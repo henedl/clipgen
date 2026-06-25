@@ -1193,3 +1193,92 @@ def test_api_models_includes_cached_and_agents(monkeypatch):
     assert {a["key"] for a in agents} == {"summary", "citations", "friction"}
     # The configured summary/friction model is present in the faked install list.
     assert all(a["installed"] for a in agents)
+
+
+# ---- Completed-task merge semantics ----
+
+
+class _CompletedTasksWorker:
+    """Minimal worker stub exposing get_all_tasks for merge tests."""
+
+    def __init__(self, tasks):
+        self._tasks = tasks
+
+    def get_all_tasks(self):
+        return self._tasks
+
+
+def test_merge_completed_results_does_not_clobber_edited_segments(monkeypatch):
+    """A completed task's frozen result is merged exactly once. A later persist
+    must not re-apply its original segments over in-memory edits."""
+    pid = "P01"
+    task = {
+        "id": "tr_abc123",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {
+            "segments": [{"id": "s0", "text": "original"}],
+            "language": "en",
+        },
+    }
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"source_transcripts": {}}, raising=False
+    )
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([task])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+
+    transcripts_server._merge_completed_results_locked()
+    src = transcripts_server._manifest["source_transcripts"]
+    assert src[pid]["segments"][0]["text"] == "original"
+    assert "tr_abc123" in transcripts_server._merged_task_ids
+
+    # Simulate an in-memory edit to the segments, then persist again.
+    src[pid]["segments"][0]["text"] = "edited"
+    transcripts_server._merge_completed_results_locked()
+
+    # The edit survives — the task is not re-merged.
+    assert src[pid]["segments"][0]["text"] == "edited"
+
+
+def test_merge_completed_results_new_task_wins(monkeypatch):
+    """Re-transcription mints a new task id, so its fresh segments merge once
+    and overwrite the previous result."""
+    pid = "P01"
+    old = {
+        "id": "tr_old",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {"segments": [{"id": "s0", "text": "old"}]},
+    }
+    monkeypatch.setattr(
+        transcripts_server, "_manifest", {"source_transcripts": {}}, raising=False
+    )
+    monkeypatch.setattr(
+        transcripts_server,
+        "_worker",
+        cast("transcripts.TranscriptWorker", _CompletedTasksWorker([old])),
+        raising=False,
+    )
+    transcripts_server._merged_task_ids.clear()
+    transcripts_server._merge_completed_results_locked()
+
+    new = {
+        "id": "tr_new",
+        "participant": pid,
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "result": {"segments": [{"id": "s0", "text": "new"}]},
+    }
+    transcripts_server._worker = cast(
+        "transcripts.TranscriptWorker", _CompletedTasksWorker([old, new])
+    )
+    transcripts_server._merge_completed_results_locked()
+
+    assert (
+        transcripts_server._manifest["source_transcripts"][pid]["segments"][0]["text"]
+        == "new"
+    )

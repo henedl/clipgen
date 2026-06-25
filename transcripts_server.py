@@ -67,6 +67,11 @@ _worker: transcripts.TranscriptWorker | None = None
 _input_dir: str = ""
 _participants: list[dict[str, Any]] = []
 _manifest_lock = threading.Lock()
+# Task ids whose result has already been merged into the in-memory manifest.
+# Merging is idempotent per task so a later persist cannot re-apply a task's
+# frozen segments over in-memory edits. Re-transcription mints a fresh task id,
+# so its new segments still merge (and win) exactly once.
+_merged_task_ids: set[str] = set()
 _transcript_model_warming = False
 _transcript_model_warming_lock = threading.Lock()
 # Thinking-agent orchestrator. Owns per-agent in-flight, cancel-event, and
@@ -1444,12 +1449,17 @@ def _merge_completed_results_locked() -> None:
     if not _worker:
         return
     for task in _worker.get_all_tasks():
-        if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get("result"):
+        if (
+            task["status"] == transcripts.TASK_STATUS_COMPLETED
+            and task.get("result")
+            and task["id"] not in _merged_task_ids
+        ):
             pid = task["participant"]
             src = _manifest.setdefault("source_transcripts", {})
             existing = src.get(pid, {})
             existing.update(task["result"])
             src[pid] = existing
+            _merged_task_ids.add(task["id"])
     _manifest["tasks"] = _worker.get_all_tasks()
 
 
@@ -1743,6 +1753,7 @@ def _init_transcripts_state(
 
     _input_dir = str(utils.get_effective_input_dir())
     _manifest = transcripts.load_transcripts_manifest()
+    _merged_task_ids.clear()
 
     _participants = []
     study_name = ""
@@ -1774,4 +1785,10 @@ def _init_transcripts_state(
     _worker = transcripts.TranscriptWorker()
     _worker.on_task_complete = _on_task_complete
     _worker.restore_tasks(_manifest.get("tasks", []))
+    # Restored completed tasks already have their segments saved in the manifest
+    # (possibly with later edits); seed the merged set so a startup persist does
+    # not re-apply their frozen results over those segments.
+    for task in _worker.get_all_tasks():
+        if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get("result"):
+            _merged_task_ids.add(task["id"])
     _worker.start()
