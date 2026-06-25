@@ -1,11 +1,15 @@
 import concurrent.futures
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
+import config
 import files
+import pipeline
 import utils
+import video
 import viewer
 import spreadsheet
 from spreadsheet import SheetContext
@@ -136,6 +140,69 @@ def test_prepare_clip_pre_parsed_fast_path_keeps_times_and_sanitizes_desc():
     # Annotation containers initialized.
     assert prepared["cell_annotations"] == []
     assert prepared["segment_annotations"] == {}
+
+
+def test_build_clip_records_feeds_process_clips(monkeypatch, tmp_path):
+    """build_clip_records produces synthetic records that process_clips accepts,
+    namespaced under the reserved Workflows cell column (col 3)."""
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    monkeypatch.setattr(utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda _t, file_format=None: str(tmp_path / f"out{file_format or '.mp4'}"),
+    )
+    monkeypatch.setattr(video, "run_ffmpeg", Mock(return_value=True))
+
+    records = files.build_clip_records(
+        participant="P01",
+        source_filename="study_P01.mp4",
+        time_ranges=[(10.0, 20.0)],
+        description="hit",
+        study="study",
+    )
+    assert len(records) == 1
+    assert records[0]["cell"].col == files._WORKFLOW_CELL_COL
+    assert records[0]["cell"].row == -1
+    # Pre-filled times trigger prepare_clip's fast path inside process_clips.
+    assert records[0]["times"] == [("0:00:10", "0:00:20")]
+
+    count, artifacts = pipeline.process_clips(records, output_format="clip")
+    assert count == 1
+    assert artifacts[0]["id"] == "a-1c3s0"
+    assert artifacts[0]["cellCol"] == files._WORKFLOW_CELL_COL
+
+
+def test_build_clip_records_clusters_adjacent_ranges():
+    merged = files.build_clip_records(
+        participant="P01",
+        source_filename="study_P01.mp4",
+        time_ranges=[(10.0, 12.0), (14.0, 16.0)],
+        description="x",
+        cluster_gap=5.0,
+    )
+    assert len(merged) == 1  # gap within 5s → single merged record
+
+    split = files.build_clip_records(
+        participant="P01",
+        source_filename="study_P01.mp4",
+        time_ranges=[(10.0, 12.0), (40.0, 42.0)],
+        description="x",
+        cluster_gap=5.0,
+    )
+    assert len(split) == 2  # gap exceeded → two records
+
+
+def test_build_clip_records_no_clustering_keeps_each_range():
+    recs = files.build_clip_records(
+        participant="P01",
+        source_filename="study_P01.mp4",
+        time_ranges=[(10.0, 12.0), (14.0, 16.0)],
+        description="x",
+    )
+    assert len(recs) == 2  # no cluster_gap → one record per range
+    assert [r["cell"].row for r in recs] == [-1, -2]
 
 
 def test_prepare_clip_sanitizes_and_sets_defaults(monkeypatch, make_clip):

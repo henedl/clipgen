@@ -64,6 +64,111 @@ def _copy_task_for_read(task: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(slim)
 
 
+def dispatch_tool_scan(
+    tool: Any,
+    video_paths: list[str],
+    region_coords: dict[str, int],
+    params: dict[str, Any],
+    *,
+    task_id: str,
+    scan_mode: str,
+    on_progress: Callable[[float], None],
+    cancel_flag: Callable[[], bool],
+    on_result: Callable[[dict[str, Any]], None] | None,
+    fast_opts: dict[str, Any] | None,
+) -> Any:
+    """Run one tool's ``scan`` over a participant's source video(s).
+
+    For a single-video participant, scans ``video_paths[0]`` directly. For a
+    multi-video participant (a session split across files), maps the task's
+    GLOBAL ``[start, end]`` window (``params['start_seconds']`` /
+    ``['end_seconds']``) onto the concatenated timeline, scans each spanned
+    sub-video at its local offsets, and shifts emitted result times back onto the
+    global timeline (tagging each with its ``_source_video``). ``params`` is
+    expected pre-resolved (fast-scan interval scaling already applied).
+
+    Shared by :meth:`ScreenspaceWorker._dispatch` and the Workflows ``ss_scan``
+    node so both get identical single/multi-video behavior.
+    """
+    timeline = video.timeline_or_none(video_paths)
+    if timeline is None:
+        return tool.scan(
+            video_paths[0],
+            region_coords,
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+    # Multi-video: map the task's GLOBAL [start, end] range onto the timeline
+    # and scan each spanned sub-video at its local offsets. Emitted result
+    # times are shifted back to the global timeline and tagged with the
+    # sub-video they came from so events line up with clips/transcripts.
+    total = timeline[-1][1] + timeline[-1][2]
+    global_start = params.get("start_seconds", 0.0) or 0.0
+    global_end = params.get("end_seconds")
+    if global_end is None:
+        global_end = total
+    pieces = utils.map_global_range_to_segments(timeline, global_start, global_end)
+    if not pieces:
+        return []
+    piece_durations = [le - ls for _index, ls, le in pieces]
+    span = sum(piece_durations) or 1.0
+    accumulated = 0.0
+    all_results: list[dict[str, Any]] = []
+    for (index, local_start, local_end), piece_dur in zip(pieces, piece_durations):
+        if cancel_flag():
+            break
+        cumulative = timeline[index][2]
+        source_name = Path(timeline[index][0]).name
+        frac_start = accumulated / span
+        frac_end = (accumulated + piece_dur) / span
+
+        def piece_progress(
+            p: float, _a: float = frac_start, _b: float = frac_end
+        ) -> None:
+            on_progress(_a + p * (_b - _a))
+
+        def piece_on_result(
+            rd: dict[str, Any],
+            _cum: int = cumulative,
+            _src: str = source_name,
+        ) -> None:
+            if on_result is not None:
+                shifted = dict(rd)
+                _offset_result_times(shifted, _cum)
+                shifted["_source_video"] = _src
+                on_result(shifted)
+
+        piece_params = {
+            **params,
+            "start_seconds": local_start,
+            "end_seconds": local_end,
+        }
+        piece_results = tool.scan(
+            timeline[index][0],
+            region_coords,
+            piece_params,
+            task_id=task_id,
+            scan_mode=scan_mode,
+            on_progress=piece_progress,
+            cancel_flag=cancel_flag,
+            on_result=piece_on_result,
+            fast_opts=fast_opts,
+        )
+        for rd in piece_results or []:
+            _offset_result_times(rd, cumulative)
+            rd["_source_video"] = source_name
+            all_results.append(rd)
+        accumulated += piece_dur
+    on_progress(1.0)
+    return all_results
+
+
 class ScreenspaceWorker:
     """Background thread that processes analysis tasks sequentially."""
 
@@ -599,7 +704,8 @@ class ScreenspaceWorker:
 
         Builds the shared fast-scan ``fast_opts`` payload here so individual
         tool classes only need to declare ``fast_scan_region_dim`` /
-        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes.
+        ``supports_fast_scan`` / ``fast_scan_extra_opts`` as class attributes,
+        then delegates the single/multi-video scan to :func:`dispatch_tool_scan`.
         """
         task_type = task["type"]
         tool = TOOLS.get(task_type)
@@ -621,84 +727,18 @@ class ScreenspaceWorker:
                 **tool.fast_scan_extra_opts,
             }
 
-        video_paths = task["video_paths"]
-        timeline = video.timeline_or_none(video_paths)
-        if timeline is None:
-            return tool.scan(
-                video_paths[0],
-                task["region_coords"],
-                params,
-                task_id=task["id"],
-                scan_mode=scan_mode,
-                on_progress=on_progress,
-                cancel_flag=cancel_flag,
-                on_result=on_result,
-                fast_opts=fast_opts,
-            )
-
-        # Multi-video: map the task's GLOBAL [start, end] range onto the timeline
-        # and scan each spanned sub-video at its local offsets. Emitted result
-        # times are shifted back to the global timeline and tagged with the
-        # sub-video they came from so events line up with clips/transcripts.
-        total = timeline[-1][1] + timeline[-1][2]
-        global_start = params.get("start_seconds", 0.0) or 0.0
-        global_end = params.get("end_seconds")
-        if global_end is None:
-            global_end = total
-        pieces = utils.map_global_range_to_segments(timeline, global_start, global_end)
-        if not pieces:
-            return []
-        piece_durations = [le - ls for _index, ls, le in pieces]
-        span = sum(piece_durations) or 1.0
-        accumulated = 0.0
-        all_results: list[dict[str, Any]] = []
-        for (index, local_start, local_end), piece_dur in zip(pieces, piece_durations):
-            if cancel_flag():
-                break
-            cumulative = timeline[index][2]
-            source_name = Path(timeline[index][0]).name
-            frac_start = accumulated / span
-            frac_end = (accumulated + piece_dur) / span
-
-            def piece_progress(
-                p: float, _a: float = frac_start, _b: float = frac_end
-            ) -> None:
-                on_progress(_a + p * (_b - _a))
-
-            def piece_on_result(
-                rd: dict[str, Any],
-                _cum: int = cumulative,
-                _src: str = source_name,
-            ) -> None:
-                if on_result is not None:
-                    shifted = dict(rd)
-                    _offset_result_times(shifted, _cum)
-                    shifted["_source_video"] = _src
-                    on_result(shifted)
-
-            piece_params = {
-                **params,
-                "start_seconds": local_start,
-                "end_seconds": local_end,
-            }
-            piece_results = tool.scan(
-                timeline[index][0],
-                task["region_coords"],
-                piece_params,
-                task_id=task["id"],
-                scan_mode=scan_mode,
-                on_progress=piece_progress,
-                cancel_flag=cancel_flag,
-                on_result=piece_on_result,
-                fast_opts=fast_opts,
-            )
-            for rd in piece_results or []:
-                _offset_result_times(rd, cumulative)
-                rd["_source_video"] = source_name
-                all_results.append(rd)
-            accumulated += piece_dur
-        on_progress(1.0)
-        return all_results
+        return dispatch_tool_scan(
+            tool,
+            task["video_paths"],
+            task["region_coords"],
+            params,
+            task_id=task["id"],
+            scan_mode=scan_mode,
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
 
 
 # ---------------------------------------------------------------------------

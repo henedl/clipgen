@@ -340,6 +340,129 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     return clip
 
 
+_WORKFLOW_CELL_COL = 3  # synthetic cell column for Workflows clip artifacts
+# (col 1 = --ss-clips, col 2 = --transcript-clips; the distinct column keeps
+# synthetic artifact ids from colliding across the three sheet-free clip paths.)
+
+
+def _make_synthetic_clip_record(
+    *,
+    cluster_idx: int,
+    cell_col: int,
+    study: str,
+    participant: str,
+    desc: str,
+    category: str,
+    severity: str,
+    start_seconds: float,
+    end_seconds: float,
+    source_filename: str,
+) -> ClipRecord:
+    """Build a ClipRecord with synthetic cell + pre-filled times.
+
+    Uses negative cell rows (unreachable for real spreadsheets) and a per-mode
+    column to namespace artifact ids. The pre-filled ``times`` triggers the
+    fast path in :func:`prepare_clip` so the cell value is never read.
+    """
+    from types import SimpleNamespace
+
+    start_ts = utils.seconds_to_timestamp(int(start_seconds), force_hours=True)
+    end_ts = utils.seconds_to_timestamp(
+        max(int(end_seconds), int(start_seconds) + 1), force_hours=True
+    )
+    cell = SimpleNamespace(value="", row=-(cluster_idx + 1), col=cell_col)
+    record: ClipRecord = {
+        "cell": cell,
+        "desc": desc,
+        "study": study,
+        "participant": participant,
+        "category": category,
+        "severity": severity,
+        "times": [(start_ts, end_ts)],
+        "source_filename": source_filename,
+        "cell_annotations": [],
+        "segment_annotations": {},
+    }
+    return record
+
+
+def build_clip_records(
+    *,
+    participant: str,
+    source_filename: str,
+    time_ranges: list[tuple[float, float]],
+    description: str,
+    category: str = "workflow",
+    study: str = "",
+    severity: str = "",
+    cell_col: int = _WORKFLOW_CELL_COL,
+    cell_row_base: int = 0,
+    cluster_gap: float | None = None,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float | None = None,
+) -> list[ClipRecord]:
+    """Build sheet-free ClipRecords from explicit ``(start, end)`` second ranges.
+
+    Pre-fills ``times`` (H:MM:SS) on synthetic cells so ``pipeline.process_clips``
+    runs without a live spreadsheet — those records hit the fast path in
+    :func:`prepare_clip`. This is the public, sheet-free clip-record entry point
+    shared by the Workflows ``make_clips`` node, its typed-port adapters, and the
+    CLI ``--ss-clips`` / ``--transcript-clips`` paths.
+
+    Args:
+        participant: Participant id stamped on every record (e.g. ``"P01"``).
+        source_filename: Source video basename, or a ``" + "``-joined list of
+            parts for a multi-video participant (resolved by
+            ``pipeline._check_source_video``).
+        time_ranges: ``(start_seconds, end_seconds)`` pairs to cut.
+        description: Clip description applied to every produced record.
+        category: Clip category applied to every produced record.
+        study: Normalized study name for output paths.
+        severity: Optional severity label.
+        cell_col: Synthetic cell column for artifact-id namespacing.
+        cell_row_base: Added to each record's synthetic (negative) cell row so
+            callers can keep ids unique/stable across batches.
+        cluster_gap: When set, merge ranges whose gap is within this many seconds
+            via :func:`utils.cluster_spans` before building records.
+        pad_pre / pad_post / max_duration: Forwarded to ``cluster_spans`` when
+            ``cluster_gap`` is set.
+
+    Returns:
+        A list of ClipRecords ready for ``pipeline.process_clips`` /
+        ``process_reel`` (not yet prepared — those call :func:`prepare_clip`).
+    """
+    if cluster_gap is not None:
+        clustered = utils.cluster_spans(
+            list(time_ranges),
+            gap_seconds=cluster_gap,
+            pad_pre=pad_pre,
+            pad_post=pad_post,
+            max_duration=max_duration or 0.0,
+        )
+        ranges = [(cs, ce) for cs, ce, _members in clustered]
+    else:
+        ranges = list(time_ranges)
+
+    records: list[ClipRecord] = []
+    for idx, (start_s, end_s) in enumerate(ranges):
+        records.append(
+            _make_synthetic_clip_record(
+                cluster_idx=cell_row_base + idx,
+                cell_col=cell_col,
+                study=study,
+                participant=participant,
+                desc=description,
+                category=category,
+                severity=severity,
+                start_seconds=start_s,
+                end_seconds=end_s,
+                source_filename=source_filename,
+            )
+        )
+    return records
+
+
 def discover_clips() -> list[str]:
     """Find generated clips in the effective output directory.
 

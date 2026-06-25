@@ -244,8 +244,16 @@ the scan branch when duration ≤ N.
       `canConnect()` seam for M3 adapters, wire select + Delete-key + floating × button); param
       editors (number/enum/bool/participant-dropdown/string) on cards; `.disabled`/`.invalid`
       validation cues. One backend touch: `GET /api/catalog` `context.participants`.
-- [ ] **M3 — Node catalog + executors.** `NODE_TYPES` + executors wrapping existing functions;
-      `files.build_clip_records` + refactor `cli.py` paths onto it; `ADAPTERS` table.
+- [x] **M3 — Node catalog + executors.** `NODE_TYPES` + executors wrapping existing functions;
+      `files.build_clip_records` + refactor `cli.py` paths onto it; `ADAPTERS` table. Adds a
+      `NodeContext` (dirs + sheet + `on_progress`/`cancel_event`/`cancel_flag`) and an executor per
+      node, each a thin adapter keyed by output-port name; every domain value embeds a **source
+      descriptor** so the pure `ADAPTERS` (value→value) can still reach a clip's source. The one
+      backend gap `files.build_clip_records` is now public (synthetic sheet-free records); the
+      Screenspace multi-video scan loop was extracted to `screenspace_worker.dispatch_tool_scan`
+      and shared by `ss_scan` so multi-part participants work. `sheet_selection` reuses the pure
+      `spreadsheet.generate_list` headless path. Executors are validated by direct invocation
+      (`tests/test_workflows_executors.py`); the `WorkflowRunner` + run endpoints stay M4.
 - [ ] **M4 — Run engine.** `WorkflowRunner` (toposort, ready-set, per-node state, cancel), SSE +
       polling, run/results panel, run history in manifest.
 - [ ] **M5 — Stashes.** Save selected sub-graph as named stash; stash palette; instantiate onto

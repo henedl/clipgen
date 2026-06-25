@@ -95,6 +95,18 @@ def test_serialize_catalog_is_json_safe():
     json.dumps(workflows.serialize_catalog())
 
 
+def test_every_node_type_has_a_callable_executor():
+    # M3 wires an execute callable onto every catalog node; a miss would mean a
+    # placed node the runner can't execute. serialize_catalog still strips it.
+    missing = [
+        nid
+        for nid, node in workflows.NODE_TYPES.items()
+        if not callable(node.get("execute"))
+    ]
+    assert missing == []
+    assert all("execute" not in node for node in workflows.serialize_catalog())
+
+
 # ---- Blueprint CRUD ----
 
 

@@ -3,6 +3,7 @@
 import pytest
 
 import cli
+import files
 
 # Reuse the comprehensive Namespace factory from the screenspace test file so that
 # any newly added argparse keys flow through one place.
@@ -304,19 +305,16 @@ def test_build_transcript_clusters_groups_by_participant():
 # ---- Synthetic clip builder ----
 
 
-def test_make_synthetic_clip_record_uses_negative_row_and_padded_times():
-    rec = cli._make_synthetic_clip_record(
-        cluster_idx=0,
-        cell_col=1,
-        study="mystudy",
+def test_build_clip_records_uses_negative_row_and_padded_times():
+    rec = files.build_clip_records(
         participant="P01",
-        desc="change dialog",
-        category="screenspace-change",
-        severity="",
-        start_seconds=10.0,
-        end_seconds=20.0,
         source_filename="mystudy_P01.mp4",
-    )
+        time_ranges=[(10.0, 20.0)],
+        description="change dialog",
+        category="screenspace-change",
+        study="mystudy",
+        cell_col=1,
+    )[0]
     assert rec["cell"].row == -1
     assert rec["cell"].col == 1
     # Pre-filled times trigger the prepare_clip fast path.
@@ -324,31 +322,27 @@ def test_make_synthetic_clip_record_uses_negative_row_and_padded_times():
     assert rec["source_filename"] == "mystudy_P01.mp4"
 
 
-def test_make_synthetic_clip_record_namespaces_by_cluster_idx():
-    a = cli._make_synthetic_clip_record(
-        cluster_idx=0,
+def test_build_clip_records_namespaces_by_cell_row_base_and_col():
+    a = files.build_clip_records(
+        participant="P01",
+        source_filename="s_P01.mp4",
+        time_ranges=[(0, 1)],
+        description="d",
+        category="c",
+        study="s",
         cell_col=1,
-        study="s",
+        cell_row_base=0,
+    )[0]
+    b = files.build_clip_records(
         participant="P01",
-        desc="d",
-        category="c",
-        severity="",
-        start_seconds=0,
-        end_seconds=1,
         source_filename="s_P01.mp4",
-    )
-    b = cli._make_synthetic_clip_record(
-        cluster_idx=5,
+        time_ranges=[(0, 1)],
+        description="d",
+        category="c",
+        study="s",
         cell_col=2,
-        study="s",
-        participant="P01",
-        desc="d",
-        category="c",
-        severity="",
-        start_seconds=0,
-        end_seconds=1,
-        source_filename="s_P01.mp4",
-    )
+        cell_row_base=5,
+    )[0]
     assert a["cell"].row == -1
     assert b["cell"].row == -6
     assert a["cell"].col == 1
