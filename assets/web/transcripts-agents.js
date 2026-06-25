@@ -388,13 +388,13 @@
     _txEtaTicker.ensure();
   }
 
-  // Hard cap on the citations poll. The previous 90 s value was shorter than
-  // some real Ollama runs on long transcripts, so the result would land in
-  // the manifest after we'd given up — and the UI only picked it up on a
-  // full page reload. Five minutes covers realistic completion times; the
-  // server-side `generating: false` signal stops the poll earlier when the
+  // Hard cap on agent polls (citations and friction). The previous 90 s value
+  // was shorter than some real Ollama runs on long transcripts, so the result
+  // would land in the manifest after we'd given up — and the UI only picked it
+  // up on a full page reload. Five minutes covers realistic completion times;
+  // the server-side `generating: false` signal stops the poll earlier when the
   // agent finishes (or fails) sooner.
-  var _CITATIONS_POLL_TIMEOUT = 300000;
+  var _AGENT_POLL_TIMEOUT = 300000;
 
   function _startCitationsPoll(pid) {
     _stopCitationsPoll();
@@ -404,7 +404,7 @@
     _citationsPoller = createPoller(function () {
       if (ver !== state.participantReqVer ||
           state.selectedParticipant !== pid ||
-          Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
+          Date.now() - started > _AGENT_POLL_TIMEOUT) {
         _stopCitationsPoll();
         state.citationsGenerating = false;
         var status = qs("#summaryContent .citations-status");
@@ -811,7 +811,7 @@
     _frictionPoller = createPoller(function () {
       if (ver !== state.participantReqVer ||
           state.selectedParticipant !== pid ||
-          Date.now() - started > _CITATIONS_POLL_TIMEOUT) {
+          Date.now() - started > _AGENT_POLL_TIMEOUT) {
         _stopFrictionPoll();
         state.frictionGenerating = false;
         renderFriction();
@@ -1163,6 +1163,7 @@
     var y = clientY - tipRect.height - 12;
     if (x + tipRect.width > window.innerWidth - 8) x = window.innerWidth - tipRect.width - 8;
     if (y < 8) y = clientY + 16;
+    if (y + tipRect.height > window.innerHeight - 8) y = window.innerHeight - tipRect.height - 8;
     tip.style.left = x + "px";
     tip.style.top = y + "px";
     state.frictionTooltipShown = true;
