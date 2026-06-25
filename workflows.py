@@ -18,12 +18,10 @@ This module is the backend home for:
 * ``ADAPTERS`` (M3) — the typed-port coercion table (e.g. ``events -> clipRecords``),
   pure ``value -> value`` callables the runner applies when an output type differs
   from the consuming input type.
-
-and, in a later milestone:
-
 * ``WorkflowRunner`` (M4) — DAG topo-sort + sequential ready-set execution, calling
   the executors directly with the uniform ``on_progress`` / ``cancel_flag`` /
-  ``cancel_event`` contract ``NodeContext`` carries.
+  ``cancel_event`` contract ``NodeContext`` carries. ``topo_order`` rejects cycles;
+  control edges (a gate's ``control`` output) gate downstream without feeding data.
 
 See ``plans/WORKFLOWS-PLAN.md``.
 
@@ -42,7 +40,9 @@ phase — kept in the schema so the seam exists without building anything.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, NotRequired, TypedDict
 
@@ -395,7 +395,12 @@ NODE_TYPES: dict[str, NodeType] = {
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],
-        "outputs": [{"name": "pass", "type": "scalar"}],
+        # ``pass`` is a CONTROL output: it carries no data, it gates. The runner
+        # skips a node when an upstream gate completed with ``pass`` False, and
+        # excludes control edges from a node's data inputs. The universal
+        # ``__gate__`` input port the frontend renders is also ``control``-typed,
+        # so a gate can wire into any node (exact-match) as a control dependency.
+        "outputs": [{"name": "pass", "type": "control"}],
         "params": [
             {
                 "name": "op",
@@ -977,3 +982,358 @@ _EXECUTORS: dict[
 
 for _node_id, _executor in _EXECUTORS.items():
     NODE_TYPES[_node_id]["execute"] = _executor
+
+
+# ---------------------------------------------------------------------------
+# Run engine (M4) — DAG topo-sort + sequential ready-set execution
+# ---------------------------------------------------------------------------
+#
+# ``WorkflowRunner`` runs one blueprint on a daemon thread (the server spawns it).
+# It calls the executors directly with the uniform ``NodeContext`` contract, so a
+# cross-domain DAG gets clean end-to-end progress + cancellation without routing
+# through the per-domain worker queues. Execution is strictly sequential (the v1
+# decision: Whisper/Ollama are single-resource); intra-node parallelism (e.g.
+# ``process_clips``' own pool) still applies.
+
+# Run + per-node status constants (mirrors screenspace_manifest's TASK_STATUS_*).
+RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUS_CANCELLED = "cancelled"
+
+NODE_STATUS_QUEUED = "queued"
+NODE_STATUS_RUNNING = "running"
+NODE_STATUS_COMPLETED = "completed"
+NODE_STATUS_FAILED = "failed"
+NODE_STATUS_SKIPPED = "skipped"
+
+_PROGRESS_NOTIFY_INTERVAL = (
+    0.5  # seconds; throttle SSE notifies (copy screenspace_worker)
+)
+
+
+class WorkflowCycleError(ValueError):
+    """Raised by :func:`topo_order` when the graph is not a DAG (rejected at submit)."""
+
+
+def _now_iso() -> str:
+    """UTC ISO-8601 timestamp for run/node start+complete stamps."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[str]:
+    """Return node ids in execution order (Kahn); raise on a cycle.
+
+    Stable: ties break by the given node order, so a run is reproducible. Edges
+    referencing unknown node ids are ignored (a stale wire never blocks a run).
+    """
+    ids = [n["id"] for n in nodes]
+    id_set = set(ids)
+    adj: dict[str, list[str]] = {nid: [] for nid in ids}
+    indeg: dict[str, int] = {nid: 0 for nid in ids}
+    for edge in edges:
+        src, dst = edge.get("from"), edge.get("to")
+        if src in id_set and dst in id_set:
+            adj[src].append(dst)
+            indeg[dst] += 1
+    ready = [nid for nid in ids if indeg[nid] == 0]
+    order: list[str] = []
+    while ready:
+        nid = ready.pop(0)
+        order.append(nid)
+        for nxt in adj[nid]:
+            indeg[nxt] -= 1
+            if indeg[nxt] == 0:
+                ready.append(nxt)
+    if len(order) != len(ids):
+        raise WorkflowCycleError("Workflow graph contains a cycle")
+    return order
+
+
+def _port_type(type_id: str, port_name: str | None, direction: str) -> str | None:
+    """Look up a port's wire type from ``NODE_TYPES`` ('in' or 'out' direction)."""
+    node_type = NODE_TYPES.get(type_id)
+    if not node_type or not port_name:
+        return None
+    ports = node_type["outputs"] if direction == "out" else node_type["inputs"]
+    for port in ports:
+        if port["name"] == port_name:
+            return port["type"]
+    return None
+
+
+def _summarize_value(value: Any) -> Any:
+    """Shrink a node output to a JSON-safe summary (counts + terminal pointers).
+
+    The full result (raw frames, whole segment lists, ClipRecords) stays in the
+    runner's in-memory store; the snapshot ships only what a panel needs.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return {"count": len(value)}
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for list_key in (
+            "events",
+            "segments",
+            "artifacts",
+            "records",
+            "ranges",
+            "times",
+        ):
+            seq = value.get(list_key)
+            if isinstance(seq, list):
+                out["count"] = len(seq)
+                break
+        for scalar_key in ("path", "study", "name", "participant", "count"):
+            sval = value.get(scalar_key)
+            if isinstance(sval, (str, int, float, bool)):
+                out[scalar_key] = sval
+        return out
+    return type(value).__name__
+
+
+def _node_result_summary(result: Any) -> dict[str, Any]:
+    """Per-port summary of a completed node's output (see :func:`_summarize_value`)."""
+    if not isinstance(result, dict):
+        return {}
+    return {port: _summarize_value(val) for port, val in result.items()}
+
+
+class WorkflowRunner:
+    """Executes one blueprint DAG; ``run()`` is the daemon-thread target.
+
+    Holds per-node state + an in-memory per-(node,port) result store. ``on_update``
+    is invoked on every status transition (immediately) and on throttled progress
+    ticks; the server wires it to the SSE notify. ``snapshot()`` returns the
+    JSON-safe run record (counts + status, large blobs stripped) for the API.
+    """
+
+    def __init__(
+        self,
+        run_id: str,
+        blueprint: dict[str, Any],
+        ctx: NodeContext,
+        on_update: Callable[[], None] | None = None,
+    ) -> None:
+        self.run_id = run_id
+        self.blueprint_id = str(blueprint.get("id", "") or "")
+        self.nodes = list(blueprint.get("nodes", []))
+        self.edges = list(blueprint.get("edges", []))
+        self.ctx = ctx
+        self.on_update = on_update or (lambda: None)
+        self._nodes_by_id = {n["id"]: n for n in self.nodes}
+        self.node_states: dict[str, dict[str, Any]] = {
+            n["id"]: {
+                "status": NODE_STATUS_QUEUED,
+                "progress": 0.0,
+                "error": None,
+                "started_at": None,
+                "completed_at": None,
+            }
+            for n in self.nodes
+        }
+        self._results: dict[str, dict[str, Any]] = {}
+        self.status = RUN_STATUS_QUEUED
+        self.started_at: str | None = None
+        self.completed_at: str | None = None
+        self._lock = threading.Lock()
+        self._last_notify = 0.0
+
+    # ---- control ----
+
+    def cancel(self) -> None:
+        """Signal the run-wide cancel event (checked between nodes + by executors)."""
+        self.ctx.cancel_event.set()
+
+    # ---- graph helpers ----
+
+    def _incoming(self, node_id: str) -> list[dict[str, Any]]:
+        return [e for e in self.edges if e.get("to") == node_id]
+
+    def _deps(self, node_id: str) -> set[str]:
+        deps: set[str] = set()
+        for edge in self._incoming(node_id):
+            src = edge.get("from")
+            if isinstance(src, str) and src in self._nodes_by_id:
+                deps.add(src)
+        return deps
+
+    def _gate_blocks(self, node_id: str) -> bool:
+        """True if ``node_id`` is a gate that completed with ``pass`` False."""
+        node = self._nodes_by_id.get(node_id)
+        if not node or node.get("type") != "gate":
+            return False
+        return (self._results.get(node_id) or {}).get("pass") is False
+
+    def _should_skip(self, node_id: str) -> bool:
+        """A node is skipped if any upstream failed/skipped, or is a blocking gate."""
+        for dep in self._deps(node_id):
+            status = self.node_states[dep]["status"]
+            if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
+                return True
+            if status == NODE_STATUS_COMPLETED and self._gate_blocks(dep):
+                return True
+        return False
+
+    def _gather_inputs(self, node: dict[str, Any]) -> dict[str, Any]:
+        """Map upstream results onto this node's input ports, applying adapters.
+
+        Control edges (a gate's ``control`` output) establish a dependency but
+        carry no data, so they are excluded here — they never clobber a real input.
+        """
+        inputs: dict[str, Any] = {}
+        for edge in self._incoming(node["id"]):
+            src_id = edge.get("from")
+            to_port = edge.get("toPort")
+            from_port = edge.get("fromPort")
+            if not (
+                isinstance(src_id, str)
+                and isinstance(to_port, str)
+                and isinstance(from_port, str)
+            ):
+                continue
+            src_node = self._nodes_by_id.get(src_id)
+            if src_node is None:
+                continue
+            out_type = _port_type(src_node["type"], from_port, "out")
+            if out_type == "control":
+                continue
+            in_type = _port_type(node["type"], to_port, "in")
+            value = (self._results.get(src_id) or {}).get(from_port)
+            if out_type is not None and in_type is not None and out_type != in_type:
+                adapter = ADAPTERS.get((out_type, in_type))
+                if adapter is not None:
+                    try:
+                        value = adapter(value)
+                    except Exception as exc:  # adapter failure → empty input
+                        utils.warning_print(
+                            f"workflow adapter {out_type}->{in_type} failed: {exc}"
+                        )
+                        value = None
+            inputs[to_port] = value
+        return inputs
+
+    # ---- state + notify ----
+
+    def _set_node(self, node_id: str, **changes: Any) -> None:
+        with self._lock:
+            self.node_states[node_id].update(changes)
+
+    def _notify(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if force or now - self._last_notify >= _PROGRESS_NOTIFY_INTERVAL:
+            self._last_notify = now
+            try:
+                self.on_update()
+            except Exception:
+                pass
+
+    def _make_progress(self, node_id: str) -> Callable[[float], None]:
+        def _on_progress(fraction: float) -> None:
+            with self._lock:
+                self.node_states[node_id]["progress"] = max(
+                    0.0, min(1.0, float(fraction))
+                )
+            self._notify()
+
+        return _on_progress
+
+    # ---- run ----
+
+    def run(self) -> None:
+        """Execute the DAG in topological order. Safe to call once, on a thread."""
+        self.status = RUN_STATUS_RUNNING
+        self.started_at = _now_iso()
+        self._notify(force=True)
+        try:
+            order = topo_order(self.nodes, self.edges)
+        except WorkflowCycleError:
+            self.status = RUN_STATUS_FAILED
+            self.completed_at = _now_iso()
+            self._notify(force=True)
+            return
+
+        for node_id in order:
+            node = self._nodes_by_id[node_id]
+            if self.ctx.cancel_event.is_set():
+                self._set_node(
+                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                continue
+            if self._should_skip(node_id):
+                self._set_node(
+                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                self._notify(force=True)
+                continue
+
+            inputs = self._gather_inputs(node)
+            params = node.get("params", {}) or {}
+            executor = NODE_TYPES.get(node["type"], {}).get("execute")
+            self._set_node(
+                node_id, status=NODE_STATUS_RUNNING, started_at=_now_iso(), progress=0.0
+            )
+            self._notify(force=True)
+            if executor is None:
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_FAILED,
+                    error=f"No executor for node type: {node.get('type')}",
+                    completed_at=_now_iso(),
+                )
+                self._notify(force=True)
+                continue
+
+            self.ctx.on_progress = self._make_progress(node_id)
+            try:
+                result = executor(self.ctx, inputs, params)
+                with self._lock:
+                    self._results[node_id] = result or {}
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_COMPLETED,
+                    progress=1.0,
+                    completed_at=_now_iso(),
+                )
+            except Exception as exc:
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_FAILED,
+                    error=str(exc),
+                    completed_at=_now_iso(),
+                )
+            self._notify(force=True)
+
+        if self.ctx.cancel_event.is_set():
+            self.status = RUN_STATUS_CANCELLED
+        elif any(s["status"] == NODE_STATUS_FAILED for s in self.node_states.values()):
+            self.status = RUN_STATUS_FAILED
+        else:
+            self.status = RUN_STATUS_COMPLETED
+        self.completed_at = _now_iso()
+        self._notify(force=True)
+
+    # ---- serialization ----
+
+    def snapshot(self) -> dict[str, Any]:
+        """JSON-safe run record for the API/SSE/manifest (counts + status only)."""
+        with self._lock:
+            node_states = {
+                nid: {k: v for k, v in st.items() if not k.startswith("_")}
+                for nid, st in self.node_states.items()
+            }
+            results = {
+                nid: _node_result_summary(res) for nid, res in self._results.items()
+            }
+        return {
+            "id": self.run_id,
+            "blueprintId": self.blueprint_id,
+            "status": self.status,
+            "nodeStates": node_states,
+            "results": results,
+            "startedAt": self.started_at,
+            "completedAt": self.completed_at,
+        }

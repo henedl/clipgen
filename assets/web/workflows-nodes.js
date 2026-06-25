@@ -19,13 +19,23 @@
   function buildPortColumn(ports, isOutput) {
     var col = el("div", "wf-port-col " + (isOutput ? "outputs" : "inputs"));
     (ports || []).forEach(function (port) {
-      var row = el("div", "wf-port" + (port.optional ? " optional" : ""));
+      // The universal control input (`__gate__`) reads as a muted "gate" anchor,
+      // not a literal port name — a Gate's `pass` output wires here to gate the node.
+      var isControl = port.type === "control";
+      var row = el(
+        "div",
+        "wf-port" +
+          (port.optional ? " optional" : "") +
+          (isControl ? " wf-port-control" : ""),
+      );
       var dot = el("span", "wf-port-dot");
       dot.setAttribute("data-port", port.name);
       dot.setAttribute("data-port-type", port.type);
       dot.setAttribute("data-port-dir", isOutput ? "out" : "in");
       row.appendChild(dot);
-      row.appendChild(el("span", "wf-port-label", port.name));
+      row.appendChild(
+        el("span", "wf-port-label", isControl ? "gate" : port.name),
+      );
       col.appendChild(row);
     });
     return col;

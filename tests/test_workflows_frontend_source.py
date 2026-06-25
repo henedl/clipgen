@@ -62,7 +62,12 @@ def test_start_overlay_treats_workflows_as_video_tool():
 def test_satellites_read_shared_state_through_wf():
     """The carve gotcha: satellites must read `WF.state`, not redeclare a
     divergent `var state = {`. Only the hub owns the literal state object."""
-    for name in ("workflows-nodes.js", "workflows-canvas.js", "workflows-wires.js"):
+    for name in (
+        "workflows-nodes.js",
+        "workflows-canvas.js",
+        "workflows-wires.js",
+        "workflows-runs.js",
+    ):
         src = (_WEB / name).read_text(encoding="utf-8")
         assert "var state = WF.state" in src, name
         assert "var state = {" not in src, name
@@ -186,6 +191,54 @@ def test_connect_ux_polish_present():
     assert "state.selectedEdge = null" in canvas
     # Review fix: the wire-delete button doesn't fall through to pan.
     assert "#wfWireDelete" in canvas
+
+
+def test_run_panel_satellite_present_and_wired():
+    """M4 run engine: the Run/Stop controls, the runs satellite (loaded last),
+    and the hub<->satellite run interface all ship."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfRunBtn"' in html
+    assert 'id="wfStopBtn"' in html
+    assert 'id="wfRuns"' in html
+    # Runs satellite loads after the wires satellite (load-order contract).
+    assert html.index('src="workflows-wires.js"') < html.index(
+        'src="workflows-runs.js"'
+    )
+
+    src = _workflows_js()
+    # Hub-owned: flushSave is awaited before a run so the server has the latest
+    # blueprint; the satellite owns the run lifecycle + rendering.
+    for fn in (
+        "WF.flushSave",
+        "WF.initRuns",
+        "WF.startRun",
+        "WF.stopRun",
+        "WF.refreshRuns",
+        "WF.renderRuns",
+    ):
+        assert fn in src, fn
+    # SSE stream with a polling fallback (mirrors screenspace-tasks).
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "EventSource" in runs
+    assert "createPoller" in runs
+    assert "api/runs" in runs
+
+
+def test_universal_control_port_for_gate_wiring():
+    """A Gate's `control` output wires into any node via a universal optional
+    `__gate__` input (exact-match) — the M4 control-edge gating decision."""
+    src = _workflows_js()
+    assert "__gate__" in src
+    assert '"control"' in src or "'control'" in src
+
+
+def test_css_defines_run_panel_and_node_status_styles():
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-run-card" in css
+    assert ".wf-run-status-running" in css
+    assert ".wf-node.run-completed" in css
+    assert ".wf-node.run-failed" in css
+    assert ".wf-node-progress" in css
 
 
 def test_in_flight_connect_is_torn_down_on_context_change():
