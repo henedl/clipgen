@@ -59,19 +59,25 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies (CPU-only torch)
-        # pytest-cov is installed CI-only, the same pattern as --torch-backend
-        # cpu (see AGENTS.md): kept out of pyproject.toml and uv.lock so
-        # end-user installs and local `uv run` stay unaffected.
+        # pytest-cov and pytest-xdist are installed CI-only, the same pattern as
+        # --torch-backend cpu (see AGENTS.md): kept out of pyproject.toml and
+        # uv.lock so end-user installs and local `uv run` stay unaffected.
+        # (pytest-randomly lives in the dev extra so local runs shuffle too.)
         run: |
           uv venv
-          uv pip install ".[dev]" pytest-cov --torch-backend cpu
+          uv pip install ".[dev]" pytest-cov pytest-xdist --torch-backend cpu
 
       - name: Run tests with coverage gate
         # Always run the full suite. It finishes in well under a minute, and a
         # scoped subset risks false-green PRs when a change breaks an untested
         # sibling test file. The coverage floor lives in pyproject.toml
         # ([tool.coverage.report] fail_under) and fails the run if breached.
-        run: uv run --no-sync pytest -c tests/pytest.ini --cov=. --cov-report=term
+        # -n auto parallelizes across cores (each xdist worker is a separate
+        # process, so module-level server globals stay isolated). The fixed
+        # --randomly-seed keeps the shuffled order reproducible run-to-run.
+        run: >-
+          uv run --no-sync pytest -c tests/pytest.ini
+          -n auto --randomly-seed=20240601 --cov=. --cov-report=term
 
   lint:
     needs: [gate]

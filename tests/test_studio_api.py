@@ -2432,7 +2432,9 @@ def test_api_settings_put_applies_values(client, monkeypatch):
     import config
 
     monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
-    original = config.REENCODING
+    # Capture+auto-restore: the endpoint mutates config.REENCODING; monkeypatch
+    # teardown restores the original even if an assertion below fails.
+    monkeypatch.setattr(config, "REENCODING", config.REENCODING)
 
     resp = client.put(
         "/studio/api/settings",
@@ -2443,9 +2445,6 @@ def test_api_settings_put_applies_values(client, monkeypatch):
     assert data["ok"] is True
     assert data["applied"]["REENCODING"] is True
     assert config.REENCODING is True
-
-    # Restore
-    config.REENCODING = original
 
 
 def test_api_settings_put_ignores_unknown(client, monkeypatch):
@@ -2467,7 +2466,12 @@ def test_api_settings_put_type_coercion(client, monkeypatch):
     import config
 
     monkeypatch.setattr(server, "_save_studio_settings", lambda o: None)
-    original = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+    # Capture+auto-restore (see test_api_settings_put_applies_values).
+    monkeypatch.setattr(
+        config,
+        "HIGHLIGHTS_REEL_DURATION_SECONDS",
+        config.HIGHLIGHTS_REEL_DURATION_SECONDS,
+    )
 
     resp = client.put(
         "/studio/api/settings",
@@ -2477,8 +2481,6 @@ def test_api_settings_put_type_coercion(client, monkeypatch):
     data = resp.get_json()
     assert data["applied"]["HIGHLIGHTS_REEL_DURATION_SECONDS"] == 120
     assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == 120
-
-    config.HIGHLIGHTS_REEL_DURATION_SECONDS = original
 
 
 def test_api_settings_put_invalid_payload(client):
@@ -2572,7 +2574,8 @@ def test_load_studio_settings(monkeypatch, tmp_path):
     import config
 
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
-    original = config.REENCODING
+    # Capture+auto-restore (see test_api_settings_put_applies_values).
+    monkeypatch.setattr(config, "REENCODING", config.REENCODING)
 
     settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
     settings_file.write_text(json.dumps({"REENCODING": True}))
@@ -2580,8 +2583,6 @@ def test_load_studio_settings(monkeypatch, tmp_path):
     applied = server._load_studio_settings()
     assert applied["REENCODING"] is True
     assert config.REENCODING is True
-
-    config.REENCODING = original
 
 
 def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
@@ -3354,7 +3355,9 @@ def test_api_generate_persists_artifacts_after_disconnect(
             started_count[0] += 1
         # Block briefly so the client has time to disconnect while futures are
         # mid-flight. The thread-pool's shutdown(wait=True) will keep us alive.
-        proceed.wait(timeout=5)
+        # resp.close() blocks on this drain, so the timeout bounds the test's
+        # wall time; the disconnect is already registered when close() starts.
+        proceed.wait(timeout=2)
         clip = clip_list[0]
         artifact = {
             "id": f"a{clip['cell'].row}",
@@ -3600,7 +3603,10 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
     def slow_clip(clip_list, **kwargs):
         started.set()
         cancel_flag = kwargs.get("cancel_flag")
-        for _ in range(500):
+        # Busy-loop long enough for the test to post a cancel mid-run, but no
+        # longer than needed (cancellation is detected between clips / at the
+        # stream level, so this bounds the test's wall time).
+        for _ in range(150):
             if cancel_flag and cancel_flag():
                 return (0, [])
             threading.Event().wait(0.01)

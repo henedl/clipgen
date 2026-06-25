@@ -16,7 +16,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# pytest-randomly shuffles test order every run so order-dependencies surface
+# locally too (it prints `Using --randomly-seed=NNN` to reproduce). It's a tiny
+# pure-Python plugin, so unlike pytest-cov / pytest-xdist (kept CI-only, see
+# tests.yml) it lives in dev.
+dev = ["pytest", "pytest-randomly"]
 
 [tool.setuptools]
 packages = []
