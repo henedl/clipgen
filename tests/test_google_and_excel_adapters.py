@@ -138,6 +138,25 @@ def test_excel_sheet_adapter_basic_access(tmp_path, monkeypatch):
     assert adapter.col_count >= 5
 
 
+def test_open_excel_workbook_corrupt_file_returns_none(tmp_path, capsys):
+    # A file with an .xlsx suffix but non-zip content makes openpyxl raise
+    # zipfile.BadZipFile, which does not subclass OSError. The adapter must
+    # still fail gracefully (error message + None) rather than propagate.
+    bad_path = tmp_path / "corrupt.xlsx"
+    bad_path.write_text("this is not a real xlsx file")
+
+    assert excel_io.open_excel_workbook(str(bad_path)) is None
+
+
+def test_open_excel_workbook_unsupported_suffix_returns_none(tmp_path):
+    # A real file openpyxl cannot read by extension raises InvalidFileException
+    # (also not an OSError subclass).
+    txt_path = tmp_path / "notes.txt"
+    txt_path.write_text("plain text, not a spreadsheet")
+
+    assert excel_io.open_excel_workbook(str(txt_path)) is None
+
+
 def _make_workbook(path):
     import openpyxl
 

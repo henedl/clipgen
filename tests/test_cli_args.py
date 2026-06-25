@@ -532,3 +532,25 @@ def test_model_flag_applies_to_config(monkeypatch, flag, value, config_attr):
         assert getattr(config, config_attr) == value
     finally:
         setattr(config, config_attr, original)
+
+
+def test_run_gallery_cli_negative_interval_falls_back_to_default(tmp_path, monkeypatch):
+    """A negative --interval must fall back to the default, mirroring the
+    interactive gallery guard (a bare `or` would pass the truthy negative)."""
+    import config
+    import video
+
+    video_file = tmp_path / "clip.mp4"
+    video_file.write_bytes(b"x")
+
+    captured = {}
+
+    def fake_captures(_path, *, interval_seconds, output_format, gif_duration_seconds):
+        captured["interval"] = interval_seconds
+        return []  # return early before viewer build
+
+    monkeypatch.setattr(video, "generate_interval_captures", fake_captures)
+
+    args = Namespace(gallery=str(video_file), interval=-5, gif=False, bundle=False)
+    cli._run_gallery_cli(args)
+    assert captured["interval"] == config.GALLERY_INTERVAL_SECONDS

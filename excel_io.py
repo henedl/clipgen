@@ -6,10 +6,12 @@ so spreadsheet.py and clipgen can use local Excel files the same way as Google S
 """
 
 import datetime as _datetime
+import zipfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import openpyxl
+from openpyxl.utils.exceptions import InvalidFileException
 
 import config
 import utils
@@ -143,7 +145,16 @@ def open_excel_workbook(path: str) -> ExcelSheetAdapter | None:
         adapter = ExcelSheetAdapter(ws, path)
         wb.close()
         return adapter
-    except (KeyError, ValueError, OSError) as e:
+    except (
+        KeyError,
+        ValueError,
+        OSError,
+        zipfile.BadZipFile,
+        InvalidFileException,
+    ) as e:
+        # openpyxl raises BadZipFile for a corrupt/non-zip file and
+        # InvalidFileException for an unsupported suffix; neither subclasses
+        # OSError, so they must be caught explicitly to fail gracefully.
         utils.error_print(f"Could not open Excel file {path}: {e}")
         return None
 
