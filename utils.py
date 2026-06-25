@@ -1348,6 +1348,9 @@ def _clock_to_seconds(ts: str) -> int | None:
 
 def seconds_to_timestamp(total_seconds: int, *, force_hours: bool = False) -> str:
     """Format a non-negative number of seconds as H:MM:SS or M:SS."""
+    # Coerce to int so a float arg (e.g. a clamped end time) can't crash the
+    # ``:d``/``:02d`` format specs; matches the int-typed contract.
+    total_seconds = int(total_seconds)
     if total_seconds < 0:
         total_seconds = 0
     hours, rem = divmod(total_seconds, config.SECONDS_PER_HOUR)
@@ -1747,8 +1750,10 @@ def format_filesize(size_bytes: float, precision: int = 2) -> str:
     """
     suffixes = ["B", "KB", "MB", "GB", "TB"]
     suffix_index = 0
-    # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4)
-    while size_bytes > 1024 and suffix_index < 4:
+    # Keep dividing by 1024 until size is under 1024 or we reach TB (index 4).
+    # Use >= so an exact power of 1024 promotes to the next unit (1024 bytes ->
+    # 1.00KB, not 1024.00B).
+    while size_bytes >= 1024 and suffix_index < 4:
         suffix_index += 1
         size_bytes = size_bytes / 1024
     return f"{size_bytes:.{precision}f}{suffixes[suffix_index]}"
