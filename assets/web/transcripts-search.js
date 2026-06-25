@@ -135,9 +135,9 @@
       markAllBtn.className = "btn btn-small";
       markAllBtn.textContent = "Mark All";
       countEl.parentNode.insertBefore(markAllBtn, countEl.nextSibling);
+      markAllBtn.addEventListener("click", function () { markAllSearchResults(); });
     }
     markAllBtn.classList.remove("hidden");
-    markAllBtn.onclick = function () { markAllSearchResults(); };
 
     // Group results by participant
     var groups = {};

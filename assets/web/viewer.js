@@ -1313,7 +1313,9 @@
         var card = document.querySelector(
           '#artifactList .artifact-card[data-id="' + _hoveredCardId + '"]'
         );
-        if (card && (!related || !card.contains(related))) {
+        // If the card is gone (list re-rendered mid-hover) or the pointer left
+        // it, drop the hover state so the tooltip can't get orphaned.
+        if (!card || !related || !card.contains(related)) {
           _hoveredCardId = null;
           hideTooltip();
         }
