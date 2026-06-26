@@ -1,11 +1,11 @@
 # Workflows — Phase 2 plan (recipes · batch · catalog · triggers)
 
-> **Living doc — converged on posture, still iterating on detail.** v1 (`plans/WORKFLOWS-PLAN.md`,
+> **Living doc — posture set; P1/P2/P5 detail now pinned.** v1 (`plans/WORKFLOWS-PLAN.md`,
 > M0–M5) proves the cross-domain chain with a curated node set and a sequential, in-process run
-> engine. Phase 2's shape is now set by a round of decisions (recorded below): a **recipe/template
-> layer on top of a steadily-growing catalog**, **whole-study batch**, and a **narrow trigger**, with
-> several heavier ideas deliberately cut. Detail (result layout, storage contract, trigger binding)
-> is still open — see *Open questions*.
+> engine. An earlier round set Phase 2's shape (a **recipe/template layer on top of a steadily-growing
+> catalog**, **whole-study batch**, a **narrow trigger**, several heavier ideas cut). A second round
+> (recorded below) pinned the **node catalog + connection model (P1/P2)** and the **validation +
+> result-storage detail (P5)**. Batch layout and trigger binding stay open — see *Open questions*.
 
 ## Context
 
@@ -28,16 +28,19 @@ client, no persistence complexity, grow by demonstrated demand.
 
 ## Depends on v1 finishing
 
-Phase 2 builds directly on two pending v1 milestones — **M4 (run engine: `WorkflowRunner`, SSE,
-run history)** and **M5 (stashes: save/instantiate sub-graphs)**. Templates need M5's stash storage;
-batch and triggers need M4's runner. Land both before starting here.
+**M4 (run engine: `WorkflowRunner`, SSE, run history)** has landed (#467) — batch, triggers, and P5
+build on its runner. **M5 (stashes: save/instantiate sub-graphs)** is still schema-only
+(`workflows_manifest.json` has the `stashes` key, no CRUD/UI yet); P4's built-in recipes need it. Land
+M5 before P4.
 
 ## Gaps carried out of v1 (the starting state)
 
 1. **Frontend `canConnect` ignores `ADAPTERS`.** `workflows-wires.js:151` is exact-match; the runner
    *does* coerce (`events→clipRecords`, `segments→timeRange`, `video→scalar`), so the UI rejects
-   wires that would actually run. The most misleading gap → fixed first (P1).
-2. **`ss_scan` exposes 4 of 10 detectors**; no multitool/timelapse/heatmap.
+   wires that would actually run (e.g. *scan → clips* runs end-to-end today but can't be drawn). The
+   most misleading gap → fixed first (P1).
+2. **`ss_scan` exposes 4 of 10 detectors** *and passes `parameters={}`* (`workflows.py:699`) — so even
+   those 4 run with no configurable target color / search string / threshold. No multitool/timelapse/heatmap.
 3. **`make_clips` emits `clip` only** despite `process_clips` supporting `screen`/`gif`; no highlights
    reel, titlecards, compression.
 4. **One participant per run** — no whole-study batch.
@@ -51,18 +54,27 @@ batch and triggers need M4's runner. Land both before starting here.
 Rough order; P1 is the unblock, P2–P4 are the core experience, P5 is interleaved, P6 is last.
 
 ### P1 — Adapter ↔ UI parity *(small; do first)*
-Serve the `ADAPTERS` keys through `GET /api/catalog` and widen `canConnect` to accept exact-match
-**or** a registered adapter; render adapter-bridged wires with a distinct cue (dashed / "↳ coerced").
-Unblocks every multi-type recipe.
+Serve the `ADAPTERS` keys through `GET /api/catalog` (alongside the catalog) and widen
+`canConnect(out,in)` to `out === in || ADAPTERS.has([out,in])`; render adapter-bridged wires with a
+distinct cue (dashed / "↳ coerced"). Unblocks *scan → clips* and every multi-type recipe.
 
-### P2 — Catalog tranche *(incremental, append-only; each node = one `NodeType` + executor)*
-Build only the demanded buckets; skills `new-screenspace-tool` / `new-mode` cover the mechanics.
+### P2 — Catalog tranche *(each node = one `NodeType` + executor; pinned shapes below)*
+Mechanics: skills `new-screenspace-tool` / `new-mode`. Pinned node set:
 
-| Bucket | Nodes | Underlying function(s) |
-|---|---|---|
-| Artifact formats | **screenshots** · **gif** · **titlecards/endcards** toggle | `pipeline.process_clips` (clip/screen/gif), `titlecards.wrap_clip_with_cards` |
-| Highlights | **highlights reel** (severity / uniqueness / annotation scoring, default 180s budget) | the `-H` reel path in `pipeline`/`spreadsheet` |
-| Screenspace breadth | numbers · template · flow · scene · inactivity · boundary detectors; **multitool** chain; **timelapse**; **heatmap** | `screenspace_tools.TOOLS[*]`, `screenspace_multitool`, `screenspace_heatmap` |
+| Node(s) | Ports (in → out) | Params / notes | Reuses |
+|---|---|---|---|
+| **`make_clips`** (changed) | `clips?`/`video?`/`timeRange?` → `artifacts` | + `output_format` enum {clip,screen,gif} · `titlecards` bool · `titlecard_duration`. Stop hardcoding `output_format="clip"` (`workflows.py:786`). | `pipeline.process_clips`, `titlecards.wrap_clip_with_cards` |
+| **`highlights`** (new) | `clipRecords` → `clipRecords` | composable selector: scores severity/uniqueness/annotation, truncates to `budget` (default 180s); wire before `build_reel`/`make_clips`. Uniqueness scored vs. existing output-dir artifacts. | `-H` path: `spreadsheet._clip_highlight_score`, `score_and_truncate_clips` |
+| **10 per-detector SS nodes** (replace `ss_scan`) | `video` (+`region?`,`timeRange?`) → `events` | `ss_text`·`ss_color`·`ss_change`·`ss_similarity`·`ss_numbers`·`ss_template`·`ss_flow`·`ss_scene`·`ss_inactivity`·`ss_boundary`; one shared executor `_exec_ss_detector(tool)` reads node params into `scan_params` (fixes the dead-params gap). Params lifted from each `AnalysisTool`. | `screenspace_tools.TOOLS[*]` |
+| **`multitool`** (new) | `video` (+`region?`) → `events` | param = ordered step-list sub-editor `{type,region,interval,offset,logic,…}` — the one new compound param widget. | `screenspace_multitool.scan_multitool` |
+| **`timelapse`** (new) | `video` (+`region?`) → `artifacts` | emits an artifact with `type:"timelapse"`; params interval/output/scale. | `TimelapseTool` / `generate_timelapse` |
+| **`heatmap`** (new) | `events` → `artifacts` | emits `type:"heatmap"`; params style/output/window. **Precondition (soft):** upstream detector ∈ template/flow/change. | `screenspace_heatmap.*` |
+| **`measure`** (new) | `events?`/`clipRecords?`/`segments?` → `scalar` | `metric` ∈ {count,max_confidence,total_duration}. **Activates the otherwise-inert `gate`** (today only `video→scalar` feeds it). | — |
+
+**Connection model:** *no new `media` type* — `timelapse`/`heatmap` emit `artifacts` carrying a new
+`type` value; `viewer.finalize_timeline_data` + the viewer JS branch on `type` so clips/screens/gifs go
+on the timeline and timelapse/heatmap land in a separate attachments panel. *No new adapters* — every
+new node connects via existing types and the 6 existing adapters.
 
 *(Deferred to demand: data export, gallery viewer, transcript export md/srt/vtt — all exist in the
 backend; add when a recipe needs them.)*
@@ -78,19 +90,32 @@ participant, with results grouped per participant under one batch view.
   small fan-out cap for ffmpeg-bound graphs — *open question, see below.*
 
 ### P4 — Recipe / template layer *(the posture's centerpiece; templates = seeded stashes)*
-- Ship the headline graphs as **built-in stashes** (the M5 stash system, pre-seeded): e.g.
-  "Transcribe → Find Word → Scan → Clips → Viewer", "Scan → Highlights reel", "Transcribe → Summary
-  + Citations". One palette, no parallel "template" concept.
+- Ship the headline graphs as **built-in stashes** (the M5 stash system, pre-seeded). **Chosen
+  starters:** "Transcribe → Find Word → Make Clips → Viewer" and "Sheet Selection → Highlights →
+  Build Reel → Viewer". (Demand-driven later: Scan → Clips → Reel; Scan → Measure → Gate → Reel;
+  Transcribe → Summary + Citations + Friction; Template/Flow → Heatmap; Video → Timelapse.) One
+  palette, no parallel "template" concept.
 - "New from recipe" instantiates a built-in stash onto a fresh blueprint with sensible defaults.
 - Built-ins are read-only seeds; instantiating copies (non-destructive, reusing the M5 copy-on-save).
 
-### P5 — Authoring & run-history UX *(interleaved, ongoing)*
-- **Pre-run validation panel** — missing params, unmet `requires`, dangling required inputs, cycles —
-  before Run, not as a runtime failure.
-- **Run-history UX** — re-run, cancel/retry a node, expandable per-node results.
-- **Large-result storage** — store full per-node outputs in `run_id/node_id` sidecar files, fetched
-  lazily; keep the SSE snapshot to counts + status. *(Define the contract before P2 emits big
-  artifacts — see open questions.)*
+### P5 — Authoring & run-history UX *(designed; land the storage contract with P2)*
+- **Pre-run validation panel** (client-side) — aggregates today's scattered cues; **errors disable
+  Run, warnings don't**. *Errors:* cycle (port `topo_order`'s Kahn loop to JS; the server 400 stays a
+  backstop) · unwired required input (`requiredInputsSatisfied`) · unmet context (`nodeContextMet`) ·
+  **empty required param** (new `required:true` flag on `ParamSpec`, e.g. `find_word.word`,
+  `video_source.participant`, search strings). *Warnings:* heatmap needs a template/flow/change
+  upstream (data-driven `requiresUpstream` declaration) · orphan node · gate with no scalar source.
+  Recompute on **every edit** (edge/param/blueprint change), not just load; each row links to its node.
+- **Large-result sidecar storage** — write *inspectable* node outputs (`artifacts` w/ paths, `events`,
+  `segments`, `summary`/`citations`/`friction`, reel `manifest`, `viewerHtml`; **not** plumbing types —
+  which also dodges serializing clipRecords' gspread `Cell`) to
+  `<output_dir>/workflow_runs/<run_id>/<node_id>.json`. The **runner** writes on each node completion
+  (JSON-sanitized: drop non-finite floats / numpy / `Cell`); the snapshot adds a per-node `hasResult`
+  flag. New `GET /api/runs/<run_id>/nodes/<node_id>/result` serves it; the frontend lazily fetches on
+  row-expand and renders by type. Prune `workflow_runs/<run_id>/` in lockstep with the 50-run history
+  cap, and **evict terminal runners from `_runs`** once persisted (frees the in-memory results that leak
+  today). SSE/snapshot stay counts-only.
+- **Run-history UX** — re-run, cancel/retry a node, expandable per-node results (backed by the sidecars).
 - Canvas niceties as they earn their place (groups/comments, copy-paste) — not a priority.
 
 ### P6 — Triggers, narrow-first *(last; the one automation piece)*
@@ -120,13 +145,13 @@ participant, with results grouped per participant under one batch view.
 
 1. **Batch result layout (P3):** per-participant output subfolders + a combined batch view? How do
    batch artifacts avoid filename collisions across participants?
-2. **Large-result storage contract (P5):** sidecar files keyed by `run_id/node_id` — settle the shape
-   before P2 ships big outputs (highlights reels, screenshot sets).
-3. **Batch concurrency (P3):** strictly sequential, or a small fan-out cap for ffmpeg-bound graphs
+2. **Batch concurrency (P3):** strictly sequential, or a small fan-out cap for ffmpeg-bound graphs
    that respects Whisper/Ollama single-resource contention?
-4. **Trigger binding (P6):** how is a watch-dir bound to its blueprint — a per-blueprint toggle, or a
+3. **Trigger binding (P6):** how is a watch-dir bound to its blueprint — a per-blueprint toggle, or a
    single "active trigger" slot? What's the UX for "this graph runs automatically"?
-5. **Recipe set (P4):** which 3–5 built-in recipes ship first?
+
+*Resolved this round:* **large-result storage** → `run_id/node_id` sidecars, inspectable outputs only,
+runner-written, lazily fetched (P5). **Recipe set** → two starters chosen (P4).
 
 ## Reference (where the capability already lives)
 

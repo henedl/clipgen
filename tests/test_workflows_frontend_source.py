@@ -143,15 +143,19 @@ def test_hub_and_satellites_publish_canvas_hooks():
 
 
 def test_wires_satellite_present_and_typed():
-    """M2 wire layer: the SVG element, the connector satellite, and exact-type
-    validation (the M3 adapter seam) all ship."""
+    """Wire layer: the SVG element, the connector satellite, and adapter-aware
+    type validation (exact match OR a served ADAPTERS coercion) all ship."""
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
     assert 'id="wfWires"' in html
     assert 'id="wfWireDelete"' in html
     assert "workflows-wires.js" in html
     wires = (_WEB / "workflows-wires.js").read_text(encoding="utf-8")
-    # Edges are typed; M2 connects only on exact type match.
+    # canConnect keeps the exact-match clause AND consults the served adapter
+    # table (P1), so the UI accepts the same coercions the runner applies.
     assert "outType === inType" in wires
+    assert "state.adapters" in wires
+    # Adapter-bridged wires get a distinct ("coerced") render class.
+    assert "wf-wire-coerced" in wires
     # Endpoints come from live node position + cached port offsets.
     assert "portWorldPos" in wires
 
@@ -161,6 +165,7 @@ def test_css_defines_wire_and_param_styles():
     # Wire layer + connector styling.
     assert ".wf-wires" in css
     assert ".wf-wire" in css
+    assert ".wf-wire-coerced" in css  # dashed cue for adapter-bridged wires (P1)
     assert "non-scaling-stroke" in css  # constant on-screen wire width under zoom
     # Param editors + on-canvas validation cues.
     assert ".wf-param" in css

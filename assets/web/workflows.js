@@ -20,6 +20,7 @@
   var state = {
     catalog: null, // ordered node-type array from /api/catalog
     catalogById: {}, // id -> node type (built once for card lookups)
+    adapters: new Set(), // "src>dst" pairs the runner coerces (widens canConnect)
     context: { sheet: false, videoDir: false }, // launch context for grey-out
     blueprints: [], // all saved blueprints (full objects)
     nodes: [], // placed cards of the active blueprint: {id, type, params, position}
@@ -44,6 +45,12 @@
     return apiGet("api/catalog").then(function (res) {
       state.catalog = (res && res.catalog) || [];
       state.context = (res && res.context) || { sheet: false, videoDir: false };
+      // Adapter pairs the runner coerces across; canConnect consults this Set so
+      // the UI accepts the same wires the runner runs (events→clipRecords, …).
+      state.adapters = new Set();
+      ((res && res.adapters) || []).forEach(function (pair) {
+        state.adapters.add(pair[0] + ">" + pair[1]);
+      });
       state.catalogById = {};
       state.catalog.forEach(function (n) {
         injectControlPort(n);
