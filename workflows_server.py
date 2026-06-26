@@ -94,6 +94,9 @@ def api_catalog() -> Any:
         {
             "ok": True,
             "catalog": workflows.serialize_catalog(),
+            # Adapter pairs the runner coerces across (events→clipRecords, …) so
+            # the frontend's canConnect accepts the same wires the runner runs.
+            "adapters": workflows.serialize_adapters(),
             "context": {
                 "sheet": _sheet_context is not None,
                 "videoDir": bool(videos),

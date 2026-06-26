@@ -115,9 +115,29 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert isinstance(data["context"]["participants"], list)
 
 
+def test_catalog_serves_adapter_pairs(wf_client):
+    # The catalog endpoint serves the runner's ADAPTERS table (top-level, so the
+    # context-shape assertion above is unaffected) as JSON-safe [src, dst] pairs,
+    # so the frontend's canConnect accepts exactly the coercions the runner
+    # applies in _gather_inputs. This is the UI↔runner parity guard.
+    resp = wf_client.get("/workflows/api/catalog")
+    adapters = resp.get_json()["adapters"]
+    assert isinstance(adapters, list) and adapters
+    assert all(isinstance(p, list) and len(p) == 2 for p in adapters)
+    assert {tuple(p) for p in adapters} == set(workflows.ADAPTERS)
+
+
 def test_serialize_catalog_is_json_safe():
     # serialize_catalog must round-trip through json without TypeErrors.
     json.dumps(workflows.serialize_catalog())
+
+
+def test_serialize_adapters_matches_table():
+    # serialize_adapters must be JSON-safe (no callables) and cover every key in
+    # ADAPTERS — the frontend Set is then correct by construction.
+    pairs = workflows.serialize_adapters()
+    json.dumps(pairs)
+    assert {tuple(p) for p in pairs} == set(workflows.ADAPTERS)
 
 
 def test_every_node_type_has_a_callable_executor():

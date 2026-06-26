@@ -430,6 +430,18 @@ def serialize_catalog() -> list[dict[str, Any]]:
     ]
 
 
+def serialize_adapters() -> list[list[str]]:
+    """Return the ``ADAPTERS`` keys as JSON-safe ``[src, dst]`` type pairs.
+
+    Drives the ``adapters`` field of ``GET /workflows/api/catalog`` so the
+    frontend's ``canConnect`` can accept the same coercions the runner applies
+    (``_gather_inputs``). Serving the table — rather than duplicating it in JS —
+    keeps UI wire-validity in lockstep with the runner (``ADAPTERS`` defined
+    below is the single source of truth; ``tests/test_workflows_api`` guards parity).
+    """
+    return [[src, dst] for src, dst in ADAPTERS]
+
+
 # ---------------------------------------------------------------------------
 # Executors (M3) — thin adapters over existing pure functions
 # ---------------------------------------------------------------------------

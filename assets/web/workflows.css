@@ -450,6 +450,13 @@ body[data-frontend="workflows"] {
   stroke-dasharray: 5 4;
 }
 
+/* Adapter-bridged ("coerced") wire — dashed to distinguish from an exact-type
+   match; the runner coerces the value (events→clipRecords, …) at run time. The
+   dash persists through :hover/.selected (those rules don't touch dasharray). */
+.wf-wire-coerced {
+  stroke-dasharray: 6 4;
+}
+
 /* Fat invisible click/hover target so thin wires are easy to grab. */
 .wf-wire-hit {
   fill: none;

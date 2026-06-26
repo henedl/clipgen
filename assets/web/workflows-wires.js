@@ -4,10 +4,12 @@
  * clicking once to arm (the wire then trails the cursor until the next click —
  * on a card it connects, anywhere else it cancels); dropping onto a card snaps
  * to its nearest compatible port. While connecting, compatible cards + palette
- * items glow and the rest dim. Type validation is exact-match (the canConnect()
- * seam widens to the ADAPTERS table in M3). Plus bezier rendering in the
- * transformed #wfWires layer, edge selection, and removal (Delete key via the
- * canvas + a floating × button).
+ * items glow and the rest dim. Type validation accepts an exact match OR a
+ * registered adapter (canConnect() consults state.adapters, served by
+ * /api/catalog, so the UI accepts the same coercions the runner applies);
+ * adapter-bridged wires render dashed with a "coerced" tooltip. Plus bezier
+ * rendering in the transformed #wfWires layer, edge selection, and removal
+ * (Delete key via the canvas + a floating × button).
  *
  * Edge shape: { id, from, fromPort, to, toPort } — always normalized so `from`
  * is the output side and `to` the input side. Endpoints are computed from the
@@ -116,6 +118,20 @@
 
   // ---- Rendering ----
 
+  // A port's wire type from the catalog (mirrors backend _port_type). Used to
+  // tag adapter-bridged wires; the connect gestures read data-port-type off the
+  // DOM dots directly, so this only serves renderWires.
+  function portTypeOf(nodeId, port, dir) {
+    var node = WF.findNode(nodeId);
+    var nt = node && state.catalogById[node.type];
+    if (!nt) return null;
+    var ports = (dir === "out" ? nt.outputs : nt.inputs) || [];
+    for (var i = 0; i < ports.length; i++) {
+      if (ports[i].name === port) return ports[i].type;
+    }
+    return null;
+  }
+
   function renderWires() {
     var svg = qs("#wfWires");
     if (!svg) return;
@@ -130,11 +146,26 @@
       group.setAttribute("data-edge-id", edge.id);
       var hit = svgEl("path", "wf-wire-hit");
       hit.setAttribute("d", d);
+      // Coerced wire: port types differ but a registered adapter bridges them.
+      var outType = portTypeOf(edge.from, edge.fromPort, "out");
+      var inType = portTypeOf(edge.to, edge.toPort, "in");
+      var coerced =
+        !!outType &&
+        !!inType &&
+        outType !== inType &&
+        !!(state.adapters && state.adapters.has(outType + ">" + inType));
       var wire = svgEl(
         "path",
-        "wf-wire" + (state.selectedEdge === edge.id ? " selected" : "")
+        "wf-wire" +
+          (state.selectedEdge === edge.id ? " selected" : "") +
+          (coerced ? " wf-wire-coerced" : "")
       );
       wire.setAttribute("d", d);
+      if (coerced) {
+        var title = svgEl("title");
+        title.textContent = "↳ coerced: " + outType + " → " + inType;
+        wire.appendChild(title);
+      }
       group.appendChild(hit);
       group.appendChild(wire);
       frag.appendChild(group);
@@ -149,10 +180,11 @@
   // ---- Type validation ----
 
   function canConnect(outType, inType) {
-    // M2: exact type match. M3 widens this to also accept a registered adapter
-    // (events → clipRecords, segments → timeRange, …) once the backend serves
-    // the ADAPTERS table to the frontend.
-    return outType === inType;
+    // Exact type match, OR a registered adapter the runner coerces across
+    // (events → clipRecords, segments → timeRange, …), served via /api/catalog.
+    // Single-hop only — mirrors the runner's one-adapter _gather_inputs.
+    if (outType === inType) return true;
+    return !!(state.adapters && state.adapters.has(outType + ">" + inType));
   }
 
   // ---- Connect: highlight ----
