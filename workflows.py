@@ -39,6 +39,7 @@ phase — kept in the schema so the seam exists without building anything.
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1989,6 +1990,30 @@ def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list
     return order
 
 
+def blueprint_participant_nodes(blueprint: dict[str, Any]) -> list[dict[str, Any]]:
+    """The blueprint's participant-bound source nodes (``video_source``).
+
+    Whole-study batch (P3) fans out over these — a blueprint with none can't be
+    rebound per participant, so the batch endpoint rejects it.
+    """
+    return [n for n in blueprint.get("nodes", []) if n.get("type") == "video_source"]
+
+
+def bind_participant(blueprint: dict[str, Any], participant: str) -> dict[str, Any]:
+    """Deep-copy ``blueprint`` and rebind every ``video_source`` node to ``participant``.
+
+    Pure: the original is never mutated. Non-source nodes are untouched — only the
+    participant-bound sources are rewritten, so one blueprint can run once per
+    participant in a batch (P3).
+    """
+    clone = copy.deepcopy(blueprint)
+    for node in clone.get("nodes", []):
+        if node.get("type") == "video_source":
+            params = node.setdefault("params", {})
+            params["participant"] = participant
+    return clone
+
+
 def _port_type(type_id: str, port_name: str | None, direction: str) -> str | None:
     """Look up a port's wire type from ``NODE_TYPES`` ('in' or 'out' direction)."""
     node_type = NODE_TYPES.get(type_id)
@@ -2055,9 +2080,15 @@ class WorkflowRunner:
         blueprint: dict[str, Any],
         ctx: NodeContext,
         on_update: Callable[[], None] | None = None,
+        participant: str = "",
+        batch_id: str = "",
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
+        # Batch identity (P3): empty for a normal single run; a child run carries
+        # its participant + parent batch id so the snapshot can be grouped.
+        self.participant = participant
+        self.batch_id = batch_id
         self.nodes = list(blueprint.get("nodes", []))
         self.edges = list(blueprint.get("edges", []))
         self.ctx = ctx
@@ -2269,6 +2300,8 @@ class WorkflowRunner:
         return {
             "id": self.run_id,
             "blueprintId": self.blueprint_id,
+            "batchId": self.batch_id,
+            "participant": self.participant,
             "status": self.status,
             "nodeStates": node_states,
             "results": results,

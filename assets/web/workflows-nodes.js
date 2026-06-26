@@ -96,12 +96,24 @@
       input = el("select", "wf-param-input");
       var participants = (state.context && state.context.participants) || [];
       var options = participants.slice();
-      // Keep a stored id that isn't in the discovered list (launched without it).
-      if (value && options.indexOf(value) < 0) options.unshift(value);
+      var ALL = WF.ALL_PARTICIPANTS;
+      // Keep a stored id that isn't in the discovered list (launched without it),
+      // but never the ALL sentinel (it gets its own option below).
+      if (value && value !== ALL && options.indexOf(value) < 0)
+        options.unshift(value);
       var blank = el("option");
       blank.value = "";
       blank.textContent = "—";
       input.appendChild(blank);
+      // "All participants" turns a Run into a whole-study batch (one run each).
+      // Only offered when there are participants with video to fan out over.
+      if (participants.length) {
+        var allOpt = el("option");
+        allOpt.value = ALL;
+        allOpt.textContent = "All participants";
+        if (value === ALL) allOpt.selected = true;
+        input.appendChild(allOpt);
+      }
       options.forEach(function (pid) {
         var opt = el("option");
         opt.value = pid;

@@ -7,6 +7,7 @@ tests/test_workflows_runner.py; here we exercise the HTTP surface.
 """
 
 import json
+import threading
 import time
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config  # noqa: E402
+import utils  # noqa: E402
 import workflows  # noqa: E402
 import workflows_server  # noqa: E402
 
@@ -30,6 +32,8 @@ def wf_client(tmp_path, monkeypatch):
     # Reset run state so runners/SSE clients never leak across tests.
     workflows_server._runs = {}
     workflows_server._sse_clients = []
+    workflows_server._batches = {}
+    workflows_server._batch_sse_clients = []
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
@@ -120,6 +124,19 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert set(data["context"]) == {"sheet", "videoDir", "participants"}
     assert data["context"]["sheet"] is False  # fixture sets _sheet_context=None
     assert isinstance(data["context"]["participants"], list)
+
+
+def test_catalog_participants_filtered_to_has_video(wf_client, monkeypatch):
+    # The Video-Source dropdown (and the "All participants" fan-out) must only see
+    # participants with an actual video file, matching the batch endpoint's filter.
+    entries = [
+        {"id": "P01", "has_video": True, "video_paths": ["a.mp4"]},
+        {"id": "P02", "has_video": False, "video_paths": []},
+    ]
+    monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: entries)
+    ctx = wf_client.get("/workflows/api/catalog").get_json()["context"]
+    assert ctx["participants"] == ["P01"]
+    assert ctx["videoDir"] is True
 
 
 def test_catalog_serves_adapter_pairs(wf_client):
@@ -314,8 +331,8 @@ def test_run_cancel_404_when_finished(wf_client):
         "run"
     ]
     _wait_terminal(wf_client, run["id"])
-    # Still cancellable while the runner lives in _runs (no-op on a finished run),
-    # but an unknown id 404s.
+    # A finished runner is evicted from _runs (P3 leak fix), so cancelling it — or
+    # an unknown id — 404s.
     assert wf_client.post("/workflows/api/runs/run_nope/cancel").status_code == 404
 
 
@@ -335,3 +352,241 @@ def test_run_stream_is_event_stream(wf_client):
     assert text.startswith("data:")
     assert run["id"] in text
     resp.close()
+
+
+def test_runner_evicted_from_runs_after_terminal(wf_client):
+    # The leak fix (P3): a terminal runner is dropped from _runs once persisted;
+    # the snapshot is still served from the manifest via _run_snapshot.
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp_id}).get_json()[
+        "run"
+    ]
+    final = _wait_terminal(wf_client, run["id"])
+    deadline = time.monotonic() + 2.0  # let the finalize thread run the eviction
+    while time.monotonic() < deadline and run["id"] in workflows_server._runs:
+        time.sleep(0.02)
+    assert run["id"] not in workflows_server._runs
+    served = wf_client.get(f"/workflows/api/runs/{run['id']}").get_json()["run"]
+    assert served["status"] == final["status"]
+
+
+# ---- Batch lifecycle (P3: whole-study fan-out) ----
+
+
+def _mock_participants(monkeypatch, ids=("P01", "P02", "P03")):
+    """Force participant discovery to a fixed set with (empty) video paths.
+
+    Empty ``video_paths`` keep the executors in their DEBUGGING stub path — no real
+    media is needed to fan a blueprint out across participants.
+    """
+    entries = [{"id": i, "has_video": True, "video_paths": []} for i in ids]
+    monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: entries)
+    return list(ids)
+
+
+def _wait_batch_terminal(client, batch_id, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        batch = client.get(f"/workflows/api/batches/{batch_id}").get_json()["batch"]
+        if batch["status"] in ("completed", "failed", "cancelled"):
+            return batch
+        time.sleep(0.02)
+    raise AssertionError(f"batch {batch_id} did not finish within {timeout}s")
+
+
+def test_batch_runs_every_participant(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    parts = _mock_participants(monkeypatch)
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    created = wf_client.post("/workflows/api/batches", json={"blueprintId": bp_id})
+    assert created.status_code == 200
+    batch = created.get_json()["batch"]
+    assert batch["id"].startswith("batch_")
+    assert set(batch["participants"]) == set(parts)
+
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "completed"
+    assert final["counts"].get("completed") == len(parts)
+    # Drill-in returns one run per participant, each tagged with the batch.
+    detail = wf_client.get(f"/workflows/api/batches/{batch['id']}").get_json()
+    runs = detail["runs"]
+    assert {r["participant"] for r in runs} == set(parts)
+    assert all(r["batchId"] == batch["id"] for r in runs)
+
+
+def test_batch_continues_when_one_participant_fails(wf_client, monkeypatch):
+    # Continue-on-error is mandatory: one bad participant must not sink the batch.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02", "P03"))
+    orig = workflows.NODE_TYPES["video_source"]["execute"]
+
+    def flaky(ctx, inputs, params):
+        if params.get("participant") == "P02":
+            raise RuntimeError("boom")
+        return orig(ctx, inputs, params)
+
+    monkeypatch.setitem(workflows.NODE_TYPES["video_source"], "execute", flaky)
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    by_part = {c["participant"]: c["status"] for c in final["children"]}
+    assert by_part["P01"] == "completed"
+    assert by_part["P03"] == "completed"
+    assert by_part["P02"] == "failed"
+    assert final["status"] == "failed"
+
+
+def test_batch_cancel_short_circuits_remaining(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02", "P03"))
+    started = threading.Event()
+    orig = workflows.NODE_TYPES["video_source"]["execute"]
+
+    def blocker(ctx, inputs, params):
+        # Hold the first child until the batch is cancelled (cancel sets the ctx
+        # cancel event via the runner), so P02/P03 never start.
+        if params.get("participant") == "P01":
+            started.set()
+            for _ in range(500):
+                if ctx.cancel_flag():
+                    break
+                time.sleep(0.01)
+        return orig(ctx, inputs, params)
+
+    monkeypatch.setitem(workflows.NODE_TYPES["video_source"], "execute", blocker)
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    assert started.wait(timeout=5)
+    assert (
+        wf_client.post(f"/workflows/api/batches/{batch['id']}/cancel").status_code
+        == 200
+    )
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "cancelled"
+    by_part = {c["participant"]: c["status"] for c in final["children"]}
+    assert by_part["P02"] == "cancelled"
+    assert by_part["P03"] == "cancelled"
+
+
+def test_batch_400_when_no_video_source(wf_client, monkeypatch):
+    _mock_participants(monkeypatch)
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    resp = wf_client.post("/workflows/api/batches", json={"blueprintId": bp_id})
+    assert resp.status_code == 400
+
+
+def test_batch_400_when_no_participants(wf_client, monkeypatch):
+    monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: [])
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    resp = wf_client.post("/workflows/api/batches", json={"blueprintId": bp_id})
+    assert resp.status_code == 400
+
+
+def test_batch_404_when_blueprint_missing(wf_client):
+    resp = wf_client.post("/workflows/api/batches", json={"blueprintId": "bp_nope"})
+    assert resp.status_code == 404
+
+
+def test_batches_list_and_filter(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02"))
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    _wait_batch_terminal(wf_client, batch["id"])
+
+    listed = wf_client.get("/workflows/api/batches").get_json()["batches"]
+    assert any(b["id"] == batch["id"] for b in listed)
+    filtered = wf_client.get(f"/workflows/api/batches?blueprintId={bp_id}").get_json()[
+        "batches"
+    ]
+    assert filtered and all(b["blueprintId"] == bp_id for b in filtered)
+    assert (
+        wf_client.get("/workflows/api/batches?blueprintId=bp_other").get_json()[
+            "batches"
+        ]
+        == []
+    )
+
+
+def test_batch_get_and_cancel_404_when_unknown(wf_client):
+    assert wf_client.get("/workflows/api/batches/batch_nope").status_code == 404
+    assert wf_client.post("/workflows/api/batches/batch_nope/cancel").status_code == 404
+
+
+def test_batch_stream_is_event_stream(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    _mock_participants(monkeypatch, ids=("P01",))
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    _wait_batch_terminal(wf_client, batch["id"])
+    resp = wf_client.get(f"/workflows/api/batches/{batch['id']}/stream")
+    assert resp.mimetype == "text/event-stream"
+    first = next(iter(resp.response))
+    text = first.decode() if isinstance(first, bytes) else first
+    assert text.startswith("data:")
+    assert batch["id"] in text
+    resp.close()
+
+
+def test_batch_children_survive_run_history_cap(wf_client, monkeypatch):
+    # The history cap evicts whole units (a batch's children together), never
+    # splitting a batch — so a batch larger than the cap keeps all its children and
+    # older loose runs are dropped instead. (Regression for the per-record cap that
+    # evicted a batch's own not-yet-finished children.)
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setattr(workflows_server, "_MAX_RUN_HISTORY", 3, raising=False)
+
+    # Three loose single runs fill the cap first.
+    gate_bp = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    loose_ids = []
+    for _ in range(3):
+        r = wf_client.post(
+            "/workflows/api/runs", json={"blueprintId": gate_bp}
+        ).get_json()["run"]
+        _wait_terminal(wf_client, r["id"])
+        loose_ids.append(r["id"])
+
+    # A 2-participant batch then runs; it must stay intact past the cap.
+    parts = _mock_participants(monkeypatch, ids=("P01", "P02"))
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    final = _wait_batch_terminal(wf_client, batch["id"])
+
+    # All children survived and are individually retrievable.
+    assert {c["participant"] for c in final["children"]} == set(parts)
+    detail = wf_client.get(f"/workflows/api/batches/{batch['id']}").get_json()
+    assert len(detail["runs"]) == len(parts)
+    for child in final["children"]:
+        assert wf_client.get(f"/workflows/api/runs/{child['runId']}").status_code == 200
+    # The oldest loose runs were evicted to make room (cap held by dropping units).
+    assert wf_client.get(f"/workflows/api/runs/{loose_ids[0]}").status_code == 404

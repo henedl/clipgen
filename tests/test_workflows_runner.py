@@ -7,6 +7,7 @@ Ollama is needed. The HTTP surface is covered in tests/test_workflows_api.py.
 
 import json
 import threading
+from typing import Any
 
 import pytest
 
@@ -54,6 +55,65 @@ def test_topo_order_ignores_stale_edges():
     nodes = [{"id": "a"}]
     edges = [{"from": "ghost", "fromPort": "o", "to": "a", "toPort": "i"}]
     assert workflows.topo_order(nodes, edges) == ["a"]
+
+
+# ---- bind_participant (P3 whole-study fan-out) ----
+
+
+def test_bind_participant_rebinds_every_video_source_without_mutating_original():
+    blueprint: dict[str, Any] = {
+        "id": "bp",
+        "nodes": [
+            {"id": "v1", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "v2", "type": "video_source", "params": {}},
+            {"id": "t", "type": "transcribe", "params": {"foo": "bar"}},
+        ],
+        "edges": [],
+    }
+    bound = workflows.bind_participant(blueprint, "P07")
+    # Every video_source is rebound; non-source nodes are untouched.
+    by_id = {n["id"]: n for n in bound["nodes"]}
+    assert by_id["v1"]["params"]["participant"] == "P07"
+    assert by_id["v2"]["params"]["participant"] == "P07"
+    assert by_id["t"]["params"] == {"foo": "bar"}
+    # Pure: the original blueprint is never mutated (deep copy).
+    orig_nodes: Any = blueprint["nodes"]
+    orig_by_id = {n["id"]: n for n in orig_nodes}
+    assert orig_by_id["v1"]["params"]["participant"] == "P01"
+    assert "participant" not in orig_by_id["v2"]["params"]
+
+
+def test_blueprint_participant_nodes_finds_only_video_sources():
+    blueprint = {
+        "nodes": [
+            {"id": "v", "type": "video_source", "params": {}},
+            {"id": "s", "type": "sheet_selection", "params": {}},
+        ]
+    }
+    found = workflows.blueprint_participant_nodes(blueprint)
+    assert [n["id"] for n in found] == ["v"]
+    assert workflows.blueprint_participant_nodes({"nodes": []}) == []
+
+
+def test_runner_snapshot_carries_batch_identity(tmp_path):
+    runner = workflows.WorkflowRunner(
+        "run_x",
+        {"id": "bp", "nodes": [], "edges": []},
+        _ctx(tmp_path),
+        participant="P03",
+        batch_id="batch_abc",
+    )
+    snap = runner.snapshot()
+    assert snap["participant"] == "P03"
+    assert snap["batchId"] == "batch_abc"
+    # A normal single run carries blank batch identity.
+    plain = workflows.WorkflowRunner(
+        "run_y",
+        {"id": "bp", "nodes": [], "edges": []},
+        _ctx(tmp_path),
+    )
+    assert plain.snapshot()["batchId"] == ""
+    assert plain.snapshot()["participant"] == ""
 
 
 # ---- WorkflowRunner ----

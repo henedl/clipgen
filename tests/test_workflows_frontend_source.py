@@ -229,6 +229,31 @@ def test_run_panel_satellite_present_and_wired():
     assert "api/runs" in runs
 
 
+def test_batch_via_all_participants_option():
+    """P3 whole-study fan-out: triggered by a Video Source's "All participants"
+    dropdown option (no separate header button) — Run delegates to a batch, with
+    its own SSE/poll transport and batch card style."""
+    src = _workflows_js()
+    # Frontend-only sentinel on the hub; the nodes satellite offers it as an option
+    # and the runs satellite branches Run on it (no duplicated string literal).
+    assert "WF.ALL_PARTICIPANTS" in src
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    assert "All participants" in nodes
+    # The single Run button fans out when a source is set to "All".
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "blueprintWantsBatch" in runs
+    assert "batches:" in src  # state.batches on the hub
+    assert "api/batches" in runs
+    assert "subscribeBatch" in runs
+
+    # The old standalone control is gone.
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert "wfRunAllBtn" not in html
+
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-batch-card" in css
+
+
 def test_universal_control_port_for_gate_wiring():
     """A Gate's `control` output wires into any node via a universal optional
     `__gate__` input (exact-match) — the M4 control-edge gating decision."""

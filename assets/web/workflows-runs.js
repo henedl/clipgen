@@ -14,14 +14,34 @@
   var state = WF.state;
 
   // Satellite-local transport handles (only this file touches them, so they stay
-  // module-local rather than on WF.state).
-  var _stream = null; // EventSource for the active run
-  var _poller = null; // createPoller fallback when SSE drops
+  // module-local rather than on WF.state). The run pair streams the focused child
+  // (or a single run); the batch pair streams the batch summary — both can run at
+  // once during a batch (summary + the drilled-in child's per-node detail).
+  var _stream = null; // EventSource for the active/focused run
+  var _poller = null; // createPoller fallback when run SSE drops
+  var _batchStream = null; // EventSource for the active batch
+  var _batchPoller = null; // createPoller fallback when batch SSE drops
 
   var TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
 
   function isTerminal(status) {
     return !!TERMINAL[status];
+  }
+
+  // A blueprint fans out when any Video Source is set to "All participants" — the
+  // single Run button then launches a batch instead of one run.
+  function blueprintWantsBatch() {
+    var nodes = state.nodes || [];
+    for (var i = 0; i < nodes.length; i++) {
+      if (
+        nodes[i].type === "video_source" &&
+        nodes[i].params &&
+        nodes[i].params.participant === WF.ALL_PARTICIPANTS
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // ---- Transport ------------------------------------------------------------
@@ -85,6 +105,68 @@
     _poller.start();
   }
 
+  // ---- Batch transport ------------------------------------------------------
+
+  function stopBatchStream() {
+    if (_batchStream) {
+      _batchStream.close();
+      _batchStream = null;
+    }
+  }
+
+  function stopBatchPolling() {
+    if (_batchPoller) {
+      _batchPoller.stop();
+      _batchPoller = null;
+    }
+  }
+
+  function stopBatchTransport() {
+    stopBatchStream();
+    stopBatchPolling();
+  }
+
+  function subscribeBatch(batchId) {
+    stopBatchTransport();
+    if (!window.EventSource) {
+      startBatchPolling(batchId);
+      return;
+    }
+    var es = new EventSource(
+      "api/batches/" + encodeURIComponent(batchId) + "/stream",
+    );
+    _batchStream = es;
+    es.onmessage = function (e) {
+      var data;
+      try {
+        data = JSON.parse(e.data);
+      } catch (_) {
+        return;
+      }
+      if (data && data.batch) handleBatchData(data.batch);
+    };
+    es.onerror = function () {
+      stopBatchStream();
+      startBatchPolling(batchId);
+    };
+  }
+
+  function startBatchPolling(batchId) {
+    if (_batchPoller) return;
+    _batchPoller = createPoller(
+      function () {
+        apiGet("api/batches/" + encodeURIComponent(batchId))
+          .then(function (res) {
+            if (res && res.batch) handleBatchData(res.batch);
+          })
+          .catch(function () {});
+      },
+      POLL_INTERVAL,
+      { runImmediately: true },
+    );
+    _batchPoller.start();
+  }
+
   // ---- Run lifecycle --------------------------------------------------------
 
   function activeRunInFlight() {
@@ -92,9 +174,19 @@
     return run && !isTerminal(run.status);
   }
 
+  function activeBatchInFlight() {
+    var batch = findBatch(state.activeBatchId);
+    return batch && !isTerminal(batch.status);
+  }
+
   function startRun() {
     if (!state.ready || !state.activeBlueprintId) return;
-    if (activeRunInFlight()) return; // one run at a time
+    if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    // A Video Source set to "All participants" makes Run fan out over the study.
+    if (blueprintWantsBatch()) {
+      startBatch();
+      return;
+    }
     setRunningUI(true);
     // Flush pending canvas edits so the server runs the latest blueprint.
     Promise.resolve(WF.flushSave ? WF.flushSave() : null)
@@ -120,6 +212,15 @@
   }
 
   function stopRun() {
+    // The single Stop button cancels whichever is in flight — a batch cancels the
+    // whole fan-out (current child + remaining), else a single run.
+    if (activeBatchInFlight()) {
+      apiPost(
+        "api/batches/" + encodeURIComponent(state.activeBatchId) + "/cancel",
+        {},
+      ).catch(function () {});
+      return;
+    }
     var id = state.activeRunId;
     if (!id) return;
     apiPost("api/runs/" + encodeURIComponent(id) + "/cancel", {}).catch(
@@ -128,28 +229,86 @@
     // UI flips to idle when the stream/poll reports the cancelled status.
   }
 
-  // Fetch this blueprint's run history (and reattach to an in-flight run).
+  // Fan the active blueprint out across every participant (P3). One run per
+  // participant, sequential, grouped under one batch card. Reached from startRun
+  // when a Video Source is set to "All participants".
+  function startBatch() {
+    if (!state.ready || !state.activeBlueprintId) return;
+    if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    setRunningUI(true);
+    Promise.resolve(WF.flushSave ? WF.flushSave() : null)
+      .then(function () {
+        return apiPost("api/batches", { blueprintId: state.activeBlueprintId });
+      })
+      .then(function (res) {
+        if (!res || !res.ok || !res.batch) {
+          setRunningUI(false);
+          showToast("Couldn't start batch");
+          return;
+        }
+        upsertBatch(res.batch);
+        state.activeBatchId = res.batch.id;
+        state.activeRunId = null;
+        renderRuns();
+        subscribeBatch(res.batch.id);
+      })
+      .catch(function (err) {
+        setRunningUI(false);
+        showToast((err && err.message) || "Couldn't start batch");
+      });
+  }
+
+  // Fetch this blueprint's run + batch history (and reattach to in-flight work).
   function refreshRuns() {
     var bpId = state.activeBlueprintId;
     if (!bpId) return;
     stopTransport();
+    stopBatchTransport();
     state.activeRunId = null;
-    apiGet("api/runs?blueprintId=" + encodeURIComponent(bpId))
-      .then(function (res) {
-        state.runs = (res && res.runs) || [];
+    state.activeBatchId = null;
+    var q = encodeURIComponent(bpId);
+    Promise.all([
+      apiGet("api/runs?blueprintId=" + q).catch(function () {
+        return null;
+      }),
+      apiGet("api/batches?blueprintId=" + q).catch(function () {
+        return null;
+      }),
+    ])
+      .then(function (results) {
+        state.runs = (results[0] && results[0].runs) || [];
+        state.batches = (results[1] && results[1].batches) || [];
+
+        // A live batch owns the Run/Stop buttons; reattach to it first and focus
+        // its running child for the canvas tint.
+        var liveBatch = firstNonTerminal(state.batches);
+        if (liveBatch) {
+          state.activeBatchId = liveBatch.id;
+          setRunningUI(true);
+          subscribeBatch(liveBatch.id);
+          var runningChild = (liveBatch.children || []).filter(function (c) {
+            return c.status === "running";
+          })[0];
+          renderRuns();
+          if (runningChild) focusChild(runningChild.runId);
+          else annotateCanvas(null);
+          return;
+        }
+
+        // Else reattach to a loose (non-batch) in-flight run, as before.
+        var looseRuns = state.runs.filter(function (r) {
+          return !r.batchId;
+        });
         var live = null;
-        for (var i = 0; i < state.runs.length; i++) {
-          if (!isTerminal(state.runs[i].status)) {
-            live = state.runs[i];
+        for (var i = 0; i < looseRuns.length; i++) {
+          if (!isTerminal(looseRuns[i].status)) {
+            live = looseRuns[i];
             break;
           }
         }
-        // The active run drives both the canvas tint and the expanded card.
-        // Point at the in-flight run if one survived (and subscribe to it), else
-        // the most recent run for an at-a-glance view of the last outcome.
         state.activeRunId = live
           ? live.id
-          : (state.runs[0] && state.runs[0].id) || null;
+          : (looseRuns[0] && looseRuns[0].id) || null;
         if (live) {
           setRunningUI(true);
           subscribeRun(live.id);
@@ -160,6 +319,13 @@
         annotateCanvas(findRun(state.activeRunId));
       })
       .catch(function () {});
+  }
+
+  function firstNonTerminal(list) {
+    for (var i = 0; i < (list || []).length; i++) {
+      if (!isTerminal(list[i].status)) return list[i];
+    }
+    return null;
   }
 
   // ---- Data handling --------------------------------------------------------
@@ -186,10 +352,51 @@
     upsertRun(run);
     if (run.id === state.activeRunId && isTerminal(run.status)) {
       stopTransport();
-      setRunningUI(false);
+      // During a batch the batch summary owns the Run/Stop buttons — a finished
+      // child must not flip them back to idle while siblings are still running.
+      if (!activeBatchInFlight()) setRunningUI(false);
     }
     renderRuns();
     annotateCanvas(run);
+  }
+
+  // ---- Batch data handling --------------------------------------------------
+
+  function findBatch(id) {
+    for (var i = 0; i < state.batches.length; i++) {
+      if (state.batches[i].id === id) return state.batches[i];
+    }
+    return null;
+  }
+
+  function upsertBatch(batch) {
+    var existing = findBatch(batch.id);
+    if (existing) {
+      state.batches[state.batches.indexOf(existing)] = batch;
+    } else {
+      state.batches.unshift(batch);
+    }
+  }
+
+  function handleBatchData(batch) {
+    if (!batch) return;
+    upsertBatch(batch);
+    if (batch.id === state.activeBatchId && isTerminal(batch.status)) {
+      stopBatchTransport();
+      setRunningUI(false);
+    }
+    renderRuns();
+  }
+
+  // Drill into one participant's run: stream its per-node detail + tint the canvas
+  // by it, without touching the batch's ownership of the Run/Stop buttons.
+  function focusChild(runId) {
+    if (!runId) return;
+    state.activeRunId = runId;
+    var existing = findRun(runId);
+    if (existing) annotateCanvas(existing);
+    renderRuns();
+    subscribeRun(runId); // live per-node updates if the child is still running
   }
 
   // ---- Canvas tinting -------------------------------------------------------
@@ -300,6 +507,30 @@
     return parts[parts.length - 1] || path;
   }
 
+  // Per-node detail rows + result chips for an expanded run (shared by single-run
+  // cards and a drilled-in batch child).
+  function buildNodeDetail(run) {
+    var wrap = document.createDocumentFragment();
+    var rows = el("div", "wf-run-nodes");
+    var states = run.nodeStates || {};
+    Object.keys(states).forEach(function (nodeId) {
+      var ns = states[nodeId];
+      var row = el("div", "wf-run-node wf-run-node-" + ns.status);
+      row.appendChild(el("span", "wf-run-node-label", nodeLabel(nodeId)));
+      var detail =
+        ns.status === "running"
+          ? Math.round((ns.progress || 0) * 100) + "%"
+          : ns.status;
+      row.appendChild(el("span", "wf-run-node-detail", detail));
+      if (ns.error) row.title = ns.error;
+      rows.appendChild(row);
+    });
+    wrap.appendChild(rows);
+    var chips = buildResultChips(run);
+    if (chips) wrap.appendChild(chips);
+    return wrap;
+  }
+
   function buildRunCard(run, expanded) {
     var card = el("div", "wf-run-card");
     card.dataset.runId = run.id;
@@ -312,25 +543,55 @@
     head.appendChild(el("span", "wf-run-meta", done + "/" + total + " nodes"));
     card.appendChild(head);
 
+    if (expanded) card.appendChild(buildNodeDetail(run));
+    return card;
+  }
+
+  // ---- Batch rendering ------------------------------------------------------
+
+  function batchCounts(batch) {
+    return batch.counts || {};
+  }
+
+  function buildBatchCard(batch, expanded) {
+    var card = el("div", "wf-batch-card");
+    card.dataset.batchId = batch.id;
+
+    var head = el("div", "wf-run-head");
+    head.appendChild(
+      el("span", "wf-run-status wf-run-status-" + batch.status, batch.status),
+    );
+    var counts = batchCounts(batch);
+    var total = (batch.children || []).length;
+    var done = counts.completed || 0;
+    var parts = [done + "/" + total + " done"];
+    if (counts.failed) parts.push(counts.failed + " failed");
+    if (counts.cancelled) parts.push(counts.cancelled + " cancelled");
+    head.appendChild(el("span", "wf-run-meta", "All participants · " + parts.join(" · ")));
+    card.appendChild(head);
+
     if (expanded) {
-      var rows = el("div", "wf-run-nodes");
-      var states = run.nodeStates || {};
-      Object.keys(states).forEach(function (nodeId) {
-        var ns = states[nodeId];
-        var row = el("div", "wf-run-node wf-run-node-" + ns.status);
-        row.appendChild(el("span", "wf-run-node-label", nodeLabel(nodeId)));
-        var detail =
-          ns.status === "running"
-            ? Math.round((ns.progress || 0) * 100) + "%"
-            : ns.status;
-        row.appendChild(el("span", "wf-run-node-detail", detail));
-        if (ns.error) row.title = ns.error;
+      var rows = el("div", "wf-batch-children");
+      (batch.children || []).forEach(function (child) {
+        var focused = child.runId === state.activeRunId;
+        var row = el(
+          "div",
+          "wf-batch-child wf-run-node-" + child.status + (focused ? " focused" : ""),
+        );
+        row.appendChild(
+          el("span", "wf-batch-child-label", child.participant || child.runId),
+        );
+        row.appendChild(el("span", "wf-run-node-detail", child.status));
+        row.addEventListener("click", function () {
+          focusChild(child.runId);
+        });
         rows.appendChild(row);
+        // The focused child expands inline with its per-node detail (if its full
+        // snapshot has streamed in via focusChild → subscribeRun).
+        var run = focused ? findRun(child.runId) : null;
+        if (run && run.nodeStates) rows.appendChild(buildNodeDetail(run));
       });
       card.appendChild(rows);
-
-      var chips = buildResultChips(run);
-      if (chips) card.appendChild(chips);
     }
     return card;
   }
@@ -339,21 +600,27 @@
     var container = qs("#wfRuns");
     if (!container) return;
     container.innerHTML = "";
-    if (!state.runs.length) {
+    // Batch children are surfaced inside their batch card, not as loose runs.
+    var looseRuns = (state.runs || []).filter(function (r) {
+      return !r.batchId;
+    });
+    if (!state.batches.length && !looseRuns.length) {
       container.appendChild(
         el(
           "p",
           "wf-empty-hint",
-          "Press Run to execute this workflow. Per-node progress and results appear here.",
+          "Press Run (or Run all) to execute this workflow. Per-node progress and results appear here.",
         ),
       );
       return;
     }
     var frag = document.createDocumentFragment();
-    // The active run (in-flight, or the most recent — see refreshRuns) shows full
-    // per-node detail; the rest are compact. Keyed by id, not list position, so a
-    // newer completed run can't steal the expansion from an older in-flight one.
-    state.runs.forEach(function (run) {
+    // Batches first (the active one expanded), then loose single runs. Keyed by id
+    // so a newer run can't steal the expansion from an older in-flight one.
+    state.batches.forEach(function (batch) {
+      frag.appendChild(buildBatchCard(batch, batch.id === state.activeBatchId));
+    });
+    looseRuns.forEach(function (run) {
       frag.appendChild(buildRunCard(run, run.id === state.activeRunId));
     });
     container.appendChild(frag);
@@ -368,12 +635,16 @@
     if (stopBtn) stopBtn.classList.toggle("hidden", !running);
   }
 
-  // Pause/resume the live stream when the tab is hidden (the poller already
-  // self-pauses; the EventSource is reopened on return if a run is in flight).
+  // Pause/resume the live streams when the tab is hidden (the poller already
+  // self-pauses; the EventSource is reopened on return if work is in flight).
   function onVisibility() {
     if (document.hidden) {
       stopStream();
+      stopBatchStream();
       return;
+    }
+    if (activeBatchInFlight() && !_batchStream && !_batchPoller) {
+      subscribeBatch(state.activeBatchId);
     }
     if (activeRunInFlight() && !_stream && !_poller) {
       subscribeRun(state.activeRunId);
@@ -387,7 +658,7 @@
 
   // ---- Satellite interface ----
   WF.initRuns = initRuns;
-  WF.startRun = startRun;
+  WF.startRun = startRun; // also fans out to a batch when a source is "All"
   WF.stopRun = stopRun;
   WF.refreshRuns = refreshRuns;
   WF.renderRuns = renderRuns;

@@ -41,8 +41,11 @@ M5 before P4.
    Replaced by ten per-detector nodes whose real params reach the scan; multitool/timelapse/heatmap added.
 3. ~~**`make_clips` emits `clip` only.**~~ ✅ **Resolved (P2).** `output_format` enum + `titlecards`/
    `titlecard_duration` params; `highlights` selector node added. (Compression still demand-driven.)
-4. **One participant per run** — no whole-study batch.
-5. **Thin run history**; large per-node results stripped with no fetch-on-demand path.
+4. ~~**One participant per run** — no whole-study batch.~~ ✅ **Resolved (P3).** "Run all" fans the
+   blueprint out one sequential run per participant, grouped under one batch card.
+5. **Thin run history**; large per-node results stripped with no fetch-on-demand path. *(Partially
+   addressed: P3 evicts terminal runners from `_runs`, fixing the in-memory leak; the lazy sidecar
+   fetch-on-demand path is still P5.)*
 6. **No pre-run validation surfacing** — missing params / unmet context only fail at runtime.
 
 ---
@@ -92,15 +95,36 @@ on the timeline and timelapse/heatmap land in a separate attachments panel.
 *(Deferred to demand: data export, gallery viewer, transcript export md/srt/vtt — all exist in the
 backend; add when a recipe needs them.)*
 
-### P3 — Whole-study batch *(the multiplier)*
-A launch-time **"run for all participants"** that fans the entire active blueprint out, one run per
-participant, with results grouped per participant under one batch view.
-- Runner: instantiate the blueprint per participant (rebind the `video_source`/participant param),
-  reuse the existing per-run `WorkflowRunner`; a thin batch coordinator tracks N runs.
-- **Continue-on-error is mandatory here** — one bad participant must not sink the batch.
-- Surfacing: a batch summary (N done / failed / skipped) + drill into any participant's run.
-- Concurrency: default sequential (Whisper/Ollama are single-resource); a tuning knob may allow a
-  small fan-out cap for ffmpeg-bound graphs — *open question, see below.*
+### P3 — Whole-study batch *(the multiplier)* — ✅ Done
+Fans the active blueprint out one run per participant, results grouped under one batch card.
+**Trigger lives in the Video Source node**, not a separate button: its participant dropdown gains an
+**"All participants"** option (sentinel `WF.ALL_PARTICIPANTS`); the single **Run** button detects it
+(`blueprintWantsBatch`) and launches a batch instead of one run. **Shipped:**
+- `workflows.bind_participant(blueprint, participant)` deep-copies + rebinds every `video_source`
+  node; `blueprint_participant_nodes` gates the endpoint. `WorkflowRunner` carries `participant`/
+  `batch_id` in its snapshot. A thin coordinator (`workflows_server._run_batch`) runs N child
+  `WorkflowRunner`s **sequentially** on one daemon thread; batches are *derived* by grouping runs on a
+  `batchId` tag (no new manifest key), live coordination in `_batches`.
+- Endpoints: `POST/GET /api/batches`, `GET/POST /api/batches/<id>[/cancel]`, `/stream` (SSE).
+- **Continue-on-error** enforced (a failing participant leaves the rest running); a **cancel**
+  short-circuits remaining children to `cancelled`.
+- Frontend: a batch summary card (N done / failed / cancelled) expands into per-participant rows;
+  clicking a participant drills into its run (canvas tint).
+- **`has_video` parity:** `/api/catalog` `context.participants` is filtered to participants with a
+  real video file — the dropdown (and "All participants") match exactly the set the batch fans over.
+- **Runner eviction** (a P5 item folded in): terminal runners are dropped from `_runs` (batch + single
+  run) once persisted — fixes the in-memory result leak that batch would have multiplied.
+- **Batch-safe history cap:** `_trim_run_history` evicts whole *units* (a batch's children together,
+  newest unit + live batches always kept) instead of per-record, so a batch larger than the 50-run
+  cap is never split (it would 404 on drill-in). Children persist on execution, not pre-queued.
+- *Resolved open questions:* concurrency = **strictly sequential**; output = **flat dir** (every
+  output node already routes through `files.get_unique_filename`, so `{study}_{participant}` clip
+  names + auto-suffixed reels/viewers avoid collisions — no per-participant subfolders needed).
+
+**Follow-up (future):** replace the single "All participants" option with a **custom multi-select
+dropdown** — pick an arbitrary subset of participants to fan out over, not just one or all. The batch
+endpoint already accepts a `participants` list; only the param widget + a richer participant param
+value (a list) are needed. Keep "All" as a convenience shortcut.
 
 ### P4 — Recipe / template layer *(the posture's centerpiece; templates = seeded stashes)*
 - Ship the headline graphs as **built-in stashes** (the M5 stash system, pre-seeded). **Chosen
@@ -156,15 +180,14 @@ participant, with results grouped per participant under one batch view.
 
 ## Open questions remaining
 
-1. **Batch result layout (P3):** per-participant output subfolders + a combined batch view? How do
-   batch artifacts avoid filename collisions across participants?
-2. **Batch concurrency (P3):** strictly sequential, or a small fan-out cap for ffmpeg-bound graphs
-   that respects Whisper/Ollama single-resource contention?
-3. **Trigger binding (P6):** how is a watch-dir bound to its blueprint — a per-blueprint toggle, or a
+1. **Trigger binding (P6):** how is a watch-dir bound to its blueprint — a per-blueprint toggle, or a
    single "active trigger" slot? What's the UX for "this graph runs automatically"?
 
-*Resolved this round:* **large-result storage** → `run_id/node_id` sidecars, inspectable outputs only,
-runner-written, lazily fetched (P5). **Recipe set** → two starters chosen (P4).
+*Resolved (P3 build):* **batch concurrency** → strictly sequential. **batch output layout** → flat
+output dir (existing `files.get_unique_filename` + `{study}_{participant}` naming dodges collisions;
+no per-participant subfolders). *Resolved earlier:* **large-result storage** → `run_id/node_id`
+sidecars, inspectable outputs only, runner-written, lazily fetched (P5). **Recipe set** → two
+starters chosen (P4).
 
 ## Reference (where the capability already lives)
 
