@@ -37,6 +37,8 @@
     // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
     batches: [], // recent batch summaries (newest first)
     activeBatchId: null, // the batch currently streamed/polled, or null
+    // ---- Stash state (M5; owned by the workflows-stashes satellite) ----
+    stashes: [], // built-in recipes + saved sub-graph stashes (built-ins first)
   };
 
   // ---- Catalog + palette ----------------------------------------------------
@@ -319,6 +321,9 @@
     return loadCatalog()
       .then(loadBlueprints) // catalog first so cards can resolve labels
       .then(function () {
+        return WF.loadStashes ? WF.loadStashes() : null; // built-ins + user stashes
+      })
+      .then(function () {
         setCanvasState("ready");
       })
       .catch(function () {
@@ -340,6 +345,10 @@
     var retry = qs("#wfOverlayRetry");
     if (retry) retry.classList.toggle("hidden", mode !== "error");
     setToolbarDisabled(!state.ready);
+    // setToolbarDisabled(false) re-enables every toolbar control, but "Stash
+    // selection" must stay disabled until nodes are selected — re-apply its
+    // selection gate after the blanket enable on entering the ready state.
+    if (state.ready && WF.syncStashButton) WF.syncStashButton();
   }
 
   function setToolbarDisabled(disabled) {
@@ -350,6 +359,7 @@
       "#wfDeleteBlueprint",
       "#wfCleanUp",
       "#wfRunBtn",
+      "#wfSaveStash",
     ].forEach(function (sel) {
       var node = qs(sel);
       if (node) node.disabled = disabled;
@@ -421,6 +431,7 @@
     if (WF.initCanvas) WF.initCanvas();
     if (WF.initWires) WF.initWires();
     if (WF.initRuns) WF.initRuns();
+    if (WF.initStashes) WF.initStashes();
     loadWorkspace();
   }
 

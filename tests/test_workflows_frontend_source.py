@@ -67,6 +67,7 @@ def test_satellites_read_shared_state_through_wf():
         "workflows-canvas.js",
         "workflows-wires.js",
         "workflows-runs.js",
+        "workflows-stashes.js",
     ):
         src = (_WEB / name).read_text(encoding="utf-8")
         assert "var state = WF.state" in src, name
@@ -252,6 +253,52 @@ def test_batch_via_all_participants_option():
 
     css = WORKFLOWS_CSS.read_text(encoding="utf-8")
     assert ".wf-batch-card" in css
+
+
+def test_stash_satellite_present_and_wired():
+    """M5 stashes + P4 built-in recipes: the sidebar list, the "Stash selection"
+    toolbar control, the satellite (loaded last), and the hub<->satellite stash
+    interface all ship; instantiation rides the canvas drop path via a new MIME."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfStashList"' in html
+    assert 'id="wfSaveStash"' in html
+    # Stashes satellite loads after the runs satellite (load-order contract).
+    assert html.index('src="workflows-runs.js"') < html.index(
+        'src="workflows-stashes.js"'
+    )
+
+    src = _workflows_js()
+    # Hub-owned: state.stashes lives on the hub; the satellite is init'd + loaded
+    # through guarded delegators.
+    assert "stashes:" in src  # state.stashes on the hub
+    assert "WF.initStashes" in src
+    assert "WF.loadStashes" in src
+    # Satellite-owned stash lifecycle attached back onto WF.
+    for fn in (
+        "WF.renderStashPalette",
+        "WF.saveSelectionAsStash",
+        "WF.instantiateStash",
+        "WF.renameStash",
+        "WF.deleteStash",
+        "WF.syncStashButton",
+    ):
+        assert fn in src, fn
+    # Server does CRUD only; the client GETs the list and instantiates locally.
+    stashes = (_WEB / "workflows-stashes.js").read_text(encoding="utf-8")
+    assert "api/stashes" in stashes
+    # The canvas reaches the stash instantiator via the new drag MIME.
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    assert "application/x-wf-stash" in canvas
+    assert "WF.instantiateStash(" in canvas
+    # randomId is published for the satellite's id remapping on instantiate.
+    assert "WF.randomId" in canvas
+
+
+def test_css_defines_stash_styles():
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-stash-list" in css
+    assert ".wf-stash-item" in css
+    assert ".wf-stash-builtin" in css  # read-only built-in variant
 
 
 def test_universal_control_port_for_gate_wiring():

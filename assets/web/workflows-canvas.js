@@ -85,7 +85,11 @@
 
   function onDragOver(e) {
     if (!state.ready) return;
-    if (typesHas(e.dataTransfer && e.dataTransfer.types, "application/x-wf-node-type")) {
+    var types = e.dataTransfer && e.dataTransfer.types;
+    if (
+      typesHas(types, "application/x-wf-node-type") ||
+      typesHas(types, "application/x-wf-stash")
+    ) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
     }
@@ -93,6 +97,16 @@
 
   function onDrop(e) {
     if (!state.ready) return;
+    // A stash drop instantiates a whole sub-graph (the stashes satellite remaps
+    // ids); a node-type drop creates one card. Try the stash MIME first.
+    var stashId = e.dataTransfer.getData("application/x-wf-stash");
+    if (stashId) {
+      e.preventDefault();
+      if (WF.instantiateStash) {
+        WF.instantiateStash(stashId, clientToWorld(e.clientX, e.clientY));
+      }
+      return;
+    }
     var type = e.dataTransfer.getData("application/x-wf-node-type");
     if (!type) return;
     e.preventDefault();
@@ -167,18 +181,6 @@
   }
 
   function startPan(e) {
-    // Clicking empty canvas clears any node/edge selection (re-render once;
-    // renderAllNodes' tail also refreshes the wire layer).
-    var changed = false;
-    if (state.selection.length) {
-      state.selection = [];
-      changed = true;
-    }
-    if (state.selectedEdge) {
-      state.selectedEdge = null;
-      changed = true;
-    }
-    if (changed && WF.renderAllNodes) WF.renderAllNodes();
     var canvas = qs("#wfCanvas");
     canvas.classList.add("panning");
     var startX = e.clientX;
@@ -196,7 +198,24 @@
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       canvas.classList.remove("panning");
-      if (moved) WF.scheduleSave();
+      if (moved) {
+        // A real pan — keep the current selection (dragging the empty canvas
+        // moves the view, it must not drop selected nodes).
+        WF.scheduleSave();
+        return;
+      }
+      // A bare click on empty canvas — *now* clear node/edge selection
+      // (deselect). Deferring to mouseup is what lets a pan keep the selection.
+      var changed = false;
+      if (state.selection.length) {
+        state.selection = [];
+        changed = true;
+      }
+      if (state.selectedEdge) {
+        state.selectedEdge = null;
+        changed = true;
+      }
+      if (changed && WF.renderAllNodes) WF.renderAllNodes();
     }
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
@@ -473,4 +492,6 @@
   // lookup for port endpoints).
   WF.clientToWorld = clientToWorld;
   WF.findNode = findNode;
+  // Consumed by the stashes satellite (fresh node ids on instantiate).
+  WF.randomId = randomId;
 })();

@@ -241,6 +241,141 @@ def test_blueprint_update_and_delete_404_on_missing(wf_client):
     assert wf_client.delete("/workflows/api/blueprints/bp_missing").status_code == 404
 
 
+# ---- Stash CRUD (M5) + built-in recipes (P4) ----
+
+
+def test_stashes_default_to_builtins_only(wf_client):
+    resp = wf_client.get("/workflows/api/stashes")
+    assert resp.status_code == 200
+    stashes = resp.get_json()["stashes"]
+    # No user stashes saved yet → only the read-only built-in recipes, all first.
+    assert stashes == workflows.BUILTIN_STASHES
+    assert stashes and all(s["builtin"] for s in stashes)
+
+
+def test_builtin_recipes_reference_only_real_nodes_and_ports(wf_client):
+    # Each built-in recipe must wire real catalog node ids/ports, or instantiating
+    # it would stamp a broken graph onto the canvas.
+    for stash in workflows.BUILTIN_STASHES:
+        by_id = {n["id"]: n for n in stash["nodes"]}
+        for node in stash["nodes"]:
+            assert node["type"] in workflows.NODE_TYPES
+        for edge in stash["edges"]:
+            src = by_id[edge["from"]]
+            dst = by_id[edge["to"]]
+            out_ports = {
+                p["name"] for p in workflows.NODE_TYPES[src["type"]]["outputs"]
+            }
+            in_ports = {p["name"] for p in workflows.NODE_TYPES[dst["type"]]["inputs"]}
+            assert edge["fromPort"] in out_ports
+            assert edge["toPort"] in in_ports
+
+
+def test_stash_create_returns_id_and_shape(wf_client):
+    nodes = [
+        {"id": "s1", "type": "transcribe", "params": {}, "position": {"x": 0, "y": 0}},
+        {"id": "s2", "type": "find_word", "params": {}, "position": {"x": 200, "y": 0}},
+    ]
+    edges = [
+        {
+            "id": "e1",
+            "from": "s1",
+            "fromPort": "segments",
+            "to": "s2",
+            "toPort": "segments",
+        }
+    ]
+    resp = wf_client.post(
+        "/workflows/api/stashes",
+        json={"name": "My chain", "nodes": nodes, "edges": edges},
+    )
+    assert resp.status_code == 200
+    stash = resp.get_json()["stash"]
+    assert stash["id"].startswith("stash_")
+    assert stash["name"] == "My chain"
+    assert stash["builtin"] is False
+    assert "createdAt" in stash
+    assert stash["nodes"] == nodes
+    assert stash["edges"] == edges
+    # Appears after the leading built-ins.
+    listed = wf_client.get("/workflows/api/stashes").get_json()["stashes"]
+    assert listed[: len(workflows.BUILTIN_STASHES)] == workflows.BUILTIN_STASHES
+    assert any(s["id"] == stash["id"] for s in listed)
+
+
+def test_stash_create_rejects_empty_nodes(wf_client):
+    resp = wf_client.post("/workflows/api/stashes", json={"name": "Empty", "nodes": []})
+    assert resp.status_code == 400
+
+
+def test_stash_rename_round_trips(wf_client):
+    nodes = [
+        {"id": "s1", "type": "transcribe", "params": {}, "position": {"x": 0, "y": 0}}
+    ]
+    stash = wf_client.post(
+        "/workflows/api/stashes", json={"name": "Before", "nodes": nodes}
+    ).get_json()["stash"]
+    resp = wf_client.put(
+        f"/workflows/api/stashes/{stash['id']}", json={"name": "After"}
+    )
+    assert resp.status_code == 200
+    listed = wf_client.get("/workflows/api/stashes").get_json()["stashes"]
+    saved = next(s for s in listed if s["id"] == stash["id"])
+    assert saved["name"] == "After"
+
+
+def test_stash_delete_removes_it(wf_client):
+    nodes = [
+        {"id": "s1", "type": "transcribe", "params": {}, "position": {"x": 0, "y": 0}}
+    ]
+    stash = wf_client.post(
+        "/workflows/api/stashes", json={"name": "Doomed", "nodes": nodes}
+    ).get_json()["stash"]
+    assert wf_client.delete(f"/workflows/api/stashes/{stash['id']}").status_code == 200
+    listed = wf_client.get("/workflows/api/stashes").get_json()["stashes"]
+    assert all(s["id"] != stash["id"] for s in listed)
+
+
+def test_builtin_stash_is_read_only(wf_client):
+    builtin_id = workflows.BUILTIN_STASHES[0]["id"]
+    assert (
+        wf_client.put(
+            f"/workflows/api/stashes/{builtin_id}", json={"name": "Hijack"}
+        ).status_code
+        == 403
+    )
+    assert wf_client.delete(f"/workflows/api/stashes/{builtin_id}").status_code == 403
+
+
+def test_stash_update_and_delete_404_on_missing(wf_client):
+    assert (
+        wf_client.put(
+            "/workflows/api/stashes/stash_missing", json={"name": "x"}
+        ).status_code
+        == 404
+    )
+    assert wf_client.delete("/workflows/api/stashes/stash_missing").status_code == 404
+
+
+def test_stash_write_preserves_blueprints_and_runs(wf_client):
+    # The combined manifest holds blueprints + stashes + runs; a stash write must
+    # read-modify-write under the shared lock without clobbering its siblings.
+    bp = wf_client.post(
+        "/workflows/api/blueprints", json={"name": "Keep me"}
+    ).get_json()["blueprint"]
+    workflows_server._manifest.setdefault("runs", []).append(
+        {"id": "run_1", "blueprintId": bp["id"], "status": "completed"}
+    )
+    nodes = [
+        {"id": "s1", "type": "transcribe", "params": {}, "position": {"x": 0, "y": 0}}
+    ]
+    wf_client.post("/workflows/api/stashes", json={"name": "Side", "nodes": nodes})
+    # Blueprint and run survive the stash write.
+    listed = wf_client.get("/workflows/api/blueprints").get_json()["blueprints"]
+    assert any(b["id"] == bp["id"] for b in listed)
+    assert any(r["id"] == "run_1" for r in workflows_server._manifest["runs"])
+
+
 # ---- Run lifecycle (M4) ----
 
 

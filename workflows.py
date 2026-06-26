@@ -889,6 +889,157 @@ def serialize_adapters() -> list[list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Built-in recipes (P4) — read-only stashes served alongside user stashes
+# ---------------------------------------------------------------------------
+#
+# These are the headline graphs shipped as ready-to-stamp sub-graphs. They are
+# *code, not data*: ``GET /api/stashes`` prepends them to the user's persisted
+# stashes, so they are never seeded into the manifest (no migration/dedup). The
+# ``builtin`` flag makes them read-only — the stash CRUD routes reject renaming
+# or deleting them. Node/edge shapes mirror the on-canvas blueprint shapes
+# (``{id, type, params, position}`` / ``{id, from, fromPort, to, toPort}``) with
+# stash-local ids; the frontend remaps to fresh ``n_``/``e_`` ids on instantiate.
+
+BUILTIN_STASHES: list[dict[str, Any]] = [
+    {
+        "id": "builtin_clip_word",
+        "name": "Transcribe → Find Word → Make Clips → Viewer",
+        "builtin": True,
+        "createdAt": "",
+        "nodes": [
+            {
+                "id": "s1",
+                "type": "video_source",
+                "params": {"participant": ""},
+                "position": {"x": 40, "y": 160},
+            },
+            {
+                "id": "s2",
+                "type": "transcribe",
+                "params": {"language": "auto"},
+                "position": {"x": 340, "y": 80},
+            },
+            {
+                "id": "s3",
+                "type": "find_word",
+                "params": {"word": "", "pad": 2},
+                "position": {"x": 640, "y": 80},
+            },
+            {
+                "id": "s4",
+                "type": "make_clips",
+                "params": {
+                    "description": "",
+                    "output_format": "clip",
+                    "titlecards": False,
+                    "titlecard_duration": config.TITLECARD_DURATION_SECONDS,
+                },
+                "position": {"x": 940, "y": 160},
+            },
+            {
+                "id": "s5",
+                "type": "timeline_viewer",
+                "params": {},
+                "position": {"x": 1240, "y": 160},
+            },
+        ],
+        "edges": [
+            {
+                "id": "se1",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s2",
+                "toPort": "video",
+            },
+            {
+                "id": "se2",
+                "from": "s2",
+                "fromPort": "segments",
+                "to": "s3",
+                "toPort": "segments",
+            },
+            {
+                "id": "se3",
+                "from": "s3",
+                "fromPort": "timeRange",
+                "to": "s4",
+                "toPort": "timeRange",
+            },
+            {
+                "id": "se4",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s4",
+                "toPort": "video",
+            },
+            {
+                "id": "se5",
+                "from": "s4",
+                "fromPort": "artifacts",
+                "to": "s5",
+                "toPort": "artifacts",
+            },
+        ],
+    },
+    {
+        "id": "builtin_highlights_reel",
+        "name": "Sheet Selection → Highlights → Build Reel → Viewer",
+        "builtin": True,
+        "createdAt": "",
+        "nodes": [
+            {
+                "id": "s1",
+                "type": "sheet_selection",
+                "params": {"selector": ""},
+                "position": {"x": 40, "y": 160},
+            },
+            {
+                "id": "s2",
+                "type": "highlights",
+                "params": {"budget": config.HIGHLIGHTS_REEL_DURATION_SECONDS},
+                "position": {"x": 340, "y": 160},
+            },
+            {
+                "id": "s3",
+                "type": "build_reel",
+                "params": {"name": "reel"},
+                "position": {"x": 640, "y": 160},
+            },
+            {
+                "id": "s4",
+                "type": "timeline_viewer",
+                "params": {},
+                "position": {"x": 940, "y": 160},
+            },
+        ],
+        "edges": [
+            {
+                "id": "se1",
+                "from": "s1",
+                "fromPort": "clips",
+                "to": "s2",
+                "toPort": "clips",
+            },
+            {
+                "id": "se2",
+                "from": "s2",
+                "fromPort": "clips",
+                "to": "s3",
+                "toPort": "clips",
+            },
+            {
+                "id": "se3",
+                "from": "s3",
+                "fromPort": "artifacts",
+                "to": "s4",
+                "toPort": "artifacts",
+            },
+        ],
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # Executors (M3) — thin adapters over existing pure functions
 # ---------------------------------------------------------------------------
 #

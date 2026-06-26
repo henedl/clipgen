@@ -317,6 +317,103 @@ body[data-frontend="workflows"] {
   cursor: not-allowed;
 }
 
+/* ---- Stash palette (M5) ---- */
+
+.wf-stash-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wf-stash-empty {
+  padding: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.wf-stash-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: grab;
+}
+
+.wf-stash-item:hover {
+  background: var(--bg-hover);
+}
+
+/* Built-in recipes read as a quieter, read-only variant of a user stash. */
+.wf-stash-item.wf-stash-builtin {
+  border-left-color: var(--fg-faint);
+}
+
+.wf-stash-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-stash-rename,
+.wf-stash-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.wf-stash-rename:hover {
+  color: var(--accent);
+  background: var(--bg);
+}
+
+.wf-stash-delete:hover {
+  color: var(--severity-high);
+  background: var(--bg);
+}
+
+/* Bare mask-image glyphs (rename/delete buttons + the built-in badge). */
+.wf-stash-btn-icon,
+.wf-stash-badge {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+.wf-stash-rename .wf-stash-btn-icon {
+  mask-image: url("icons/pencil-square.svg");
+  -webkit-mask-image: url("icons/pencil-square.svg");
+}
+
+.wf-stash-delete .wf-stash-btn-icon {
+  mask-image: url("icons/x-mark.svg");
+  -webkit-mask-image: url("icons/x-mark.svg");
+}
+
+.wf-stash-badge {
+  color: var(--fg-faint);
+  mask-image: url("icons/rectangle-stack.svg");
+  -webkit-mask-image: url("icons/rectangle-stack.svg");
+}
+
 /* ---- Canvas empty-state ---- */
 
 .wf-canvas-empty {

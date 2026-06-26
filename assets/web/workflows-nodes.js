@@ -327,6 +327,11 @@
     // Port DOM was rebuilt → drop the wires' cached port offsets, then redraw.
     if (WF.clearPortCache) WF.clearPortCache();
     if (WF.renderWires) WF.renderWires();
+
+    // Selection may have changed (drop, marquee, delete) → re-gate "Stash
+    // selection". One guarded site keeps the button in sync without touching
+    // every gesture that mutates state.selection.
+    if (WF.syncStashButton) WF.syncStashButton();
   }
 
   WF.renderNode = renderNode;
