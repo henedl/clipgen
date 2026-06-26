@@ -35,14 +35,12 @@ M5 before P4.
 
 ## Gaps carried out of v1 (the starting state)
 
-1. **Frontend `canConnect` ignores `ADAPTERS`.** `workflows-wires.js:151` is exact-match; the runner
-   *does* coerce (`events→clipRecords`, `segments→timeRange`, `video→scalar`), so the UI rejects
-   wires that would actually run (e.g. *scan → clips* runs end-to-end today but can't be drawn). The
-   most misleading gap → fixed first (P1).
-2. **`ss_scan` exposes 4 of 10 detectors** *and passes `parameters={}`* (`workflows.py:699`) — so even
-   those 4 run with no configurable target color / search string / threshold. No multitool/timelapse/heatmap.
-3. **`make_clips` emits `clip` only** despite `process_clips` supporting `screen`/`gif`; no highlights
-   reel, titlecards, compression.
+1. ~~**Frontend `canConnect` ignores `ADAPTERS`.**~~ ✅ **Resolved (P1).** `canConnect` now consults
+   the served `ADAPTERS` table and coerced wires render dashed with a "↳ coerced" tooltip.
+2. ~~**`ss_scan` exposes 4 of 10 detectors** *and passes `parameters={}`*.~~ ✅ **Resolved (P2).**
+   Replaced by ten per-detector nodes whose real params reach the scan; multitool/timelapse/heatmap added.
+3. ~~**`make_clips` emits `clip` only.**~~ ✅ **Resolved (P2).** `output_format` enum + `titlecards`/
+   `titlecard_duration` params; `highlights` selector node added. (Compression still demand-driven.)
 4. **One participant per run** — no whole-study batch.
 5. **Thin run history**; large per-node results stripped with no fetch-on-demand path.
 6. **No pre-run validation surfacing** — missing params / unmet context only fail at runtime.
@@ -53,23 +51,29 @@ M5 before P4.
 
 Rough order; P1 is the unblock, P2–P4 are the core experience, P5 is interleaved, P6 is last.
 
-### P1 — Adapter ↔ UI parity *(small; do first)*
+### P1 — Adapter ↔ UI parity *(small; do first)* — ✅ Done
 Serve the `ADAPTERS` keys through `GET /api/catalog` (alongside the catalog) and widen
 `canConnect(out,in)` to `out === in || ADAPTERS.has([out,in])`; render adapter-bridged wires with a
 distinct cue (dashed / "↳ coerced"). Unblocks *scan → clips* and every multi-type recipe.
+**Shipped** (`workflows.serialize_adapters` + `workflows_server` `/api/catalog`; `workflows-wires.js`
+`canConnect` + `.wf-wire-coerced`; `workflows.js` `state.adapters`). Guarded by
+`test_catalog_serves_adapter_pairs`.
 
-### P2 — Catalog tranche *(each node = one `NodeType` + executor; pinned shapes below)*
-Mechanics: skills `new-screenspace-tool` / `new-mode`. Pinned node set:
+### P2 — Catalog tranche *(each node = one `NodeType` + executor; pinned shapes below)* — ✅ Done
+Mechanics: skills `new-screenspace-tool` / `new-mode`. **Shipped** — all node rows below landed; the
+single `ss_scan` was replaced by ten per-detector nodes (`_make_ss_executor` factory reading real
+params via `_build_ss_scan_params`), `make_clips` no longer hardcodes `output_format`, and
+timelapse/heatmap render in a new viewer **Attachments** panel. Pinned node set:
 
 | Node(s) | Ports (in → out) | Params / notes | Reuses |
 |---|---|---|---|
-| **`make_clips`** (changed) | `clips?`/`video?`/`timeRange?` → `artifacts` | + `output_format` enum {clip,screen,gif} · `titlecards` bool · `titlecard_duration`. Stop hardcoding `output_format="clip"` (`workflows.py:786`). | `pipeline.process_clips`, `titlecards.wrap_clip_with_cards` |
-| **`highlights`** (new) | `clipRecords` → `clipRecords` | composable selector: scores severity/uniqueness/annotation, truncates to `budget` (default 180s); wire before `build_reel`/`make_clips`. Uniqueness scored vs. existing output-dir artifacts. | `-H` path: `spreadsheet._clip_highlight_score`, `score_and_truncate_clips` |
-| **10 per-detector SS nodes** (replace `ss_scan`) | `video` (+`region?`,`timeRange?`) → `events` | `ss_text`·`ss_color`·`ss_change`·`ss_similarity`·`ss_numbers`·`ss_template`·`ss_flow`·`ss_scene`·`ss_inactivity`·`ss_boundary`; one shared executor `_exec_ss_detector(tool)` reads node params into `scan_params` (fixes the dead-params gap). Params lifted from each `AnalysisTool`. | `screenspace_tools.TOOLS[*]` |
-| **`multitool`** (new) | `video` (+`region?`) → `events` | param = ordered step-list sub-editor `{type,region,interval,offset,logic,…}` — the one new compound param widget. | `screenspace_multitool.scan_multitool` |
-| **`timelapse`** (new) | `video` (+`region?`) → `artifacts` | emits an artifact with `type:"timelapse"`; params interval/output/scale. | `TimelapseTool` / `generate_timelapse` |
-| **`heatmap`** (new) | `events` → `artifacts` | emits `type:"heatmap"`; params style/output/window. **Precondition (soft):** upstream detector ∈ template/flow/change. | `screenspace_heatmap.*` |
-| **`measure`** (new) | `events?`/`clipRecords?`/`segments?` → `scalar` | `metric` ∈ {count,max_confidence,total_duration}. **Activates the otherwise-inert `gate`** (today only `video→scalar` feeds it). | — |
+| ✅ **`make_clips`** (changed) | `clips?`/`video?`/`timeRange?` → `artifacts` | + `output_format` enum {clip,screen,gif} · `titlecards` bool · `titlecard_duration`. **Done** — passes through to `process_clips`. | `pipeline.process_clips`, `titlecards.wrap_clip_with_cards` |
+| ✅ **`highlights`** (new) | `clipRecords` → `clipRecords` | composable selector: scores severity/uniqueness/annotation, truncates to `budget` (default 180s); wire before `build_reel`/`make_clips`. Uniqueness scored vs. existing output-dir artifacts. **Done.** | `-H` path: `spreadsheet.score_and_truncate_clips`, `files.discover_clips` |
+| ✅ **10 per-detector SS nodes** (replaced `ss_scan`) | `video` (+`region?`,`timeRange?`) → `events` | `ss_text`·`ss_color`·`ss_change`·`ss_similarity`·`ss_numbers`·`ss_template`·`ss_flow`·`ss_scene`·`ss_inactivity`·`ss_boundary`; shared `_make_ss_executor(tool)` reads node params into `scan_params` via `_build_ss_scan_params` (fixed the dead-params gap). Reference detectors (template/similarity/scene) self-extract their reference from the region at `reference_seconds`. Detectors attach `raw_results` for the heatmap node. **Done.** | `screenspace_tools.TOOLS[*]` |
+| ✅ **`multitool`** (new) | `video` (+`region?`) → `events` | param = ordered `step-list` sub-editor (the one new compound widget, in `workflows-nodes.js`; reuses each `ss_<type>` catalog param). Step types limited to the 6 check_frame detectors. **Done.** | `screenspace_multitool.scan_multitool` |
+| ✅ **`timelapse`** (new) | `video` (+`region?`) → `artifacts` | emits `type:"timelapse"`; params speedup/format/sample_interval. **Done.** | `screenspace_scans.generate_timelapse` |
+| ✅ **`heatmap`** (new) | `events` → `artifacts` | emits `type:"heatmap"`; param `style` ∈ {template,flow,change}, reads upstream `raw_results`. **Done** (rolling-GIF `window` deferred). | `screenspace_heatmap.*` |
+| ✅ **`measure`** (new) | `events?`/`clipRecords?`/`segments?` → `scalar` | `metric` ∈ {count,max_confidence,total_duration}. **Activates the `gate`.** **Done.** | — |
 
 **Connection model:** *no new `media` type* — `timelapse`/`heatmap` emit `artifacts` carrying a new
 `type` value; `viewer.finalize_timeline_data` + the viewer JS branch on `type` so clips/screens/gifs go

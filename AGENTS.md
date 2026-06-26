@@ -108,7 +108,7 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 - No hardcoded version numbers in evergreen docs (CLAUDE.md, README.md). Reference `build/VERSION` or call `utils.get_version()` instead.
 - Commit early and commit often, so we can roll back changes more easily.
 - If a problem is reoccurring and survives fix attempts, check git logs for clues.
-- When working through a plan file, e.g. FEATURE-PLAN.md, always make sure to check off items after they are completed.
+- When working through a plan file, e.g. `FEATURE-PLAN.md` or anything under `plans/`, keep its status current **as each unit of work lands — not just at the very end**: check off completed items (or update the status table / set a "Done" marker for prose plans that have no checkboxes) and note anything resolved or descoped. This is a hard expectation, not a nicety — agents are habitually sloppy here, and the next session (or a reviewer) relies on the plan's recorded state to tell what's actually built vs. still open. If you finish work a plan describes, update that plan in the same change.
 - Keep AGENTS.md concise with cross-cutting bird's-eye context; per-module detail belongs in inline comments/docstrings, not duplicated in agent docs.
 
 ## Workspace facts

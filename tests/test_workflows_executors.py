@@ -137,7 +137,7 @@ class _FakeTool:
         return [{"timestamp": 5.0, "_confidence": 0.9}]
 
 
-def test_ss_scan_generates_events_with_window(tmp_path, monkeypatch):
+def test_ss_detector_generates_events_with_window(tmp_path, monkeypatch):
     _FakeTool.calls = []
     monkeypatch.setitem(screenspace.TOOLS, "color", _FakeTool())
     monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
@@ -148,9 +148,7 @@ def test_ss_scan_generates_events_with_window(tmp_path, monkeypatch):
         "video_paths": ["study_P01.mp4"],
     }
     tr = {"ranges": [(10.0, 20.0)], "source": src}
-    out = _run(
-        "ss_scan", _ctx(tmp_path), {"video": src, "timeRange": tr}, {"tool": "color"}
-    )
+    out = _run("ss_color", _ctx(tmp_path), {"video": src, "timeRange": tr}, {})
     # The timeRange window is forwarded as the scan's local [start, end].
     assert _FakeTool.calls == [("study_P01.mp4", 10.0, 20.0)]
     events = out["events"]["events"]
@@ -160,7 +158,7 @@ def test_ss_scan_generates_events_with_window(tmp_path, monkeypatch):
     assert out["events"]["source"] is src
 
 
-def test_ss_scan_progress_monotonic_across_windows(tmp_path, monkeypatch):
+def test_ss_detector_progress_monotonic_across_windows(tmp_path, monkeypatch):
     progress = []
 
     class _ProgressTool:
@@ -183,7 +181,7 @@ def test_ss_scan_progress_monotonic_across_windows(tmp_path, monkeypatch):
         "video_paths": ["study_P01.mp4"],
     }
     tr = {"ranges": [(0.0, 10.0), (10.0, 30.0)], "source": src}
-    _run("ss_scan", ctx, {"video": src, "timeRange": tr}, {"tool": "color"})
+    _run("ss_color", ctx, {"video": src, "timeRange": tr}, {})
     # Job-level progress advances monotonically; only the final window reaches
     # 1.0 (the first window's own 0->1 maps into [0, 1/3], not back to 0).
     assert progress == sorted(progress)
@@ -191,7 +189,7 @@ def test_ss_scan_progress_monotonic_across_windows(tmp_path, monkeypatch):
     assert progress.count(1.0) == 1
 
 
-def test_ss_scan_multipart_offsets_event_times(tmp_path, monkeypatch):
+def test_ss_detector_multipart_offsets_event_times(tmp_path, monkeypatch):
     _FakeTool.calls = []
     monkeypatch.setitem(screenspace.TOOLS, "color", _FakeTool())
     monkeypatch.setattr(
@@ -204,9 +202,7 @@ def test_ss_scan_multipart_offsets_event_times(tmp_path, monkeypatch):
         "video_paths": ["a.mp4", "b.mp4"],
     }
     tr = {"ranges": [(60.0, 90.0)], "source": src}
-    out = _run(
-        "ss_scan", _ctx(tmp_path), {"video": src, "timeRange": tr}, {"tool": "color"}
-    )
+    out = _run("ss_color", _ctx(tmp_path), {"video": src, "timeRange": tr}, {})
     # 60..90 straddles the 80s boundary; result times shift back to the global
     # timeline (5.0 from part a, 5.0+80 from part b).
     times = sorted(e["time_in"] for e in out["events"]["events"])
@@ -397,3 +393,178 @@ def test_adapter_events_to_timerange_derives_source():
     assert out["ranges"] == [(1.0, 2.0)]
     assert out["source"]["participant"] == "P01"
     assert out["source"]["study"] == "study"
+
+
+# ---- P2 catalog tranche ----
+
+
+def test_make_clips_passes_output_format_and_titlecards(tmp_path, monkeypatch):
+    import pipeline
+
+    captured = {}
+
+    def fake_process_clips(records, output_format="clip", include_severity=False, **kw):
+        captured["output_format"] = output_format
+        captured["titlecards_enabled"] = kw.get("titlecards_enabled")
+        captured["titlecard_duration"] = kw.get("titlecard_duration_seconds")
+        return (len(records), [{"id": "a", "type": output_format}])
+
+    monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    tr = {"ranges": [(10.0, 20.0)], "source": src}
+    out = _run(
+        "make_clips",
+        _ctx(tmp_path),
+        {"timeRange": tr},
+        {"output_format": "gif", "titlecards": True, "titlecard_duration": 3},
+    )
+    assert captured["output_format"] == "gif"
+    assert captured["titlecards_enabled"] is True
+    assert captured["titlecard_duration"] == 3
+    assert out["artifacts"]["count"] == 1
+
+
+def test_highlights_truncates_to_budget(tmp_path, monkeypatch):
+    import spreadsheet
+
+    seen = {}
+
+    def fake_score(records, existing, budget):
+        seen["budget"] = budget
+        seen["existing"] = existing
+        return records[:1]
+
+    monkeypatch.setattr(spreadsheet, "score_and_truncate_clips", fake_score)
+    monkeypatch.setattr(files, "discover_clips", lambda: ["old.mp4"])
+    clips = {"records": [{"a": 1}, {"a": 2}, {"a": 3}], "study": "study"}
+    out = _run("highlights", _ctx(tmp_path), {"clips": clips}, {"budget": 90})
+    assert seen["budget"] == 90
+    assert seen["existing"] == {"old.mp4"}
+    assert len(out["clips"]["records"]) == 1
+    assert out["clips"]["study"] == "study"
+
+
+def test_measure_counts_events_and_durations(tmp_path):
+    ctx = _ctx(tmp_path)
+    events = {
+        "events": [
+            {"time_in": 1.0, "time_out": 3.0, "confidence": 0.4},
+            {"time_in": 5.0, "time_out": 6.0, "confidence": 0.9},
+        ]
+    }
+    assert _run("measure", ctx, {"events": events}, {"metric": "count"})["value"] == 2.0
+    assert (
+        _run("measure", ctx, {"events": events}, {"metric": "max_confidence"})["value"]
+        == 0.9
+    )
+    assert (
+        _run("measure", ctx, {"events": events}, {"metric": "total_duration"})["value"]
+        == 3.0
+    )
+
+
+def test_measure_drives_gate(tmp_path):
+    ctx = _ctx(tmp_path)
+    events = {"events": [{"time_in": 0, "time_out": 1} for _ in range(5)]}
+    measured = _run("measure", ctx, {"events": events}, {"metric": "count"})
+    assert _run(
+        "gate", ctx, {"value": measured["value"]}, {"op": ">=", "threshold": 3}
+    )["pass"]
+
+
+def test_ss_detector_reshapes_real_params(tmp_path, monkeypatch):
+    captured = {}
+
+    class _CaptureTool:
+        def scan(self, video_path, region_coords, params, **kw):
+            captured.update(params)
+            return [{"timestamp": 1.0, "_confidence": 0.5}]
+
+    monkeypatch.setitem(screenspace.TOOLS, "color", _CaptureTool())
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    _run(
+        "ss_color",
+        _ctx(tmp_path),
+        {"video": src},
+        {"color_h": 120, "color_s": 200, "color_v": 150, "color_mode": "presence"},
+    )
+    # The dead-params gap is fixed: the node's flat params are reshaped into the
+    # nested scan params the tool expects (not an empty {}).
+    assert captured["target_color"] == {"h": 120.0, "s": 200.0, "v": 150.0}
+    assert captured["color_mode"] == "presence"
+
+
+def test_timelapse_emits_attachment(tmp_path, monkeypatch):
+    import screenspace_scans
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"width": 1920, "height": 1080, "duration": 60.0},
+    )
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / "timelapse.mp4"),
+    )
+    monkeypatch.setattr(
+        screenspace_scans, "generate_timelapse", lambda *a, **kw: str(a[3])
+    )
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    out = _run("timelapse", _ctx(tmp_path), {"video": src}, {"output_format": "mp4"})
+    arts = out["artifacts"]["artifacts"]
+    assert len(arts) == 1
+    assert arts[0]["type"] == "timelapse"
+    # Attachment artifacts sit off the timeline (start/end 0).
+    assert arts[0]["start"] == 0 and arts[0]["end"] == 0
+
+
+def test_heatmap_consumes_raw_results(tmp_path, monkeypatch):
+    import screenspace_heatmap
+
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 640, "height": 480}
+    )
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / "heatmap.png"),
+    )
+    called = {}
+
+    def fake_change(results, w, h, out_path):
+        called["results"] = results
+        called["dims"] = (w, h)
+        return out_path
+
+    monkeypatch.setattr(screenspace_heatmap, "generate_change_heatmap", fake_change)
+    events_in = {
+        "events": [],
+        "source": {
+            "participant": "P01",
+            "study": "study",
+            "source_filename": "study_P01.mp4",
+            "video_paths": ["study_P01.mp4"],
+        },
+        "raw_results": [{"change_grid": []}],
+    }
+    out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {"style": "change"})
+    assert called["results"] == [{"change_grid": []}]
+    assert called["dims"] == (640, 480)
+    assert out["artifacts"]["artifacts"][0]["type"] == "heatmap"

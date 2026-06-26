@@ -167,10 +167,10 @@ def test_control_edges_are_excluded_from_inputs(tmp_path):
 
 
 def test_adapter_is_applied_on_type_mismatch(tmp_path):
-    # ss_scan emits `events`; make_clips consumes `clips` (clipRecords). The
+    # ss_color emits `events`; make_clips consumes `clips` (clipRecords). The
     # runner must apply the events->clipRecords adapter when gathering inputs.
     nodes = [
-        {"id": "a", "type": "ss_scan", "params": {}},
+        {"id": "a", "type": "ss_color", "params": {}},
         {"id": "b", "type": "make_clips", "params": {}},
     ]
     edges = [{"from": "a", "fromPort": "events", "to": "b", "toPort": "clips"}]
