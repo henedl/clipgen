@@ -44,7 +44,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, NotRequired, TypedDict
+from typing import Any, Callable, NotRequired, TypedDict, cast
 
 import config
 import utils
@@ -215,6 +215,23 @@ NODE_TYPES: dict[str, NodeType] = {
             },
         ],
         "requires": ["sheet"],
+    },
+    "time_range": {
+        "id": "time_range",
+        "label": "Time Range",
+        "domain": "artifact",
+        "category": "Source",
+        "inputs": [],
+        "outputs": [{"name": "timeRange", "type": "timeRange"}],
+        "params": [
+            {
+                "name": "ranges",
+                "type": "string",
+                "default": "",
+                "label": "Ranges (e.g. 1:23-1:45, 2:00-2:30)",
+            },
+        ],
+        "requires": [],
     },
     "region": {
         "id": "region",
@@ -978,6 +995,25 @@ def _exec_region(
     return {"region": {"name": name, "coords": coords}}
 
 
+def _exec_time_range(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Manual in/out times → timeRange (scan windows for SS nodes, cuts for clips).
+
+    Parses the same ``MM:SS``/``HH:MM:SS`` (range or single) syntax as a sheet
+    cell. Source is left empty — SS detectors take their video from the ``video``
+    input, and ``make_clips`` falls back to its wired ``video`` for the source.
+    """
+    raw = str(params.get("ranges", "") or "").strip()
+    ranges: list[tuple[float, float]] = []
+    for start_str, end_str in utils.parse_timestamps(raw) if raw else []:
+        start = utils.timestamp_to_seconds(start_str)
+        end = utils.timestamp_to_seconds(end_str)
+        if start is not None and end is not None:
+            ranges.append((start, max(start, end)))
+    return {"timeRange": {"ranges": ranges, "source": {}}}
+
+
 # ---- Transcript ----
 
 
@@ -1229,7 +1265,6 @@ def _run_ss_detector(
     import screenspace
     import screenspace_manifest
     import screenspace_worker
-    import video
 
     src = inputs.get("video") or {}
     paths = list(src.get("video_paths") or [])
@@ -1237,17 +1272,11 @@ def _run_ss_detector(
     if not paths or tool is None:
         return {"events": {"events": [], "source": src, "raw_results": []}}
 
-    # Region: denormalize against the first part's dimensions, else whole frame.
-    region_in = inputs.get("region") or {}
-    region_name = str(region_in.get("name", "") or "")
-    region_coords: dict[str, int] = {"x": 0, "y": 0, "w": 0, "h": 0}
-    norm = region_in.get("coords")
-    if isinstance(norm, dict) and norm:
-        props = video.probe_video_properties(paths[0]) or {}
-        w = int(props.get("width", 0) or 0)
-        h = int(props.get("height", 0) or 0)
-        if w > 0 and h > 0:
-            region_coords = screenspace.denormalize_region(norm, w, h)
+    # Unwired region scans the whole frame (zero-size coords would make the scan a
+    # silent no-op — see _resolve_region_coords).
+    region_name, region_coords = _resolve_region_coords(
+        inputs.get("region") or {}, paths[0]
+    )
 
     base_params = _build_ss_scan_params(tool_name, params)
     if tool_name in _SS_REFERENCE_DETECTORS and not _attach_ss_reference(
@@ -1333,19 +1362,29 @@ def _make_ss_executor(
 def _resolve_region_coords(
     region_in: dict[str, Any], video_path: str
 ) -> tuple[str, dict[str, int]]:
-    """Denormalize a region input against a video's dimensions (else whole frame)."""
+    """Resolve a region input to pixel coords, defaulting to the **full frame**.
+
+    A region port is optional on every Screenspace node; when it is unwired (or a
+    Region node names nothing / a coord-less entry), this returns the whole
+    frame's pixel dimensions rather than zero-size coords. That matters because
+    ``scan_video_frames`` rejects a zero-size region and skips the scan entirely
+    (a silent no-op), and the reference detectors would otherwise crop an empty
+    reference frame. Probes ``video_path`` once for the frame size.
+    """
     import screenspace
     import video
 
     region_name = str(region_in.get("name", "") or "")
+    props = video.probe_video_properties(video_path) or {}
+    width = int(props.get("width", 0) or 0)
+    height = int(props.get("height", 0) or 0)
     coords: dict[str, int] = {"x": 0, "y": 0, "w": 0, "h": 0}
     norm = region_in.get("coords")
-    if isinstance(norm, dict) and norm:
-        props = video.probe_video_properties(video_path) or {}
-        w = int(props.get("width", 0) or 0)
-        h = int(props.get("height", 0) or 0)
-        if w > 0 and h > 0:
-            coords = screenspace.denormalize_region(norm, w, h)
+    if isinstance(norm, dict) and norm and width > 0 and height > 0:
+        coords = screenspace.denormalize_region(norm, width, height)
+    if coords["w"] <= 0 or coords["h"] <= 0:
+        # Full-frame fallback: unwired region, or a region that didn't resolve.
+        coords = {"x": 0, "y": 0, "w": width, "h": height}
     return region_name, coords
 
 
@@ -1511,7 +1550,6 @@ def _exec_timelapse(
 ) -> dict[str, Any]:
     import files
     import screenspace_scans
-    import video
 
     src = inputs.get("video") or {}
     paths = list(src.get("video_paths") or [])
@@ -1519,15 +1557,9 @@ def _exec_timelapse(
     if not paths:
         return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
 
+    # _resolve_region_coords already falls back to the full frame when no region
+    # is wired; a still-zero size means the probe failed (unreadable video).
     _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
-    if region_coords["w"] <= 0 or region_coords["h"] <= 0:
-        props = video.probe_video_properties(paths[0]) or {}
-        region_coords = {
-            "x": 0,
-            "y": 0,
-            "w": int(props.get("width", 0) or 0),
-            "h": int(props.get("height", 0) or 0),
-        }
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
         return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
 
@@ -1783,6 +1815,37 @@ def _adapt_events_to_timerange(value: dict[str, Any]) -> dict[str, Any]:
     return {"ranges": ranges, "source": source}
 
 
+def _adapt_cliprecords_to_timerange(value: dict[str, Any]) -> dict[str, Any]:
+    """Project clip records to ``(start, end)`` windows — e.g. *sheet cells →
+    SS scan windows*. Each record's resolved ``times`` (via ``files.prepare_clip``
+    when not pre-filled) are converted to seconds; the inverse of
+    :func:`_adapt_timerange_to_cliprecords`.
+    """
+    import files
+
+    ranges: list[tuple[float, float]] = []
+    source: dict[str, Any] = {}
+    for rec in value.get("records") or []:
+        prepared = (
+            rec
+            if rec.get("times")
+            else files.prepare_clip(cast(utils.ClipRecord, dict(rec)))
+        )
+        for start_str, end_str in prepared.get("times") or []:
+            start = utils.timestamp_to_seconds(start_str)
+            end = utils.timestamp_to_seconds(end_str)
+            if start is not None and end is not None:
+                ranges.append((start, max(start, end)))
+        if not source and rec.get("participant"):
+            source = {
+                "participant": str(rec.get("participant", "") or ""),
+                "study": str(rec.get("study", value.get("study", "")) or ""),
+                "source_filename": "",
+                "video_paths": [],
+            }
+    return {"ranges": ranges, "source": source}
+
+
 def _adapt_events_to_cliprecords(value: dict[str, Any]) -> dict[str, Any]:
     import files
 
@@ -1819,6 +1882,7 @@ ADAPTERS: dict[tuple[str, str], Callable[[Any], Any]] = {
     ("transcript", "segments"): _adapt_transcript_to_segments,
     ("segments", "timeRange"): _adapt_segments_to_timerange,
     ("timeRange", "clipRecords"): _adapt_timerange_to_cliprecords,
+    ("clipRecords", "timeRange"): _adapt_cliprecords_to_timerange,
     ("events", "timeRange"): _adapt_events_to_timerange,
     ("events", "clipRecords"): _adapt_events_to_cliprecords,
     ("video", "scalar"): _adapt_video_to_scalar,
@@ -1833,6 +1897,7 @@ _EXECUTORS: dict[
     "video_source": _exec_video_source,
     "sheet_selection": _exec_sheet_selection,
     "region": _exec_region,
+    "time_range": _exec_time_range,
     "transcribe": _exec_transcribe,
     "find_word": _exec_find_word,
     "summarize": _exec_summarize,

@@ -77,8 +77,17 @@ timelapse/heatmap render in a new viewer **Attachments** panel. Pinned node set:
 
 **Connection model:** *no new `media` type* — `timelapse`/`heatmap` emit `artifacts` carrying a new
 `type` value; `viewer.finalize_timeline_data` + the viewer JS branch on `type` so clips/screens/gifs go
-on the timeline and timelapse/heatmap land in a separate attachments panel. *No new adapters* — every
-new node connects via existing types and the 6 existing adapters.
+on the timeline and timelapse/heatmap land in a separate attachments panel.
+
+**P2 follow-ups (shipped same PR):** ✅
+- **`time_range` node** (new Source) — manual in/out entry (`MM:SS`/range syntax), outputs `timeRange`
+  to feed SS scan windows or `make_clips`. ✅
+- **`clipRecords → timeRange` adapter** — lets `sheet_selection` (or any clipRecords) drive SS scan
+  windows ("scan only the cells' timestamps"). The one new adapter (7 total now). ✅
+- **Full-frame fallback for Screenspace** — an unwired/empty region now scans the whole frame instead
+  of a silent zero-size no-op: shared `workflows._resolve_region_coords` (covers all SS detectors,
+  multitool, timelapse, and the self-extract reference path), and CLI `--ss-task TYPE PARTICIPANT`
+  with REGION omitted defaults to `full_frame`. ✅
 
 *(Deferred to demand: data export, gallery viewer, transcript export md/srt/vtt — all exist in the
 backend; add when a recipe needs them.)*

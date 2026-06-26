@@ -568,3 +568,64 @@ def test_heatmap_consumes_raw_results(tmp_path, monkeypatch):
     assert called["results"] == [{"change_grid": []}]
     assert called["dims"] == (640, 480)
     assert out["artifacts"]["artifacts"][0]["type"] == "heatmap"
+
+
+# ---- Full-frame fallback + time-range authoring ----
+
+
+def test_ss_detector_defaults_to_full_frame_when_region_unwired(tmp_path, monkeypatch):
+    seen = {}
+
+    class _RegionTool:
+        def scan(self, video_path, region_coords, params, **kw):
+            seen["region"] = dict(region_coords)
+            return []
+
+    monkeypatch.setitem(screenspace.TOOLS, "color", _RegionTool())
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 1920, "height": 1080}
+    )
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    # No region input wired → scan the whole frame (not a zero-size no-op).
+    _run("ss_color", _ctx(tmp_path), {"video": src}, {})
+    assert seen["region"] == {"x": 0, "y": 0, "w": 1920, "h": 1080}
+
+
+def test_resolve_region_coords_full_frame_fallback(monkeypatch):
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 1280, "height": 720}
+    )
+    name, coords = workflows._resolve_region_coords({}, "study_P01.mp4")
+    assert name == ""
+    assert coords == {"x": 0, "y": 0, "w": 1280, "h": 720}
+
+
+def test_time_range_parses_manual_ranges(tmp_path):
+    out = _run("time_range", _ctx(tmp_path), {}, {"ranges": "1:23-1:45, 2:00-2:30"})
+    assert out["timeRange"]["ranges"] == [(83.0, 105.0), (120.0, 150.0)]
+    assert out["timeRange"]["source"] == {}
+
+
+def test_time_range_empty_is_safe(tmp_path):
+    out = _run("time_range", _ctx(tmp_path), {}, {"ranges": ""})
+    assert out["timeRange"]["ranges"] == []
+
+
+def test_adapter_cliprecords_to_timerange():
+    # Sheet cells → SS scan windows: records carry resolved `times` here.
+    value = {
+        "records": [
+            {"times": [("0:00:10", "0:00:20")], "participant": "P01", "study": "s"},
+            {"times": [("0:01:00", "0:01:05")], "participant": "P01", "study": "s"},
+        ],
+        "study": "s",
+    }
+    out = workflows.ADAPTERS[("clipRecords", "timeRange")](value)
+    assert out["ranges"] == [(10.0, 20.0), (60.0, 65.0)]
+    assert out["source"]["participant"] == "P01"
