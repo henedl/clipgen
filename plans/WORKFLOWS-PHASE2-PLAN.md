@@ -29,9 +29,10 @@ client, no persistence complexity, grow by demonstrated demand.
 ## Depends on v1 finishing
 
 **M4 (run engine: `WorkflowRunner`, SSE, run history)** has landed (#467) — batch, triggers, and P5
-build on its runner. **M5 (stashes: save/instantiate sub-graphs)** is still schema-only
-(`workflows_manifest.json` has the `stashes` key, no CRUD/UI yet); P4's built-in recipes need it. Land
-M5 before P4.
+build on its runner. **M5 (stashes: save/instantiate sub-graphs)** has now **landed alongside P4**:
+`GET/POST/PUT/DELETE /api/stashes` (combined-manifest CRUD mirroring blueprint CRUD), a
+`workflows-stashes.js` satellite with a sidebar stash section (drag-to-canvas + click-to-add, client-
+side id remap), and the read-only built-in recipes served from `workflows.BUILTIN_STASHES`.
 
 ## Gaps carried out of v1 (the starting state)
 
@@ -126,14 +127,16 @@ dropdown** — pick an arbitrary subset of participants to fan out over, not jus
 endpoint already accepts a `participants` list; only the param widget + a richer participant param
 value (a list) are needed. Keep "All" as a convenience shortcut.
 
-### P4 — Recipe / template layer *(the posture's centerpiece; templates = seeded stashes)*
-- Ship the headline graphs as **built-in stashes** (the M5 stash system, pre-seeded). **Chosen
-  starters:** "Transcribe → Find Word → Make Clips → Viewer" and "Sheet Selection → Highlights →
-  Build Reel → Viewer". (Demand-driven later: Scan → Clips → Reel; Scan → Measure → Gate → Reel;
-  Transcribe → Summary + Citations + Friction; Template/Flow → Heatmap; Video → Timelapse.) One
-  palette, no parallel "template" concept.
-- "New from recipe" instantiates a built-in stash onto a fresh blueprint with sensible defaults.
-- Built-ins are read-only seeds; instantiating copies (non-destructive, reusing the M5 copy-on-save).
+### P4 — Recipe / template layer *(the posture's centerpiece; templates = seeded stashes)* — ✅ Done
+- **Shipped** (with M5) — the two headline graphs ship as **read-only built-in stashes**
+  (`workflows.BUILTIN_STASHES`, served by `GET /api/stashes` ahead of the user's stashes, *not*
+  persisted — code, not data): "Transcribe → Find Word → Make Clips → Viewer" and "Sheet Selection →
+  Highlights → Build Reel → Viewer". (Demand-driven later: Scan → Clips → Reel; Scan → Measure → Gate
+  → Reel; Transcribe → Summary + Citations + Friction; Template/Flow → Heatmap; Video → Timelapse.)
+  One palette — built-ins and user stashes share the sidebar list and the same instantiate path.
+- Instantiating (drag-to-canvas or click-to-add) stamps a fresh copy: the satellite remaps every node
+  id, rewrites edges through the id map, and offsets positions. Non-destructive — built-ins carry a
+  `builtin:true` flag and the CRUD routes reject renaming/deleting them (403).
 
 ### P5 — Authoring & run-history UX *(designed; land the storage contract with P2)*
 - **Pre-run validation panel** (client-side) — aggregates today's scattered cues; **errors disable

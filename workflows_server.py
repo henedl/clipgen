@@ -186,6 +186,78 @@ def api_blueprints_delete(bp_id: str) -> Any:
     return jsonify({"ok": True})
 
 
+# ---- Stash CRUD (M5: save/instantiate sub-graphs) ----
+#
+# A stash is a reusable sub-graph fragment ({id, name, nodes, edges, createdAt,
+# builtin}). The server does CRUD only; the frontend instantiates a stash onto
+# the canvas (id remap + position offset) client-side. ``GET`` prepends the
+# read-only built-in recipes (P4) ahead of the user's persisted stashes. The
+# same single-combined-manifest locking the blueprint routes use applies here.
+
+
+@workflows_bp.route("/api/stashes")
+def api_stashes() -> Any:
+    """Return the built-in recipes (read-only) followed by the user's stashes."""
+    with _manifest_lock:
+        user_stashes = copy.deepcopy(_manifest.get("stashes", []))
+    return jsonify({"ok": True, "stashes": workflows.BUILTIN_STASHES + user_stashes})
+
+
+@workflows_bp.route("/api/stashes", methods=["POST"])
+def api_stashes_create() -> Any:
+    """Save a selected sub-graph as a named stash and return it with its id."""
+    data = request.get_json(silent=True) or {}
+    nodes = data.get("nodes", [])
+    if not nodes:
+        return jsonify({"ok": False, "error": "No nodes to stash"}), 400
+    stash = {
+        "id": "stash_" + uuid.uuid4().hex[:8],
+        "name": (data.get("name") or "Stash").strip() or "Stash",
+        "nodes": nodes,
+        "edges": data.get("edges", []),
+        "builtin": False,  # P4 built-ins are served from code; CRUD guards on this
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    with _manifest_lock:
+        _manifest.setdefault("stashes", []).append(stash)
+        _persist_locked()
+    return jsonify({"ok": True, "stash": stash})
+
+
+@workflows_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
+def api_stashes_update(stash_id: str) -> Any:
+    """Rename a user stash. Built-in recipes are read-only (403)."""
+    if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
+        return jsonify({"ok": False, "error": "Built-in recipes are read-only"}), 403
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"ok": False, "error": "JSON body required"}), 400
+    with _manifest_lock:
+        stashes = _manifest.get("stashes", [])
+        stash = next((s for s in stashes if s.get("id") == stash_id), None)
+        if stash is None:
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
+        if "name" in data:
+            stash["name"] = (data["name"] or stash["name"]).strip() or stash["name"]
+        _persist_locked()
+    return jsonify({"ok": True, "stash": stash})
+
+
+@workflows_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
+def api_stashes_delete(stash_id: str) -> Any:
+    """Delete a user stash by id. Built-in recipes are read-only (403)."""
+    if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
+        return jsonify({"ok": False, "error": "Built-in recipes are read-only"}), 403
+    with _manifest_lock:
+        stashes = _manifest.get("stashes", [])
+        idx = next((i for i, s in enumerate(stashes) if s.get("id") == stash_id), None)
+        if idx is None:
+            return jsonify({"ok": False, "error": "Stash not found"}), 404
+        stashes.pop(idx)
+        _persist_locked()
+    return jsonify({"ok": True})
+
+
 # ---- Run lifecycle (M4) ----
 
 

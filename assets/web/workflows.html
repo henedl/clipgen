@@ -26,6 +26,10 @@
     <aside id="wfSidebar" aria-label="Node palette">
       <div class="wf-sidebar-header">Nodes</div>
       <div id="wfPalette" class="wf-palette"></div>
+      <!-- Stashes (M5): built-in recipes + saved sub-graphs. Drag or click an
+           item to stamp it onto the canvas (the stashes satellite remaps ids). -->
+      <div class="wf-sidebar-header">Stashes</div>
+      <div id="wfStashList" class="wf-stash-list"></div>
     </aside>
 
     <section id="wfCanvasWrap" aria-label="Workflow canvas">
@@ -38,6 +42,8 @@
         <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
         <button id="wfCleanUp" class="btn btn-small" type="button" disabled
                 title="Auto-arrange the nodes">Clean up</button>
+        <button id="wfSaveStash" class="btn btn-small" type="button" disabled
+                title="Save the selected nodes as a reusable stash">Stash selection</button>
         <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
                 title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
         <button id="wfStopBtn" class="btn btn-small hidden" type="button"
@@ -97,5 +103,6 @@
   <script src="workflows-canvas.js"></script>
   <script src="workflows-wires.js"></script>
   <script src="workflows-runs.js"></script>
+  <script src="workflows-stashes.js"></script>
 </body>
 </html>
