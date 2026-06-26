@@ -50,11 +50,14 @@
                 title="Cancel the running workflow">Stop</button>
       </header>
       <div id="wfCanvas" class="wf-canvas">
-        <!-- Wire layer: transformed in lockstep with #wfWorld (same translate/scale),
-             painted behind the cards. Paths carry pointer-events; the SVG itself
-             doesn't, so empty areas still pan the canvas. -->
-        <svg id="wfWires" class="wf-wires"></svg>
-        <div id="wfWorld" class="wf-world"></div>
+        <!-- Wire layer lives INSIDE #wfWorld so it shares the cards' (transformed)
+             stacking context: this lets wires sit above the card frames (z-index 1)
+             yet below the port dots (z-index 2) — the card-frame → wire → dot
+             sandwich. Paths carry pointer-events; the SVG itself doesn't, so empty
+             areas still pan the canvas. renderAllNodes() preserves this <svg>. -->
+        <div id="wfWorld" class="wf-world">
+          <svg id="wfWires" class="wf-wires"></svg>
+        </div>
         <!-- Floating delete control: shown at a wire's midpoint on hover / when a
              wire is selected (screen-positioned, so it stays crisp under zoom). -->
         <button id="wfWireDelete" class="wf-wire-delete-btn hidden" type="button"

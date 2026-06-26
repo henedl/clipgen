@@ -52,14 +52,12 @@
     _vpRaf = requestAnimationFrame(function () {
       _vpRaf = 0;
       var world = qs("#wfWorld");
-      var wires = qs("#wfWires");
       var canvas = qs("#wfCanvas");
       var vp = state.viewport;
-      // Same transform for cards and the wire layer so wires pan/zoom in lockstep
-      // (no per-path recompute needed on pan/zoom — only on node move).
+      // One transform on #wfWorld pans/zooms both the cards and the nested wire
+      // layer in lockstep (no per-path recompute on pan/zoom — only on node move).
       var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
       if (world) world.style.transform = t;
-      if (wires) wires.style.transform = t;
       if (canvas) {
         var g = _gridBase * vp.zoom;
         canvas.style.backgroundSize = g + "px " + g + "px";

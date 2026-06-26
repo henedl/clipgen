@@ -93,20 +93,36 @@
     return { x: (node.position.x || 0) + off.x, y: (node.position.y || 0) + off.y };
   }
 
-  // Horizontal S-curve from an output (a, bulges right) to an input (b, left).
+  // Horizontal S-curve from an output (a, exits right) to an input (b, enters from
+  // the left), using React Flow's curvature model. A forward edge (b right of a)
+  // puts both control points at the horizontal midpoint → a clean S. A backward
+  // edge (b left of a — e.g. a cleaned-up cycle's back-reference) gets a small
+  // sqrt-bounded bow instead of a wide loop slung under the cards. The old linear
+  // `max(40, |dx|*0.4)` did the opposite: its 40px floor crossed the control
+  // points on near-vertical forward edges (a kink), and the linear term ballooned
+  // backward edges.
+  var WIRE_CURVATURE = 0.25;
+
+  function ctrlOffset(distance) {
+    if (distance >= 0) return 0.5 * distance;
+    return WIRE_CURVATURE * 25 * Math.sqrt(-distance);
+  }
+
   function bezierPath(a, b) {
-    var dx = Math.max(40, Math.abs(b.x - a.x) * 0.4);
+    var d = b.x - a.x;
+    var c1x = a.x + ctrlOffset(d);
+    var c2x = b.x - ctrlOffset(d);
     return (
       "M " +
       a.x +
       " " +
       a.y +
       " C " +
-      (a.x + dx) +
+      c1x +
       " " +
       a.y +
       ", " +
-      (b.x - dx) +
+      c2x +
       " " +
       b.y +
       ", " +
