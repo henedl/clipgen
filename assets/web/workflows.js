@@ -34,6 +34,9 @@
     runs: [], // recent run snapshots (newest first)
     activeRunId: null, // the run currently streamed/polled, or null
     nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
+    // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
+    batches: [], // recent batch summaries (newest first)
+    activeBatchId: null, // the batch currently streamed/polled, or null
   };
 
   // ---- Catalog + palette ----------------------------------------------------
@@ -427,6 +430,10 @@
   // (renderNode, renderAllNodes, initCanvas, applyViewport) back onto it.
   var WF = (window.ClipgenWorkflows = window.ClipgenWorkflows || {});
   WF.state = state;
+  // Sentinel a Video Source's participant param holds for "fan out over every
+  // participant"; the Run button turns such a blueprint into a batch. (Frontend-
+  // only — the batch rebinds each video_source to a real participant per run.)
+  WF.ALL_PARTICIPANTS = "__all__";
   WF.boot = boot;
   WF.scheduleSave = scheduleSave;
   WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
