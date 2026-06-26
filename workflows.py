@@ -44,7 +44,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, NotRequired, TypedDict
+from typing import Any, Callable, NotRequired, TypedDict, cast
 
 import config
 import utils
@@ -216,6 +216,23 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": ["sheet"],
     },
+    "time_range": {
+        "id": "time_range",
+        "label": "Time Range",
+        "domain": "artifact",
+        "category": "Source",
+        "inputs": [],
+        "outputs": [{"name": "timeRange", "type": "timeRange"}],
+        "params": [
+            {
+                "name": "ranges",
+                "type": "string",
+                "default": "",
+                "label": "Ranges (e.g. 1:23-1:45, 2:00-2:30)",
+            },
+        ],
+        "requires": [],
+    },
     "region": {
         "id": "region",
         "label": "Region",
@@ -315,29 +332,101 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
     # ---- Screenspace ----
-    "ss_scan": {
-        "id": "ss_scan",
-        "label": "SS Scan",
+    # The ten per-detector nodes (ss_text … ss_boundary) are appended below the
+    # literal from ``_SS_DETECTOR_SPECS`` so each tool's real params reach the
+    # scan (the old single ``ss_scan`` passed ``parameters={}``).
+    "multitool": {
+        "id": "multitool",
+        "label": "Multitool",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [
             {"name": "video", "type": "video"},
             {"name": "region", "type": "region", "optional": True},
-            {"name": "timeRange", "type": "timeRange", "optional": True},
         ],
         "outputs": [{"name": "events", "type": "events"}],
         "params": [
             {
-                "name": "tool",
+                "name": "steps",
+                "type": "step-list",
+                "default": [],
+                "label": "Steps (≥2, chained per frame)",
+            },
+        ],
+        "requires": ["videoDir"],
+    },
+    "timelapse": {
+        "id": "timelapse",
+        "label": "Timelapse",
+        "domain": "screenspace",
+        "category": "Screenspace",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            {"name": "region", "type": "region", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "speedup_factor",
+                "type": "number",
+                "default": 10.0,
+                "min": 1,
+                "label": "Speed-up ×",
+            },
+            {
+                "name": "output_format",
                 "type": "enum",
-                "default": "text",
-                "choices": ["text", "color", "change", "similarity"],
-                "label": "Tool",
+                "default": "mp4",
+                "choices": ["mp4", "gif"],
+                "label": "Format",
+            },
+            {
+                "name": "sample_interval",
+                "type": "number",
+                "default": 0.0,
+                "min": 0,
+                "label": "Sample interval (s)",
+            },
+        ],
+        "requires": ["videoDir"],
+    },
+    "heatmap": {
+        "id": "heatmap",
+        "label": "Heatmap",
+        "domain": "screenspace",
+        "category": "Screenspace",
+        "inputs": [{"name": "events", "type": "events"}],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "style",
+                "type": "enum",
+                "default": "change",
+                "choices": ["template", "flow", "change"],
+                "label": "Style (needs matching upstream detector)",
             },
         ],
         "requires": ["videoDir"],
     },
     # ---- Artifact ----
+    "highlights": {
+        "id": "highlights",
+        "label": "Highlights",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [{"name": "clips", "type": "clipRecords"}],
+        "outputs": [{"name": "clips", "type": "clipRecords"}],
+        "params": [
+            {
+                "name": "budget",
+                "type": "number",
+                "default": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
+                "min": 1,
+                "label": "Budget (seconds)",
+            },
+        ],
+        "requires": [],
+    },
     "make_clips": {
         "id": "make_clips",
         "label": "Make Clips",
@@ -355,6 +444,27 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "",
                 "label": "Description",
+            },
+            {
+                "name": "output_format",
+                "type": "enum",
+                "default": "clip",
+                "choices": ["clip", "screen", "gif"],
+                "label": "Output format",
+            },
+            {
+                "name": "titlecards",
+                "type": "bool",
+                "default": False,
+                "label": "Titlecards",
+            },
+            {
+                "name": "titlecard_duration",
+                "type": "number",
+                "default": config.TITLECARD_DURATION_SECONDS,
+                "min": 1,
+                "max": 30,
+                "label": "Titlecard duration (s)",
             },
         ],
         "requires": ["videoDir"],
@@ -389,6 +499,28 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
     # ---- Control ----
+    "measure": {
+        "id": "measure",
+        "label": "Measure",
+        "domain": "control",
+        "category": "Control",
+        "inputs": [
+            {"name": "events", "type": "events", "optional": True},
+            {"name": "clips", "type": "clipRecords", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        "outputs": [{"name": "value", "type": "scalar"}],
+        "params": [
+            {
+                "name": "metric",
+                "type": "enum",
+                "default": "count",
+                "choices": ["count", "max_confidence", "total_duration"],
+                "label": "Metric",
+            },
+        ],
+        "requires": [],
+    },
     "gate": {
         "id": "gate",
         "label": "Gate",
@@ -414,6 +546,319 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
 }
+
+
+# Per-detector Screenspace nodes. Each entry's params are lifted from the matching
+# ``screenspace_tools`` class (the knobs its ``scan`` reads). The three
+# reference-based detectors (template/similarity/scene) self-extract their
+# reference from the node's region at ``reference_seconds`` so the canvas needs no
+# upload UI. ``_build_ss_scan_params`` (below) assembles these flat params into the
+# nested ``scan_params`` each scan expects.
+_SS_DETECTOR_LABELS: dict[str, str] = {
+    "text": "Detect Text",
+    "color": "Detect Color",
+    "change": "Detect Change",
+    "similarity": "Detect Similarity",
+    "numbers": "Detect Numbers",
+    "template": "Detect Template",
+    "flow": "Detect Motion",
+    "scene": "Detect Scene",
+    "inactivity": "Detect Inactivity",
+    "boundary": "Detect Boundary",
+}
+
+_INTERVAL_PARAM: ParamSpec = {
+    "name": "interval",
+    "type": "number",
+    "default": 0,
+    "min": 0,
+    "label": "Interval (s, 0=auto)",
+}
+
+_SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
+    "text": [
+        {
+            "name": "search_string",
+            "type": "string",
+            "default": "",
+            "label": "Search text",
+        },
+        {
+            "name": "fuzzy_threshold",
+            "type": "number",
+            "default": 80,
+            "min": 0,
+            "max": 100,
+            "label": "Fuzzy match %",
+        },
+        {
+            "name": "interval",
+            "type": "number",
+            "default": 2.0,
+            "min": 0,
+            "label": "Interval (s, 0=auto)",
+        },
+    ],
+    "color": [
+        {
+            "name": "color_h",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 179,
+            "label": "Hue",
+        },
+        {
+            "name": "color_s",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 255,
+            "label": "Saturation",
+        },
+        {
+            "name": "color_v",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 255,
+            "label": "Value",
+        },
+        {
+            "name": "tol_h",
+            "type": "number",
+            "default": 10,
+            "min": 0,
+            "max": 179,
+            "label": "Hue tol",
+        },
+        {
+            "name": "tol_s",
+            "type": "number",
+            "default": 50,
+            "min": 0,
+            "max": 255,
+            "label": "Sat tol",
+        },
+        {
+            "name": "tol_v",
+            "type": "number",
+            "default": 50,
+            "min": 0,
+            "max": 255,
+            "label": "Val tol",
+        },
+        {
+            "name": "color_mode",
+            "type": "enum",
+            "default": "average",
+            "choices": ["average", "presence"],
+            "label": "Mode",
+        },
+        {
+            "name": "min_coverage",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "max": 1,
+            "label": "Min coverage",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "change": [
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_CHANGE_RATIO_THRESHOLD,
+            "min": 0,
+            "max": 1,
+            "label": "Change ratio",
+        },
+        {
+            "name": "noise_threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_NOISE_THRESHOLD,
+            "min": 0,
+            "label": "Noise threshold",
+        },
+        {
+            "name": "require_consecutive",
+            "type": "number",
+            "default": 1,
+            "min": 1,
+            "label": "Consecutive frames",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "similarity": [
+        {
+            "name": "reference_seconds",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Reference time (s)",
+        },
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_SSIM_THRESHOLD,
+            "min": 0,
+            "max": 1,
+            "label": "SSIM threshold",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "numbers": [
+        {
+            "name": "operator",
+            "type": "enum",
+            "default": "gt",
+            "choices": ["gt", "lt", "gte", "lte", "eq", "range"],
+            "label": "Operator",
+        },
+        {
+            "name": "target_value",
+            "type": "number",
+            "default": 0,
+            "label": "Target value",
+        },
+        {"name": "range_min", "type": "number", "default": 0, "label": "Range min"},
+        {"name": "range_max", "type": "number", "default": 0, "label": "Range max"},
+        {
+            "name": "integers_only",
+            "type": "bool",
+            "default": False,
+            "label": "Integers only",
+        },
+        {
+            "name": "interval",
+            "type": "number",
+            "default": 2.0,
+            "min": 0,
+            "label": "Interval (s, 0=auto)",
+        },
+    ],
+    "template": [
+        {
+            "name": "reference_seconds",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Reference time (s)",
+        },
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD,
+            "min": 0,
+            "max": 1,
+            "label": "Match threshold",
+        },
+        {
+            "name": "template_scale",
+            "type": "number",
+            "default": 1.0,
+            "min": 0,
+            "label": "Template scale",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "flow": [
+        {
+            "name": "magnitude_threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD,
+            "min": 0,
+            "label": "Magnitude threshold",
+        },
+        {
+            "name": "require_consecutive",
+            "type": "number",
+            "default": 1,
+            "min": 1,
+            "label": "Consecutive frames",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "scene": [
+        {
+            "name": "reference_seconds",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Reference time (s)",
+        },
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD,
+            "min": 0,
+            "max": 1,
+            "label": "Scene threshold",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "inactivity": [
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": config.SCREENSPACE_INACTIVITY_PHASH_THRESHOLD,
+            "min": 0,
+            "label": "Phash threshold",
+        },
+        {
+            "name": "min_duration",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Min duration (s)",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "boundary": [
+        {
+            "name": "threshold",
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "label": "Threshold (0=auto)",
+        },
+        {
+            "name": "min_gap",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Min gap (s)",
+        },
+        {
+            "name": "metric",
+            "type": "enum",
+            "default": config.SCREENSPACE_BOUNDARY_METRIC,
+            "choices": ["hybrid", "phash", "scene"],
+            "label": "Metric",
+        },
+        _INTERVAL_PARAM,
+    ],
+}
+
+# Detectors whose scan needs a reference frame self-extracted from the node region.
+_SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "scene"})
+
+for _ss_tool in _SS_DETECTOR_SPECS:
+    NODE_TYPES[f"ss_{_ss_tool}"] = {
+        "id": f"ss_{_ss_tool}",
+        "label": _SS_DETECTOR_LABELS[_ss_tool],
+        "domain": "screenspace",
+        "category": "Screenspace",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            {"name": "region", "type": "region", "optional": True},
+            {"name": "timeRange", "type": "timeRange", "optional": True},
+        ],
+        "outputs": [{"name": "events", "type": "events"}],
+        "params": list(_SS_DETECTOR_SPECS[_ss_tool]),
+        "requires": ["videoDir"],
+    }
 
 
 def serialize_catalog() -> list[dict[str, Any]]:
@@ -550,6 +995,25 @@ def _exec_region(
     return {"region": {"name": name, "coords": coords}}
 
 
+def _exec_time_range(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Manual in/out times → timeRange (scan windows for SS nodes, cuts for clips).
+
+    Parses the same ``MM:SS``/``HH:MM:SS`` (range or single) syntax as a sheet
+    cell. Source is left empty — SS detectors take their video from the ``video``
+    input, and ``make_clips`` falls back to its wired ``video`` for the source.
+    """
+    raw = str(params.get("ranges", "") or "").strip()
+    ranges: list[tuple[float, float]] = []
+    for start_str, end_str in utils.parse_timestamps(raw) if raw else []:
+        start = utils.timestamp_to_seconds(start_str)
+        end = utils.timestamp_to_seconds(end_str)
+        if start is not None and end is not None:
+            ranges.append((start, max(start, end)))
+    return {"timeRange": {"ranges": ranges, "source": {}}}
+
+
 # ---- Transcript ----
 
 
@@ -674,32 +1138,151 @@ def _exec_friction(
 # ---- Screenspace ----
 
 
-def _exec_ss_scan(
-    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+def _build_ss_scan_params(tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Assemble a detector's flat node params into the scan's ``parameters`` dict.
+
+    Flat number/enum/bool params from the canvas are reshaped into the nested
+    structure each ``screenspace_tools`` scan reads (e.g. color's ``target_color``
+    /``tolerance`` HSV dicts). Reference-frame extraction is handled separately by
+    the caller (it needs the video path + region).
+    """
+
+    def _num(key: str, default: float = 0.0) -> float:
+        val = params.get(key)
+        return float(val) if val not in (None, "") else float(default)
+
+    if tool_name == "color":
+        return {
+            "target_color": {
+                "h": _num("color_h"),
+                "s": _num("color_s"),
+                "v": _num("color_v"),
+            },
+            "tolerance": {
+                "h": _num("tol_h", 10),
+                "s": _num("tol_s", 50),
+                "v": _num("tol_v", 50),
+            },
+            "color_mode": str(params.get("color_mode", "average") or "average"),
+            "min_coverage": _num("min_coverage"),
+            "interval": _num("interval"),
+        }
+    if tool_name == "change":
+        return {
+            "threshold": _num("threshold"),
+            "noise_threshold": _num("noise_threshold"),
+            "require_consecutive": int(_num("require_consecutive", 1)),
+            "interval": _num("interval"),
+        }
+    if tool_name == "flow":
+        return {
+            "magnitude_threshold": _num("magnitude_threshold"),
+            "require_consecutive": int(_num("require_consecutive", 1)),
+            "interval": _num("interval"),
+        }
+    if tool_name == "text":
+        return {
+            "search_string": str(params.get("search_string", "") or ""),
+            "fuzzy_threshold": _num("fuzzy_threshold", 80),
+            "interval": _num("interval", 2.0),
+        }
+    if tool_name == "numbers":
+        out: dict[str, Any] = {
+            "operator": str(params.get("operator", "gt") or "gt"),
+            "target_value": _num("target_value"),
+            "integers_only": bool(params.get("integers_only", False)),
+            "interval": _num("interval", 2.0),
+        }
+        if params.get("range_min") not in (None, ""):
+            out["range_min"] = _num("range_min")
+        if params.get("range_max") not in (None, ""):
+            out["range_max"] = _num("range_max")
+        return out
+    if tool_name == "similarity":
+        return {"threshold": _num("threshold"), "interval": _num("interval")}
+    if tool_name == "scene":
+        return {"threshold": _num("threshold"), "interval": _num("interval")}
+    if tool_name == "template":
+        return {
+            "threshold": _num("threshold"),
+            "template_scale": _num("template_scale", 1.0),
+            "interval": _num("interval"),
+        }
+    if tool_name == "inactivity":
+        return {
+            "threshold": _num("threshold"),
+            "min_duration": _num("min_duration"),
+            "interval": _num("interval"),
+        }
+    if tool_name == "boundary":
+        return {
+            "threshold": _num("threshold"),
+            "min_gap": _num("min_gap"),
+            "metric": str(
+                params.get("metric", "") or config.SCREENSPACE_BOUNDARY_METRIC
+            ),
+            "interval": _num("interval"),
+        }
+    return {"interval": _num("interval")}
+
+
+def _attach_ss_reference(
+    tool_name: str,
+    base_params: dict[str, Any],
+    params: dict[str, Any],
+    video_path: str,
+    region_coords: dict[str, int],
+) -> bool:
+    """Self-extract a reference frame from ``video_path`` at ``reference_seconds``.
+
+    Similarity/scene/template need reference image data that the canvas can't
+    upload; instead we crop the node's region from a frame at ``reference_seconds``.
+    Returns False when the frame can't be read so the executor can short-circuit.
+    """
+    import screenspace
+    import video as video_mod
+
+    ref_ts = float(params.get("reference_seconds", 0.0) or 0.0)
+    frame = video_mod.extract_frame_at_timestamp(video_path, ref_ts)
+    if frame is None:
+        return False
+    crop = screenspace.extract_region(frame, region_coords)
+    if tool_name == "similarity":
+        base_params["reference_frame"] = crop
+    elif tool_name == "template":
+        base_params["template_image"] = crop
+    elif tool_name == "scene":
+        base_params["reference_scenes"] = [{"name": "ref", "frame": crop}]
+    return True
+
+
+def _run_ss_detector(
+    ctx: NodeContext,
+    inputs: dict[str, Any],
+    params: dict[str, Any],
+    tool_name: str,
 ) -> dict[str, Any]:
     import screenspace
     import screenspace_manifest
     import screenspace_worker
-    import video
 
     src = inputs.get("video") or {}
     paths = list(src.get("video_paths") or [])
-    tool_name = str(params.get("tool", "text") or "text")
     tool = screenspace.TOOLS.get(tool_name)
     if not paths or tool is None:
-        return {"events": {"events": [], "source": src}}
+        return {"events": {"events": [], "source": src, "raw_results": []}}
 
-    # Region: denormalize against the first part's dimensions, else whole frame.
-    region_in = inputs.get("region") or {}
-    region_name = str(region_in.get("name", "") or "")
-    region_coords: dict[str, int] = {"x": 0, "y": 0, "w": 0, "h": 0}
-    norm = region_in.get("coords")
-    if isinstance(norm, dict) and norm:
-        props = video.probe_video_properties(paths[0]) or {}
-        w = int(props.get("width", 0) or 0)
-        h = int(props.get("height", 0) or 0)
-        if w > 0 and h > 0:
-            region_coords = screenspace.denormalize_region(norm, w, h)
+    # Unwired region scans the whole frame (zero-size coords would make the scan a
+    # silent no-op — see _resolve_region_coords).
+    region_name, region_coords = _resolve_region_coords(
+        inputs.get("region") or {}, paths[0]
+    )
+
+    base_params = _build_ss_scan_params(tool_name, params)
+    if tool_name in _SS_REFERENCE_DETECTORS and not _attach_ss_reference(
+        tool_name, base_params, params, paths[0], region_coords
+    ):
+        return {"events": {"events": [], "source": src, "raw_results": []}}
 
     task = screenspace_manifest.create_task(
         tool_name,
@@ -708,7 +1291,7 @@ def _exec_ss_scan(
         paths,
         region_name,
         region_coords,
-        parameters={},
+        parameters=base_params,
     )
 
     # Scan windows: each timeRange span scanned separately, else the whole video.
@@ -758,10 +1341,136 @@ def _exec_ss_scan(
         done_span += win_span
 
     events = screenspace_manifest.generate_events_from_results(task, raw_results)
-    return {"events": {"events": events, "source": src}}
+    # raw_results rides along for the heatmap node (template/flow/change); every
+    # other consumer reads only ``events`` and ignores it.
+    return {"events": {"events": events, "source": src, "raw_results": raw_results}}
+
+
+def _make_ss_executor(
+    tool_name: str,
+) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
+    """Bind ``_run_ss_detector`` to one tool so all ten nodes share one body."""
+
+    def _exec(
+        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, Any]:
+        return _run_ss_detector(ctx, inputs, params, tool_name)
+
+    return _exec
+
+
+def _resolve_region_coords(
+    region_in: dict[str, Any], video_path: str
+) -> tuple[str, dict[str, int]]:
+    """Resolve a region input to pixel coords, defaulting to the **full frame**.
+
+    A region port is optional on every Screenspace node; when it is unwired (or a
+    Region node names nothing / a coord-less entry), this returns the whole
+    frame's pixel dimensions rather than zero-size coords. That matters because
+    ``scan_video_frames`` rejects a zero-size region and skips the scan entirely
+    (a silent no-op), and the reference detectors would otherwise crop an empty
+    reference frame. Probes ``video_path`` once for the frame size.
+    """
+    import screenspace
+    import video
+
+    region_name = str(region_in.get("name", "") or "")
+    props = video.probe_video_properties(video_path) or {}
+    width = int(props.get("width", 0) or 0)
+    height = int(props.get("height", 0) or 0)
+    coords: dict[str, int] = {"x": 0, "y": 0, "w": 0, "h": 0}
+    norm = region_in.get("coords")
+    if isinstance(norm, dict) and norm and width > 0 and height > 0:
+        coords = screenspace.denormalize_region(norm, width, height)
+    if coords["w"] <= 0 or coords["h"] <= 0:
+        # Full-frame fallback: unwired region, or a region that didn't resolve.
+        coords = {"x": 0, "y": 0, "w": width, "h": height}
+    return region_name, coords
+
+
+def _exec_multitool(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import screenspace
+    import screenspace_manifest
+    import screenspace_worker
+
+    src = inputs.get("video") or {}
+    paths = list(src.get("video_paths") or [])
+    raw_steps = list(params.get("steps") or [])
+    if not paths or len(raw_steps) < 2:
+        return {"events": {"events": [], "source": src, "raw_results": []}}
+
+    region_name, region_coords = _resolve_region_coords(
+        inputs.get("region") or {}, paths[0]
+    )
+
+    # Reshape each flat step into the {type, region_coords, logic, …} shape
+    # scan_multitool expects, reusing the per-detector param builder.
+    steps: list[dict[str, Any]] = []
+    for idx, raw in enumerate(raw_steps):
+        step_type = str(raw.get("type", "") or "")
+        if step_type not in screenspace.TOOLS:
+            continue
+        step = _build_ss_scan_params(step_type, raw)
+        step["type"] = step_type
+        step["region_coords"] = region_coords
+        if idx > 0:
+            step["logic"] = str(raw.get("logic", "AND") or "AND").upper()
+        steps.append(step)
+    if len(steps) < 2:
+        return {"events": {"events": [], "source": src, "raw_results": []}}
+
+    task = screenspace_manifest.create_task(
+        "multitool",
+        str(src.get("participant", "") or ""),
+        str(src.get("source_filename", "") or ""),
+        paths,
+        region_name,
+        region_coords,
+        parameters={"steps": steps},
+    )
+    raw_results = (
+        screenspace_worker.dispatch_tool_scan(
+            screenspace.TOOLS["multitool"],
+            paths,
+            region_coords,
+            task["parameters"],
+            task_id=task["id"],
+            scan_mode="normal",
+            on_progress=ctx.on_progress,
+            cancel_flag=ctx.cancel_flag,
+            on_result=None,
+            fast_opts=None,
+        )
+        or []
+    )
+    events = screenspace_manifest.generate_events_from_results(task, raw_results)
+    return {"events": {"events": events, "source": src, "raw_results": raw_results}}
 
 
 # ---- Artifact ----
+
+
+def _exec_highlights(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import files
+    import spreadsheet
+
+    clips_in = inputs.get("clips") or {}
+    records = list(clips_in.get("records") or [])
+    study = str(clips_in.get("study", "") or "")
+    if not records:
+        return {"clips": {"records": [], "study": study}}
+    budget = int(params.get("budget", config.HIGHLIGHTS_REEL_DURATION_SECONDS) or 0)
+    if budget <= 0:
+        budget = config.HIGHLIGHTS_REEL_DURATION_SECONDS
+    # Uniqueness is scored against artifacts already in the output dir (mirrors the
+    # ``-H`` CLI path: spreadsheet.generate_reel_timestamps -> score_and_truncate_clips).
+    existing_filenames = set(files.discover_clips())
+    selected = spreadsheet.score_and_truncate_clips(records, existing_filenames, budget)
+    return {"clips": {"records": selected, "study": study}}
 
 
 def _exec_make_clips(
@@ -771,6 +1480,12 @@ def _exec_make_clips(
     import pipeline
 
     description = str(params.get("description", "") or "").strip() or "workflow"
+    output_format = str(params.get("output_format", "clip") or "clip")
+    if output_format not in ("clip", "screen", "gif"):
+        output_format = "clip"
+    titlecards = bool(params.get("titlecards", False))
+    raw_card_dur = params.get("titlecard_duration")
+    titlecard_duration = int(raw_card_dur) if raw_card_dur not in (None, "") else None
 
     records: list[Any] = []
     study = ""
@@ -795,11 +1510,119 @@ def _exec_make_clips(
         return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
     count, artifacts = pipeline.process_clips(
         records,
-        output_format="clip",
+        output_format=output_format,
         include_severity=False,
         cancel_flag=ctx.cancel_flag,
+        titlecards_enabled=titlecards,
+        titlecard_duration_seconds=titlecard_duration,
     )
     return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
+
+
+def _attachment_artifact(
+    art_type: str, output_path: str, source: dict[str, Any], description: str
+) -> dict[str, Any]:
+    """Build an artifact record for a single non-timeline output (timelapse/heatmap).
+
+    ``start``/``end`` are 0 so the viewer keeps it out of the timeline track and
+    surfaces it in the Attachments panel instead (branch on ``type``).
+    """
+    name = Path(output_path).name
+    return {
+        "id": f"{art_type}-{name}",
+        "type": art_type,
+        "file": name,
+        "thumbnail": "",
+        "start": 0,
+        "end": 0,
+        "study": str(source.get("study", "") or ""),
+        "participant": str(source.get("participant", "") or ""),
+        "category": "",
+        "severity": "",
+        "description": description,
+        "sourceVideo": str(source.get("source_filename", "") or ""),
+        "annotations": [],
+    }
+
+
+def _exec_timelapse(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import files
+    import screenspace_scans
+
+    src = inputs.get("video") or {}
+    paths = list(src.get("video_paths") or [])
+    study = str(src.get("study", "") or "")
+    if not paths:
+        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+
+    # _resolve_region_coords already falls back to the full frame when no region
+    # is wired; a still-zero size means the probe failed (unreadable video).
+    _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
+    if region_coords["w"] <= 0 or region_coords["h"] <= 0:
+        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+
+    out_format = str(params.get("output_format", "mp4") or "mp4")
+    if out_format not in ("mp4", "gif"):
+        out_format = "mp4"
+    output_path = files.get_unique_filename(
+        f"timelapse.{out_format}", file_format=f".{out_format}"
+    )
+    result = screenspace_scans.generate_timelapse(
+        paths[0],
+        region_coords,
+        float(params.get("speedup_factor", 10.0) or 10.0),
+        output_path,
+        output_format=out_format,
+        sample_interval=float(params.get("sample_interval", 0.0) or 0.0),
+        on_progress=ctx.on_progress,
+        cancel_flag=ctx.cancel_flag,
+    )
+    if not result:
+        files.release_reservation(output_path)
+        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+    rec = _attachment_artifact("timelapse", result, src, "Timelapse")
+    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
+
+
+def _exec_heatmap(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import files
+    import screenspace_heatmap
+    import video
+
+    events_in = inputs.get("events") or {}
+    src = events_in.get("source") or {}
+    study = str(src.get("study", "") or "")
+    results = list(events_in.get("raw_results") or [])
+    style = str(params.get("style", "change") or "change")
+    paths = list(src.get("video_paths") or [])
+    if not results or not paths or style not in ("template", "flow", "change"):
+        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+
+    props = video.probe_video_properties(paths[0]) or {}
+    width = int(props.get("width", 0) or 0) or 1920
+    height = int(props.get("height", 0) or 0) or 1080
+    output_path = files.get_unique_filename("heatmap.png", file_format=".png")
+    if style == "template":
+        result = screenspace_heatmap.generate_template_heatmap(
+            results, width, height, output_path
+        )
+    elif style == "flow":
+        result = screenspace_heatmap.generate_flow_heatmap(
+            results, width, height, output_path
+        )
+    else:
+        result = screenspace_heatmap.generate_change_heatmap(
+            results, width, height, output_path
+        )
+    if not result:
+        files.release_reservation(output_path)
+        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+    rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
+    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
 def _exec_build_reel(
@@ -856,6 +1679,68 @@ _GATE_OPS: dict[str, Callable[[float, float], bool]] = {
     "==": lambda a, b: a == b,
     "!=": lambda a, b: a != b,
 }
+
+
+def _exec_measure(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Reduce a wired collection to one scalar for the gate's threshold test.
+
+    Reads whichever of events / clipRecords / segments is wired (events first).
+    ``max_confidence`` only applies to events; it falls back to 0 otherwise.
+    """
+    metric = str(params.get("metric", "count") or "count")
+    events = (inputs.get("events") or {}).get("events")
+    records = (inputs.get("clips") or {}).get("records")
+    segments = (inputs.get("segments") or {}).get("segments")
+
+    if events is not None:
+        items = list(events)
+        if metric == "count":
+            return {"value": float(len(items))}
+        if metric == "max_confidence":
+            confs = [float(e.get("confidence", 0.0) or 0.0) for e in items]
+            return {"value": max(confs) if confs else 0.0}
+        total = sum(
+            max(
+                0.0,
+                float(e.get("time_out", 0.0) or 0.0)
+                - float(e.get("time_in", 0.0) or 0.0),
+            )
+            for e in items
+        )
+        return {"value": float(total)}
+
+    if records is not None:
+        items = list(records)
+        if metric == "count":
+            return {"value": float(len(items))}
+        if metric == "max_confidence":
+            return {"value": 0.0}
+        total = 0.0
+        for rec in items:
+            for start_str, end_str in rec.get("times") or []:
+                start = utils.timestamp_to_seconds(start_str)
+                end = utils.timestamp_to_seconds(end_str)
+                if start is not None and end is not None:
+                    total += max(0.0, end - start)
+        return {"value": float(total)}
+
+    if segments is not None:
+        items = list(segments)
+        if metric == "count":
+            return {"value": float(len(items))}
+        if metric == "max_confidence":
+            return {"value": 0.0}
+        total = sum(
+            max(
+                0.0, float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0)
+            )
+            for s in items
+        )
+        return {"value": float(total)}
+
+    return {"value": 0.0}
 
 
 def _exec_gate(
@@ -930,6 +1815,37 @@ def _adapt_events_to_timerange(value: dict[str, Any]) -> dict[str, Any]:
     return {"ranges": ranges, "source": source}
 
 
+def _adapt_cliprecords_to_timerange(value: dict[str, Any]) -> dict[str, Any]:
+    """Project clip records to ``(start, end)`` windows — e.g. *sheet cells →
+    SS scan windows*. Each record's resolved ``times`` (via ``files.prepare_clip``
+    when not pre-filled) are converted to seconds; the inverse of
+    :func:`_adapt_timerange_to_cliprecords`.
+    """
+    import files
+
+    ranges: list[tuple[float, float]] = []
+    source: dict[str, Any] = {}
+    for rec in value.get("records") or []:
+        prepared = (
+            rec
+            if rec.get("times")
+            else files.prepare_clip(cast(utils.ClipRecord, dict(rec)))
+        )
+        for start_str, end_str in prepared.get("times") or []:
+            start = utils.timestamp_to_seconds(start_str)
+            end = utils.timestamp_to_seconds(end_str)
+            if start is not None and end is not None:
+                ranges.append((start, max(start, end)))
+        if not source and rec.get("participant"):
+            source = {
+                "participant": str(rec.get("participant", "") or ""),
+                "study": str(rec.get("study", value.get("study", "")) or ""),
+                "source_filename": "",
+                "video_paths": [],
+            }
+    return {"ranges": ranges, "source": source}
+
+
 def _adapt_events_to_cliprecords(value: dict[str, Any]) -> dict[str, Any]:
     import files
 
@@ -966,6 +1882,7 @@ ADAPTERS: dict[tuple[str, str], Callable[[Any], Any]] = {
     ("transcript", "segments"): _adapt_transcript_to_segments,
     ("segments", "timeRange"): _adapt_segments_to_timerange,
     ("timeRange", "clipRecords"): _adapt_timerange_to_cliprecords,
+    ("clipRecords", "timeRange"): _adapt_cliprecords_to_timerange,
     ("events", "timeRange"): _adapt_events_to_timerange,
     ("events", "clipRecords"): _adapt_events_to_cliprecords,
     ("video", "scalar"): _adapt_video_to_scalar,
@@ -980,17 +1897,26 @@ _EXECUTORS: dict[
     "video_source": _exec_video_source,
     "sheet_selection": _exec_sheet_selection,
     "region": _exec_region,
+    "time_range": _exec_time_range,
     "transcribe": _exec_transcribe,
     "find_word": _exec_find_word,
     "summarize": _exec_summarize,
     "citations": _exec_citations,
     "friction": _exec_friction,
-    "ss_scan": _exec_ss_scan,
+    "multitool": _exec_multitool,
+    "highlights": _exec_highlights,
     "make_clips": _exec_make_clips,
     "build_reel": _exec_build_reel,
+    "timelapse": _exec_timelapse,
+    "heatmap": _exec_heatmap,
+    "measure": _exec_measure,
     "timeline_viewer": _exec_timeline_viewer,
     "gate": _exec_gate,
 }
+
+# The ten per-detector Screenspace nodes share one body via the factory above.
+for _ss_tool in _SS_DETECTOR_SPECS:
+    _EXECUTORS[f"ss_{_ss_tool}"] = _make_ss_executor(_ss_tool)
 
 for _node_id, _executor in _EXECUTORS.items():
     NODE_TYPES[_node_id]["execute"] = _executor

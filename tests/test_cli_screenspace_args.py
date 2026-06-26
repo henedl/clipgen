@@ -125,6 +125,48 @@ def test_parse_ss_task_color_minimal(monkeypatch):
     assert args.ss_color_mode == "average"  # default
 
 
+def test_parse_ss_task_region_optional(monkeypatch):
+    # REGION is optional — `--ss-task TYPE PARTICIPANT` parses to a 2-element list.
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "clipgen.py",
+            "--ss-task",
+            "color",
+            "P01",
+            "--ss-target-color",
+            "#FF0000",
+            "--ss-tolerance",
+            "20,30,30",
+            "--ss-threshold",
+            "0.85",
+        ],
+    )
+    args = cli.parse_arguments()
+    assert args.ss_task == ["color", "P01"]
+
+
+def test_ss_task_omitted_region_defaults_to_full_frame(monkeypatch, capsys):
+    # With no REGION, resolution must succeed (full_frame) and fall through to the
+    # next step — here the missing video — rather than erroring on the region.
+    fake_manifest = {"regions": {}, "stashes": [], "tasks": [], "events": []}
+    import screenspace
+
+    monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
+    monkeypatch.setattr(cli, "_ss_resolve_videos_for_participant", lambda pid: [])
+    args = _ss_args(
+        ss_task=["color", "P01"],
+        ss_target_color="#FF0000",
+        ss_tolerance="20,30,30",
+        ss_threshold=0.85,
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli._run_ss_task(args)
+    assert exc.value.code == 1
+    # Reached the video check (region resolved as full_frame), not a region error.
+    assert "P01" in capsys.readouterr().out
+
+
 def test_parse_ss_task_color_presence(monkeypatch):
     monkeypatch.setattr(
         "sys.argv",

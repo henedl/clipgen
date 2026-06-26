@@ -78,6 +78,55 @@
     return "clip";
   }
 
+  // Non-timeline artifact types: single output files surfaced in the Attachments
+  // panel rather than on the timeline track.
+  var ATTACHMENT_TYPES = { timelapse: true, heatmap: true };
+
+  function isAttachmentType(a) {
+    return !!ATTACHMENT_TYPES[a && a.type];
+  }
+
+  // Render the Attachments panel: heatmaps as <img>, timelapse mp4 as a looping
+  // <video>, timelapse gif as <img>. Hidden when there are no attachments.
+  function renderAttachments(attachments) {
+    var pane = qs("#attachmentsPane");
+    var grid = qs("#attachmentsGrid");
+    if (!pane || !grid) return;
+    if (!attachments || attachments.length === 0) {
+      pane.classList.add("hidden");
+      return;
+    }
+    grid.innerHTML = "";
+    var frag = document.createDocumentFragment();
+    attachments.forEach(function (a) {
+      var card = document.createElement("div");
+      card.className = "attachment-card";
+      var media;
+      var isVideo = a.type === "timelapse" && /\.mp4$/i.test(a.file);
+      if (isVideo) {
+        media = document.createElement("video");
+        media.controls = true;
+        media.loop = true;
+        media.muted = true;
+        media.src = a.file;
+      } else {
+        media = document.createElement("img");
+        media.src = a.file;
+        media.alt = a.description || a.type;
+        media.loading = "lazy";
+      }
+      card.appendChild(media);
+      var label = document.createElement("div");
+      label.className = "attachment-label";
+      var who = (a.participant || "").trim();
+      label.textContent = (a.description || a.type) + (who ? " · " + who : "");
+      card.appendChild(label);
+      frag.appendChild(card);
+    });
+    grid.appendChild(frag);
+    pane.classList.remove("hidden");
+  }
+
   function markerClasses(a) {
     var parts = ["artifact-marker", markerTypeClass(a.type)];
     var sev = (a.severity || "").trim();
@@ -667,8 +716,16 @@
       return;
     }
 
-    state.artifacts = (data.artifacts || []).filter(function (a) {
-      return a.id && a.file && (a.start != null || a.end != null);
+    // Attachments (timelapse / heatmap) are single output files, not timeline
+    // events — split them out before the timeline pipeline and render separately.
+    var rawArtifacts = (data.artifacts || []).filter(function (a) {
+      return a.id && a.file;
+    });
+    state.attachments = rawArtifacts.filter(isAttachmentType);
+    renderAttachments(state.attachments);
+
+    state.artifacts = rawArtifacts.filter(function (a) {
+      return !isAttachmentType(a) && (a.start != null || a.end != null);
     }).map(function (a, i) {
       return Object.assign({}, a, { _idx: i });
     });

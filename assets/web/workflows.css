@@ -413,6 +413,67 @@ body[data-frontend="workflows"] {
   width: auto;
 }
 
+/* ---- Multitool step-list (compound `steps` param) ---- */
+
+.wf-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+}
+
+.wf-step {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wf-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.wf-step-logic {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.wf-step-btn {
+  flex: 0 0 auto;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.wf-step-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.wf-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wf-step-add {
+  background: var(--bg-input);
+  color: var(--fg-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
 /* ---- SVG wire layer ---- */
 
 /* Transformed in lockstep with #wfWorld; zero-size + overflow:visible so paths

@@ -367,14 +367,15 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
     ss_modes = screenspace_cli.add_mutually_exclusive_group()
     ss_modes.add_argument(
         "--ss-task",
-        nargs=3,
-        metavar=("TYPE", "PARTICIPANT", "REGION"),
+        nargs="+",
+        metavar="TYPE PARTICIPANT [REGION]",
         default=None,
         help=(
             "Run a Screenspace analysis task headlessly. "
             "TYPE is one of color, change, similarity, text, numbers, timelapse, "
-            "template, flow, inactivity, scene. REGION must already exist in the "
-            "active manifest or in a stash (use --ss-list-regions / --ss-list-stashes)."
+            "template, flow, inactivity, scene. REGION is optional and must already "
+            "exist in the active manifest or in a stash (use --ss-list-regions / "
+            "--ss-list-stashes); omit it (or pass 'full_frame') to scan the whole frame."
         ),
     )
     ss_modes.add_argument(
@@ -1723,7 +1724,18 @@ def _run_ss_task(args: argparse.Namespace) -> None:
     """Run a Screenspace analysis task synchronously and persist the result."""
     import screenspace
 
-    task_type, participant, region_name = args.ss_task
+    # REGION is optional: `--ss-task TYPE PARTICIPANT` scans the whole frame
+    # (resolves to the FULL_FRAME_REGION via the literal name below).
+    ss_task = list(args.ss_task)
+    if len(ss_task) == 2:
+        ss_task.append(screenspace.FULL_FRAME_REGION_NAME)
+    if len(ss_task) != 3:
+        utils.error_print(
+            "--ss-task takes TYPE PARTICIPANT [REGION].",
+            ["Omit REGION (or pass 'full_frame') to scan the whole frame."],
+        )
+        sys.exit(1)
+    task_type, participant, region_name = ss_task
     if task_type not in _SS_VALID_TASK_TYPES:
         utils.error_print(
             f"Unknown screenspace task type {task_type!r}.",

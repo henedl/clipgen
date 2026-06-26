@@ -41,12 +41,24 @@
     return col;
   }
 
-  // One ParamSpec editor (number / enum / bool / participant / string), each
-  // writing back to node.params on change and autosaving. No re-render on edit,
-  // so focus/caret survive typing (the mousedown router also leaves param
-  // controls alone for the same reason).
-  function buildParamControl(node, spec) {
-    var value = node.params ? node.params[spec.name] : spec.default;
+  // Multitool step types: only the per-frame (check_frame) detectors that need
+  // no uploaded reference. Each step reuses its ss_<type> catalog params — no
+  // duplicated field definitions (the param specs come from the catalog).
+  var MT_STEP_TYPES = ["color", "change", "flow", "text", "numbers", "inactivity"];
+
+  function stepParamSpecs(stepType) {
+    var nt = state.catalogById && state.catalogById["ss_" + stepType];
+    return (nt && nt.params) || [];
+  }
+
+  // One ParamSpec editor (number / enum / bool / participant / string / step-list),
+  // writing back to `store` (defaults to node.params) on change and autosaving.
+  // Scalar editors do NOT re-render on edit, so focus/caret survive typing (the
+  // mousedown router also leaves param controls alone for the same reason).
+  function buildParamControl(node, spec, store) {
+    if (spec.type === "step-list") return buildStepList(node, spec);
+    store = store || node.params;
+    var value = store ? store[spec.name] : spec.default;
     var input;
     if (spec.type === "number") {
       input = el("input", "wf-param-input");
@@ -56,7 +68,7 @@
       input.value = value != null ? value : "";
       input.addEventListener("input", function () {
         var n = parseFloat(input.value);
-        node.params[spec.name] = isNaN(n) ? null : n;
+        store[spec.name] = isNaN(n) ? null : n;
         WF.scheduleSave();
       });
     } else if (spec.type === "enum") {
@@ -69,7 +81,7 @@
         input.appendChild(opt);
       });
       input.addEventListener("change", function () {
-        node.params[spec.name] = input.value;
+        store[spec.name] = input.value;
         WF.scheduleSave();
       });
     } else if (spec.type === "bool") {
@@ -77,7 +89,7 @@
       input.type = "checkbox";
       input.checked = !!value;
       input.addEventListener("change", function () {
-        node.params[spec.name] = input.checked;
+        store[spec.name] = input.checked;
         WF.scheduleSave();
       });
     } else if (spec.type === "participant") {
@@ -98,7 +110,7 @@
         input.appendChild(opt);
       });
       input.addEventListener("change", function () {
-        node.params[spec.name] = input.value;
+        store[spec.name] = input.value;
         WF.scheduleSave();
       });
     } else {
@@ -107,11 +119,111 @@
       input.autocomplete = "off";
       input.value = value != null ? value : "";
       input.addEventListener("input", function () {
-        node.params[spec.name] = input.value;
+        store[spec.name] = input.value;
         WF.scheduleSave();
       });
     }
     return input;
+  }
+
+  // Compound editor for the multitool `steps` param: an ordered list of step
+  // objects {type, logic, …per-type fields}. Structural changes (add/remove/
+  // reorder/type) re-render the list container only; scalar field edits write
+  // through buildParamControl(step) without a re-render (focus preserved).
+  function buildStepList(node, spec) {
+    if (!Array.isArray(node.params[spec.name])) node.params[spec.name] = [];
+    var steps = node.params[spec.name];
+    var container = el("div", "wf-step-list");
+
+    function rerender() {
+      container.innerHTML = "";
+      steps.forEach(function (step, idx) {
+        container.appendChild(buildStepCard(node, spec, step, idx, rerender));
+      });
+      var add = el("button", "wf-step-add", "+ Add step");
+      add.type = "button";
+      add.addEventListener("click", function () {
+        steps.push({ type: MT_STEP_TYPES[0], logic: "AND" });
+        WF.scheduleSave();
+        rerender();
+      });
+      container.appendChild(add);
+    }
+    rerender();
+    return container;
+  }
+
+  function buildStepCard(node, spec, step, idx, rerender) {
+    var steps = node.params[spec.name];
+    var card = el("div", "wf-step");
+    var head = el("div", "wf-step-head");
+
+    var typeSel = el("select", "wf-param-input");
+    MT_STEP_TYPES.forEach(function (t) {
+      var o = el("option");
+      o.value = t;
+      o.textContent = t;
+      if (t === step.type) o.selected = true;
+      typeSel.appendChild(o);
+    });
+    typeSel.addEventListener("change", function () {
+      step.type = typeSel.value;
+      WF.scheduleSave();
+      rerender(); // body fields differ per type
+    });
+    head.appendChild(typeSel);
+
+    // Steps after the first carry a chain logic (AND / NOT).
+    if (idx > 0) {
+      var logicSel = el("select", "wf-param-input wf-step-logic");
+      ["AND", "NOT"].forEach(function (l) {
+        var o = el("option");
+        o.value = l;
+        o.textContent = l;
+        if (l === (step.logic || "AND")) o.selected = true;
+        logicSel.appendChild(o);
+      });
+      logicSel.addEventListener("change", function () {
+        step.logic = logicSel.value;
+        WF.scheduleSave();
+      });
+      head.appendChild(logicSel);
+    }
+
+    function moveBtn(label, delta, disabled) {
+      var b = el("button", "wf-step-btn", label);
+      b.type = "button";
+      b.disabled = disabled;
+      b.addEventListener("click", function () {
+        var j = idx + delta;
+        if (j < 0 || j >= steps.length) return;
+        steps.splice(j, 0, steps.splice(idx, 1)[0]);
+        WF.scheduleSave();
+        rerender();
+      });
+      return b;
+    }
+    head.appendChild(moveBtn("↑", -1, idx === 0));
+    head.appendChild(moveBtn("↓", 1, idx === steps.length - 1));
+    var rm = el("button", "wf-step-btn", "✕");
+    rm.type = "button";
+    rm.addEventListener("click", function () {
+      steps.splice(idx, 1);
+      WF.scheduleSave();
+      rerender();
+    });
+    head.appendChild(rm);
+    card.appendChild(head);
+
+    var body = el("div", "wf-step-body");
+    stepParamSpecs(step.type).forEach(function (ps) {
+      var row = el("div", "wf-param");
+      row.appendChild(el("label", "wf-param-label", ps.label || ps.name));
+      row.appendChild(buildParamControl(node, ps, step));
+      body.appendChild(row);
+    });
+    card.appendChild(body);
+    return card;
   }
 
   function buildParamEditors(node, type) {

@@ -104,8 +104,15 @@ def test_catalog_returns_serializable_node_types(wf_client):
     catalog = data["catalog"]
     assert isinstance(catalog, list) and catalog
     ids = {node["id"] for node in catalog}
-    # A few headline nodes the cross-domain path needs.
-    assert {"transcribe", "ss_scan", "make_clips", "gate"} <= ids
+    # A few headline nodes the cross-domain path needs (P2 replaced the single
+    # ss_scan with ten per-detector nodes; ss_scan must be gone).
+    assert {"transcribe", "ss_text", "ss_color", "make_clips", "gate"} <= ids
+    assert "ss_scan" not in ids
+    # P2 catalog tranche additions.
+    assert {"highlights", "multitool", "timelapse", "heatmap", "measure"} <= ids
+    # P2 follow-ups: manual time-range source + the clipRecords→timeRange adapter.
+    assert "time_range" in ids
+    assert ("clipRecords", "timeRange") in workflows.ADAPTERS
     # The serialized catalog must carry no `execute` callable (JSON-safe).
     assert all("execute" not in node for node in catalog)
     # Launch-context flags drive palette grey-out; participants populate the

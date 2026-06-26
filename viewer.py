@@ -7,6 +7,9 @@ Timeline viewer (--viewer / interactive 'viewer'):
     sourceFileType, filmstripEnabled}, artifacts: [{id, type, file, start, end,
     study, participant, category, description, cellRow, cellCol, cellA1, annotations,
     sourceVideo}], timeline: {duration, startOffset} }
+  Artifact ``type`` is one of clip / screen / gif / reel (timeline events) or the
+    non-timeline "attachment" types timelapse / heatmap (start/end 0; the viewer JS
+    branches on type and surfaces these in a separate Attachments panel).
   Key functions: build_artifact_records_for_clip(), finalize_timeline_data(),
     generate_timeline_viewer().
 
