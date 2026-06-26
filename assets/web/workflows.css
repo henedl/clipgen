@@ -13,6 +13,7 @@
   --wf-panel-width: 16rem;
   --wf-grid-size: 24px; /* dot-grid cell at zoom 1; JS scales it with zoom */
   --wf-node-width: 11rem;
+  --wf-node-width-wide: 15rem; /* busy nodes (e.g. Multitool step-list) */
 
   /* Per-domain accent stripe colours — mapped onto the theme-aware task tokens
      so cards stay legible in both themes (page-local: not shared design tokens). */
@@ -21,6 +22,15 @@
   --wf-domain-transcript: var(--color-task-color);
   --wf-domain-thinking: var(--color-task-text);
   --wf-domain-control: var(--color-task-change);
+
+  /* Per-data-type port colours, grouped into families so adapter-coercible types
+     share a hue (a `timeRange` output into a `clips` input reads as "same family,
+     auto-converted"). Page-local; mapped onto the task/severity palette. */
+  --wf-type-temporal: var(--color-task-similarity); /* timeRange/clipRecords/events/segments/timestamps */
+  --wf-type-insight: var(--color-task-text); /* transcript/summary/citations/friction */
+  --wf-type-source: var(--color-task-color); /* video/participant/region */
+  --wf-type-output: var(--color-task-multitool); /* artifacts/manifest/viewerHtml */
+  --wf-type-value: var(--severity-medium); /* scalar/number/string */
 }
 
 body[data-frontend="workflows"] {
@@ -182,6 +192,12 @@ body[data-frontend="workflows"] {
   box-shadow: var(--shadow-focus);
 }
 
+/* Busy nodes (e.g. Multitool's step-list) need more room than the default width
+   so their param controls stay readable. Set via .wf-node-wide in renderNode. */
+.wf-node.wf-node-wide {
+  width: var(--wf-node-width-wide);
+}
+
 .wf-node-title {
   font-weight: 600;
 }
@@ -244,29 +260,68 @@ body[data-frontend="workflows"] {
   flex-direction: row-reverse;
 }
 
-/* Connector anchor — drag from a dot to another dot to wire a typed edge. */
+/* Connector anchor — drag from a dot to another dot to wire a typed edge.
+   Coloured by data type (--wf-port-color, set per type below); hollow when open,
+   filled when wired (.wf-port-connected). */
 .wf-port-dot {
   flex: 0 0 auto;
   width: 0.6rem;
   height: 0.6rem;
   border-radius: var(--radius-full);
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid var(--wf-port-color, var(--border));
   cursor: crosshair;
+  /* Raised above the nested wire layer (z-index 1) so wires tuck under the dots.
+     The card stays z-auto (not a stacking context), so this escapes to #wfWorld
+     where it outranks .wf-wires. */
+  position: relative;
+  z-index: 2;
   transition:
     transform var(--duration-fast),
     background var(--duration-fast),
     border-color var(--duration-fast);
 }
 
-.wf-port-dot:hover {
-  transform: scale(1.35);
-  background: var(--accent);
-  border-color: var(--accent);
+/* Occupied port — filled with its type colour (open ports stay a hollow ring). */
+.wf-port-connected .wf-port-dot {
+  background: var(--wf-port-color, var(--accent));
+  border-color: var(--wf-port-color, var(--accent));
 }
 
-.wf-port.optional .wf-port-dot {
-  background: transparent;
+.wf-port-dot:hover {
+  transform: scale(1.35);
+  background: var(--wf-port-color, var(--accent));
+  border-color: var(--wf-port-color, var(--accent));
+}
+
+/* Per-data-type port colour, grouped into families (see --wf-type-* in :root). */
+.wf-port-dot[data-port-type="timeRange"],
+.wf-port-dot[data-port-type="clipRecords"],
+.wf-port-dot[data-port-type="events"],
+.wf-port-dot[data-port-type="segments"],
+.wf-port-dot[data-port-type="timestamps"] {
+  --wf-port-color: var(--wf-type-temporal);
+}
+.wf-port-dot[data-port-type="transcript"],
+.wf-port-dot[data-port-type="summary"],
+.wf-port-dot[data-port-type="citations"],
+.wf-port-dot[data-port-type="friction"] {
+  --wf-port-color: var(--wf-type-insight);
+}
+.wf-port-dot[data-port-type="video"],
+.wf-port-dot[data-port-type="participant"],
+.wf-port-dot[data-port-type="region"] {
+  --wf-port-color: var(--wf-type-source);
+}
+.wf-port-dot[data-port-type="artifacts"],
+.wf-port-dot[data-port-type="manifest"],
+.wf-port-dot[data-port-type="viewerHtml"] {
+  --wf-port-color: var(--wf-type-output);
+}
+.wf-port-dot[data-port-type="scalar"],
+.wf-port-dot[data-port-type="number"],
+.wf-port-dot[data-port-type="string"] {
+  --wf-port-color: var(--wf-type-value);
 }
 
 /* ---- Marquee selection (drawn in canvas/screen coords) ---- */
@@ -481,10 +536,13 @@ body[data-frontend="workflows"] {
   margin-top: var(--space-2);
 }
 
+/* Label stacked above a full-width input so the control isn't starved by the
+   label on the narrow card (applies to top-level params and step-body params). */
 .wf-param {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
 }
 
 .wf-param-label {
@@ -531,6 +589,7 @@ body[data-frontend="workflows"] {
 .wf-step-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-1);
 }
 
@@ -573,9 +632,12 @@ body[data-frontend="workflows"] {
 
 /* ---- SVG wire layer ---- */
 
-/* Transformed in lockstep with #wfWorld; zero-size + overflow:visible so paths
-   drawn in world coords render outside the nominal viewBox. Only the paths take
-   pointer events (set per-path below), so empty canvas still pans. */
+/* Nested in #wfWorld, so it inherits the world transform (panned/zoomed in
+   lockstep with the cards) and shares their stacking context. zero-size +
+   overflow:visible so paths drawn in world coords render outside the nominal
+   viewBox. Only the paths take pointer events (set per-path below), so empty
+   canvas still pans. z-index 1 seats the wires above the card frames (z-auto)
+   but below the port dots (z-index 2) — the frame → wire → dot sandwich. */
 .wf-wires {
   position: absolute;
   top: 0;
@@ -583,9 +645,8 @@ body[data-frontend="workflows"] {
   width: 0;
   height: 0;
   overflow: visible;
-  transform-origin: 0 0;
   pointer-events: none;
-  will-change: transform;
+  z-index: 1;
 }
 
 .wf-wire {
@@ -710,7 +771,7 @@ body[data-frontend="workflows"] {
 }
 
 .wf-port-control .wf-port-dot {
-  background: transparent;
+  --wf-port-color: var(--wf-domain-control);
   border-style: dashed;
   border-color: var(--wf-domain-control);
 }
@@ -723,8 +784,33 @@ body[data-frontend="workflows"] {
 
 /* ---- Per-node run status (canvas tinting + progress) ---- */
 
+/* Active node — accent ring with a breathing outer glow, lifted above its
+   neighbours so the glow isn't clipped by an overlapping card. */
 .wf-node.run-running {
-  box-shadow: 0 0 0 2px var(--accent);
+  border-color: var(--accent);
+  z-index: var(--z-float);
+  animation: wf-run-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes wf-run-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 6px 1px var(--color-accent-highlight);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 18px 5px var(--color-accent-highlight);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-node.run-running {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent);
+  }
 }
 
 .wf-node.run-completed {

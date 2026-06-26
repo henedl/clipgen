@@ -15,23 +15,35 @@
   var state = WF.state;
 
   // One column of port rows (inputs on the left, outputs on the right; the
-  // outputs column is flipped via CSS so its dot sits on the card edge).
-  function buildPortColumn(ports, isOutput) {
+  // outputs column is flipped via CSS so its dot sits on the card edge). Ports
+  // already wired (per `state.edges`) get `.wf-port-connected` so CSS can fill
+  // the dot (occupied) vs. leave it a hollow ring (open).
+  function buildPortColumn(node, ports, isOutput) {
     var col = el("div", "wf-port-col " + (isOutput ? "outputs" : "inputs"));
+    var edges = state.edges || [];
     (ports || []).forEach(function (port) {
       // The universal control input (`__gate__`) reads as a muted "gate" anchor,
       // not a literal port name — a Gate's `pass` output wires here to gate the node.
       var isControl = port.type === "control";
+      var connected = edges.some(function (e) {
+        return isOutput
+          ? e.from === node.id && e.fromPort === port.name
+          : e.to === node.id && e.toPort === port.name;
+      });
       var row = el(
         "div",
         "wf-port" +
           (port.optional ? " optional" : "") +
-          (isControl ? " wf-port-control" : ""),
+          (isControl ? " wf-port-control" : "") +
+          (connected ? " wf-port-connected" : ""),
       );
       var dot = el("span", "wf-port-dot");
       dot.setAttribute("data-port", port.name);
       dot.setAttribute("data-port-type", port.type);
       dot.setAttribute("data-port-dir", isOutput ? "out" : "in");
+      // Hovering a port reveals its data type — clarifies adapter-coerced wires
+      // (e.g. a `timeRange` output into a `clips`/clipRecords input).
+      dot.title = isControl ? "gate" : port.type;
       row.appendChild(dot);
       row.appendChild(
         el("span", "wf-port-label", isControl ? "gate" : port.name),
@@ -275,7 +287,17 @@
 
     var card = el("div", "wf-node");
     card.setAttribute("data-node-id", node.id);
+    card.setAttribute("data-node-type", node.type);
     card.setAttribute("data-domain", type.domain || "");
+    // Busy nodes (a compound step-list param, currently only Multitool) get extra
+    // width so their controls stay readable and don't overflow the card.
+    if (
+      (type.params || []).some(function (p) {
+        return p.type === "step-list";
+      })
+    ) {
+      card.classList.add("wf-node-wide");
+    }
     card.style.left = (pos.x || 0) + "px";
     card.style.top = (pos.y || 0) + "px";
     if (state.selection && state.selection.indexOf(node.id) >= 0) {
@@ -302,8 +324,8 @@
       (type.inputs && type.inputs.length) || (type.outputs && type.outputs.length);
     if (hasPorts) {
       var ports = el("div", "wf-node-ports");
-      ports.appendChild(buildPortColumn(type.inputs, false));
-      ports.appendChild(buildPortColumn(type.outputs, true));
+      ports.appendChild(buildPortColumn(node, type.inputs, false));
+      ports.appendChild(buildPortColumn(node, type.outputs, true));
       card.appendChild(ports);
     }
     return card;
@@ -314,7 +336,12 @@
   function renderAllNodes() {
     var world = qs("#wfWorld");
     if (!world) return;
+    // Clear the cards but keep the nested wire <svg> (it lives in #wfWorld so it
+    // shares the cards' stacking context — see workflows.html). renderWires()
+    // below repopulates its paths.
+    var wires = world.querySelector("#wfWires");
     world.innerHTML = "";
+    if (wires) world.appendChild(wires);
     var frag = document.createDocumentFragment();
     (state.nodes || []).forEach(function (node) {
       frag.appendChild(renderNode(node));
