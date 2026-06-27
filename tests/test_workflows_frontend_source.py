@@ -452,3 +452,17 @@ def test_blueprint_import_export():
     assert 'apiPost("api/blueprints"' in hub
     # Export reuses the canonical Blob-download idiom.
     assert "URL.createObjectURL" in hub
+
+
+def test_copy_paste_duplicate_nodes():
+    """Canvas supports Ctrl/Cmd+C/V/D, reusing the stash id-remap for paste."""
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    stashes = (_WEB / "workflows-stashes.js").read_text(encoding="utf-8")
+    assert "function copySelection" in canvas
+    assert "function pasteClipboard" in canvas
+    assert "function duplicateSelection" in canvas
+    # Clipboard shortcuts gate on the cmd/ctrl modifier and skip text fields.
+    assert "e.metaKey || e.ctrlKey" in canvas
+    # Paste delegates to the stashes satellite's published id-remap (late-bound).
+    assert "WF.instantiateSubgraph" in canvas
+    assert "WF.instantiateSubgraph = instantiateSubgraph" in stashes

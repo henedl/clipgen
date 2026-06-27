@@ -355,19 +355,82 @@
 
   // ---- Keyboard ----
 
+  // ---- Clipboard (copy / paste / duplicate) ----
+
+  // In-memory clipboard ({nodes, edges}); not the system clipboard (vanilla JS,
+  // no async-clipboard permission dance, and node graphs aren't text anyway).
+  var _clipboard = null;
+
+  // Capture the current selection + induced edges (both endpoints selected) as a
+  // deep-cloned sub-graph. Returns false when nothing is selected.
+  function copySelection() {
+    var sel = state.selection || [];
+    if (!sel.length) return false;
+    var selSet = {};
+    sel.forEach(function (id) {
+      selSet[id] = true;
+    });
+    var nodes = (state.nodes || [])
+      .filter(function (n) {
+        return selSet[n.id];
+      })
+      .map(function (n) {
+        return JSON.parse(JSON.stringify(n));
+      });
+    if (!nodes.length) return false;
+    var edges = (state.edges || [])
+      .filter(function (ed) {
+        return selSet[ed.from] && selSet[ed.to];
+      })
+      .map(function (ed) {
+        return JSON.parse(JSON.stringify(ed));
+      });
+    _clipboard = { nodes: nodes, edges: edges };
+    return true;
+  }
+
+  // Stamp the clipboard onto the canvas (fresh ids, cascaded offset). The stashes
+  // satellite owns the id-remap; call it late-bound so load order doesn't matter.
+  function pasteClipboard() {
+    if (!_clipboard || !_clipboard.nodes.length || !WF.instantiateSubgraph) {
+      return false;
+    }
+    WF.instantiateSubgraph(_clipboard.nodes, _clipboard.edges, null);
+    return true;
+  }
+
+  function duplicateSelection() {
+    return copySelection() && pasteClipboard();
+  }
+
   function onKeyDown(e) {
     if (!state.ready) return;
-    if (e.key !== "Delete" && e.key !== "Backspace") return;
     var t = e.target;
-    if (
+    var inField =
       t &&
       (t.tagName === "INPUT" ||
         t.tagName === "TEXTAREA" ||
         t.tagName === "SELECT" ||
-        t.isContentEditable)
-    ) {
-      return;
+        t.isContentEditable);
+    // Clipboard shortcuts — skipped while typing in a field so the browser's
+    // native Ctrl/Cmd+C/V/D still work there. Cmd on macOS, Ctrl elsewhere.
+    if ((e.metaKey || e.ctrlKey) && !inField) {
+      var k = (e.key || "").toLowerCase();
+      if (k === "c") {
+        if (copySelection()) e.preventDefault();
+        return;
+      }
+      if (k === "v") {
+        if (pasteClipboard()) e.preventDefault();
+        return;
+      }
+      if (k === "d") {
+        if (duplicateSelection()) e.preventDefault();
+        return;
+      }
     }
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    if (inField) return;
     // A selected wire takes priority over node selection (wires satellite owns
     // single-edge removal, shared with the floating × button).
     if (state.selectedEdge) {
