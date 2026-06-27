@@ -538,3 +538,14 @@ def test_run_to_selected_node():
     # The run-start passes the target through; the item needs exactly one node.
     assert "body.targetNodeId = targetNodeId" in runs
     assert "state.selection.length === 1" in runs
+
+
+def test_theme_toggle_icons_styled():
+    """The TopNav renders #themeToggle, but each page must supply the sun/moon
+    icon visuals + the position:relative anchor (missing → blank toggle)."""
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".theme-icon-sun" in css
+    assert ".theme-icon-moon" in css
+    assert '#themeToggle[data-theme="dark"] .theme-icon-moon' in css
+    # The absolutely-positioned icons need a positioned button to anchor to.
+    assert "#themeToggle {" in css
