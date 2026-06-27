@@ -68,6 +68,7 @@ def test_satellites_read_shared_state_through_wf():
         "workflows-wires.js",
         "workflows-runs.js",
         "workflows-stashes.js",
+        "workflows-validate.js",
     ):
         src = (_WEB / name).read_text(encoding="utf-8")
         assert "var state = WF.state" in src, name
@@ -316,6 +317,56 @@ def test_css_defines_run_panel_and_node_status_styles():
     assert ".wf-node.run-completed" in css
     assert ".wf-node.run-failed" in css
     assert ".wf-node-progress" in css
+
+
+def test_validation_satellite_present_and_wired():
+    """P5 pre-run validation: the Issues panel, the satellite (loaded last), and
+    the hub<->satellite validation interface ship; the hub recomputes on every
+    edit (scheduleSave) and gates Run on errors."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfValidation"' in html
+    assert "workflows-validate.js" in html
+    # Validation satellite loads after the stashes satellite (load-order contract).
+    assert html.index('src="workflows-stashes.js"') < html.index(
+        'src="workflows-validate.js"'
+    )
+
+    src = _workflows_js()
+    # Hub publishes nothing new, but the satellite attaches its interface onto WF.
+    for fn in ("WF.nodeIssues", "WF.graphHasCycle", "WF.refreshValidation"):
+        assert fn in src, fn
+    # state.validation lives on the hub; recomputed on every edit (not debounced)
+    # and once on blueprint load.
+    assert "validation:" in src
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    assert "WF.refreshValidation()" in hub  # scheduleSave + openBlueprint
+    # The runs satellite re-gates Run from validation errors; the nodes satellite
+    # shares the per-node cue via WF.nodeIssues.
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "WF.syncRunButton" in runs
+    assert "state.validation" in runs
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    assert "WF.nodeIssues" in nodes
+    # Clicking an Issues row reveals its node (published by the canvas satellite).
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    assert "WF.focusNode" in canvas
+
+
+def test_lazy_node_results_and_rerun_present():
+    """P5 run-history UX: node rows lazily fetch their stored result sidecar on
+    expand, and terminal run cards offer a Re-run."""
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    # hasResult drives the expandable row; the result is fetched from the sidecar
+    # endpoint and cached on the run object.
+    assert "hasResult" in runs
+    assert "/nodes/" in runs and "/result" in runs
+    assert "_nodeResults" in runs
+    assert "wf-run-rerun" in runs
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-result-panel" in css
+    assert ".wf-validation" in css
+    assert ".wf-issue-error" in css
+    assert ".wf-issue-warning" in css
 
 
 def test_in_flight_connect_is_torn_down_on_context_change():

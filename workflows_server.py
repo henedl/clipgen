@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import queue
+import shutil
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -286,7 +288,7 @@ def _run_snapshot(run_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _trim_run_history(runs: list[dict[str, Any]]) -> None:
+def _trim_run_history(runs: list[dict[str, Any]]) -> list[str]:
     """Cap persisted run history in place, evicting whole units oldest-first.
 
     A *unit* is one loose run or one batch's whole set of child runs (grouped by
@@ -295,9 +297,12 @@ def _trim_run_history(runs: list[dict[str, Any]]) -> None:
     batch are always kept, so a single large batch is never split or dropped (the
     cap yields to integrity). Without this, a 50+-participant batch would shed its
     earliest children and 404 on drill-in.
+
+    Returns the run ids that were dropped, so the caller can prune their per-node
+    result sidecars (P5) in lockstep.
     """
     if len(runs) <= _MAX_RUN_HISTORY:
-        return
+        return []
     with _batches_lock:
         live = set(_batches)
     # Group into units preserving first-seen (≈ oldest-first) order.
@@ -319,8 +324,18 @@ def _trim_run_history(runs: list[dict[str, Any]]) -> None:
             continue  # never evict a live batch's children
         drop.add(key)
         kept -= len(members[key])
-    if drop:
-        runs[:] = [r for k in order if k not in drop for r in members[k]]
+    if not drop:
+        return []
+    dropped_ids = [str(r.get("id")) for k in drop for r in members[k] if r.get("id")]
+    runs[:] = [r for k in order if k not in drop for r in members[k]]
+    return dropped_ids
+
+
+def _prune_run_sidecars(run_ids: list[str]) -> None:
+    """Delete the per-node result sidecar dirs for evicted runs (best-effort)."""
+    base = utils.get_effective_output_dir()
+    for rid in run_ids:
+        shutil.rmtree(workflows.run_results_dir(base, rid), ignore_errors=True)
 
 
 def _persist_run(snapshot: dict[str, Any] | None) -> None:
@@ -336,8 +351,11 @@ def _persist_run(snapshot: dict[str, Any] | None) -> None:
             runs.append(snapshot)
         else:
             runs[idx] = snapshot
-        _trim_run_history(runs)
+        dropped = _trim_run_history(runs)
         _persist_locked()
+    # Outside the manifest lock — filesystem cleanup mustn't hold it.
+    if dropped:
+        _prune_run_sidecars(dropped)
 
 
 def _notify_run_clients(run_id: str) -> None:
@@ -404,9 +422,9 @@ def api_run_create() -> Any:
             _persist_run(runner.snapshot())
             _notify_run_clients(run_id)
             # Evict the terminal runner: its summary now lives in the manifest
-            # (``_run_snapshot`` falls back to it), so holding the runner only
-            # leaks its full in-memory results. (P5 sidecars will write before
-            # this once they land.)
+            # (``_run_snapshot`` falls back to it) and its inspectable per-node
+            # results are already on disk as sidecars (written during ``run()``),
+            # so holding the runner would only leak its full in-memory results.
             with _runs_lock:
                 _runs.pop(run_id, None)
 
@@ -447,6 +465,29 @@ def api_run_get(run_id: str) -> Any:
     if snap is None:
         return jsonify({"ok": False, "error": "Run not found"}), 404
     return jsonify({"ok": True, "run": snap})
+
+
+@workflows_bp.route("/api/runs/<run_id>/nodes/<node_id>/result")
+def api_run_node_result(run_id: str, node_id: str) -> Any:
+    """Serve a node's inspectable result sidecar written by the runner (P5).
+
+    Lazily fetched by the run-history UI on row-expand. Returns the raw stored
+    payload (already JSON-sanitized at write time). 404 when no sidecar exists.
+    """
+    # Both ids are path segments — reject anything that could escape the run dir.
+    safe_node = node_id == os.path.basename(node_id) and node_id not in (".", "..")
+    safe_run = run_id == os.path.basename(run_id) and run_id not in (".", "..")
+    if not (safe_node and safe_run):
+        return jsonify({"ok": False, "error": "Invalid id"}), 404
+    path = (
+        workflows.run_results_dir(utils.get_effective_output_dir(), run_id)
+        / f"{node_id}.json"
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return jsonify({"ok": False, "error": "No result for node"}), 404
+    return jsonify({"ok": True, "result": payload})
 
 
 @workflows_bp.route("/api/runs/<run_id>/cancel", methods=["POST"])

@@ -39,6 +39,8 @@
     activeBatchId: null, // the batch currently streamed/polled, or null
     // ---- Stash state (M5; owned by the workflows-stashes satellite) ----
     stashes: [], // built-in recipes + saved sub-graph stashes (built-ins first)
+    // ---- Validation (P5; owned by the workflows-validate satellite) ----
+    validation: { errors: [], warnings: [] }, // recomputed on every edit
   };
 
   // ---- Catalog + palette ----------------------------------------------------
@@ -194,6 +196,8 @@
     // Refresh the run panel for the newly-active blueprint (reattaches to an
     // in-flight run if one survived a reload).
     if (WF.refreshRuns) WF.refreshRuns();
+    // Validate the freshly-loaded graph (gates Run, populates the Issues panel).
+    if (WF.refreshValidation) WF.refreshValidation();
   }
 
   function loadBlueprints() {
@@ -283,6 +287,9 @@
   function scheduleSave() {
     cancelSave();
     _saveTimer = setTimeout(flushSave, 600);
+    // Validation is immediate (not debounced) so the Issues panel + Run button
+    // never lag an edit. Every graph mutation funnels through here.
+    if (WF.refreshValidation) WF.refreshValidation();
   }
 
   // Persist the active blueprint now (also syncs working state back into the

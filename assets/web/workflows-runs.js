@@ -182,6 +182,9 @@
   function startRun() {
     if (!state.ready || !state.activeBlueprintId) return;
     if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    // Errors gate the run (the button is already disabled; this guards the
+    // programmatic path). Warnings never block.
+    if (state.validation && state.validation.errors.length) return;
     // A Video Source set to "All participants" makes Run fan out over the study.
     if (blueprintWantsBatch()) {
       startBatch();
@@ -508,7 +511,8 @@
   }
 
   // Per-node detail rows + result chips for an expanded run (shared by single-run
-  // cards and a drilled-in batch child).
+  // cards and a drilled-in batch child). Rows whose snapshot says `hasResult`
+  // expand to lazily fetch + render the node's stored result sidecar (P5).
   function buildNodeDetail(run) {
     var wrap = document.createDocumentFragment();
     var rows = el("div", "wf-run-nodes");
@@ -524,11 +528,160 @@
       row.appendChild(el("span", "wf-run-node-detail", detail));
       if (ns.error) row.title = ns.error;
       rows.appendChild(row);
+      if (ns.hasResult) {
+        row.classList.add("wf-run-node-expandable");
+        var panel = el("div", "wf-result-panel hidden");
+        row.addEventListener("click", function (e) {
+          e.stopPropagation();
+          toggleNodeResult(run, nodeId, panel);
+        });
+        rows.appendChild(panel);
+      }
     });
     wrap.appendChild(rows);
     var chips = buildResultChips(run);
     if (chips) wrap.appendChild(chips);
     return wrap;
+  }
+
+  // ---- Lazy per-node result (P5) -------------------------------------------
+
+  // Expand/collapse one node's result panel. The full payload is fetched once
+  // and cached on the run object, so re-expanding (even after a card rebuild)
+  // never re-hits the endpoint.
+  function toggleNodeResult(run, nodeId, panel) {
+    if (!panel.classList.contains("hidden")) {
+      panel.classList.add("hidden");
+      return;
+    }
+    panel.classList.remove("hidden");
+    if (panel.dataset.loaded === "1" || panel.dataset.loading === "1") return;
+    var cached = run._nodeResults && run._nodeResults[nodeId];
+    if (cached) {
+      panel.innerHTML = "";
+      appendResultBody(panel, cached);
+      panel.dataset.loaded = "1";
+      return;
+    }
+    panel.dataset.loading = "1";
+    panel.innerHTML = "";
+    panel.appendChild(el("div", "wf-result-line", "Loading…"));
+    apiGet(
+      "api/runs/" +
+        encodeURIComponent(run.id) +
+        "/nodes/" +
+        encodeURIComponent(nodeId) +
+        "/result",
+    )
+      .then(function (res) {
+        panel.dataset.loading = "";
+        panel.innerHTML = "";
+        if (res && res.ok && res.result) {
+          run._nodeResults = run._nodeResults || {};
+          run._nodeResults[nodeId] = res.result;
+          appendResultBody(panel, res.result);
+          panel.dataset.loaded = "1";
+        } else {
+          panel.appendChild(el("div", "wf-result-line", "No stored result."));
+        }
+      })
+      .catch(function () {
+        panel.dataset.loading = "";
+        panel.innerHTML = "";
+        panel.appendChild(el("div", "wf-result-line", "Failed to load result."));
+      });
+  }
+
+  // Render the stored result (a {port: value} map) into `container`, branching on
+  // the value's shape — artifacts/events/segments lists, reel manifest, viewer
+  // path, summary/citation/friction text, scalar.
+  function appendResultBody(container, result) {
+    var ports = Object.keys(result || {});
+    if (!ports.length) {
+      container.appendChild(el("div", "wf-result-line", "No inspectable output."));
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    ports.forEach(function (port) {
+      var box = el("div", "wf-result-port");
+      box.appendChild(el("span", "wf-result-port-name", port));
+      var body = el("div", "wf-result-port-body");
+      renderResultValue(body, result[port]);
+      box.appendChild(body);
+      frag.appendChild(box);
+    });
+    container.appendChild(frag);
+  }
+
+  function renderResultValue(body, val) {
+    if (val == null) {
+      body.appendChild(el("div", "wf-result-line", "—"));
+    } else if (typeof val === "string") {
+      body.appendChild(el("div", "wf-result-text", val));
+    } else if (typeof val === "number" || typeof val === "boolean") {
+      body.appendChild(el("div", "wf-result-line", String(val)));
+    } else if (Array.isArray(val)) {
+      renderList(body, val.map(citationLabel));
+    } else if (Array.isArray(val.artifacts)) {
+      countLine(body, val.artifacts.length, "artifact");
+      renderList(
+        body,
+        val.artifacts.map(function (a) {
+          return a.file || a.path || a.name || a.id;
+        }),
+      );
+    } else if (Array.isArray(val.events)) {
+      countLine(body, val.events.length, "event");
+      renderList(body, val.events.map(eventLabel));
+    } else if (Array.isArray(val.segments)) {
+      countLine(body, val.segments.length, "segment");
+      renderList(
+        body,
+        val.segments.map(function (s) {
+          return (s && (s.text || s.label)) || "";
+        }),
+      );
+    } else if (Array.isArray(val.records)) {
+      countLine(body, val.records.length, "item");
+      if (val.path) body.appendChild(el("div", "wf-result-line", basename(val.path)));
+    } else if (val.path) {
+      body.appendChild(el("div", "wf-result-line", basename(val.path)));
+    } else {
+      body.appendChild(el("div", "wf-result-text", JSON.stringify(val)));
+    }
+  }
+
+  function countLine(body, n, noun) {
+    body.appendChild(
+      el("div", "wf-result-line", n + " " + noun + (n === 1 ? "" : "s")),
+    );
+  }
+
+  function renderList(body, items) {
+    items.slice(0, 8).forEach(function (it) {
+      body.appendChild(el("div", "wf-result-item", it == null ? "—" : String(it)));
+    });
+    if (items.length > 8) {
+      body.appendChild(el("div", "wf-result-more", "+" + (items.length - 8) + " more"));
+    }
+  }
+
+  function fmtClock(sec) {
+    var s = Math.max(0, Math.round(Number(sec) || 0));
+    var m = Math.floor(s / 60);
+    var r = s % 60;
+    return m + ":" + (r < 10 ? "0" : "") + r;
+  }
+
+  function eventLabel(ev) {
+    if (!ev || typeof ev !== "object") return String(ev);
+    var t = ev.time_in != null ? fmtClock(ev.time_in) + "  " : "";
+    return t + (ev.event_type || ev.detector || "event");
+  }
+
+  function citationLabel(item) {
+    if (item == null || typeof item !== "object") return item;
+    return item.claim || item.text || item.label || item.quote || JSON.stringify(item);
   }
 
   function buildRunCard(run, expanded) {
@@ -541,6 +694,19 @@
     var total = Object.keys(run.nodeStates || {}).length;
     var done = (counts.completed || 0) + (counts.skipped || 0);
     head.appendChild(el("span", "wf-run-meta", done + "/" + total + " nodes"));
+    // Re-run a terminal run of the active blueprint — relaunches the same graph
+    // (no partial/memoized re-run; the engine just re-executes). Disabled while
+    // a run/batch is in flight, mirroring the toolbar Run gate.
+    if (isTerminal(run.status) && run.blueprintId === state.activeBlueprintId) {
+      var rerun = el("button", "wf-run-rerun", "Re-run");
+      rerun.type = "button";
+      rerun.disabled = activeRunInFlight() || activeBatchInFlight();
+      rerun.addEventListener("click", function (e) {
+        e.stopPropagation();
+        startRun();
+      });
+      head.appendChild(rerun);
+    }
     card.appendChild(head);
 
     if (expanded) card.appendChild(buildNodeDetail(run));
@@ -628,11 +794,27 @@
 
   // ---- Running UI -----------------------------------------------------------
 
-  function setRunningUI(running) {
+  var _running = false;
+
+  // Re-gate the Run button from the three inputs that can change independently:
+  // an in-flight run, the load gate, and validation errors (P5). Called by both
+  // setRunningUI and the validation satellite (after every recompute).
+  function syncRunButton() {
     var runBtn = qs("#wfRunBtn");
+    if (!runBtn) return;
+    var v = state.validation;
+    var hasErrors = !!(v && v.errors && v.errors.length);
+    runBtn.disabled = _running || !state.ready || hasErrors;
+    runBtn.title = hasErrors
+      ? "Fix the errors in the Issues panel to run"
+      : "Run this workflow (set a Video Source to “All participants” to fan out)";
+  }
+
+  function setRunningUI(running) {
+    _running = running;
     var stopBtn = qs("#wfStopBtn");
-    if (runBtn) runBtn.disabled = running || !state.ready;
     if (stopBtn) stopBtn.classList.toggle("hidden", !running);
+    syncRunButton();
   }
 
   // Pause/resume the live streams when the tab is hidden (the poller already
@@ -662,4 +844,5 @@
   WF.stopRun = stopRun;
   WF.refreshRuns = refreshRuns;
   WF.renderRuns = renderRuns;
+  WF.syncRunButton = syncRunButton; // re-gated by the validation satellite
 })();
