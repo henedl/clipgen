@@ -491,3 +491,16 @@ def test_collection_palette_grouped_by_operation():
     # Sub-groups use native <details>/<summary> for collapse (no JS toggle).
     assert 'el("details", "wf-palette-subgroup")' in hub
     assert ".wf-palette-subgroup-label" in css
+
+
+def test_undo_redo_history():
+    """The hub keeps a coalesced snapshot history; canvas binds Ctrl/Cmd+Z / +Y."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    assert "function undo" in hub and "function redo" in hub
+    assert "WF.undo = undo" in hub and "WF.redo = redo" in hub
+    # Capture rides the scheduleSave chokepoint and resets on blueprint switch.
+    assert "captureHistory" in hub
+    assert "resetHistory()" in hub  # openBlueprint
+    # Canvas calls the hub's history late-bound.
+    assert "WF.undo" in canvas and "WF.redo" in canvas

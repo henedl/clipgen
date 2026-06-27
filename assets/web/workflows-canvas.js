@@ -428,6 +428,17 @@
         if (duplicateSelection()) e.preventDefault();
         return;
       }
+      // Undo / redo (hub owns the history stack; call late-bound). Cmd/Ctrl+Z
+      // undoes; add Shift to redo; Ctrl+Y is the common Windows redo.
+      if (k === "z") {
+        var ok = e.shiftKey ? WF.redo && WF.redo() : WF.undo && WF.undo();
+        if (ok) e.preventDefault();
+        return;
+      }
+      if (k === "y") {
+        if (WF.redo && WF.redo()) e.preventDefault();
+        return;
+      }
     }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (inField) return;

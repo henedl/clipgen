@@ -261,6 +261,7 @@
     state.viewport = bp.viewport || (bp.viewport = { x: 0, y: 0, zoom: 1 });
     state.selection = [];
     state.selectedEdge = null;
+    resetHistory(); // history doesn't span blueprints
     syncToolbar();
     syncTriggerButton();
     if (WF.renderAllNodes) WF.renderAllNodes();
@@ -505,6 +506,76 @@
     }
   }
 
+  // ---- Undo / redo ----------------------------------------------------------
+  //
+  // History is a stack of {nodes, edges} snapshots (the autosave shape; viewport
+  // and selection are excluded so a pan never lands on the undo stack). Capture
+  // hangs off the scheduleSave chokepoint and is coalesced by the same 600 ms
+  // debounce, so a burst of param keystrokes collapses to one undo step.
+
+  var _undoStack = [];
+  var _redoStack = [];
+  var _baseline = null; // last settled graph; what an undo restores TO
+  var _snapPending = false; // a burst is mid-flight (already captured once)
+  var _UNDO_CAP = 50;
+
+  function cloneGraph() {
+    return {
+      nodes: JSON.parse(JSON.stringify(state.nodes || [])),
+      edges: JSON.parse(JSON.stringify(state.edges || [])),
+    };
+  }
+
+  function resetHistory() {
+    _undoStack = [];
+    _redoStack = [];
+    _snapPending = false;
+    _baseline = cloneGraph();
+  }
+
+  // On the first mutation of a burst, push the pre-burst baseline; later
+  // keystrokes in the same burst are absorbed (snapPending) into one step.
+  function captureHistory() {
+    if (!_baseline) {
+      _baseline = cloneGraph();
+      return;
+    }
+    if (_snapPending) return;
+    _undoStack.push(_baseline);
+    if (_undoStack.length > _UNDO_CAP) _undoStack.shift();
+    _redoStack = []; // a fresh edit invalidates the redo branch
+    _snapPending = true;
+  }
+
+  // Restore a graph snapshot and persist it without re-capturing history.
+  function applyGraph(graph) {
+    if (WF.cancelConnect) WF.cancelConnect();
+    state.nodes = JSON.parse(JSON.stringify(graph.nodes || []));
+    state.edges = JSON.parse(JSON.stringify(graph.edges || []));
+    state.selection = [];
+    state.selectedEdge = null;
+    _baseline = cloneGraph();
+    _snapPending = false;
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    if (WF.refreshValidation) WF.refreshValidation();
+    cancelSave();
+    flushSave();
+  }
+
+  function undo() {
+    if (!_undoStack.length) return false;
+    _redoStack.push(cloneGraph());
+    applyGraph(_undoStack.pop());
+    return true;
+  }
+
+  function redo() {
+    if (!_redoStack.length) return false;
+    _undoStack.push(cloneGraph());
+    applyGraph(_redoStack.pop());
+    return true;
+  }
+
   // ---- Debounced autosave ---------------------------------------------------
 
   var _saveTimer = null;
@@ -517,8 +588,14 @@
   }
 
   function scheduleSave() {
+    captureHistory();
     cancelSave();
-    _saveTimer = setTimeout(flushSave, 600);
+    _saveTimer = setTimeout(function () {
+      // Burst settled → this is the new baseline a future edit captures from.
+      _baseline = cloneGraph();
+      _snapPending = false;
+      flushSave();
+    }, 600);
     // Validation is immediate (not debounced) so the Issues panel + Run button
     // never lag an edit. Every graph mutation funnels through here.
     if (WF.refreshValidation) WF.refreshValidation();
@@ -711,6 +788,8 @@
   WF.ALL_PARTICIPANTS = "__all__";
   WF.boot = boot;
   WF.scheduleSave = scheduleSave;
+  WF.undo = undo;
+  WF.redo = redo;
   WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
   WF.renderPalette = renderPalette;
   WF.openBlueprint = openBlueprint;
