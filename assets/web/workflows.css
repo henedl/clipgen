@@ -262,6 +262,35 @@ body[data-frontend="workflows"] {
   opacity: 1;
 }
 
+/* Mute toggle in the title bar — an eye-slash glyph; brighter once the node is
+   muted (`.on`). Skips the node and its downstream subtree without deleting. */
+.wf-node-mute {
+  flex: 0 0 auto;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  opacity: 0.6;
+  cursor: pointer;
+  mask-image: url("icons/eye-slash.svg");
+  -webkit-mask-image: url("icons/eye-slash.svg");
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+.wf-node-mute:hover,
+.wf-node-mute.on {
+  opacity: 1;
+}
+
+/* A muted card is dimmed so the skipped branch reads at a glance. */
+.wf-node-muted {
+  opacity: 0.45;
+}
+
 .wf-node-domain {
   font-size: var(--text-xs);
   color: var(--fg-muted);

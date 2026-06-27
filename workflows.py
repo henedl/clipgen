@@ -3152,6 +3152,14 @@ class WorkflowRunner:
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 continue
+            # A muted node is skipped intrinsically; _should_skip then propagates
+            # SKIPPED to its whole downstream subtree (same as a blocking gate).
+            if node.get("disabled"):
+                self._set_node(
+                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                self._notify(force=True)
+                continue
             if self._should_skip(node_id):
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()

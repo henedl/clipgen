@@ -289,6 +289,8 @@
     if (state.selection && state.selection.indexOf(node.id) >= 0) {
       card.classList.add("selected");
     }
+    // Muted nodes are dimmed; the runner skips them and their downstream subtree.
+    if (node.disabled) card.classList.add("wf-node-muted");
     // Validation cue (shares WF.nodeIssues with the Issues panel): greyed when
     // the launch context can't satisfy `requires`; otherwise a dashed `.invalid`
     // border for any remaining error (unwired required input / empty required
@@ -318,6 +320,26 @@
       help.setAttribute("data-tooltip", type.description);
       titleBar.appendChild(help);
     }
+    // Mute toggle: skip this node (and its downstream subtree) without deleting.
+    var mute = el("span", "wf-node-mute");
+    if (node.disabled) mute.classList.add("on");
+    mute.setAttribute(
+      "data-tooltip",
+      node.disabled ? "Un-mute (run this node)" : "Mute (skip this node + downstream)",
+    );
+    mute.setAttribute("role", "button");
+    // Stop the mousedown reaching the canvas's delegated drag/select handler.
+    mute.addEventListener("mousedown", function (e) {
+      e.stopPropagation();
+    });
+    mute.addEventListener("click", function (e) {
+      e.stopPropagation();
+      node.disabled = !node.disabled;
+      if (WF.renderAllNodes) WF.renderAllNodes();
+      if (WF.refreshValidation) WF.refreshValidation();
+      WF.scheduleSave();
+    });
+    titleBar.appendChild(mute);
     card.appendChild(titleBar);
     card.appendChild(el("div", "wf-node-domain", type.domain || ""));
 

@@ -254,6 +254,28 @@ def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
     assert runner.node_states["view"]["status"] == "skipped"
 
 
+def test_disabled_node_skips_itself_and_downstream(tmp_path, monkeypatch):
+    # Muting 't' skips it and propagates SKIPPED to its dependent 's'; the run
+    # still completes (a mute is not a failure) and the unrelated 'v' runs.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    runner = _runner(
+        tmp_path,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "t", "type": "transcribe", "params": {}, "disabled": True},
+            {"id": "s", "type": "summarize", "params": {}},
+        ],
+        edges=[
+            {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+            {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+        ],
+    )
+    runner.run()
+    assert runner.node_states["t"]["status"] == "skipped"
+    assert runner.node_states["s"]["status"] == "skipped"
+    assert runner.status == "completed"
+
+
 def _gate_graph():
     return (
         [

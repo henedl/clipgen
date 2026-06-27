@@ -71,6 +71,8 @@
   // Per-node issues: {errors:[msg…], warnings:[msg…]}. Single source of truth for
   // both the node-card cue (workflows-nodes.js) and the panel rows.
   function nodeIssues(node) {
+    // A muted node never runs, so it can't block the run — report no issues.
+    if (node.disabled) return { errors: [], warnings: [] };
     var type = catalogType(node);
     var errors = [];
     var warnings = [];

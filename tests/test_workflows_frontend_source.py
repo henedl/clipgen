@@ -466,3 +466,17 @@ def test_copy_paste_duplicate_nodes():
     # Paste delegates to the stashes satellite's published id-remap (late-bound).
     assert "WF.instantiateSubgraph" in canvas
     assert "WF.instantiateSubgraph = instantiateSubgraph" in stashes
+
+
+def test_node_mute_toggle():
+    """Nodes have a mute toggle; the runner-facing flag is `disabled`, validation
+    skips muted nodes, and the card dims via .wf-node-muted."""
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert "wf-node-mute" in nodes
+    assert "node.disabled = !node.disabled" in nodes
+    assert "wf-node-muted" in nodes
+    assert ".wf-node-muted" in css
+    # A muted node must not block Run.
+    assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
