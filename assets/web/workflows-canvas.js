@@ -150,8 +150,8 @@
       return;
     }
     // The floating wire-delete button handles its own click — don't let the
-    // mousedown fall through to startPan (which hides the button + arms a pan,
-    // so a slight drag pans instead of deleting).
+    // mousedown fall through to a gesture handler (startNodeDrag/startMarquee),
+    // whose e.preventDefault() would swallow the button's click.
     if (t.closest("#wfWireDelete")) return;
     // 1. Port dot → start a typed wire drag (wires satellite owns the gesture).
     var dot = t.closest(".wf-port-dot");
