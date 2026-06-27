@@ -42,6 +42,25 @@ def test_gate_compares_scalar(tmp_path):
     assert not _run("gate", ctx, {"value": None}, {"op": ">", "threshold": 0})["pass"]
 
 
+def test_gate_collection_measures_and_gates(tmp_path):
+    ctx = _ctx(tmp_path)
+    evs = {
+        "events": {
+            "events": [{"time_in": 0, "time_out": 1}, {"time_in": 2, "time_out": 3}]
+        }
+    }
+    assert _run(
+        "gate_collection", ctx, evs, {"metric": "count", "op": ">=", "threshold": 2}
+    )["pass"]
+    assert not _run(
+        "gate_collection", ctx, evs, {"metric": "count", "op": ">=", "threshold": 3}
+    )["pass"]
+    # Nothing wired -> value 0 -> fails a positive threshold (fails closed).
+    assert not _run(
+        "gate_collection", ctx, {}, {"metric": "count", "op": ">", "threshold": 0}
+    )["pass"]
+
+
 def test_find_word_filters_segments_and_pads(tmp_path):
     ctx = _ctx(tmp_path)
     segs = {

@@ -601,6 +601,38 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
+    "gate_collection": {
+        "id": "gate_collection",
+        "label": "Threshold Gate",
+        "description": "Measure events, clips, or segments and gate downstream nodes on the result — Measure + Gate in one node.",
+        "domain": "control",
+        "category": "Control",
+        "inputs": [
+            {"name": "events", "type": "events", "optional": True},
+            {"name": "clips", "type": "clipRecords", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        # ``pass`` gates exactly like the plain Gate's output (see that node).
+        "outputs": [{"name": "pass", "type": "control"}],
+        "params": [
+            {
+                "name": "metric",
+                "type": "enum",
+                "default": "count",
+                "choices": ["count", "max_confidence", "total_duration"],
+                "label": "Metric",
+            },
+            {
+                "name": "op",
+                "type": "enum",
+                "default": ">=",
+                "choices": [">=", ">", "<=", "<", "==", "!="],
+                "label": "Comparison",
+            },
+            {"name": "threshold", "type": "number", "default": 0, "label": "Threshold"},
+        ],
+        "requires": [],
+    },
 }
 
 
@@ -1951,15 +1983,12 @@ _GATE_OPS: dict[str, Callable[[float, float], bool]] = {
 }
 
 
-def _exec_measure(
-    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
-) -> dict[str, Any]:
-    """Reduce a wired collection to one scalar for the gate's threshold test.
+def _reduce_collection(metric: str, inputs: dict[str, Any]) -> float:
+    """Reduce a wired collection to one scalar (the measure / gate-collection core).
 
     Reads whichever of events / clipRecords / segments is wired (events first).
     ``max_confidence`` only applies to events; it falls back to 0 otherwise.
     """
-    metric = str(params.get("metric", "count") or "count")
     events = (inputs.get("events") or {}).get("events")
     records = (inputs.get("clips") or {}).get("records")
     segments = (inputs.get("segments") or {}).get("segments")
@@ -1967,26 +1996,27 @@ def _exec_measure(
     if events is not None:
         items = list(events)
         if metric == "count":
-            return {"value": float(len(items))}
+            return float(len(items))
         if metric == "max_confidence":
             confs = [float(e.get("confidence", 0.0) or 0.0) for e in items]
-            return {"value": max(confs) if confs else 0.0}
-        total = sum(
-            max(
-                0.0,
-                float(e.get("time_out", 0.0) or 0.0)
-                - float(e.get("time_in", 0.0) or 0.0),
+            return max(confs) if confs else 0.0
+        return float(
+            sum(
+                max(
+                    0.0,
+                    float(e.get("time_out", 0.0) or 0.0)
+                    - float(e.get("time_in", 0.0) or 0.0),
+                )
+                for e in items
             )
-            for e in items
         )
-        return {"value": float(total)}
 
     if records is not None:
         items = list(records)
         if metric == "count":
-            return {"value": float(len(items))}
+            return float(len(items))
         if metric == "max_confidence":
-            return {"value": 0.0}
+            return 0.0
         total = 0.0
         for rec in items:
             for start_str, end_str in rec.get("times") or []:
@@ -1994,38 +2024,67 @@ def _exec_measure(
                 end = utils.timestamp_to_seconds(end_str)
                 if start is not None and end is not None:
                     total += max(0.0, end - start)
-        return {"value": float(total)}
+        return total
 
     if segments is not None:
         items = list(segments)
         if metric == "count":
-            return {"value": float(len(items))}
+            return float(len(items))
         if metric == "max_confidence":
-            return {"value": 0.0}
-        total = sum(
-            max(
-                0.0, float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0)
+            return 0.0
+        return float(
+            sum(
+                max(
+                    0.0,
+                    float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0),
+                )
+                for s in items
             )
-            for s in items
         )
-        return {"value": float(total)}
 
-    return {"value": 0.0}
+    return 0.0
+
+
+def _exec_measure(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Reduce a wired collection to one scalar for a downstream gate."""
+    metric = str(params.get("metric", "count") or "count")
+    return {"value": _reduce_collection(metric, inputs)}
+
+
+def _apply_gate(value: float, params: dict[str, Any]) -> bool:
+    """Compare *value* to a threshold per the node's ``op`` (shared gate logic)."""
+    fn = _GATE_OPS.get(str(params.get("op", ">=") or ">="))
+    if fn is None:
+        return False
+    try:
+        return bool(fn(value, float(params.get("threshold", 0))))
+    except (TypeError, ValueError):
+        return False
 
 
 def _exec_gate(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    op = str(params.get("op", ">=") or ">=")
-    fn = _GATE_OPS.get(op)
     raw = inputs.get("value")
-    if fn is None or raw is None:
+    if raw is None:
         return {"pass": False}
     try:
-        result = fn(float(raw), float(params.get("threshold", 0)))
+        value = float(raw)
     except (TypeError, ValueError):
-        result = False
-    return {"pass": bool(result)}
+        return {"pass": False}
+    return {"pass": _apply_gate(value, params)}
+
+
+def _exec_gate_collection(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Reduce a wired collection to a scalar then gate it — the measure+gate pair
+    fused into one node (see :func:`_exec_measure` and :func:`_exec_gate`)."""
+    metric = str(params.get("metric", "count") or "count")
+    value = _reduce_collection(metric, inputs)
+    return {"pass": _apply_gate(value, params)}
 
 
 # ---- Collection-algebra control nodes (filter / merge / partition / limit / dedup) ----
@@ -2645,6 +2704,7 @@ _EXECUTORS: dict[
     "measure": _exec_measure,
     "timeline_viewer": _exec_timeline_viewer,
     "gate": _exec_gate,
+    "gate_collection": _exec_gate_collection,
 }
 
 # The ten per-detector Screenspace nodes share one body via the factory above.
@@ -3053,7 +3113,7 @@ class WorkflowRunner:
     def _gate_blocks(self, node_id: str) -> bool:
         """True if ``node_id`` is a gate that completed with ``pass`` False."""
         node = self._nodes_by_id.get(node_id)
-        if not node or node.get("type") != "gate":
+        if not node or node.get("type") not in ("gate", "gate_collection"):
             return False
         return (self._results.get(node_id) or {}).get("pass") is False
 

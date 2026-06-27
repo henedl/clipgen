@@ -309,6 +309,39 @@ def test_gate_true_runs_downstream_branch(tmp_path):
     assert runner.node_states["m"]["status"] == "completed"
 
 
+def test_gate_collection_blocks_downstream(tmp_path, monkeypatch):
+    # The fused measure+gate node reduces a wired collection then gates: a 1-event
+    # collection with threshold 2 -> pass False -> the downstream 'm' is skipped.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["ss_color"],
+        "execute",
+        lambda ctx, inputs, params: {
+            "events": {"events": [{"time_in": 0, "time_out": 1}]}
+        },
+    )
+    nodes = [
+        {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+        {"id": "d", "type": "ss_color", "params": {}},
+        {
+            "id": "gc",
+            "type": "gate_collection",
+            "params": {"metric": "count", "op": ">=", "threshold": 2},
+        },
+        {"id": "m", "type": "make_clips", "params": {}},
+    ]
+    edges = [
+        {"from": "v", "fromPort": "video", "to": "d", "toPort": "video"},
+        {"from": "d", "fromPort": "events", "to": "gc", "toPort": "events"},
+        {"from": "gc", "fromPort": "pass", "to": "m", "toPort": "__gate__"},
+        {"from": "v", "fromPort": "video", "to": "m", "toPort": "video"},
+    ]
+    runner = _runner(tmp_path, nodes, edges)
+    runner.run()
+    assert runner.node_states["gc"]["status"] == "completed"
+    assert runner.node_states["m"]["status"] == "skipped"
+
+
 def test_cancel_skips_remaining_nodes(tmp_path):
     nodes, edges = _gate_graph()
     cancel = threading.Event()
