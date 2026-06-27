@@ -308,7 +308,16 @@
       }
     }
 
-    card.appendChild(el("div", "wf-node-title", type.label || node.type));
+    // Colour-coded title bar (domain background via CSS data-domain): the label
+    // plus a `?` help glyph whose native tooltip carries the catalog description.
+    var titleBar = el("div", "wf-node-title");
+    titleBar.appendChild(el("span", "wf-node-title-text", type.label || node.type));
+    if (type.description) {
+      var help = el("span", "wf-node-help");
+      help.title = type.description;
+      titleBar.appendChild(help);
+    }
+    card.appendChild(titleBar);
     card.appendChild(el("div", "wf-node-domain", type.domain || ""));
 
     if (type.params && type.params.length) {

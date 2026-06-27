@@ -145,7 +145,9 @@ body[data-frontend="workflows"] {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  cursor: grab;
+  /* Left-drag selects (marquee); panning is middle-drag, which flips this to
+     `grabbing` via `.panning`. So the resting cursor is a plain arrow. */
+  cursor: default;
   /* Subtle dot grid so the canvas reads as a workspace even when empty. JS
      drives background-position/size inline to pan/scale the grid with the
      viewport; the values here are the zoom-1, no-pan defaults. */
@@ -179,7 +181,6 @@ body[data-frontend="workflows"] {
   padding: var(--space-3);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   font-size: var(--text-sm);
@@ -198,8 +199,51 @@ body[data-frontend="workflows"] {
   width: var(--wf-node-width-wide);
 }
 
+/* Colour-coded title bar: breaks out of the card padding to sit flush at the
+   top edge (rounded to match the card), domain colour set per data-domain below.
+   White text + a soft shadow keeps the label legible over every domain hue. */
 .wf-node-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-3)) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--border);
+  color: #fff;
   font-weight: 600;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 35%);
+}
+
+.wf-node-title-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `?` help glyph in the title bar — native title tooltip carries the catalog
+   description (mirrors the palette-row tooltip). */
+.wf-node-help {
+  flex: 0 0 auto;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  opacity: 0.75;
+  cursor: help;
+  mask-image: url("icons/question-mark-circle.svg");
+  -webkit-mask-image: url("icons/question-mark-circle.svg");
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+.wf-node-help:hover {
+  opacity: 1;
 }
 
 .wf-node-domain {
@@ -208,24 +252,35 @@ body[data-frontend="workflows"] {
   text-transform: capitalize;
 }
 
-/* Per-domain accent stripe, shared by palette rows and placed cards. */
-.wf-node[data-domain="artifact"],
+/* Per-domain accent: a coloured title bar on placed cards, a left stripe on
+   palette rows. */
+.wf-node[data-domain="artifact"] .wf-node-title {
+  background: var(--wf-domain-artifact);
+}
 .wf-palette-item[data-domain="artifact"] {
   border-left-color: var(--wf-domain-artifact);
 }
-.wf-node[data-domain="screenspace"],
+.wf-node[data-domain="screenspace"] .wf-node-title {
+  background: var(--wf-domain-screenspace);
+}
 .wf-palette-item[data-domain="screenspace"] {
   border-left-color: var(--wf-domain-screenspace);
 }
-.wf-node[data-domain="transcript"],
+.wf-node[data-domain="transcript"] .wf-node-title {
+  background: var(--wf-domain-transcript);
+}
 .wf-palette-item[data-domain="transcript"] {
   border-left-color: var(--wf-domain-transcript);
 }
-.wf-node[data-domain="thinking"],
+.wf-node[data-domain="thinking"] .wf-node-title {
+  background: var(--wf-domain-thinking);
+}
 .wf-palette-item[data-domain="thinking"] {
   border-left-color: var(--wf-domain-thinking);
 }
-.wf-node[data-domain="control"],
+.wf-node[data-domain="control"] .wf-node-title {
+  background: var(--wf-domain-control);
+}
 .wf-palette-item[data-domain="control"] {
   border-left-color: var(--wf-domain-control);
 }
