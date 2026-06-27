@@ -2275,8 +2275,12 @@ _COLLECTION_KINDS: dict[str, dict[str, Any]] = {
     },
     "clips": {
         "port": "clipRecords",
+        # Labelled "Clip Selections" (not "Clips") so the family reads as operating
+        # on pre-render clip specs from sheet_selection/highlights — not the
+        # rendered ``artifacts`` Make Clips emits (which has its own artifacts
+        # family). The node ids stay ``*_clips`` so saved blueprints are unaffected.
         "key": "records",
-        "label": "Clips",
+        "label": "Clip Selections",
         "preserve": ("study",),
         "fields": ["duration", "category", "severity", "desc"],
         "sort_fields": ["duration"],
