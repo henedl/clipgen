@@ -33,8 +33,12 @@ Manifest shape (``workflows_manifest.json`` in the output directory)::
         "runs":       [ {id, blueprintId, status, nodeStates, startedAt, completedAt} ]
     }
 
-``trigger`` is reserved (always ``null`` in v1) for the deferred auto-launch
-phase — kept in the schema so the seam exists without building anything.
+``trigger`` holds the watch-dir auto-launch binding (P6): ``null`` (or
+``{"type": "watch_dir", "enabled": false}``) when disarmed, or
+``{"type": "watch_dir", "enabled": true}`` on the single armed blueprint. The
+directory watcher in ``workflows_server`` auto-runs the armed blueprint (one run
+per just-arrived participant). The ``type`` field leaves room for future trigger
+kinds (transcript_complete / scan_event chaining) without a schema migration.
 """
 
 from __future__ import annotations
@@ -2379,6 +2383,7 @@ class WorkflowRunner:
         on_update: Callable[[], None] | None = None,
         participant: str = "",
         batch_id: str = "",
+        triggered: bool = False,
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
@@ -2386,6 +2391,9 @@ class WorkflowRunner:
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
         self.batch_id = batch_id
+        # Watch-dir trigger (P6): True when this run was auto-launched by the
+        # directory watcher (surfaced as a badge in the run history).
+        self.triggered = triggered
         self.nodes = list(blueprint.get("nodes", []))
         self.edges = list(blueprint.get("edges", []))
         self.ctx = ctx
@@ -2612,6 +2620,7 @@ class WorkflowRunner:
             "blueprintId": self.blueprint_id,
             "batchId": self.batch_id,
             "participant": self.participant,
+            "triggered": self.triggered,
             "status": self.status,
             "nodeStates": node_states,
             "results": results,

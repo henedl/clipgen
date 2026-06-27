@@ -146,6 +146,11 @@ STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 WORKFLOWS_MANIFEST_FILENAME: str = (
     "workflows_manifest.json"  # node-canvas blueprints, stashes, run history
 )
+# Watch-dir trigger (P6): poll interval for the daemon that auto-runs an armed
+# blueprint when a new participant video lands in the input dir. The partial-copy
+# stability window is 2x this (a file must stat identically across two polls).
+# Server-only — never mirrored to the frontend.
+WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
 CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
 # Data-source lanes shown (in order) per participant in the Convergence Browser.
 # Mirrored to the frontend via utils.get_frontend_config() so the swim-lane

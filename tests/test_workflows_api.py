@@ -34,6 +34,9 @@ def wf_client(tmp_path, monkeypatch):
     workflows_server._sse_clients = []
     workflows_server._batches = {}
     workflows_server._batch_sse_clients = []
+    # Reset watch-dir trigger state (P6) so seen pids never leak across tests.
+    workflows_server._watch_seen = set()
+    workflows_server._watch_pending = {}
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
@@ -802,3 +805,210 @@ def test_node_result_sidecars_pruned_with_history(wf_client, monkeypatch):
         wf_client.get(f"/workflows/api/runs/{run_ids[0]}/nodes/m/result").status_code
         == 404
     )
+
+
+# ---- Watch-dir triggers (P6) ----
+
+
+def _video_source_blueprint(client, participant="P01"):
+    """An armable blueprint: a lone Video Source (has a source, no cycle)."""
+    return _make_blueprint(
+        client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": participant}}
+        ],
+    )
+
+
+def _entry(pid, has_video=True):
+    """A discover_participant_videos entry whose first path equals the pid."""
+    return {"id": pid, "has_video": has_video, "video_paths": [pid]}
+
+
+def _record_launches(monkeypatch):
+    """Replace _launch_run with a recorder so no real runner threads spawn."""
+    calls = []
+
+    def _fake(blueprint, participant="", triggered=False):
+        calls.append((blueprint, participant, triggered))
+        return {}
+
+    monkeypatch.setattr(workflows_server, "_launch_run", _fake)
+    return calls
+
+
+def _mock_discovery(monkeypatch, entries, stats):
+    monkeypatch.setattr(utils, "discover_participant_videos", lambda *a, **k: entries)
+    monkeypatch.setattr(
+        workflows_server,
+        "_stat_first_video",
+        lambda paths: stats.get(paths[0]) if paths else None,
+    )
+
+
+def test_trigger_arm_and_disarm_round_trip(wf_client):
+    bp = _video_source_blueprint(wf_client)
+    res = wf_client.put(
+        f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True}
+    )
+    assert res.status_code == 200
+    assert res.get_json()["blueprint"]["trigger"] == {
+        "type": "watch_dir",
+        "enabled": True,
+    }
+    listed = wf_client.get("/workflows/api/blueprints").get_json()["blueprints"]
+    assert next(b for b in listed if b["id"] == bp)["trigger"]["enabled"] is True
+
+    res2 = wf_client.put(
+        f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": False}
+    )
+    assert res2.get_json()["blueprint"]["trigger"]["enabled"] is False
+
+
+def test_trigger_is_single_active(wf_client):
+    a = _video_source_blueprint(wf_client)
+    b = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{a}/trigger", json={"enabled": True})
+    wf_client.put(f"/workflows/api/blueprints/{b}/trigger", json={"enabled": True})
+    blueprints = {
+        x["id"]: x
+        for x in wf_client.get("/workflows/api/blueprints").get_json()["blueprints"]
+    }
+    # Arming b disarmed a (only one blueprint may watch at a time).
+    assert blueprints[a]["trigger"]["enabled"] is False
+    assert blueprints[b]["trigger"]["enabled"] is True
+
+
+def test_trigger_arm_rejects_cycle(wf_client):
+    bp = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "a", "type": "gate", "params": {}},
+            {"id": "b", "type": "gate", "params": {}},
+        ],
+        edges=[
+            {"from": "a", "fromPort": "pass", "to": "b", "toPort": "value"},
+            {"from": "b", "fromPort": "pass", "to": "a", "toPort": "value"},
+        ],
+    )
+    res = wf_client.put(
+        f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True}
+    )
+    assert res.status_code == 400
+
+
+def test_trigger_arm_rejects_no_video_source(wf_client):
+    bp = _make_blueprint(wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}])
+    res = wf_client.put(
+        f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True}
+    )
+    assert res.status_code == 400
+
+
+def test_trigger_404_on_missing_blueprint(wf_client):
+    res = wf_client.put(
+        "/workflows/api/blueprints/bp_nope/trigger", json={"enabled": True}
+    )
+    assert res.status_code == 404
+
+
+def test_watch_seed_marks_existing_seen(wf_client, monkeypatch):
+    monkeypatch.setattr(
+        utils,
+        "discover_participant_videos",
+        lambda *a, **k: [_entry("P01"), _entry("P02")],
+    )
+    workflows_server._seed_watch_seen()
+    assert workflows_server._watch_seen == {"P01", "P02"}
+
+
+def test_watch_fires_after_two_stable_polls(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+
+    workflows_server._watch_poll_once()  # records pending — no fire on first sight
+    assert calls == []
+    workflows_server._watch_poll_once()  # stable -> fires once
+    assert len(calls) == 1
+    assert calls[0][1] == "P01" and calls[0][2] is True
+    workflows_server._watch_poll_once()  # already seen -> no refire
+    assert len(calls) == 1
+
+
+def test_watch_unstable_stat_does_not_fire(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    sizes = iter([(100, 1.0), (200, 2.0)])  # still being copied between polls
+    monkeypatch.setattr(
+        utils, "discover_participant_videos", lambda *a, **k: [_entry("P01")]
+    )
+    monkeypatch.setattr(
+        workflows_server, "_stat_first_video", lambda paths: next(sizes)
+    )
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert calls == []  # never stable across two polls
+
+
+def test_watch_gated_on_single_armed(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    # No blueprint armed at all.
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert calls == []  # stable, but nothing armed -> no fire
+    assert "P01" in workflows_server._watch_seen  # still consumed (no retro-fire)
+
+
+def test_watch_two_armed_is_ambiguous_and_skips(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    a = _video_source_blueprint(wf_client)
+    b = _video_source_blueprint(wf_client)
+    # Force both armed directly (bypassing the single-active write) to prove the
+    # watcher defends against an inconsistent manifest.
+    for bid in (a, b):
+        bp = next(x for x in workflows_server._manifest["blueprints"] if x["id"] == bid)
+        bp["trigger"] = {"type": "watch_dir", "enabled": True}
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert calls == []
+
+
+def test_watch_disarmed_arrival_not_retrofired(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)  # not armed
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()  # P01 consumed while disarmed
+    assert calls == []
+    # Arming later must not retro-fire the already-seen pid.
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    workflows_server._watch_poll_once()
+    assert calls == []
+
+
+def test_watch_seeded_existing_never_fires(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+    workflows_server._seed_watch_seen()  # P01 present at startup
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert calls == []  # the backlog is never auto-run
+
+
+def test_watch_multipart_fires_once(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    entry = {"id": "P01", "has_video": True, "video_paths": ["P01-1", "P01-2"]}
+    _mock_discovery(monkeypatch, [entry], {"P01-1": (100, 1.0)})
+    for _ in range(4):
+        workflows_server._watch_poll_once()
+    assert len(calls) == 1  # one entry per pid -> a single fire

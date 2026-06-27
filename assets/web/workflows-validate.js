@@ -234,6 +234,8 @@
     state.validation = compute();
     render();
     if (WF.syncRunButton) WF.syncRunButton();
+    // The trigger toggle shares the Run gate (can't arm a graph with errors).
+    if (WF.syncTriggerButton) WF.syncTriggerButton();
   }
 
   // ---- Satellite interface ----

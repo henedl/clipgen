@@ -1799,7 +1799,16 @@ def participant_id_from_source_name(name: str) -> str | None:
     if len(parts) != 2:
         return None
     pid = parts[1]
-    return pid if pid and pid[0] in config.PARTICIPANT_PREFIXES else None
+    if not pid or pid[0] not in config.PARTICIPANT_PREFIXES:
+        return None
+    # Reject ids with whitespace: real participant ids are clean tokens (P01,
+    # G02). A space is the signature of a Finder/Explorer duplicate
+    # ("study_P03 copy.mp4"), which is never a new participant — without this it
+    # becomes a phantom participant in every tool's dropdown and (with the P6
+    # watch-dir trigger) auto-launches a run for a bogus id.
+    if any(ch.isspace() for ch in pid):
+        return None
+    return pid
 
 
 def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:

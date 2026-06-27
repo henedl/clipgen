@@ -106,7 +106,7 @@ def test_runner_snapshot_carries_batch_identity(tmp_path):
     snap = runner.snapshot()
     assert snap["participant"] == "P03"
     assert snap["batchId"] == "batch_abc"
-    # A normal single run carries blank batch identity.
+    # A normal single run carries blank batch identity and is not triggered.
     plain = workflows.WorkflowRunner(
         "run_y",
         {"id": "bp", "nodes": [], "edges": []},
@@ -114,6 +114,18 @@ def test_runner_snapshot_carries_batch_identity(tmp_path):
     )
     assert plain.snapshot()["batchId"] == ""
     assert plain.snapshot()["participant"] == ""
+    assert plain.snapshot()["triggered"] is False
+
+
+def test_runner_snapshot_carries_triggered_flag(tmp_path):
+    runner = workflows.WorkflowRunner(
+        "run_t",
+        {"id": "bp", "nodes": [], "edges": []},
+        _ctx(tmp_path),
+        participant="P01",
+        triggered=True,
+    )
+    assert runner.snapshot()["triggered"] is True
 
 
 # ---- WorkflowRunner ----
