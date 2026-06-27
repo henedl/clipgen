@@ -136,10 +136,17 @@
 
   function onCanvasMouseDown(e) {
     if (!state.ready) return;
+    // Middle button → pan (grab to navigate), anywhere on the canvas — a
+    // navigation gesture shouldn't depend on hitting empty space.
+    if (e.button === 1) {
+      e.preventDefault(); // suppress middle-click autoscroll
+      startPan(e);
+      return;
+    }
     if (e.button !== 0) return;
     var t = e.target;
     if (!t || !t.closest) {
-      startPan(e);
+      startMarquee(e);
       return;
     }
     // The floating wire-delete button handles its own click — don't let the
@@ -171,10 +178,10 @@
     var card = t.closest(".wf-node");
     if (card) {
       startNodeDrag(e, card);
-    } else if (e.shiftKey) {
-      startMarquee(e);
     } else {
-      startPan(e);
+      // Empty canvas → drag-select (marquee). Shift makes it additive; a bare
+      // click is a zero-area non-additive marquee, which clears the selection.
+      startMarquee(e);
     }
   }
 
@@ -196,24 +203,9 @@
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       canvas.classList.remove("panning");
-      if (moved) {
-        // A real pan — keep the current selection (dragging the empty canvas
-        // moves the view, it must not drop selected nodes).
-        WF.scheduleSave();
-        return;
-      }
-      // A bare click on empty canvas — *now* clear node/edge selection
-      // (deselect). Deferring to mouseup is what lets a pan keep the selection.
-      var changed = false;
-      if (state.selection.length) {
-        state.selection = [];
-        changed = true;
-      }
-      if (state.selectedEdge) {
-        state.selectedEdge = null;
-        changed = true;
-      }
-      if (changed && WF.renderAllNodes) WF.renderAllNodes();
+      // Pan is a middle-button navigation gesture — it never changes the
+      // selection (deselect-on-empty-click is handled by left-click → marquee).
+      if (moved) WF.scheduleSave();
     }
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);

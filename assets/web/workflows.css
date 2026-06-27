@@ -145,7 +145,9 @@ body[data-frontend="workflows"] {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  cursor: grab;
+  /* Left-drag selects (marquee); panning is middle-drag, which flips this to
+     `grabbing` via `.panning`. So the resting cursor is a plain arrow. */
+  cursor: default;
   /* Subtle dot grid so the canvas reads as a workspace even when empty. JS
      drives background-position/size inline to pan/scale the grid with the
      viewport; the values here are the zoom-1, no-pan defaults. */
