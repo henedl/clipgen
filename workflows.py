@@ -33,8 +33,12 @@ Manifest shape (``workflows_manifest.json`` in the output directory)::
         "runs":       [ {id, blueprintId, status, nodeStates, startedAt, completedAt} ]
     }
 
-``trigger`` is reserved (always ``null`` in v1) for the deferred auto-launch
-phase — kept in the schema so the seam exists without building anything.
+``trigger`` holds the watch-dir auto-launch binding (P6): ``null`` (or
+``{"type": "watch_dir", "enabled": false}``) when disarmed, or
+``{"type": "watch_dir", "enabled": true}`` on the single armed blueprint. The
+directory watcher in ``workflows_server`` auto-runs the armed blueprint (one run
+per just-arrived participant). The ``type`` field leaves room for future trigger
+kinds (transcript_complete / scan_event chaining) without a schema migration.
 """
 
 from __future__ import annotations
@@ -171,6 +175,7 @@ class NodeType(TypedDict):
 
     id: str
     label: str
+    description: str  # one-line palette tooltip / on-card help text
     domain: str  # artifact | screenspace | transcript | thinking | control
     category: str  # human-facing palette group label
     inputs: list[Port]
@@ -188,6 +193,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "video_source": {
         "id": "video_source",
         "label": "Video Source",
+        "description": "A participant's source video, picked from the video directory.",
         "domain": "artifact",
         "category": "Source",
         "inputs": [],
@@ -209,6 +215,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "sheet_selection": {
         "id": "sheet_selection",
         "label": "Sheet Selection",
+        "description": "Clip records pulled from the spreadsheet by a cell, line, or category selector.",
         "domain": "artifact",
         "category": "Source",
         "inputs": [],
@@ -226,6 +233,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "time_range": {
         "id": "time_range",
         "label": "Time Range",
+        "description": "Manually entered start–end time ranges to drive downstream clips.",
         "domain": "artifact",
         "category": "Source",
         "inputs": [],
@@ -244,6 +252,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "region": {
         "id": "region",
         "label": "Region",
+        "description": "A named screen region that scopes Screenspace detection to part of the frame.",
         "domain": "screenspace",
         "category": "Source",
         "inputs": [],
@@ -257,6 +266,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "transcribe": {
         "id": "transcribe",
         "label": "Transcribe",
+        "description": "Transcribe a video's audio into a timestamped transcript and segments.",
         "domain": "transcript",
         "category": "Transcript",
         "inputs": [{"name": "video", "type": "video"}],
@@ -277,6 +287,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "find_word": {
         "id": "find_word",
         "label": "Find Word",
+        "description": "Find a word or phrase in transcript segments and emit its time ranges.",
         "domain": "transcript",
         "category": "Transcript",
         "inputs": [{"name": "segments", "type": "segments"}],
@@ -307,6 +318,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "summarize": {
         "id": "summarize",
         "label": "Summarize",
+        "description": "Summarize a transcript into a paragraph and key bullet points (Ollama).",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [{"name": "transcript", "type": "transcript"}],
@@ -317,6 +329,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "citations": {
         "id": "citations",
         "label": "Citations",
+        "description": "Link summary claims back to the transcript segments that support them (Ollama).",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -330,6 +343,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "friction": {
         "id": "friction",
         "label": "Friction",
+        "description": "Score transcript segments for usability friction and surface the rough moments.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -347,6 +361,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "multitool": {
         "id": "multitool",
         "label": "Multitool",
+        "description": "Chain two or more per-frame detectors, matching frames where all of them fire.",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [
@@ -367,6 +382,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "timelapse": {
         "id": "timelapse",
         "label": "Timelapse",
+        "description": "Condense a video into a sped-up timelapse clip or GIF.",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [
@@ -402,6 +418,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "heatmap": {
         "id": "heatmap",
         "label": "Heatmap",
+        "description": "Render a heatmap image from detector events (match the upstream detector style).",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [{"name": "events", "type": "events"}],
@@ -421,6 +438,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "highlights": {
         "id": "highlights",
         "label": "Highlights",
+        "description": "Score clips by severity, uniqueness, and annotations, keeping the best within a time budget.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [{"name": "clips", "type": "clipRecords"}],
@@ -439,6 +457,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "make_clips": {
         "id": "make_clips",
         "label": "Make Clips",
+        "description": "Cut clips, screenshots, or GIFs from clip records, a video, or time ranges.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -481,6 +500,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "build_reel": {
         "id": "build_reel",
         "label": "Build Reel",
+        "description": "Concatenate clips into a single reel video plus a manifest.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [{"name": "clips", "type": "clipRecords"}],
@@ -496,6 +516,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "timeline_viewer": {
         "id": "timeline_viewer",
         "label": "Timeline Viewer",
+        "description": "Bundle artifacts, events, and segments into a standalone timeline HTML viewer.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -511,6 +532,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "measure": {
         "id": "measure",
         "label": "Measure",
+        "description": "Reduce events, clips, or segments to a single number (count, confidence, or duration).",
         "domain": "control",
         "category": "Control",
         "inputs": [
@@ -533,6 +555,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "gate": {
         "id": "gate",
         "label": "Gate",
+        "description": "Compare a measured value to a threshold to allow or skip downstream nodes.",
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],
@@ -574,6 +597,19 @@ _SS_DETECTOR_LABELS: dict[str, str] = {
     "scene": "Detect Scene",
     "inactivity": "Detect Inactivity",
     "boundary": "Detect Boundary",
+}
+
+_SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
+    "text": "Detect when target text appears in the region via OCR.",
+    "color": "Detect when a target color appears or covers enough of the region.",
+    "change": "Detect visual change between frames in the region.",
+    "similarity": "Detect frames matching a reference image sampled from the region.",
+    "numbers": "Read numbers in the region via OCR and compare them to a target.",
+    "template": "Detect a reference template (sampled from the region) appearing in the frame.",
+    "flow": "Detect motion in the region via optical flow.",
+    "scene": "Detect scene changes against a reference fingerprint sampled from the region.",
+    "inactivity": "Detect stretches of inactivity (no change) in the region.",
+    "boundary": "Detect UI boundaries or edges appearing in the region.",
 }
 
 _INTERVAL_PARAM: ParamSpec = {
@@ -858,6 +894,7 @@ for _ss_tool in _SS_DETECTOR_SPECS:
     NODE_TYPES[f"ss_{_ss_tool}"] = {
         "id": f"ss_{_ss_tool}",
         "label": _SS_DETECTOR_LABELS[_ss_tool],
+        "description": _SS_DETECTOR_DESCRIPTIONS[_ss_tool],
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [
@@ -2562,11 +2599,13 @@ for _ss_tool in _SS_DETECTOR_SPECS:
 for _kind, _meta in _COLLECTION_KINDS.items():
     _T = _meta["port"]
     _name = _meta["label"]
+    _lname = _name.lower()
     NODE_TYPES[f"filter_{_kind}"] = {
         "id": f"filter_{_kind}",
         "label": f"Filter {_name}",
         "domain": "control",
         "category": "Collection",
+        "description": f"Keep only the {_lname} matching a field/comparison/value test.",
         "inputs": [{"name": "in", "type": _T}],
         "outputs": [{"name": "out", "type": _T}],
         "params": _predicate_params(_kind),
@@ -2578,6 +2617,7 @@ for _kind, _meta in _COLLECTION_KINDS.items():
         "label": f"Partition {_name}",
         "domain": "control",
         "category": "Collection",
+        "description": f"Split {_lname} into matched and unmatched branches by a test.",
         "inputs": [{"name": "in", "type": _T}],
         "outputs": [
             {"name": "matched", "type": _T},
@@ -2592,6 +2632,7 @@ for _kind, _meta in _COLLECTION_KINDS.items():
         "label": f"Merge {_name}",
         "domain": "control",
         "category": "Collection",
+        "description": f"Combine two or three {_lname} streams into one.",
         "inputs": [
             {"name": "in1", "type": _T},
             {"name": "in2", "type": _T, "optional": True},
@@ -2607,6 +2648,7 @@ for _kind, _meta in _COLLECTION_KINDS.items():
         "label": f"Limit {_name}",
         "domain": "control",
         "category": "Collection",
+        "description": f"Optionally sort {_lname} by a field, then keep the first N.",
         "inputs": [{"name": "in", "type": _T}],
         "outputs": [{"name": "out", "type": _T}],
         "params": _limit_params(_kind),
@@ -2618,11 +2660,13 @@ for _kind, _meta in _COLLECTION_KINDS.items():
 for _kind in ("events", "clips", "timerange"):
     _T = _COLLECTION_KINDS[_kind]["port"]
     _name = _COLLECTION_KINDS[_kind]["label"]
+    _lname = _name.lower()
     NODE_TYPES[f"dedup_{_kind}"] = {
         "id": f"dedup_{_kind}",
         "label": f"Dedup {_name}",
         "domain": "control",
         "category": "Collection",
+        "description": f"Merge overlapping or near-duplicate {_lname} into single spans.",
         "inputs": [{"name": "in", "type": _T}],
         "outputs": [{"name": "out", "type": _T}],
         "params": [
@@ -2892,6 +2936,7 @@ class WorkflowRunner:
         on_update: Callable[[], None] | None = None,
         participant: str = "",
         batch_id: str = "",
+        triggered: bool = False,
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
@@ -2899,6 +2944,9 @@ class WorkflowRunner:
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
         self.batch_id = batch_id
+        # Watch-dir trigger (P6): True when this run was auto-launched by the
+        # directory watcher (surfaced as a badge in the run history).
+        self.triggered = triggered
         self.nodes = list(blueprint.get("nodes", []))
         self.edges = list(blueprint.get("edges", []))
         self.ctx = ctx
@@ -3125,6 +3173,7 @@ class WorkflowRunner:
             "blueprintId": self.blueprint_id,
             "batchId": self.batch_id,
             "participant": self.participant,
+            "triggered": self.triggered,
             "status": self.status,
             "nodeStates": node_states,
             "results": results,

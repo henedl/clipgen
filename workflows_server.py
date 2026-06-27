@@ -31,6 +31,7 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
+import config
 import utils
 import workflows
 
@@ -67,6 +68,21 @@ _RUN_TERMINAL = {
     workflows.RUN_STATUS_FAILED,
     workflows.RUN_STATUS_CANCELLED,
 }
+
+# ---- Watch-dir trigger state (P6) ----
+#
+# A single polling daemon thread (no extra dependency — mirrors the screenspace
+# worker's daemon posture) watches the input dir for newly-arrived participant
+# videos and auto-runs the armed blueprint, one single run per pid. ``_watch_seen``
+# is seeded at startup so pre-existing videos never fire; a pid must stat
+# identically across two consecutive polls (the partial-copy guard) before it
+# fires. The thread always runs (cheap glob + a few stats per tick) so the
+# seen-set stays current, meaning arming later never retro-fires the backlog.
+_watch_seen: set[str] = set()  # pids already accounted for (never fire again)
+_watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mtime)
+_watch_lock = threading.Lock()
+_watch_thread: threading.Thread | None = None
+_watch_stop = threading.Event()  # tests only; production never sets it
 
 
 # ---- Blueprint ----
@@ -186,6 +202,58 @@ def api_blueprints_delete(bp_id: str) -> Any:
         blueprints.pop(idx)
         _persist_locked()
     return jsonify({"ok": True})
+
+
+@workflows_bp.route("/api/blueprints/<bp_id>/trigger", methods=["PUT"])
+def api_blueprint_trigger(bp_id: str) -> Any:
+    """Arm/disarm the watch-dir auto-run trigger on a blueprint (P6).
+
+    A *single* blueprint may be armed at a time: arming one disables the watch-dir
+    trigger on every other (the dropbox-style "this graph runs automatically"
+    binding). Kept on its own endpoint so the debounced canvas autosave (the
+    generic ``PUT`` above, which never sends ``trigger``) can't clobber the armed
+    state. Arming requires a runnable graph — a passing DAG check and at least one
+    ``video_source`` node to bind the just-arrived participant onto.
+    """
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled"))
+    with _manifest_lock:
+        blueprints = _manifest.get("blueprints", [])
+        target = next((b for b in blueprints if b.get("id") == bp_id), None)
+        if target is None:
+            return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+        if enabled:
+            try:
+                workflows.topo_order(target.get("nodes", []), target.get("edges", []))
+            except workflows.WorkflowCycleError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            if not workflows.blueprint_participant_nodes(target):
+                return (
+                    jsonify(
+                        {
+                            "ok": False,
+                            "error": "Add a Video Source node before arming auto-run",
+                        }
+                    ),
+                    400,
+                )
+            for b in blueprints:
+                if b is target:
+                    b["trigger"] = {"type": "watch_dir", "enabled": True}
+                else:
+                    b["trigger"] = _disarmed_trigger(b.get("trigger"))
+        else:
+            target["trigger"] = {"type": "watch_dir", "enabled": False}
+        _persist_locked()
+        result = copy.deepcopy(target)
+    return jsonify({"ok": True, "blueprint": result})
+
+
+def _disarmed_trigger(trigger: Any) -> Any:
+    """Force a watch-dir trigger off; leave any other trigger kind untouched."""
+    if isinstance(trigger, dict) and trigger.get("type") == "watch_dir":
+        return {"type": "watch_dir", "enabled": False}
+    return trigger  # room for future trigger types (transcript_complete, …)
 
 
 # ---- Stash CRUD (M5: save/instantiate sub-graphs) ----
@@ -388,28 +456,25 @@ def _sse_run_payload(run_id: str) -> str:
     return "data: " + json.dumps({"ok": snap is not None, "run": snap}) + "\n\n"
 
 
-@workflows_bp.route("/api/runs", methods=["POST"])
-def api_run_create() -> Any:
-    """Validate a blueprint's DAG, spawn a runner thread, return the run snapshot."""
-    data = request.get_json(silent=True) or {}
-    bp_id = data.get("blueprintId")
-    with _manifest_lock:
-        blueprint = next(
-            (b for b in _manifest.get("blueprints", []) if b.get("id") == bp_id), None
-        )
-        blueprint = copy.deepcopy(blueprint) if blueprint else None
-    if blueprint is None:
-        return jsonify({"ok": False, "error": "Blueprint not found"}), 404
-    try:
-        workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
-    except workflows.WorkflowCycleError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+def _launch_run(
+    blueprint: dict[str, Any], participant: str = "", triggered: bool = False
+) -> dict[str, Any]:
+    """Create + spawn one run on a daemon thread; return the initial snapshot.
 
+    Shared by ``POST /api/runs`` and the watch-dir trigger. The blueprint is
+    assumed already validated (``topo_order``) and, for a triggered run, already
+    participant-bound by the caller.
+    """
     run_id = "run_" + uuid.uuid4().hex[:8]
     cancel_event = threading.Event()
     ctx = _build_node_context(cancel_event)
     runner = workflows.WorkflowRunner(
-        run_id, blueprint, ctx, on_update=lambda: _notify_run_clients(run_id)
+        run_id,
+        blueprint,
+        ctx,
+        on_update=lambda: _notify_run_clients(run_id),
+        participant=participant,
+        triggered=triggered,
     )
     with _runs_lock:
         _runs[run_id] = runner
@@ -431,7 +496,26 @@ def api_run_create() -> Any:
     threading.Thread(
         target=_run_and_finalize, daemon=True, name=f"workflow-{run_id}"
     ).start()
-    return jsonify({"ok": True, "run": runner.snapshot()})
+    return runner.snapshot()
+
+
+@workflows_bp.route("/api/runs", methods=["POST"])
+def api_run_create() -> Any:
+    """Validate a blueprint's DAG, spawn a runner thread, return the run snapshot."""
+    data = request.get_json(silent=True) or {}
+    bp_id = data.get("blueprintId")
+    with _manifest_lock:
+        blueprint = next(
+            (b for b in _manifest.get("blueprints", []) if b.get("id") == bp_id), None
+        )
+        blueprint = copy.deepcopy(blueprint) if blueprint else None
+    if blueprint is None:
+        return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+    try:
+        workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
+    except workflows.WorkflowCycleError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True, "run": _launch_run(blueprint)})
 
 
 def _merged_runs() -> dict[str, dict[str, Any]]:
@@ -837,6 +921,130 @@ def api_batch_stream(batch_id: str) -> Response:
     )
 
 
+# ---- Watch-dir trigger watcher (P6) ----
+
+
+def _trigger_enabled(trigger: Any) -> bool:
+    """True if ``trigger`` is an armed watch-dir binding."""
+    return (
+        isinstance(trigger, dict)
+        and trigger.get("type") == "watch_dir"
+        and bool(trigger.get("enabled"))
+    )
+
+
+def _seed_watch_seen() -> None:
+    """Record every currently-present participant so they never auto-fire.
+
+    Only pids that already resolve to a video at startup are seeded; the watcher
+    fires only for pids that appear *after* this call.
+    """
+    with _watch_lock:
+        _watch_seen.clear()
+        _watch_pending.clear()
+        for entry in utils.discover_participant_videos():
+            if entry.get("has_video"):
+                _watch_seen.add(str(entry["id"]))
+
+
+def _stat_first_video(video_paths: list[str]) -> tuple[int, float] | None:
+    """``(size, mtime)`` of a participant's first video, or ``None`` if unreadable."""
+    if not video_paths:
+        return None
+    try:
+        st = os.stat(video_paths[0])
+    except OSError:
+        return None  # mid-rename / vanished — treat as not-yet-stable
+    return (st.st_size, st.st_mtime)
+
+
+def _armed_blueprint_locked() -> dict[str, Any] | None:
+    """A deepcopy of the single armed blueprint, or ``None``. Caller holds lock.
+
+    Single-active is enforced on write (``api_blueprint_trigger``); this still
+    defends by returning ``None`` when zero or (defensively) more than one are
+    armed, so an inconsistent manifest never fans out unexpectedly.
+    """
+    armed = [
+        b for b in _manifest.get("blueprints", []) if _trigger_enabled(b.get("trigger"))
+    ]
+    return copy.deepcopy(armed[0]) if len(armed) == 1 else None
+
+
+def _maybe_fire_trigger(participant: str) -> None:
+    """Auto-run the armed blueprint for one just-arrived participant."""
+    with _manifest_lock:
+        blueprint = _armed_blueprint_locked()
+    if blueprint is None:
+        return  # disarmed/ambiguous — pid is already marked seen, won't refire
+    bound = workflows.bind_participant(blueprint, participant)
+    try:
+        workflows.topo_order(bound.get("nodes", []), bound.get("edges", []))
+    except workflows.WorkflowCycleError:
+        utils.warning_print(
+            f"watch-dir trigger: armed blueprint has a cycle; skipping {participant}"
+        )
+        return
+    _launch_run(bound, participant=participant, triggered=True)
+
+
+def _watch_poll_once() -> None:
+    """One watcher tick: detect newly-arrived, stable participants and fire each.
+
+    A pid fires only after it stats identically across two consecutive polls (the
+    partial-copy guard) and is then marked seen *before* the armed-blueprint gate,
+    so a disarmed watcher still consumes the arrival (arming later won't refire).
+    """
+    entries = {
+        str(e["id"]): e
+        for e in utils.discover_participant_videos()
+        if e.get("has_video")
+    }
+    fire: list[str] = []
+    with _watch_lock:
+        current = set(entries)
+        # Drop pendings whose file vanished (e.g. a copy that was aborted).
+        for pid in [p for p in _watch_pending if p not in current]:
+            _watch_pending.pop(pid, None)
+        for pid, entry in entries.items():
+            if pid in _watch_seen:
+                continue
+            stat = _stat_first_video(entry.get("video_paths", []))
+            if stat is None:
+                continue
+            if _watch_pending.get(pid) == stat:
+                # Stable across two polls -> mark seen + queue a fire.
+                _watch_seen.add(pid)
+                _watch_pending.pop(pid, None)
+                fire.append(pid)
+            else:
+                _watch_pending[pid] = stat
+    for pid in fire:
+        _maybe_fire_trigger(pid)
+
+
+def _watch_loop() -> None:
+    """Daemon body: poll until stopped, never dying on a transient error."""
+    while not _watch_stop.is_set():
+        try:
+            _watch_poll_once()
+        except Exception as exc:  # noqa: BLE001 — a poll error must not kill the daemon
+            utils.warning_print(f"watch-dir trigger poll failed: {exc}")
+        _watch_stop.wait(config.WORKFLOWS_WATCH_POLL_SECONDS)
+
+
+def _start_watch_thread() -> None:
+    """Start the watch-dir daemon (idempotent; daemon dies with the process)."""
+    global _watch_thread  # noqa: PLW0603
+    if _watch_thread is not None and _watch_thread.is_alive():
+        return
+    _watch_stop.clear()
+    _watch_thread = threading.Thread(
+        target=_watch_loop, daemon=True, name="workflow-watch-dir"
+    )
+    _watch_thread.start()
+
+
 def _init_workflows_state(
     sheet_context: Any = None,
     participant_list: list[str] | None = None,
@@ -845,7 +1053,8 @@ def _init_workflows_state(
     """Initialize module-level state for Workflows routes.
 
     Loads the workflows manifest and records the active input dir + sheet
-    context + worksheet (the latter feeds the ``sheet_selection`` executor).
+    context + worksheet (the latter feeds the ``sheet_selection`` executor), then
+    seeds the watch-dir baseline and starts the trigger daemon (P6).
     ``participant_list`` is accepted for parity with the other blueprints' init
     signatures; per-participant video paths are resolved on demand.
     """
@@ -855,3 +1064,5 @@ def _init_workflows_state(
     _sheet_context = sheet_context
     _worksheet = worksheet
     _manifest = workflows.load_workflows_manifest()
+    _seed_watch_seen()
+    _start_watch_thread()

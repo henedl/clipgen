@@ -1,11 +1,11 @@
 # Workflows — Phase 2 plan (recipes · batch · catalog · triggers)
 
-> **Living doc — posture set; P1/P2/P5 detail now pinned.** v1 (`plans/WORKFLOWS-PLAN.md`,
-> M0–M5) proves the cross-domain chain with a curated node set and a sequential, in-process run
-> engine. An earlier round set Phase 2's shape (a **recipe/template layer on top of a steadily-growing
-> catalog**, **whole-study batch**, a **narrow trigger**, several heavier ideas cut). A second round
-> (recorded below) pinned the **node catalog + connection model (P1/P2)** and the **validation +
-> result-storage detail (P5)**. Batch layout and trigger binding stay open — see *Open questions*.
+> **Phase 2 complete — P1–P6 all shipped.** v1 (`plans/WORKFLOWS-PLAN.md`, M0–M5) proves the
+> cross-domain chain with a curated node set and a sequential, in-process run engine. Phase 2 made it a
+> daily tool: a **recipe/template layer on top of a steadily-growing catalog** (P1/P2/P4), a
+> **whole-study batch** (P3), authoring + run-history UX (P5), and a **narrow watch-dir trigger** (P6,
+> the final workstream). All open questions are resolved (see *Open questions*); remaining items are
+> demand-driven follow-ups noted inline per workstream.
 
 ## Context
 
@@ -167,13 +167,34 @@ value (a list) are needed. Keep "All" as a convenience shortcut.
   requires partial/memoized re-run, which the plan explicitly cut ("just re-run"); whole-run cancel
   already exists (Stop). Canvas niceties (groups/comments, copy-paste) stay out — not a priority.
 
-### P6 — Triggers, narrow-first *(last; the one automation piece)*
-- A single **watch-dir watcher**: when a new video appears in `-i`, auto-run a **designated**
-  blueprint (typically a fan-out recipe). Debounce + dedup so one file doesn't fire twice.
-- Fill the reserved `blueprint.trigger` field with a minimal schema (`{type:"watch_dir", enabled}`)
-  that leaves room for `transcript_complete` / `scan_event` chaining and a general monitor later —
-  **build the narrow case, keep the seam.**
-- Safeguards: enable/disable per blueprint, a "triggered runs" view, a dry-run preview.
+### P6 — Triggers, narrow-first *(last; the one automation piece)* — ✅ Done
+- **Shipped** — a single **watch-dir watcher** (polling daemon thread in `workflows_server`, no new
+  dependency; mirrors the screenspace worker's `daemon=True` posture). When a *new* participant video
+  lands in `-i`, it auto-runs the single **armed** blueprint as one run bound to the just-arrived pid
+  (`workflows.bind_participant`) — **not** a whole-study batch. Poll interval =
+  `config.WORKFLOWS_WATCH_POLL_SECONDS` (5s); a pid must stat identically across two consecutive polls
+  before firing (the partial-copy guard), and the seen-set is seeded at startup so the pre-existing
+  backlog and re-added files never fire (no retro-fire when arming later).
+- **Single active trigger:** `blueprint.trigger` holds `{type:"watch_dir", enabled}`; arming one
+  blueprint disarms every other (enforced in the dedicated `PUT /api/blueprints/<id>/trigger`, which
+  also rejects arming a graph with a cycle or no `video_source`). The `type` field keeps the seam for
+  `transcript_complete` / `scan_event` chaining + a general monitor later.
+- **Run-launch refactor:** the single-run lifecycle is now `_launch_run(blueprint, participant,
+  triggered)`, shared by `POST /api/runs` and the watcher. Triggered runs carry a `triggered` flag on
+  the runner snapshot.
+- **UX:** a per-blueprint "Auto-run on new video" toolbar toggle (single-active, gated on a valid
+  graph with a Video Source — re-gated by the validate satellite on every edit) + a "⚡ triggered"
+  badge on auto-launched runs in the existing run history (no separate panel). Guarded by
+  `test_workflows_frontend_source.py` + the watcher/CRUD unit tests in `test_workflows_api.py`.
+- **Field-test fixes (same PR):** (1) the combined web server now forces `utils.NO_INPUT_MODE` on at
+  launch — server-driven clip generation (triggered runs *and* Studio generate) was blocking a daemon
+  thread on the interactive fuzzy-match `input()` prompt; it now skips-and-reports. (2)
+  `utils.participant_id_from_source_name` rejects ids containing whitespace, so a Finder/Explorer
+  duplicate (`study_P03 copy.mp4`) is no longer a phantom participant that auto-fires a run. (3) the
+  run panel runs a low-frequency idle discover poll so a triggered run (which this client never
+  started) surfaces live instead of only on a manual reload.
+- **Deferred (future seam):** per-blueprint enable history view beyond the badge; a dry-run preview;
+  `transcript_complete` / `scan_event` chaining; a general `TriggerMonitor`.
 
 ---
 
@@ -204,8 +225,13 @@ value (a list) are needed. Keep "All" as a convenience shortcut.
 
 ## Open questions remaining
 
-1. **Trigger binding (P6):** how is a watch-dir bound to its blueprint — a per-blueprint toggle, or a
-   single "active trigger" slot? What's the UX for "this graph runs automatically"?
+*(none — P6 was the last workstream; its open question is resolved below.)*
+
+*Resolved (P6 build):* **trigger binding** → a **single active trigger** across all blueprints
+(`blueprint.trigger = {type:"watch_dir", enabled}`); arming one disarms the rest. The "this graph runs
+automatically" UX is a per-blueprint **"Auto-run on new video"** toolbar toggle (armed = accent bolt),
+gated on a valid graph with a Video Source. A new video fires **one run for the just-arrived
+participant** (not a batch); auto-launched runs show a ⚡ badge in the existing run history.
 
 *Resolved (P3 build):* **batch concurrency** → strictly sequential. **batch output layout** → flat
 output dir (existing `files.get_unique_filename` + `{study}_{participant}` naming dodges collisions;

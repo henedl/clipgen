@@ -310,6 +310,21 @@ def test_universal_control_port_for_gate_wiring():
     assert '"control"' in src or "'control'" in src
 
 
+def test_node_descriptions_use_data_tooltip_singleton():
+    """Palette rows and the on-card `?` glyph surface the catalog description
+    through the [data-tooltip] singleton (utils.clipgenInitDataTooltips), not
+    native `title` — native tooltips don't render on draggable=true palette
+    rows and are unstyled. Guards against regressing to `.title =`."""
+    src = _workflows_js()
+    # Palette row + help glyph both wire description via data-tooltip.
+    assert 'setAttribute("data-tooltip", node.description)' in src
+    assert 'setAttribute("data-tooltip", type.description)' in src
+    # The help glyph itself ships (mask-icon span carrying the tooltip).
+    assert "wf-node-help" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-node-help" in css
+
+
 def test_css_defines_run_panel_and_node_status_styles():
     css = WORKFLOWS_CSS.read_text(encoding="utf-8")
     assert ".wf-run-card" in css
@@ -367,6 +382,38 @@ def test_lazy_node_results_and_rerun_present():
     assert ".wf-validation" in css
     assert ".wf-issue-error" in css
     assert ".wf-issue-warning" in css
+
+
+def test_watch_dir_trigger_toggle_and_badge():
+    """P6 watch-dir triggers: the toolbar toggle, its hub-owned PUT + single-active
+    mirror, the validate satellite re-gate, and the run-history triggered badge."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfTriggerBtn"' in html
+
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    # Hub owns the toggle (touches state.blueprints + the dedicated trigger PUT).
+    assert "/trigger" in hub
+    assert "function toggleTrigger" in hub
+    assert "WF.syncTriggerButton" in hub  # published for the validate satellite
+    assert '"#wfTriggerBtn"' in hub  # gated alongside the other toolbar controls
+
+    # The validate satellite re-gates the toggle on every edit (can't arm errors).
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "WF.syncTriggerButton" in validate
+
+    # The run history tags auto-launched runs (rides the snapshot's `triggered`).
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "run.triggered" in runs
+    assert "wf-run-triggered" in runs
+    # A triggered run isn't started by this client, so the panel must discover it:
+    # a low-frequency idle poll refreshes the run list so it surfaces live.
+    assert "discoverTick" in runs
+    assert "runsChanged" in runs
+
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-trigger-icon" in css
+    assert ".wf-trigger-armed" in css
+    assert ".wf-run-triggered" in css
 
 
 def test_in_flight_connect_is_torn_down_on_context_change():

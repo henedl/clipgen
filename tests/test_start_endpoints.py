@@ -433,3 +433,22 @@ def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
     resp = client.post("/api/spreadsheets/close")
     assert resp.status_code == 409
     assert resp.get_json()["ok"] is False
+
+
+def test_combined_server_forces_non_interactive(monkeypatch):
+    """The web server has no console: start_combined_server must flip
+    utils.NO_INPUT_MODE on so a missing source video is skipped-and-reported
+    instead of blocking a Flask/daemon thread on input() (regression: watch-dir
+    triggered runs + Studio generate hung on the fuzzy-match prompt)."""
+    import utils
+
+    class _FakeApp:
+        def run(self, **kwargs):  # never actually serve
+            pass
+
+    monkeypatch.setattr(utils, "NO_INPUT_MODE", False)
+    monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _FakeApp())
+    monkeypatch.setattr(server.webbrowser, "open", lambda *a, **k: None)
+
+    server.start_combined_server(port=0)
+    assert utils.NO_INPUT_MODE is True
