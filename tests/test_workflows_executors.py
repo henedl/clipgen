@@ -325,6 +325,59 @@ def test_make_clips_cuts_from_timerange(tmp_path, monkeypatch):
     assert out["artifacts"]["study"] == "study"
 
 
+def test_interval_captures_samples_each_range(tmp_path, monkeypatch):
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: (
+            seen.update({"records": records, "fmt": kw.get("output_format")}),
+            (len(records), [{"id": i} for i in range(len(records))]),
+        )[1],
+    )
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    tr = {"ranges": [(0.0, 30.0)], "source": src}
+    out = _run(
+        "interval_captures",
+        _ctx(tmp_path),
+        {"video": src, "timeRange": tr},
+        {"interval": 10, "output_format": "screen"},
+    )
+    # 0, 10, 20 → three screenshots (unlike Make Clips, which makes one per range).
+    assert out["artifacts"]["count"] == 3
+    assert len(seen["records"]) == 3
+    assert seen["fmt"] == "screen"
+
+
+def test_interval_captures_whole_video_uses_duration(tmp_path, monkeypatch):
+    import pipeline
+    import video as video_mod
+
+    monkeypatch.setattr(video_mod, "get_file_duration", lambda p: 25)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: seen.__setitem__("n", len(records)) or (len(records), []),
+    )
+    src = {
+        "participant": "P01",
+        "study": "s",
+        "source_filename": "s_P01.mp4",
+        "video_paths": ["s_P01.mp4"],
+    }
+    # No timeRange wired → sample the whole video: duration 25, interval 10 → 0,10,20.
+    _run("interval_captures", _ctx(tmp_path), {"video": src}, {"interval": 10})
+    assert seen["n"] == 3
+
+
 def test_build_reel_honors_name_param(tmp_path, monkeypatch):
     import pipeline
 

@@ -518,6 +518,43 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": ["videoDir"],
     },
+    "interval_captures": {
+        "id": "interval_captures",
+        "label": "Interval Captures",
+        "description": "Sample a screenshot or GIF at a fixed interval across the video (or each input time range).",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            {"name": "timeRange", "type": "timeRange", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "interval",
+                "type": "number",
+                "default": config.GALLERY_INTERVAL_SECONDS,
+                "min": 1,
+                "label": "Interval (s)",
+                "required": True,
+            },
+            {
+                "name": "output_format",
+                "type": "enum",
+                "default": "screen",
+                "choices": ["screen", "gif"],
+                "label": "Output format",
+            },
+            {
+                "name": "gif_duration",
+                "type": "number",
+                "default": config.GALLERY_GIF_DURATION_SECONDS,
+                "min": 1,
+                "label": "GIF duration (s)",
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "build_reel": {
         "id": "build_reel",
         "label": "Build Reel",
@@ -1830,6 +1867,78 @@ def _exec_make_clips(
     return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
 
 
+def _exec_interval_captures(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Sample a video into screenshots/GIFs at a fixed interval.
+
+    Iterates each wired time range (or the whole video when none is wired) at
+    ``interval`` seconds, expands the samples into point/GIF clip records, and
+    reuses ``process_clips`` so the artifacts match Make Clips exactly. Fixes the
+    one-artifact-per-range limit of Make Clips' screen/gif output.
+    """
+    import files
+    import pipeline
+    import video as video_mod
+
+    src = inputs.get("video") or {}
+    paths = list(src.get("video_paths") or [])
+    study = str(src.get("study", "") or "")
+    empty = {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+    if not paths:
+        return empty
+
+    interval = int(
+        float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
+        or config.GALLERY_INTERVAL_SECONDS
+    )
+    if interval < 1:
+        interval = 1
+    fmt = (
+        "gif" if str(params.get("output_format", "screen") or "") == "gif" else "screen"
+    )
+    gif_dur = float(
+        params.get("gif_duration", config.GALLERY_GIF_DURATION_SECONDS)
+        or config.GALLERY_GIF_DURATION_SECONDS
+    )
+
+    ranges = [
+        (float(s), float(e))
+        for s, e in ((inputs.get("timeRange") or {}).get("ranges") or [])
+    ]
+    if not ranges:
+        duration = video_mod.get_file_duration(paths[0]) or 0
+        if duration <= 0:
+            return empty
+        ranges = [(0.0, float(duration))]
+
+    # Expand each window into per-interval sample points (a point for a
+    # screenshot, a [t, t+gif_dur] window for a GIF).
+    sample_ranges: list[tuple[float, float]] = []
+    for start, end in ranges:
+        t = start
+        while t < end:
+            sample_ranges.append((t, t + gif_dur if fmt == "gif" else t))
+            t += interval
+    if not sample_ranges:
+        return empty
+
+    records = files.build_clip_records(
+        participant=str(src.get("participant", "") or ""),
+        source_filename=_clip_source_filename(src),
+        time_ranges=sample_ranges,
+        description="sample",
+        study=study,
+    )
+    count, artifacts = pipeline.process_clips(
+        records,
+        output_format=fmt,
+        include_severity=False,
+        cancel_flag=ctx.cancel_flag,
+    )
+    return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
+
+
 def _attachment_artifact(
     art_type: str, output_path: str, source: dict[str, Any], description: str
 ) -> dict[str, Any]:
@@ -2741,6 +2850,7 @@ _EXECUTORS: dict[
     "multitool": _exec_multitool,
     "highlights": _exec_highlights,
     "make_clips": _exec_make_clips,
+    "interval_captures": _exec_interval_captures,
     "build_reel": _exec_build_reel,
     "timelapse": _exec_timelapse,
     "heatmap": _exec_heatmap,
