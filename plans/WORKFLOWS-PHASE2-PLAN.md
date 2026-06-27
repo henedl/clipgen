@@ -180,8 +180,20 @@ value (a list) are needed. Keep "All" as a convenience shortcut.
 ## Explicitly out of scope (cut, with rationale)
 
 - **Memoization / cross-run caching** — chose "just re-run"; avoids cache-invalidation risk.
-- **General control-flow suite** (map / filter / accumulate / switch) — graph-as-programming-language
-  scope sink; the existing **gate** plus whole-graph fan-out covers the real need.
+- **General control-flow suite** (map / filter / accumulate / switch) — *partially revisited and
+  shipped* as **collection-algebra nodes**: per-type `filter` / `partition` / `merge` / `limit`
+  (top-N) families over **every collection type that has a real producer *and* consumer** in the
+  graph — `events` · `clipRecords` · `segments` · `timeRange` · `artifacts` — plus `dedup` for the
+  span-based ones (`events` · `clipRecords` · `timeRange`). This deliberately covers both the
+  **pre-clip** side (`clipRecords`/`timeRange`, thinned before `make_clips`) and the **post-clip**
+  side (`artifacts` from make_clips/timelapse/heatmap/build_reel, capped before `timeline_viewer`).
+  One `{field, op, value}` predicate reuses `_GATE_OPS`; all are pure single-pass nodes (no runner
+  changes), exact-typed (no adapters), grouped under a "Collection" palette category. **Not given a
+  family:** `citations`/`friction` (terminal insight outputs — zero downstream consumers, so a family
+  would dead-end) and the single-value types (`region`/`scalar`/`summary`/`transcript`/`video`).
+  Still cut: per-item **`foreach` / subgraph iteration** (the collections *are* the iteration — true
+  looping would force runtime DAG expansion, the graph-as-programming-language scope sink) and the
+  **compound multi-clause predicate widget** (chain two filters for AND).
 - **Composable `foreach` node** — whole-graph fan-out (P3) covers the common case far more simply.
 - **General `TriggerMonitor`** — start with the narrow watch-dir (P6); generalize only on demand.
 - **A separate "templates" system** — folded into stashes (P4).

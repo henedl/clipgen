@@ -155,6 +155,60 @@ def test_catalog_serves_required_param_flag(wf_client):
     assert "required" not in _param("find_word", "pad")
 
 
+def test_catalog_serves_collection_ops(wf_client):
+    # The collection-algebra control nodes (filter/merge/partition/limit/dedup) are
+    # per-type families grouped under "Collection". Ports must be exact-typed
+    # (same wire type in/out) so no adapter is needed, and the predicate value /
+    # limit take params carry required:true for the validation panel.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    expected = {
+        f"{op}_{k}"
+        for op in ("filter", "partition", "merge", "limit")
+        for k in ("events", "clips", "segments", "timerange", "artifacts")
+    }
+    # dedup is span-based -> events + clips + time ranges (no segments/artifacts).
+    expected |= {"dedup_events", "dedup_clips", "dedup_timerange"}
+    assert expected <= set(by_id)
+
+    # Every collection node is grouped under the "Collection" palette category.
+    assert all(by_id[nid]["category"] == "Collection" for nid in expected)
+
+    # The families must wire to the established pipeline by exact type: make_clips
+    # outputs `artifacts` (so limit/filter_artifacts accept it), and timeRange
+    # families sit between time-range sources and make_clips / ss detectors.
+    assert by_id["limit_artifacts"]["inputs"][0]["type"] == "artifacts"
+    assert by_id["make_clips"]["outputs"][0]["type"] == "artifacts"
+    assert by_id["filter_timerange"]["outputs"][0]["type"] == "timeRange"
+
+    # filter_events: events -> events (exact type, no coercion), value required.
+    fe = by_id["filter_events"]
+    assert [p["type"] for p in fe["inputs"]] == ["events"]
+    assert [p["type"] for p in fe["outputs"]] == ["events"]
+    assert next(p for p in fe["params"] if p["name"] == "value")["required"] is True
+
+    # partition emits two outputs of the input's type (the gate's data-level else).
+    pc = by_id["partition_clips"]
+    assert [p["name"] for p in pc["outputs"]] == ["matched", "unmatched"]
+    assert {p["type"] for p in pc["outputs"]} == {"clipRecords"}
+
+    # merge takes 2-3 same-typed inputs (in2/in3 optional) into one output.
+    ms = by_id["merge_segments"]
+    assert [p["name"] for p in ms["inputs"]] == ["in1", "in2", "in3"]
+    assert ms["inputs"][1].get("optional") and ms["inputs"][2].get("optional")
+    assert {p["type"] for p in ms["inputs"]} == {"segments"}
+
+    # limit's take is required; dedup is span-based (no segments family).
+    assert (
+        next(p for p in by_id["limit_events"]["params"] if p["name"] == "take")[
+            "required"
+        ]
+        is True
+    )
+    assert "dedup_segments" not in by_id
+
+
 def test_catalog_serves_adapter_pairs(wf_client):
     # The catalog endpoint serves the runner's ADAPTERS table (top-level, so the
     # context-shape assertion above is unaffected) as JSON-safe [src, dst] pairs,

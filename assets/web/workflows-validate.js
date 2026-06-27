@@ -102,6 +102,13 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
+    // warning — a merge with fewer than two wired inputs is a no-op passthrough.
+    if (node.type.indexOf("merge_") === 0) {
+      var wired = ["in1", "in2", "in3"].filter(function (p) {
+        return inputWired(node.id, p);
+      }).length;
+      if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
+    }
     // warning — an orphan node (no incident edges) in a multi-node graph.
     var connected = (state.edges || []).some(function (e) {
       return e.from === node.id || e.to === node.id;

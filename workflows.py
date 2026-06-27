@@ -1932,6 +1932,469 @@ def _exec_gate(
     return {"pass": bool(result)}
 
 
+# ---- Collection-algebra control nodes (filter / merge / partition / limit / dedup) ----
+#
+# These thin / combine / branch / cap / dedup the collections that already flow
+# through the graph (events, clipRecords, segments) — the collections *are* the
+# iteration, so no per-item ``foreach`` (which would force runtime DAG expansion,
+# breaking the static ``topo_order`` model). All are pure single-pass nodes: no
+# runner changes. Per-type families (mirroring the ss_* split) keep every port
+# exact-typed, so no adapters or frontend ``canConnect`` changes are needed.
+
+# One ``{field, op, value}`` clause reuses the gate's comparison table; ``contains``
+# is the one string-only addition (kept out of ``_GATE_OPS``, which must stay
+# numeric for the gate). ``none`` is the limit node's "keep input order" sentinel.
+_COLLECTION_OPS: list[str] = list(_GATE_OPS.keys()) + ["contains"]
+_SORT_NONE = "none"
+
+# kind -> envelope metadata. ``port`` is the wire type; ``key`` is the inner list
+# key in the envelope; ``preserve`` are the envelope keys carried through unchanged
+# (source lineage / study / raw_results); ``fields`` drive the predicate enum and
+# ``sort_fields`` the limit sort enum (numeric-only, so the sort key stays
+# comparable). ``recount`` (artifacts) rewrites the envelope's ``count`` to the
+# kept length. dedup is span-based, registered for events + clips + timeRanges.
+#
+# Both the pre-clip side (``clipRecords``, ``timeRange``) and the post-clip side
+# (``artifacts`` from make_clips/timelapse/heatmap/build_reel) get families, so a
+# stream can be thinned/capped/combined before *or* after it becomes artifacts.
+_COLLECTION_KINDS: dict[str, dict[str, Any]] = {
+    "events": {
+        "port": "events",
+        "key": "events",
+        "label": "Events",
+        "preserve": ("source", "raw_results"),
+        "fields": ["confidence", "duration", "start"],
+        "sort_fields": ["confidence", "duration", "start"],
+    },
+    "clips": {
+        "port": "clipRecords",
+        "key": "records",
+        "label": "Clips",
+        "preserve": ("study",),
+        "fields": ["duration", "category", "severity", "desc"],
+        "sort_fields": ["duration"],
+    },
+    "segments": {
+        "port": "segments",
+        "key": "segments",
+        "label": "Segments",
+        "preserve": ("source",),
+        "fields": ["text", "duration", "start"],
+        "sort_fields": ["duration", "start"],
+    },
+    "timerange": {
+        "port": "timeRange",
+        "key": "ranges",
+        "label": "Time Ranges",
+        "preserve": ("source",),
+        "fields": ["duration", "start"],
+        "sort_fields": ["duration", "start"],
+    },
+    "artifacts": {
+        "port": "artifacts",
+        "key": "artifacts",
+        "label": "Artifacts",
+        "preserve": ("study",),
+        "recount": True,
+        "fields": ["duration", "start", "type", "category", "severity", "participant"],
+        "sort_fields": ["duration", "start"],
+    },
+}
+
+
+def _collection_field(kind: str, item: Any, field: str) -> float | str | None:
+    """Extract one predicate/sort field from a collection item.
+
+    Numeric fields return ``float``; text fields (``category``/``severity``/
+    ``desc``/``text``/``type``/``participant``) return ``str``. Clip ``duration``
+    sums the record's ``times`` spans, mirroring ``_exec_measure``'s total-duration
+    path. ``timerange`` items are ``(start, end)`` tuples, not dicts.
+    """
+    if kind == "timerange":
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return None
+        start = float(item[0] or 0.0)
+        end = float(item[1] or 0.0)
+        if field == "duration":
+            return max(0.0, end - start)
+        if field == "start":
+            return start
+        return None
+    if not isinstance(item, dict):
+        return None
+    if kind == "artifacts":
+        if field == "duration":
+            return max(
+                0.0,
+                float(item.get("end", 0.0) or 0.0)
+                - float(item.get("start", 0.0) or 0.0),
+            )
+        if field == "start":
+            return float(item.get("start", 0.0) or 0.0)
+        if field in ("type", "category", "severity", "participant"):
+            return str(item.get(field, "") or "")
+        return None
+    if kind == "events":
+        if field == "confidence":
+            return float(item.get("confidence", 0.0) or 0.0)
+        if field == "duration":
+            return max(
+                0.0,
+                float(item.get("time_out", 0.0) or 0.0)
+                - float(item.get("time_in", 0.0) or 0.0),
+            )
+        if field == "start":
+            return float(item.get("time_in", 0.0) or 0.0)
+    elif kind == "clips":
+        if field == "duration":
+            total = 0.0
+            for start_str, end_str in item.get("times") or []:
+                start = utils.timestamp_to_seconds(start_str)
+                end = utils.timestamp_to_seconds(end_str)
+                if start is not None and end is not None:
+                    total += max(0.0, end - start)
+            return total
+        if field in ("category", "severity", "desc"):
+            return str(item.get(field, "") or "")
+    elif kind == "segments":
+        if field == "text":
+            return str(item.get("text", "") or "")
+        if field == "duration":
+            return max(
+                0.0,
+                float(item.get("end", 0.0) or 0.0)
+                - float(item.get("start", 0.0) or 0.0),
+            )
+        if field == "start":
+            return float(item.get("start", 0.0) or 0.0)
+    return None
+
+
+def _eval_predicate(field_val: float | str | None, op: str, raw_value: Any) -> bool:
+    """Evaluate one ``{field, op, value}`` clause against an extracted field value.
+
+    ``contains`` is a case-insensitive substring test; text fields support only
+    ``==``/``!=`` (case-insensitive, trimmed). Numeric fields route through
+    ``_GATE_OPS`` after a ``float()`` coerce (mirrors ``_exec_gate``'s guard).
+    """
+    if field_val is None:
+        return False
+    if op == "contains":
+        return str(raw_value).strip().lower() in str(field_val).lower()
+    if isinstance(field_val, str):
+        a = field_val.strip().lower()
+        b = str(raw_value).strip().lower()
+        if op == "==":
+            return a == b
+        if op == "!=":
+            return a != b
+        return False  # ordering ops don't apply to text fields
+    fn = _GATE_OPS.get(op)
+    if fn is None:
+        return False
+    try:
+        return fn(float(field_val), float(raw_value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _wrap_collection(
+    kind: str, src_envelope: dict[str, Any], items: list[Any]
+) -> dict[str, Any]:
+    """Re-wrap an item list in the kind's envelope, preserving source lineage."""
+    meta = _COLLECTION_KINDS[kind]
+    out: dict[str, Any] = {meta["key"]: items}
+    for preserve_key in meta["preserve"]:
+        if preserve_key in src_envelope:
+            out[preserve_key] = src_envelope[preserve_key]
+    if meta.get("recount"):
+        out["count"] = len(items)  # artifacts carry a count; keep it honest
+    return out
+
+
+def _make_filter_executor(
+    kind: str,
+) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
+    """Keep items matching one ``{field, op, value}`` clause; same type in/out."""
+    meta = _COLLECTION_KINDS[kind]
+
+    def _exec(
+        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, Any]:
+        env = inputs.get("in") or {}
+        items = list(env.get(meta["key"]) or [])
+        field = str(params.get("field") or meta["fields"][0])
+        op = str(params.get("op") or ">=")
+        value = params.get("value")
+        kept = [
+            it
+            for it in items
+            if _eval_predicate(_collection_field(kind, it, field), op, value)
+        ]
+        return {"out": _wrap_collection(kind, env, kept)}
+
+    return _exec
+
+
+def _make_partition_executor(
+    kind: str,
+) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
+    """Split one collection into ``matched`` / ``unmatched`` — the gate's missing
+    data-level branch. Two same-typed outputs (runner stores the whole result
+    dict; consumers read per-port)."""
+    meta = _COLLECTION_KINDS[kind]
+
+    def _exec(
+        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, Any]:
+        env = inputs.get("in") or {}
+        items = list(env.get(meta["key"]) or [])
+        field = str(params.get("field") or meta["fields"][0])
+        op = str(params.get("op") or ">=")
+        value = params.get("value")
+        matched: list[Any] = []
+        unmatched: list[Any] = []
+        for it in items:
+            target = (
+                matched
+                if _eval_predicate(_collection_field(kind, it, field), op, value)
+                else unmatched
+            )
+            target.append(it)
+        return {
+            "matched": _wrap_collection(kind, env, matched),
+            "unmatched": _wrap_collection(kind, env, unmatched),
+        }
+
+    return _exec
+
+
+def _make_merge_executor(
+    kind: str,
+) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
+    """Union 2-3 same-type collections into one (fixes the one-wire-per-input
+    wall). Preserves the first wired input's lineage; concatenates ``raw_results``
+    for events so a downstream heatmap still sees per-frame coverage."""
+    meta = _COLLECTION_KINDS[kind]
+
+    def _exec(
+        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, Any]:
+        merged: list[Any] = []
+        raw: list[Any] = []
+        base_env: dict[str, Any] = {}
+        for port in ("in1", "in2", "in3"):
+            env = inputs.get(port)
+            if not isinstance(env, dict):
+                continue
+            if not base_env:
+                base_env = env
+            seq = env.get(meta["key"])
+            if isinstance(seq, list):
+                merged.extend(seq)
+            extra = env.get("raw_results")
+            if isinstance(extra, list):
+                raw.extend(extra)
+        out = _wrap_collection(kind, base_env, merged)
+        if kind == "events":
+            out["raw_results"] = raw
+        return {"out": out}
+
+    return _exec
+
+
+def _make_limit_executor(
+    kind: str,
+) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
+    """Optionally sort by a numeric field, then keep the first N items."""
+    meta = _COLLECTION_KINDS[kind]
+
+    def _exec(
+        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, Any]:
+        env = inputs.get("in") or {}
+        items = list(env.get(meta["key"]) or [])
+        sort_by = str(params.get("sort_by") or _SORT_NONE)
+        order = str(params.get("order") or "desc")
+        if sort_by != _SORT_NONE:
+
+            def _key(it: dict[str, Any]) -> float:
+                val = _collection_field(kind, it, sort_by)
+                return float(val) if isinstance(val, (int, float)) else 0.0
+
+            items.sort(key=_key, reverse=(order == "desc"))
+        try:
+            take = int(params.get("take", 0) or 0)
+        except (TypeError, ValueError):
+            take = 0
+        if take > 0:
+            items = items[:take]
+        return {"out": _wrap_collection(kind, env, items)}
+
+    return _exec
+
+
+def _dedup_events(items: list[dict[str, Any]], gap: float) -> list[dict[str, Any]]:
+    """Merge events whose spans overlap or sit within ``gap`` seconds; the merged
+    event spans the union and keeps the max confidence."""
+    ordered = sorted(items, key=lambda e: float(e.get("time_in", 0.0) or 0.0))
+    out: list[dict[str, Any]] = []
+    for ev in ordered:
+        t_in = float(ev.get("time_in", 0.0) or 0.0)
+        t_out = float(ev.get("time_out", t_in) or t_in)
+        if out:
+            prev = out[-1]
+            p_in = float(prev.get("time_in", 0.0) or 0.0)
+            p_out = float(prev.get("time_out", p_in) or p_in)
+            if t_in <= p_out + gap:
+                # Keep the higher-confidence member's fields, union the span.
+                ev_conf = float(ev.get("confidence", 0.0) or 0.0)
+                prev_conf = float(prev.get("confidence", 0.0) or 0.0)
+                merged = dict(ev if ev_conf > prev_conf else prev)
+                merged["time_in"] = min(p_in, t_in)
+                merged["time_out"] = max(p_out, t_out)
+                merged["confidence"] = max(prev_conf, ev_conf)
+                out[-1] = merged
+                continue
+        out.append(dict(ev))
+    return out
+
+
+def _dedup_clips(records: list[dict[str, Any]], gap: float) -> list[dict[str, Any]]:
+    """Drop clip records whose overall time-span overlaps (within ``gap``) a
+    record already kept; keeps the first, extending the covered span."""
+
+    def _span(rec: dict[str, Any]) -> tuple[float, float] | None:
+        starts: list[float] = []
+        ends: list[float] = []
+        for start_str, end_str in rec.get("times") or []:
+            start = utils.timestamp_to_seconds(start_str)
+            end = utils.timestamp_to_seconds(end_str)
+            if start is not None:
+                starts.append(start)
+            if end is not None:
+                ends.append(end)
+        if not starts or not ends:
+            return None
+        return (min(starts), max(ends))
+
+    indexed = sorted(
+        ((_span(rec), rec) for rec in records),
+        key=lambda pair: pair[0][0] if pair[0] else 0.0,
+    )
+    out: list[dict[str, Any]] = []
+    last_span: tuple[float, float] | None = None
+    for span, rec in indexed:
+        if span and last_span and span[0] <= last_span[1] + gap:
+            last_span = (last_span[0], max(last_span[1], span[1]))
+            continue
+        out.append(rec)
+        # Keep an untimed record but never let its None span clobber the tracker —
+        # otherwise the next overlap check short-circuits and later duplicates leak.
+        if span is not None:
+            last_span = span
+    return out
+
+
+def _dedup_timeranges(items: list[Any], gap: float) -> list[tuple[float, float]]:
+    """Merge ``(start, end)`` windows that overlap or sit within ``gap`` seconds."""
+    spans: list[tuple[float, float]] = []
+    for it in items:
+        if isinstance(it, (list, tuple)) and len(it) >= 2:
+            spans.append((float(it[0] or 0.0), float(it[1] or 0.0)))
+    spans.sort()
+    out: list[tuple[float, float]] = []
+    for start, end in spans:
+        if out and start <= out[-1][1] + gap:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out
+
+
+def _make_dedup_executor(
+    kind: str,
+) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
+    """Span-merge near-duplicate items (events, clips, and time ranges)."""
+    meta = _COLLECTION_KINDS[kind]
+
+    def _exec(
+        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+    ) -> dict[str, Any]:
+        env = inputs.get("in") or {}
+        items = list(env.get(meta["key"]) or [])
+        try:
+            gap = max(0.0, float(params.get("gap", 0) or 0))
+        except (TypeError, ValueError):
+            gap = 0.0
+        if kind == "events":
+            items = _dedup_events(items, gap)
+        elif kind == "clips":
+            items = _dedup_clips(items, gap)
+        elif kind == "timerange":
+            items = _dedup_timeranges(items, gap)
+        return {"out": _wrap_collection(kind, env, items)}
+
+    return _exec
+
+
+def _predicate_params(kind: str) -> list[ParamSpec]:
+    """The shared ``{field, op, value}`` clause for filter / partition nodes."""
+    meta = _COLLECTION_KINDS[kind]
+    return [
+        {
+            "name": "field",
+            "type": "enum",
+            "default": meta["fields"][0],
+            "choices": list(meta["fields"]),
+            "label": "Field",
+        },
+        {
+            "name": "op",
+            "type": "enum",
+            "default": ">=",
+            "choices": list(_COLLECTION_OPS),
+            "label": "Comparison",
+        },
+        {
+            "name": "value",
+            "type": "string",
+            "default": "",
+            "label": "Value",
+            "required": True,
+        },
+    ]
+
+
+def _limit_params(kind: str) -> list[ParamSpec]:
+    """Sort-key + order + count for the limit (top-N) node."""
+    meta = _COLLECTION_KINDS[kind]
+    return [
+        {
+            "name": "sort_by",
+            "type": "enum",
+            "default": _SORT_NONE,
+            "choices": [_SORT_NONE] + list(meta["sort_fields"]),
+            "label": "Sort by",
+        },
+        {
+            "name": "order",
+            "type": "enum",
+            "default": "desc",
+            "choices": ["desc", "asc"],
+            "label": "Order",
+        },
+        {
+            "name": "take",
+            "type": "number",
+            "default": 10,
+            "min": 0,
+            "label": "Keep first N",
+            "required": True,
+        },
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Typed-port adapters (M3) — pure value -> value, applied by the runner (M4)
 # ---------------------------------------------------------------------------
@@ -2091,6 +2554,89 @@ _EXECUTORS: dict[
 # The ten per-detector Screenspace nodes share one body via the factory above.
 for _ss_tool in _SS_DETECTOR_SPECS:
     _EXECUTORS[f"ss_{_ss_tool}"] = _make_ss_executor(_ss_tool)
+
+# Collection-algebra control nodes — per-type families, all factory-generated.
+# Registered here (NODE_TYPES + _EXECUTORS together) so the attach loop below
+# wires their ``execute`` like any other node. Category "Collection" groups them
+# apart from measure/gate in the palette.
+for _kind, _meta in _COLLECTION_KINDS.items():
+    _T = _meta["port"]
+    _name = _meta["label"]
+    NODE_TYPES[f"filter_{_kind}"] = {
+        "id": f"filter_{_kind}",
+        "label": f"Filter {_name}",
+        "domain": "control",
+        "category": "Collection",
+        "inputs": [{"name": "in", "type": _T}],
+        "outputs": [{"name": "out", "type": _T}],
+        "params": _predicate_params(_kind),
+        "requires": [],
+    }
+    _EXECUTORS[f"filter_{_kind}"] = _make_filter_executor(_kind)
+    NODE_TYPES[f"partition_{_kind}"] = {
+        "id": f"partition_{_kind}",
+        "label": f"Partition {_name}",
+        "domain": "control",
+        "category": "Collection",
+        "inputs": [{"name": "in", "type": _T}],
+        "outputs": [
+            {"name": "matched", "type": _T},
+            {"name": "unmatched", "type": _T},
+        ],
+        "params": _predicate_params(_kind),
+        "requires": [],
+    }
+    _EXECUTORS[f"partition_{_kind}"] = _make_partition_executor(_kind)
+    NODE_TYPES[f"merge_{_kind}"] = {
+        "id": f"merge_{_kind}",
+        "label": f"Merge {_name}",
+        "domain": "control",
+        "category": "Collection",
+        "inputs": [
+            {"name": "in1", "type": _T},
+            {"name": "in2", "type": _T, "optional": True},
+            {"name": "in3", "type": _T, "optional": True},
+        ],
+        "outputs": [{"name": "out", "type": _T}],
+        "params": [],
+        "requires": [],
+    }
+    _EXECUTORS[f"merge_{_kind}"] = _make_merge_executor(_kind)
+    NODE_TYPES[f"limit_{_kind}"] = {
+        "id": f"limit_{_kind}",
+        "label": f"Limit {_name}",
+        "domain": "control",
+        "category": "Collection",
+        "inputs": [{"name": "in", "type": _T}],
+        "outputs": [{"name": "out", "type": _T}],
+        "params": _limit_params(_kind),
+        "requires": [],
+    }
+    _EXECUTORS[f"limit_{_kind}"] = _make_limit_executor(_kind)
+
+# dedup is span-based -> events + clips + time ranges.
+for _kind in ("events", "clips", "timerange"):
+    _T = _COLLECTION_KINDS[_kind]["port"]
+    _name = _COLLECTION_KINDS[_kind]["label"]
+    NODE_TYPES[f"dedup_{_kind}"] = {
+        "id": f"dedup_{_kind}",
+        "label": f"Dedup {_name}",
+        "domain": "control",
+        "category": "Collection",
+        "inputs": [{"name": "in", "type": _T}],
+        "outputs": [{"name": "out", "type": _T}],
+        "params": [
+            {
+                "name": "gap",
+                "type": "number",
+                "default": 0,
+                "min": 0,
+                "label": "Merge gap (s)",
+            },
+        ],
+        "requires": [],
+    }
+    _EXECUTORS[f"dedup_{_kind}"] = _make_dedup_executor(_kind)
 
 for _node_id, _executor in _EXECUTORS.items():
     NODE_TYPES[_node_id]["execute"] = _executor
