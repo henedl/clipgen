@@ -303,6 +303,49 @@ def test_build_reel_honors_name_param(tmp_path, monkeypatch):
     assert out["artifacts"]["count"] == 1
 
 
+def test_build_reel_chronological_sorts_records(tmp_path, monkeypatch):
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        files, "get_unique_filename", lambda template, **kw: str(tmp_path / template)
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "process_reel",
+        lambda records, **kw: (
+            seen.__setitem__("records", records) or (1, [{"id": "r"}])
+        ),
+    )
+    out_of_order = [
+        {"id": "b", "times": [("0:30", "0:35")]},
+        {"id": "a", "times": [("0:05", "0:10")]},
+    ]
+    _run(
+        "build_reel",
+        _ctx(tmp_path),
+        {"clips": {"records": out_of_order, "study": "study"}},
+        {"name": "reel", "chronological": True},
+    )
+    assert [r["id"] for r in seen["records"]] == ["a", "b"]
+
+
+def test_transcribe_threads_model_param(tmp_path, monkeypatch):
+    import transcripts
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        transcripts,
+        "transcribe_video",
+        lambda path, **kw: (
+            seen.__setitem__("model", kw.get("model_name")) or {"segments": []}
+        ),
+    )
+    src = {"participant": "P01", "video_paths": [str(tmp_path / "study_P01.mp4")]}
+    _run("transcribe", _ctx(tmp_path), {"video": src}, {"model": "small"})
+    assert seen["model"] == "small"
+
+
 def test_timeline_viewer_generates_path(tmp_path, monkeypatch):
     monkeypatch.setattr(
         viewer,

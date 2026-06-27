@@ -287,6 +287,13 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "params": [
             {
+                "name": "model",
+                "type": "enum",
+                "default": config.TRANSCRIBE_MODEL,
+                "choices": ["tiny", "base", "small", "medium", "large-v3"],
+                "label": "Whisper model",
+            },
+            {
                 "name": "language",
                 "type": "string",
                 "default": "auto",
@@ -521,6 +528,12 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "params": [
             {"name": "name", "type": "string", "default": "reel", "label": "Reel name"},
+            {
+                "name": "chronological",
+                "type": "bool",
+                "default": False,
+                "label": "Chronological order",
+            },
         ],
         "requires": ["videoDir"],
     },
@@ -1236,17 +1249,24 @@ def _exec_transcribe(
     paths = list(src.get("video_paths") or [])
     language = str(params.get("language", "") or "").strip()
     lang = None if language in ("", "auto") else language
+    model_name = str(params.get("model", "") or "").strip() or None
 
     result: Any = None
     if len(paths) >= 2:
         timeline = video.build_source_timeline(paths)
         if timeline is not None:
             result = transcripts.transcribe_timeline(
-                timeline, language=lang, cancel_flag=ctx.cancel_flag
+                timeline,
+                model_name=model_name,
+                language=lang,
+                cancel_flag=ctx.cancel_flag,
             )
     elif paths:
         result = transcripts.transcribe_video(
-            paths[0], language=lang, cancel_flag=ctx.cancel_flag
+            paths[0],
+            model_name=model_name,
+            language=lang,
+            cancel_flag=ctx.cancel_flag,
         )
 
     if result is None:
@@ -1841,6 +1861,25 @@ def _exec_heatmap(
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
+def _reel_start_seconds(rec: Any) -> float:
+    """Earliest start (seconds) of a clip record, for chronological reels.
+
+    Adapter-built records carry pre-resolved ``times`` (H:MM:SS); sheet records
+    resolve lazily from their ``cell`` (matching
+    ``spreadsheet.sort_clips_chronologically``). Unparseable records sort last.
+    """
+    times = rec.get("times")
+    if not times:
+        cell = rec.get("cell")
+        cell_value = str(getattr(cell, "value", "") or "") if cell is not None else ""
+        cleaned, _, _ = utils.parse_cell_annotations(cell_value)
+        times = utils.parse_timestamps(cleaned)
+    if not times:
+        return float("inf")
+    seconds = utils.timestamp_to_seconds(times[0][0])
+    return seconds if seconds is not None else float("inf")
+
+
 def _exec_build_reel(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1850,6 +1889,8 @@ def _exec_build_reel(
     clips_in = inputs.get("clips") or {}
     records = list(clips_in.get("records") or [])
     study = str(clips_in.get("study", "") or "")
+    if params.get("chronological"):
+        records = sorted(records, key=_reel_start_seconds)
     if not records:
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
