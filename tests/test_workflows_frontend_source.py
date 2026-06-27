@@ -369,6 +369,38 @@ def test_lazy_node_results_and_rerun_present():
     assert ".wf-issue-warning" in css
 
 
+def test_watch_dir_trigger_toggle_and_badge():
+    """P6 watch-dir triggers: the toolbar toggle, its hub-owned PUT + single-active
+    mirror, the validate satellite re-gate, and the run-history triggered badge."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfTriggerBtn"' in html
+
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    # Hub owns the toggle (touches state.blueprints + the dedicated trigger PUT).
+    assert "/trigger" in hub
+    assert "function toggleTrigger" in hub
+    assert "WF.syncTriggerButton" in hub  # published for the validate satellite
+    assert '"#wfTriggerBtn"' in hub  # gated alongside the other toolbar controls
+
+    # The validate satellite re-gates the toggle on every edit (can't arm errors).
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "WF.syncTriggerButton" in validate
+
+    # The run history tags auto-launched runs (rides the snapshot's `triggered`).
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "run.triggered" in runs
+    assert "wf-run-triggered" in runs
+    # A triggered run isn't started by this client, so the panel must discover it:
+    # a low-frequency idle poll refreshes the run list so it surfaces live.
+    assert "discoverTick" in runs
+    assert "runsChanged" in runs
+
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-trigger-icon" in css
+    assert ".wf-trigger-armed" in css
+    assert ".wf-run-triggered" in css
+
+
 def test_in_flight_connect_is_torn_down_on_context_change():
     """An armed wire must not outlive its source node: switching blueprints and
     re-laying-out the canvas both cancel the in-flight connection (else its

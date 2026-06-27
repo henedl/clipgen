@@ -191,6 +191,7 @@
     state.selection = [];
     state.selectedEdge = null;
     syncToolbar();
+    syncTriggerButton();
     if (WF.renderAllNodes) WF.renderAllNodes();
     if (WF.applyViewport) WF.applyViewport();
     // Refresh the run panel for the newly-active blueprint (reattaches to an
@@ -271,6 +272,100 @@
       }
     }
     scheduleSave();
+  }
+
+  // ---- Watch-dir trigger (P6) -----------------------------------------------
+  // A single armed blueprint auto-runs when a new participant video lands in the
+  // input dir. Arming is single-active: the server disarms every other blueprint,
+  // mirrored client-side below so the toolbar hint is accurate without a refetch.
+
+  function blueprintArmed(bp) {
+    return !!(
+      bp &&
+      bp.trigger &&
+      bp.trigger.type === "watch_dir" &&
+      bp.trigger.enabled
+    );
+  }
+
+  function activeTriggerArmed() {
+    return blueprintArmed(findBlueprint(state.activeBlueprintId));
+  }
+
+  function armedBlueprint() {
+    for (var i = 0; i < state.blueprints.length; i++) {
+      if (blueprintArmed(state.blueprints[i])) return state.blueprints[i];
+    }
+    return null;
+  }
+
+  function hasVideoSource() {
+    return (state.nodes || []).some(function (n) {
+      return n.type === "video_source";
+    });
+  }
+
+  function toggleTrigger() {
+    var id = state.activeBlueprintId;
+    if (!id) return;
+    var enabling = !activeTriggerArmed();
+    apiPut("api/blueprints/" + encodeURIComponent(id) + "/trigger", {
+      enabled: enabling,
+    })
+      .then(function (res) {
+        if (!res || !res.ok) {
+          showToast((res && res.error) || "Couldn't update auto-run");
+          return;
+        }
+        // Single-active: enabling here disarmed every other blueprint server-side.
+        if (enabling) {
+          state.blueprints.forEach(function (b) {
+            if (b.id !== id && b.trigger && b.trigger.type === "watch_dir") {
+              b.trigger.enabled = false;
+            }
+          });
+        }
+        var bp = findBlueprint(id);
+        if (bp) bp.trigger = res.blueprint.trigger;
+        syncTriggerButton();
+      })
+      .catch(function () {
+        // apiPut throws on a 4xx (e.g. arming a broken graph); the client gate
+        // below normally prevents this, so a generic message is enough.
+        showToast("Couldn't update auto-run");
+      });
+  }
+
+  function syncTriggerButton() {
+    var btn = qs("#wfTriggerBtn");
+    if (!btn) return;
+    var armed = activeTriggerArmed();
+    var v = state.validation;
+    var hasErrors = !!(v && v.errors && v.errors.length);
+    var armable = !hasErrors && hasVideoSource();
+    // Disarming is always allowed; arming needs a ready, valid graph with a source.
+    btn.disabled = !state.ready || (!armed && !armable);
+    btn.classList.toggle("wf-trigger-armed", armed);
+    btn.setAttribute("aria-pressed", armed ? "true" : "false");
+    var label = btn.querySelector(".wf-trigger-label");
+    if (label) label.textContent = armed ? "Auto-running" : "Auto-run on new video";
+    var other = armedBlueprint();
+    if (armed) {
+      btn.title =
+        "Watching the input folder — new videos auto-run this blueprint. Click to stop.";
+    } else if (other) {
+      btn.title =
+        "Auto-run is armed on “" +
+        (other.name || "Untitled") +
+        "”. Click to move it here.";
+    } else if (!hasVideoSource()) {
+      btn.title = "Add a Video Source node to enable auto-run on new videos";
+    } else if (hasErrors) {
+      btn.title = "Fix the errors in the Issues panel to enable auto-run";
+    } else {
+      btn.title =
+        "Auto-run this blueprint when a new video lands in the input folder";
+    }
   }
 
   // ---- Debounced autosave ---------------------------------------------------
@@ -356,6 +451,9 @@
     // selection" must stay disabled until nodes are selected — re-apply its
     // selection gate after the blanket enable on entering the ready state.
     if (state.ready && WF.syncStashButton) WF.syncStashButton();
+    // Blanket re-enable above ignores the trigger's nuanced gate (valid graph +
+    // a Video Source); re-apply it after entering the ready state.
+    if (state.ready) syncTriggerButton();
   }
 
   function setToolbarDisabled(disabled) {
@@ -367,6 +465,7 @@
       "#wfCleanUp",
       "#wfRunBtn",
       "#wfSaveStash",
+      "#wfTriggerBtn",
     ].forEach(function (sel) {
       var node = qs(sel);
       if (node) node.disabled = disabled;
@@ -429,6 +528,8 @@
         if (WF.stopRun) WF.stopRun();
       });
     }
+    var triggerBtn = qs("#wfTriggerBtn");
+    if (triggerBtn) triggerBtn.addEventListener("click", toggleTrigger);
 
     var retryBtn = qs("#wfOverlayRetry");
     if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);
@@ -459,6 +560,9 @@
   WF.openBlueprint = openBlueprint;
   // Published for the nodes satellite (palette grey-out logic shared, not duped).
   WF.nodeContextMet = nodeContextMet;
+  // Published so the validate satellite re-gates the trigger toggle on every edit
+  // (you can't arm a graph with errors), alongside its WF.syncRunButton call.
+  WF.syncTriggerButton = syncTriggerButton;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

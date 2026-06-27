@@ -21,6 +21,7 @@
   var _poller = null; // createPoller fallback when run SSE drops
   var _batchStream = null; // EventSource for the active batch
   var _batchPoller = null; // createPoller fallback when batch SSE drops
+  var _discoverPoller = null; // low-freq poll surfacing runs THIS client didn't start
 
   var TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
 
@@ -690,6 +691,11 @@
 
     var head = el("div", "wf-run-head");
     head.appendChild(el("span", "wf-run-status wf-run-status-" + run.status, run.status));
+    // Auto-launched by the watch-dir trigger (P6) — a bolt chip distinguishes it
+    // from a manual run (margin-right:auto keeps it hugging the status label).
+    if (run.triggered) {
+      head.appendChild(el("span", "wf-run-triggered", "triggered"));
+    }
     var counts = statusCounts(run);
     var total = Object.keys(run.nodeStates || {}).length;
     var done = (counts.completed || 0) + (counts.skipped || 0);
@@ -817,6 +823,54 @@
     syncRunButton();
   }
 
+  // ---- Discover externally-started runs (P6 watch-dir triggers) -------------
+  // A run can appear without this client starting it — the directory watcher
+  // auto-launches one when a new video lands. The run panel otherwise only
+  // refreshes on blueprint-open, so such runs would never surface live. A low-
+  // frequency poll picks them up; refreshRuns() then reattaches + streams the
+  // live one. Gated to idle so it never tears down a stream we're already on.
+
+  // True if the run list for the active blueprint differs from what we hold
+  // (a new run id, or a status change) — only then is a full refresh worth it.
+  function runsChanged(latest) {
+    var cur = state.runs || [];
+    if (latest.length !== cur.length) return true;
+    var byId = {};
+    cur.forEach(function (r) {
+      byId[r.id] = r.status;
+    });
+    for (var i = 0; i < latest.length; i++) {
+      if (byId[latest[i].id] !== latest[i].status) return true;
+    }
+    return false;
+  }
+
+  function discoverTick() {
+    if (document.hidden || !state.activeBlueprintId) return;
+    // An active stream already keeps us current; don't disrupt it.
+    if (activeRunInFlight() || activeBatchInFlight()) return;
+    if (_stream || _poller || _batchStream || _batchPoller) return;
+    apiGet("api/runs?blueprintId=" + encodeURIComponent(state.activeBlueprintId))
+      .then(function (res) {
+        var latest = (res && res.runs) || [];
+        if (runsChanged(latest)) refreshRuns(); // reattaches to any live run
+      })
+      .catch(function () {});
+  }
+
+  function startDiscover() {
+    if (_discoverPoller) return;
+    _discoverPoller = createPoller(discoverTick, 5000);
+    _discoverPoller.start();
+  }
+
+  function stopDiscover() {
+    if (_discoverPoller) {
+      _discoverPoller.stop();
+      _discoverPoller = null;
+    }
+  }
+
   // Pause/resume the live streams when the tab is hidden (the poller already
   // self-pauses; the EventSource is reopened on return if work is in flight).
   function onVisibility() {
@@ -836,6 +890,7 @@
   function initRuns() {
     document.addEventListener("visibilitychange", onVisibility);
     setRunningUI(false);
+    startDiscover();
   }
 
   // ---- Satellite interface ----

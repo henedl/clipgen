@@ -469,6 +469,64 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/rectangle-stack.svg");
 }
 
+/* ---- Watch-dir trigger toggle (P6) ---- */
+
+#wfTriggerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.wf-trigger-icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-image: url("icons/bolt-slash.svg");
+  -webkit-mask-image: url("icons/bolt-slash.svg");
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+#wfTriggerBtn.wf-trigger-armed {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+#wfTriggerBtn.wf-trigger-armed .wf-trigger-icon {
+  mask-image: url("icons/bolt.svg");
+  -webkit-mask-image: url("icons/bolt.svg");
+}
+
+/* Run-history chip marking an auto-launched (triggered) run. */
+.wf-run-triggered {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-right: auto; /* hug the status label; push meta/rerun to the right */
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.wf-run-triggered::before {
+  content: "";
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-image: url("icons/bolt.svg");
+  -webkit-mask-image: url("icons/bolt.svg");
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
 /* ---- Canvas empty-state ---- */
 
 .wf-canvas-empty {

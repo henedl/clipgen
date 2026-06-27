@@ -48,6 +48,12 @@
                 title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
         <button id="wfStopBtn" class="btn btn-small hidden" type="button"
                 title="Cancel the running workflow">Stop</button>
+        <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
+                aria-pressed="false"
+                title="Auto-run this blueprint when a new video lands in the input folder">
+          <span class="wf-trigger-icon" aria-hidden="true"></span>
+          <span class="wf-trigger-label">Auto-run on new video</span>
+        </button>
       </header>
       <div id="wfCanvas" class="wf-canvas">
         <!-- Wire layer lives INSIDE #wfWorld so it shares the cards' (transformed)

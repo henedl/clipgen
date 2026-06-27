@@ -3863,6 +3863,14 @@ def start_combined_server(
     the Google Sheets list endpoint reports authenticated and skips the
     "Connect Google" CTA in the Start overlay.
     """
+    # The web server has no interactive console: every request/run/background
+    # task executes on a Flask/daemon thread with no attached stdin. Force
+    # non-interactive resolution so a missing source video (or any pipeline
+    # prompt) is skipped-and-reported instead of blocking the thread forever on
+    # ``input()`` — this previously hung Studio generate and watch-dir-triggered
+    # workflow runs alike.
+    utils.NO_INPUT_MODE = True
+
     combined = build_combined_app(
         worksheet=worksheet,
         default_page=default_page,

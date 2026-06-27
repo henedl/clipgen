@@ -732,6 +732,11 @@ def test_participant_id_from_source_name():
     assert utils.participant_id_from_source_name("study_P01-2.mp4") == "P01"
     assert utils.participant_id_from_source_name("my-study_G02-10.mp4") == "G02"
     assert utils.participant_id_from_source_name("random.mp4") is None
+    # A Finder/Explorer duplicate ("… copy.mp4") yields a whitespace id, which is
+    # never a real participant — reject it so it can't become a phantom
+    # participant or auto-launch a watch-dir-triggered run for a bogus id.
+    assert utils.participant_id_from_source_name("study_P03 copy.mp4") is None
+    assert utils.participant_id_from_source_name("study_P03 copy 2.mp4") is None
 
 
 def test_numbered_parts_are_contiguous():
