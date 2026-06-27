@@ -9,6 +9,7 @@ Screenspace scans are monkeypatched so no model/subprocess/network is touched.
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import config
@@ -120,6 +121,47 @@ def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
         "summarize", _ctx(tmp_path), {"transcript": {"segments": [{"text": "x"}]}}, {}
     )
     assert out["summary"] == "the summary"
+
+
+def test_thinking_executors_thread_model_param(tmp_path, monkeypatch):
+    """The ``model`` node param reaches each thinking agent; blank → None."""
+    import ollama_client
+    import thinking_agents
+
+    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    seen: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        thinking_agents,
+        "summarize_transcript",
+        lambda segments, **kw: seen.__setitem__("summary", kw.get("model")) or "s",
+    )
+    monkeypatch.setattr(
+        thinking_agents,
+        "find_citations",
+        lambda summary, segments, **kw: (
+            seen.__setitem__("citations", kw.get("model")) or []
+        ),
+    )
+    monkeypatch.setattr(
+        thinking_agents,
+        "find_friction_moments",
+        lambda summary, segments, candidates, **kw: (
+            seen.__setitem__("friction", kw.get("model")) or []
+        ),
+    )
+
+    ctx = _ctx(tmp_path)
+    tr = {"transcript": {"segments": [{"text": "x"}]}}
+    segs = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": {}}
+
+    _run("summarize", ctx, tr, {"model": "llama3"})
+    _run("citations", ctx, {"summary": "s", "segments": segs}, {"model": "llama3"})
+    _run("friction", ctx, {"segments": segs}, {})  # blank → None
+
+    assert seen["summary"] == "llama3"
+    assert seen["citations"] == "llama3"
+    assert seen["friction"] is None
 
 
 # ---- Screenspace ----

@@ -185,6 +185,17 @@ class NodeType(TypedDict):
     execute: NotRequired[Callable[..., dict[str, Any]]]
 
 
+# Shared by the three Ollama thinking nodes: a free-text override of the model
+# name (blank → the configured default). A ``string`` rather than ``enum`` because
+# the installed Ollama models are environment-specific and not known server-side.
+_OLLAMA_MODEL_PARAM: ParamSpec = {
+    "name": "model",
+    "type": "string",
+    "default": "",
+    "label": "Ollama model (blank = default)",
+}
+
+
 # Curated v1 node set (plans/WORKFLOWS-PLAN.md). Keyed by id so the frontend can
 # both iterate (palette) and look up a placed node's type. Ports/params may be
 # refined when the M3 executors are wired against the underlying functions.
@@ -323,7 +334,7 @@ NODE_TYPES: dict[str, NodeType] = {
         "category": "Thinking",
         "inputs": [{"name": "transcript", "type": "transcript"}],
         "outputs": [{"name": "summary", "type": "summary"}],
-        "params": [],
+        "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
     "citations": {
@@ -337,7 +348,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "segments", "type": "segments"},
         ],
         "outputs": [{"name": "citations", "type": "citations"}],
-        "params": [],
+        "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
     "friction": {
@@ -351,7 +362,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "summary", "type": "summary", "optional": True},
         ],
         "outputs": [{"name": "friction", "type": "friction"}],
-        "params": [],
+        "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
     # ---- Screenspace ----
@@ -1291,7 +1302,7 @@ def _exec_summarize(
     if not ollama_client.is_available():
         return {"summary": ""}
     summary = thinking_agents.summarize_transcript(
-        segments, cancel_event=ctx.cancel_event
+        segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
     return {"summary": summary or ""}
 
@@ -1308,7 +1319,10 @@ def _exec_citations(
     if not ollama_client.is_available():
         return {"citations": []}
     cites = thinking_agents.find_citations(
-        summary, segments, cancel_event=ctx.cancel_event
+        summary,
+        segments,
+        model=params.get("model") or None,
+        cancel_event=ctx.cancel_event,
     )
     return {"citations": cites or []}
 
@@ -1328,7 +1342,11 @@ def _exec_friction(
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored)
     moments = thinking_agents.find_friction_moments(
-        summary, segments, candidates, cancel_event=ctx.cancel_event
+        summary,
+        segments,
+        candidates,
+        model=params.get("model") or None,
+        cancel_event=ctx.cancel_event,
     )
     return {"friction": moments or []}
 
