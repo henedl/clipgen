@@ -426,3 +426,14 @@ def test_in_flight_connect_is_torn_down_on_context_change():
     assert "WF.cancelConnect = endConnect" in wires
     assert "WF.cancelConnect()" in hub  # openBlueprint
     assert "WF.cancelConnect()" in canvas  # autoArrange
+
+
+def test_palette_search_filters_nodes():
+    """The palette has a search box that filters nodes by label/description/category."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfPaletteSearch"' in html
+    assert 'autocomplete="off"' in html  # text input must not browser-autofill
+    assert "paletteNodeMatches" in hub
+    # The search input re-renders the palette on every keystroke.
+    assert 'qs("#wfPaletteSearch")' in hub

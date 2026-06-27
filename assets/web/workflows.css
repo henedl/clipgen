@@ -76,10 +76,26 @@ body[data-frontend="workflows"] {
   border-bottom: 1px solid var(--border);
 }
 
+.wf-palette-search {
+  margin: var(--space-3) var(--space-4) 0;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+
 .wf-palette,
 .wf-runs {
   padding: var(--space-4);
   flex: 1;
+}
+
+.wf-palette-empty {
+  font-size: var(--text-sm);
+  color: var(--fg-faint);
 }
 
 .wf-empty-hint {

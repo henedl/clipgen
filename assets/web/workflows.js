@@ -126,15 +126,33 @@
     return item;
   }
 
+  // A node matches the palette search when the query is empty or a substring of
+  // its label, description, or category (all case-insensitive).
+  function paletteNodeMatches(node, query) {
+    if (!query) return true;
+    var hay = (
+      (node.label || "") +
+      " " +
+      (node.description || "") +
+      " " +
+      (node.category || "")
+    ).toLowerCase();
+    return hay.indexOf(query) !== -1;
+  }
+
   function renderPalette() {
     var palette = qs("#wfPalette");
     if (!palette || !state.catalog) return;
     palette.innerHTML = "";
+    var searchInput = qs("#wfPaletteSearch");
+    var query = (searchInput ? searchInput.value : "").trim().toLowerCase();
     // Group by category, preserving catalog order (per the perf rule, build a
-    // DocumentFragment and append once).
+    // DocumentFragment and append once). A group label is only emitted when at
+    // least one of its nodes survives the search filter.
     var order = [];
     var byCat = {};
     state.catalog.forEach(function (node) {
+      if (!paletteNodeMatches(node, query)) return;
       var cat = node.category || "Other";
       if (!byCat[cat]) {
         byCat[cat] = [];
@@ -149,6 +167,9 @@
         frag.appendChild(buildPaletteItem(node));
       });
     });
+    if (!order.length && query) {
+      frag.appendChild(el("div", "wf-palette-empty", "No matching nodes"));
+    }
     palette.appendChild(frag);
   }
 
@@ -510,6 +531,10 @@
       nameInput.addEventListener("input", function () {
         renameActive(nameInput.value);
       });
+    }
+    var paletteSearch = qs("#wfPaletteSearch");
+    if (paletteSearch) {
+      paletteSearch.addEventListener("input", renderPalette);
     }
     var newBtn = qs("#wfNewBlueprint");
     if (newBtn) newBtn.addEventListener("click", createBlueprint);
