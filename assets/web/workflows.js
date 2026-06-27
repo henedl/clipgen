@@ -98,6 +98,8 @@
   function buildPaletteItem(node) {
     var item = el("div", "wf-palette-item", node.label);
     item.setAttribute("data-domain", node.domain || "");
+    // Brief description tooltip for every palette row (mirrors the on-card `?`).
+    if (node.description) item.title = node.description;
     if (nodeContextMet(node)) {
       item.draggable = true;
       item.dataset.nodeType = node.id;
@@ -112,7 +114,9 @@
       });
     } else {
       item.classList.add("disabled");
-      item.title = "Requires " + ((node.requires || []).join(", ") || "context");
+      // Disabled rows still show the description, plus what context they need.
+      var req = "Requires " + ((node.requires || []).join(", ") || "context");
+      item.title = node.description ? node.description + " — " + req : req;
     }
     return item;
   }
