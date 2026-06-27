@@ -462,6 +462,30 @@
     WF.scheduleSave();
   }
 
+  // ---- Focus a node (from the validation panel) ----
+
+  // Select a node and pan it to the canvas centre — the Issues-panel rows call
+  // this so clicking a finding reveals the offending card.
+  function focusNode(id) {
+    var node = findNode(id);
+    if (!node) return;
+    state.selectedEdge = null;
+    state.selection = [id];
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    var canvas = qs("#wfCanvas");
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var card = qs('.wf-node[data-node-id="' + id + '"]');
+    var vp = state.viewport;
+    var w = card ? card.offsetWidth : 200;
+    var h = card ? card.offsetHeight : 120;
+    var cx = (node.position.x || 0) + w / 2;
+    var cy = (node.position.y || 0) + h / 2;
+    vp.x = rect.width / 2 - cx * vp.zoom;
+    vp.y = rect.height / 2 - cy * vp.zoom;
+    applyViewport();
+  }
+
   // ---- Boot ----
 
   function initCanvas() {
@@ -492,4 +516,6 @@
   WF.findNode = findNode;
   // Consumed by the stashes satellite (fresh node ids on instantiate).
   WF.randomId = randomId;
+  // Consumed by the validation satellite (reveal a node from an Issues row).
+  WF.focusNode = focusNode;
 })();

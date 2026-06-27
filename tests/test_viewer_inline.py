@@ -1,4 +1,8 @@
+from pathlib import Path
+
 import viewer
+
+_VIEWER_JS = Path(__file__).resolve().parent.parent / "assets" / "web" / "viewer.js"
 
 
 def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
@@ -29,3 +33,11 @@ def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     assert "<style>" in html
     assert "<script defer>" in html
     assert "window.CLIPGEN_DATA" in html
+
+
+def test_viewer_renders_reels_from_data():
+    # Regression: reels live in their own `data.reels` slot (no start/end), so the
+    # viewer must surface them as playable cards — else a Build Reel → Viewer
+    # workflow (or CLI `reel --viewer`) produces an empty viewer.
+    src = _VIEWER_JS.read_text(encoding="utf-8")
+    assert "data.reels" in src

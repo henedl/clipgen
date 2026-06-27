@@ -139,6 +139,22 @@ def test_catalog_participants_filtered_to_has_video(wf_client, monkeypatch):
     assert ctx["videoDir"] is True
 
 
+def test_catalog_serves_required_param_flag(wf_client):
+    # P5: params whose empty value is a guaranteed no-op carry required:true, so
+    # the client-side validation panel can flag them and disable Run.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    assert _param("find_word", "word").get("required") is True
+    assert _param("video_source", "participant").get("required") is True
+    assert _param("ss_text", "search_string").get("required") is True
+    # A param with a sane default stays optional (no required flag).
+    assert "required" not in _param("find_word", "pad")
+
+
 def test_catalog_serves_adapter_pairs(wf_client):
     # The catalog endpoint serves the runner's ADAPTERS table (top-level, so the
     # context-shape assertion above is unaffected) as JSON-safe [src, dst] pairs,
@@ -725,3 +741,56 @@ def test_batch_children_survive_run_history_cap(wf_client, monkeypatch):
         assert wf_client.get(f"/workflows/api/runs/{child['runId']}").status_code == 200
     # The oldest loose runs were evicted to make room (cap held by dropping units).
     assert wf_client.get(f"/workflows/api/runs/{loose_ids[0]}").status_code == 404
+
+
+# ---- Per-node result sidecars (P5) ----
+
+
+def test_node_result_endpoint_serves_sidecar(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    # A lone make_clips node completes with an (empty) artifacts result — an
+    # inspectable port, so a sidecar is written and flagged on the snapshot.
+    bp = _make_blueprint(
+        wf_client, nodes=[{"id": "m", "type": "make_clips", "params": {}}]
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp}).get_json()[
+        "run"
+    ]
+    final = _wait_terminal(wf_client, run["id"])
+    assert final["nodeStates"]["m"]["hasResult"] is True
+
+    res = wf_client.get(f"/workflows/api/runs/{run['id']}/nodes/m/result")
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert "artifacts" in payload["result"]
+    # Unknown node / unknown run → 404 (no sidecar on disk).
+    assert (
+        wf_client.get(f"/workflows/api/runs/{run['id']}/nodes/ghost/result").status_code
+        == 404
+    )
+    assert wf_client.get("/workflows/api/runs/nope/nodes/m/result").status_code == 404
+
+
+def test_node_result_sidecars_pruned_with_history(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setattr(workflows_server, "_MAX_RUN_HISTORY", 2, raising=False)
+    bp = _make_blueprint(
+        wf_client, nodes=[{"id": "m", "type": "make_clips", "params": {}}]
+    )
+    base = utils.get_effective_output_dir()
+    run_ids = []
+    for _ in range(3):
+        r = wf_client.post("/workflows/api/runs", json={"blueprintId": bp}).get_json()[
+            "run"
+        ]
+        _wait_terminal(wf_client, r["id"])
+        run_ids.append(r["id"])
+    # The oldest run was evicted past the cap; its sidecar dir is pruned in
+    # lockstep, while the newest survives.
+    assert not workflows.run_results_dir(base, run_ids[0]).exists()
+    assert workflows.run_results_dir(base, run_ids[-1]).exists()
+    assert (
+        wf_client.get(f"/workflows/api/runs/{run_ids[0]}/nodes/m/result").status_code
+        == 404
+    )

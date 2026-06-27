@@ -40,6 +40,8 @@ phase — kept in the schema so the seam exists without building anything.
 from __future__ import annotations
 
 import copy
+import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field
@@ -159,6 +161,9 @@ class ParamSpec(TypedDict):
     choices: NotRequired[list[Any]]
     min: NotRequired[float]
     max: NotRequired[float]
+    # P5: an empty value here is a guaranteed no-op/failure — the pre-run
+    # validation panel surfaces it as an error and disables Run.
+    required: NotRequired[bool]
 
 
 class NodeType(TypedDict):
@@ -196,6 +201,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "participant",
                 "default": "",
                 "label": "Participant",
+                "required": True,
             },
         ],
         "requires": ["videoDir"],
@@ -230,6 +236,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "",
                 "label": "Ranges (e.g. 1:23-1:45, 2:00-2:30)",
+                "required": True,
             },
         ],
         "requires": [],
@@ -283,6 +290,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "",
                 "label": "Word or phrase",
+                "required": True,
             },
             {
                 "name": "pad",
@@ -583,6 +591,7 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "type": "string",
             "default": "",
             "label": "Search text",
+            "required": True,
         },
         {
             "name": "fuzzy_threshold",
@@ -1810,11 +1819,24 @@ def _exec_timeline_viewer(
     import viewer
 
     artifacts_in = inputs.get("artifacts") or {}
-    artifacts = list(artifacts_in.get("artifacts") or [])
+    incoming = list(artifacts_in.get("artifacts") or [])
     study = str(artifacts_in.get("study", "") or "")
+    # build_reel emits reel records (carrying ``components``, no start/end) onto
+    # the same ``artifacts`` wire as clip/screen/gif artifacts. The viewer renders
+    # them from separate slots — timeline artifacts on the timeline, reels in the
+    # Attachments pane — so split them out here (otherwise reels land in the
+    # timeline slot, get filtered for lack of start/end, and the viewer is empty).
+    reels = [
+        a for a in incoming if isinstance(a, dict) and a.get("components") is not None
+    ]
+    artifacts = [
+        a
+        for a in incoming
+        if not (isinstance(a, dict) and a.get("components") is not None)
+    ]
     ss_events = (inputs.get("events") or {}).get("events") or None
     data = viewer.finalize_timeline_data(
-        artifacts, study=study, screenspace_events=ss_events
+        artifacts, reels=reels or None, study=study, screenspace_events=ss_events
     )
     path = viewer.generate_timeline_viewer(data, output_basename="workflow_viewer.html")
     return {"viewer": {"path": str(path) if path else None}}
@@ -2216,6 +2238,97 @@ def _node_result_summary(result: Any) -> dict[str, Any]:
     return {port: _summarize_value(val) for port, val in result.items()}
 
 
+# ---- Per-node result sidecars (P5) ----------------------------------------
+#
+# The snapshot ships only counts/pointers; the *full* inspectable result is
+# written to ``<output_dir>/workflow_runs/<run_id>/<node_id>.json`` so the
+# run-history UI can lazily fetch and render it after the runner is evicted.
+
+# Output port types worth persisting. Plumbing types (``clipRecords`` carrying
+# gspread ``Cell``s, raw ``video``/``region``/``timeRange`` handles, ``control``)
+# are dropped — both because they aren't useful to inspect and because excluding
+# ``clipRecords`` dodges serializing a non-JSON ``Cell``.
+_INSPECTABLE_PORT_TYPES = frozenset(
+    {
+        "artifacts",
+        "events",
+        "segments",
+        "summary",
+        "citations",
+        "friction",
+        "manifest",
+        "viewerHtml",
+        "scalar",
+    }
+)
+
+
+def run_results_dir(output_dir: Path | str, run_id: str) -> Path:
+    """Directory holding one run's per-node result sidecars (P5)."""
+    return Path(output_dir) / "workflow_runs" / run_id
+
+
+def _project_inspectable(port_type: str, value: Any) -> Any:
+    """Strip a port value down to its inspectable (JSON-safe) projection.
+
+    The only heavy/non-serializable rider is an ``events`` value's
+    ``raw_results`` — per-frame scoring kept for the heatmap node, which can
+    carry numpy arrays and is large. Drop it; the rest of every inspectable type
+    is already JSON-safe (paths, counts, text, timestamps).
+    """
+    if port_type == "events" and isinstance(value, dict):
+        return {k: v for k, v in value.items() if k != "raw_results"}
+    return value
+
+
+def _inspectable_result(node_type_id: str, result: Any) -> dict[str, Any]:
+    """Keep only the result ports whose declared type is inspectable (projected)."""
+    if not isinstance(result, dict):
+        return {}
+    node_type = NODE_TYPES.get(node_type_id)
+    out_types = {p["name"]: p["type"] for p in (node_type or {}).get("outputs", [])}
+    inspectable: dict[str, Any] = {}
+    for port, val in result.items():
+        ptype = out_types.get(port)
+        if ptype in _INSPECTABLE_PORT_TYPES:
+            inspectable[port] = _project_inspectable(ptype, val)
+    return inspectable
+
+
+def write_node_sidecar(
+    output_dir: Path | str, run_id: str, node_id: str, node_type_id: str, result: Any
+) -> bool:
+    """Atomically write a node's inspectable result to its run sidecar.
+
+    Returns True iff a sidecar file now exists for this node (i.e. it had at
+    least one inspectable port). JSON-sanitizes via :func:`utils.sanitize_floats`
+    (non-finite floats / numpy scalars). A bad ``node_id`` (path separators) or
+    an empty inspectable payload writes nothing and returns False.
+    """
+    if not node_id or node_id != os.path.basename(node_id) or node_id in (".", ".."):
+        return False
+    payload = _inspectable_result(node_type_id, result)
+    if not payload:
+        return False
+    path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
+    tmp = path.with_suffix(".json.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(
+            json.dumps(utils.sanitize_floats(payload), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+        return True
+    except (OSError, TypeError, ValueError) as exc:
+        utils.warning_print(f"workflow sidecar write failed ({node_id}): {exc}")
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+
+
 class WorkflowRunner:
     """Executes one blueprint DAG; ``run()`` is the daemon-thread target.
 
@@ -2256,6 +2369,9 @@ class WorkflowRunner:
             for n in self.nodes
         }
         self._results: dict[str, dict[str, Any]] = {}
+        # Node ids with an inspectable result sidecar on disk (P5); surfaced as
+        # ``hasResult`` in the snapshot so the UI knows it can fetch on demand.
+        self._sidecars: set[str] = set()
         self.status = RUN_STATUS_QUEUED
         self.started_at: str | None = None
         self.completed_at: str | None = None
@@ -2412,6 +2528,13 @@ class WorkflowRunner:
                 result = executor(self.ctx, inputs, params)
                 with self._lock:
                     self._results[node_id] = result or {}
+                # Persist the inspectable result so the run-history UI can fetch
+                # it on demand even after this runner is evicted from memory.
+                if write_node_sidecar(
+                    self.ctx.output_dir, self.run_id, node_id, node["type"], result
+                ):
+                    with self._lock:
+                        self._sidecars.add(node_id)
                 self._set_node(
                     node_id,
                     status=NODE_STATUS_COMPLETED,
@@ -2442,7 +2565,10 @@ class WorkflowRunner:
         """JSON-safe run record for the API/SSE/manifest (counts + status only)."""
         with self._lock:
             node_states = {
-                nid: {k: v for k, v in st.items() if not k.startswith("_")}
+                nid: {
+                    **{k: v for k, v in st.items() if not k.startswith("_")},
+                    "hasResult": nid in self._sidecars,
+                }
                 for nid, st in self.node_states.items()
             }
             results = {

@@ -81,6 +81,9 @@
     </section>
 
     <aside id="wfRunPanel" aria-label="Run and results">
+      <!-- Pre-run validation (P5): aggregates errors/warnings; errors disable Run.
+           Hidden when the graph is clean. Each row links to its node. -->
+      <div id="wfValidation" class="wf-validation hidden"></div>
       <div class="wf-sidebar-header">Runs</div>
       <div id="wfRuns" class="wf-runs">
         <p class="wf-empty-hint">Press Run to execute this workflow. Per-node progress
@@ -107,5 +110,6 @@
   <script src="workflows-wires.js"></script>
   <script src="workflows-runs.js"></script>
   <script src="workflows-stashes.js"></script>
+  <script src="workflows-validate.js"></script>
 </body>
 </html>

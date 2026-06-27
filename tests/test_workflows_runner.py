@@ -142,6 +142,77 @@ def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
     assert {n["status"] for n in runner.node_states.values()} == {"completed"}
 
 
+# ---- Per-node result sidecars (P5) ----
+
+
+def test_runner_writes_node_result_sidecars(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    runner = _runner(
+        tmp_path,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "t", "type": "transcribe", "params": {}},
+            {"id": "s", "type": "summarize", "params": {}},
+        ],
+        edges=[
+            {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+            {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+        ],
+    )
+    runner.run()
+    rdir = workflows.run_results_dir(tmp_path, "run_test")
+    # Inspectable nodes (segments, summary) get a sidecar; the plumbing-only
+    # video source (video/participant ports) does not.
+    assert (rdir / "t.json").exists()
+    assert (rdir / "s.json").exists()
+    assert not (rdir / "v.json").exists()
+    # The snapshot flags which nodes have a fetchable result.
+    states = runner.snapshot()["nodeStates"]
+    assert states["t"]["hasResult"] is True
+    assert states["s"]["hasResult"] is True
+    assert states["v"]["hasResult"] is False
+    # The sidecar holds the inspectable payload, JSON-loadable.
+    assert "summary" in json.loads((rdir / "s.json").read_text(encoding="utf-8"))
+
+
+def test_inspectable_result_projects_and_filters_ports():
+    # ss_text declares one output port `events` (inspectable). The heavy
+    # raw_results rider is projected out; the events list survives.
+    keep = workflows._inspectable_result(
+        "ss_text",
+        {"events": {"events": [{"time_in": 1}], "source": {}, "raw_results": [1, 2]}},
+    )
+    assert keep["events"]["events"] == [{"time_in": 1}]
+    assert "raw_results" not in keep["events"]
+    # sheet_selection outputs `clips` (clipRecords) — dropped, so gspread Cells
+    # never reach a sidecar.
+    assert (
+        workflows._inspectable_result(
+            "sheet_selection", {"clips": {"records": ["x"], "study": "s"}}
+        )
+        == {}
+    )
+
+
+def test_write_node_sidecar_guards_and_empty_payload(tmp_path):
+    arts = {"artifacts": {"artifacts": [], "study": "", "count": 0}}
+    # A node id that isn't a bare basename is rejected (no file, returns False).
+    assert not workflows.write_node_sidecar(
+        tmp_path, "run_x", "../escape", "make_clips", arts
+    )
+    # A node with no inspectable port writes nothing.
+    assert not workflows.write_node_sidecar(
+        tmp_path, "run_x", "v", "video_source", {"video": {"participant": "P01"}}
+    )
+    # A real inspectable payload writes a loadable sidecar.
+    assert workflows.write_node_sidecar(tmp_path, "run_x", "m", "make_clips", arts)
+    written = workflows.run_results_dir(tmp_path, "run_x") / "m.json"
+    assert "artifacts" in json.loads(written.read_text(encoding="utf-8"))
+
+
 def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
     # Force the summarize executor to raise; the run is 'failed' and any
     # downstream node is 'skipped' (none here, but the failed status propagates).

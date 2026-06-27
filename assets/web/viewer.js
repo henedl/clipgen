@@ -102,12 +102,17 @@
       var card = document.createElement("div");
       card.className = "attachment-card";
       var media;
-      var isVideo = a.type === "timelapse" && /\.mp4$/i.test(a.file);
+      // Reels (from a Build Reel node) are full mp4s, played with sound and no
+      // loop; timelapse mp4s loop muted. Both render as a <video>.
+      var isVideo =
+        (a.type === "timelapse" || a.type === "reel") && /\.mp4$/i.test(a.file);
       if (isVideo) {
         media = document.createElement("video");
         media.controls = true;
-        media.loop = true;
-        media.muted = true;
+        if (a.type === "timelapse") {
+          media.loop = true;
+          media.muted = true;
+        }
         media.src = a.file;
       } else {
         media = document.createElement("img");
@@ -722,7 +727,24 @@
       return a.id && a.file;
     });
     state.attachments = rawArtifacts.filter(isAttachmentType);
-    renderAttachments(state.attachments);
+    // Reels (from a Build Reel node) live in their own `reels` slot and have no
+    // start/end, so they never fit the timeline. Surface them as playable cards
+    // in the Attachments pane (mirrors the CLI, where a reel-only run would
+    // otherwise produce an empty viewer too).
+    var reelCards = (data.reels || [])
+      .filter(function (r) {
+        return r && r.file;
+      })
+      .map(function (r) {
+        return {
+          id: r.id || "reel-" + r.file,
+          type: "reel",
+          file: r.file,
+          description: r.description || "Reel",
+          participant: r.participant || "",
+        };
+      });
+    renderAttachments(state.attachments.concat(reelCards));
 
     state.artifacts = rawArtifacts.filter(function (a) {
       return !isAttachmentType(a) && (a.start != null || a.end != null);
@@ -731,7 +753,7 @@
     });
 
     if (state.artifacts.length === 0) {
-      showEmptyState();
+      showEmptyState(state.attachments.length > 0 || reelCards.length > 0);
       return;
     }
 
@@ -780,9 +802,20 @@
     return types;
   }
 
-  function showEmptyState() {
+  function showEmptyState(hasOtherOutputs) {
     var empty = qs("#emptyState");
-    if (empty) empty.classList.remove("hidden");
+    if (empty) {
+      // The Attachments pane sits outside #layout and stays visible, so when a
+      // reel/timelapse/heatmap is the only output, point the reader to it rather
+      // than claiming nothing was generated.
+      var p = empty.querySelector("p");
+      if (p) {
+        p.textContent = hasOtherOutputs
+          ? "No timeline clips for this run — see the outputs above."
+          : "No artifacts were generated for this run.";
+      }
+      empty.classList.remove("hidden");
+    }
     var layout = qs("#layout");
     if (layout) layout.style.display = "none";
     var tp = qs("#timelinePane");

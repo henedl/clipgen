@@ -840,6 +840,89 @@ body[data-frontend="workflows"] {
   transition: width var(--duration-fast);
 }
 
+/* ---- Pre-run validation panel (P5) ---- */
+
+.wf-validation {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.wf-validation-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.wf-validation-title {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+
+.wf-validation-count {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+.wf-issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wf-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.wf-issue.clickable {
+  cursor: pointer;
+}
+
+.wf-issue.clickable:hover {
+  background: var(--bg-hover);
+}
+
+.wf-issue-dot {
+  flex: 0 0 auto;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.3em;
+  border-radius: var(--radius-full);
+}
+
+.wf-issue-error .wf-issue-dot {
+  background: var(--severity-high);
+}
+
+.wf-issue-warning .wf-issue-dot {
+  background: var(--severity-medium);
+}
+
+.wf-issue-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wf-issue-msg {
+  color: var(--fg);
+}
+
+.wf-issue-node {
+  color: var(--fg-faint);
+}
+
 /* ---- Run/results panel ---- */
 
 .wf-run-card {
@@ -938,6 +1021,88 @@ body[data-frontend="workflows"] {
   background: var(--bg-hover);
   border-radius: var(--radius-full);
   color: var(--fg-muted);
+}
+
+/* Re-run button on a terminal run card (P5). */
+.wf-run-rerun {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  padding: 0 var(--space-2);
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.wf-run-rerun:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.wf-run-rerun:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Expandable per-node result rows + lazily-fetched result panel (P5). */
+.wf-run-node-expandable {
+  cursor: pointer;
+}
+
+.wf-run-node-expandable .wf-run-node-label::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: var(--space-1);
+  color: var(--fg-faint);
+  font-size: 0.85em;
+}
+
+.wf-result-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2) var(--space-3);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+}
+
+.wf-result-port-name {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.wf-result-port-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wf-result-line {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.wf-result-item {
+  font-size: var(--text-xs);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-result-more {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+.wf-result-text {
+  font-size: var(--text-xs);
+  color: var(--fg);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Batch card (P3: whole-study fan-out) — a run card with an accent edge so the

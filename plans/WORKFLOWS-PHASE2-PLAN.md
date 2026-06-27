@@ -44,10 +44,13 @@ side id remap), and the read-only built-in recipes served from `workflows.BUILTI
    `titlecard_duration` params; `highlights` selector node added. (Compression still demand-driven.)
 4. ~~**One participant per run** — no whole-study batch.~~ ✅ **Resolved (P3).** "Run all" fans the
    blueprint out one sequential run per participant, grouped under one batch card.
-5. **Thin run history**; large per-node results stripped with no fetch-on-demand path. *(Partially
-   addressed: P3 evicts terminal runners from `_runs`, fixing the in-memory leak; the lazy sidecar
-   fetch-on-demand path is still P5.)*
-6. **No pre-run validation surfacing** — missing params / unmet context only fail at runtime.
+5. ~~**Thin run history**; large per-node results stripped with no fetch-on-demand path.~~ ✅
+   **Resolved (P5).** Inspectable per-node results are written to
+   `<output_dir>/workflow_runs/<run_id>/<node_id>.json` sidecars and lazily fetched on row-expand;
+   pruned in lockstep with the 50-run cap. (P3 already evicted terminal runners.)
+6. ~~**No pre-run validation surfacing** — missing params / unmet context only fail at runtime.~~ ✅
+   **Resolved (P5).** A client-side Issues panel aggregates cycle / unwired-input / unmet-context /
+   empty-required-param errors (disabling Run) plus warnings; recomputed on every edit.
 
 ---
 
@@ -138,25 +141,31 @@ value (a list) are needed. Keep "All" as a convenience shortcut.
   id, rewrites edges through the id map, and offsets positions. Non-destructive — built-ins carry a
   `builtin:true` flag and the CRUD routes reject renaming/deleting them (403).
 
-### P5 — Authoring & run-history UX *(designed; land the storage contract with P2)*
-- **Pre-run validation panel** (client-side) — aggregates today's scattered cues; **errors disable
-  Run, warnings don't**. *Errors:* cycle (port `topo_order`'s Kahn loop to JS; the server 400 stays a
-  backstop) · unwired required input (`requiredInputsSatisfied`) · unmet context (`nodeContextMet`) ·
-  **empty required param** (new `required:true` flag on `ParamSpec`, e.g. `find_word.word`,
-  `video_source.participant`, search strings). *Warnings:* heatmap needs a template/flow/change
-  upstream (data-driven `requiresUpstream` declaration) · orphan node · gate with no scalar source.
-  Recompute on **every edit** (edge/param/blueprint change), not just load; each row links to its node.
-- **Large-result sidecar storage** — write *inspectable* node outputs (`artifacts` w/ paths, `events`,
-  `segments`, `summary`/`citations`/`friction`, reel `manifest`, `viewerHtml`; **not** plumbing types —
-  which also dodges serializing clipRecords' gspread `Cell`) to
-  `<output_dir>/workflow_runs/<run_id>/<node_id>.json`. The **runner** writes on each node completion
-  (JSON-sanitized: drop non-finite floats / numpy / `Cell`); the snapshot adds a per-node `hasResult`
-  flag. New `GET /api/runs/<run_id>/nodes/<node_id>/result` serves it; the frontend lazily fetches on
-  row-expand and renders by type. Prune `workflow_runs/<run_id>/` in lockstep with the 50-run history
-  cap, and **evict terminal runners from `_runs`** once persisted (frees the in-memory results that leak
-  today). SSE/snapshot stay counts-only.
-- **Run-history UX** — re-run, cancel/retry a node, expandable per-node results (backed by the sidecars).
-- Canvas niceties as they earn their place (groups/comments, copy-paste) — not a priority.
+### P5 — Authoring & run-history UX — ✅ Done
+- **Pre-run validation panel** (client-side) — ✅ a new `workflows-validate.js` satellite aggregates
+  the scattered cues into a `#wfValidation` Issues panel; **errors disable Run, warnings don't**, and
+  it recomputes on every edit (the hub's `scheduleSave` + `openBlueprint` call `WF.refreshValidation`).
+  *Errors:* cycle (`WF.graphHasCycle`, a JS port of `topo_order`'s Kahn loop; the server 400 stays a
+  backstop) · unwired required input · unmet context (`nodeContextMet`) · **empty required param**
+  (new `required:true` flag on `ParamSpec` — `find_word.word`, `video_source.participant`,
+  `time_range.ranges`, `ss_text.search_string`). *Warnings:* heatmap style needs a matching
+  template/flow/change (or multitool) upstream · orphan node · gate with no scalar source. Each row
+  links to its node via `WF.focusNode` (select + pan-to-centre). `WF.nodeIssues` is the single source
+  of truth, shared with the on-card `.disabled`/`.invalid` cue in `workflows-nodes.js`.
+- **Large-result sidecar storage** — ✅ the runner writes *inspectable* node outputs (filtered by
+  declared output-port type — `artifacts`/`events`/`segments`/`summary`/`citations`/`friction`/
+  `manifest`/`viewerHtml`/`scalar`; plumbing types like `clipRecords` are dropped, dodging the gspread
+  `Cell`, and an `events` value's heavy `raw_results` rider is projected out) to
+  `<output_dir>/workflow_runs/<run_id>/<node_id>.json` on each node completion (JSON-sanitized via
+  `utils.sanitize_floats`). The snapshot adds a per-node `hasResult` flag;
+  `GET /api/runs/<run_id>/nodes/<node_id>/result` serves the file; the frontend lazily fetches on
+  row-expand and renders by type (artifact/event/segment lists, reel manifest, viewer path,
+  summary/citation/friction text, scalar). `workflow_runs/<run_id>/` dirs are pruned in lockstep with
+  the 50-run cap (`_trim_run_history` now returns dropped ids). SSE/snapshot stay counts-only.
+- **Run-history UX** — ✅ **re-run** (a button on terminal run cards relaunching the same blueprint)
+  + expandable per-node results backed by the sidecars. **Deferred:** per-node cancel/retry — it
+  requires partial/memoized re-run, which the plan explicitly cut ("just re-run"); whole-run cancel
+  already exists (Stop). Canvas niceties (groups/comments, copy-paste) stay out — not a priority.
 
 ### P6 — Triggers, narrow-first *(last; the one automation piece)*
 - A single **watch-dir watcher**: when a new video appears in `-i`, auto-run a **designated**

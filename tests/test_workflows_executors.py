@@ -276,6 +276,34 @@ def test_timeline_viewer_generates_path(tmp_path, monkeypatch):
     assert out["viewer"]["path"].endswith("workflow_viewer.html")
 
 
+def test_timeline_viewer_routes_reels_to_reels_slot(tmp_path, monkeypatch):
+    # A reel record (carries `components`, no start/end) must reach the viewer's
+    # `reels` slot, not the timeline `artifacts` slot — else it's filtered for
+    # lack of start/end and the viewer is empty (the Build Reel → Viewer bug).
+    captured = {}
+
+    def fake_finalize(artifacts, **kw):
+        captured["artifacts"] = artifacts
+        captured["reels"] = kw.get("reels")
+        return {"artifacts": artifacts}
+
+    monkeypatch.setattr(viewer, "finalize_timeline_data", fake_finalize)
+    monkeypatch.setattr(
+        viewer, "generate_timeline_viewer", lambda data, **kw: tmp_path / "v.html"
+    )
+    reel = {"id": "r1", "file": "reel.mp4", "components": [{"start": "0:00"}]}
+    clip = {"id": "c1", "file": "c.mp4", "type": "clip", "start": 1.0, "end": 2.0}
+    out = _run(
+        "timeline_viewer",
+        _ctx(tmp_path),
+        {"artifacts": {"artifacts": [reel, clip], "study": "study"}},
+        {},
+    )
+    assert captured["reels"] == [reel]
+    assert captured["artifacts"] == [clip]
+    assert out["viewer"]["path"]
+
+
 # ---- Sheet selection (real pure path) ----
 
 

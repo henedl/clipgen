@@ -261,20 +261,6 @@
     return wrap;
   }
 
-  // True unless some non-optional input port has no incoming edge.
-  function requiredInputsSatisfied(node, type) {
-    var inputs = type.inputs || [];
-    for (var i = 0; i < inputs.length; i++) {
-      var port = inputs[i];
-      if (port.optional) continue;
-      var wired = (state.edges || []).some(function (e) {
-        return e.to === node.id && e.toPort === port.name;
-      });
-      if (!wired) return false;
-    }
-    return true;
-  }
-
   function renderNode(node) {
     var type = state.catalogById[node.type] || {
       label: node.type,
@@ -303,13 +289,23 @@
     if (state.selection && state.selection.indexOf(node.id) >= 0) {
       card.classList.add("selected");
     }
-    // Validation cue: greyed when the launch context can't satisfy `requires`;
-    // otherwise warned when a required input is still unwired.
+    // Validation cue (shares WF.nodeIssues with the Issues panel): greyed when
+    // the launch context can't satisfy `requires`; otherwise a dashed `.invalid`
+    // border for any remaining error (unwired required input / empty required
+    // param). Warnings surface only as a tooltip, never a blocking cue.
     if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
       card.classList.add("disabled");
-    } else if (!requiredInputsSatisfied(node, type)) {
-      card.classList.add("invalid");
-      card.title = "Connect required inputs";
+      card.title = "Requires " + ((type.requires || []).join(", ") || "context");
+    } else {
+      var issues = WF.nodeIssues
+        ? WF.nodeIssues(node)
+        : { errors: [], warnings: [] };
+      if (issues.errors.length) {
+        card.classList.add("invalid");
+        card.title = issues.errors.join("; ");
+      } else if (issues.warnings.length) {
+        card.title = issues.warnings.join("; ");
+      }
     }
 
     card.appendChild(el("div", "wf-node-title", type.label || node.type));
