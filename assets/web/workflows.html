@@ -52,10 +52,22 @@
                 title="Auto-arrange the nodes">Clean up</button>
         <button id="wfSaveStash" class="btn btn-small" type="button" disabled
                 title="Save the selected nodes as a reusable stash">Stash selection</button>
-        <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
-                title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
-        <button id="wfRunToBtn" class="btn btn-small" type="button" disabled
-                title="Run only the selected node and the nodes it depends on">Run to here</button>
+        <div class="wf-run-split">
+          <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
+                  title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
+          <button id="wfRunMenuBtn" class="btn btn-small btn-primary wf-run-caret"
+                  type="button" disabled aria-haspopup="menu" aria-expanded="false"
+                  aria-label="More run options" title="More run options">
+            <span class="wf-run-caret-icon" aria-hidden="true"></span>
+          </button>
+          <div id="wfRunMenu" class="wf-run-menu hidden" role="menu">
+            <button id="wfRunToItem" class="wf-run-menu-item" type="button" role="menuitem"
+                    disabled
+                    title="Run only the selected node and the nodes it depends on">
+              Run to here
+            </button>
+          </div>
+        </div>
         <button id="wfStopBtn" class="btn btn-small hidden" type="button"
                 title="Cancel the running workflow">Stop</button>
         <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled

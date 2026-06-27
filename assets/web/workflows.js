@@ -681,13 +681,56 @@
       "#wfImportBlueprint",
       "#wfCleanUp",
       "#wfRunBtn",
-      "#wfRunToBtn",
+      "#wfRunMenuBtn",
       "#wfSaveStash",
       "#wfTriggerBtn",
     ].forEach(function (sel) {
       var node = qs(sel);
       if (node) node.disabled = disabled;
     });
+  }
+
+  // Run split-button: the caret opens a small menu whose "Run to here" item runs
+  // the selected node + its ancestors (a partial run). The primary button still
+  // runs the whole graph.
+  function initRunMenu() {
+    var caret = qs("#wfRunMenuBtn");
+    var menu = qs("#wfRunMenu");
+    var runTo = qs("#wfRunToItem");
+    if (!caret || !menu) return;
+
+    function closeMenu() {
+      menu.classList.add("hidden");
+      caret.setAttribute("aria-expanded", "false");
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    }
+    function onDocDown(e) {
+      // Ignore mousedowns on the caret itself so its click handler toggles (a
+      // close-then-reopen race otherwise).
+      if (caret.contains(e.target) || menu.contains(e.target)) return;
+      closeMenu();
+    }
+    function onKey(e) {
+      if (e.key === "Escape") closeMenu();
+    }
+    function openMenu() {
+      menu.classList.remove("hidden");
+      caret.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", onDocDown, true);
+      document.addEventListener("keydown", onKey, true);
+    }
+    caret.addEventListener("click", function () {
+      if (menu.classList.contains("hidden")) openMenu();
+      else closeMenu();
+    });
+    if (runTo) {
+      runTo.addEventListener("click", function () {
+        closeMenu();
+        var sel = state.selection || [];
+        if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
+      });
+    }
   }
 
   // ---- Boot -----------------------------------------------------------------
@@ -757,13 +800,7 @@
         if (WF.startRun) WF.startRun();
       });
     }
-    var runToBtn = qs("#wfRunToBtn");
-    if (runToBtn) {
-      runToBtn.addEventListener("click", function () {
-        var sel = state.selection || [];
-        if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
-      });
-    }
+    initRunMenu();
     var stopBtn = qs("#wfStopBtn");
     if (stopBtn) {
       stopBtn.addEventListener("click", function () {

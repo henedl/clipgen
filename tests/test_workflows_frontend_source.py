@@ -522,12 +522,17 @@ def test_unified_detect_node():
 
 
 def test_run_to_selected_node():
-    """A selection-gated 'Run to here' button starts a partial run with targetNodeId."""
+    """'Run to here' lives in the Run split-button menu and starts a partial run."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
     runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
-    assert 'id="wfRunToBtn"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    # Split-button: primary Run + caret menu with a Run-to-here item.
+    assert 'id="wfRunMenuBtn"' in html
+    assert 'id="wfRunToItem"' in html
+    assert ".wf-run-menu" in css
+    assert "function initRunMenu" in hub
     assert "WF.startRun(sel[0])" in hub
-    # The run-start passes the target through; the button needs exactly one node.
+    # The run-start passes the target through; the item needs exactly one node.
     assert "body.targetNodeId = targetNodeId" in runs
     assert "state.selection.length === 1" in runs

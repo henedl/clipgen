@@ -819,11 +819,14 @@
         ? "Fix the errors in the Issues panel to run"
         : "Run this workflow (set a Video Source to “All participants” to fan out)";
     }
+    // The Run split-button caret opens the more-options menu (same gate as Run).
+    var caret = qs("#wfRunMenuBtn");
+    if (caret) caret.disabled = blocked;
     // "Run to here" needs exactly one selected node (its target).
-    var runToBtn = qs("#wfRunToBtn");
-    if (runToBtn) {
+    var runToItem = qs("#wfRunToItem");
+    if (runToItem) {
       var one = state.selection && state.selection.length === 1;
-      runToBtn.disabled = blocked || !one;
+      runToItem.disabled = blocked || !one;
     }
   }
 
