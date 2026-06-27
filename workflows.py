@@ -183,6 +183,9 @@ class NodeType(TypedDict):
     params: list[ParamSpec]
     requires: list[str]  # subset of {"sheet", "videoDir"}
     execute: NotRequired[Callable[..., dict[str, Any]]]
+    # Hidden from the palette but kept in the catalog (e.g. the per-detector
+    # ss_<tool> nodes, which the unified Detect node + Multitool read for specs).
+    hidden: NotRequired[bool]
 
 
 # Shared by the three Ollama thinking nodes: a free-text override of the model
@@ -961,7 +964,39 @@ for _ss_tool in _SS_DETECTOR_SPECS:
         "outputs": [{"name": "events", "type": "events"}],
         "params": list(_SS_DETECTOR_SPECS[_ss_tool]),
         "requires": ["videoDir"],
+        # Hidden from the palette: the unified "detect" node below is the
+        # palette-facing entry. These stay in the catalog as the per-detector
+        # spec source (Detect editor + Multitool steps) and keep old blueprints
+        # and built-in recipes that reference ss_<tool> directly runnable.
+        "hidden": True,
     }
+
+# Unified palette-facing detector: one node whose ``detector`` dropdown swaps the
+# per-detector param set (the frontend reads it from the hidden ss_<tool> nodes
+# above). Dispatches to the same _run_ss_detector body the ss_<tool> nodes use.
+NODE_TYPES["detect"] = {
+    "id": "detect",
+    "label": "Detect",
+    "description": "Detect a region condition (text, colour, motion, numbers, …) — pick the detector.",
+    "domain": "screenspace",
+    "category": "Screenspace",
+    "inputs": [
+        {"name": "video", "type": "video"},
+        {"name": "region", "type": "region", "optional": True},
+        {"name": "timeRange", "type": "timeRange", "optional": True},
+    ],
+    "outputs": [{"name": "events", "type": "events"}],
+    "params": [
+        {
+            "name": "detector",
+            "type": "enum",
+            "default": "text",
+            "choices": list(_SS_DETECTOR_SPECS.keys()),
+            "label": "Detector",
+        }
+    ],
+    "requires": ["videoDir"],
+}
 
 
 def serialize_catalog() -> list[dict[str, Any]]:
@@ -1625,6 +1660,14 @@ def _make_ss_executor(
         return _run_ss_detector(ctx, inputs, params, tool_name)
 
     return _exec
+
+
+def _exec_detect(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Unified detector node: dispatch to the chosen tool's scan body."""
+    tool_name = str(params.get("detector", "text") or "text")
+    return _run_ss_detector(ctx, inputs, params, tool_name)
 
 
 def _resolve_region_coords(
@@ -2707,9 +2750,11 @@ _EXECUTORS: dict[
     "gate_collection": _exec_gate_collection,
 }
 
-# The ten per-detector Screenspace nodes share one body via the factory above.
+# The ten per-detector Screenspace nodes share one body via the factory above;
+# the unified ``detect`` node dispatches into the same body by ``detector`` param.
 for _ss_tool in _SS_DETECTOR_SPECS:
     _EXECUTORS[f"ss_{_ss_tool}"] = _make_ss_executor(_ss_tool)
+_EXECUTORS["detect"] = _exec_detect
 
 # Collection-algebra control nodes — per-type families, all factory-generated.
 # Registered here (NODE_TYPES + _EXECUTORS together) so the attach loop below

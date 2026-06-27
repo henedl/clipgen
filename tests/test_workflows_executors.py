@@ -198,6 +198,35 @@ class _FakeTool:
         return [{"timestamp": 5.0, "_confidence": 0.9}]
 
 
+def test_detect_dispatches_to_selected_detector(tmp_path, monkeypatch):
+    # The unified Detect node routes to the tool named by its `detector` param,
+    # reusing the same scan body as the (hidden) ss_<tool> nodes.
+    _FakeTool.calls = []
+    monkeypatch.setitem(screenspace.TOOLS, "color", _FakeTool())
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    out = _run("detect", _ctx(tmp_path), {"video": src}, {"detector": "color"})
+    assert len(_FakeTool.calls) == 1
+    assert out["events"]["events"][0]["time_in"] == 5.0
+
+
+def test_detect_node_is_palette_facing_and_ss_nodes_hidden():
+    # Detect is the visible node; the ten ss_<tool> nodes stay in the catalog
+    # (multitool/detect read their specs) but are hidden from the palette.
+    assert "detect" in workflows.NODE_TYPES
+    assert not workflows.NODE_TYPES["detect"].get("hidden")
+    for tool in ("text", "color", "change"):
+        node = workflows.NODE_TYPES["ss_" + tool]
+        assert node.get("hidden") is True
+        # Still executable so old blueprints keep running.
+        assert workflows.NODE_TYPES["ss_" + tool].get("execute") is not None
+
+
 def test_ss_detector_generates_events_with_window(tmp_path, monkeypatch):
     _FakeTool.calls = []
     monkeypatch.setitem(screenspace.TOOLS, "color", _FakeTool())

@@ -504,3 +504,18 @@ def test_undo_redo_history():
     assert "resetHistory()" in hub  # openBlueprint
     # Canvas calls the hub's history late-bound.
     assert "WF.undo" in canvas and "WF.redo" in canvas
+
+
+def test_unified_detect_node():
+    """A single Detect node with a detector dropdown; hidden ss_* stay as specs."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    # Palette skips hidden catalog nodes.
+    assert "if (node.hidden) return;" in hub
+    # Detect editor swaps the param set per detector, derived from the catalog.
+    assert "function buildDetectEditor" in nodes
+    assert "function detectTypes" in nodes
+    assert 'node.type === "detect"' in nodes
+    # Detect's per-detector required params still gate Run.
+    assert 'node.type === "detect"' in validate

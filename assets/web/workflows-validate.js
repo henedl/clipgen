@@ -91,6 +91,17 @@
         errors.push("Set “" + (spec.label || spec.name) + "”");
       }
     });
+    // error — the Detect node's active detector has its own (swapped-in) params;
+    // check their required flags against the hidden ss_<detector> spec node.
+    if (node.type === "detect") {
+      var det = (node.params || {}).detector;
+      var specNode = det && state.catalogById && state.catalogById["ss_" + det];
+      ((specNode && specNode.params) || []).forEach(function (spec) {
+        if (spec.required && paramEmpty((node.params || {})[spec.name])) {
+          errors.push("Set “" + (spec.label || spec.name) + "”");
+        }
+      });
+    }
 
     // warning — heatmap style needs a matching upstream detector.
     if (node.type === "heatmap") {

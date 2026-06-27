@@ -189,6 +189,7 @@
     var order = [];
     var byCat = {};
     state.catalog.forEach(function (node) {
+      if (node.hidden) return; // kept in the catalog for specs, not palette-facing
       if (!paletteNodeMatches(node, query)) return;
       var cat = node.category || "Other";
       if (!byCat[cat]) {
