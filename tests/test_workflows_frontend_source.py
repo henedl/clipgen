@@ -440,14 +440,16 @@ def test_palette_search_filters_nodes():
 
 
 def test_blueprint_import_export():
-    """Toolbar can export the active blueprint and import one from a JSON file."""
+    """Blueprint JSON export/import live in the TopNav Quick Actions menu."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
-    assert 'id="wfExportBlueprint"' in html
-    assert 'id="wfImportBlueprint"' in html
-    assert 'id="wfImportFile"' in html
+    assert 'id="wfImportFile"' in html  # hidden input the Import action triggers
     assert "function exportBlueprint" in hub
     assert "function importBlueprint" in hub
+    # Registered as TopNav quick actions, not toolbar buttons.
+    assert "ClipgenTopNav.setQuickActions" in hub
+    assert "Export blueprint JSON" in hub
+    assert "Import blueprint JSON" in hub
     # Import reuses the existing create endpoint (no new server route).
     assert 'apiPost("api/blueprints"' in hub
     # Export reuses the canonical Blob-download idiom.

@@ -677,8 +677,6 @@
       "#wfBlueprintName",
       "#wfNewBlueprint",
       "#wfDeleteBlueprint",
-      "#wfExportBlueprint",
-      "#wfImportBlueprint",
       "#wfCleanUp",
       "#wfRunBtn",
       "#wfRunMenuBtn",
@@ -733,6 +731,37 @@
     }
   }
 
+  // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
+  // JSON import/export live here, off the toolbar. Export is gated on an active
+  // blueprint; onBeforeOpen refreshes that state each time the menu opens.
+  function buildQuickActions() {
+    if (!window.ClipgenTopNav) return;
+    var importFile = qs("#wfImportFile");
+    function rebuild() {
+      window.ClipgenTopNav.setQuickActions([
+        {
+          icon: "arrow-down-tray",
+          label: "Export blueprint JSON",
+          action: exportBlueprint,
+          disabled: !state.activeBlueprintId,
+          title: state.activeBlueprintId
+            ? "Download the active blueprint as a JSON file"
+            : "Open a blueprint first to export it.",
+        },
+        {
+          icon: "arrow-up-tray",
+          label: "Import blueprint JSON",
+          action: function () {
+            if (importFile) importFile.click();
+          },
+          title: "Create a new blueprint from a JSON file",
+        },
+      ]);
+    }
+    rebuild();
+    window.ClipgenTopNav.onBeforeOpen(rebuild);
+  }
+
   // ---- Boot -----------------------------------------------------------------
 
   function boot() {
@@ -769,19 +798,14 @@
     }
     var newBtn = qs("#wfNewBlueprint");
     if (newBtn) newBtn.addEventListener("click", createBlueprint);
-    var exportBtn = qs("#wfExportBlueprint");
-    if (exportBtn) exportBtn.addEventListener("click", exportBlueprint);
-    var importBtn = qs("#wfImportBlueprint");
     var importFile = qs("#wfImportFile");
-    if (importBtn && importFile) {
-      importBtn.addEventListener("click", function () {
-        importFile.click();
-      });
+    if (importFile) {
       importFile.addEventListener("change", function () {
         importBlueprint(importFile.files && importFile.files[0]);
         importFile.value = ""; // allow re-importing the same file
       });
     }
+    buildQuickActions();
     var delBtn = qs("#wfDeleteBlueprint");
     if (delBtn) {
       delBtn.addEventListener("click", function () {
