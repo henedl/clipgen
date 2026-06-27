@@ -308,7 +308,10 @@
       }
     }
 
-    card.appendChild(el("div", "wf-node-title", type.label || node.type));
+    // Colour-coded title bar (domain background via CSS data-domain).
+    var titleBar = el("div", "wf-node-title");
+    titleBar.appendChild(el("span", "wf-node-title-text", type.label || node.type));
+    card.appendChild(titleBar);
     card.appendChild(el("div", "wf-node-domain", type.domain || ""));
 
     if (type.params && type.params.length) {
