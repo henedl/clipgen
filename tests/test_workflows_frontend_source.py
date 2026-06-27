@@ -519,3 +519,15 @@ def test_unified_detect_node():
     assert 'node.type === "detect"' in nodes
     # Detect's per-detector required params still gate Run.
     assert 'node.type === "detect"' in validate
+
+
+def test_run_to_selected_node():
+    """A selection-gated 'Run to here' button starts a partial run with targetNodeId."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfRunToBtn"' in html
+    assert "WF.startRun(sel[0])" in hub
+    # The run-start passes the target through; the button needs exactly one node.
+    assert "body.targetNodeId = targetNodeId" in runs
+    assert "state.selection.length === 1" in runs

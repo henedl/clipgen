@@ -681,6 +681,7 @@
       "#wfImportBlueprint",
       "#wfCleanUp",
       "#wfRunBtn",
+      "#wfRunToBtn",
       "#wfSaveStash",
       "#wfTriggerBtn",
     ].forEach(function (sel) {
@@ -754,6 +755,13 @@
     if (runBtn) {
       runBtn.addEventListener("click", function () {
         if (WF.startRun) WF.startRun();
+      });
+    }
+    var runToBtn = qs("#wfRunToBtn");
+    if (runToBtn) {
+      runToBtn.addEventListener("click", function () {
+        var sel = state.selection || [];
+        if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
       });
     }
     var stopBtn = qs("#wfStopBtn");

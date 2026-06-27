@@ -180,14 +180,15 @@
     return batch && !isTerminal(batch.status);
   }
 
-  function startRun() {
+  function startRun(targetNodeId) {
     if (!state.ready || !state.activeBlueprintId) return;
     if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
     // Errors gate the run (the button is already disabled; this guards the
     // programmatic path). Warnings never block.
     if (state.validation && state.validation.errors.length) return;
-    // A Video Source set to "All participants" makes Run fan out over the study.
-    if (blueprintWantsBatch()) {
+    // A Video Source set to "All participants" makes Run fan out over the study —
+    // but a partial "run to here" is always a single run.
+    if (!targetNodeId && blueprintWantsBatch()) {
       startBatch();
       return;
     }
@@ -195,7 +196,9 @@
     // Flush pending canvas edits so the server runs the latest blueprint.
     Promise.resolve(WF.flushSave ? WF.flushSave() : null)
       .then(function () {
-        return apiPost("api/runs", { blueprintId: state.activeBlueprintId });
+        var body = { blueprintId: state.activeBlueprintId };
+        if (targetNodeId) body.targetNodeId = targetNodeId;
+        return apiPost("api/runs", body);
       })
       .then(function (res) {
         if (!res || !res.ok || !res.run) {
@@ -806,14 +809,22 @@
   // an in-flight run, the load gate, and validation errors (P5). Called by both
   // setRunningUI and the validation satellite (after every recompute).
   function syncRunButton() {
-    var runBtn = qs("#wfRunBtn");
-    if (!runBtn) return;
     var v = state.validation;
     var hasErrors = !!(v && v.errors && v.errors.length);
-    runBtn.disabled = _running || !state.ready || hasErrors;
-    runBtn.title = hasErrors
-      ? "Fix the errors in the Issues panel to run"
-      : "Run this workflow (set a Video Source to “All participants” to fan out)";
+    var blocked = _running || !state.ready || hasErrors;
+    var runBtn = qs("#wfRunBtn");
+    if (runBtn) {
+      runBtn.disabled = blocked;
+      runBtn.title = hasErrors
+        ? "Fix the errors in the Issues panel to run"
+        : "Run this workflow (set a Video Source to “All participants” to fan out)";
+    }
+    // "Run to here" needs exactly one selected node (its target).
+    var runToBtn = qs("#wfRunToBtn");
+    if (runToBtn) {
+      var one = state.selection && state.selection.length === 1;
+      runToBtn.disabled = blocked || !one;
+    }
   }
 
   function setRunningUI(running) {

@@ -3101,9 +3101,13 @@ class WorkflowRunner:
         participant: str = "",
         batch_id: str = "",
         triggered: bool = False,
+        target_node_id: str = "",
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
+        # Partial run (P11): when set, only this node and its transitive ancestors
+        # execute; the rest are marked skipped. Empty → run the whole graph.
+        self.target_node_id = target_node_id
         # Batch identity (P3): empty for a normal single run; a child run carries
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
@@ -3154,6 +3158,18 @@ class WorkflowRunner:
             if isinstance(src, str) and src in self._nodes_by_id:
                 deps.add(src)
         return deps
+
+    def _ancestors_inclusive(self, node_id: str) -> set[str]:
+        """``node_id`` plus everything it transitively depends on (for partial runs)."""
+        seen: set[str] = set()
+        stack = [node_id]
+        while stack:
+            nid = stack.pop()
+            if nid in seen:
+                continue
+            seen.add(nid)
+            stack.extend(self._deps(nid))
+        return seen
 
     def _gate_blocks(self, node_id: str) -> bool:
         """True if ``node_id`` is a gate that completed with ``pass`` False."""
@@ -3249,6 +3265,17 @@ class WorkflowRunner:
             self.completed_at = _now_iso()
             self._notify(force=True)
             return
+
+        # Partial run: keep only the target node and its ancestors; the rest are
+        # skipped up front (they never execute and don't block completion).
+        if self.target_node_id and self.target_node_id in self._nodes_by_id:
+            keep = self._ancestors_inclusive(self.target_node_id)
+            for nid in order:
+                if nid not in keep:
+                    self._set_node(
+                        nid, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                    )
+            order = [nid for nid in order if nid in keep]
 
         for node_id in order:
             node = self._nodes_by_id[node_id]

@@ -309,6 +309,31 @@ def test_gate_true_runs_downstream_branch(tmp_path):
     assert runner.node_states["m"]["status"] == "completed"
 
 
+def test_run_to_target_executes_only_ancestors(tmp_path, monkeypatch):
+    # A partial run keeps the target + its ancestors and skips the rest: targeting
+    # 't' runs 'v' and 't' but skips downstream 's'.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    nodes = [
+        {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+        {"id": "t", "type": "transcribe", "params": {}},
+        {"id": "s", "type": "summarize", "params": {}},
+    ]
+    edges = [
+        {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+        {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+    ]
+    runner = workflows.WorkflowRunner(
+        "run_target",
+        {"id": "bp", "nodes": nodes, "edges": edges},
+        _ctx(tmp_path),
+        target_node_id="t",
+    )
+    runner.run()
+    assert runner.node_states["t"]["status"] == "completed"
+    assert runner.node_states["s"]["status"] == "skipped"
+    assert runner.status == "completed"
+
+
 def test_gate_collection_blocks_downstream(tmp_path, monkeypatch):
     # The fused measure+gate node reduces a wired collection then gates: a 1-event
     # collection with threshold 2 -> pass False -> the downstream 'm' is skipped.

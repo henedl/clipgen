@@ -440,10 +440,12 @@
     if (WF.clearPortCache) WF.clearPortCache();
     if (WF.renderWires) WF.renderWires();
 
-    // Selection may have changed (drop, marquee, delete) → re-gate "Stash
-    // selection". One guarded site keeps the button in sync without touching
-    // every gesture that mutates state.selection.
+    // Selection may have changed (drop, marquee, delete) → re-gate the
+    // selection-dependent toolbar buttons ("Stash selection", "Run to here").
+    // One guarded site keeps them in sync without touching every gesture that
+    // mutates state.selection.
     if (WF.syncStashButton) WF.syncStashButton();
+    if (WF.syncRunButton) WF.syncRunButton();
   }
 
   WF.renderNode = renderNode;
