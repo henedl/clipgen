@@ -126,15 +126,71 @@
     return item;
   }
 
+  // The ~23 collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/
+  // dedup_*) share one "Collection" category; group them by operation so the
+  // palette shows 5 collapsible sub-groups instead of a long flat list.
+  var _COLLECTION_OPS = [
+    ["filter", "Filter"],
+    ["partition", "Partition"],
+    ["merge", "Merge"],
+    ["limit", "Limit"],
+    ["dedup", "Dedup"],
+  ];
+
+  // Operation prefix of a collection node id (e.g. "filter_events" → "filter").
+  function paletteOp(node) {
+    return String(node.id || "").split("_")[0];
+  }
+
+  // Emit the Collection category as <details> sub-groups by operation. While a
+  // search is active, sub-groups auto-expand so matches aren't hidden.
+  function appendCollectionGroups(frag, nodes, query) {
+    var byOp = {};
+    nodes.forEach(function (n) {
+      var op = paletteOp(n);
+      (byOp[op] || (byOp[op] = [])).push(n);
+    });
+    _COLLECTION_OPS.forEach(function (pair) {
+      var items = byOp[pair[0]];
+      if (!items || !items.length) return;
+      var details = el("details", "wf-palette-subgroup");
+      if (query) details.open = true;
+      details.appendChild(el("summary", "wf-palette-subgroup-label", pair[1]));
+      items.forEach(function (n) {
+        details.appendChild(buildPaletteItem(n));
+      });
+      frag.appendChild(details);
+    });
+  }
+
+  // A node matches the palette search when the query is empty or a substring of
+  // its label, description, or category (all case-insensitive).
+  function paletteNodeMatches(node, query) {
+    if (!query) return true;
+    var hay = (
+      (node.label || "") +
+      " " +
+      (node.description || "") +
+      " " +
+      (node.category || "")
+    ).toLowerCase();
+    return hay.indexOf(query) !== -1;
+  }
+
   function renderPalette() {
     var palette = qs("#wfPalette");
     if (!palette || !state.catalog) return;
     palette.innerHTML = "";
+    var searchInput = qs("#wfPaletteSearch");
+    var query = (searchInput ? searchInput.value : "").trim().toLowerCase();
     // Group by category, preserving catalog order (per the perf rule, build a
-    // DocumentFragment and append once).
+    // DocumentFragment and append once). A group label is only emitted when at
+    // least one of its nodes survives the search filter.
     var order = [];
     var byCat = {};
     state.catalog.forEach(function (node) {
+      if (node.hidden) return; // kept in the catalog for specs, not palette-facing
+      if (!paletteNodeMatches(node, query)) return;
       var cat = node.category || "Other";
       if (!byCat[cat]) {
         byCat[cat] = [];
@@ -145,10 +201,17 @@
     var frag = document.createDocumentFragment();
     order.forEach(function (cat) {
       frag.appendChild(el("div", "wf-palette-group-label", cat));
-      byCat[cat].forEach(function (node) {
-        frag.appendChild(buildPaletteItem(node));
-      });
+      if (cat === "Collection") {
+        appendCollectionGroups(frag, byCat[cat], query);
+      } else {
+        byCat[cat].forEach(function (node) {
+          frag.appendChild(buildPaletteItem(node));
+        });
+      }
     });
+    if (!order.length && query) {
+      frag.appendChild(el("div", "wf-palette-empty", "No matching nodes"));
+    }
     palette.appendChild(frag);
   }
 
@@ -199,6 +262,7 @@
     state.viewport = bp.viewport || (bp.viewport = { x: 0, y: 0, zoom: 1 });
     state.selection = [];
     state.selectedEdge = null;
+    resetHistory(); // history doesn't span blueprints
     syncToolbar();
     syncTriggerButton();
     if (WF.renderAllNodes) WF.renderAllNodes();
@@ -264,6 +328,72 @@
       .catch(function () {
         showToast("Failed to delete blueprint");
       });
+  }
+
+  // ---- Import / export ------------------------------------------------------
+
+  // Download the active blueprint as JSON (the same {name,nodes,edges,viewport}
+  // shape the autosave PUT sends, so import round-trips losslessly bar the
+  // server-assigned id/createdAt).
+  function exportBlueprint() {
+    var bp = findBlueprint(state.activeBlueprintId);
+    if (!bp) return;
+    var data = {
+      name: bp.name || "Untitled",
+      nodes: state.nodes || [],
+      edges: state.edges || [],
+      viewport: state.viewport || { x: 0, y: 0, zoom: 1 },
+    };
+    var blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = (bp.name || "blueprint").replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Parse a JSON file and create a new blueprint from it. Unknown node types are
+  // accepted as-is (they fail gracefully at run time, like any removed type).
+  function importBlueprint(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data;
+      try {
+        data = JSON.parse(String(reader.result || ""));
+      } catch (e) {
+        showToast("Import failed: not valid JSON");
+        return;
+      }
+      if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
+        showToast("Import failed: missing nodes/edges");
+        return;
+      }
+      apiPost("api/blueprints", {
+        name: data.name || "Imported",
+        nodes: data.nodes,
+        edges: data.edges,
+        viewport: data.viewport || { x: 0, y: 0, zoom: 1 },
+      })
+        .then(function (res) {
+          if (!res || !res.ok) {
+            showToast("Import failed");
+            return;
+          }
+          state.blueprints.push(res.blueprint);
+          populateSelect();
+          openBlueprint(res.blueprint);
+        })
+        .catch(function () {
+          showToast("Import failed");
+        });
+    };
+    reader.readAsText(file);
   }
 
   function renameActive(name) {
@@ -377,6 +507,76 @@
     }
   }
 
+  // ---- Undo / redo ----------------------------------------------------------
+  //
+  // History is a stack of {nodes, edges} snapshots (the autosave shape; viewport
+  // and selection are excluded so a pan never lands on the undo stack). Capture
+  // hangs off the scheduleSave chokepoint and is coalesced by the same 600 ms
+  // debounce, so a burst of param keystrokes collapses to one undo step.
+
+  var _undoStack = [];
+  var _redoStack = [];
+  var _baseline = null; // last settled graph; what an undo restores TO
+  var _snapPending = false; // a burst is mid-flight (already captured once)
+  var _UNDO_CAP = 50;
+
+  function cloneGraph() {
+    return {
+      nodes: JSON.parse(JSON.stringify(state.nodes || [])),
+      edges: JSON.parse(JSON.stringify(state.edges || [])),
+    };
+  }
+
+  function resetHistory() {
+    _undoStack = [];
+    _redoStack = [];
+    _snapPending = false;
+    _baseline = cloneGraph();
+  }
+
+  // On the first mutation of a burst, push the pre-burst baseline; later
+  // keystrokes in the same burst are absorbed (snapPending) into one step.
+  function captureHistory() {
+    if (!_baseline) {
+      _baseline = cloneGraph();
+      return;
+    }
+    if (_snapPending) return;
+    _undoStack.push(_baseline);
+    if (_undoStack.length > _UNDO_CAP) _undoStack.shift();
+    _redoStack = []; // a fresh edit invalidates the redo branch
+    _snapPending = true;
+  }
+
+  // Restore a graph snapshot and persist it without re-capturing history.
+  function applyGraph(graph) {
+    if (WF.cancelConnect) WF.cancelConnect();
+    state.nodes = JSON.parse(JSON.stringify(graph.nodes || []));
+    state.edges = JSON.parse(JSON.stringify(graph.edges || []));
+    state.selection = [];
+    state.selectedEdge = null;
+    _baseline = cloneGraph();
+    _snapPending = false;
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    if (WF.refreshValidation) WF.refreshValidation();
+    cancelSave();
+    flushSave();
+  }
+
+  function undo() {
+    if (!_undoStack.length) return false;
+    _redoStack.push(cloneGraph());
+    applyGraph(_undoStack.pop());
+    return true;
+  }
+
+  function redo() {
+    if (!_redoStack.length) return false;
+    _undoStack.push(cloneGraph());
+    applyGraph(_redoStack.pop());
+    return true;
+  }
+
   // ---- Debounced autosave ---------------------------------------------------
 
   var _saveTimer = null;
@@ -389,8 +589,14 @@
   }
 
   function scheduleSave() {
+    captureHistory();
     cancelSave();
-    _saveTimer = setTimeout(flushSave, 600);
+    _saveTimer = setTimeout(function () {
+      // Burst settled → this is the new baseline a future edit captures from.
+      _baseline = cloneGraph();
+      _snapPending = false;
+      flushSave();
+    }, 600);
     // Validation is immediate (not debounced) so the Issues panel + Run button
     // never lag an edit. Every graph mutation funnels through here.
     if (WF.refreshValidation) WF.refreshValidation();
@@ -473,12 +679,87 @@
       "#wfDeleteBlueprint",
       "#wfCleanUp",
       "#wfRunBtn",
+      "#wfRunMenuBtn",
       "#wfSaveStash",
       "#wfTriggerBtn",
     ].forEach(function (sel) {
       var node = qs(sel);
       if (node) node.disabled = disabled;
     });
+  }
+
+  // Run split-button: the caret opens a small menu whose "Run to here" item runs
+  // the selected node + its ancestors (a partial run). The primary button still
+  // runs the whole graph.
+  function initRunMenu() {
+    var caret = qs("#wfRunMenuBtn");
+    var menu = qs("#wfRunMenu");
+    var runTo = qs("#wfRunToItem");
+    if (!caret || !menu) return;
+
+    function closeMenu() {
+      menu.classList.add("hidden");
+      caret.setAttribute("aria-expanded", "false");
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    }
+    function onDocDown(e) {
+      // Ignore mousedowns on the caret itself so its click handler toggles (a
+      // close-then-reopen race otherwise).
+      if (caret.contains(e.target) || menu.contains(e.target)) return;
+      closeMenu();
+    }
+    function onKey(e) {
+      if (e.key === "Escape") closeMenu();
+    }
+    function openMenu() {
+      menu.classList.remove("hidden");
+      caret.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", onDocDown, true);
+      document.addEventListener("keydown", onKey, true);
+    }
+    caret.addEventListener("click", function () {
+      if (menu.classList.contains("hidden")) openMenu();
+      else closeMenu();
+    });
+    if (runTo) {
+      runTo.addEventListener("click", function () {
+        closeMenu();
+        var sel = state.selection || [];
+        if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
+      });
+    }
+  }
+
+  // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
+  // JSON import/export live here, off the toolbar. Export is gated on an active
+  // blueprint; onBeforeOpen refreshes that state each time the menu opens.
+  function buildQuickActions() {
+    if (!window.ClipgenTopNav) return;
+    var importFile = qs("#wfImportFile");
+    function rebuild() {
+      window.ClipgenTopNav.setQuickActions([
+        {
+          icon: "arrow-down-tray",
+          label: "Export blueprint JSON",
+          action: exportBlueprint,
+          disabled: !state.activeBlueprintId,
+          title: state.activeBlueprintId
+            ? "Download the active blueprint as a JSON file"
+            : "Open a blueprint first to export it.",
+        },
+        {
+          icon: "arrow-up-tray",
+          label: "Import blueprint JSON",
+          action: function () {
+            if (importFile) importFile.click();
+          },
+          title: "Create a new blueprint from a JSON file",
+        },
+      ]);
+    }
+    rebuild();
+    window.ClipgenTopNav.onBeforeOpen(rebuild);
   }
 
   // ---- Boot -----------------------------------------------------------------
@@ -511,8 +792,20 @@
         renameActive(nameInput.value);
       });
     }
+    var paletteSearch = qs("#wfPaletteSearch");
+    if (paletteSearch) {
+      paletteSearch.addEventListener("input", renderPalette);
+    }
     var newBtn = qs("#wfNewBlueprint");
     if (newBtn) newBtn.addEventListener("click", createBlueprint);
+    var importFile = qs("#wfImportFile");
+    if (importFile) {
+      importFile.addEventListener("change", function () {
+        importBlueprint(importFile.files && importFile.files[0]);
+        importFile.value = ""; // allow re-importing the same file
+      });
+    }
+    buildQuickActions();
     var delBtn = qs("#wfDeleteBlueprint");
     if (delBtn) {
       delBtn.addEventListener("click", function () {
@@ -531,6 +824,7 @@
         if (WF.startRun) WF.startRun();
       });
     }
+    initRunMenu();
     var stopBtn = qs("#wfStopBtn");
     if (stopBtn) {
       stopBtn.addEventListener("click", function () {
@@ -564,6 +858,8 @@
   WF.ALL_PARTICIPANTS = "__all__";
   WF.boot = boot;
   WF.scheduleSave = scheduleSave;
+  WF.undo = undo;
+  WF.redo = redo;
   WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
   WF.renderPalette = renderPalette;
   WF.openBlueprint = openBlueprint;

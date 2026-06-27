@@ -25,6 +25,9 @@
   <main id="wfShell">
     <aside id="wfSidebar" aria-label="Node palette">
       <div class="wf-sidebar-header">Nodes</div>
+      <input id="wfPaletteSearch" class="wf-palette-search" type="text"
+             autocomplete="off" placeholder="Search nodes…"
+             aria-label="Search nodes" />
       <div id="wfPalette" class="wf-palette"></div>
       <!-- Stashes (M5): built-in recipes + saved sub-graphs. Drag or click an
            item to stamp it onto the canvas (the stashes satellite remaps ids). -->
@@ -40,12 +43,29 @@
                aria-label="Blueprint name" placeholder="Untitled" disabled />
         <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
         <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
+        <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
+             this hidden input is triggered by the "Import blueprint JSON" item. -->
+        <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
         <button id="wfCleanUp" class="btn btn-small" type="button" disabled
                 title="Auto-arrange the nodes">Clean up</button>
         <button id="wfSaveStash" class="btn btn-small" type="button" disabled
                 title="Save the selected nodes as a reusable stash">Stash selection</button>
-        <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
-                title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
+        <div class="wf-run-split">
+          <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
+                  title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
+          <button id="wfRunMenuBtn" class="btn btn-small btn-primary wf-run-caret"
+                  type="button" disabled aria-haspopup="menu" aria-expanded="false"
+                  aria-label="More run options" title="More run options">
+            <span class="wf-run-caret-icon" aria-hidden="true"></span>
+          </button>
+          <div id="wfRunMenu" class="wf-run-menu hidden" role="menu">
+            <button id="wfRunToItem" class="wf-run-menu-item" type="button" role="menuitem"
+                    disabled
+                    title="Run only the selected node and the nodes it depends on">
+              Run to here
+            </button>
+          </div>
+        </div>
         <button id="wfStopBtn" class="btn btn-small hidden" type="button"
                 title="Cancel the running workflow">Stop</button>
         <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled

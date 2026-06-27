@@ -457,13 +457,17 @@ def _sse_run_payload(run_id: str) -> str:
 
 
 def _launch_run(
-    blueprint: dict[str, Any], participant: str = "", triggered: bool = False
+    blueprint: dict[str, Any],
+    participant: str = "",
+    triggered: bool = False,
+    target_node_id: str = "",
 ) -> dict[str, Any]:
     """Create + spawn one run on a daemon thread; return the initial snapshot.
 
     Shared by ``POST /api/runs`` and the watch-dir trigger. The blueprint is
     assumed already validated (``topo_order``) and, for a triggered run, already
-    participant-bound by the caller.
+    participant-bound by the caller. ``target_node_id`` (P11) restricts the run to
+    that node and its ancestors.
     """
     run_id = "run_" + uuid.uuid4().hex[:8]
     cancel_event = threading.Event()
@@ -475,6 +479,7 @@ def _launch_run(
         on_update=lambda: _notify_run_clients(run_id),
         participant=participant,
         triggered=triggered,
+        target_node_id=target_node_id,
     )
     with _runs_lock:
         _runs[run_id] = runner
@@ -515,7 +520,10 @@ def api_run_create() -> Any:
         workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
     except workflows.WorkflowCycleError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    return jsonify({"ok": True, "run": _launch_run(blueprint)})
+    # Optional partial run: restrict to this node + its ancestors (an unknown id
+    # is ignored by the runner and runs the whole graph).
+    target = str(data.get("targetNodeId") or "")
+    return jsonify({"ok": True, "run": _launch_run(blueprint, target_node_id=target)})
 
 
 def _merged_runs() -> dict[str, dict[str, Any]]:

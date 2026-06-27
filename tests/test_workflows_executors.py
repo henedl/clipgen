@@ -9,6 +9,7 @@ Screenspace scans are monkeypatched so no model/subprocess/network is touched.
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import Mock
 
 import config
@@ -39,6 +40,25 @@ def test_gate_compares_scalar(tmp_path):
     ]
     # Non-numeric value fails closed rather than raising.
     assert not _run("gate", ctx, {"value": None}, {"op": ">", "threshold": 0})["pass"]
+
+
+def test_gate_collection_measures_and_gates(tmp_path):
+    ctx = _ctx(tmp_path)
+    evs = {
+        "events": {
+            "events": [{"time_in": 0, "time_out": 1}, {"time_in": 2, "time_out": 3}]
+        }
+    }
+    assert _run(
+        "gate_collection", ctx, evs, {"metric": "count", "op": ">=", "threshold": 2}
+    )["pass"]
+    assert not _run(
+        "gate_collection", ctx, evs, {"metric": "count", "op": ">=", "threshold": 3}
+    )["pass"]
+    # Nothing wired -> value 0 -> fails a positive threshold (fails closed).
+    assert not _run(
+        "gate_collection", ctx, {}, {"metric": "count", "op": ">", "threshold": 0}
+    )["pass"]
 
 
 def test_find_word_filters_segments_and_pads(tmp_path):
@@ -122,6 +142,47 @@ def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
     assert out["summary"] == "the summary"
 
 
+def test_thinking_executors_thread_model_param(tmp_path, monkeypatch):
+    """The ``model`` node param reaches each thinking agent; blank → None."""
+    import ollama_client
+    import thinking_agents
+
+    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    seen: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        thinking_agents,
+        "summarize_transcript",
+        lambda segments, **kw: seen.__setitem__("summary", kw.get("model")) or "s",
+    )
+    monkeypatch.setattr(
+        thinking_agents,
+        "find_citations",
+        lambda summary, segments, **kw: (
+            seen.__setitem__("citations", kw.get("model")) or []
+        ),
+    )
+    monkeypatch.setattr(
+        thinking_agents,
+        "find_friction_moments",
+        lambda summary, segments, candidates, **kw: (
+            seen.__setitem__("friction", kw.get("model")) or []
+        ),
+    )
+
+    ctx = _ctx(tmp_path)
+    tr = {"transcript": {"segments": [{"text": "x"}]}}
+    segs = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": {}}
+
+    _run("summarize", ctx, tr, {"model": "llama3"})
+    _run("citations", ctx, {"summary": "s", "segments": segs}, {"model": "llama3"})
+    _run("friction", ctx, {"segments": segs}, {})  # blank → None
+
+    assert seen["summary"] == "llama3"
+    assert seen["citations"] == "llama3"
+    assert seen["friction"] is None
+
+
 # ---- Screenspace ----
 
 
@@ -135,6 +196,35 @@ class _FakeTool:
             (video_path, params.get("start_seconds"), params.get("end_seconds"))
         )
         return [{"timestamp": 5.0, "_confidence": 0.9}]
+
+
+def test_detect_dispatches_to_selected_detector(tmp_path, monkeypatch):
+    # The unified Detect node routes to the tool named by its `detector` param,
+    # reusing the same scan body as the (hidden) ss_<tool> nodes.
+    _FakeTool.calls = []
+    monkeypatch.setitem(screenspace.TOOLS, "color", _FakeTool())
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    out = _run("detect", _ctx(tmp_path), {"video": src}, {"detector": "color"})
+    assert len(_FakeTool.calls) == 1
+    assert out["events"]["events"][0]["time_in"] == 5.0
+
+
+def test_detect_node_is_palette_facing_and_ss_nodes_hidden():
+    # Detect is the visible node; the ten ss_<tool> nodes stay in the catalog
+    # (multitool/detect read their specs) but are hidden from the palette.
+    assert "detect" in workflows.NODE_TYPES
+    assert not workflows.NODE_TYPES["detect"].get("hidden")
+    for tool in ("text", "color", "change"):
+        node = workflows.NODE_TYPES["ss_" + tool]
+        assert node.get("hidden") is True
+        # Still executable so old blueprints keep running.
+        assert workflows.NODE_TYPES["ss_" + tool].get("execute") is not None
 
 
 def test_ss_detector_generates_events_with_window(tmp_path, monkeypatch):
@@ -235,6 +325,59 @@ def test_make_clips_cuts_from_timerange(tmp_path, monkeypatch):
     assert out["artifacts"]["study"] == "study"
 
 
+def test_interval_captures_samples_each_range(tmp_path, monkeypatch):
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: (
+            seen.update({"records": records, "fmt": kw.get("output_format")}),
+            (len(records), [{"id": i} for i in range(len(records))]),
+        )[1],
+    )
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    tr = {"ranges": [(0.0, 30.0)], "source": src}
+    out = _run(
+        "interval_captures",
+        _ctx(tmp_path),
+        {"video": src, "timeRange": tr},
+        {"interval": 10, "output_format": "screen"},
+    )
+    # 0, 10, 20 → three screenshots (unlike Make Clips, which makes one per range).
+    assert out["artifacts"]["count"] == 3
+    assert len(seen["records"]) == 3
+    assert seen["fmt"] == "screen"
+
+
+def test_interval_captures_whole_video_uses_duration(tmp_path, monkeypatch):
+    import pipeline
+    import video as video_mod
+
+    monkeypatch.setattr(video_mod, "get_file_duration", lambda p: 25)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: seen.__setitem__("n", len(records)) or (len(records), []),
+    )
+    src = {
+        "participant": "P01",
+        "study": "s",
+        "source_filename": "s_P01.mp4",
+        "video_paths": ["s_P01.mp4"],
+    }
+    # No timeRange wired → sample the whole video: duration 25, interval 10 → 0,10,20.
+    _run("interval_captures", _ctx(tmp_path), {"video": src}, {"interval": 10})
+    assert seen["n"] == 3
+
+
 def test_build_reel_honors_name_param(tmp_path, monkeypatch):
     import pipeline
 
@@ -259,6 +402,49 @@ def test_build_reel_honors_name_param(tmp_path, monkeypatch):
     # The (sanitized) reel name drives the reserved output filename.
     assert seen["template"].lower().startswith("my")
     assert out["artifacts"]["count"] == 1
+
+
+def test_build_reel_chronological_sorts_records(tmp_path, monkeypatch):
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        files, "get_unique_filename", lambda template, **kw: str(tmp_path / template)
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "process_reel",
+        lambda records, **kw: (
+            seen.__setitem__("records", records) or (1, [{"id": "r"}])
+        ),
+    )
+    out_of_order = [
+        {"id": "b", "times": [("0:30", "0:35")]},
+        {"id": "a", "times": [("0:05", "0:10")]},
+    ]
+    _run(
+        "build_reel",
+        _ctx(tmp_path),
+        {"clips": {"records": out_of_order, "study": "study"}},
+        {"name": "reel", "chronological": True},
+    )
+    assert [r["id"] for r in seen["records"]] == ["a", "b"]
+
+
+def test_transcribe_threads_model_param(tmp_path, monkeypatch):
+    import transcripts
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        transcripts,
+        "transcribe_video",
+        lambda path, **kw: (
+            seen.__setitem__("model", kw.get("model_name")) or {"segments": []}
+        ),
+    )
+    src = {"participant": "P01", "video_paths": [str(tmp_path / "study_P01.mp4")]}
+    _run("transcribe", _ctx(tmp_path), {"video": src}, {"model": "small"})
+    assert seen["model"] == "small"
 
 
 def test_timeline_viewer_generates_path(tmp_path, monkeypatch):

@@ -289,21 +289,24 @@ def find_citations(
     summary: str,
     segments: list[dict[str, Any]],
     *,
+    model: str | None = None,
     cancel_event: threading.Event | None = None,
 ) -> list[dict[str, Any]] | None:
     """Find supporting transcript segments for each summary sentence.
 
     Sends the full transcript (truncated if very long) in a single model call
-    to avoid multi-chunk latency. If *cancel_event* is set during the model
-    call, the request is aborted and ``None`` is returned. Returns an ordered
-    list of ``{"sentence", "refs": [...]}`` dicts, or ``None`` if inputs are
-    empty or the run was cancelled.
+    to avoid multi-chunk latency. Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an
+    explicit *model* override is provided. If *cancel_event* is set during the
+    model call, the request is aborted and ``None`` is returned. Returns an
+    ordered list of ``{"sentence", "refs": [...]}`` dicts, or ``None`` if inputs
+    are empty or the run was cancelled.
     """
     sentences = _split_summary_sentences(summary)
     if not sentences or not segments:
         return None
 
-    model = config.OLLAMA_SUMMARY_MODEL
+    if model is None:
+        model = config.OLLAMA_SUMMARY_MODEL
 
     claims_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sentences))
     transcript_text = _truncate_middle(

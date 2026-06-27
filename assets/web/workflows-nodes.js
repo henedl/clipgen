@@ -63,6 +63,61 @@
     return (nt && nt.params) || [];
   }
 
+  // Detector keys for the unified Detect node, derived from the (hidden) ss_<tool>
+  // catalog nodes — no duplicated list in JS.
+  function detectTypes() {
+    var out = [];
+    (state.catalog || []).forEach(function (n) {
+      if (n.id && n.id.indexOf("ss_") === 0) out.push(n.id.slice(3));
+    });
+    return out;
+  }
+
+  // The unified Detect node: a detector dropdown plus the selected detector's
+  // param set (the ss_<tool> specs), which swaps in place on change. Generalises
+  // the Multitool step editor to a single, node-level step.
+  function buildDetectEditor(node) {
+    if (!node.params) node.params = {};
+    var types = detectTypes();
+    if (!node.params.detector) node.params.detector = types[0] || "text";
+    var wrap = el("div", "wf-node-params");
+
+    var row = el("div", "wf-param");
+    row.appendChild(el("label", "wf-param-label", "Detector"));
+    var sel = el("select", "wf-param-input");
+    types.forEach(function (t) {
+      var o = el("option");
+      o.value = t;
+      o.textContent = t;
+      if (t === node.params.detector) o.selected = true;
+      sel.appendChild(o);
+    });
+    var body = el("div", "wf-detect-body");
+    function renderBody() {
+      body.innerHTML = "";
+      stepParamSpecs(node.params.detector).forEach(function (ps) {
+        // Seed the spec default so number fields show a value (and persist on the
+        // next save); the server also defaults missing params defensively.
+        if (node.params[ps.name] === undefined) node.params[ps.name] = ps.default;
+        var prow = el("div", "wf-param");
+        prow.appendChild(el("label", "wf-param-label", ps.label || ps.name));
+        prow.appendChild(buildParamControl(node, ps));
+        body.appendChild(prow);
+      });
+    }
+    sel.addEventListener("change", function () {
+      node.params.detector = sel.value;
+      WF.scheduleSave();
+      renderBody(); // the param set differs per detector
+      if (WF.refreshValidation) WF.refreshValidation();
+    });
+    row.appendChild(sel);
+    wrap.appendChild(row);
+    wrap.appendChild(body);
+    renderBody();
+    return wrap;
+  }
+
   // One ParamSpec editor (number / enum / bool / participant / string / step-list),
   // writing back to `store` (defaults to node.params) on change and autosaving.
   // Scalar editors do NOT re-render on edit, so focus/caret survive typing (the
@@ -251,6 +306,7 @@
   }
 
   function buildParamEditors(node, type) {
+    if (node.type === "detect") return buildDetectEditor(node);
     var wrap = el("div", "wf-node-params");
     type.params.forEach(function (spec) {
       var row = el("div", "wf-param");
@@ -275,9 +331,10 @@
     card.setAttribute("data-node-id", node.id);
     card.setAttribute("data-node-type", node.type);
     card.setAttribute("data-domain", type.domain || "");
-    // Busy nodes (a compound step-list param, currently only Multitool) get extra
-    // width so their controls stay readable and don't overflow the card.
+    // Busy nodes (a compound step-list param like Multitool, or the Detect node's
+    // swappable param set) get extra width so their controls stay readable.
     if (
+      node.type === "detect" ||
       (type.params || []).some(function (p) {
         return p.type === "step-list";
       })
@@ -289,6 +346,8 @@
     if (state.selection && state.selection.indexOf(node.id) >= 0) {
       card.classList.add("selected");
     }
+    // Muted nodes are dimmed; the runner skips them and their downstream subtree.
+    if (node.disabled) card.classList.add("wf-node-muted");
     // Validation cue (shares WF.nodeIssues with the Issues panel): greyed when
     // the launch context can't satisfy `requires`; otherwise a dashed `.invalid`
     // border for any remaining error (unwired required input / empty required
@@ -318,6 +377,26 @@
       help.setAttribute("data-tooltip", type.description);
       titleBar.appendChild(help);
     }
+    // Mute toggle: skip this node (and its downstream subtree) without deleting.
+    var mute = el("span", "wf-node-mute");
+    if (node.disabled) mute.classList.add("on");
+    mute.setAttribute(
+      "data-tooltip",
+      node.disabled ? "Un-mute (run this node)" : "Mute (skip this node + downstream)",
+    );
+    mute.setAttribute("role", "button");
+    // Stop the mousedown reaching the canvas's delegated drag/select handler.
+    mute.addEventListener("mousedown", function (e) {
+      e.stopPropagation();
+    });
+    mute.addEventListener("click", function (e) {
+      e.stopPropagation();
+      node.disabled = !node.disabled;
+      if (WF.renderAllNodes) WF.renderAllNodes();
+      if (WF.refreshValidation) WF.refreshValidation();
+      WF.scheduleSave();
+    });
+    titleBar.appendChild(mute);
     card.appendChild(titleBar);
     card.appendChild(el("div", "wf-node-domain", type.domain || ""));
 
@@ -361,10 +440,12 @@
     if (WF.clearPortCache) WF.clearPortCache();
     if (WF.renderWires) WF.renderWires();
 
-    // Selection may have changed (drop, marquee, delete) → re-gate "Stash
-    // selection". One guarded site keeps the button in sync without touching
-    // every gesture that mutates state.selection.
+    // Selection may have changed (drop, marquee, delete) → re-gate the
+    // selection-dependent toolbar buttons ("Stash selection", "Run to here").
+    // One guarded site keeps them in sync without touching every gesture that
+    // mutates state.selection.
     if (WF.syncStashButton) WF.syncStashButton();
+    if (WF.syncRunButton) WF.syncRunButton();
   }
 
   WF.renderNode = renderNode;

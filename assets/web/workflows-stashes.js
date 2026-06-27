@@ -167,23 +167,25 @@
       });
   }
 
-  // Stamp a stash's sub-graph onto the canvas with fresh ids. dropWorld is the
-  // world-coord drop point (drag) or null (click-to-add → viewport center).
-  function instantiateStash(stashId, dropWorld) {
-    var stash = findStash(stashId);
-    if (!stash || !stash.nodes || !stash.nodes.length) return;
+  // Stamp a sub-graph (deep-cloned nodes + induced edges) onto the canvas with
+  // fresh ids, anchored at dropWorld (drag) or a cascaded viewport center (null).
+  // Shared by stash instantiation and clipboard paste (workflows-canvas.js).
+  // Deep-clones each node so any non-core fields (e.g. a `disabled` flag) survive.
+  // Returns the new node ids.
+  function instantiateSubgraph(nodes, edges, dropWorld) {
+    if (!nodes || !nodes.length) return [];
 
-    // Fresh id for every stash node, built BEFORE any edge is rewritten.
+    // Fresh id for every node, built BEFORE any edge is rewritten.
     var idMap = {};
-    stash.nodes.forEach(function (n) {
+    nodes.forEach(function (n) {
       idMap[n.id] = "n_" + WF.randomId();
     });
 
-    // Anchor the stash's top-left node to the drop point (or the cascaded
+    // Anchor the sub-graph's top-left node to the drop point (or the cascaded
     // viewport center) so it never stacks exactly on existing nodes.
     var minX = Infinity;
     var minY = Infinity;
-    stash.nodes.forEach(function (n) {
+    nodes.forEach(function (n) {
       var p = n.position || { x: 0, y: 0 };
       if (p.x < minX) minX = p.x;
       if (p.y < minY) minY = p.y;
@@ -200,19 +202,16 @@
     var offY = Math.round(anchor.y - minY);
 
     var newIds = [];
-    stash.nodes.forEach(function (n) {
+    nodes.forEach(function (n) {
       var p = n.position || { x: 0, y: 0 };
-      var node = {
-        id: idMap[n.id],
-        type: n.type,
-        params: JSON.parse(JSON.stringify(n.params || {})),
-        position: { x: p.x + offX, y: p.y + offY },
-      };
+      var node = JSON.parse(JSON.stringify(n));
+      node.id = idMap[n.id];
+      node.position = { x: p.x + offX, y: p.y + offY };
       state.nodes.push(node);
       newIds.push(node.id);
     });
 
-    (stash.edges || []).forEach(function (e) {
+    (edges || []).forEach(function (e) {
       var from = idMap[e.from];
       var to = idMap[e.to];
       if (!from || !to) return; // defensive: drop an edge with an unmapped endpoint
@@ -229,6 +228,15 @@
     state.selectedEdge = null;
     if (WF.renderAllNodes) WF.renderAllNodes();
     WF.scheduleSave();
+    return newIds;
+  }
+
+  // Stamp a stash's sub-graph onto the canvas with fresh ids. dropWorld is the
+  // world-coord drop point (drag) or null (click-to-add → viewport center).
+  function instantiateStash(stashId, dropWorld) {
+    var stash = findStash(stashId);
+    if (!stash || !stash.nodes || !stash.nodes.length) return;
+    instantiateSubgraph(stash.nodes, stash.edges, dropWorld);
   }
 
   function viewportCenterWorld() {
@@ -290,6 +298,7 @@
   WF.renderStashPalette = renderStashPalette;
   WF.saveSelectionAsStash = saveSelectionAsStash;
   WF.instantiateStash = instantiateStash;
+  WF.instantiateSubgraph = instantiateSubgraph;
   WF.renameStash = renameStash;
   WF.deleteStash = deleteStash;
   WF.syncStashButton = syncStashButton;

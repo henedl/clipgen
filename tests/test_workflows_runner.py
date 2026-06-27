@@ -254,6 +254,28 @@ def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
     assert runner.node_states["view"]["status"] == "skipped"
 
 
+def test_disabled_node_skips_itself_and_downstream(tmp_path, monkeypatch):
+    # Muting 't' skips it and propagates SKIPPED to its dependent 's'; the run
+    # still completes (a mute is not a failure) and the unrelated 'v' runs.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    runner = _runner(
+        tmp_path,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "t", "type": "transcribe", "params": {}, "disabled": True},
+            {"id": "s", "type": "summarize", "params": {}},
+        ],
+        edges=[
+            {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+            {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+        ],
+    )
+    runner.run()
+    assert runner.node_states["t"]["status"] == "skipped"
+    assert runner.node_states["s"]["status"] == "skipped"
+    assert runner.status == "completed"
+
+
 def _gate_graph():
     return (
         [
@@ -285,6 +307,64 @@ def test_gate_true_runs_downstream_branch(tmp_path):
     runner = _runner(tmp_path, nodes, edges)
     runner.run()
     assert runner.node_states["m"]["status"] == "completed"
+
+
+def test_run_to_target_executes_only_ancestors(tmp_path, monkeypatch):
+    # A partial run keeps the target + its ancestors and skips the rest: targeting
+    # 't' runs 'v' and 't' but skips downstream 's'.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    nodes = [
+        {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+        {"id": "t", "type": "transcribe", "params": {}},
+        {"id": "s", "type": "summarize", "params": {}},
+    ]
+    edges = [
+        {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+        {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+    ]
+    runner = workflows.WorkflowRunner(
+        "run_target",
+        {"id": "bp", "nodes": nodes, "edges": edges},
+        _ctx(tmp_path),
+        target_node_id="t",
+    )
+    runner.run()
+    assert runner.node_states["t"]["status"] == "completed"
+    assert runner.node_states["s"]["status"] == "skipped"
+    assert runner.status == "completed"
+
+
+def test_gate_collection_blocks_downstream(tmp_path, monkeypatch):
+    # The fused measure+gate node reduces a wired collection then gates: a 1-event
+    # collection with threshold 2 -> pass False -> the downstream 'm' is skipped.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["ss_color"],
+        "execute",
+        lambda ctx, inputs, params: {
+            "events": {"events": [{"time_in": 0, "time_out": 1}]}
+        },
+    )
+    nodes = [
+        {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+        {"id": "d", "type": "ss_color", "params": {}},
+        {
+            "id": "gc",
+            "type": "gate_collection",
+            "params": {"metric": "count", "op": ">=", "threshold": 2},
+        },
+        {"id": "m", "type": "make_clips", "params": {}},
+    ]
+    edges = [
+        {"from": "v", "fromPort": "video", "to": "d", "toPort": "video"},
+        {"from": "d", "fromPort": "events", "to": "gc", "toPort": "events"},
+        {"from": "gc", "fromPort": "pass", "to": "m", "toPort": "__gate__"},
+        {"from": "v", "fromPort": "video", "to": "m", "toPort": "video"},
+    ]
+    runner = _runner(tmp_path, nodes, edges)
+    runner.run()
+    assert runner.node_states["gc"]["status"] == "completed"
+    assert runner.node_states["m"]["status"] == "skipped"
 
 
 def test_cancel_skips_remaining_nodes(tmp_path):

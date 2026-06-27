@@ -183,6 +183,20 @@ class NodeType(TypedDict):
     params: list[ParamSpec]
     requires: list[str]  # subset of {"sheet", "videoDir"}
     execute: NotRequired[Callable[..., dict[str, Any]]]
+    # Hidden from the palette but kept in the catalog (e.g. the per-detector
+    # ss_<tool> nodes, which the unified Detect node + Multitool read for specs).
+    hidden: NotRequired[bool]
+
+
+# Shared by the three Ollama thinking nodes: a free-text override of the model
+# name (blank → the configured default). A ``string`` rather than ``enum`` because
+# the installed Ollama models are environment-specific and not known server-side.
+_OLLAMA_MODEL_PARAM: ParamSpec = {
+    "name": "model",
+    "type": "string",
+    "default": "",
+    "label": "Ollama model (blank = default)",
+}
 
 
 # Curated v1 node set (plans/WORKFLOWS-PLAN.md). Keyed by id so the frontend can
@@ -276,6 +290,13 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "params": [
             {
+                "name": "model",
+                "type": "enum",
+                "default": config.TRANSCRIBE_MODEL,
+                "choices": ["tiny", "base", "small", "medium", "large-v3"],
+                "label": "Whisper model",
+            },
+            {
                 "name": "language",
                 "type": "string",
                 "default": "auto",
@@ -323,7 +344,7 @@ NODE_TYPES: dict[str, NodeType] = {
         "category": "Thinking",
         "inputs": [{"name": "transcript", "type": "transcript"}],
         "outputs": [{"name": "summary", "type": "summary"}],
-        "params": [],
+        "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
     "citations": {
@@ -337,7 +358,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "segments", "type": "segments"},
         ],
         "outputs": [{"name": "citations", "type": "citations"}],
-        "params": [],
+        "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
     "friction": {
@@ -351,7 +372,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "summary", "type": "summary", "optional": True},
         ],
         "outputs": [{"name": "friction", "type": "friction"}],
-        "params": [],
+        "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
     # ---- Screenspace ----
@@ -497,6 +518,43 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": ["videoDir"],
     },
+    "interval_captures": {
+        "id": "interval_captures",
+        "label": "Interval Captures",
+        "description": "Sample a screenshot or GIF at a fixed interval across the video (or each input time range).",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            {"name": "timeRange", "type": "timeRange", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "interval",
+                "type": "number",
+                "default": config.GALLERY_INTERVAL_SECONDS,
+                "min": 1,
+                "label": "Interval (s)",
+                "required": True,
+            },
+            {
+                "name": "output_format",
+                "type": "enum",
+                "default": "screen",
+                "choices": ["screen", "gif"],
+                "label": "Output format",
+            },
+            {
+                "name": "gif_duration",
+                "type": "number",
+                "default": config.GALLERY_GIF_DURATION_SECONDS,
+                "min": 1,
+                "label": "GIF duration (s)",
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "build_reel": {
         "id": "build_reel",
         "label": "Build Reel",
@@ -510,6 +568,12 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "params": [
             {"name": "name", "type": "string", "default": "reel", "label": "Reel name"},
+            {
+                "name": "chronological",
+                "type": "bool",
+                "default": False,
+                "label": "Chronological order",
+            },
         ],
         "requires": ["videoDir"],
     },
@@ -566,6 +630,38 @@ NODE_TYPES: dict[str, NodeType] = {
         # so a gate can wire into any node (exact-match) as a control dependency.
         "outputs": [{"name": "pass", "type": "control"}],
         "params": [
+            {
+                "name": "op",
+                "type": "enum",
+                "default": ">=",
+                "choices": [">=", ">", "<=", "<", "==", "!="],
+                "label": "Comparison",
+            },
+            {"name": "threshold", "type": "number", "default": 0, "label": "Threshold"},
+        ],
+        "requires": [],
+    },
+    "gate_collection": {
+        "id": "gate_collection",
+        "label": "Threshold Gate",
+        "description": "Measure events, clips, or segments and gate downstream nodes on the result — Measure + Gate in one node.",
+        "domain": "control",
+        "category": "Control",
+        "inputs": [
+            {"name": "events", "type": "events", "optional": True},
+            {"name": "clips", "type": "clipRecords", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        # ``pass`` gates exactly like the plain Gate's output (see that node).
+        "outputs": [{"name": "pass", "type": "control"}],
+        "params": [
+            {
+                "name": "metric",
+                "type": "enum",
+                "default": "count",
+                "choices": ["count", "max_confidence", "total_duration"],
+                "label": "Metric",
+            },
             {
                 "name": "op",
                 "type": "enum",
@@ -905,7 +1001,39 @@ for _ss_tool in _SS_DETECTOR_SPECS:
         "outputs": [{"name": "events", "type": "events"}],
         "params": list(_SS_DETECTOR_SPECS[_ss_tool]),
         "requires": ["videoDir"],
+        # Hidden from the palette: the unified "detect" node below is the
+        # palette-facing entry. These stay in the catalog as the per-detector
+        # spec source (Detect editor + Multitool steps) and keep old blueprints
+        # and built-in recipes that reference ss_<tool> directly runnable.
+        "hidden": True,
     }
+
+# Unified palette-facing detector: one node whose ``detector`` dropdown swaps the
+# per-detector param set (the frontend reads it from the hidden ss_<tool> nodes
+# above). Dispatches to the same _run_ss_detector body the ss_<tool> nodes use.
+NODE_TYPES["detect"] = {
+    "id": "detect",
+    "label": "Detect",
+    "description": "Detect a region condition (text, colour, motion, numbers, …) — pick the detector.",
+    "domain": "screenspace",
+    "category": "Screenspace",
+    "inputs": [
+        {"name": "video", "type": "video"},
+        {"name": "region", "type": "region", "optional": True},
+        {"name": "timeRange", "type": "timeRange", "optional": True},
+    ],
+    "outputs": [{"name": "events", "type": "events"}],
+    "params": [
+        {
+            "name": "detector",
+            "type": "enum",
+            "default": "text",
+            "choices": list(_SS_DETECTOR_SPECS.keys()),
+            "label": "Detector",
+        }
+    ],
+    "requires": ["videoDir"],
+}
 
 
 def serialize_catalog() -> list[dict[str, Any]]:
@@ -1225,17 +1353,24 @@ def _exec_transcribe(
     paths = list(src.get("video_paths") or [])
     language = str(params.get("language", "") or "").strip()
     lang = None if language in ("", "auto") else language
+    model_name = str(params.get("model", "") or "").strip() or None
 
     result: Any = None
     if len(paths) >= 2:
         timeline = video.build_source_timeline(paths)
         if timeline is not None:
             result = transcripts.transcribe_timeline(
-                timeline, language=lang, cancel_flag=ctx.cancel_flag
+                timeline,
+                model_name=model_name,
+                language=lang,
+                cancel_flag=ctx.cancel_flag,
             )
     elif paths:
         result = transcripts.transcribe_video(
-            paths[0], language=lang, cancel_flag=ctx.cancel_flag
+            paths[0],
+            model_name=model_name,
+            language=lang,
+            cancel_flag=ctx.cancel_flag,
         )
 
     if result is None:
@@ -1291,7 +1426,7 @@ def _exec_summarize(
     if not ollama_client.is_available():
         return {"summary": ""}
     summary = thinking_agents.summarize_transcript(
-        segments, cancel_event=ctx.cancel_event
+        segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
     return {"summary": summary or ""}
 
@@ -1308,7 +1443,10 @@ def _exec_citations(
     if not ollama_client.is_available():
         return {"citations": []}
     cites = thinking_agents.find_citations(
-        summary, segments, cancel_event=ctx.cancel_event
+        summary,
+        segments,
+        model=params.get("model") or None,
+        cancel_event=ctx.cancel_event,
     )
     return {"citations": cites or []}
 
@@ -1328,7 +1466,11 @@ def _exec_friction(
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored)
     moments = thinking_agents.find_friction_moments(
-        summary, segments, candidates, cancel_event=ctx.cancel_event
+        summary,
+        segments,
+        candidates,
+        model=params.get("model") or None,
+        cancel_event=ctx.cancel_event,
     )
     return {"friction": moments or []}
 
@@ -1557,6 +1699,14 @@ def _make_ss_executor(
     return _exec
 
 
+def _exec_detect(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Unified detector node: dispatch to the chosen tool's scan body."""
+    tool_name = str(params.get("detector", "text") or "text")
+    return _run_ss_detector(ctx, inputs, params, tool_name)
+
+
 def _resolve_region_coords(
     region_in: dict[str, Any], video_path: str
 ) -> tuple[str, dict[str, int]]:
@@ -1717,6 +1867,78 @@ def _exec_make_clips(
     return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
 
 
+def _exec_interval_captures(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Sample a video into screenshots/GIFs at a fixed interval.
+
+    Iterates each wired time range (or the whole video when none is wired) at
+    ``interval`` seconds, expands the samples into point/GIF clip records, and
+    reuses ``process_clips`` so the artifacts match Make Clips exactly. Fixes the
+    one-artifact-per-range limit of Make Clips' screen/gif output.
+    """
+    import files
+    import pipeline
+    import video as video_mod
+
+    src = inputs.get("video") or {}
+    paths = list(src.get("video_paths") or [])
+    study = str(src.get("study", "") or "")
+    empty = {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+    if not paths:
+        return empty
+
+    interval = int(
+        float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
+        or config.GALLERY_INTERVAL_SECONDS
+    )
+    if interval < 1:
+        interval = 1
+    fmt = (
+        "gif" if str(params.get("output_format", "screen") or "") == "gif" else "screen"
+    )
+    gif_dur = float(
+        params.get("gif_duration", config.GALLERY_GIF_DURATION_SECONDS)
+        or config.GALLERY_GIF_DURATION_SECONDS
+    )
+
+    ranges = [
+        (float(s), float(e))
+        for s, e in ((inputs.get("timeRange") or {}).get("ranges") or [])
+    ]
+    if not ranges:
+        duration = video_mod.get_file_duration(paths[0]) or 0
+        if duration <= 0:
+            return empty
+        ranges = [(0.0, float(duration))]
+
+    # Expand each window into per-interval sample points (a point for a
+    # screenshot, a [t, t+gif_dur] window for a GIF).
+    sample_ranges: list[tuple[float, float]] = []
+    for start, end in ranges:
+        t = start
+        while t < end:
+            sample_ranges.append((t, t + gif_dur if fmt == "gif" else t))
+            t += interval
+    if not sample_ranges:
+        return empty
+
+    records = files.build_clip_records(
+        participant=str(src.get("participant", "") or ""),
+        source_filename=_clip_source_filename(src),
+        time_ranges=sample_ranges,
+        description="sample",
+        study=study,
+    )
+    count, artifacts = pipeline.process_clips(
+        records,
+        output_format=fmt,
+        include_severity=False,
+        cancel_flag=ctx.cancel_flag,
+    )
+    return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
+
+
 def _attachment_artifact(
     art_type: str, output_path: str, source: dict[str, Any], description: str
 ) -> dict[str, Any]:
@@ -1823,6 +2045,25 @@ def _exec_heatmap(
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
+def _reel_start_seconds(rec: Any) -> float:
+    """Earliest start (seconds) of a clip record, for chronological reels.
+
+    Adapter-built records carry pre-resolved ``times`` (H:MM:SS); sheet records
+    resolve lazily from their ``cell`` (matching
+    ``spreadsheet.sort_clips_chronologically``). Unparseable records sort last.
+    """
+    times = rec.get("times")
+    if not times:
+        cell = rec.get("cell")
+        cell_value = str(getattr(cell, "value", "") or "") if cell is not None else ""
+        cleaned, _, _ = utils.parse_cell_annotations(cell_value)
+        times = utils.parse_timestamps(cleaned)
+    if not times:
+        return float("inf")
+    seconds = utils.timestamp_to_seconds(times[0][0])
+    return seconds if seconds is not None else float("inf")
+
+
 def _exec_build_reel(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1832,6 +2073,8 @@ def _exec_build_reel(
     clips_in = inputs.get("clips") or {}
     records = list(clips_in.get("records") or [])
     study = str(clips_in.get("study", "") or "")
+    if params.get("chronological"):
+        records = sorted(records, key=_reel_start_seconds)
     if not records:
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
@@ -1892,15 +2135,12 @@ _GATE_OPS: dict[str, Callable[[float, float], bool]] = {
 }
 
 
-def _exec_measure(
-    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
-) -> dict[str, Any]:
-    """Reduce a wired collection to one scalar for the gate's threshold test.
+def _reduce_collection(metric: str, inputs: dict[str, Any]) -> float:
+    """Reduce a wired collection to one scalar (the measure / gate-collection core).
 
     Reads whichever of events / clipRecords / segments is wired (events first).
     ``max_confidence`` only applies to events; it falls back to 0 otherwise.
     """
-    metric = str(params.get("metric", "count") or "count")
     events = (inputs.get("events") or {}).get("events")
     records = (inputs.get("clips") or {}).get("records")
     segments = (inputs.get("segments") or {}).get("segments")
@@ -1908,26 +2148,27 @@ def _exec_measure(
     if events is not None:
         items = list(events)
         if metric == "count":
-            return {"value": float(len(items))}
+            return float(len(items))
         if metric == "max_confidence":
             confs = [float(e.get("confidence", 0.0) or 0.0) for e in items]
-            return {"value": max(confs) if confs else 0.0}
-        total = sum(
-            max(
-                0.0,
-                float(e.get("time_out", 0.0) or 0.0)
-                - float(e.get("time_in", 0.0) or 0.0),
+            return max(confs) if confs else 0.0
+        return float(
+            sum(
+                max(
+                    0.0,
+                    float(e.get("time_out", 0.0) or 0.0)
+                    - float(e.get("time_in", 0.0) or 0.0),
+                )
+                for e in items
             )
-            for e in items
         )
-        return {"value": float(total)}
 
     if records is not None:
         items = list(records)
         if metric == "count":
-            return {"value": float(len(items))}
+            return float(len(items))
         if metric == "max_confidence":
-            return {"value": 0.0}
+            return 0.0
         total = 0.0
         for rec in items:
             for start_str, end_str in rec.get("times") or []:
@@ -1935,38 +2176,67 @@ def _exec_measure(
                 end = utils.timestamp_to_seconds(end_str)
                 if start is not None and end is not None:
                     total += max(0.0, end - start)
-        return {"value": float(total)}
+        return total
 
     if segments is not None:
         items = list(segments)
         if metric == "count":
-            return {"value": float(len(items))}
+            return float(len(items))
         if metric == "max_confidence":
-            return {"value": 0.0}
-        total = sum(
-            max(
-                0.0, float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0)
+            return 0.0
+        return float(
+            sum(
+                max(
+                    0.0,
+                    float(s.get("end", 0.0) or 0.0) - float(s.get("start", 0.0) or 0.0),
+                )
+                for s in items
             )
-            for s in items
         )
-        return {"value": float(total)}
 
-    return {"value": 0.0}
+    return 0.0
+
+
+def _exec_measure(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Reduce a wired collection to one scalar for a downstream gate."""
+    metric = str(params.get("metric", "count") or "count")
+    return {"value": _reduce_collection(metric, inputs)}
+
+
+def _apply_gate(value: float, params: dict[str, Any]) -> bool:
+    """Compare *value* to a threshold per the node's ``op`` (shared gate logic)."""
+    fn = _GATE_OPS.get(str(params.get("op", ">=") or ">="))
+    if fn is None:
+        return False
+    try:
+        return bool(fn(value, float(params.get("threshold", 0))))
+    except (TypeError, ValueError):
+        return False
 
 
 def _exec_gate(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    op = str(params.get("op", ">=") or ">=")
-    fn = _GATE_OPS.get(op)
     raw = inputs.get("value")
-    if fn is None or raw is None:
+    if raw is None:
         return {"pass": False}
     try:
-        result = fn(float(raw), float(params.get("threshold", 0)))
+        value = float(raw)
     except (TypeError, ValueError):
-        result = False
-    return {"pass": bool(result)}
+        return {"pass": False}
+    return {"pass": _apply_gate(value, params)}
+
+
+def _exec_gate_collection(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Reduce a wired collection to a scalar then gate it — the measure+gate pair
+    fused into one node (see :func:`_exec_measure` and :func:`_exec_gate`)."""
+    metric = str(params.get("metric", "count") or "count")
+    value = _reduce_collection(metric, inputs)
+    return {"pass": _apply_gate(value, params)}
 
 
 # ---- Collection-algebra control nodes (filter / merge / partition / limit / dedup) ----
@@ -2005,8 +2275,12 @@ _COLLECTION_KINDS: dict[str, dict[str, Any]] = {
     },
     "clips": {
         "port": "clipRecords",
+        # Labelled "Clip Selections" (not "Clips") so the family reads as operating
+        # on pre-render clip specs from sheet_selection/highlights — not the
+        # rendered ``artifacts`` Make Clips emits (which has its own artifacts
+        # family). The node ids stay ``*_clips`` so saved blueprints are unaffected.
         "key": "records",
-        "label": "Clips",
+        "label": "Clip Selections",
         "preserve": ("study",),
         "fields": ["duration", "category", "severity", "desc"],
         "sort_fields": ["duration"],
@@ -2580,17 +2854,21 @@ _EXECUTORS: dict[
     "multitool": _exec_multitool,
     "highlights": _exec_highlights,
     "make_clips": _exec_make_clips,
+    "interval_captures": _exec_interval_captures,
     "build_reel": _exec_build_reel,
     "timelapse": _exec_timelapse,
     "heatmap": _exec_heatmap,
     "measure": _exec_measure,
     "timeline_viewer": _exec_timeline_viewer,
     "gate": _exec_gate,
+    "gate_collection": _exec_gate_collection,
 }
 
-# The ten per-detector Screenspace nodes share one body via the factory above.
+# The ten per-detector Screenspace nodes share one body via the factory above;
+# the unified ``detect`` node dispatches into the same body by ``detector`` param.
 for _ss_tool in _SS_DETECTOR_SPECS:
     _EXECUTORS[f"ss_{_ss_tool}"] = _make_ss_executor(_ss_tool)
+_EXECUTORS["detect"] = _exec_detect
 
 # Collection-algebra control nodes — per-type families, all factory-generated.
 # Registered here (NODE_TYPES + _EXECUTORS together) so the attach loop below
@@ -2937,9 +3215,13 @@ class WorkflowRunner:
         participant: str = "",
         batch_id: str = "",
         triggered: bool = False,
+        target_node_id: str = "",
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
+        # Partial run (P11): when set, only this node and its transitive ancestors
+        # execute; the rest are marked skipped. Empty → run the whole graph.
+        self.target_node_id = target_node_id
         # Batch identity (P3): empty for a normal single run; a child run carries
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
@@ -2991,10 +3273,22 @@ class WorkflowRunner:
                 deps.add(src)
         return deps
 
+    def _ancestors_inclusive(self, node_id: str) -> set[str]:
+        """``node_id`` plus everything it transitively depends on (for partial runs)."""
+        seen: set[str] = set()
+        stack = [node_id]
+        while stack:
+            nid = stack.pop()
+            if nid in seen:
+                continue
+            seen.add(nid)
+            stack.extend(self._deps(nid))
+        return seen
+
     def _gate_blocks(self, node_id: str) -> bool:
         """True if ``node_id`` is a gate that completed with ``pass`` False."""
         node = self._nodes_by_id.get(node_id)
-        if not node or node.get("type") != "gate":
+        if not node or node.get("type") not in ("gate", "gate_collection"):
             return False
         return (self._results.get(node_id) or {}).get("pass") is False
 
@@ -3086,12 +3380,31 @@ class WorkflowRunner:
             self._notify(force=True)
             return
 
+        # Partial run: keep only the target node and its ancestors; the rest are
+        # skipped up front (they never execute and don't block completion).
+        if self.target_node_id and self.target_node_id in self._nodes_by_id:
+            keep = self._ancestors_inclusive(self.target_node_id)
+            for nid in order:
+                if nid not in keep:
+                    self._set_node(
+                        nid, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                    )
+            order = [nid for nid in order if nid in keep]
+
         for node_id in order:
             node = self._nodes_by_id[node_id]
             if self.ctx.cancel_event.is_set():
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
+                continue
+            # A muted node is skipped intrinsically; _should_skip then propagates
+            # SKIPPED to its whole downstream subtree (same as a blocking gate).
+            if node.get("disabled"):
+                self._set_node(
+                    node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                self._notify(force=True)
                 continue
             if self._should_skip(node_id):
                 self._set_node(

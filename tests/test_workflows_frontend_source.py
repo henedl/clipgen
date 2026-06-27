@@ -426,3 +426,126 @@ def test_in_flight_connect_is_torn_down_on_context_change():
     assert "WF.cancelConnect = endConnect" in wires
     assert "WF.cancelConnect()" in hub  # openBlueprint
     assert "WF.cancelConnect()" in canvas  # autoArrange
+
+
+def test_palette_search_filters_nodes():
+    """The palette has a search box that filters nodes by label/description/category."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfPaletteSearch"' in html
+    assert 'autocomplete="off"' in html  # text input must not browser-autofill
+    assert "paletteNodeMatches" in hub
+    # The search input re-renders the palette on every keystroke.
+    assert 'qs("#wfPaletteSearch")' in hub
+
+
+def test_blueprint_import_export():
+    """Blueprint JSON export/import live in the TopNav Quick Actions menu."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfImportFile"' in html  # hidden input the Import action triggers
+    assert "function exportBlueprint" in hub
+    assert "function importBlueprint" in hub
+    # Registered as TopNav quick actions, not toolbar buttons.
+    assert "ClipgenTopNav.setQuickActions" in hub
+    assert "Export blueprint JSON" in hub
+    assert "Import blueprint JSON" in hub
+    # Import reuses the existing create endpoint (no new server route).
+    assert 'apiPost("api/blueprints"' in hub
+    # Export reuses the canonical Blob-download idiom.
+    assert "URL.createObjectURL" in hub
+
+
+def test_copy_paste_duplicate_nodes():
+    """Canvas supports Ctrl/Cmd+C/V/D, reusing the stash id-remap for paste."""
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    stashes = (_WEB / "workflows-stashes.js").read_text(encoding="utf-8")
+    assert "function copySelection" in canvas
+    assert "function pasteClipboard" in canvas
+    assert "function duplicateSelection" in canvas
+    # Clipboard shortcuts gate on the cmd/ctrl modifier and skip text fields.
+    assert "e.metaKey || e.ctrlKey" in canvas
+    # Paste delegates to the stashes satellite's published id-remap (late-bound).
+    assert "WF.instantiateSubgraph" in canvas
+    assert "WF.instantiateSubgraph = instantiateSubgraph" in stashes
+
+
+def test_node_mute_toggle():
+    """Nodes have a mute toggle; the runner-facing flag is `disabled`, validation
+    skips muted nodes, and the card dims via .wf-node-muted."""
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert "wf-node-mute" in nodes
+    assert "node.disabled = !node.disabled" in nodes
+    assert "wf-node-muted" in nodes
+    assert ".wf-node-muted" in css
+    # A muted node must not block Run.
+    assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
+
+
+def test_collection_palette_grouped_by_operation():
+    """The Collection category renders as collapsible operation sub-groups."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert "appendCollectionGroups" in hub
+    assert 'cat === "Collection"' in hub
+    # Sub-groups use native <details>/<summary> for collapse (no JS toggle).
+    assert 'el("details", "wf-palette-subgroup")' in hub
+    assert ".wf-palette-subgroup-label" in css
+
+
+def test_undo_redo_history():
+    """The hub keeps a coalesced snapshot history; canvas binds Ctrl/Cmd+Z / +Y."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    assert "function undo" in hub and "function redo" in hub
+    assert "WF.undo = undo" in hub and "WF.redo = redo" in hub
+    # Capture rides the scheduleSave chokepoint and resets on blueprint switch.
+    assert "captureHistory" in hub
+    assert "resetHistory()" in hub  # openBlueprint
+    # Canvas calls the hub's history late-bound.
+    assert "WF.undo" in canvas and "WF.redo" in canvas
+
+
+def test_unified_detect_node():
+    """A single Detect node with a detector dropdown; hidden ss_* stay as specs."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    # Palette skips hidden catalog nodes.
+    assert "if (node.hidden) return;" in hub
+    # Detect editor swaps the param set per detector, derived from the catalog.
+    assert "function buildDetectEditor" in nodes
+    assert "function detectTypes" in nodes
+    assert 'node.type === "detect"' in nodes
+    # Detect's per-detector required params still gate Run.
+    assert 'node.type === "detect"' in validate
+
+
+def test_run_to_selected_node():
+    """'Run to here' lives in the Run split-button menu and starts a partial run."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    # Split-button: primary Run + caret menu with a Run-to-here item.
+    assert 'id="wfRunMenuBtn"' in html
+    assert 'id="wfRunToItem"' in html
+    assert ".wf-run-menu" in css
+    assert "function initRunMenu" in hub
+    assert "WF.startRun(sel[0])" in hub
+    # The run-start passes the target through; the item needs exactly one node.
+    assert "body.targetNodeId = targetNodeId" in runs
+    assert "state.selection.length === 1" in runs
+
+
+def test_theme_toggle_icons_styled():
+    """The TopNav renders #themeToggle, but each page must supply the sun/moon
+    icon visuals + the position:relative anchor (missing → blank toggle)."""
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".theme-icon-sun" in css
+    assert ".theme-icon-moon" in css
+    assert '#themeToggle[data-theme="dark"] .theme-icon-moon' in css
+    # The absolutely-positioned icons need a positioned button to anchor to.
+    assert "#themeToggle {" in css
