@@ -98,6 +98,10 @@
   function buildPaletteItem(node) {
     var item = el("div", "wf-palette-item", node.label);
     item.setAttribute("data-domain", node.domain || "");
+    // Brief description tooltip for every palette row (mirrors the on-card `?`).
+    // Use the [data-tooltip] singleton, not native title — title doesn't render
+    // on draggable=true rows, and the singleton is styled/positioned in-viewport.
+    if (node.description) item.setAttribute("data-tooltip", node.description);
     if (nodeContextMet(node)) {
       item.draggable = true;
       item.dataset.nodeType = node.id;
@@ -112,7 +116,12 @@
       });
     } else {
       item.classList.add("disabled");
-      item.title = "Requires " + ((node.requires || []).join(", ") || "context");
+      // Disabled rows still show the description, plus what context they need.
+      var req = "Requires " + ((node.requires || []).join(", ") || "context");
+      item.setAttribute(
+        "data-tooltip",
+        node.description ? node.description + " — " + req : req,
+      );
     }
     return item;
   }

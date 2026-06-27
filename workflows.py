@@ -175,6 +175,7 @@ class NodeType(TypedDict):
 
     id: str
     label: str
+    description: str  # one-line palette tooltip / on-card help text
     domain: str  # artifact | screenspace | transcript | thinking | control
     category: str  # human-facing palette group label
     inputs: list[Port]
@@ -192,6 +193,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "video_source": {
         "id": "video_source",
         "label": "Video Source",
+        "description": "A participant's source video, picked from the video directory.",
         "domain": "artifact",
         "category": "Source",
         "inputs": [],
@@ -213,6 +215,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "sheet_selection": {
         "id": "sheet_selection",
         "label": "Sheet Selection",
+        "description": "Clip records pulled from the spreadsheet by a cell, line, or category selector.",
         "domain": "artifact",
         "category": "Source",
         "inputs": [],
@@ -230,6 +233,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "time_range": {
         "id": "time_range",
         "label": "Time Range",
+        "description": "Manually entered start–end time ranges to drive downstream clips.",
         "domain": "artifact",
         "category": "Source",
         "inputs": [],
@@ -248,6 +252,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "region": {
         "id": "region",
         "label": "Region",
+        "description": "A named screen region that scopes Screenspace detection to part of the frame.",
         "domain": "screenspace",
         "category": "Source",
         "inputs": [],
@@ -261,6 +266,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "transcribe": {
         "id": "transcribe",
         "label": "Transcribe",
+        "description": "Transcribe a video's audio into a timestamped transcript and segments.",
         "domain": "transcript",
         "category": "Transcript",
         "inputs": [{"name": "video", "type": "video"}],
@@ -281,6 +287,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "find_word": {
         "id": "find_word",
         "label": "Find Word",
+        "description": "Find a word or phrase in transcript segments and emit its time ranges.",
         "domain": "transcript",
         "category": "Transcript",
         "inputs": [{"name": "segments", "type": "segments"}],
@@ -311,6 +318,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "summarize": {
         "id": "summarize",
         "label": "Summarize",
+        "description": "Summarize a transcript into a paragraph and key bullet points (Ollama).",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [{"name": "transcript", "type": "transcript"}],
@@ -321,6 +329,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "citations": {
         "id": "citations",
         "label": "Citations",
+        "description": "Link summary claims back to the transcript segments that support them (Ollama).",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -334,6 +343,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "friction": {
         "id": "friction",
         "label": "Friction",
+        "description": "Score transcript segments for usability friction and surface the rough moments.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -351,6 +361,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "multitool": {
         "id": "multitool",
         "label": "Multitool",
+        "description": "Chain two or more per-frame detectors, matching frames where all of them fire.",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [
@@ -371,6 +382,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "timelapse": {
         "id": "timelapse",
         "label": "Timelapse",
+        "description": "Condense a video into a sped-up timelapse clip or GIF.",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [
@@ -406,6 +418,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "heatmap": {
         "id": "heatmap",
         "label": "Heatmap",
+        "description": "Render a heatmap image from detector events (match the upstream detector style).",
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [{"name": "events", "type": "events"}],
@@ -425,6 +438,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "highlights": {
         "id": "highlights",
         "label": "Highlights",
+        "description": "Score clips by severity, uniqueness, and annotations, keeping the best within a time budget.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [{"name": "clips", "type": "clipRecords"}],
@@ -443,6 +457,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "make_clips": {
         "id": "make_clips",
         "label": "Make Clips",
+        "description": "Cut clips, screenshots, or GIFs from clip records, a video, or time ranges.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -485,6 +500,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "build_reel": {
         "id": "build_reel",
         "label": "Build Reel",
+        "description": "Concatenate clips into a single reel video plus a manifest.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [{"name": "clips", "type": "clipRecords"}],
@@ -500,6 +516,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "timeline_viewer": {
         "id": "timeline_viewer",
         "label": "Timeline Viewer",
+        "description": "Bundle artifacts, events, and segments into a standalone timeline HTML viewer.",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -515,6 +532,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "measure": {
         "id": "measure",
         "label": "Measure",
+        "description": "Reduce events, clips, or segments to a single number (count, confidence, or duration).",
         "domain": "control",
         "category": "Control",
         "inputs": [
@@ -537,6 +555,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "gate": {
         "id": "gate",
         "label": "Gate",
+        "description": "Compare a measured value to a threshold to allow or skip downstream nodes.",
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],
@@ -578,6 +597,19 @@ _SS_DETECTOR_LABELS: dict[str, str] = {
     "scene": "Detect Scene",
     "inactivity": "Detect Inactivity",
     "boundary": "Detect Boundary",
+}
+
+_SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
+    "text": "Detect when target text appears in the region via OCR.",
+    "color": "Detect when a target color appears or covers enough of the region.",
+    "change": "Detect visual change between frames in the region.",
+    "similarity": "Detect frames matching a reference image sampled from the region.",
+    "numbers": "Read numbers in the region via OCR and compare them to a target.",
+    "template": "Detect a reference template (sampled from the region) appearing in the frame.",
+    "flow": "Detect motion in the region via optical flow.",
+    "scene": "Detect scene changes against a reference fingerprint sampled from the region.",
+    "inactivity": "Detect stretches of inactivity (no change) in the region.",
+    "boundary": "Detect UI boundaries or edges appearing in the region.",
 }
 
 _INTERVAL_PARAM: ParamSpec = {
@@ -862,6 +894,7 @@ for _ss_tool in _SS_DETECTOR_SPECS:
     NODE_TYPES[f"ss_{_ss_tool}"] = {
         "id": f"ss_{_ss_tool}",
         "label": _SS_DETECTOR_LABELS[_ss_tool],
+        "description": _SS_DETECTOR_DESCRIPTIONS[_ss_tool],
         "domain": "screenspace",
         "category": "Screenspace",
         "inputs": [

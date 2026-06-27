@@ -310,6 +310,21 @@ def test_universal_control_port_for_gate_wiring():
     assert '"control"' in src or "'control'" in src
 
 
+def test_node_descriptions_use_data_tooltip_singleton():
+    """Palette rows and the on-card `?` glyph surface the catalog description
+    through the [data-tooltip] singleton (utils.clipgenInitDataTooltips), not
+    native `title` — native tooltips don't render on draggable=true palette
+    rows and are unstyled. Guards against regressing to `.title =`."""
+    src = _workflows_js()
+    # Palette row + help glyph both wire description via data-tooltip.
+    assert 'setAttribute("data-tooltip", node.description)' in src
+    assert 'setAttribute("data-tooltip", type.description)' in src
+    # The help glyph itself ships (mask-icon span carrying the tooltip).
+    assert "wf-node-help" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-node-help" in css
+
+
 def test_css_defines_run_panel_and_node_status_styles():
     css = WORKFLOWS_CSS.read_text(encoding="utf-8")
     assert ".wf-run-card" in css

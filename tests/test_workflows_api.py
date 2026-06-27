@@ -129,6 +129,14 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert isinstance(data["context"]["participants"], list)
 
 
+def test_catalog_serves_node_descriptions(wf_client):
+    # Every node carries a non-empty description string — it drives the palette
+    # tooltip and the on-card `?` help glyph, so a blank one ships a broken tip.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    missing = [n["id"] for n in catalog if not str(n.get("description", "")).strip()]
+    assert not missing, f"nodes without a description: {missing}"
+
+
 def test_catalog_participants_filtered_to_has_video(wf_client, monkeypatch):
     # The Video-Source dropdown (and the "All participants" fan-out) must only see
     # participants with an actual video file, matching the batch endpoint's filter.
