@@ -480,3 +480,14 @@ def test_node_mute_toggle():
     assert ".wf-node-muted" in css
     # A muted node must not block Run.
     assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
+
+
+def test_collection_palette_grouped_by_operation():
+    """The Collection category renders as collapsible operation sub-groups."""
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert "appendCollectionGroups" in hub
+    assert 'cat === "Collection"' in hub
+    # Sub-groups use native <details>/<summary> for collapse (no JS toggle).
+    assert 'el("details", "wf-palette-subgroup")' in hub
+    assert ".wf-palette-subgroup-label" in css

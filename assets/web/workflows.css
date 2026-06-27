@@ -449,6 +449,24 @@ body[data-frontend="workflows"] {
   margin-top: 0;
 }
 
+/* Collapsible operation sub-groups under the Collection category. */
+.wf-palette-subgroup {
+  margin-bottom: var(--space-1);
+}
+
+.wf-palette-subgroup-label {
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.wf-palette-subgroup-label:hover {
+  color: var(--fg);
+}
+
 .wf-palette-item {
   display: flex;
   align-items: center;

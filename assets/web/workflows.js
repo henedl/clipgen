@@ -126,6 +126,43 @@
     return item;
   }
 
+  // The ~23 collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/
+  // dedup_*) share one "Collection" category; group them by operation so the
+  // palette shows 5 collapsible sub-groups instead of a long flat list.
+  var _COLLECTION_OPS = [
+    ["filter", "Filter"],
+    ["partition", "Partition"],
+    ["merge", "Merge"],
+    ["limit", "Limit"],
+    ["dedup", "Dedup"],
+  ];
+
+  // Operation prefix of a collection node id (e.g. "filter_events" → "filter").
+  function paletteOp(node) {
+    return String(node.id || "").split("_")[0];
+  }
+
+  // Emit the Collection category as <details> sub-groups by operation. While a
+  // search is active, sub-groups auto-expand so matches aren't hidden.
+  function appendCollectionGroups(frag, nodes, query) {
+    var byOp = {};
+    nodes.forEach(function (n) {
+      var op = paletteOp(n);
+      (byOp[op] || (byOp[op] = [])).push(n);
+    });
+    _COLLECTION_OPS.forEach(function (pair) {
+      var items = byOp[pair[0]];
+      if (!items || !items.length) return;
+      var details = el("details", "wf-palette-subgroup");
+      if (query) details.open = true;
+      details.appendChild(el("summary", "wf-palette-subgroup-label", pair[1]));
+      items.forEach(function (n) {
+        details.appendChild(buildPaletteItem(n));
+      });
+      frag.appendChild(details);
+    });
+  }
+
   // A node matches the palette search when the query is empty or a substring of
   // its label, description, or category (all case-insensitive).
   function paletteNodeMatches(node, query) {
@@ -163,9 +200,13 @@
     var frag = document.createDocumentFragment();
     order.forEach(function (cat) {
       frag.appendChild(el("div", "wf-palette-group-label", cat));
-      byCat[cat].forEach(function (node) {
-        frag.appendChild(buildPaletteItem(node));
-      });
+      if (cat === "Collection") {
+        appendCollectionGroups(frag, byCat[cat], query);
+      } else {
+        byCat[cat].forEach(function (node) {
+          frag.appendChild(buildPaletteItem(node));
+        });
+      }
     });
     if (!order.length && query) {
       frag.appendChild(el("div", "wf-palette-empty", "No matching nodes"));
