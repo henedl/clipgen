@@ -287,6 +287,72 @@
       });
   }
 
+  // ---- Import / export ------------------------------------------------------
+
+  // Download the active blueprint as JSON (the same {name,nodes,edges,viewport}
+  // shape the autosave PUT sends, so import round-trips losslessly bar the
+  // server-assigned id/createdAt).
+  function exportBlueprint() {
+    var bp = findBlueprint(state.activeBlueprintId);
+    if (!bp) return;
+    var data = {
+      name: bp.name || "Untitled",
+      nodes: state.nodes || [],
+      edges: state.edges || [],
+      viewport: state.viewport || { x: 0, y: 0, zoom: 1 },
+    };
+    var blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = (bp.name || "blueprint").replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  // Parse a JSON file and create a new blueprint from it. Unknown node types are
+  // accepted as-is (they fail gracefully at run time, like any removed type).
+  function importBlueprint(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data;
+      try {
+        data = JSON.parse(String(reader.result || ""));
+      } catch (e) {
+        showToast("Import failed: not valid JSON");
+        return;
+      }
+      if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
+        showToast("Import failed: missing nodes/edges");
+        return;
+      }
+      apiPost("api/blueprints", {
+        name: data.name || "Imported",
+        nodes: data.nodes,
+        edges: data.edges,
+        viewport: data.viewport || { x: 0, y: 0, zoom: 1 },
+      })
+        .then(function (res) {
+          if (!res || !res.ok) {
+            showToast("Import failed");
+            return;
+          }
+          state.blueprints.push(res.blueprint);
+          populateSelect();
+          openBlueprint(res.blueprint);
+        })
+        .catch(function () {
+          showToast("Import failed");
+        });
+    };
+    reader.readAsText(file);
+  }
+
   function renameActive(name) {
     var bp = findBlueprint(state.activeBlueprintId);
     if (!bp) return;
@@ -492,6 +558,8 @@
       "#wfBlueprintName",
       "#wfNewBlueprint",
       "#wfDeleteBlueprint",
+      "#wfExportBlueprint",
+      "#wfImportBlueprint",
       "#wfCleanUp",
       "#wfRunBtn",
       "#wfSaveStash",
@@ -538,6 +606,19 @@
     }
     var newBtn = qs("#wfNewBlueprint");
     if (newBtn) newBtn.addEventListener("click", createBlueprint);
+    var exportBtn = qs("#wfExportBlueprint");
+    if (exportBtn) exportBtn.addEventListener("click", exportBlueprint);
+    var importBtn = qs("#wfImportBlueprint");
+    var importFile = qs("#wfImportFile");
+    if (importBtn && importFile) {
+      importBtn.addEventListener("click", function () {
+        importFile.click();
+      });
+      importFile.addEventListener("change", function () {
+        importBlueprint(importFile.files && importFile.files[0]);
+        importFile.value = ""; // allow re-importing the same file
+      });
+    }
     var delBtn = qs("#wfDeleteBlueprint");
     if (delBtn) {
       delBtn.addEventListener("click", function () {

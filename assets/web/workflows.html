@@ -43,6 +43,11 @@
                aria-label="Blueprint name" placeholder="Untitled" disabled />
         <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
         <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
+        <button id="wfExportBlueprint" class="btn btn-small" type="button" disabled
+                title="Download this blueprint as JSON">Export</button>
+        <button id="wfImportBlueprint" class="btn btn-small" type="button" disabled
+                title="Import a blueprint from a JSON file">Import</button>
+        <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
         <button id="wfCleanUp" class="btn btn-small" type="button" disabled
                 title="Auto-arrange the nodes">Clean up</button>
         <button id="wfSaveStash" class="btn btn-small" type="button" disabled
