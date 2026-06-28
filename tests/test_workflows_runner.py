@@ -384,7 +384,7 @@ def test_control_edges_are_excluded_from_inputs(tmp_path):
     runner = _runner(tmp_path, nodes, edges)
     runner._results["v"] = {"video": {"participant": "P01", "video_paths": []}}
     runner._results["g"] = {"pass": True}
-    inputs = runner._gather_inputs({"id": "m", "type": "make_clips"})
+    inputs, _notes = runner._gather_inputs({"id": "m", "type": "make_clips"})
     assert "video" in inputs
     assert "__gate__" not in inputs
 
@@ -411,9 +411,48 @@ def test_adapter_is_applied_on_type_mismatch(tmp_path):
             "source": {},
         }
     }
-    inputs = runner._gather_inputs(nodes[1])
+    inputs, _notes = runner._gather_inputs(nodes[1])
     assert "clips" in inputs
     assert "records" in inputs["clips"]  # adapter produced ClipRecords
+
+
+def test_executor_note_surfaces_and_is_stripped(tmp_path, monkeypatch):
+    # A node that completes with the reserved __note__ key surfaces it as the
+    # node's `note` (a non-fatal degraded outcome, not a FAILED error) and never
+    # stores it as a result port.
+    nodes = [{"id": "m", "type": "measure", "params": {}}]
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["measure"],
+        "execute",
+        lambda ctx, inputs, params: {"value": 0, "__note__": "nothing measured"},
+    )
+    runner = _runner(tmp_path, nodes, [])
+    runner.run()
+    snap = runner.snapshot()
+    assert snap["nodeStates"]["m"]["status"] == "completed"
+    assert snap["nodeStates"]["m"]["note"] == "nothing measured"
+    assert "__note__" not in runner._results["m"]
+    assert "__note__" not in (snap["results"].get("m") or {})
+
+
+def test_adapter_failure_records_a_note(tmp_path, monkeypatch):
+    # A coercion that raises degrades the input to None *and* leaves a note, so the
+    # failure isn't invisible (previously only a server-log warning).
+    nodes = [
+        {"id": "a", "type": "ss_color", "params": {}},
+        {"id": "b", "type": "make_clips", "params": {}},
+    ]
+    edges = [{"from": "a", "fromPort": "events", "to": "b", "toPort": "clips"}]
+
+    def _boom(_value):
+        raise ValueError("nope")
+
+    monkeypatch.setitem(workflows.ADAPTERS, ("events", "clipRecords"), _boom)
+    runner = _runner(tmp_path, nodes, edges)
+    runner._results["a"] = {"events": {"events": [], "source": {}}}
+    inputs, notes = runner._gather_inputs(nodes[1])
+    assert inputs["clips"] is None
+    assert any("convert" in n.lower() for n in notes)
 
 
 def test_snapshot_is_json_safe_and_summarized(tmp_path):

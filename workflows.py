@@ -3239,6 +3239,10 @@ class WorkflowRunner:
                 "status": NODE_STATUS_QUEUED,
                 "progress": 0.0,
                 "error": None,
+                # Non-fatal note for a degraded-but-completed node (Ollama down,
+                # nothing wired, an adapter that couldn't coerce) — distinct from
+                # ``error`` (which means FAILED). Surfaced in the run history.
+                "note": None,
                 "started_at": None,
                 "completed_at": None,
             }
@@ -3302,13 +3306,18 @@ class WorkflowRunner:
                 return True
         return False
 
-    def _gather_inputs(self, node: dict[str, Any]) -> dict[str, Any]:
+    def _gather_inputs(self, node: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         """Map upstream results onto this node's input ports, applying adapters.
 
-        Control edges (a gate's ``control`` output) establish a dependency but
-        carry no data, so they are excluded here — they never clobber a real input.
+        Returns ``(inputs, notes)``. ``notes`` carries any adapter-failure
+        messages so the runner can surface them on the node — a coercion that
+        raises otherwise degrades the input to ``None`` invisibly (only a server
+        log). Control edges (a gate's ``control`` output) establish a dependency
+        but carry no data, so they are excluded here — they never clobber a real
+        input.
         """
         inputs: dict[str, Any] = {}
+        notes: list[str] = []
         for edge in self._incoming(node["id"]):
             src_id = edge.get("from")
             to_port = edge.get("toPort")
@@ -3332,13 +3341,14 @@ class WorkflowRunner:
                 if adapter is not None:
                     try:
                         value = adapter(value)
-                    except Exception as exc:  # adapter failure → empty input
+                    except Exception as exc:  # adapter failure → empty input + note
                         utils.warning_print(
                             f"workflow adapter {out_type}->{in_type} failed: {exc}"
                         )
+                        notes.append(f"Couldn't convert {out_type} → {in_type}")
                         value = None
             inputs[to_port] = value
-        return inputs
+        return inputs, notes
 
     # ---- state + notify ----
 
@@ -3413,7 +3423,7 @@ class WorkflowRunner:
                 self._notify(force=True)
                 continue
 
-            inputs = self._gather_inputs(node)
+            inputs, input_notes = self._gather_inputs(node)
             params = node.get("params", {}) or {}
             executor = NODE_TYPES.get(node["type"], {}).get("execute")
             self._set_node(
@@ -3433,8 +3443,17 @@ class WorkflowRunner:
             self.ctx.on_progress = self._make_progress(node_id)
             try:
                 result = executor(self.ctx, inputs, params)
+                result = result if isinstance(result, dict) else {}
+                # A reserved ``__note__`` key lets an executor flag a non-fatal
+                # degraded outcome (e.g. Ollama unavailable, nothing wired) that
+                # still completes — surfaced on the node, never stored as a result
+                # port. Merge it with any adapter-coercion notes from gathering.
+                notes = list(input_notes)
+                exec_note = result.pop("__note__", None)
+                if exec_note:
+                    notes.append(str(exec_note))
                 with self._lock:
-                    self._results[node_id] = result or {}
+                    self._results[node_id] = result
                 # Persist the inspectable result so the run-history UI can fetch
                 # it on demand even after this runner is evicted from memory.
                 if write_node_sidecar(
@@ -3447,6 +3466,7 @@ class WorkflowRunner:
                     status=NODE_STATUS_COMPLETED,
                     progress=1.0,
                     completed_at=_now_iso(),
+                    note="; ".join(notes) if notes else None,
                 )
             except Exception as exc:
                 self._set_node(
