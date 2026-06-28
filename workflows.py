@@ -1051,15 +1051,18 @@ def serialize_catalog() -> list[dict[str, Any]]:
 
 
 def serialize_adapters() -> list[list[str]]:
-    """Return the ``ADAPTERS`` keys as JSON-safe ``[src, dst]`` type pairs.
+    """Return the ``ADAPTERS`` keys as JSON-safe ``[src, dst, description]`` rows.
 
     Drives the ``adapters`` field of ``GET /workflows/api/catalog`` so the
     frontend's ``canConnect`` can accept the same coercions the runner applies
-    (``_gather_inputs``). Serving the table — rather than duplicating it in JS —
-    keeps UI wire-validity in lockstep with the runner (``ADAPTERS`` defined
-    below is the single source of truth; ``tests/test_workflows_api`` guards parity).
+    (``_gather_inputs``), and so a coerced wire's tooltip can explain the
+    transformation. Serving the table — rather than duplicating it in JS — keeps
+    UI wire-validity in lockstep with the runner (``ADAPTERS`` defined below is the
+    single source of truth; ``tests/test_workflows_api`` guards parity).
     """
-    return [[src, dst] for src, dst in ADAPTERS]
+    return [
+        [src, dst, _ADAPTER_DESCRIPTIONS.get((src, dst), "")] for src, dst in ADAPTERS
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2865,6 +2868,20 @@ ADAPTERS: dict[tuple[str, str], Callable[[Any], Any]] = {
     ("events", "timeRange"): _adapt_events_to_timerange,
     ("events", "clipRecords"): _adapt_events_to_cliprecords,
     ("video", "scalar"): _adapt_video_to_scalar,
+}
+
+# Plain-language description of what each adapter does, served alongside the
+# table (see ``serialize_adapters``) so a coerced (dashed) wire's tooltip can
+# explain the transformation — not just that one happened. One per ADAPTERS key
+# (guarded by ``tests/test_workflows_api``); a missing one degrades to no suffix.
+_ADAPTER_DESCRIPTIONS: dict[tuple[str, str], str] = {
+    ("transcript", "segments"): "use the transcript's segments",
+    ("segments", "timeRange"): "use each segment's time span",
+    ("timeRange", "clipRecords"): "make a clip from each time range",
+    ("clipRecords", "timeRange"): "use each clip's time span",
+    ("events", "timeRange"): "use each event's time span",
+    ("events", "clipRecords"): "make a clip from each event (clustered)",
+    ("video", "scalar"): "use the video's duration",
 }
 
 

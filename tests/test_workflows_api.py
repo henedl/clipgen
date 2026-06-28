@@ -228,8 +228,10 @@ def test_catalog_serves_adapter_pairs(wf_client):
     resp = wf_client.get("/workflows/api/catalog")
     adapters = resp.get_json()["adapters"]
     assert isinstance(adapters, list) and adapters
-    assert all(isinstance(p, list) and len(p) == 2 for p in adapters)
-    assert {tuple(p) for p in adapters} == set(workflows.ADAPTERS)
+    # [src, dst, description] — description drives the coerced-wire tooltip.
+    assert all(isinstance(p, list) and len(p) == 3 for p in adapters)
+    assert {(p[0], p[1]) for p in adapters} == set(workflows.ADAPTERS)
+    assert all(p[2].strip() for p in adapters)  # every coercion is explained
 
 
 def test_serialize_catalog_is_json_safe():
@@ -242,7 +244,9 @@ def test_serialize_adapters_matches_table():
     # ADAPTERS — the frontend Set is then correct by construction.
     pairs = workflows.serialize_adapters()
     json.dumps(pairs)
-    assert {tuple(p) for p in pairs} == set(workflows.ADAPTERS)
+    assert {(p[0], p[1]) for p in pairs} == set(workflows.ADAPTERS)
+    # Every adapter carries a non-empty plain-language description.
+    assert all(p[2].strip() for p in pairs)
 
 
 def test_every_node_type_has_a_callable_executor():
