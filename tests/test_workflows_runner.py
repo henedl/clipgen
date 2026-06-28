@@ -226,8 +226,8 @@ def test_write_node_sidecar_guards_and_empty_payload(tmp_path):
 
 
 def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
-    # Force the summarize executor to raise; the run is 'failed' and any
-    # downstream node is 'skipped' (none here, but the failed status propagates).
+    # Force the summarize executor to raise; the run is 'failed' and a downstream
+    # node wired to it through a *required* input is 'skipped'.
     def _boom(ctx, inputs, params):
         raise RuntimeError("kaboom")
 
@@ -238,12 +238,13 @@ def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
             {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
             {"id": "t", "type": "transcribe", "params": {}},
             {"id": "s", "type": "summarize", "params": {}},
-            {"id": "view", "type": "timeline_viewer", "params": {}},
+            {"id": "c", "type": "citations", "params": {}},
         ],
         edges=[
             {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
             {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
-            {"from": "s", "fromPort": "summary", "to": "view", "toPort": "segments"},
+            # summarize -> citations through citations' required `summary` input.
+            {"from": "s", "fromPort": "summary", "to": "c", "toPort": "summary"},
         ],
     )
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
@@ -251,7 +252,7 @@ def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
     assert runner.status == "failed"
     assert runner.node_states["s"]["status"] == "failed"
     assert runner.node_states["s"]["error"]
-    assert runner.node_states["view"]["status"] == "skipped"
+    assert runner.node_states["c"]["status"] == "skipped"
 
 
 def test_disabled_node_skips_itself_and_downstream(tmp_path, monkeypatch):
@@ -384,7 +385,7 @@ def test_control_edges_are_excluded_from_inputs(tmp_path):
     runner = _runner(tmp_path, nodes, edges)
     runner._results["v"] = {"video": {"participant": "P01", "video_paths": []}}
     runner._results["g"] = {"pass": True}
-    inputs = runner._gather_inputs({"id": "m", "type": "make_clips"})
+    inputs, _notes = runner._gather_inputs({"id": "m", "type": "make_clips"})
     assert "video" in inputs
     assert "__gate__" not in inputs
 
@@ -411,9 +412,97 @@ def test_adapter_is_applied_on_type_mismatch(tmp_path):
             "source": {},
         }
     }
-    inputs = runner._gather_inputs(nodes[1])
+    inputs, _notes = runner._gather_inputs(nodes[1])
     assert "clips" in inputs
     assert "records" in inputs["clips"]  # adapter produced ClipRecords
+
+
+def test_executor_note_surfaces_and_is_stripped(tmp_path, monkeypatch):
+    # A node that completes with the reserved __note__ key surfaces it as the
+    # node's `note` (a non-fatal degraded outcome, not a FAILED error) and never
+    # stores it as a result port.
+    nodes = [{"id": "m", "type": "measure", "params": {}}]
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["measure"],
+        "execute",
+        lambda ctx, inputs, params: {"value": 0, "__note__": "nothing measured"},
+    )
+    runner = _runner(tmp_path, nodes, [])
+    runner.run()
+    snap = runner.snapshot()
+    assert snap["nodeStates"]["m"]["status"] == "completed"
+    assert snap["nodeStates"]["m"]["note"] == "nothing measured"
+    assert "__note__" not in runner._results["m"]
+    assert "__note__" not in (snap["results"].get("m") or {})
+
+
+def test_adapter_failure_records_a_note(tmp_path, monkeypatch):
+    # A coercion that raises degrades the input to None *and* leaves a note, so the
+    # failure isn't invisible (previously only a server-log warning).
+    nodes = [
+        {"id": "a", "type": "ss_color", "params": {}},
+        {"id": "b", "type": "make_clips", "params": {}},
+    ]
+    edges = [{"from": "a", "fromPort": "events", "to": "b", "toPort": "clips"}]
+
+    def _boom(_value):
+        raise ValueError("nope")
+
+    monkeypatch.setitem(workflows.ADAPTERS, ("events", "clipRecords"), _boom)
+    runner = _runner(tmp_path, nodes, edges)
+    runner._results["a"] = {"events": {"events": [], "source": {}}}
+    inputs, notes = runner._gather_inputs(nodes[1])
+    assert inputs["clips"] is None
+    assert any("convert" in n.lower() for n in notes)
+
+
+def test_optional_input_failure_does_not_skip_consumer(tmp_path, monkeypatch):
+    # merge inputs are all optional: muting one branch leaves the merge running on
+    # the surviving stream (previously any dead upstream skipped the whole node).
+    nodes = [
+        {"id": "a", "type": "ss_color", "params": {}, "disabled": True},
+        {"id": "b", "type": "ss_color", "params": {}},
+        {"id": "m", "type": "merge_events", "params": {}},
+    ]
+    # Live producer 'b' feeds the required in1; muted 'a' feeds the optional in2.
+    edges = [
+        {"from": "b", "fromPort": "events", "to": "m", "toPort": "in1"},
+        {"from": "a", "fromPort": "events", "to": "m", "toPort": "in2"},
+    ]
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["ss_color"],
+        "execute",
+        lambda ctx, inputs, params: {
+            "events": {
+                "events": [{"time_in": 1.0, "time_out": 2.0}],
+                "source": {},
+                "raw_results": [],
+            }
+        },
+    )
+    runner = _runner(tmp_path, nodes, edges)
+    runner.run()
+    assert runner.node_states["a"]["status"] == "skipped"  # muted
+    assert runner.node_states["m"]["status"] == "completed"  # optional dep tolerated
+    assert len(runner._results["m"]["out"]["events"]) == 1  # only the b stream
+
+
+def test_required_input_failure_still_skips_consumer(tmp_path, monkeypatch):
+    # heatmap's `events` input is required: a failed producer still skips it.
+    nodes = [
+        {"id": "a", "type": "ss_color", "params": {}},
+        {"id": "h", "type": "heatmap", "params": {}},
+    ]
+    edges = [{"from": "a", "fromPort": "events", "to": "h", "toPort": "events"}]
+
+    def _boom(ctx, inputs, params):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setitem(workflows.NODE_TYPES["ss_color"], "execute", _boom)
+    runner = _runner(tmp_path, nodes, edges)
+    runner.run()
+    assert runner.node_states["a"]["status"] == "failed"
+    assert runner.node_states["h"]["status"] == "skipped"
 
 
 def test_snapshot_is_json_safe_and_summarized(tmp_path):

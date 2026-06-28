@@ -179,7 +179,14 @@
       wire.setAttribute("d", d);
       if (coerced) {
         var title = svgEl("title");
-        title.textContent = "↳ coerced: " + outType + " → " + inType;
+        var desc =
+          state.adapterDescriptions && state.adapterDescriptions[outType + ">" + inType];
+        title.textContent =
+          "↳ coerced: " +
+          outType +
+          " → " +
+          inType +
+          (desc ? " (" + desc + ")" : "");
         wire.appendChild(title);
       }
       group.appendChild(hit);

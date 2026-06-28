@@ -186,6 +186,9 @@ class NodeType(TypedDict):
     # Hidden from the palette but kept in the catalog (e.g. the per-detector
     # ss_<tool> nodes, which the unified Detect node + Multitool read for specs).
     hidden: NotRequired[bool]
+    # Whether a ss_<tool> detector can be a Multitool chain step (the frontend
+    # derives its step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
+    multitoolStep: NotRequired[bool]
 
 
 # Shared by the three Ollama thinking nodes: a free-text override of the model
@@ -986,6 +989,16 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
 # Detectors whose scan needs a reference frame self-extracted from the node region.
 _SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "scene"})
 
+# Detectors usable as a Multitool chain step: the per-frame (``check_frame``)
+# detectors that need no uploaded reference. Single source of truth — served to
+# the frontend via each node's ``multitoolStep`` flag so the step editor derives
+# the list instead of hardcoding it (the "no duplicated JS constants" rule).
+# ``tests/test_workflows_executors`` cross-checks this against the actual tool
+# classes (override ``check_frame`` AND not reference-based) so it can't drift.
+_MULTITOOL_STEP_TOOLS = frozenset(
+    {"color", "change", "flow", "text", "numbers", "inactivity"}
+)
+
 for _ss_tool in _SS_DETECTOR_SPECS:
     NODE_TYPES[f"ss_{_ss_tool}"] = {
         "id": f"ss_{_ss_tool}",
@@ -1006,6 +1019,9 @@ for _ss_tool in _SS_DETECTOR_SPECS:
         # spec source (Detect editor + Multitool steps) and keep old blueprints
         # and built-in recipes that reference ss_<tool> directly runnable.
         "hidden": True,
+        # Whether this detector can be a Multitool step (the frontend derives the
+        # step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
+        "multitoolStep": _ss_tool in _MULTITOOL_STEP_TOOLS,
     }
 
 # Unified palette-facing detector: one node whose ``detector`` dropdown swaps the
@@ -1051,15 +1067,18 @@ def serialize_catalog() -> list[dict[str, Any]]:
 
 
 def serialize_adapters() -> list[list[str]]:
-    """Return the ``ADAPTERS`` keys as JSON-safe ``[src, dst]`` type pairs.
+    """Return the ``ADAPTERS`` keys as JSON-safe ``[src, dst, description]`` rows.
 
     Drives the ``adapters`` field of ``GET /workflows/api/catalog`` so the
     frontend's ``canConnect`` can accept the same coercions the runner applies
-    (``_gather_inputs``). Serving the table — rather than duplicating it in JS —
-    keeps UI wire-validity in lockstep with the runner (``ADAPTERS`` defined
-    below is the single source of truth; ``tests/test_workflows_api`` guards parity).
+    (``_gather_inputs``), and so a coerced wire's tooltip can explain the
+    transformation. Serving the table — rather than duplicating it in JS — keeps
+    UI wire-validity in lockstep with the runner (``ADAPTERS`` defined below is the
+    single source of truth; ``tests/test_workflows_api`` guards parity).
     """
-    return [[src, dst] for src, dst in ADAPTERS]
+    return [
+        [src, dst, _ADAPTER_DESCRIPTIONS.get((src, dst), "")] for src, dst in ADAPTERS
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1206,6 +1225,88 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
                 "from": "s3",
                 "fromPort": "artifacts",
                 "to": "s4",
+                "toPort": "artifacts",
+            },
+        ],
+    },
+    {
+        # Demonstrates the collection-algebra family (limit_events): keep only the
+        # top-N most confident detections before cutting clips.
+        "id": "builtin_top_detections",
+        "name": "Detect → Top Events → Make Clips → Viewer",
+        "builtin": True,
+        "createdAt": "",
+        "nodes": [
+            {
+                "id": "s1",
+                "type": "video_source",
+                "params": {"participant": ""},
+                "position": {"x": 40, "y": 160},
+            },
+            {
+                "id": "s2",
+                "type": "detect",
+                "params": {"detector": "text"},
+                "position": {"x": 340, "y": 80},
+            },
+            {
+                "id": "s3",
+                "type": "limit_events",
+                "params": {"sort_by": "confidence", "order": "desc", "take": 10},
+                "position": {"x": 640, "y": 80},
+            },
+            {
+                "id": "s4",
+                "type": "make_clips",
+                "params": {
+                    "description": "",
+                    "output_format": "clip",
+                    "titlecards": False,
+                    "titlecard_duration": config.TITLECARD_DURATION_SECONDS,
+                },
+                "position": {"x": 940, "y": 160},
+            },
+            {
+                "id": "s5",
+                "type": "timeline_viewer",
+                "params": {},
+                "position": {"x": 1240, "y": 160},
+            },
+        ],
+        "edges": [
+            {
+                "id": "se1",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s2",
+                "toPort": "video",
+            },
+            {
+                "id": "se2",
+                "from": "s2",
+                "fromPort": "events",
+                "to": "s3",
+                "toPort": "in",
+            },
+            {
+                "id": "se3",
+                "from": "s3",
+                "fromPort": "out",
+                "to": "s4",
+                "toPort": "clips",
+            },
+            {
+                "id": "se4",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s4",
+                "toPort": "video",
+            },
+            {
+                "id": "se5",
+                "from": "s4",
+                "fromPort": "artifacts",
+                "to": "s5",
                 "toPort": "artifacts",
             },
         ],
@@ -1424,7 +1525,7 @@ def _exec_summarize(
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
     if not ollama_client.is_available():
-        return {"summary": ""}
+        return {"summary": "", "__note__": "Ollama not available — summary skipped"}
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -1441,7 +1542,7 @@ def _exec_citations(
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     if not ollama_client.is_available():
-        return {"citations": []}
+        return {"citations": [], "__note__": "Ollama not available — citations skipped"}
     cites = thinking_agents.find_citations(
         summary,
         segments,
@@ -1462,7 +1563,7 @@ def _exec_friction(
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
     if not ollama_client.is_available():
-        return {"friction": []}
+        return {"friction": [], "__note__": "Ollama not available — friction skipped"}
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored)
     moments = thinking_agents.find_friction_moments(
@@ -1610,7 +1711,11 @@ def _run_ss_detector(
     paths = list(src.get("video_paths") or [])
     tool = screenspace.TOOLS.get(tool_name)
     if not paths or tool is None:
-        return {"events": {"events": [], "source": src, "raw_results": []}}
+        note = "No video wired" if not paths else f"Unknown detector: {tool_name}"
+        return {
+            "events": {"events": [], "source": src, "raw_results": []},
+            "__note__": note,
+        }
 
     # Unwired region scans the whole frame (zero-size coords would make the scan a
     # silent no-op — see _resolve_region_coords).
@@ -1622,7 +1727,10 @@ def _run_ss_detector(
     if tool_name in _SS_REFERENCE_DETECTORS and not _attach_ss_reference(
         tool_name, base_params, params, paths[0], region_coords
     ):
-        return {"events": {"events": [], "source": src, "raw_results": []}}
+        return {
+            "events": {"events": [], "source": src, "raw_results": []},
+            "__note__": "Couldn't read the reference frame at the given time",
+        }
 
     task = screenspace_manifest.create_task(
         tool_name,
@@ -1855,7 +1963,10 @@ def _exec_make_clips(
             )
 
     if not records:
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No clips to render — wire clips, a time range, or a video",
+        }
     count, artifacts = pipeline.process_clips(
         records,
         output_format=output_format,
@@ -1886,7 +1997,7 @@ def _exec_interval_captures(
     study = str(src.get("study", "") or "")
     empty = {"artifacts": {"artifacts": [], "study": study, "count": 0}}
     if not paths:
-        return empty
+        return {**empty, "__note__": "No video wired"}
 
     interval = int(
         float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
@@ -1909,7 +2020,7 @@ def _exec_interval_captures(
     if not ranges:
         duration = video_mod.get_file_duration(paths[0]) or 0
         if duration <= 0:
-            return empty
+            return {**empty, "__note__": "Couldn't read the video duration"}
         ranges = [(0.0, float(duration))]
 
     # Expand each window into per-interval sample points (a point for a
@@ -1921,7 +2032,7 @@ def _exec_interval_captures(
             sample_ranges.append((t, t + gif_dur if fmt == "gif" else t))
             t += interval
     if not sample_ranges:
-        return empty
+        return {**empty, "__note__": "No sample points in the given interval/range"}
 
     records = files.build_clip_records(
         participant=str(src.get("participant", "") or ""),
@@ -1975,13 +2086,19 @@ def _exec_timelapse(
     paths = list(src.get("video_paths") or [])
     study = str(src.get("study", "") or "")
     if not paths:
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No video wired",
+        }
 
     # _resolve_region_coords already falls back to the full frame when no region
     # is wired; a still-zero size means the probe failed (unreadable video).
     _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Couldn't read the video",
+        }
 
     out_format = str(params.get("output_format", "mp4") or "mp4")
     if out_format not in ("mp4", "gif"):
@@ -2001,7 +2118,10 @@ def _exec_timelapse(
     )
     if not result:
         files.release_reservation(output_path)
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Timelapse couldn't be generated",
+        }
     rec = _attachment_artifact("timelapse", result, src, "Timelapse")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
@@ -2020,7 +2140,15 @@ def _exec_heatmap(
     style = str(params.get("style", "change") or "change")
     paths = list(src.get("video_paths") or [])
     if not results or not paths or style not in ("template", "flow", "change"):
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        note = (
+            "No detector results — wire a matching template/flow/change detector"
+            if not results
+            else "No video for the heatmap"
+        )
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": note,
+        }
 
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
@@ -2040,7 +2168,10 @@ def _exec_heatmap(
         )
     if not result:
         files.release_reservation(output_path)
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Heatmap couldn't be generated",
+        }
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
@@ -2079,6 +2210,7 @@ def _exec_build_reel(
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
             "manifest": {"path": None, "records": []},
+            "__note__": "No clips to build a reel from",
         }
     # Honor the node's reel name: reserve a unique output path (process_reel
     # treats a supplied output_file as a reservation and releases it on failure).
@@ -2836,6 +2968,20 @@ ADAPTERS: dict[tuple[str, str], Callable[[Any], Any]] = {
     ("video", "scalar"): _adapt_video_to_scalar,
 }
 
+# Plain-language description of what each adapter does, served alongside the
+# table (see ``serialize_adapters``) so a coerced (dashed) wire's tooltip can
+# explain the transformation — not just that one happened. One per ADAPTERS key
+# (guarded by ``tests/test_workflows_api``); a missing one degrades to no suffix.
+_ADAPTER_DESCRIPTIONS: dict[tuple[str, str], str] = {
+    ("transcript", "segments"): "use the transcript's segments",
+    ("segments", "timeRange"): "use each segment's time span",
+    ("timeRange", "clipRecords"): "make a clip from each time range",
+    ("clipRecords", "timeRange"): "use each clip's time span",
+    ("events", "timeRange"): "use each event's time span",
+    ("events", "clipRecords"): "make a clip from each event (clustered)",
+    ("video", "scalar"): "use the video's duration",
+}
+
 
 # Wire each declarative NodeType to its executor. ``serialize_catalog`` strips
 # ``execute`` again for the JSON catalog endpoint, so this stays server-internal.
@@ -3067,6 +3213,17 @@ def _port_type(type_id: str, port_name: str | None, direction: str) -> str | Non
     return None
 
 
+def _port_optional(type_id: str | None, port_name: str | None) -> bool:
+    """True if a node type's *input* port is declared ``optional`` (else False)."""
+    node_type = NODE_TYPES.get(type_id) if type_id else None
+    if not node_type or not port_name:
+        return False
+    for port in node_type["inputs"]:
+        if port["name"] == port_name:
+            return bool(port.get("optional"))
+    return False
+
+
 def _summarize_value(value: Any) -> Any:
     """Shrink a node output to a JSON-safe summary (counts + terminal pointers).
 
@@ -3216,12 +3373,17 @@ class WorkflowRunner:
         batch_id: str = "",
         triggered: bool = False,
         target_node_id: str = "",
+        seed_results: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
         # Partial run (P11): when set, only this node and its transitive ancestors
         # execute; the rest are marked skipped. Empty → run the whole graph.
         self.target_node_id = target_node_id
+        # Pre-seeded results (P3 batch perf): {node_id: result} for participant-
+        # independent source nodes the batch coordinator computed once. A seeded
+        # node is stored as if it ran, skipping its (rate-limited) executor.
+        self._seed_results = seed_results or {}
         # Batch identity (P3): empty for a normal single run; a child run carries
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
@@ -3239,6 +3401,10 @@ class WorkflowRunner:
                 "status": NODE_STATUS_QUEUED,
                 "progress": 0.0,
                 "error": None,
+                # Non-fatal note for a degraded-but-completed node (Ollama down,
+                # nothing wired, an adapter that couldn't coerce) — distinct from
+                # ``error`` (which means FAILED). Surfaced in the run history.
+                "note": None,
                 "started_at": None,
                 "completed_at": None,
             }
@@ -3293,22 +3459,53 @@ class WorkflowRunner:
         return (self._results.get(node_id) or {}).get("pass") is False
 
     def _should_skip(self, node_id: str) -> bool:
-        """A node is skipped if any upstream failed/skipped, or is a blocking gate."""
-        for dep in self._deps(node_id):
+        """Decide whether ``node_id`` is skipped before it runs.
+
+        Skipped when a *required* input's producer failed/skipped (the node can't
+        run without it) or when a gate gating this node blocks it. A dead producer
+        feeding an *optional* input is tolerated — the node runs with that input
+        absent (executors already read ``inputs.get(...)``), so a muted or broken
+        branch of a ``merge`` (or any optional input) doesn't sink the whole
+        downstream.
+        """
+        node = self._nodes_by_id.get(node_id)
+        node_type = node.get("type") if node else None
+        for edge in self._incoming(node_id):
+            dep = edge.get("from")
+            if not isinstance(dep, str) or dep not in self._nodes_by_id:
+                continue
             status = self.node_states[dep]["status"]
-            if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
-                return True
-            if status == NODE_STATUS_COMPLETED and self._gate_blocks(dep):
+            out_type = _port_type(
+                self._nodes_by_id[dep].get("type"), edge.get("fromPort"), "out"
+            )
+            if out_type == "control":
+                # A gate edge: skip if the gate can't pass us through — it blocked
+                # (``pass`` False) or it never completed (failed/skipped).
+                if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
+                    return True
+                if status == NODE_STATUS_COMPLETED and self._gate_blocks(dep):
+                    return True
+                continue
+            # A data edge: only a *required* input's dead producer forces a skip.
+            if status in (
+                NODE_STATUS_FAILED,
+                NODE_STATUS_SKIPPED,
+            ) and not _port_optional(node_type, edge.get("toPort")):
                 return True
         return False
 
-    def _gather_inputs(self, node: dict[str, Any]) -> dict[str, Any]:
+    def _gather_inputs(self, node: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         """Map upstream results onto this node's input ports, applying adapters.
 
-        Control edges (a gate's ``control`` output) establish a dependency but
-        carry no data, so they are excluded here — they never clobber a real input.
+        Returns ``(inputs, notes)``. ``notes`` carries any adapter-failure
+        messages so the runner can surface them on the node — a coercion that
+        raises otherwise degrades the input to ``None`` invisibly (only a server
+        log). Control edges (a gate's ``control`` output) establish a dependency
+        but carry no data, so they are excluded here — they never clobber a real
+        input.
         """
         inputs: dict[str, Any] = {}
+        notes: list[str] = []
         for edge in self._incoming(node["id"]):
             src_id = edge.get("from")
             to_port = edge.get("toPort")
@@ -3332,13 +3529,14 @@ class WorkflowRunner:
                 if adapter is not None:
                     try:
                         value = adapter(value)
-                    except Exception as exc:  # adapter failure → empty input
+                    except Exception as exc:  # adapter failure → empty input + note
                         utils.warning_print(
                             f"workflow adapter {out_type}->{in_type} failed: {exc}"
                         )
+                        notes.append(f"Couldn't convert {out_type} → {in_type}")
                         value = None
             inputs[to_port] = value
-        return inputs
+        return inputs, notes
 
     # ---- state + notify ----
 
@@ -3413,7 +3611,28 @@ class WorkflowRunner:
                 self._notify(force=True)
                 continue
 
-            inputs = self._gather_inputs(node)
+            # Batch seed (P3 perf): a participant-independent source precomputed
+            # once by the batch coordinator — store it as if this node just ran,
+            # skipping its (rate-limited) executor for every child but the first.
+            if node_id in self._seed_results:
+                seeded = self._seed_results[node_id]
+                with self._lock:
+                    self._results[node_id] = seeded
+                if write_node_sidecar(
+                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
+                ):
+                    with self._lock:
+                        self._sidecars.add(node_id)
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_COMPLETED,
+                    progress=1.0,
+                    completed_at=_now_iso(),
+                )
+                self._notify(force=True)
+                continue
+
+            inputs, input_notes = self._gather_inputs(node)
             params = node.get("params", {}) or {}
             executor = NODE_TYPES.get(node["type"], {}).get("execute")
             self._set_node(
@@ -3433,8 +3652,17 @@ class WorkflowRunner:
             self.ctx.on_progress = self._make_progress(node_id)
             try:
                 result = executor(self.ctx, inputs, params)
+                result = result if isinstance(result, dict) else {}
+                # A reserved ``__note__`` key lets an executor flag a non-fatal
+                # degraded outcome (e.g. Ollama unavailable, nothing wired) that
+                # still completes — surfaced on the node, never stored as a result
+                # port. Merge it with any adapter-coercion notes from gathering.
+                notes = list(input_notes)
+                exec_note = result.pop("__note__", None)
+                if exec_note:
+                    notes.append(str(exec_note))
                 with self._lock:
-                    self._results[node_id] = result or {}
+                    self._results[node_id] = result
                 # Persist the inspectable result so the run-history UI can fetch
                 # it on demand even after this runner is evicted from memory.
                 if write_node_sidecar(
@@ -3447,6 +3675,7 @@ class WorkflowRunner:
                     status=NODE_STATUS_COMPLETED,
                     progress=1.0,
                     completed_at=_now_iso(),
+                    note="; ".join(notes) if notes else None,
                 )
             except Exception as exc:
                 self._set_node(

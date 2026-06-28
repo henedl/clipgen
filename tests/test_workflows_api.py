@@ -124,9 +124,10 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert all("execute" not in node for node in catalog)
     # Launch-context flags drive palette grey-out; participants populate the
     # Video-Source dropdown (reusing the videoDir discovery call).
-    assert set(data["context"]) == {"sheet", "videoDir", "participants"}
+    assert set(data["context"]) == {"sheet", "videoDir", "participants", "outputDir"}
     assert data["context"]["sheet"] is False  # fixture sets _sheet_context=None
     assert isinstance(data["context"]["participants"], list)
+    assert isinstance(data["context"]["outputDir"], str)  # run panel shows it
 
 
 def test_catalog_serves_node_descriptions(wf_client):
@@ -164,6 +165,17 @@ def test_catalog_serves_required_param_flag(wf_client):
     assert _param("ss_text", "search_string").get("required") is True
     # A param with a sane default stays optional (no required flag).
     assert "required" not in _param("find_word", "pad")
+
+
+def test_catalog_flags_multitool_step_detectors(wf_client):
+    # The Multitool step editor derives its step types from the catalog's
+    # multitoolStep flag (no hardcoded JS list): the six per-frame detectors carry
+    # it; the reference-based ones (similarity/template/scene) don't.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+    steps = {n["id"][3:] for n in catalog if n.get("multitoolStep")}
+    assert steps == {"color", "change", "flow", "text", "numbers", "inactivity"}
+    assert by_id["ss_template"].get("multitoolStep") is False
 
 
 def test_catalog_serves_collection_ops(wf_client):
@@ -228,8 +240,10 @@ def test_catalog_serves_adapter_pairs(wf_client):
     resp = wf_client.get("/workflows/api/catalog")
     adapters = resp.get_json()["adapters"]
     assert isinstance(adapters, list) and adapters
-    assert all(isinstance(p, list) and len(p) == 2 for p in adapters)
-    assert {tuple(p) for p in adapters} == set(workflows.ADAPTERS)
+    # [src, dst, description] — description drives the coerced-wire tooltip.
+    assert all(isinstance(p, list) and len(p) == 3 for p in adapters)
+    assert {(p[0], p[1]) for p in adapters} == set(workflows.ADAPTERS)
+    assert all(p[2].strip() for p in adapters)  # every coercion is explained
 
 
 def test_serialize_catalog_is_json_safe():
@@ -242,7 +256,9 @@ def test_serialize_adapters_matches_table():
     # ADAPTERS — the frontend Set is then correct by construction.
     pairs = workflows.serialize_adapters()
     json.dumps(pairs)
-    assert {tuple(p) for p in pairs} == set(workflows.ADAPTERS)
+    assert {(p[0], p[1]) for p in pairs} == set(workflows.ADAPTERS)
+    # Every adapter carries a non-empty plain-language description.
+    assert all(p[2].strip() for p in pairs)
 
 
 def test_every_node_type_has_a_callable_executor():
@@ -513,6 +529,19 @@ def test_run_missing_blueprint_404(wf_client):
     assert resp.status_code == 404
 
 
+def test_run_rejects_unknown_target_node_with_400(wf_client):
+    # A stale "run to here" target must error, not silently run the whole graph.
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    resp = wf_client.post(
+        "/workflows/api/runs",
+        json={"blueprintId": bp_id, "targetNodeId": "ghost"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
 def test_runs_list_and_filter(wf_client):
     bp_id = _make_blueprint(
         wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
@@ -632,6 +661,43 @@ def test_batch_runs_every_participant(wf_client, monkeypatch):
     runs = detail["runs"]
     assert {r["participant"] for r in runs} == set(parts)
     assert all(r["batchId"] == batch["id"] for r in runs)
+
+
+def test_batch_seeds_sheet_selection_once(wf_client, monkeypatch):
+    # sheet_selection is participant-independent and hits the rate-limited Sheets
+    # API; a batch must compute it once, not once per participant.
+    import spreadsheet
+
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    parts = _mock_participants(monkeypatch, ids=("P01", "P02", "P03"))
+
+    class _Sheet:
+        study_name = "study"
+
+    monkeypatch.setattr(workflows_server, "_sheet_context", _Sheet())
+    calls = {"n": 0}
+
+    def _fake_generate_list(*a, **k):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(spreadsheet, "generate_list", _fake_generate_list)
+
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {}},
+            {"id": "s", "type": "sheet_selection", "params": {"selector": "1"}},
+        ],
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "completed"
+    assert len(parts) == 3
+    # Seeded once for the whole batch, not once per participant.
+    assert calls["n"] == 1
 
 
 def test_batch_continues_when_one_participant_fails(wf_client, monkeypatch):
@@ -1010,12 +1076,26 @@ def test_watch_unstable_stat_does_not_fire(wf_client, monkeypatch):
 
 def test_watch_gated_on_single_armed(wf_client, monkeypatch):
     calls = _record_launches(monkeypatch)
-    # No blueprint armed at all.
+    # No blueprint armed at all -> the poll skips all work (no glob/stat) and fires
+    # nothing. No-retro-fire is handled by the arm-time re-seed, not here.
     _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
-    assert calls == []  # stable, but nothing armed -> no fire
-    assert "P01" in workflows_server._watch_seen  # still consumed (no retro-fire)
+    assert calls == []
+
+
+def test_arming_reseeds_so_backlog_never_fires(wf_client, monkeypatch):
+    # A pid already present when the blueprint is armed is re-baselined as seen at
+    # arm time, so it never retro-fires (the poll no longer maintains the seen-set
+    # while disarmed).
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    assert "P01" in workflows_server._watch_seen  # seeded at arm time
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert calls == []
 
 
 def test_watch_two_armed_is_ambiguous_and_skips(wf_client, monkeypatch):
@@ -1038,9 +1118,9 @@ def test_watch_disarmed_arrival_not_retrofired(wf_client, monkeypatch):
     bp = _video_source_blueprint(wf_client)  # not armed
     _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
     workflows_server._watch_poll_once()
-    workflows_server._watch_poll_once()  # P01 consumed while disarmed
+    workflows_server._watch_poll_once()  # disarmed -> no-op
     assert calls == []
-    # Arming later must not retro-fire the already-seen pid.
+    # Arming re-seeds the now-present P01, so it isn't retro-fired.
     wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
     workflows_server._watch_poll_once()
     assert calls == []

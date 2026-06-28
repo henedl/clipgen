@@ -33,7 +33,33 @@
     return apiGet("api/stashes").then(function (res) {
       state.stashes = (res && res.stashes) || [];
       renderStashPalette();
+      renderEmptyRecipes();
     });
+  }
+
+  // Surface the built-in recipes on the empty-canvas placeholder so a fresh
+  // blueprint has a one-click starting point (they otherwise hide in the sidebar).
+  // The slot lives inside #wfCanvasEmpty, so it shows/hides with the empty state.
+  function renderEmptyRecipes() {
+    var host = qs("#wfEmptyRecipes");
+    if (!host) return;
+    host.innerHTML = "";
+    var builtins = (state.stashes || []).filter(function (s) {
+      return s.builtin;
+    });
+    if (!builtins.length) return;
+    host.appendChild(el("div", "wf-empty-recipes-label", "Start from a recipe"));
+    var row = el("div", "wf-empty-recipes-row");
+    builtins.forEach(function (stash) {
+      var chip = el("button", "wf-recipe-chip", stash.name);
+      chip.type = "button";
+      chip.title = "Add this recipe to the canvas";
+      chip.addEventListener("click", function () {
+        if (state.ready) instantiateStash(stash.id, null);
+      });
+      row.appendChild(chip);
+    });
+    host.appendChild(row);
   }
 
   // ---- Render ---------------------------------------------------------------

@@ -44,6 +44,14 @@
       // Hovering a port reveals its data type — clarifies adapter-coerced wires
       // (e.g. a `timeRange` output into a `clips`/clipRecords input).
       dot.title = isControl ? "gate" : port.type;
+      // Assistive tech: the dot is an interactive connection point.
+      dot.setAttribute("role", "button");
+      dot.setAttribute(
+        "aria-label",
+        isControl
+          ? "Gate control input"
+          : (isOutput ? "Output" : "Input") + ": " + port.name + " (" + port.type + ")",
+      );
       row.appendChild(dot);
       row.appendChild(
         el("span", "wf-port-label", isControl ? "gate" : port.name),
@@ -53,10 +61,19 @@
     return col;
   }
 
-  // Multitool step types: only the per-frame (check_frame) detectors that need
-  // no uploaded reference. Each step reuses its ss_<type> catalog params — no
-  // duplicated field definitions (the param specs come from the catalog).
-  var MT_STEP_TYPES = ["color", "change", "flow", "text", "numbers", "inactivity"];
+  // Multitool step types: the per-frame (check_frame) detectors that need no
+  // uploaded reference, derived from the catalog's `multitoolStep` flag (the
+  // backend's _MULTITOOL_STEP_TOOLS is the single source — no hardcoded JS list).
+  // Each step reuses its ss_<type> catalog params (also from the catalog).
+  function multitoolStepTypes() {
+    var out = [];
+    (state.catalog || []).forEach(function (n) {
+      if (n.multitoolStep && n.id && n.id.indexOf("ss_") === 0) {
+        out.push(n.id.slice(3));
+      }
+    });
+    return out;
+  }
 
   function stepParamSpecs(stepType) {
     var nt = state.catalogById && state.catalogById["ss_" + stepType];
@@ -222,7 +239,7 @@
       var add = el("button", "wf-step-add", "+ Add step");
       add.type = "button";
       add.addEventListener("click", function () {
-        steps.push({ type: MT_STEP_TYPES[0], logic: "AND" });
+        steps.push({ type: multitoolStepTypes()[0] || "color", logic: "AND" });
         WF.scheduleSave();
         rerender();
       });
@@ -238,7 +255,7 @@
     var head = el("div", "wf-step-head");
 
     var typeSel = el("select", "wf-param-input");
-    MT_STEP_TYPES.forEach(function (t) {
+    multitoolStepTypes().forEach(function (t) {
       var o = el("option");
       o.value = t;
       o.textContent = t;

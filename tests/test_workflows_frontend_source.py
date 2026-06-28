@@ -484,6 +484,55 @@ def test_node_mute_toggle():
     assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
 
 
+def test_validation_warns_on_node_with_no_inputs_wired():
+    """A node whose data inputs are all optional + unwired (e.g. make_clips,
+    measure) warns instead of passing validation and running empty. Suppressed
+    when the clearer orphan "not connected" message fires instead."""
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "Wire at least one input" in validate
+    assert "willShowOrphan" in validate
+
+
+def test_validation_warns_on_non_numeric_filter_value():
+    """A filter/partition with an ordering comparison but a non-numeric value
+    warns — that value fails the backend float() coerce and drops every item."""
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "Value must be a number for this comparison" in validate
+
+
+def test_empty_canvas_offers_builtin_recipes():
+    """The empty canvas surfaces the built-in recipes as one-click starting points
+    (they otherwise hide in the sidebar)."""
+    html = (_WEB / "workflows.html").read_text(encoding="utf-8")
+    stashes = (_WEB / "workflows-stashes.js").read_text(encoding="utf-8")
+    assert 'id="wfEmptyRecipes"' in html
+    assert "renderEmptyRecipes" in stashes
+    assert "wf-recipe-chip" in stashes
+
+
+def test_multitool_steps_and_heatmap_styles_derived_from_catalog():
+    """MT step types and the heatmap style→detector mapping are derived (from the
+    catalog's multitoolStep flag / the ss_<style> pattern), not hardcoded JS lists
+    — the no-duplicated-constants rule."""
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "multitoolStepTypes" in nodes and "n.multitoolStep" in nodes
+    assert "var MT_STEP_TYPES = [" not in nodes  # no hardcoded list
+    assert "HEATMAP_STYLE_SOURCE" not in validate  # no lookup table
+    assert '"ss_" + (' in validate  # derived from the style name
+
+
+def test_run_panel_surfaces_output_dir_and_armed_hint():
+    """The run panel shows where artifacts land; the toolbar shows a persistent cue
+    when any blueprint (even a non-active one) is armed for auto-run."""
+    html = (_WEB / "workflows.html").read_text(encoding="utf-8")
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    assert 'id="wfOutputDir"' in html and 'id="wfArmedHint"' in html
+    assert "renderOutputDir" in runs
+    assert "wfArmedHint" in hub
+
+
 def test_collection_palette_grouped_by_operation():
     """The Collection category renders as collapsible operation sub-groups."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")

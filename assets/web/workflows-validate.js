@@ -15,14 +15,6 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // Heatmap style → the detector node that produces the matching raw_results
-  // upstream. A mismatch is a warning, not an error (the scan still runs).
-  var HEATMAP_STYLE_SOURCE = {
-    template: "ss_template",
-    flow: "ss_flow",
-    change: "ss_change",
-  };
-
   function catalogType(node) {
     return (
       state.catalogById[node.type] || {
@@ -105,9 +97,11 @@
 
     // warning — heatmap style needs a matching upstream detector.
     if (node.type === "heatmap") {
-      var want = HEATMAP_STYLE_SOURCE[(node.params || {}).style || "change"];
+      // The heatmap style names map 1:1 to the ss_<style> detector that produces
+      // the matching raw_results (template→ss_template, …) — derive it directly.
+      var want = "ss_" + ((node.params || {}).style || "change");
       var up = upstreamType(node.id, "events");
-      if (want && up && up !== want && up !== "multitool") {
+      if (up && up !== want && up !== "multitool") {
         warnings.push("Heatmap style needs a " + want + " (or multitool) upstream");
       }
     }
@@ -115,18 +109,49 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
+    // warning — a filter/partition with an ordering comparison (>=,>,<=,<) needs a
+    // numeric value; a non-numeric one fails the backend float() coerce and
+    // silently drops every item. (Heuristic on the op, so no need to mirror the
+    // backend's per-field numeric/text table.)
+    if (
+      node.type.indexOf("filter_") === 0 ||
+      node.type.indexOf("partition_") === 0
+    ) {
+      var op = (node.params || {}).op;
+      var val = (node.params || {}).value;
+      var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
+      var numeric = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
+      if (ordering && !paramEmpty(val) && !numeric) {
+        warnings.push("Value must be a number for this comparison");
+      }
+    }
+    var connected = (state.edges || []).some(function (e) {
+      return e.from === node.id || e.to === node.id;
+    });
+    var willShowOrphan = !connected && (state.nodes || []).length > 1;
     // warning — a merge with fewer than two wired inputs is a no-op passthrough.
     if (node.type.indexOf("merge_") === 0) {
       var wired = ["in1", "in2", "in3"].filter(function (p) {
         return inputWired(node.id, p);
       }).length;
       if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
+    } else {
+      // warning — a node with data input ports but none wired runs but produces
+      // nothing (e.g. make_clips / measure, whose inputs are all optional so the
+      // required-input check above never fires). Suppressed when the clearer
+      // "not connected" orphan message below will fire instead.
+      var dataInputs = (type.inputs || []).filter(function (p) {
+        return p.type !== "control";
+      });
+      var noneWired =
+        dataInputs.length &&
+        !dataInputs.some(function (p) {
+          return inputWired(node.id, p.name);
+        });
+      if (noneWired && !willShowOrphan) warnings.push("Wire at least one input");
     }
     // warning — an orphan node (no incident edges) in a multi-node graph.
-    var connected = (state.edges || []).some(function (e) {
-      return e.from === node.id || e.to === node.id;
-    });
-    if (!connected && (state.nodes || []).length > 1) {
+    if (willShowOrphan) {
       warnings.push("Not connected to the graph");
     }
 

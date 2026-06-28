@@ -120,12 +120,47 @@ def test_thinking_executors_empty_when_ollama_unavailable(tmp_path, monkeypatch)
     ctx = _ctx(tmp_path)
     segs = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": {}}
     tr = {"segments": [{"start": 0, "end": 1, "text": "hi"}]}
-    assert _run("summarize", ctx, {"transcript": tr}, {})["summary"] == ""
-    assert (
-        _run("citations", ctx, {"summary": "s", "segments": segs}, {})["citations"]
-        == []
-    )
-    assert _run("friction", ctx, {"segments": segs}, {})["friction"] == []
+    summarize = _run("summarize", ctx, {"transcript": tr}, {})
+    citations = _run("citations", ctx, {"summary": "s", "segments": segs}, {})
+    friction = _run("friction", ctx, {"segments": segs}, {})
+    assert summarize["summary"] == ""
+    assert citations["citations"] == []
+    assert friction["friction"] == []
+    # Degraded-but-completed: a __note__ explains the empty output (Ollama down).
+    assert "Ollama" in summarize["__note__"]
+    assert "Ollama" in citations["__note__"]
+    assert "Ollama" in friction["__note__"]
+
+
+def test_make_clips_notes_when_nothing_wired(tmp_path):
+    # No clips / time range / video wired → completes empty with a note saying why.
+    result = _run("make_clips", _ctx(tmp_path), {}, {})
+    assert result["artifacts"]["count"] == 0
+    assert "wire" in result["__note__"].lower()
+
+
+def test_multitool_step_flag_matches_tool_capability():
+    # The catalog's multitoolStep flag must match the actual tool capability —
+    # overrides check_frame AND isn't reference-based — so _MULTITOOL_STEP_TOOLS
+    # can't drift from screenspace_tools.
+    import screenspace
+    import screenspace_tools as st
+
+    def _cls(t):
+        return t if isinstance(t, type) else type(t)
+
+    derived = {
+        name
+        for name, tool in screenspace.TOOLS.items()
+        if _cls(tool).check_frame is not st.AnalysisTool.check_frame
+        and name not in workflows._SS_REFERENCE_DETECTORS
+    }
+    tagged = {
+        n["id"][3:]
+        for n in workflows.NODE_TYPES.values()
+        if n.get("multitoolStep") and n["id"].startswith("ss_")
+    }
+    assert tagged == derived
 
 
 def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):

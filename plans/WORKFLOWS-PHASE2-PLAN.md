@@ -239,6 +239,26 @@ no per-participant subfolders). *Resolved earlier:* **large-result storage** →
 sidecars, inspectable outputs only, runner-written, lazily fetched (P5). **Recipe set** → two
 starters chosen (P4).
 
+## Post-ship hardening (review follow-up)
+
+A back-to-front review after P6 landed a focused round of fixes (one PR, separate commits):
+
+- **Observability:** per-node, non-fatal **run notes** (`__note__` → snapshot → run history) so a
+  degraded-but-completed node (Ollama down, nothing wired, a coercion that couldn't apply) explains
+  itself instead of leaving a green run with an empty output folder.
+- **Correctness:** skip-propagation now only skips on a *required* input's dead producer (you can mute
+  one branch of a `merge`); the run endpoint **rejects an unknown `targetNodeId`**; validation **warns
+  when a node has no inputs wired** (all-optional-input nodes used to pass and run empty) and when a
+  **filter value can't match its comparison**.
+- **Efficiency:** a batch computes participant-independent sources (`sheet_selection`) **once** instead
+  of per participant (the rate-limited Sheets call); the **watch-dir poll is a no-op while nothing is
+  armed** (re-seeding the seen-set at arm time).
+- **UX:** coerced wires explain the transformation; the empty canvas offers **built-in recipes**; the
+  run panel shows the **output folder**; a persistent **"Auto-run armed on X"** indicator; multitool
+  steps + heatmap styles are **derived from the catalog** (no duplicated JS lists).
+- **Deferred (still demand-driven):** multi-select participant batch; parallel/queued runs; bounding
+  in-run `_results` memory via snapshot decoupling (marginal on this small tool).
+
 ## Reference (where the capability already lives)
 
 - Artifact pipeline: `pipeline.process_clips` (clip/screen/gif), `process_reel`, the `-H` highlights

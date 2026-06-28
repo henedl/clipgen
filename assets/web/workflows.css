@@ -238,7 +238,7 @@ body[data-frontend="workflows"] {
 .wf-run-caret {
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-  border-left: 1px solid rgb(255 255 255 / 30%);
+  border-left: 1px solid color-mix(in srgb, var(--accent-fg) 30%, transparent);
   padding-left: var(--space-1);
   padding-right: var(--space-1);
 }
@@ -364,8 +364,10 @@ body[data-frontend="workflows"] {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: var(--border);
-  color: #fff;
+  color: var(--accent-fg);
   font-weight: 600;
+  /* Decorative 1px depth cue on the coloured title bar; no text-shadow token
+     exists in the design system, so the literal stays (intentional). */
   text-shadow: 0 1px 1px rgb(0 0 0 / 35%);
 }
 
@@ -757,6 +759,26 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/bolt.svg");
 }
 
+/* Persistent toolbar cue that some blueprint is armed for auto-run. */
+.wf-armed-hint {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+/* Output-folder line above the run list. */
+.wf-output-dir {
+  padding: 0 var(--space-4) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  word-break: break-all;
+}
+
 /* Run-history chip marking an auto-launched (triggered) run. */
 .wf-run-triggered {
   display: inline-flex;
@@ -814,6 +836,50 @@ body[data-frontend="workflows"] {
 .wf-canvas-empty .wf-empty-sub {
   font-size: var(--text-sm);
   color: var(--fg-faint);
+}
+
+/* Built-in recipe chips on the empty canvas. The parent is pointer-events:none,
+   so the interactive slot must re-enable pointer events. */
+.wf-empty-recipes {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+  pointer-events: auto;
+}
+
+.wf-empty-recipes-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-faint);
+}
+
+.wf-empty-recipes-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  max-width: 40rem;
+}
+
+.wf-recipe-chip {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast),
+    border-color var(--duration-fast);
+}
+
+.wf-recipe-chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
 }
 
 /* ---- Load gate (loading / error) ---- */
@@ -1139,6 +1205,12 @@ body[data-frontend="workflows"] {
   opacity: 0.55;
 }
 
+/* Completed but degraded (a run note): amber left border overrides the positive
+   one of run-completed (defined after it, so source order wins). */
+.wf-node.run-note {
+  border-left-color: var(--severity-medium);
+}
+
 .wf-node-progress {
   margin-top: var(--space-2);
   height: 3px;
@@ -1320,6 +1392,14 @@ body[data-frontend="workflows"] {
 .wf-run-node-detail {
   flex: 0 0 auto;
   color: var(--fg-muted);
+}
+
+/* Non-fatal note under a completed-but-degraded node row. */
+.wf-run-node-note {
+  padding: 0 var(--space-3) var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  color: var(--severity-medium);
 }
 
 .wf-run-results {
