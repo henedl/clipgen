@@ -1424,7 +1424,7 @@ def _exec_summarize(
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
     if not ollama_client.is_available():
-        return {"summary": ""}
+        return {"summary": "", "__note__": "Ollama not available — summary skipped"}
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -1441,7 +1441,7 @@ def _exec_citations(
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     if not ollama_client.is_available():
-        return {"citations": []}
+        return {"citations": [], "__note__": "Ollama not available — citations skipped"}
     cites = thinking_agents.find_citations(
         summary,
         segments,
@@ -1462,7 +1462,7 @@ def _exec_friction(
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
     if not ollama_client.is_available():
-        return {"friction": []}
+        return {"friction": [], "__note__": "Ollama not available — friction skipped"}
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored)
     moments = thinking_agents.find_friction_moments(
@@ -1610,7 +1610,11 @@ def _run_ss_detector(
     paths = list(src.get("video_paths") or [])
     tool = screenspace.TOOLS.get(tool_name)
     if not paths or tool is None:
-        return {"events": {"events": [], "source": src, "raw_results": []}}
+        note = "No video wired" if not paths else f"Unknown detector: {tool_name}"
+        return {
+            "events": {"events": [], "source": src, "raw_results": []},
+            "__note__": note,
+        }
 
     # Unwired region scans the whole frame (zero-size coords would make the scan a
     # silent no-op — see _resolve_region_coords).
@@ -1622,7 +1626,10 @@ def _run_ss_detector(
     if tool_name in _SS_REFERENCE_DETECTORS and not _attach_ss_reference(
         tool_name, base_params, params, paths[0], region_coords
     ):
-        return {"events": {"events": [], "source": src, "raw_results": []}}
+        return {
+            "events": {"events": [], "source": src, "raw_results": []},
+            "__note__": "Couldn't read the reference frame at the given time",
+        }
 
     task = screenspace_manifest.create_task(
         tool_name,
@@ -1855,7 +1862,10 @@ def _exec_make_clips(
             )
 
     if not records:
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No clips to render — wire clips, a time range, or a video",
+        }
     count, artifacts = pipeline.process_clips(
         records,
         output_format=output_format,
@@ -1886,7 +1896,7 @@ def _exec_interval_captures(
     study = str(src.get("study", "") or "")
     empty = {"artifacts": {"artifacts": [], "study": study, "count": 0}}
     if not paths:
-        return empty
+        return {**empty, "__note__": "No video wired"}
 
     interval = int(
         float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
@@ -1909,7 +1919,7 @@ def _exec_interval_captures(
     if not ranges:
         duration = video_mod.get_file_duration(paths[0]) or 0
         if duration <= 0:
-            return empty
+            return {**empty, "__note__": "Couldn't read the video duration"}
         ranges = [(0.0, float(duration))]
 
     # Expand each window into per-interval sample points (a point for a
@@ -1921,7 +1931,7 @@ def _exec_interval_captures(
             sample_ranges.append((t, t + gif_dur if fmt == "gif" else t))
             t += interval
     if not sample_ranges:
-        return empty
+        return {**empty, "__note__": "No sample points in the given interval/range"}
 
     records = files.build_clip_records(
         participant=str(src.get("participant", "") or ""),
@@ -1975,13 +1985,19 @@ def _exec_timelapse(
     paths = list(src.get("video_paths") or [])
     study = str(src.get("study", "") or "")
     if not paths:
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No video wired",
+        }
 
     # _resolve_region_coords already falls back to the full frame when no region
     # is wired; a still-zero size means the probe failed (unreadable video).
     _name, region_coords = _resolve_region_coords(inputs.get("region") or {}, paths[0])
     if region_coords["w"] <= 0 or region_coords["h"] <= 0:
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Couldn't read the video",
+        }
 
     out_format = str(params.get("output_format", "mp4") or "mp4")
     if out_format not in ("mp4", "gif"):
@@ -2001,7 +2017,10 @@ def _exec_timelapse(
     )
     if not result:
         files.release_reservation(output_path)
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Timelapse couldn't be generated",
+        }
     rec = _attachment_artifact("timelapse", result, src, "Timelapse")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
@@ -2020,7 +2039,15 @@ def _exec_heatmap(
     style = str(params.get("style", "change") or "change")
     paths = list(src.get("video_paths") or [])
     if not results or not paths or style not in ("template", "flow", "change"):
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        note = (
+            "No detector results — wire a matching template/flow/change detector"
+            if not results
+            else "No video for the heatmap"
+        )
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": note,
+        }
 
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
@@ -2040,7 +2067,10 @@ def _exec_heatmap(
         )
     if not result:
         files.release_reservation(output_path)
-        return {"artifacts": {"artifacts": [], "study": study, "count": 0}}
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Heatmap couldn't be generated",
+        }
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
@@ -2079,6 +2109,7 @@ def _exec_build_reel(
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
             "manifest": {"path": None, "records": []},
+            "__note__": "No clips to build a reel from",
         }
     # Honor the node's reel name: reserve a unique output path (process_reel
     # treats a supplied output_file as a reservation and releases it on failure).
