@@ -382,6 +382,12 @@ body {
   color: var(--fg);
   border-left-color: var(--accent);
 }
+/* Inset outline rather than a shadow ring: rows are flush to the sidebar's
+ * left edge, where a box-shadow ring would clip. Matches #themeToggle. */
+.studio-sidebar-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .studio-sidebar-row-dot {
   width: 6px;
   height: 6px;
@@ -441,6 +447,10 @@ body {
   background: var(--bg-active);
   color: var(--fg);
   border-color: var(--border-strong);
+}
+.studio-sidebar-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
 /* When the sheet sub-tab is not active, hide the sidebar entirely. */
@@ -640,6 +650,13 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   text-align: center;
 }
 
+#sheetLoading .sheet-loading-caption {
+  align-self: center;
+  padding: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
 .sheet-empty-caption-icon {
   display: inline-block;
   width: 1.1em;
@@ -789,6 +806,11 @@ body.bottom-animating #stashedArtifactsArea {
 }
 .sort-btn:hover {
   color: var(--fg);
+}
+.sort-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-xs);
 }
 .sort-btn-active {
   color: var(--accent);
@@ -1803,6 +1825,19 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: var(--bg-hover);
 }
 
+/* A stash just landed — the freshly-saved card animates in once (the list is
+ * rebuilt on every stash mutation, so JS gates this on the new stash id). */
+@keyframes stash-card-land {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.stash-card-landed {
+  animation: stash-card-land var(--duration-fast) cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stash-card-landed { animation: none; }
+}
+
 /* Stack of up to three frame thumbnails — top item is fully visible, the
  * 2nd/3rd are offset 2px right + 2px up so the chip reads as a deck of
  * folders. JS appends the <img> elements; the hue-tinted background acts
@@ -2253,6 +2288,29 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 }
 
 /* Status overlay */
+
+/* Shared entrance for the Studio overlay cards. The overlays toggle
+ * display:none↔flex, so a transition wouldn't fire on un-hide — an animation
+ * runs the moment the card becomes rendered. One keyframe, applied to every
+ * card so the modals stop popping in abruptly. */
+@keyframes cg-overlay-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.status-card,
+.confirm-card,
+.gallery-card,
+.log-panel,
+.build-status-card {
+  animation: cg-overlay-pop var(--duration-fast) cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-card,
+  .confirm-card,
+  .gallery-card,
+  .log-panel,
+  .build-status-card { animation: none; }
+}
 
 #statusOverlay {
   position: fixed;
