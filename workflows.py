@@ -1213,6 +1213,88 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        # Demonstrates the collection-algebra family (limit_events): keep only the
+        # top-N most confident detections before cutting clips.
+        "id": "builtin_top_detections",
+        "name": "Detect → Top Events → Make Clips → Viewer",
+        "builtin": True,
+        "createdAt": "",
+        "nodes": [
+            {
+                "id": "s1",
+                "type": "video_source",
+                "params": {"participant": ""},
+                "position": {"x": 40, "y": 160},
+            },
+            {
+                "id": "s2",
+                "type": "detect",
+                "params": {"detector": "text"},
+                "position": {"x": 340, "y": 80},
+            },
+            {
+                "id": "s3",
+                "type": "limit_events",
+                "params": {"sort_by": "confidence", "order": "desc", "take": 10},
+                "position": {"x": 640, "y": 80},
+            },
+            {
+                "id": "s4",
+                "type": "make_clips",
+                "params": {
+                    "description": "",
+                    "output_format": "clip",
+                    "titlecards": False,
+                    "titlecard_duration": config.TITLECARD_DURATION_SECONDS,
+                },
+                "position": {"x": 940, "y": 160},
+            },
+            {
+                "id": "s5",
+                "type": "timeline_viewer",
+                "params": {},
+                "position": {"x": 1240, "y": 160},
+            },
+        ],
+        "edges": [
+            {
+                "id": "se1",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s2",
+                "toPort": "video",
+            },
+            {
+                "id": "se2",
+                "from": "s2",
+                "fromPort": "events",
+                "to": "s3",
+                "toPort": "in",
+            },
+            {
+                "id": "se3",
+                "from": "s3",
+                "fromPort": "out",
+                "to": "s4",
+                "toPort": "clips",
+            },
+            {
+                "id": "se4",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s4",
+                "toPort": "video",
+            },
+            {
+                "id": "se5",
+                "from": "s4",
+                "fromPort": "artifacts",
+                "to": "s5",
+                "toPort": "artifacts",
+            },
+        ],
+    },
 ]
 
 

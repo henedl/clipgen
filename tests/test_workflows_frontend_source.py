@@ -500,6 +500,16 @@ def test_validation_warns_on_non_numeric_filter_value():
     assert "Value must be a number for this comparison" in validate
 
 
+def test_empty_canvas_offers_builtin_recipes():
+    """The empty canvas surfaces the built-in recipes as one-click starting points
+    (they otherwise hide in the sidebar)."""
+    html = (_WEB / "workflows.html").read_text(encoding="utf-8")
+    stashes = (_WEB / "workflows-stashes.js").read_text(encoding="utf-8")
+    assert 'id="wfEmptyRecipes"' in html
+    assert "renderEmptyRecipes" in stashes
+    assert "wf-recipe-chip" in stashes
+
+
 def test_collection_palette_grouped_by_operation():
     """The Collection category renders as collapsible operation sub-groups."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
