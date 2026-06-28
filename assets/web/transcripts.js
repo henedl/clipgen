@@ -127,11 +127,30 @@
     }
   }
 
+  // A genuinely unreachable sibling tool (network error or non-2xx) flips a
+  // per-source flag so the status tooltip can say cross-references are missing,
+  // rather than the badges silently never appearing. A successful poll clears it.
+  function _markXrefSource(source, failed) {
+    var prev = !!(state.xrefErrors && (state.xrefErrors.screenspace || state.xrefErrors.studio));
+    if (!state.xrefErrors) state.xrefErrors = { screenspace: false, studio: false };
+    state.xrefErrors[source] = failed;
+    var now = state.xrefErrors.screenspace || state.xrefErrors.studio;
+    if (now && !prev && !state.xrefErrorToastShown) {
+      state.xrefErrorToastShown = true;
+      showToast("Cross-references unavailable — is Screenspace/Studio running?");
+    }
+    if (!now) state.xrefErrorToastShown = false;
+    updateStatusIndicator();
+  }
+
   function loadCrossRefData() {
-    // TODO: skips r.ok; silent on HTTP errors (polling every 30s, so caller tolerates it).
     fetch("../screenspace/api/events?excluded=false")
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function (data) {
+        _markXrefSource("screenspace", false);
         if (data.ok) {
           state.ssEvents = data.events || [];
           state.ssEventsLoaded = true;
@@ -139,12 +158,15 @@
           if (state.searchResults) renderSearchResults(state.searchResults);
         }
       })
-      .catch(function () {});
+      .catch(function () { _markXrefSource("screenspace", true); });
 
-    // TODO: skips r.ok (same pattern).
     fetch("../studio/api/sheet")
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function (data) {
+        _markXrefSource("studio", false);
         if (data.ok) {
           clipgenApplyConfig(data.config);
           state.sheetRows = data.rows || [];
@@ -154,7 +176,7 @@
           if (state.searchResults) renderSearchResults(state.searchResults);
         }
       })
-      .catch(function () {});
+      .catch(function () { _markXrefSource("studio", true); });
   }
 
   function parseSheetTimestamps(raw) {
@@ -374,6 +396,12 @@
     }
 
     var lines = [_modelLine(), taskLine];
+    if (state.xrefErrors && (state.xrefErrors.screenspace || state.xrefErrors.studio)) {
+      var down = [];
+      if (state.xrefErrors.screenspace) down.push("Screenspace");
+      if (state.xrefErrors.studio) down.push("Studio");
+      lines.push("Cross-references unavailable (" + down.join(", ") + ")");
+    }
     var ariaLabel;
     if (cls === "status-indicator--working") ariaLabel = taskLine;
     else if (cls === "status-indicator--error") ariaLabel = lines.join(" \u2014 ");
@@ -1424,16 +1452,95 @@
 
   // ---- Marks ----
 
-  function toggleMark(segmentId) {
-    apiPost("api/marks", {
-      segment_ids: [segmentId],
-      category: state.lastMarkCategory,
-    }).then(function (data) {
-      if (data.ok) {
-        showToast("Marked");
-        if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
+  // Find the loaded (non-streaming) segment index for an id; -1 if absent.
+  function _segmentIndexById(segmentId) {
+    for (var i = 0; i < state.segments.length; i++) {
+      if (state.segments[i].id === segmentId) return i;
+    }
+    return -1;
+  }
+
+  // Find the loaded segment carrying a mark id; null if absent.
+  function _findSegmentByMarkId(markId) {
+    for (var i = 0; i < state.segments.length; i++) {
+      var marks = state.segments[i].marks || [];
+      for (var j = 0; j < marks.length; j++) {
+        if (marks[j].id === markId) return { idx: i, seg: state.segments[i], mark: marks[j] };
       }
-    });
+    }
+    return null;
+  }
+
+  // Repaint a single segment's mark dot + annotation badge in place (mirrors the
+  // template in renderSegments) so a mark add/remove/recolor shows instantly
+  // without a full loadTranscript round-trip. markObj null clears the mark.
+  function _paintSegmentMark(idx, markObj) {
+    var list = qs("#segmentList");
+    if (!list) return;
+    var row = list.querySelector('.segment-row[data-index="' + idx + '"]');
+    if (!row) return;
+    var dot = row.querySelector(".segment-mark");
+    var textEl = row.querySelector(".segment-text");
+    var oldBadge = textEl ? textEl.querySelector(".segment-anno-badge") : null;
+    if (oldBadge) oldBadge.remove();
+    if (!dot) return;
+    if (markObj) {
+      var cat = MARK_CATEGORIES[markObj.category] || MARK_CATEGORIES.bookmark;
+      dot.classList.add("marked");
+      dot.style.background = cat.color;
+      if (markObj.label) {
+        dot.title = markObj.label;
+        if (textEl) {
+          var bgMix = "color-mix(in oklch, " + cat.color + " 18%, transparent)";
+          var borderMix = "color-mix(in oklch, " + cat.color + " 50%, transparent)";
+          var badge = document.createElement("span");
+          badge.className = "segment-anno-badge";
+          badge.style.cssText =
+            "--anno-badge-fg:" + cat.color + ";--anno-badge-bg:" + bgMix + ";--anno-badge-border:" + borderMix;
+          badge.textContent = markObj.label;
+          textEl.insertBefore(badge, textEl.firstChild);
+        }
+      } else {
+        dot.removeAttribute("title");
+      }
+    } else {
+      dot.classList.remove("marked");
+      dot.style.background = "";
+      dot.removeAttribute("title");
+    }
+  }
+
+  function toggleMark(segmentId) {
+    var idx = _segmentIndexById(segmentId);
+    var seg = idx >= 0 ? state.segments[idx] : null;
+    if (!seg) {
+      // No loaded row (shouldn't happen for the persisted path) — fall back to a
+      // reload so the new mark still appears.
+      apiPost("api/marks", { segment_ids: [segmentId], category: state.lastMarkCategory }).then(function (data) {
+        if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      });
+      return;
+    }
+    // Optimistic: fill the dot now, reconcile the real id on success, revert on failure.
+    var prevMarks = seg.marks || [];
+    var provisional = { id: null, category: state.lastMarkCategory, label: "" };
+    seg.marks = [provisional];
+    _paintSegmentMark(idx, provisional);
+    function revert() {
+      seg.marks = prevMarks;
+      _paintSegmentMark(idx, prevMarks[0] || null);
+      showToast("Failed to mark");
+    }
+    apiPost("api/marks", { segment_ids: [segmentId], category: state.lastMarkCategory })
+      .then(function (data) {
+        if (data.ok && data.marks && data.marks.length > 0) {
+          seg.marks = [data.marks[0]];
+          showToast("Marked");
+        } else {
+          revert();
+        }
+      })
+      .catch(revert);
   }
 
   function toggleMarkStreaming(segmentId, markEl) {
@@ -1459,11 +1566,12 @@
   }
 
   function removeMark(markId) {
-    apiDelete("api/marks/" + markId).then(function (data) {
-      if (data.ok) {
-        showToast("Mark removed");
-        hideMarkPopover();
-        if (state.streamingParticipant) {
+    hideMarkPopover();
+    // Streaming participant: keep the existing reload-on-success path.
+    if (state.streamingParticipant) {
+      apiDelete("api/marks/" + markId).then(function (data) {
+        if (data.ok) {
+          showToast("Mark removed");
           for (var key in _streamingMarks) {
             if (_streamingMarks[key].id === markId) {
               delete _streamingMarks[key];
@@ -1472,19 +1580,45 @@
             }
           }
           pollTaskStatus();
-        } else if (state.selectedParticipant) {
-          loadTranscript(state.selectedParticipant);
         }
-      }
-    });
+      });
+      return;
+    }
+    // Optimistic: clear the dot now, restore on failure.
+    var found = _findSegmentByMarkId(markId);
+    if (!found) {
+      apiDelete("api/marks/" + markId).then(function (data) {
+        if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      });
+      return;
+    }
+    var prevMarks = found.seg.marks;
+    found.seg.marks = [];
+    _paintSegmentMark(found.idx, null);
+    apiDelete("api/marks/" + markId)
+      .then(function (data) {
+        if (data.ok) {
+          showToast("Mark removed");
+        } else {
+          found.seg.marks = prevMarks;
+          _paintSegmentMark(found.idx, prevMarks[0] || null);
+          showToast("Failed to remove mark");
+        }
+      })
+      .catch(function () {
+        found.seg.marks = prevMarks;
+        _paintSegmentMark(found.idx, prevMarks[0] || null);
+        showToast("Failed to remove mark");
+      });
   }
 
   function updateMarkCategory(markId, category) {
     state.lastMarkCategory = category;
-    apiPut("api/marks/" + markId, { category: category }).then(function (data) {
-      if (data.ok) {
-        hideMarkPopover();
-        if (state.streamingParticipant) {
+    hideMarkPopover();
+    // Streaming participant: keep the existing reload-on-success path.
+    if (state.streamingParticipant) {
+      apiPut("api/marks/" + markId, { category: category }).then(function (data) {
+        if (data.ok) {
           var cat = MARK_CATEGORIES[category] || MARK_CATEGORIES.bookmark;
           for (var key in _streamingMarks) {
             if (_streamingMarks[key].id === markId) {
@@ -1495,10 +1629,25 @@
             }
           }
           pollTaskStatus();
-        } else if (state.selectedParticipant) {
-          loadTranscript(state.selectedParticipant);
         }
-      }
+      });
+      return;
+    }
+    // Optimistic: recolor the dot now, restore on failure.
+    var found = _findSegmentByMarkId(markId);
+    if (!found) {
+      apiPut("api/marks/" + markId, { category: category }).then(function (data) {
+        if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      });
+      return;
+    }
+    var prevCategory = found.mark.category;
+    found.mark.category = category;
+    _paintSegmentMark(found.idx, found.mark);
+    apiPut("api/marks/" + markId, { category: category }).catch(function () {
+      found.mark.category = prevCategory;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
     });
   }
 
@@ -2387,6 +2536,9 @@
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
   TS.getMarkForSegment = getMarkForSegment; // video (timeline markers + tooltip)
+  TS.toggleMark = toggleMark; // video (keyboard marking)
+  TS.updateMarkCategory = updateMarkCategory; // video (keyboard category set)
+  TS.showMarkPopover = showMarkPopover; // video (keyboard marking on already-marked segment)
   TS.maybeWarmOnPillHover = maybeWarmOnPillHover; // pills
   TS.tryPostTranscriptionWarmup = tryPostTranscriptionWarmup; // pills
   TS.pollTaskStatus = pollTaskStatus; // pills

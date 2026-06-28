@@ -770,6 +770,13 @@
       qs("#frictionEmpty").classList.add("hidden");
       qs("#frictionGenerating").classList.add("hidden");
       qs("#frictionContent").classList.remove("hidden");
+      var banner = qs("#frictionStaleBanner");
+      if (banner) {
+        var fd = state.frictionData;
+        // Show the banner only for edit-staleness, not for an LLM failure (which
+        // the header already explains with its own re-run guidance).
+        banner.classList.toggle("hidden", !(fd.stale && fd.llm_ok !== false));
+      }
       renderFrictionStats();
       renderFrictionFilterControls();
       renderFrictionMoments();
@@ -1104,6 +1111,8 @@
   function initFriction() {
     qs("#frictionRerun").addEventListener("click", function () { _startFrictionRun(); });
     qs("#frictionCancel").addEventListener("click", function () { _stopFrictionRun(); });
+    var staleRerun = qs("#frictionStaleRerun");
+    if (staleRerun) staleRerun.addEventListener("click", function () { _startFrictionRun(); });
     qs("#frictionMarkAll").addEventListener("click", function () { _frictionMarkAll(); });
     var slider = qs("#frictionThreshold");
     slider.addEventListener("input", function () {

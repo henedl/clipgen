@@ -465,6 +465,11 @@ body {
   transform: rotate(180deg);
 }
 
+.player-icon-follow {
+  mask-image: url(icons/bars-arrow-down.svg);
+  -webkit-mask-image: url(icons/bars-arrow-down.svg);
+}
+
 .player-speed-btn {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -853,6 +858,28 @@ body {
 
 .friction-status--stale {
   color: var(--color-friction);
+}
+
+/* Stale-analysis banner shown inside the friction content panel. */
+.agent-stale-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-friction) 45%, var(--color-border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-friction) 12%, transparent);
+}
+
+.agent-stale-banner.hidden {
+  display: none;
+}
+
+.agent-stale-banner-text {
+  font-size: var(--text-xs);
+  color: var(--color-text);
 }
 
 .friction-status--error {
@@ -1891,5 +1918,72 @@ body {
 .correction-delete:hover {
   color: var(--sev-critical);
   background: rgba(239, 68, 68, 0.1);
+}
+
+/* ---- Keyboard shortcuts cheatsheet ---- */
+
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+}
+
+.shortcuts-overlay.hidden {
+  display: none;
+}
+
+.shortcuts-card {
+  background: var(--color-surface);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  max-width: 420px;
+  width: 90%;
+  box-shadow: var(--shadow-xl);
+}
+
+.shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.shortcuts-head h3 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.shortcuts-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+  margin: 0;
+}
+
+.shortcuts-list dt {
+  white-space: nowrap;
+}
+
+.shortcuts-list dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-dim);
+}
+
+.shortcuts-list kbd {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
 }
 

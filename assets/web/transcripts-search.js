@@ -69,10 +69,20 @@
     });
   }
 
+  function _renderSearchError() {
+    var container = qs("#searchResults");
+    var countEl = qs("#searchCount");
+    if (countEl) countEl.textContent = "";
+    if (!container) return;
+    container.innerHTML =
+      '<div class="search-result-row" style="justify-content:center;color:var(--sev-high)">Search failed — try again</div>';
+    container.classList.remove("hidden");
+  }
+
   function doSearch(query) {
     state.searchQuery = query;
     apiGet("api/search?q=" + encodeURIComponent(query)).then(function (data) {
-      if (!data.ok) return;
+      if (!data || !data.ok) { _renderSearchError(); return; }
       // Merge client-side search of partial segments for the streaming participant
       if (state.streamingParticipant) {
         var partials = _searchPartialSegments(query, state.streamingParticipant);
@@ -85,7 +95,7 @@
       }
       state.searchResults = data;
       renderSearchResults(data);
-    });
+    }).catch(function () { _renderSearchError(); });
   }
 
   function _searchPartialSegments(query, pid) {
