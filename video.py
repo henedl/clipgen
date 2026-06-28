@@ -11,7 +11,6 @@ import tempfile
 import threading
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1442,9 +1441,7 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
     """
     if config.DEBUGGING:
         ic(start_time, end_time)
-    utils.debug_print(
-        f"start_time is {start_time} with length {len(start_time)}, end_time is {end_time}"
-    )
+    utils.debug_print(f"start_time is {start_time}, end_time is {end_time}")
 
     if end_time is INVALID_END_TIMESTAMP:
         utils.error_print(
@@ -1453,31 +1450,29 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
         )
         return None
 
-    formats = (
-        ["%M:%S", "%H:%M:%S"]
-        if len(str(start_time)) <= config.MAX_MMSS_LENGTH
-        else ["%H:%M:%S", "%M:%S"]
-    )
+    # Parse each end independently with the canonical timestamp parser rather
+    # than picking one strptime format for both ends: the two ends can
+    # legitimately need different formats (a clip 59:50 -> 1:00:10 straddling
+    # the hour, or a single timestamp whose default-duration end crosses it),
+    # and MM:SS minutes may exceed 59 ("75:00", a long session written without
+    # an hours component). A shared-format strptime rejected all of those and
+    # silently dropped the clip.
+    start_seconds = utils.timestamp_to_seconds(start_time)
+    end_seconds = utils.timestamp_to_seconds(end_time)
+    if start_seconds is None or end_seconds is None:
+        utils.error_print(
+            "Timestamp formatting error in get_duration().",
+            [
+                f"Start time: '{start_time}', End time: '{end_time}'",
+                "Accepted formats: HH:MM:SS, MM:SS, or M:SS (e.g., 1:23:45, 12:34, 1:23)",
+            ],
+        )
+        return None
 
-    for time_format in formats:
-        try:
-            start_datetime = datetime.strptime(str(start_time), time_format)
-            end_datetime = datetime.strptime(str(end_time), time_format)
-            duration = int((end_datetime - start_datetime).total_seconds())
-            if config.DEBUGGING:
-                ic(duration)
-            return duration
-        except ValueError:
-            continue
-
-    utils.error_print(
-        "Timestamp formatting error in get_duration().",
-        [
-            f"Start time: '{start_time}', End time: '{end_time}'",
-            "Accepted formats: HH:MM:SS, MM:SS, or M:SS (e.g., 1:23:45, 12:34, 1:23)",
-        ],
-    )
-    return None
+    duration = int(end_seconds - start_seconds)
+    if config.DEBUGGING:
+        ic(duration)
+    return duration
 
 
 def calculate_target_bitrate(

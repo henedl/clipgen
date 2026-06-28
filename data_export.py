@@ -111,9 +111,9 @@ def _flatten_value_for_csv(value: Any) -> Any:
                 "" if (safe := utils.sanitize_floats(item)) is None else str(safe)
                 for item in value
             )
-        return json.dumps(value, ensure_ascii=False)
+        return json.dumps(utils.sanitize_floats(value), ensure_ascii=False)
     if isinstance(value, dict):
-        return json.dumps(value, ensure_ascii=False)
+        return json.dumps(utils.sanitize_floats(value), ensure_ascii=False)
     return str(value)
 
 
