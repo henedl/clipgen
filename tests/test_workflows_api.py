@@ -167,6 +167,17 @@ def test_catalog_serves_required_param_flag(wf_client):
     assert "required" not in _param("find_word", "pad")
 
 
+def test_catalog_flags_multitool_step_detectors(wf_client):
+    # The Multitool step editor derives its step types from the catalog's
+    # multitoolStep flag (no hardcoded JS list): the six per-frame detectors carry
+    # it; the reference-based ones (similarity/template/scene) don't.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+    steps = {n["id"][3:] for n in catalog if n.get("multitoolStep")}
+    assert steps == {"color", "change", "flow", "text", "numbers", "inactivity"}
+    assert by_id["ss_template"].get("multitoolStep") is False
+
+
 def test_catalog_serves_collection_ops(wf_client):
     # The collection-algebra control nodes (filter/merge/partition/limit/dedup) are
     # per-type families grouped under "Collection". Ports must be exact-typed

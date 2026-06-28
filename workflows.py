@@ -186,6 +186,9 @@ class NodeType(TypedDict):
     # Hidden from the palette but kept in the catalog (e.g. the per-detector
     # ss_<tool> nodes, which the unified Detect node + Multitool read for specs).
     hidden: NotRequired[bool]
+    # Whether a ss_<tool> detector can be a Multitool chain step (the frontend
+    # derives its step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
+    multitoolStep: NotRequired[bool]
 
 
 # Shared by the three Ollama thinking nodes: a free-text override of the model
@@ -986,6 +989,16 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
 # Detectors whose scan needs a reference frame self-extracted from the node region.
 _SS_REFERENCE_DETECTORS = frozenset({"similarity", "template", "scene"})
 
+# Detectors usable as a Multitool chain step: the per-frame (``check_frame``)
+# detectors that need no uploaded reference. Single source of truth — served to
+# the frontend via each node's ``multitoolStep`` flag so the step editor derives
+# the list instead of hardcoding it (the "no duplicated JS constants" rule).
+# ``tests/test_workflows_executors`` cross-checks this against the actual tool
+# classes (override ``check_frame`` AND not reference-based) so it can't drift.
+_MULTITOOL_STEP_TOOLS = frozenset(
+    {"color", "change", "flow", "text", "numbers", "inactivity"}
+)
+
 for _ss_tool in _SS_DETECTOR_SPECS:
     NODE_TYPES[f"ss_{_ss_tool}"] = {
         "id": f"ss_{_ss_tool}",
@@ -1006,6 +1019,9 @@ for _ss_tool in _SS_DETECTOR_SPECS:
         # spec source (Detect editor + Multitool steps) and keep old blueprints
         # and built-in recipes that reference ss_<tool> directly runnable.
         "hidden": True,
+        # Whether this detector can be a Multitool step (the frontend derives the
+        # step-type list from this flag — see _MULTITOOL_STEP_TOOLS).
+        "multitoolStep": _ss_tool in _MULTITOOL_STEP_TOOLS,
     }
 
 # Unified palette-facing detector: one node whose ``detector`` dropdown swaps the

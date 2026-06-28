@@ -15,14 +15,6 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // Heatmap style → the detector node that produces the matching raw_results
-  // upstream. A mismatch is a warning, not an error (the scan still runs).
-  var HEATMAP_STYLE_SOURCE = {
-    template: "ss_template",
-    flow: "ss_flow",
-    change: "ss_change",
-  };
-
   function catalogType(node) {
     return (
       state.catalogById[node.type] || {
@@ -105,9 +97,11 @@
 
     // warning — heatmap style needs a matching upstream detector.
     if (node.type === "heatmap") {
-      var want = HEATMAP_STYLE_SOURCE[(node.params || {}).style || "change"];
+      // The heatmap style names map 1:1 to the ss_<style> detector that produces
+      // the matching raw_results (template→ss_template, …) — derive it directly.
+      var want = "ss_" + ((node.params || {}).style || "change");
       var up = upstreamType(node.id, "events");
-      if (want && up && up !== want && up !== "multitool") {
+      if (up && up !== want && up !== "multitool") {
         warnings.push("Heatmap style needs a " + want + " (or multitool) upstream");
       }
     }

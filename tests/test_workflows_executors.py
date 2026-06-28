@@ -139,6 +139,30 @@ def test_make_clips_notes_when_nothing_wired(tmp_path):
     assert "wire" in result["__note__"].lower()
 
 
+def test_multitool_step_flag_matches_tool_capability():
+    # The catalog's multitoolStep flag must match the actual tool capability —
+    # overrides check_frame AND isn't reference-based — so _MULTITOOL_STEP_TOOLS
+    # can't drift from screenspace_tools.
+    import screenspace
+    import screenspace_tools as st
+
+    def _cls(t):
+        return t if isinstance(t, type) else type(t)
+
+    derived = {
+        name
+        for name, tool in screenspace.TOOLS.items()
+        if _cls(tool).check_frame is not st.AnalysisTool.check_frame
+        and name not in workflows._SS_REFERENCE_DETECTORS
+    }
+    tagged = {
+        n["id"][3:]
+        for n in workflows.NODE_TYPES.values()
+        if n.get("multitoolStep") and n["id"].startswith("ss_")
+    }
+    assert tagged == derived
+
+
 def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
     import ollama_client
     import thinking_agents

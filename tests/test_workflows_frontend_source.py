@@ -510,6 +510,18 @@ def test_empty_canvas_offers_builtin_recipes():
     assert "wf-recipe-chip" in stashes
 
 
+def test_multitool_steps_and_heatmap_styles_derived_from_catalog():
+    """MT step types and the heatmap style→detector mapping are derived (from the
+    catalog's multitoolStep flag / the ss_<style> pattern), not hardcoded JS lists
+    — the no-duplicated-constants rule."""
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "multitoolStepTypes" in nodes and "n.multitoolStep" in nodes
+    assert "var MT_STEP_TYPES = [" not in nodes  # no hardcoded list
+    assert "HEATMAP_STYLE_SOURCE" not in validate  # no lookup table
+    assert '"ss_" + (' in validate  # derived from the style name
+
+
 def test_run_panel_surfaces_output_dir_and_armed_hint():
     """The run panel shows where artifacts land; the toolbar shows a persistent cue
     when any blueprint (even a non-active one) is armed for auto-run."""
