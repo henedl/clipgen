@@ -219,6 +219,8 @@
     selectedTaskId: null,
     hoveredTaskId: null,
     selectedTaskResults: null,
+    resultsLoading: false,
+    resultsLazyObserver: null,
     // Coordination flags shared between the hub and screenspace-tasks.js:
     // resultsRequestVersion gates in-flight results fetches; suppressCalibration-
     // Refresh is set while restoreTaskToWorkflow rebuilds the param panel.
@@ -227,6 +229,7 @@
     suppressCalibrationRefresh: false,
     poller: null,
     eventSource: null,
+    sseFellBack: false,
     queuePaused: false,
     timelineDragging: false,
     panelHeight: bottomPanelHeightFromToken(),
@@ -1015,14 +1018,17 @@
     _pendingFrameTs = null;
     _loadedFrameTs = null;
     qs("#participantSelect").value = pid;
-    qs("#videoInfo").textContent = "";
+    // Skeleton frame + a textual "Loading…" in the subheader make the switch
+    // legibly in-progress; both are replaced once video info resolves (or on the
+    // error path below).
+    qs("#videoInfo").textContent = "Loading…";
     qs("#frameEmpty").classList.remove("hidden");
     setInfoParticipant(pid);
 
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
-        if (!data.ok) return;
+        if (!data.ok) { qs("#videoInfo").textContent = ""; return; }
         state.videoInfo = data.info;
         // If the server reports a different mtime than we last saw, the
         // source file was replaced \u2014 drop the stale frame-0 blob so the
@@ -1045,7 +1051,14 @@
         qs("#videoPlayer").src = videoStreamUrl(pid);
         loadFrame(initialTimestamp !== undefined ? initialTimestamp : 0);
       })
-      .catch(function () { showToast("Failed to load video info"); });
+      .catch(function () {
+        // Clear the "Loading…" placeholder for the still-current participant so
+        // it doesn't hang after a failed fetch.
+        if (participantRequestVersion === _participantRequestVersion && pid === state.selectedParticipant) {
+          qs("#videoInfo").textContent = "";
+        }
+        showToast("Failed to load video info");
+      });
 
     apiGet("api/participants/" + encodeURIComponent(pid) + "/notes")
       .then(function (data) {

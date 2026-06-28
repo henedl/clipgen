@@ -895,7 +895,9 @@
       if (task.status === "running") {
         var rPct = Math.round((task.progress || 0) * 100);
         var rLen = Array.isArray(task.result) ? task.result.length : 0;
-        statusText = rPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : "");
+        // "0% \u00b7 scanning\u2026" reads as in-progress rather than hung when a running
+        // task hasn't produced any hits yet.
+        statusText = rPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : " \u00b7 scanning\u2026");
       }
       if (task.status === "paused") {
         var pPct = Math.round((task.progress || 0) * 100);
@@ -910,7 +912,21 @@
         rLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
         statusText = rLen + " result" + (rLen !== 1 ? "s" : "");
       }
-      card.appendChild(el("span", "task-card-status", statusText));
+      var statusSpan = el("span", "task-card-status", statusText);
+      if (task.status === "failed" && task.error) {
+        // The status text truncates with ellipsis; let users read the whole
+        // error via a toast without leaving the queue. stopPropagation so the
+        // click doesn't also select/seek the card.
+        statusSpan.classList.add("task-card-status-error");
+        statusSpan.title = "Click to view the full error";
+        (function (err) {
+          statusSpan.addEventListener("click", function (e) {
+            e.stopPropagation();
+            showToast(err);
+          });
+        })(task.error);
+      }
+      card.appendChild(statusSpan);
 
       // Edit button
       var editBtn = el("button", "task-card-edit");
@@ -1048,6 +1064,11 @@
     var es = new EventSource("api/tasks/stream");
     state.eventSource = es;
 
+    es.onopen = function () {
+      // A live connection re-arms the one-shot drop notice for any later drop.
+      state.sseFellBack = false;
+    };
+
     es.onmessage = function (e) {
       var data;
       try { data = JSON.parse(e.data); } catch (_) { return; }
@@ -1055,9 +1076,14 @@
     };
 
     es.onerror = function () {
-      // Connection lost — fall back to polling
+      // Connection lost — fall back to polling. onerror can fire repeatedly, so
+      // toast only once per drop (the flag resets when SSE is re-established).
       es.close();
       state.eventSource = null;
+      if (!state.sseFellBack) {
+        state.sseFellBack = true;
+        showToast("Live updates interrupted — falling back to polling");
+      }
       startPolling();
     };
   }

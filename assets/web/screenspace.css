@@ -3109,6 +3109,14 @@ body.panel-dragging #bottomPanel {
   max-width: 120px;
 }
 
+/* Truncated error text is clickable to reveal the full message in a toast. */
+.task-card-status-error {
+  cursor: pointer;
+}
+.task-card-status-error:hover {
+  text-decoration: underline;
+}
+
 .task-card-paused {
   border-left-color: #eab308;
 }
@@ -3318,6 +3326,15 @@ body.panel-dragging #bottomPanel {
 
 .result-row.excluded {
   opacity: 0.4;
+}
+
+/* Invisible tripwire at the bottom of a chunk-rendered result list; the
+   IntersectionObserver in renderResults() pulls the next chunk when it nears
+   the viewport. Needs non-zero size so it can intersect. */
+.results-lazy-sentinel {
+  width: 100%;
+  height: 1px;
+  flex-shrink: 0;
 }
 
 .result-exclude-btn {
