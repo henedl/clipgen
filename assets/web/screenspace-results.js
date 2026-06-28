@@ -102,12 +102,20 @@
         var evId = btn.dataset.eventId;
         var isExcluded = btn.dataset.excluded === "true";
         var endpoint = isExcluded ? "api/events/" + evId + "/include" : "api/events/" + evId + "/exclude";
-        apiPut(endpoint).then(function () {
+        // Optimistic flip, reverted on failure so the row never lies about the
+        // server's actual exclude state.
+        var setExcluded = function (val) {
           var evts = state.taskEvents[state.selectedTaskId] || [];
           for (var i = 0; i < evts.length; i++) {
-            if (evts[i].id === evId) { evts[i].excluded = !isExcluded; break; }
+            if (evts[i].id === evId) { evts[i].excluded = val; break; }
           }
+        };
+        setExcluded(!isExcluded);
+        renderResults();
+        apiPut(endpoint).catch(function () {
+          setExcluded(isExcluded);
           renderResults();
+          showToast("Failed to update result");
         });
         return;
       }
@@ -296,6 +304,10 @@
     state.certaintyCutoff = 0;
     var slider = qs("#certaintyCutoff");
     if (slider) slider.value = "0";
+    // Surface a loading state immediately so the panel reads "Loading…" rather
+    // than the idle "Click a task…" while the two fetches are in flight.
+    state.resultsLoading = true;
+    renderResults();
     apiGet("api/tasks/" + taskId + "/results")
       .then(function (data) {
         if (resultsRequestVersion !== state.resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return null;
@@ -306,16 +318,143 @@
         if (!evData) return;
         if (resultsRequestVersion !== state.resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return;
         state.taskEvents[selectedTaskId] = evData.events || [];
+        state.resultsLoading = false;
         renderResults();
         renderTaskList();
         updateResultsCrumb();
       })
-      .catch(function () { showToast("Failed to load results"); });
+      .catch(function () {
+        // Only the current request clears the flag; a superseded load leaves the
+        // newer one's spinner intact.
+        if (resultsRequestVersion === state.resultsRequestVersion && state.selectedTaskId === selectedTaskId) {
+          state.resultsLoading = false;
+          renderResults();
+        }
+        showToast("Failed to load results");
+      });
   }
+
+  // Build a single result row element. Extracted from renderResults so the row
+  // list can be rendered in lazy chunks (see RESULTS_RENDER_ALL / renderChunk):
+  // the per-result event matching + certainty/excluded filtering stays in the
+  // data pass, this just turns one (already-matched, already-kept) result into DOM.
+  function buildResultRow(r, rIdx, matchedEvent, isExcluded, task) {
+    var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
+    row.dataset.resultIndex = rIdx;
+
+    if (task.type === "color") {
+      row.dataset.timestamp = r.start;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
+      row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
+    } else if (task.type === "inactivity") {
+      row.dataset.timestamp = r.start;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
+      row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
+      row.appendChild(el("span", "result-score", "d:" + (r.avg_distance !== undefined ? r.avg_distance : "?")));
+    } else if (task.type === "change") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(buildConfBar(Math.min(r.magnitude, 1), task.type));
+      row.appendChild(el("span", "result-score", (r.magnitude * 100).toFixed(1) + "%"));
+    } else if (task.type === "similarity") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(buildConfBar(r.score, task.type));
+      row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
+    } else if (task.type === "text") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(el("span", "result-detail", r.text_found || ""));
+      row.appendChild(buildConfBar(r.confidence, task.type));
+      row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
+    } else if (task.type === "numbers") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(el("span", "result-detail", String(r.number_found)));
+      if (r.confidence !== undefined) {
+        row.appendChild(buildConfBar(r.confidence, task.type));
+        row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
+      }
+    } else if (task.type === "template") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(buildConfBar(r.best_score, task.type));
+      row.appendChild(el("span", "result-score", (r.best_score * 100).toFixed(1) + "%"));
+      row.appendChild(el("span", "result-detail", r.match_count + " match" + (r.match_count !== 1 ? "es" : "")));
+    } else if (task.type === "flow") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(buildConfBar(Math.min(r.magnitude / 20, 1), task.type));
+      row.appendChild(el("span", "result-score", r.magnitude.toFixed(2)));
+    } else if (task.type === "scene") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(el("span", "result-detail", r.scene_name));
+      row.appendChild(buildConfBar(r.score, task.type));
+      row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
+    } else if (task.type === "boundary") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
+      row.appendChild(el("span", "result-score", "d:" + (r.distance !== undefined ? r.distance : "?")));
+      // Scene label (Scene A/B/… — recurrence-aware for scene/hybrid metrics).
+      if (r.scene_label) row.appendChild(el("span", "result-scene", r.scene_label));
+    } else if (task.type === "multitool") {
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      var badges = el("span", "result-detail multitool-badges");
+      var stepDefs = (task.parameters && task.parameters.steps) || [];
+      var types = r.tool_types || stepDefs.map(function (s) { return s.type; });
+      types.forEach(function (t, i) {
+        var step = stepDefs[i] || { type: t };
+        if (i > 0) {
+          var logic = (step.logic || "AND").toUpperCase();
+          var sep = el("span", "multitool-step-logic" + (logic === "NOT" ? " logic-not" : ""), logic);
+          badges.appendChild(sep);
+        }
+        var badge = el("span", "multitool-type-badge");
+        badge.style.color = taskTypeColor(t);
+        var paramStr = formatMultitoolStepParams(step);
+        badge.title = t + (paramStr ? ": " + paramStr : "");
+        var icon = buildTypeIcon(t);
+        if (icon) badge.appendChild(icon);
+        if (paramStr) badge.appendChild(el("span", "multitool-step-params", paramStr));
+        badges.appendChild(badge);
+      });
+      row.appendChild(badges);
+      row.appendChild(el("span", "result-score", ((r.min_confidence || 0) * 100).toFixed(1) + "%"));
+    }
+
+    if (matchedEvent) {
+      var btn = el("button", "result-exclude-btn");
+      btn.dataset.eventId = matchedEvent.id;
+      btn.dataset.excluded = isExcluded ? "true" : "false";
+      btn.title = isExcluded ? "Include event" : "Exclude event";
+      var exIcon = isExcluded ? iconSpan("x-mark", "ss-icon--sm") : iconSpan("check", "ss-icon--sm");
+      btn.appendChild(exIcon);
+      row.appendChild(btn);
+    }
+    return row;
+  }
+
+  // Render all rows inline below this many; above it, rows stream in chunks via
+  // an IntersectionObserver so a 500+ result task doesn't build thousands of DOM
+  // nodes (and reflow) in one synchronous pass. Variable row heights (wrapping
+  // text / multitool badges) rule out fixed-height windowing, so we grow the
+  // list incrementally instead.
+  var RESULTS_RENDER_ALL = 150;
+  var RESULTS_CHUNK = 120;
 
   function renderResults() {
     var container = qs("#resultsList");
     var prevResultsScrollTop = container.scrollTop;
+    // Tear down any lazy-load observer from a previous render — its sentinel is
+    // about to be wiped with container.innerHTML, and a stale observer would
+    // keep a detached node alive.
+    if (state.resultsLazyObserver) {
+      state.resultsLazyObserver.disconnect();
+      state.resultsLazyObserver = null;
+    }
     var countEl = qs("#resultCount") || { textContent: "" };
     var actionsEl = qs("#resultsActions");
     var results = state.selectedTaskResults;
@@ -329,8 +468,11 @@
       container.parentNode.insertBefore(fastLabel, container);
     }
 
-    if (!results || !task) {
-      container.innerHTML = '<div class="panel-empty">Click a task to view results.</div>';
+    // While a results fetch is in flight, show a loading state even if stale
+    // results from the previous task are still in state.selectedTaskResults.
+    if (state.resultsLoading || !results || !task) {
+      var emptyMsg = state.resultsLoading ? "Loading results…" : "Click a task to view results.";
+      container.innerHTML = '<div class="panel-empty">' + emptyMsg + "</div>";
       countEl.textContent = "";
       actionsEl.classList.add("hidden");
       fastLabel.classList.add("hidden");
@@ -435,8 +577,6 @@
 
     var showToggle = qs("#showExcludedBtn");
     if (showToggle) showToggle.classList.toggle("hidden", events.length === 0);
-
-    var frag = document.createDocumentFragment();
 
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
@@ -560,6 +700,10 @@
       container.appendChild(heatmapSection);
     }
 
+    // Data pass: pair each result to its event (sequential per-timestamp
+    // consumption), apply certainty + excluded filtering, and collect the kept
+    // rows. Cheap (no DOM) so it stays a single pass over every result.
+    var visibleRows = [];
     results.forEach(function (r, rIdx) {
       // Find matching event for this result
       var ts = r.timestamp !== undefined ? r.timestamp : r.start;
@@ -592,106 +736,56 @@
       var isExcluded = matchedEvent && matchedEvent.excluded;
       if (isExcluded && !state.showExcluded) return;
 
-      var row = el("div", "result-row" + (isExcluded ? " excluded" : ""));
-      row.dataset.resultIndex = rIdx;
-
-      if (task.type === "color") {
-        row.dataset.timestamp = r.start;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
-        row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
-      } else if (task.type === "inactivity") {
-        row.dataset.timestamp = r.start;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.start, { decimals: 1 }) + " \u2013 " + formatTime(r.end, { decimals: 1 })));
-        row.appendChild(el("span", "result-detail", r.duration.toFixed(1) + "s"));
-        row.appendChild(el("span", "result-score", "d:" + (r.avg_distance !== undefined ? r.avg_distance : "?")));
-      } else if (task.type === "change") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(buildConfBar(Math.min(r.magnitude, 1), task.type));
-        row.appendChild(el("span", "result-score", (r.magnitude * 100).toFixed(1) + "%"));
-      } else if (task.type === "similarity") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(buildConfBar(r.score, task.type));
-        row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
-      } else if (task.type === "text") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(el("span", "result-detail", r.text_found || ""));
-        row.appendChild(buildConfBar(r.confidence, task.type));
-        row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
-      } else if (task.type === "numbers") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(el("span", "result-detail", String(r.number_found)));
-        if (r.confidence !== undefined) {
-          row.appendChild(buildConfBar(r.confidence, task.type));
-          row.appendChild(el("span", "result-score", (r.confidence * 100).toFixed(0) + "%"));
-        }
-      } else if (task.type === "template") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(buildConfBar(r.best_score, task.type));
-        row.appendChild(el("span", "result-score", (r.best_score * 100).toFixed(1) + "%"));
-        row.appendChild(el("span", "result-detail", r.match_count + " match" + (r.match_count !== 1 ? "es" : "")));
-      } else if (task.type === "flow") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(buildConfBar(Math.min(r.magnitude / 20, 1), task.type));
-        row.appendChild(el("span", "result-score", r.magnitude.toFixed(2)));
-      } else if (task.type === "scene") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(el("span", "result-detail", r.scene_name));
-        row.appendChild(buildConfBar(r.score, task.type));
-        row.appendChild(el("span", "result-score", (r.score * 100).toFixed(1) + "%"));
-      } else if (task.type === "boundary") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
-        row.appendChild(el("span", "result-score", "d:" + (r.distance !== undefined ? r.distance : "?")));
-        // Scene label (Scene A/B/… — recurrence-aware for scene/hybrid metrics).
-        if (r.scene_label) row.appendChild(el("span", "result-scene", r.scene_label));
-      } else if (task.type === "multitool") {
-        row.dataset.timestamp = r.timestamp;
-        row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
-        var badges = el("span", "result-detail multitool-badges");
-        var stepDefs = (task.parameters && task.parameters.steps) || [];
-        var types = r.tool_types || stepDefs.map(function (s) { return s.type; });
-        types.forEach(function (t, i) {
-          var step = stepDefs[i] || { type: t };
-          if (i > 0) {
-            var logic = (step.logic || "AND").toUpperCase();
-            var sep = el("span", "multitool-step-logic" + (logic === "NOT" ? " logic-not" : ""), logic);
-            badges.appendChild(sep);
-          }
-          var badge = el("span", "multitool-type-badge");
-          badge.style.color = taskTypeColor(t);
-          var paramStr = formatMultitoolStepParams(step);
-          badge.title = t + (paramStr ? ": " + paramStr : "");
-          var icon = buildTypeIcon(t);
-          if (icon) badge.appendChild(icon);
-          if (paramStr) badge.appendChild(el("span", "multitool-step-params", paramStr));
-          badges.appendChild(badge);
-        });
-        row.appendChild(badges);
-        row.appendChild(el("span", "result-score", ((r.min_confidence || 0) * 100).toFixed(1) + "%"));
-      }
-
-      if (matchedEvent) {
-        var btn = el("button", "result-exclude-btn");
-        btn.dataset.eventId = matchedEvent.id;
-        btn.dataset.excluded = isExcluded ? "true" : "false";
-        btn.title = isExcluded ? "Include event" : "Exclude event";
-        var icon = isExcluded ? iconSpan("x-mark", "ss-icon--sm") : iconSpan("check", "ss-icon--sm");
-        btn.appendChild(icon);
-        row.appendChild(btn);
-      }
-
-      frag.appendChild(row);
+      visibleRows.push({ r: r, rIdx: rIdx, matchedEvent: matchedEvent, isExcluded: isExcluded });
     });
-    container.appendChild(frag);
+
+    // Render pass: append rows a chunk at a time. renderChunk returns true while
+    // more rows remain, so callers can keep pulling.
+    var rendered = 0;
+    function renderChunk() {
+      var endIdx = Math.min(rendered + RESULTS_CHUNK, visibleRows.length);
+      var frag = document.createDocumentFragment();
+      for (var i = rendered; i < endIdx; i++) {
+        var d = visibleRows[i];
+        frag.appendChild(buildResultRow(d.r, d.rIdx, d.matchedEvent, d.isExcluded, task));
+      }
+      container.appendChild(frag);
+      rendered = endIdx;
+      return rendered < visibleRows.length;
+    }
+
+    if (visibleRows.length <= RESULTS_RENDER_ALL) {
+      // Small lists render in full \u2014 no observer, identical to old behavior.
+      while (renderChunk()) { /* render everything */ }
+      container.scrollTop = prevResultsScrollTop;
+      return;
+    }
+
+    // Large list: render the first chunk, then enough more to cover the prior
+    // scroll position (so re-renders during live streaming don't jump to the
+    // top), then lazy-load the rest as the user scrolls toward the bottom.
+    renderChunk();
+    var coverTarget = prevResultsScrollTop + container.clientHeight;
+    while (rendered < visibleRows.length && container.scrollHeight < coverTarget) renderChunk();
     container.scrollTop = prevResultsScrollTop;
+
+    if (rendered < visibleRows.length) {
+      var sentinel = el("div", "results-lazy-sentinel");
+      container.appendChild(sentinel);
+      var io = new IntersectionObserver(function (entries) {
+        if (!entries[0].isIntersecting) return;
+        var more = renderChunk();
+        if (more) {
+          container.appendChild(sentinel); // keep the sentinel below freshly added rows
+        } else {
+          io.disconnect();
+          if (sentinel.parentNode) sentinel.parentNode.removeChild(sentinel);
+          state.resultsLazyObserver = null;
+        }
+      }, { root: container, rootMargin: "300px" });
+      io.observe(sentinel);
+      state.resultsLazyObserver = io;
+    }
   }
 
   // ---- Satellite interface (published back to window.ClipgenScreenspace) ----
