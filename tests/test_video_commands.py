@@ -1,6 +1,7 @@
 import json
 import subprocess
 
+import utils
 import video
 
 _MATCHING_PROPS = {
@@ -405,6 +406,31 @@ def test_get_duration_valid_and_invalid_values(monkeypatch):
     assert video.get_duration("00:10", video.INVALID_END_TIMESTAMP) is None
     # Completely invalid format returns None
     assert video.get_duration("not-a-time", "also-bad") is None
+
+
+def test_get_duration_mixed_format_and_overflow_minutes():
+    """Pairs whose ends need different formats, and MM:SS with minutes >= 60,
+    must yield a real duration. The timestamp parser emits both shapes; a
+    shared-format strptime previously returned None and silently dropped the
+    clip in run_ffmpeg."""
+    # Mixed M:SS / H:MM:SS pair (a clip straddling the hour boundary).
+    assert video.get_duration("59:50", "1:00:10") == 20
+    # MM:SS with minutes >= 60 (a long session written without an hours field).
+    assert video.get_duration("75:00", "80:00") == 300
+    # Both ends carrying hours still work.
+    assert video.get_duration("1:00:10", "1:00:30") == 20
+
+
+def test_get_duration_accepts_every_pair_the_parser_emits():
+    """Tie the parser contract to the cutter: any (start, end) pair that
+    parse_timestamps produces must yield a duration, not None — including
+    single timestamps whose default-duration end crosses the hour."""
+    for cell in ("59:50", "75:00", "58:30", "0:10"):
+        start, end = utils.parse_timestamps(cell)[0]
+        assert video.get_duration(start, end) is not None, cell
+    # Explicit range cell with overflow minutes.
+    start, end = utils.parse_timestamps("75:00-80:00")[0]
+    assert video.get_duration(start, end) == 300
 
 
 def test_calculate_target_bitrate_typical_and_min_floor():

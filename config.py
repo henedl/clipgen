@@ -318,7 +318,6 @@ MAX_SKIPPED_TIMESTAMPS_TO_SHOW: int = (
 # ── Timestamps ───────────────────────────────────────────────────────
 SECONDS_PER_HOUR: int = 3600
 SECONDS_PER_MINUTE: int = 60
-MAX_MMSS_LENGTH: int = 5  # Max length of an MM:SS timestamp string
 
 # ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)

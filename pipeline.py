@@ -325,9 +325,12 @@ def _prepare_and_check_clip(
 def _local_timestamp(seconds: float) -> str:
     """Format local *seconds* as ``H:MM:SS`` for ffmpeg.
 
-    Always emits the hours component so a clip's start/end can't end up in mixed
-    formats (``video.get_duration`` parses both ends with one format). These
-    strings feed ffmpeg, not the spreadsheet, so the explicit hours are harmless.
+    Always emits the hours component so every ffmpeg-bound timestamp shares one
+    uniform shape. This is a consistency/readability invariant, not a
+    correctness requirement: ``video.get_duration`` parses each end
+    independently (via ``utils.timestamp_to_seconds``) and tolerates mixed
+    ``M:SS`` / ``H:MM:SS`` pairs. These strings feed ffmpeg, not the
+    spreadsheet, so the explicit hours are harmless.
     """
     return utils.seconds_to_timestamp(int(round(seconds)), force_hours=True)
 
@@ -423,8 +426,8 @@ def cut_global_range(
         ok = video.run_ffmpeg(
             base_video,
             out_path,
-            utils.seconds_to_timestamp(int(round(start_seconds))),
-            utils.seconds_to_timestamp(int(round(end_seconds))),
+            _local_timestamp(start_seconds),
+            _local_timestamp(end_seconds),
             reencode,
             cancel_flag=cancel_flag,
         )
