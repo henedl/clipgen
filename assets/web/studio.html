@@ -209,9 +209,9 @@
   </div>
 
   <div id="logOverlay" class="hidden">
-    <div class="log-panel">
+    <div class="log-panel" role="dialog" aria-modal="true" aria-labelledby="logTitle">
       <div class="log-header">
-        <h3>Artifact Log</h3>
+        <h3 id="logTitle">Artifact Log</h3>
         <button id="logClose" class="btn btn-small">Close</button>
       </div>
       <div id="logContent"></div>
@@ -222,7 +222,7 @@
   </div>
 
   <div id="statusOverlay" class="hidden">
-    <div class="status-card">
+    <div class="status-card" role="dialog" aria-modal="true" aria-labelledby="statusTitle">
       <div id="statusSpinner" class="spinner"></div>
       <h3 id="statusTitle">Processing...</h3>
       <p id="statusMessage"></p>
@@ -249,7 +249,7 @@
   </div>
 
   <div id="confirmOverlay" class="hidden">
-    <div class="confirm-card">
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
       <h3 id="confirmTitle"></h3>
       <p id="confirmMessage"></p>
       <div class="confirm-actions">
@@ -260,7 +260,7 @@
   </div>
 
   <div id="galleryOverlay" class="hidden">
-    <div class="gallery-card" role="dialog" aria-labelledby="galleryDialogTitle">
+    <div class="gallery-card" role="dialog" aria-modal="true" aria-labelledby="galleryDialogTitle">
       <h3 id="galleryDialogTitle">Open Gallery</h3>
       <p class="gallery-dialog-help">Generate a gallery viewer from a participant's source video.</p>
       <div class="gallery-dialog-fields">
