@@ -22,6 +22,7 @@
   var _batchStream = null; // EventSource for the active batch
   var _batchPoller = null; // createPoller fallback when batch SSE drops
   var _discoverPoller = null; // low-freq poll surfacing runs THIS client didn't start
+  var _reconnecting = false; // an SSE stream dropped; polling is covering the gap
 
   var TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
 
@@ -68,6 +69,7 @@
 
   function subscribeRun(runId) {
     stopTransport();
+    _reconnecting = false; // fresh subscription — clear any stale gap state
     if (!window.EventSource) {
       startPolling(runId);
       return;
@@ -84,9 +86,12 @@
       if (data && data.run) handleRunData(data.run);
     };
     es.onerror = function () {
-      // SSE dropped — fall back to polling so progress still flows.
+      // SSE dropped — flag the gap (surfaces a "Reconnecting…" pill) and fall
+      // back to polling so progress still flows; the next poll clears the flag.
+      _reconnecting = true;
       stopStream();
       startPolling(runId);
+      renderRuns();
     };
   }
 
@@ -129,6 +134,7 @@
 
   function subscribeBatch(batchId) {
     stopBatchTransport();
+    _reconnecting = false; // fresh subscription — clear any stale gap state
     if (!window.EventSource) {
       startBatchPolling(batchId);
       return;
@@ -147,8 +153,10 @@
       if (data && data.batch) handleBatchData(data.batch);
     };
     es.onerror = function () {
+      _reconnecting = true;
       stopBatchStream();
       startBatchPolling(batchId);
+      renderRuns();
     };
   }
 
@@ -356,6 +364,7 @@
 
   function handleRunData(run) {
     if (!run) return;
+    _reconnecting = false; // data flowed (live SSE or a successful poll)
     upsertRun(run);
     if (run.id === state.activeRunId && isTerminal(run.status)) {
       stopTransport();
@@ -387,6 +396,7 @@
 
   function handleBatchData(batch) {
     if (!batch) return;
+    _reconnecting = false; // data flowed (live SSE or a successful poll)
     upsertBatch(batch);
     if (batch.id === state.activeBatchId && isTerminal(batch.status)) {
       stopBatchTransport();
@@ -476,6 +486,15 @@
     return nodeId;
   }
 
+  // A leading status glyph for a run-detail / batch-child row. The Heroicon and
+  // colour are set by CSS keyed on data-status (so the row reads at a glance,
+  // not just by its left-border tint).
+  function statusIcon(status) {
+    var icon = el("span", "wf-run-node-icon");
+    icon.setAttribute("data-status", status || "queued");
+    return icon;
+  }
+
   function statusCounts(run) {
     var counts = {};
     var states = run.nodeStates || {};
@@ -527,6 +546,7 @@
     Object.keys(states).forEach(function (nodeId) {
       var ns = states[nodeId];
       var row = el("div", "wf-run-node wf-run-node-" + ns.status);
+      row.appendChild(statusIcon(ns.status));
       row.appendChild(el("span", "wf-run-node-label", nodeLabel(nodeId)));
       var detail =
         ns.status === "running"
@@ -668,12 +688,30 @@
     );
   }
 
+  function resultItem(it) {
+    return el("div", "wf-result-item", it == null ? "—" : String(it));
+  }
+
   function renderList(body, items) {
-    items.slice(0, 8).forEach(function (it) {
-      body.appendChild(el("div", "wf-result-item", it == null ? "—" : String(it)));
+    var LIMIT = 8;
+    items.slice(0, LIMIT).forEach(function (it) {
+      body.appendChild(resultItem(it));
     });
-    if (items.length > 8) {
-      body.appendChild(el("div", "wf-result-more", "+" + (items.length - 8) + " more"));
+    if (items.length > LIMIT) {
+      // Clickable "+N more" reveals the rest in place (the payload is already
+      // here — no further fetch). stopPropagation so it doesn't toggle the row.
+      var more = el("button", "wf-result-more", "+" + (items.length - LIMIT) + " more");
+      more.type = "button";
+      more.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var frag = document.createDocumentFragment();
+        items.slice(LIMIT).forEach(function (it) {
+          frag.appendChild(resultItem(it));
+        });
+        body.insertBefore(frag, more);
+        more.parentNode.removeChild(more);
+      });
+      body.appendChild(more);
     }
   }
 
@@ -682,6 +720,24 @@
     var m = Math.floor(s / 60);
     var r = s % 60;
     return m + ":" + (r < 10 ? "0" : "") + r;
+  }
+
+  // Wall-clock start time of a run/batch (ISO → local HH:MM); "" if unparseable.
+  function fmtStartTime(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  // Elapsed wall-clock between two ISO stamps as a compact "12s" / "3m 4s".
+  function fmtDuration(startIso, endIso) {
+    if (!startIso || !endIso) return "";
+    var ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+    if (!(ms >= 0)) return "";
+    var s = Math.round(ms / 1000);
+    if (s < 60) return s + "s";
+    return Math.floor(s / 60) + "m " + (s % 60) + "s";
   }
 
   function eventLabel(ev) {
@@ -706,10 +762,22 @@
     if (run.triggered) {
       head.appendChild(el("span", "wf-run-triggered", "triggered"));
     }
+    // Live stream dropped for the active run — polling is covering the gap.
+    if (_reconnecting && run.id === state.activeRunId && !isTerminal(run.status)) {
+      head.appendChild(el("span", "wf-run-reconnect", "Reconnecting…"));
+    }
     var counts = statusCounts(run);
     var total = Object.keys(run.nodeStates || {}).length;
     var done = (counts.completed || 0) + (counts.skipped || 0);
-    head.appendChild(el("span", "wf-run-meta", done + "/" + total + " nodes"));
+    // Meta line: node progress · start time · duration (the last two only once
+    // the run has a startedAt / has finished). Folded into one span so the head's
+    // space-between layout stays stable regardless of how many parts there are.
+    var metaParts = [done + "/" + total + " nodes"];
+    var started = fmtStartTime(run.startedAt);
+    if (started) metaParts.push(started);
+    var dur = fmtDuration(run.startedAt, run.completedAt);
+    if (dur) metaParts.push(dur);
+    head.appendChild(el("span", "wf-run-meta", metaParts.join(" · ")));
     // Re-run a terminal run of the active blueprint — relaunches the same graph
     // (no partial/memoized re-run; the engine just re-executes). Disabled while
     // a run/batch is in flight, mirroring the toolbar Run gate.
@@ -743,12 +811,21 @@
     head.appendChild(
       el("span", "wf-run-status wf-run-status-" + batch.status, batch.status),
     );
+    if (
+      _reconnecting &&
+      batch.id === state.activeBatchId &&
+      !isTerminal(batch.status)
+    ) {
+      head.appendChild(el("span", "wf-run-reconnect", "Reconnecting…"));
+    }
     var counts = batchCounts(batch);
     var total = (batch.children || []).length;
     var done = counts.completed || 0;
     var parts = [done + "/" + total + " done"];
     if (counts.failed) parts.push(counts.failed + " failed");
     if (counts.cancelled) parts.push(counts.cancelled + " cancelled");
+    var bstart = fmtStartTime(batch.createdAt);
+    if (bstart) parts.push(bstart);
     head.appendChild(el("span", "wf-run-meta", "All participants · " + parts.join(" · ")));
     card.appendChild(head);
 
@@ -760,6 +837,7 @@
           "div",
           "wf-batch-child wf-run-node-" + child.status + (focused ? " focused" : ""),
         );
+        row.appendChild(statusIcon(child.status));
         row.appendChild(
           el("span", "wf-batch-child-label", child.participant || child.runId),
         );
@@ -793,6 +871,17 @@
     host.classList.remove("hidden");
   }
 
+  // Client-side run-history filter (state.runFilter). "running" spans every
+  // non-terminal status; "failed" also folds in cancelled (both are red ends).
+  function runMatchesFilter(status) {
+    var f = state.runFilter || "all";
+    if (f === "all") return true;
+    if (f === "running") return !isTerminal(status);
+    if (f === "completed") return status === "completed";
+    if (f === "failed") return status === "failed" || status === "cancelled";
+    return true;
+  }
+
   function renderRuns() {
     renderOutputDir();
     var container = qs("#wfRuns");
@@ -812,16 +901,46 @@
       );
       return;
     }
+    var batches = state.batches.filter(function (b) {
+      return runMatchesFilter(b.status);
+    });
+    var runs = looseRuns.filter(function (r) {
+      return runMatchesFilter(r.status);
+    });
+    if (!batches.length && !runs.length) {
+      container.appendChild(
+        el("p", "wf-empty-hint", "No " + (state.runFilter || "") + " runs."),
+      );
+      return;
+    }
     var frag = document.createDocumentFragment();
     // Batches first (the active one expanded), then loose single runs. Keyed by id
     // so a newer run can't steal the expansion from an older in-flight one.
-    state.batches.forEach(function (batch) {
+    batches.forEach(function (batch) {
       frag.appendChild(buildBatchCard(batch, batch.id === state.activeBatchId));
     });
-    looseRuns.forEach(function (run) {
+    runs.forEach(function (run) {
       frag.appendChild(buildRunCard(run, run.id === state.activeRunId));
     });
     container.appendChild(frag);
+  }
+
+  // Wire the status-filter chips above the run list (set state.runFilter, toggle
+  // the active chip, re-render). No-op if the markup isn't present.
+  function initRunFilter() {
+    var host = qs("#wfRunFilter");
+    if (!host) return;
+    if (!state.runFilter) state.runFilter = "all";
+    host.addEventListener("click", function (e) {
+      var btn = e.target.closest(".wf-run-filter-btn");
+      if (!btn) return;
+      state.runFilter = btn.getAttribute("data-filter") || "all";
+      var chips = host.querySelectorAll(".wf-run-filter-btn");
+      for (var i = 0; i < chips.length; i++) {
+        chips[i].classList.toggle("active", chips[i] === btn);
+      }
+      renderRuns();
+    });
   }
 
   // ---- Running UI -----------------------------------------------------------
@@ -926,6 +1045,7 @@
 
   function initRuns() {
     document.addEventListener("visibilitychange", onVisibility);
+    initRunFilter();
     setRunningUI(false);
     startDiscover();
   }

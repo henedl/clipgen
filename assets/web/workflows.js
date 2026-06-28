@@ -35,6 +35,7 @@
     runs: [], // recent run snapshots (newest first)
     activeRunId: null, // the run currently streamed/polled, or null
     nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
+    runFilter: "all", // run-history status filter (all|running|completed|failed)
     // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
     batches: [], // recent batch summaries (newest first)
     activeBatchId: null, // the batch currently streamed/polled, or null
@@ -550,6 +551,17 @@
     _redoStack = [];
     _snapPending = false;
     _baseline = cloneGraph();
+    syncUndoButtons();
+  }
+
+  // Toolbar undo/redo buttons mirror the keyboard stack; disabled when the
+  // canvas isn't ready or the respective stack is empty. Called from every
+  // history mutation so the buttons never lie about what's available.
+  function syncUndoButtons() {
+    var u = qs("#wfUndo");
+    var r = qs("#wfRedo");
+    if (u) u.disabled = !state.ready || !_undoStack.length;
+    if (r) r.disabled = !state.ready || !_redoStack.length;
   }
 
   // On the first mutation of a burst, push the pre-burst baseline; later
@@ -564,6 +576,7 @@
     if (_undoStack.length > _UNDO_CAP) _undoStack.shift();
     _redoStack = []; // a fresh edit invalidates the redo branch
     _snapPending = true;
+    syncUndoButtons();
   }
 
   // Restore a graph snapshot and persist it without re-capturing history.
@@ -585,6 +598,7 @@
     if (!_undoStack.length) return false;
     _redoStack.push(cloneGraph());
     applyGraph(_undoStack.pop());
+    syncUndoButtons();
     return true;
   }
 
@@ -592,12 +606,29 @@
     if (!_redoStack.length) return false;
     _undoStack.push(cloneGraph());
     applyGraph(_redoStack.pop());
+    syncUndoButtons();
     return true;
   }
 
   // ---- Debounced autosave ---------------------------------------------------
 
   var _saveTimer = null;
+
+  // Reflect autosave state in the toolbar: "saving" while the debounce timer is
+  // armed / a PUT is in flight, "saved" once it resolves, "error" on failure.
+  function setSaveStatus(mode) {
+    var status = qs("#wfSaveStatus");
+    if (!status) return;
+    status.classList.toggle("wf-save-error", mode === "error");
+    status.textContent =
+      mode === "saving"
+        ? "Saving…"
+        : mode === "saved"
+          ? "Saved"
+          : mode === "error"
+            ? "Save failed"
+            : "";
+  }
 
   function cancelSave() {
     if (_saveTimer) {
@@ -609,6 +640,7 @@
   function scheduleSave() {
     captureHistory();
     cancelSave();
+    setSaveStatus("saving");
     _saveTimer = setTimeout(function () {
       // Burst settled → this is the new baseline a future edit captures from.
       _baseline = cloneGraph();
@@ -639,9 +671,14 @@
       nodes: state.nodes,
       edges: state.edges,
       viewport: state.viewport,
-    }).catch(function () {
-      showToast("Failed to save blueprint");
-    });
+    })
+      .then(function () {
+        setSaveStatus("saved");
+      })
+      .catch(function () {
+        setSaveStatus("error");
+        showToast("Failed to save blueprint");
+      });
   }
 
   // ---- Load gate ------------------------------------------------------------
@@ -679,6 +716,9 @@
     }
     var retry = qs("#wfOverlayRetry");
     if (retry) retry.classList.toggle("hidden", mode !== "error");
+    // Spinner only spins while loading — on error it's replaced by the retry CTA.
+    var spinner = qs("#wfOverlaySpinner");
+    if (spinner) spinner.classList.toggle("hidden", mode === "error");
     setToolbarDisabled(!state.ready);
     // setToolbarDisabled(false) re-enables every toolbar control, but "Stash
     // selection" must stay disabled until nodes are selected — re-apply its
@@ -687,6 +727,9 @@
     // Blanket re-enable above ignores the trigger's nuanced gate (valid graph +
     // a Video Source); re-apply it after entering the ready state.
     if (state.ready) syncTriggerButton();
+    // Undo/redo gate on stack contents, not just readiness — re-derive after the
+    // blanket enable so they don't light up on a fresh, history-less canvas.
+    syncUndoButtons();
   }
 
   function setToolbarDisabled(disabled) {
@@ -695,6 +738,8 @@
       "#wfBlueprintName",
       "#wfNewBlueprint",
       "#wfDeleteBlueprint",
+      "#wfUndo",
+      "#wfRedo",
       "#wfCleanUp",
       "#wfRunBtn",
       "#wfRunMenuBtn",
@@ -706,6 +751,38 @@
     });
   }
 
+  // Generic dropdown toggle: wires a trigger button to a menu element with
+  // outside-click + Escape close (shared by the Run split-button and the
+  // shortcuts legend). Returns {open, close} for callers that need them.
+  function bindMenuToggle(btn, menu) {
+    function onDocDown(e) {
+      // Ignore mousedowns on the trigger itself so its click handler toggles (a
+      // close-then-reopen race otherwise).
+      if (btn.contains(e.target) || menu.contains(e.target)) return;
+      close();
+    }
+    function onKey(e) {
+      if (e.key === "Escape") close();
+    }
+    function open() {
+      menu.classList.remove("hidden");
+      btn.setAttribute("aria-expanded", "true");
+      document.addEventListener("mousedown", onDocDown, true);
+      document.addEventListener("keydown", onKey, true);
+    }
+    function close() {
+      menu.classList.add("hidden");
+      btn.setAttribute("aria-expanded", "false");
+      document.removeEventListener("mousedown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    }
+    btn.addEventListener("click", function () {
+      if (menu.classList.contains("hidden")) open();
+      else close();
+    });
+    return { open: open, close: close };
+  }
+
   // Run split-button: the caret opens a small menu whose "Run to here" item runs
   // the selected node + its ancestors (a partial run). The primary button still
   // runs the whole graph.
@@ -714,39 +791,23 @@
     var menu = qs("#wfRunMenu");
     var runTo = qs("#wfRunToItem");
     if (!caret || !menu) return;
-
-    function closeMenu() {
-      menu.classList.add("hidden");
-      caret.setAttribute("aria-expanded", "false");
-      document.removeEventListener("mousedown", onDocDown, true);
-      document.removeEventListener("keydown", onKey, true);
-    }
-    function onDocDown(e) {
-      // Ignore mousedowns on the caret itself so its click handler toggles (a
-      // close-then-reopen race otherwise).
-      if (caret.contains(e.target) || menu.contains(e.target)) return;
-      closeMenu();
-    }
-    function onKey(e) {
-      if (e.key === "Escape") closeMenu();
-    }
-    function openMenu() {
-      menu.classList.remove("hidden");
-      caret.setAttribute("aria-expanded", "true");
-      document.addEventListener("mousedown", onDocDown, true);
-      document.addEventListener("keydown", onKey, true);
-    }
-    caret.addEventListener("click", function () {
-      if (menu.classList.contains("hidden")) openMenu();
-      else closeMenu();
-    });
+    var ctl = bindMenuToggle(caret, menu);
     if (runTo) {
       runTo.addEventListener("click", function () {
-        closeMenu();
+        ctl.close();
         var sel = state.selection || [];
         if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
       });
     }
+  }
+
+  // Keyboard/mouse shortcuts legend — a far-right ? popover. Static content, so
+  // no gating; reuses the same outside-click/Escape toggle as the run menu.
+  function initShortcutsMenu() {
+    var btn = qs("#wfShortcutsBtn");
+    var menu = qs("#wfShortcutsMenu");
+    if (!btn || !menu) return;
+    bindMenuToggle(btn, menu);
   }
 
   // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
@@ -830,6 +891,19 @@
         deleteBlueprint(state.activeBlueprintId);
       });
     }
+    var undoBtn = qs("#wfUndo");
+    if (undoBtn) {
+      undoBtn.addEventListener("click", function () {
+        undo();
+      });
+    }
+    var redoBtn = qs("#wfRedo");
+    if (redoBtn) {
+      redoBtn.addEventListener("click", function () {
+        redo();
+      });
+    }
+    initShortcutsMenu();
     var cleanBtn = qs("#wfCleanUp");
     if (cleanBtn) {
       cleanBtn.addEventListener("click", function () {

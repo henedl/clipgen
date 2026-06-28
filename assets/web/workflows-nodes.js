@@ -348,10 +348,12 @@
     card.setAttribute("data-node-id", node.id);
     card.setAttribute("data-node-type", node.type);
     card.setAttribute("data-domain", type.domain || "");
-    // Busy nodes (a compound step-list param like Multitool, or the Detect node's
-    // swappable param set) get extra width so their controls stay readable.
+    // Busy nodes get extra width so their controls stay readable: the Detect
+    // node's swappable param set, a compound step-list param (Multitool), or any
+    // node carrying more than three params (e.g. Make Clips with titlecard knobs).
     if (
       node.type === "detect" ||
+      (type.params || []).length > 3 ||
       (type.params || []).some(function (p) {
         return p.type === "step-list";
       })
