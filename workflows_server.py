@@ -138,6 +138,9 @@ def api_catalog() -> Any:
                 "sheet": _sheet_context is not None,
                 "videoDir": bool(videos),
                 "participants": [v["id"] for v in videos if v.get("has_video")],
+                # Where a run's artifacts land — surfaced in the run panel so the
+                # user knows where to find their clips/reels/viewers.
+                "outputDir": str(utils.get_effective_output_dir()),
             },
         }
     )

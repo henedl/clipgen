@@ -757,6 +757,26 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/bolt.svg");
 }
 
+/* Persistent toolbar cue that some blueprint is armed for auto-run. */
+.wf-armed-hint {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+/* Output-folder line above the run list. */
+.wf-output-dir {
+  padding: 0 var(--space-4) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  word-break: break-all;
+}
+
 /* Run-history chip marking an auto-launched (triggered) run. */
 .wf-run-triggered {
   display: inline-flex;

@@ -509,6 +509,20 @@
       btn.title =
         "Auto-run this blueprint when a new video lands in the input folder";
     }
+    // Persistent global cue: which blueprint (if any) is armed, even when it
+    // isn't the active canvas (the button only reflects the active blueprint).
+    var hint = qs("#wfArmedHint");
+    if (hint) {
+      var armedBp = armedBlueprint();
+      if (armedBp) {
+        hint.textContent = "⚡ Auto-run: " + (armedBp.name || "Untitled");
+        hint.title =
+          "“" + (armedBp.name || "Untitled") + "” runs automatically on new videos";
+        hint.classList.remove("hidden");
+      } else {
+        hint.classList.add("hidden");
+      }
+    }
   }
 
   // ---- Undo / redo ----------------------------------------------------------

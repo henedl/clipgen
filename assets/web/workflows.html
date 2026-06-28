@@ -74,6 +74,9 @@
           <span class="wf-trigger-icon" aria-hidden="true"></span>
           <span class="wf-trigger-label">Auto-run on new video</span>
         </button>
+        <!-- Persistent cue that some blueprint is armed for auto-run, even one
+             that isn't the active canvas (the button only reflects the active). -->
+        <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
       </header>
       <div id="wfCanvas" class="wf-canvas">
         <!-- Wire layer lives INSIDE #wfWorld so it shares the cards' (transformed)
@@ -114,6 +117,8 @@
            Hidden when the graph is clean. Each row links to its node. -->
       <div id="wfValidation" class="wf-validation hidden"></div>
       <div class="wf-sidebar-header">Runs</div>
+      <!-- Where a run's clips/reels/viewers land (from the catalog context). -->
+      <div id="wfOutputDir" class="wf-output-dir hidden"></div>
       <div id="wfRuns" class="wf-runs">
         <p class="wf-empty-hint">Press Run to execute this workflow. Per-node progress
           and results appear here.</p>

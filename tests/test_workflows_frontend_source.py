@@ -510,6 +510,17 @@ def test_empty_canvas_offers_builtin_recipes():
     assert "wf-recipe-chip" in stashes
 
 
+def test_run_panel_surfaces_output_dir_and_armed_hint():
+    """The run panel shows where artifacts land; the toolbar shows a persistent cue
+    when any blueprint (even a non-active one) is armed for auto-run."""
+    html = (_WEB / "workflows.html").read_text(encoding="utf-8")
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    assert 'id="wfOutputDir"' in html and 'id="wfArmedHint"' in html
+    assert "renderOutputDir" in runs
+    assert "wfArmedHint" in hub
+
+
 def test_collection_palette_grouped_by_operation():
     """The Collection category renders as collapsible operation sub-groups."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")

@@ -778,7 +778,23 @@
     return card;
   }
 
+  // Show where artifacts land (from the catalog context) above the run list, so a
+  // user always knows where to find their clips/reels/viewers.
+  function renderOutputDir() {
+    var host = qs("#wfOutputDir");
+    if (!host) return;
+    var dir = (state.context && state.context.outputDir) || "";
+    if (!dir) {
+      host.classList.add("hidden");
+      return;
+    }
+    host.textContent = "Outputs → " + dir;
+    host.title = dir;
+    host.classList.remove("hidden");
+  }
+
   function renderRuns() {
+    renderOutputDir();
     var container = qs("#wfRuns");
     if (!container) return;
     container.innerHTML = "";

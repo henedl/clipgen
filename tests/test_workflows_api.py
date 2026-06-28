@@ -124,9 +124,10 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert all("execute" not in node for node in catalog)
     # Launch-context flags drive palette grey-out; participants populate the
     # Video-Source dropdown (reusing the videoDir discovery call).
-    assert set(data["context"]) == {"sheet", "videoDir", "participants"}
+    assert set(data["context"]) == {"sheet", "videoDir", "participants", "outputDir"}
     assert data["context"]["sheet"] is False  # fixture sets _sheet_context=None
     assert isinstance(data["context"]["participants"], list)
+    assert isinstance(data["context"]["outputDir"], str)  # run panel shows it
 
 
 def test_catalog_serves_node_descriptions(wf_client):
