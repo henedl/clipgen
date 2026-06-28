@@ -1671,19 +1671,25 @@
     var catContainer = popover.querySelector(".mark-popover-categories");
     catContainer.innerHTML = "";
     var cats = Object.keys(MARK_CATEGORIES);
+    var pills = [];
+    var activeIdx = 0;
     for (var i = 0; i < cats.length; i++) {
-      (function (key) {
+      (function (key, idx) {
         var cat = MARK_CATEGORIES[key];
         var pill = document.createElement("button");
+        pill.type = "button";
         pill.className = "mark-cat-pill" + (markObj.category === key ? " active" : "");
+        if (markObj.category === key) activeIdx = idx;
         pill.style.background = cat.color;
         pill.title = cat.label;
+        pill.setAttribute("aria-label", cat.label);
         pill.addEventListener("click", function (e) {
           e.stopPropagation();
           updateMarkCategory(markObj.id, key);
         });
+        pills.push(pill);
         catContainer.appendChild(pill);
-      })(cats[i]);
+      })(cats[i], i);
     }
 
     // Label input
@@ -1708,11 +1714,34 @@
       removeMark(markObj.id);
     };
 
+    // Keyboard: arrows rove between category pills, Enter applies the focused
+    // category (the pill's own click), Esc dismisses. Typing in the label input
+    // keeps its own Enter/Esc handling and is skipped for arrow roving.
+    popover.onkeydown = function (e) {
+      if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); return; }
+      if (document.activeElement === labelInput) return;
+      var idx = pills.indexOf(document.activeElement);
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        e.preventDefault();
+        pills[idx < 0 ? 0 : (idx + 1) % pills.length].focus();
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        e.preventDefault();
+        pills[idx < 0 ? pills.length - 1 : (idx - 1 + pills.length) % pills.length].focus();
+      }
+    };
+
     // Position below anchor
     var rect = anchorEl.getBoundingClientRect();
     popover.style.top = (rect.bottom + window.scrollY + 4) + "px";
     popover.style.left = (rect.left + window.scrollX - 4) + "px";
     popover.classList.remove("hidden");
+
+    // Focus the current category so arrows/Enter work immediately. preventScroll
+    // keeps the segment list from jumping when the popover opens via the keyboard.
+    if (pills.length) {
+      try { pills[activeIdx].focus({ preventScroll: true }); }
+      catch (err) { pills[activeIdx].focus(); }
+    }
 
     // Close on outside click (deferred so this click doesn't trigger it).
     // Track the timeout so a fast hideMarkPopover (e.g. Esc within the same

@@ -1210,6 +1210,12 @@ body {
   outline-offset: 1px;
 }
 
+.mark-cat-pill:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  transform: scale(1.1);
+}
+
 .mark-popover-label {
   width: 100%;
   height: 26px;
