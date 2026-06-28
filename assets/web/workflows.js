@@ -35,6 +35,7 @@
     runs: [], // recent run snapshots (newest first)
     activeRunId: null, // the run currently streamed/polled, or null
     nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
+    runFilter: "all", // run-history status filter (all|running|completed|failed)
     // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
     batches: [], // recent batch summaries (newest first)
     activeBatchId: null, // the batch currently streamed/polled, or null
