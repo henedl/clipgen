@@ -297,6 +297,28 @@ def test_blueprint_create_returns_id_and_defaults(wf_client):
     assert any(b["id"] == bp["id"] for b in listed)
 
 
+def test_zero_interaction_launch_writes_no_manifest(wf_client, tmp_path):
+    # The frontend auto-creates a bare "Untitled" blueprint on first load; that
+    # node-less blueprint must not drop a manifest file in the output dir.
+    resp = wf_client.post("/workflows/api/blueprints", json={})
+    assert resp.status_code == 200
+    assert not (tmp_path / config.WORKFLOWS_MANIFEST_FILENAME).exists()
+
+
+def test_blueprint_with_node_persists_manifest(wf_client, tmp_path):
+    _make_blueprint(wf_client, nodes=[{"id": "n1", "type": "video_source"}])
+    assert (tmp_path / config.WORKFLOWS_MANIFEST_FILENAME).is_file()
+
+
+def test_emptying_blueprint_removes_manifest(wf_client, tmp_path):
+    bp_id = _make_blueprint(wf_client, nodes=[{"id": "n1", "type": "video_source"}])
+    manifest = tmp_path / config.WORKFLOWS_MANIFEST_FILENAME
+    assert manifest.is_file()
+    # Clear the graph back to empty (the autosave PUT shape) → file reclaimed.
+    wf_client.put(f"/workflows/api/blueprints/{bp_id}", json={"nodes": [], "edges": []})
+    assert not manifest.exists()
+
+
 def test_blueprint_update_round_trips_nodes_and_viewport(wf_client):
     bp = wf_client.post("/workflows/api/blueprints", json={}).get_json()["blueprint"]
     payload = {

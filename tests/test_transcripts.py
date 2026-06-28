@@ -529,6 +529,23 @@ class TestTranscriptsManifest:
         loaded = transcripts.load_transcripts_manifest()
         assert loaded["corrections"] == corrections
 
+    def test_empty_save_writes_no_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        path = transcripts.save_transcripts_manifest({}, [])
+        assert path is None
+        assert not (tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME).exists()
+
+    def test_emptying_existing_manifest_removes_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        manifest = tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME
+        transcripts.save_transcripts_manifest(
+            {}, [{"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"}]
+        )
+        assert manifest.is_file()
+        # Pass marks=[] explicitly to defeat the marks-from-disk preservation.
+        transcripts.save_transcripts_manifest({}, [], marks=[])
+        assert not manifest.exists()
+
     def test_load_corrupt_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         (tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME).write_text("not json")

@@ -89,6 +89,19 @@ def load_screenspace_manifest() -> dict[str, Any]:
     )
 
 
+def _is_empty_screenspace_manifest(payload: dict[str, Any]) -> bool:
+    """True when no regions, tasks, events, stashes, per-participant data, or pins
+    exist — i.e. nothing worth writing into the output dir."""
+    return not (
+        payload.get("regions")
+        or payload.get("tasks")
+        or payload.get("events")
+        or payload.get("stashes")
+        or payload.get("per_participant")
+        or payload.get("pins")
+    )
+
+
 def save_screenspace_manifest(
     regions: dict[str, dict[str, Any]],
     tasks: list[dict[str, Any]],
@@ -147,6 +160,9 @@ def save_screenspace_manifest(
             "pins": pins_payload,
         }
     )
+    if _is_empty_screenspace_manifest(payload):
+        utils.remove_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME)
+        return None
     return utils.save_json_manifest(
         config.SCREENSPACE_MANIFEST_FILENAME,
         payload,

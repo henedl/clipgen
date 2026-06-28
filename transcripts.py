@@ -409,6 +409,13 @@ def _empty_transcripts_manifest() -> dict[str, Any]:
     return {"source_transcripts": {}, "corrections": [], "marks": []}
 
 
+def _is_empty_transcripts_manifest(data: dict[str, Any]) -> bool:
+    """True when no transcripts, corrections, or marks exist — nothing to persist."""
+    return not (
+        data.get("source_transcripts") or data.get("corrections") or data.get("marks")
+    )
+
+
 def load_transcripts_manifest() -> dict[str, Any]:
     """Load the transcripts manifest from the output directory.
 
@@ -452,6 +459,9 @@ def save_transcripts_manifest(
         "corrections": corrections,
         "marks": marks,
     }
+    if _is_empty_transcripts_manifest(data):
+        utils.remove_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME)
+        return None
     return utils.save_json_manifest(
         config.TRANSCRIPTS_MANIFEST_FILENAME,
         data,

@@ -2714,6 +2714,10 @@ def _init_screenspace_state(
     _worker.restore_tasks(_manifest.get("tasks", []))
     _worker.start()
 
+    # Reclaim a stale empty manifest left by a prior abandoned session: the
+    # guarded save removes the file when empty, idempotent rewrite otherwise.
+    _persist_manifest()
+
 
 def _discover_participant_videos(study_name: str) -> None:
     """Scan input directory for source video files and populate _participants."""

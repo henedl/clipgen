@@ -1131,5 +1131,10 @@ def _init_workflows_state(
     _sheet_context = sheet_context
     _worksheet = worksheet
     _manifest = workflows.load_workflows_manifest()
+    # Reclaim a stale empty manifest (e.g. an abandoned auto-created "Untitled"
+    # blueprint) left by a prior session: the guarded save removes the file when
+    # empty and is an idempotent rewrite otherwise.
+    with _manifest_lock:
+        _persist_locked()
     _seed_watch_seen()
     _start_watch_thread()
