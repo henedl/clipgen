@@ -520,9 +520,12 @@ def api_run_create() -> Any:
         workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
     except workflows.WorkflowCycleError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
-    # Optional partial run: restrict to this node + its ancestors (an unknown id
-    # is ignored by the runner and runs the whole graph).
+    # Optional partial run: restrict to this node + its ancestors. Reject an
+    # unknown id rather than silently running the whole graph (the runner would
+    # ignore it), so a stale selection surfaces as a clear error.
     target = str(data.get("targetNodeId") or "")
+    if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
+        return jsonify({"ok": False, "error": "Unknown target node"}), 400
     return jsonify({"ok": True, "run": _launch_run(blueprint, target_node_id=target)})
 
 

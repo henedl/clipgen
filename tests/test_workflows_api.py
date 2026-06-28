@@ -513,6 +513,19 @@ def test_run_missing_blueprint_404(wf_client):
     assert resp.status_code == 404
 
 
+def test_run_rejects_unknown_target_node_with_400(wf_client):
+    # A stale "run to here" target must error, not silently run the whole graph.
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
+    )
+    resp = wf_client.post(
+        "/workflows/api/runs",
+        json={"blueprintId": bp_id, "targetNodeId": "ghost"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
 def test_runs_list_and_filter(wf_client):
     bp_id = _make_blueprint(
         wf_client, nodes=[{"id": "g", "type": "gate", "params": {}}]
