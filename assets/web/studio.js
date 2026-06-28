@@ -612,6 +612,37 @@
     });
   }
 
+  // Persist the sidebar's filter selections (not just the open/collapsed state,
+  // which rides SIDEBAR_VIEW_KEY) so they survive a reload. Stored as one
+  // "filters" field on the shared per-page UI store. The raw category/keyword/
+  // participant maps round-trip; filters.categories/keywords are re-derived on
+  // restore via applySidebar* so they stay consistent.
+  function persistSidebarFilters() {
+    setStoredUIStateField("studio", "filters", {
+      severities: state.filters.severities,
+      categories: state.sidebarCategories,
+      keywords: state.sidebarKeywords,
+      participants: state.sidebarParticipants,
+      activeFunction: state.activeFunction,
+      fnMin: state.filters.fnMin,
+      fnMax: state.filters.fnMax,
+    });
+  }
+
+  function restoreSidebarFilters() {
+    var stored = getStoredUIState("studio").filters;
+    if (!stored) return;
+    if (stored.severities) state.filters.severities = stored.severities.slice();
+    if (stored.categories) state.sidebarCategories = stored.categories;
+    if (stored.keywords) state.sidebarKeywords = stored.keywords;
+    if (stored.participants) state.sidebarParticipants = stored.participants;
+    if (stored.activeFunction) state.activeFunction = stored.activeFunction;
+    if (stored.fnMin != null) state.filters.fnMin = stored.fnMin;
+    if (stored.fnMax != null) state.filters.fnMax = stored.fnMax;
+    applySidebarCategories();
+    applySidebarKeywords();
+  }
+
   function keywordLabel(annotationId) {
     if (!annotationId) return "";
     return annotationId.charAt(0).toUpperCase() + annotationId.slice(1);
@@ -689,6 +720,7 @@
           active: severitiesEqual(viewSevs, state.filters.severities),
           onClick: function () {
             applySidebarView(view.id);
+            persistSidebarFilters();
             renderSidebar();
             renderGrid();
           },
@@ -710,6 +742,7 @@
           onClick: function () {
             state.sidebarCategories[cat] = !state.sidebarCategories[cat];
             applySidebarCategories();
+            persistSidebarFilters();
             renderSidebar();
             renderGrid();
           },
@@ -737,6 +770,7 @@
           active: state.filters.severities.length === 0,
           onClick: function () {
             state.filters.severities = [];
+            persistSidebarFilters();
             renderSidebar();
             renderGrid();
           },
@@ -756,6 +790,7 @@
                 var idx = arr.indexOf(label);
                 if (idx >= 0) arr.splice(idx, 1); else arr.push(label);
                 state.filters.severities = arr;
+                persistSidebarFilters();
                 renderSidebar();
                 renderGrid();
               },
@@ -789,6 +824,7 @@
             onClick: function () {
               state.sidebarKeywords[ann.id] = !state.sidebarKeywords[ann.id];
               applySidebarKeywords();
+              persistSidebarFilters();
               renderSidebar();
               renderGrid();
             },
@@ -815,6 +851,7 @@
         if (state.sidebarParticipants[pid]) pill.classList.add("is-active");
         pill.addEventListener("click", function () {
           state.sidebarParticipants[pid] = !state.sidebarParticipants[pid];
+          persistSidebarFilters();
           renderSidebar();
           renderGrid();
         });
@@ -846,6 +883,7 @@
       var mx = maxIn.value.trim();
       state.filters.fnMin = mn !== "" ? parseFloat(mn) : null;
       state.filters.fnMax = mx !== "" ? parseFloat(mx) : null;
+      persistSidebarFilters();
       applyGridFilters();
     }
     minIn.addEventListener("input", onChange);
@@ -1043,6 +1081,12 @@
 
   function populateSheetSkeleton() {
     buildSkeletonGrid(qs("#sheetLoading .skeleton-grid"), 9, 4);
+    var loading = qs("#sheetLoading");
+    if (loading && !loading.querySelector(".sheet-loading-caption")) {
+      var cap = el("div", "sheet-loading-caption", "Loading sheet…");
+      cap.setAttribute("aria-live", "polite");
+      loading.insertBefore(cap, loading.firstChild);
+    }
   }
 
   // ---- Data loading ----
@@ -1058,6 +1102,8 @@
         if (data.sheet_loaded === false) {
           var loading = qs("#sheetLoading");
           if (loading) {
+            var lcap = loading.querySelector(".sheet-loading-caption");
+            if (lcap) loading.removeChild(lcap);
             loading.classList.add("is-empty");
             var caption = document.createElement("div");
             caption.className = "sheet-empty-caption";
@@ -1078,6 +1124,10 @@
         }
         state.sheetData = data;
         clipgenApplyConfig(data.config);
+        // Restore persisted sidebar filter selections before the first render so
+        // the grid and sidebar paint already-filtered (activeFunction first so
+        // the fn range stays enabled).
+        restoreSidebarFilters();
         renderHeader();
         renderSidebar();
         renderGrid();
@@ -1459,7 +1509,10 @@
       state.activeFunction = this.value;
       fnClear.style.display = this.value ? "" : "none";
       if (!this.value && state.sortColumn === "function") state.sortColumn = "";
+      // syncFilterFnDisabled may clear fnMin/fnMax — persist after so the
+      // stored range matches what's actually applied.
       syncFilterFnDisabled();
+      persistSidebarFilters();
       // Full re-render so the function-column sort button appears/disappears.
       renderGrid();
     });
@@ -1469,6 +1522,7 @@
       this.style.display = "none";
       if (state.sortColumn === "function") state.sortColumn = "";
       syncFilterFnDisabled();
+      persistSidebarFilters();
       renderGrid();
     });
     fnWrap.appendChild(fnSelect);
@@ -1749,6 +1803,10 @@
         var chip = document.createElement("span");
         chip.className = "ts-chip cg-mono";
         chip.textContent = cellData.value;
+        // Native tooltip fallback for chips clipped by the fixed column width.
+        // Inert when the text isn't truncated; cheaper than per-cell scrollWidth
+        // reads in the render loop. Complements the richer hover-expand float.
+        chip.title = cellData.value;
         td.appendChild(chip);
         if (cellData.valid) {
           td.classList.add("valid-ts");
@@ -2542,6 +2600,7 @@
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         createStashViaAPI("api/stashes", info.items, function (stash) {
           state.stashes.push(stash);
+          _justStashedId = stash.id;
           renderStashedReels();
         });
       }
@@ -2550,6 +2609,7 @@
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         createStashViaAPI("api/artifact-stashes", info.items, function (stash) {
           state.artifactStashes.push(stash);
+          _justStashedId = stash.id;
           renderStashedArtifacts();
         });
       }
@@ -3204,6 +3264,11 @@
     renderQueue: renderArtifactQueue,
   };
 
+  // Set to a stash id right before renderStashes rebuilds the list, so the
+  // freshly-saved card animates in once. One-shot: nulled the moment the
+  // matching card is built, so unrelated rerenders (delete/rename) don't flash.
+  var _justStashedId = null;
+
   function loadStashes() {
     apiGet("api/stashes")
       .then(function (data) {
@@ -3280,6 +3345,10 @@
   function buildStashCard(stash, apiPath, listRef, rerender, dragSource, onRecall) {
     var card = el("div", "stash-card");
     card.setAttribute("data-stash-id", stash.id);
+    if (stash.id === _justStashedId) {
+      card.classList.add("stash-card-landed");
+      _justStashedId = null;
+    }
     card.setAttribute("draggable", "true");
     card.addEventListener("dragstart", function (ev) {
       ev.dataTransfer.setData("application/json", JSON.stringify({
@@ -3333,6 +3402,7 @@
     var items = state[cfg.queueKey].slice();
     createStashViaAPI(cfg.apiPath, items, function (stash) {
       state[cfg.stateKey].push(stash);
+      _justStashedId = stash.id;
       var q = state[cfg.queueKey];
       for (var i = 0; i < q.length; i++) {
         var item = q[i];
@@ -3640,9 +3710,12 @@
     if (badge) badge.remove();
   }
 
-  function setCardResult(card, success) {
+  function setCardResult(card, success, reason) {
     card.classList.remove("queue-card-queued");
     card.classList.add(success ? "queue-card-success" : "queue-card-fail");
+    // Surface the per-item failure reason as a native tooltip on the card.
+    if (!success && reason) card.title = reason;
+    else if (success) card.removeAttribute("title");
     var overlay = card.querySelector(".card-gen-overlay");
     if (overlay) overlay.remove();
     var thumb = card.querySelector(".queue-card-thumb");
@@ -3807,6 +3880,7 @@
     var totalSuccess = 0;
     var totalFail = 0;
     var allArtifacts = [];
+    var failReasons = [];
     var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
     var sheetCellTotal = 0;
@@ -3850,8 +3924,26 @@
           err = "All generations failed";
         }
       }
+      // Append up to 3 distinct failure reasons so the user can act on them
+      // instead of just seeing a count (full reason is also on each card title).
+      if (totalFail > 0 && failReasons.length) {
+        var seenReason = {};
+        var uniqReasons = [];
+        for (var fr = 0; fr < failReasons.length; fr++) {
+          var rsn = failReasons[fr];
+          if (!rsn || seenReason[rsn]) continue;
+          seenReason[rsn] = true;
+          uniqReasons.push(rsn);
+          if (uniqReasons.length >= 3) break;
+        }
+        if (uniqReasons.length) {
+          var suffix = " (" + uniqReasons.join("; ") + ")";
+          if (err) err += suffix;
+          else if (msg) msg += suffix;
+        }
+      }
       showResult(msg, err);
-      qs("#statusOverlay").classList.remove("hidden");
+      revealStatusOverlay();
     }
 
     // Handle spreadsheet items via streaming api/generate
@@ -3893,7 +3985,10 @@
             }
           }
         } else {
-          for (ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false);
+          // The server omits `error` when a clean run simply produced nothing.
+          var reason = data.error || "No artifact produced";
+          for (ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], false, reason);
+          failReasons.push(reason);
           totalFail++;
         }
       }
@@ -3981,8 +4076,10 @@
           }
           if (card) setCardResult(card, true);
         } else {
+          var reason = data.error || "Generation failed";
           totalFail++;
-          if (card) setCardResult(card, false);
+          failReasons.push(reason);
+          if (card) setCardResult(card, false, reason);
         }
         intakeDone++;
         updateGenerateButtonProgress();
@@ -4139,7 +4236,7 @@
       } else {
         showResult(null, data.error || "Reel build failed");
       }
-      qs("#statusOverlay").classList.remove("hidden");
+      revealStatusOverlay();
     }
 
     function handleLine(line) {
@@ -4427,13 +4524,17 @@
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
     overlay.classList.remove("hidden");
+    openModalTrap(overlay, closeGalleryDialog);
     var sel = qs("#galleryParticipant");
     if (sel) sel.focus();
   }
 
   function closeGalleryDialog() {
     var overlay = qs("#galleryOverlay");
-    if (overlay) overlay.classList.add("hidden");
+    if (overlay) {
+      closeModalTrap(overlay);
+      overlay.classList.add("hidden");
+    }
   }
 
   function submitGalleryDialog() {
@@ -4508,16 +4609,83 @@
     }
     if (cancel) cancel.addEventListener("click", closeGalleryDialog);
     if (confirm) confirm.addEventListener("click", submitGalleryDialog);
-    document.addEventListener("keydown", function (ev) {
-      if (ev.key === "Escape" && overlay && !overlay.classList.contains("hidden")) {
-        closeGalleryDialog();
+    // Escape is handled by the modal focus trap opened in openGalleryDialog.
+  }
+
+  // ---- Modal focus trap (shared by the blocking overlays) ----
+  //
+  // Keeps Tab/Shift+Tab inside the overlay, closes on Escape, and restores focus
+  // to the trigger on release. role=dialog + aria-modal live statically on each
+  // overlay's card in the HTML. Studio never stacks these overlays, so one active
+  // trap is enough — opening a new one releases the previous. release() is
+  // idempotent cleanup-only, so any dismiss path (button, backdrop, Escape) can
+  // call closeModalTrap safely.
+  var _activeTrap = null;
+  var _TRAP_FOCUSABLE =
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  function openModalTrap(overlayEl, onEscape) {
+    if (!overlayEl) return null;
+    if (_activeTrap && _activeTrap.el === overlayEl) {
+      _activeTrap.onEscape = onEscape;
+      return _activeTrap;
+    }
+    if (_activeTrap) _activeTrap.release();
+    var prevFocus = document.activeElement;
+
+    function visibleFocusable() {
+      return Array.prototype.slice
+        .call(overlayEl.querySelectorAll(_TRAP_FOCUSABLE))
+        .filter(function (n) { return !n.disabled && n.offsetParent !== null; });
+    }
+    function onKey(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        if (trap.onEscape) trap.onEscape();
+        return;
       }
-    });
+      if (ev.key !== "Tab") return;
+      // Re-query each Tab — overlay button visibility changes between phases
+      // (e.g. the status overlay's in-progress vs result state).
+      var f = visibleFocusable();
+      if (f.length === 0) { ev.preventDefault(); return; }
+      var first = f[0];
+      var last = f[f.length - 1];
+      if (ev.shiftKey && document.activeElement === first) {
+        ev.preventDefault();
+        last.focus();
+      } else if (!ev.shiftKey && document.activeElement === last) {
+        ev.preventDefault();
+        first.focus();
+      }
+    }
+    function release() {
+      if (_activeTrap !== trap) return;
+      document.removeEventListener("keydown", onKey, true);
+      _activeTrap = null;
+      if (prevFocus && prevFocus.focus) prevFocus.focus();
+    }
+
+    var trap = { el: overlayEl, onEscape: onEscape, release: release };
+    document.addEventListener("keydown", onKey, true);
+    var initial = visibleFocusable();
+    if (initial.length) initial[0].focus();
+    _activeTrap = trap;
+    return trap;
+  }
+
+  function closeModalTrap(overlayEl) {
+    if (_activeTrap && _activeTrap.el === overlayEl) _activeTrap.release();
   }
 
   // ---- Status overlay ----
 
   var _lastViewerFile = "";
+
+  function revealStatusOverlay() {
+    qs("#statusOverlay").classList.remove("hidden");
+    openModalTrap(qs("#statusOverlay"), hideOverlay);
+  }
 
   function showOverlay(message) {
     qs("#statusSpinner").style.display = "";
@@ -4527,7 +4695,7 @@
     qs("#statusDismiss").classList.add("hidden");
     qs("#statusOpen").classList.add("hidden");
     _lastViewerFile = "";
-    qs("#statusOverlay").classList.remove("hidden");
+    revealStatusOverlay();
   }
 
   function showResult(successMsg, errorMsg, filePath) {
@@ -4552,6 +4720,7 @@
   }
 
   function hideOverlay() {
+    closeModalTrap(qs("#statusOverlay"));
     qs("#statusOverlay").classList.add("hidden");
   }
 
@@ -4640,6 +4809,7 @@
     var noBtn = qs("#confirmNo");
 
     function cleanup() {
+      closeModalTrap(qs("#confirmOverlay"));
       qs("#confirmOverlay").classList.add("hidden");
       yesBtn.removeEventListener("click", handleYes);
       noBtn.removeEventListener("click", handleNo);
@@ -4652,6 +4822,8 @@
     yesBtn.addEventListener("click", handleYes);
     noBtn.addEventListener("click", handleNo);
     _confirmCleanup = cleanup;
+    // Escape cancels (same as No / backdrop click).
+    openModalTrap(qs("#confirmOverlay"), handleNo);
   }
 
   function hideConfirm() {
@@ -4663,10 +4835,12 @@
 
   function openLog() {
     qs("#logOverlay").classList.remove("hidden");
+    openModalTrap(qs("#logOverlay"), closeLog);
     renderLog();
   }
 
   function closeLog() {
+    closeModalTrap(qs("#logOverlay"));
     qs("#logOverlay").classList.add("hidden");
   }
 
@@ -4801,25 +4975,15 @@
   function checkConvergenceTabVisibility() {
     var tab = qs('.preview-tab[data-tab="convergence"]');
     if (!tab) return;
-    var multipleParticipants = false;
-    if (state.sheetData && state.sheetData.participants && state.sheetData.participants.length > 1) {
-      multipleParticipants = true;
-    }
-    if (!multipleParticipants && state.intakeEvents.length > 0) {
-      var seenSS = {};
-      for (var i = 0; i < state.intakeEvents.length; i++) {
-        seenSS[state.intakeEvents[i].participant] = true;
-      }
-      if (Object.keys(seenSS).length > 1) multipleParticipants = true;
-    }
-    if (!multipleParticipants && state.trIntakeMarks.length > 0) {
-      var seenTr = {};
-      for (var j = 0; j < state.trIntakeMarks.length; j++) {
-        seenTr[state.trIntakeMarks[j].participant] = true;
-      }
-      if (Object.keys(seenTr).length > 1) multipleParticipants = true;
-    }
-    if (multipleParticipants) {
+    // Show the tab whenever there is any data to plot — even a single
+    // participant — and let convergence.js's own empty/no-convergence message
+    // explain when there isn't enough to converge. Hiding the tab outright (the
+    // old multi-participant gate) made it vanish with no explanation.
+    var hasData =
+      (state.sheetData && state.sheetData.participants && state.sheetData.participants.length > 0) ||
+      state.intakeEvents.length > 0 ||
+      state.trIntakeMarks.length > 0;
+    if (hasData) {
       tab.classList.remove("hidden");
     } else {
       tab.classList.add("hidden");
