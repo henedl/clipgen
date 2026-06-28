@@ -634,6 +634,43 @@ def test_batch_runs_every_participant(wf_client, monkeypatch):
     assert all(r["batchId"] == batch["id"] for r in runs)
 
 
+def test_batch_seeds_sheet_selection_once(wf_client, monkeypatch):
+    # sheet_selection is participant-independent and hits the rate-limited Sheets
+    # API; a batch must compute it once, not once per participant.
+    import spreadsheet
+
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    parts = _mock_participants(monkeypatch, ids=("P01", "P02", "P03"))
+
+    class _Sheet:
+        study_name = "study"
+
+    monkeypatch.setattr(workflows_server, "_sheet_context", _Sheet())
+    calls = {"n": 0}
+
+    def _fake_generate_list(*a, **k):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(spreadsheet, "generate_list", _fake_generate_list)
+
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {}},
+            {"id": "s", "type": "sheet_selection", "params": {"selector": "1"}},
+        ],
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "completed"
+    assert len(parts) == 3
+    # Seeded once for the whole batch, not once per participant.
+    assert calls["n"] == 1
+
+
 def test_batch_continues_when_one_participant_fails(wf_client, monkeypatch):
     # Continue-on-error is mandatory: one bad participant must not sink the batch.
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)

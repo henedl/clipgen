@@ -729,6 +729,40 @@ def _sse_batch_payload(batch_id: str) -> str:
     return "data: " + json.dumps({"ok": summary is not None, "batch": summary}) + "\n\n"
 
 
+# Source node types whose result is participant-independent across a batch and
+# expensive enough to compute once and seed into every child. ``sheet_selection``
+# calls the heavily rate-limited Google Sheets API; ``bind_participant`` never
+# rebinds it, so re-running it per participant is N identical API round-trips.
+# (``region``/``time_range`` are cheap, local, and not worth the bookkeeping.)
+_BATCH_CACHEABLE_TYPES = {"sheet_selection"}
+
+
+def _precompute_shared_nodes(
+    blueprint: dict[str, Any], ctx: workflows.NodeContext
+) -> dict[str, dict[str, Any]]:
+    """Run a batch's participant-independent source nodes once.
+
+    Returns ``{node_id: result}`` to seed into every child runner, so a batch hits
+    the rate-limited Sheets API once instead of once per participant. A node that
+    raises is simply omitted — the child re-runs it normally (no behavior change).
+    """
+    seeded: dict[str, dict[str, Any]] = {}
+    for node in blueprint.get("nodes", []):
+        if node.get("type") not in _BATCH_CACHEABLE_TYPES or node.get("disabled"):
+            continue
+        executor = workflows.NODE_TYPES.get(node["type"], {}).get("execute")
+        if executor is None:
+            continue
+        try:
+            result = executor(ctx, {}, node.get("params", {}) or {})
+        except Exception as exc:  # noqa: BLE001 — child re-runs it; don't sink the batch
+            utils.warning_print(f"workflow batch precompute failed: {exc}")
+            continue
+        if isinstance(result, dict):
+            seeded[str(node["id"])] = result
+    return seeded
+
+
 def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     """Coordinator thread: run the blueprint once per participant, sequentially.
 
@@ -743,6 +777,12 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
         return
     cancel_event: threading.Event = record["cancel_event"]
     plan = list(zip(record["runIds"], record["participants"]))
+
+    # Compute participant-independent sources (sheet_selection) once and seed them
+    # into every child, so an N-participant batch hits the Sheets API once, not N.
+    seed_results = _precompute_shared_nodes(
+        blueprint, _build_node_context(threading.Event())
+    )
 
     for run_id, participant in plan:
         child_cancel = threading.Event()
@@ -762,6 +802,7 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
             on_update=_on_child_update,
             participant=participant,
             batch_id=batch_id,
+            seed_results=seed_results,
         )
         with _runs_lock:
             _runs[run_id] = runner

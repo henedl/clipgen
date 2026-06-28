@@ -3258,12 +3258,17 @@ class WorkflowRunner:
         batch_id: str = "",
         triggered: bool = False,
         target_node_id: str = "",
+        seed_results: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
         # Partial run (P11): when set, only this node and its transitive ancestors
         # execute; the rest are marked skipped. Empty → run the whole graph.
         self.target_node_id = target_node_id
+        # Pre-seeded results (P3 batch perf): {node_id: result} for participant-
+        # independent source nodes the batch coordinator computed once. A seeded
+        # node is stored as if it ran, skipping its (rate-limited) executor.
+        self._seed_results = seed_results or {}
         # Batch identity (P3): empty for a normal single run; a child run carries
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
@@ -3487,6 +3492,27 @@ class WorkflowRunner:
             if self._should_skip(node_id):
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
+                )
+                self._notify(force=True)
+                continue
+
+            # Batch seed (P3 perf): a participant-independent source precomputed
+            # once by the batch coordinator — store it as if this node just ran,
+            # skipping its (rate-limited) executor for every child but the first.
+            if node_id in self._seed_results:
+                seeded = self._seed_results[node_id]
+                with self._lock:
+                    self._results[node_id] = seeded
+                if write_node_sidecar(
+                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
+                ):
+                    with self._lock:
+                        self._sidecars.add(node_id)
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_COMPLETED,
+                    progress=1.0,
+                    completed_at=_now_iso(),
                 )
                 self._notify(force=True)
                 continue
