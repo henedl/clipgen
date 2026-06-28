@@ -115,6 +115,22 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
+    // warning — a filter/partition with an ordering comparison (>=,>,<=,<) needs a
+    // numeric value; a non-numeric one fails the backend float() coerce and
+    // silently drops every item. (Heuristic on the op, so no need to mirror the
+    // backend's per-field numeric/text table.)
+    if (
+      node.type.indexOf("filter_") === 0 ||
+      node.type.indexOf("partition_") === 0
+    ) {
+      var op = (node.params || {}).op;
+      var val = (node.params || {}).value;
+      var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
+      var numeric = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
+      if (ordering && !paramEmpty(val) && !numeric) {
+        warnings.push("Value must be a number for this comparison");
+      }
+    }
     var connected = (state.edges || []).some(function (e) {
       return e.from === node.id || e.to === node.id;
     });

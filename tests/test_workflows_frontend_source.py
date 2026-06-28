@@ -493,6 +493,13 @@ def test_validation_warns_on_node_with_no_inputs_wired():
     assert "willShowOrphan" in validate
 
 
+def test_validation_warns_on_non_numeric_filter_value():
+    """A filter/partition with an ordering comparison but a non-numeric value
+    warns — that value fails the backend float() coerce and drops every item."""
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "Value must be a number for this comparison" in validate
+
+
 def test_collection_palette_grouped_by_operation():
     """The Collection category renders as collapsible operation sub-groups."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
