@@ -1,6 +1,42 @@
 # Changelog
 
-Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, or `Core`. The first bolded line is the title; everything after is the body.
+Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
+
+## v0.13.41 — 2026-06-27 — Workflows
+**Detect node, interval captures, and editor power tools**
+Unified Detect node over per-detector types; Interval Captures samples screenshots or GIFs across a range; per-node Ollama and Whisper model levers; palette search; blueprint JSON import/export; copy/paste/duplicate, mute, undo/redo; Run split-button with Run to here; middle-mouse pan and colour-coded title bars.
+
+## v0.13.27 — 2026-06-27 — Workflows
+**Collection control nodes**
+Filter, partition, merge, limit, and dedup nodes thin or combine the collections flowing through a graph — gate clip selections before Make Clips, cap artifacts before the viewer, or branch matched vs. unmatched streams.
+
+## v0.13.26 — 2026-06-27 — Workflows
+**Watch-dir auto-run**
+Arm one blueprint to run automatically when a new participant video lands in the input directory; triggered runs show a ⚡ badge in run history.
+
+## v0.13.22 — 2026-06-27 — Workflows
+**Pre-run validation and inspectable results**
+An Issues panel blocks Run on wiring or param errors; completed nodes expose lazy-loaded result sidecars; Re-run replays a finished graph; timelapse and heatmap land in the viewer Attachments pane and Build Reel → Viewer renders playable reel cards.
+
+## v0.13.20 — 2026-06-26 — Workflows
+**Expanded catalog, batch runs, and stashes**
+Per-detector Screenspace nodes, highlights selector, multitool/timelapse/heatmap/measure, and adapter-aware dashed wires; Video Source "All participants" fans out a whole study; save sub-graphs as named stashes or start from two built-in recipes.
+
+## v0.13.16 — 2026-06-25 — Workflows
+**Workflows mode — node canvas and run engine**
+A fourth top-level tab chains clip, Screenspace, and transcript actions on an infinite pan/zoom canvas: drag nodes from a catalog, wire typed ports, edit params, Run with live per-node progress, and skip branches via Gate control edges.
+
+## v0.13.11 — 2026-06-23 — Core
+**Card scrubber on hover**
+Sweep a queue or viewer card thumbnail to scrub frames with audio and a waveform playhead; toggle on in Studio settings or the exported timeline viewer header.
+
+## v0.13.10 — 2026-06-23 — Screenspace
+**Scene-aware boundary segmentation**
+The Boundary detector gains hybrid scene metrics, hierarchical Scene A1/B2 labels, and a post-run consolidation pass; boundaries surface in results, Studio intake, Convergence, Metadata, and the timeline viewer.
+
+## v0.13.6 — 2026-06-22 — Studio
+**Clip-length intake timeline markers**
+Screenspace and Transcript intake density timelines size each marker by its clip span so longer selections read wider at a glance.
 
 ## v0.13.5 — 2026-06-22 — Transcripts
 **Model install consent and dynamic Ollama pickers**
