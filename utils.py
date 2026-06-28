@@ -562,6 +562,40 @@ def save_json_manifest(
         return None
 
 
+def remove_json_manifest(filename: str) -> None:
+    """Delete a manifest and any stale ``.tmp`` sibling from the output dir.
+
+    Used by the save wrappers when a manifest is semantically empty: rather than
+    writing an empty artifact into the user's CWD, remove the file so a
+    zero-interaction launch leaves no junk. No-op when nothing is on disk.
+    """
+    path = Path(get_effective_output_dir()) / filename
+    for candidate in (path, path.with_suffix(path.suffix + ".tmp")):
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def sweep_stale_temp_artifacts() -> None:
+    """Remove orphaned atomic-write tmps and reel temp-clips from the output dir.
+
+    Targets only our own artifacts — ``*.json.tmp`` siblings (manifest atomic
+    writes) and ``{TEMP_ARTIFACT_PREFIX}*`` reel temp-clips — so user files are
+    never touched. Meant to run once at server startup, before any worker thread,
+    to reclaim leftovers from a prior hard kill.
+    """
+    base = Path(get_effective_output_dir())
+    if not base.is_dir():
+        return
+    for pattern in ("*.json.tmp", config.TEMP_ARTIFACT_PREFIX + "*"):
+        for stale in base.glob(pattern):
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def get_bundled_assets_root() -> Path:
     """Return the base directory for bundled project assets.
 

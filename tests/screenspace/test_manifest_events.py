@@ -152,6 +152,33 @@ class TestManifest:
         assert screenspace.load_screenspace_manifest()["pins"] == {}
 
 
+class TestEmptyManifestGuard:
+    """An empty screenspace manifest is never written (and an existing one is
+    removed) so a zero-interaction / abandoned launch leaves no CWD junk."""
+
+    def test_empty_save_writes_no_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        path = screenspace.save_screenspace_manifest({}, [])
+        assert path is None
+        assert not (tmp_path / config.SCREENSPACE_MANIFEST_FILENAME).exists()
+
+    def test_nonempty_save_writes_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        path = screenspace.save_screenspace_manifest({"hud": {"x": 0}}, [])
+        assert path is not None and path.is_file()
+
+    def test_emptying_existing_manifest_removes_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        manifest = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
+        screenspace.save_screenspace_manifest({"hud": {"x": 0}}, [])
+        assert manifest.is_file()
+        # A stale .tmp from a prior crashed write must also be reclaimed.
+        (tmp_path / (config.SCREENSPACE_MANIFEST_FILENAME + ".tmp")).write_text("x")
+        screenspace.save_screenspace_manifest({}, [])
+        assert not manifest.exists()
+        assert not (tmp_path / (config.SCREENSPACE_MANIFEST_FILENAME + ".tmp")).exists()
+
+
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------

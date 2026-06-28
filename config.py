@@ -146,6 +146,10 @@ STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 WORKFLOWS_MANIFEST_FILENAME: str = (
     "workflows_manifest.json"  # node-canvas blueprints, stashes, run history
 )
+# Prefix for our own scratch temp-files written into the output dir (currently the
+# reel-builder's mkstemp clips). Lets sweep_stale_temp_artifacts() reclaim orphans
+# left by a hard kill without ever touching user files.
+TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
 # Watch-dir trigger (P6): poll interval for the daemon that auto-runs an armed
 # blueprint when a new participant video lands in the input dir. The partial-copy
 # stability window is 2x this (a file must stat identically across two polls).

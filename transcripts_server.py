@@ -1924,3 +1924,7 @@ def _init_transcripts_state(
         if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get("result"):
             _merged_task_ids.add(task["id"])
     _worker.start()
+
+    # Reclaim a stale empty manifest left by a prior abandoned session: the
+    # guarded save removes the file when empty, idempotent rewrite otherwise.
+    _persist_manifest()

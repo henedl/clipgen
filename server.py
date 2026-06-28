@@ -1260,14 +1260,7 @@ def _save_studio_settings(overrides: dict[str, Any]) -> Path | None:
         if name in _settings_defaults and value != _settings_defaults[name]:
             to_save[name] = value
     if not to_save:
-        settings_path = (
-            Path(utils.get_effective_output_dir()) / config.STUDIO_SETTINGS_FILENAME
-        )
-        if settings_path.is_file():
-            try:
-                settings_path.unlink()
-            except OSError:
-                pass
+        utils.remove_json_manifest(config.STUDIO_SETTINGS_FILENAME)
         return None
     return utils.save_json_manifest(config.STUDIO_SETTINGS_FILENAME, to_save)
 
@@ -2870,7 +2863,9 @@ def api_reel_direct() -> FlaskResponse:
                     timeline = video.timeline_or_none(video_paths)
 
                     fd, tmp_path = tempfile.mkstemp(
-                        suffix=config.FILEFORMAT, dir=str(output_dir)
+                        prefix=config.TEMP_ARTIFACT_PREFIX,
+                        suffix=config.FILEFORMAT,
+                        dir=str(output_dir),
                     )
                     # Track for cleanup BEFORE os.close(fd) or any other call
                     # that could raise; otherwise the tmp file is on disk but
@@ -3870,6 +3865,10 @@ def start_combined_server(
     # ``input()`` — this previously hung Studio generate and watch-dir-triggered
     # workflow runs alike.
     utils.NO_INPUT_MODE = True
+
+    # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel temp-clips)
+    # a prior hard kill may have left in the output dir, before workers spin up.
+    utils.sweep_stale_temp_artifacts()
 
     combined = build_combined_app(
         worksheet=worksheet,

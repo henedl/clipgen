@@ -77,17 +77,40 @@ def load_workflows_manifest() -> dict[str, Any]:
     return base
 
 
+def _is_empty_workflows_manifest(payload: dict[str, Any]) -> bool:
+    """True when nothing worth persisting exists.
+
+    A blueprint counts only if it carries graph content (nodes or edges); a bare
+    auto-created "Untitled" with empty nodes/edges is treated as empty even when
+    renamed, so a zero-interaction Workflows launch writes no file. Any stash or
+    run is user-meaningful and keeps the manifest.
+    """
+    if payload.get("stashes") or payload.get("runs"):
+        return False
+    for blueprint in payload.get("blueprints", []):
+        if blueprint.get("nodes") or blueprint.get("edges"):
+            return False
+    return True
+
+
 def save_workflows_manifest(
     blueprints: list[dict[str, Any]],
     stashes: list[dict[str, Any]] | None = None,
     runs: list[dict[str, Any]] | None = None,
 ) -> Path | None:
-    """Persist the workflows manifest atomically; returns the path or ``None``."""
+    """Persist the workflows manifest atomically; returns the path or ``None``.
+
+    Skips the write (and removes any stale file) when the manifest is empty, so
+    an unused canvas leaves no junk in the output dir.
+    """
     payload = {
         "blueprints": blueprints,
         "stashes": stashes or [],
         "runs": runs or [],
     }
+    if _is_empty_workflows_manifest(payload):
+        utils.remove_json_manifest(config.WORKFLOWS_MANIFEST_FILENAME)
+        return None
     return utils.save_json_manifest(
         config.WORKFLOWS_MANIFEST_FILENAME,
         payload,
