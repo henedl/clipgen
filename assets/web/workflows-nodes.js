@@ -44,6 +44,14 @@
       // Hovering a port reveals its data type — clarifies adapter-coerced wires
       // (e.g. a `timeRange` output into a `clips`/clipRecords input).
       dot.title = isControl ? "gate" : port.type;
+      // Assistive tech: the dot is an interactive connection point.
+      dot.setAttribute("role", "button");
+      dot.setAttribute(
+        "aria-label",
+        isControl
+          ? "Gate control input"
+          : (isOutput ? "Output" : "Input") + ": " + port.name + " (" + port.type + ")",
+      );
       row.appendChild(dot);
       row.appendChild(
         el("span", "wf-port-label", isControl ? "gate" : port.name),
