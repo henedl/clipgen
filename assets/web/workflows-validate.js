@@ -115,18 +115,33 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
+    var connected = (state.edges || []).some(function (e) {
+      return e.from === node.id || e.to === node.id;
+    });
+    var willShowOrphan = !connected && (state.nodes || []).length > 1;
     // warning — a merge with fewer than two wired inputs is a no-op passthrough.
     if (node.type.indexOf("merge_") === 0) {
       var wired = ["in1", "in2", "in3"].filter(function (p) {
         return inputWired(node.id, p);
       }).length;
       if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
+    } else {
+      // warning — a node with data input ports but none wired runs but produces
+      // nothing (e.g. make_clips / measure, whose inputs are all optional so the
+      // required-input check above never fires). Suppressed when the clearer
+      // "not connected" orphan message below will fire instead.
+      var dataInputs = (type.inputs || []).filter(function (p) {
+        return p.type !== "control";
+      });
+      var noneWired =
+        dataInputs.length &&
+        !dataInputs.some(function (p) {
+          return inputWired(node.id, p.name);
+        });
+      if (noneWired && !willShowOrphan) warnings.push("Wire at least one input");
     }
     // warning — an orphan node (no incident edges) in a multi-node graph.
-    var connected = (state.edges || []).some(function (e) {
-      return e.from === node.id || e.to === node.id;
-    });
-    if (!connected && (state.nodes || []).length > 1) {
+    if (willShowOrphan) {
       warnings.push("Not connected to the graph");
     }
 

@@ -484,6 +484,15 @@ def test_node_mute_toggle():
     assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
 
 
+def test_validation_warns_on_node_with_no_inputs_wired():
+    """A node whose data inputs are all optional + unwired (e.g. make_clips,
+    measure) warns instead of passing validation and running empty. Suppressed
+    when the clearer orphan "not connected" message fires instead."""
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "Wire at least one input" in validate
+    assert "willShowOrphan" in validate
+
+
 def test_collection_palette_grouped_by_operation():
     """The Collection category renders as collapsible operation sub-groups."""
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
