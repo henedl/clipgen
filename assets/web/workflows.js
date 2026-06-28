@@ -715,6 +715,9 @@
     }
     var retry = qs("#wfOverlayRetry");
     if (retry) retry.classList.toggle("hidden", mode !== "error");
+    // Spinner only spins while loading — on error it's replaced by the retry CTA.
+    var spinner = qs("#wfOverlaySpinner");
+    if (spinner) spinner.classList.toggle("hidden", mode === "error");
     setToolbarDisabled(!state.ready);
     // setToolbarDisabled(false) re-enables every toolbar control, but "Stash
     // selection" must stay disabled until nodes are selected — re-apply its

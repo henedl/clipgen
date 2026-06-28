@@ -33,6 +33,19 @@
            item to stamp it onto the canvas (the stashes satellite remaps ids). -->
       <div class="wf-sidebar-header">Stashes</div>
       <div id="wfStashList" class="wf-stash-list"></div>
+      <!-- Port-type legend: the five data-type families and their wire colours.
+           Collapsed by default; the swatches reuse the same --wf-type-* vars the
+           port dots are coloured from (workflows.css). -->
+      <details class="wf-type-legend">
+        <summary>Port types</summary>
+        <ul class="wf-type-legend-list">
+          <li><span class="wf-type-swatch" data-type-family="temporal"></span>Temporal — clips, events, segments, ranges</li>
+          <li><span class="wf-type-swatch" data-type-family="insight"></span>Insight — transcript, summary, citations, friction</li>
+          <li><span class="wf-type-swatch" data-type-family="source"></span>Source — video, participant, region</li>
+          <li><span class="wf-type-swatch" data-type-family="output"></span>Output — artifacts, manifest, viewer</li>
+          <li><span class="wf-type-swatch" data-type-family="value"></span>Value — scalar, number, string</li>
+        </ul>
+      </details>
     </aside>
 
     <section id="wfCanvasWrap" aria-label="Workflow canvas">
@@ -139,6 +152,7 @@
              load failure shows a persistent, retryable error rather than a canvas
              that looks editable but never saves. -->
         <div id="wfCanvasOverlay" class="wf-canvas-overlay">
+          <span id="wfOverlaySpinner" class="wf-overlay-spinner" aria-hidden="true"></span>
           <p id="wfOverlayMsg" class="wf-overlay-msg">Loading workflows…</p>
           <button id="wfOverlayRetry" class="btn btn-small hidden" type="button">Retry</button>
         </div>

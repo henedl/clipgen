@@ -94,7 +94,10 @@ body[data-frontend="workflows"] {
 }
 
 .wf-palette-empty {
+  padding: var(--space-4) var(--space-2);
+  text-align: center;
   font-size: var(--text-sm);
+  font-style: italic;
   color: var(--fg-faint);
 }
 
@@ -413,8 +416,17 @@ body[data-frontend="workflows"] {
   border-radius: var(--radius-sm);
 }
 
-/* Keyboard focus rings on the new toolbar icon buttons (matches #themeToggle). */
-.wf-icon-btn:focus-visible {
+/* Keyboard focus rings across the page's interactive controls (matches the
+   #themeToggle pattern). Covers the natively-focusable toolbar/sidebar controls;
+   harmless on the few div-based ones should they gain tabindex later. */
+#wfToolbar button:focus-visible,
+#wfBlueprintSelect:focus-visible,
+#wfBlueprintName:focus-visible,
+.wf-palette-search:focus-visible,
+.wf-param-input:focus-visible,
+.wf-run-menu-item:focus-visible,
+.wf-recipe-chip:focus-visible,
+#wfOverlayRetry:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -465,6 +477,19 @@ body[data-frontend="workflows"] {
   font-size: var(--text-sm);
   cursor: grab;
   user-select: none;
+  /* Smooth the hover lift below. (An enter animation would replay on every
+     full re-render — renderAllNodes rebuilds all cards — so it's intentionally
+     left out; hover is the safe runtime state to animate.) */
+  transition:
+    box-shadow var(--duration-fast),
+    border-color var(--duration-fast);
+}
+
+/* Subtle hover lift to signal a card is grabbable (skipped while selected or
+   muted, which carry their own emphasis). */
+.wf-node:hover:not(.selected):not(.wf-node-muted) {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-lg);
 }
 
 .wf-node.selected {
@@ -852,6 +877,70 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/rectangle-stack.svg");
 }
 
+/* ---- Port-type legend (sidebar footer) ---- */
+
+/* Collapsible key to the five data-type families; swatches reuse the same
+   --wf-type-* vars that colour the port dots, so the legend can't drift. */
+.wf-type-legend {
+  margin-top: auto;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+}
+
+.wf-type-legend > summary {
+  cursor: pointer;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.wf-type-legend > summary:hover {
+  color: var(--fg);
+}
+
+.wf-type-legend-list {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wf-type-legend-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+}
+
+.wf-type-swatch {
+  flex: 0 0 auto;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: var(--radius-full);
+  background: var(--wf-swatch-color, var(--border));
+}
+
+.wf-type-swatch[data-type-family="temporal"] {
+  --wf-swatch-color: var(--wf-type-temporal);
+}
+.wf-type-swatch[data-type-family="insight"] {
+  --wf-swatch-color: var(--wf-type-insight);
+}
+.wf-type-swatch[data-type-family="source"] {
+  --wf-swatch-color: var(--wf-type-source);
+}
+.wf-type-swatch[data-type-family="output"] {
+  --wf-swatch-color: var(--wf-type-output);
+}
+.wf-type-swatch[data-type-family="value"] {
+  --wf-swatch-color: var(--wf-type-value);
+}
+
 /* ---- Watch-dir trigger toggle (P6) ---- */
 
 #wfTriggerBtn {
@@ -1030,6 +1119,29 @@ body[data-frontend="workflows"] {
   max-width: 28rem;
   font-size: var(--text-base);
   color: var(--fg-muted);
+}
+
+/* Indeterminate loading spinner shown while the workspace loads (hidden on the
+   error state, where the retry CTA takes over). */
+.wf-overlay-spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: wf-spin 0.8s linear infinite;
+}
+
+@keyframes wf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-overlay-spinner {
+    animation: none;
+  }
 }
 
 /* ---- Param editors (on the card, below the domain line) ---- */
