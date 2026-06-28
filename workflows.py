@@ -3098,6 +3098,17 @@ def _port_type(type_id: str, port_name: str | None, direction: str) -> str | Non
     return None
 
 
+def _port_optional(type_id: str | None, port_name: str | None) -> bool:
+    """True if a node type's *input* port is declared ``optional`` (else False)."""
+    node_type = NODE_TYPES.get(type_id) if type_id else None
+    if not node_type or not port_name:
+        return False
+    for port in node_type["inputs"]:
+        if port["name"] == port_name:
+            return bool(port.get("optional"))
+    return False
+
+
 def _summarize_value(value: Any) -> Any:
     """Shrink a node output to a JSON-safe summary (counts + terminal pointers).
 
@@ -3328,12 +3339,38 @@ class WorkflowRunner:
         return (self._results.get(node_id) or {}).get("pass") is False
 
     def _should_skip(self, node_id: str) -> bool:
-        """A node is skipped if any upstream failed/skipped, or is a blocking gate."""
-        for dep in self._deps(node_id):
+        """Decide whether ``node_id`` is skipped before it runs.
+
+        Skipped when a *required* input's producer failed/skipped (the node can't
+        run without it) or when a gate gating this node blocks it. A dead producer
+        feeding an *optional* input is tolerated — the node runs with that input
+        absent (executors already read ``inputs.get(...)``), so a muted or broken
+        branch of a ``merge`` (or any optional input) doesn't sink the whole
+        downstream.
+        """
+        node = self._nodes_by_id.get(node_id)
+        node_type = node.get("type") if node else None
+        for edge in self._incoming(node_id):
+            dep = edge.get("from")
+            if not isinstance(dep, str) or dep not in self._nodes_by_id:
+                continue
             status = self.node_states[dep]["status"]
-            if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
-                return True
-            if status == NODE_STATUS_COMPLETED and self._gate_blocks(dep):
+            out_type = _port_type(
+                self._nodes_by_id[dep].get("type"), edge.get("fromPort"), "out"
+            )
+            if out_type == "control":
+                # A gate edge: skip if the gate can't pass us through — it blocked
+                # (``pass`` False) or it never completed (failed/skipped).
+                if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
+                    return True
+                if status == NODE_STATUS_COMPLETED and self._gate_blocks(dep):
+                    return True
+                continue
+            # A data edge: only a *required* input's dead producer forces a skip.
+            if status in (
+                NODE_STATUS_FAILED,
+                NODE_STATUS_SKIPPED,
+            ) and not _port_optional(node_type, edge.get("toPort")):
                 return True
         return False
 
