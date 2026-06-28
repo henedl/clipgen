@@ -41,11 +41,24 @@
         <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled></select>
         <input id="wfBlueprintName" type="text" autocomplete="off"
                aria-label="Blueprint name" placeholder="Untitled" disabled />
+        <!-- Debounced-autosave status: "Saving…" while the timer is armed, "Saved"
+             once the PUT resolves, "Save failed" on error (hub setSaveStatus). -->
+        <span id="wfSaveStatus" class="wf-save-status" aria-live="polite"></span>
         <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
         <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
         <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
              this hidden input is triggered by the "Import blueprint JSON" item. -->
         <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
+        <!-- Undo / redo: the keyboard stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
+             state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
+        <button id="wfUndo" class="btn btn-small wf-icon-btn" type="button" disabled
+                aria-label="Undo" title="Undo (⌘Z)">
+          <span class="wf-btn-icon wf-undo-icon" aria-hidden="true"></span>
+        </button>
+        <button id="wfRedo" class="btn btn-small wf-icon-btn" type="button" disabled
+                aria-label="Redo" title="Redo (⌘⇧Z)">
+          <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
+        </button>
         <button id="wfCleanUp" class="btn btn-small" type="button" disabled
                 title="Auto-arrange the nodes">Clean up</button>
         <button id="wfSaveStash" class="btn btn-small" type="button" disabled
@@ -77,6 +90,26 @@
         <!-- Persistent cue that some blueprint is armed for auto-run, even one
              that isn't the active canvas (the button only reflects the active). -->
         <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
+        <!-- Keyboard/mouse shortcuts legend: a far-right ? popover (reuses the
+             run-menu toggle pattern). Static content — usable even before load. -->
+        <div class="wf-shortcuts-wrap">
+          <button id="wfShortcutsBtn" class="btn btn-small wf-icon-btn" type="button"
+                  aria-haspopup="menu" aria-expanded="false"
+                  aria-label="Keyboard shortcuts" title="Keyboard &amp; mouse shortcuts">
+            <span class="wf-btn-icon wf-shortcuts-icon" aria-hidden="true"></span>
+          </button>
+          <div id="wfShortcutsMenu" class="wf-shortcuts-menu hidden" role="menu">
+            <div class="wf-shortcuts-title">Keyboard &amp; mouse</div>
+            <dl class="wf-shortcuts-list">
+              <div><dt>Undo / Redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
+              <div><dt>Copy / Paste / Duplicate</dt><dd><kbd>⌘C</kbd> <kbd>⌘V</kbd> <kbd>⌘D</kbd></dd></div>
+              <div><dt>Delete selection</dt><dd><kbd>Delete</kbd></dd></div>
+              <div><dt>Pan canvas</dt><dd>middle-drag</dd></div>
+              <div><dt>Zoom</dt><dd>scroll</dd></div>
+              <div><dt>Select</dt><dd>drag / shift-click</dd></div>
+            </dl>
+          </div>
+        </div>
       </header>
       <div id="wfCanvas" class="wf-canvas">
         <!-- Wire layer lives INSIDE #wfWorld so it shares the cards' (transformed)
