@@ -1060,12 +1060,26 @@ def test_watch_unstable_stat_does_not_fire(wf_client, monkeypatch):
 
 def test_watch_gated_on_single_armed(wf_client, monkeypatch):
     calls = _record_launches(monkeypatch)
-    # No blueprint armed at all.
+    # No blueprint armed at all -> the poll skips all work (no glob/stat) and fires
+    # nothing. No-retro-fire is handled by the arm-time re-seed, not here.
     _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
-    assert calls == []  # stable, but nothing armed -> no fire
-    assert "P01" in workflows_server._watch_seen  # still consumed (no retro-fire)
+    assert calls == []
+
+
+def test_arming_reseeds_so_backlog_never_fires(wf_client, monkeypatch):
+    # A pid already present when the blueprint is armed is re-baselined as seen at
+    # arm time, so it never retro-fires (the poll no longer maintains the seen-set
+    # while disarmed).
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+    wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
+    assert "P01" in workflows_server._watch_seen  # seeded at arm time
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert calls == []
 
 
 def test_watch_two_armed_is_ambiguous_and_skips(wf_client, monkeypatch):
@@ -1088,9 +1102,9 @@ def test_watch_disarmed_arrival_not_retrofired(wf_client, monkeypatch):
     bp = _video_source_blueprint(wf_client)  # not armed
     _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
     workflows_server._watch_poll_once()
-    workflows_server._watch_poll_once()  # P01 consumed while disarmed
+    workflows_server._watch_poll_once()  # disarmed -> no-op
     assert calls == []
-    # Arming later must not retro-fire the already-seen pid.
+    # Arming re-seeds the now-present P01, so it isn't retro-fired.
     wf_client.put(f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": True})
     workflows_server._watch_poll_once()
     assert calls == []

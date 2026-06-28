@@ -246,6 +246,11 @@ def api_blueprint_trigger(bp_id: str) -> Any:
             target["trigger"] = {"type": "watch_dir", "enabled": False}
         _persist_locked()
         result = copy.deepcopy(target)
+    # Re-baseline the seen-set when arming so the current backlog never retro-fires.
+    # The poll no longer maintains the seen-set while nothing is armed (it skips all
+    # work then), so this arm-time re-seed is what upholds the no-retro-fire promise.
+    if enabled:
+        _seed_watch_seen()
     return jsonify({"ok": True, "blueprint": result})
 
 
@@ -1043,10 +1048,16 @@ def _maybe_fire_trigger(participant: str) -> None:
 def _watch_poll_once() -> None:
     """One watcher tick: detect newly-arrived, stable participants and fire each.
 
-    A pid fires only after it stats identically across two consecutive polls (the
-    partial-copy guard) and is then marked seen *before* the armed-blueprint gate,
-    so a disarmed watcher still consumes the arrival (arming later won't refire).
+    Skips all work (no glob, no stats) unless exactly one blueprint is armed — the
+    common case, even in Studio/Screenspace/Transcripts launches where this daemon
+    also runs. The no-retro-fire guarantee is upheld by re-seeding the seen-set when
+    a blueprint is armed (``api_blueprint_trigger``), not by maintaining it here. A
+    pid still fires only after it stats identically across two consecutive polls
+    (the partial-copy guard).
     """
+    with _manifest_lock:
+        if _armed_blueprint_locked() is None:
+            return  # nothing (or ambiguously >1) armed → don't even glob the dir
     entries = {
         str(e["id"]): e
         for e in utils.discover_participant_videos()
@@ -1088,13 +1099,14 @@ def _watch_loop() -> None:
 def _start_watch_thread() -> None:
     """Start the watch-dir daemon (idempotent; daemon dies with the process)."""
     global _watch_thread  # noqa: PLW0603
-    if _watch_thread is not None and _watch_thread.is_alive():
-        return
-    _watch_stop.clear()
-    _watch_thread = threading.Thread(
-        target=_watch_loop, daemon=True, name="workflow-watch-dir"
-    )
-    _watch_thread.start()
+    with _watch_lock:
+        if _watch_thread is not None and _watch_thread.is_alive():
+            return
+        _watch_stop.clear()
+        _watch_thread = threading.Thread(
+            target=_watch_loop, daemon=True, name="workflow-watch-dir"
+        )
+        _watch_thread.start()
 
 
 def _init_workflows_state(
