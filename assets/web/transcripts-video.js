@@ -67,6 +67,14 @@
       collapseBtn.title = state.videoCollapsed ? "Show video" : "Hide video";
       collapseBtn.setAttribute("aria-expanded", state.videoCollapsed ? "false" : "true");
     }
+    var followBtn = qs("#videoFollowBtn");
+    if (followBtn) {
+      followBtn.classList.toggle("active", !!state.autoFollow);
+      followBtn.setAttribute("aria-pressed", state.autoFollow ? "true" : "false");
+      followBtn.title = state.autoFollow
+        ? "Auto-scroll transcript with playback (on)"
+        : "Auto-scroll transcript with playback (off)";
+    }
   }
 
   function applyPlaybackRate() {
@@ -392,6 +400,8 @@
     var stored = getStoredUIState("transcripts");
     state.ccEnabled = !!(stored && stored.ccEnabled);
     state.videoCollapsed = !!(stored && stored.videoCollapsed);
+    // Auto-follow defaults on; only an explicit stored `false` disables it.
+    state.autoFollow = !(stored && stored.autoFollow === false);
     var section = qs("#videoSection");
     if (section) section.classList.toggle("video-collapsed", state.videoCollapsed);
 
@@ -433,6 +443,19 @@
       setStoredUIStateField("transcripts", "videoCollapsed", state.videoCollapsed);
       updatePlayerButtons();
     });
+    var followBtn = qs("#videoFollowBtn");
+    if (followBtn) {
+      followBtn.addEventListener("click", function () {
+        state.autoFollow = !state.autoFollow;
+        // A fresh enable shouldn't stay paused from an earlier manual scroll.
+        if (state.autoFollow) _autoFollowPausedUntil = 0;
+        setStoredUIStateField("transcripts", "autoFollow", state.autoFollow);
+        updatePlayerButtons();
+      });
+    }
+
+    initAutoFollowScrollPause();
+    initShortcutsOverlay();
 
     video.addEventListener("play", function () {
       state.videoPlaying = true;
@@ -630,23 +653,134 @@
 
   // ---- Keyboard ----
 
-  function initPlayerKeyboard() {
-    document.addEventListener("keydown", function (e) {
-      if (e.code !== "Space" && e.key !== " ") return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      var t = e.target;
-      if (t && t.matches && t.matches("input, textarea, select, [contenteditable=true]")) return;
-      if (state.editingTextEl) return;
-      var modal = qs("#correctionsModal");
-      if (modal && !modal.classList.contains("hidden")) return;
-      var pop = qs("#markPopover");
-      if (pop && !pop.classList.contains("hidden")) return;
+  function _markElForIndex(idx) {
+    var list = qs("#segmentList");
+    var row = list ? list.querySelector('.segment-row[data-index="' + idx + '"]') : null;
+    return row ? row.querySelector(".segment-mark") : null;
+  }
+
+  // Move the active segment by *delta*, seeking + scrolling to it. Establishes an
+  // active segment at an edge when none is selected yet.
+  function _moveActiveSegment(delta) {
+    var n = state.segments.length;
+    if (!n) return;
+    var cur = state.activeSegmentIndex;
+    var next = cur < 0 ? (delta > 0 ? 0 : n - 1) : cur + delta;
+    if (next < 0) next = 0;
+    if (next > n - 1) next = n - 1;
+    setActiveSegment(next, { seek: true, follow: true, force: true });
+  }
+
+  // Jump to the next/previous segment carrying a mark.
+  function _jumpToMarkedSegment(dir) {
+    var n = state.segments.length;
+    if (!n) return;
+    var i = state.activeSegmentIndex < 0 ? (dir > 0 ? -1 : n) : state.activeSegmentIndex;
+    for (var step = 0; step < n; step++) {
+      i += dir;
+      if (i < 0 || i >= n) return;
+      var marks = state.segments[i].marks;
+      if (marks && marks.length > 0) {
+        setActiveSegment(i, { seek: true, follow: true, force: true });
+        return;
+      }
+    }
+  }
+
+  // Mark the active segment. categoryKey null = toggle (create, or open the
+  // popover if already marked); a category key sets/creates that category.
+  function _markActiveSegment(categoryKey) {
+    var idx = state.activeSegmentIndex;
+    var seg = idx >= 0 ? state.segments[idx] : null;
+    if (!seg) return;
+    var existing = seg.marks && seg.marks.length > 0 ? seg.marks[0] : null;
+    if (categoryKey) {
+      if (existing) TS.updateMarkCategory(existing.id, categoryKey);
+      else { state.lastMarkCategory = categoryKey; TS.toggleMark(seg.id); }
+    } else if (existing) {
+      var anchor = _markElForIndex(idx);
+      if (anchor) TS.showMarkPopover(anchor, seg.id, existing);
+    } else {
+      TS.toggleMark(seg.id);
+    }
+  }
+
+  function onTranscriptKeydown(e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var t = e.target;
+    if (t && t.matches && t.matches("input, textarea, select, [contenteditable=true]")) return;
+    if (state.editingTextEl) return;
+
+    // The cheatsheet works regardless of player/segment state.
+    if (e.key === "?") { e.preventDefault(); toggleShortcuts(); return; }
+    if (e.key === "Escape" && _shortcutsOpen()) { e.preventDefault(); hideShortcuts(); return; }
+
+    var modal = qs("#correctionsModal");
+    if (modal && !modal.classList.contains("hidden")) return;
+    var pop = qs("#markPopover");
+    if (pop && !pop.classList.contains("hidden")) return;
+
+    var key = e.key;
+    if (e.code === "Space" || key === " ") {
       var v = qs("#videoPlayer");
       if (!v || !v.src) return;
       e.preventDefault();
       if (v.paused) v.play();
       else v.pause();
-    });
+      return;
+    }
+
+    // Remaining shortcuts act on the segment list.
+    if (!state.segments || !state.segments.length) return;
+    if (key === "j" || key === "ArrowDown") { e.preventDefault(); _moveActiveSegment(1); return; }
+    if (key === "k" || key === "ArrowUp") { e.preventDefault(); _moveActiveSegment(-1); return; }
+    if (key === "n") { e.preventDefault(); _jumpToMarkedSegment(1); return; }
+    if (key === "p") { e.preventDefault(); _jumpToMarkedSegment(-1); return; }
+    if (key === "m") { e.preventDefault(); _markActiveSegment(null); return; }
+    if (key === ",") { e.preventDefault(); seekVideo(Math.max(0, videoGlobalTime() - 5)); return; }
+    if (key === ".") { e.preventDefault(); seekVideo(videoGlobalTime() + 5); return; }
+    if (key >= "1" && key <= "9") {
+      var catKeys = Object.keys(MARK_CATEGORIES);
+      var ci = parseInt(key, 10) - 1;
+      if (ci < catKeys.length) { e.preventDefault(); _markActiveSegment(catKeys[ci]); }
+      return;
+    }
+  }
+
+  function initPlayerKeyboard() {
+    document.addEventListener("keydown", onTranscriptKeydown);
+  }
+
+  // ---- Keyboard shortcuts cheatsheet ----
+
+  function _shortcutsOpen() {
+    var el = qs("#trShortcuts");
+    return !!(el && !el.classList.contains("hidden"));
+  }
+  function showShortcuts() {
+    var el = qs("#trShortcuts");
+    if (el) el.classList.remove("hidden");
+  }
+  function hideShortcuts() {
+    var el = qs("#trShortcuts");
+    if (el) el.classList.add("hidden");
+  }
+  function toggleShortcuts() {
+    if (_shortcutsOpen()) hideShortcuts();
+    else showShortcuts();
+  }
+
+  function initShortcutsOverlay() {
+    var btn = qs("#shortcutsBtn");
+    if (btn) btn.addEventListener("click", function () { toggleShortcuts(); });
+    var closeBtn = qs("#shortcutsClose");
+    if (closeBtn) closeBtn.addEventListener("click", hideShortcuts);
+    var overlay = qs("#trShortcuts");
+    if (overlay) {
+      overlay.addEventListener("click", function (e) {
+        if (e.target === overlay) hideShortcuts();
+      });
+    }
   }
 
   var _pendingSeekTime = null;
@@ -750,6 +884,32 @@
     setStoredUIStateField("transcripts", "videoTimeByParticipant", map);
   }
 
+  // Move the .active highlight to *newIndex* and optionally seek the video to its
+  // start. Shared by playhead sync (highlightActiveSegment) and keyboard nav.
+  // opts.follow scrolls the row into view; opts.seek jumps the video there.
+  function setActiveSegment(newIndex, opts) {
+    opts = opts || {};
+    if (newIndex === state.activeSegmentIndex && !opts.force) return;
+
+    if (!state.cachedSegmentRows) {
+      var list = qs("#segmentList");
+      state.cachedSegmentRows = list ? list.querySelectorAll(".segment-row") : [];
+    }
+    var rows = state.cachedSegmentRows;
+
+    if (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < rows.length) {
+      rows[state.activeSegmentIndex].classList.remove("active");
+    }
+    state.activeSegmentIndex = newIndex;
+    if (newIndex >= 0 && newIndex < rows.length) {
+      rows[newIndex].classList.add("active");
+      if (opts.follow) scrollToSegment(rows[newIndex]);
+    }
+    if (opts.seek && newIndex >= 0 && state.segments[newIndex]) {
+      seekVideo(state.segments[newIndex].start);
+    }
+  }
+
   function highlightActiveSegment() {
     var video = qs("#videoPlayer");
     if (!video || !video.src) return;
@@ -766,26 +926,32 @@
 
     if (newIndex === state.activeSegmentIndex) return;
 
-    // Cache segment row elements
-    if (!state.cachedSegmentRows) {
-      state.cachedSegmentRows = qs("#segmentList").querySelectorAll(".segment-row");
-    }
-    var rows = state.cachedSegmentRows;
+    // Chase the playhead when auto-follow is on (or in PiP, where the embedded
+    // player is hidden so there's nothing else to read against). Skip while the
+    // user is reading elsewhere — a manual scroll pauses follow for a few seconds.
+    var follow = (state.autoFollow || state.pipActive) && !_autoFollowPaused();
+    setActiveSegment(newIndex, { follow: follow });
+  }
 
-    // Remove old active
-    if (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < rows.length) {
-      rows[state.activeSegmentIndex].classList.remove("active");
-    }
+  // ---- Auto-follow scroll-pause ----
+  // A user scroll on #trMain pauses playhead-following for a few seconds so it
+  // doesn't yank the transcript away while they read. scrollToSegment marks its
+  // own programmatic scrolls so they don't count as a manual scroll.
+  var AUTO_FOLLOW_PAUSE_MS = 3000;
+  var _autoFollowPausedUntil = 0;
+  var _ignoreScrollUntil = 0;
 
-    // Set new active
-    state.activeSegmentIndex = newIndex;
-    if (newIndex >= 0 && newIndex < rows.length) {
-      rows[newIndex].classList.add("active");
-      // Only chase the playhead when PiP is active. With the embedded player
-      // visible at the top, the user is driving via the timeline and doesn't
-      // want the transcript pulled away from what they're reading.
-      if (state.pipActive) scrollToSegment(rows[newIndex]);
-    }
+  function _autoFollowPaused() {
+    return Date.now() < _autoFollowPausedUntil;
+  }
+
+  function initAutoFollowScrollPause() {
+    var scroller = qs("#trMain");
+    if (!scroller) return;
+    scroller.addEventListener("scroll", function () {
+      if (Date.now() < _ignoreScrollUntil) return; // our own scrollToSegment
+      _autoFollowPausedUntil = Date.now() + AUTO_FOLLOW_PAUSE_MS;
+    }, { passive: true });
   }
 
   function scrollToSegment(row) {
@@ -802,8 +968,10 @@
     var visibleBottom = scroller.scrollTop + scroller.clientHeight;
 
     if (rowTopInScroll < visibleTop + 40) {
+      _ignoreScrollUntil = Date.now() + 120;
       scroller.scrollTop = rowTopInScroll - TR_CHROME_TOP - 40;
     } else if (rowBottomInScroll > visibleBottom - 40) {
+      _ignoreScrollUntil = Date.now() + 120;
       scroller.scrollTop = rowBottomInScroll - scroller.clientHeight + 40;
     }
   }
