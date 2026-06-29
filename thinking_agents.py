@@ -81,14 +81,6 @@ class Agent(TypedDict):
 # Summary agent (Pass 1)
 # ---------------------------------------------------------------------------
 
-_SUMMARIZE_PROMPT = """\
-Summarize this user research session transcript. Write a concise paragraph \
-(2-4 sentences) describing what happened in the session. Then list the key \
-topics or themes as bullet points (prefix each with "- ").
-
-Transcript:
-{text}"""
-
 _MIN_TEXT_LENGTH = 50  # skip summarization for very short transcripts
 _MAX_TRANSCRIPT_CHARS = 6000  # truncate long transcripts to fit context window
 
@@ -127,7 +119,7 @@ def summarize_transcript(
         f"Summarizing transcript ({len(segments)} segments, "
         f"{len(text)} chars) with model {model}"
     )
-    prompt = _SUMMARIZE_PROMPT.format(text=text)
+    prompt = config.OLLAMA_SUMMARY_PROMPT.format(text=text)
     result = ollama_client.generate(prompt, model=model, cancel_event=cancel_event)
     if result:
         utils.verbose_print(f"Summary generated ({len(result)} chars)")
@@ -144,27 +136,6 @@ def _run_summary(
 # ---------------------------------------------------------------------------
 # Citation agent (Pass 2)
 # ---------------------------------------------------------------------------
-
-_CITATION_SYSTEM = (
-    "You match transcript segments to summary claims. "
-    "For each claim, select only the 1-3 most relevant and representative "
-    "segments. Prefer segments that most clearly and directly support the claim. "
-    "Use the exact format shown."
-)
-
-_CITATION_PROMPT = """\
-Claims:
-{claims}
-
-Transcript:
-{transcript}
-
-For each claim, pick the 1-3 BEST supporting timestamps — the clearest, \
-most direct evidence. Do not list every vaguely related segment.
-Format your response exactly as:
-1: 0:45, 1:02
-2: NONE
-Write NONE if no segments clearly support a claim."""
 
 _MAX_REFS_PER_CLAIM = 4  # hard cap enforced during parsing
 _MAX_CITATION_TRANSCRIPT_CHARS = 12000  # generous context-window limit
@@ -318,11 +289,13 @@ def find_citations(
         f"({len(transcript_text)} chars transcript) with model {model}"
     )
 
-    prompt = _CITATION_PROMPT.format(claims=claims_text, transcript=transcript_text)
+    prompt = config.OLLAMA_CITATIONS_PROMPT.format(
+        claims=claims_text, transcript=transcript_text
+    )
     response = ollama_client.generate(
         prompt,
         model=model,
-        system=_CITATION_SYSTEM,
+        system=config.OLLAMA_CITATIONS_SYSTEM,
         think=False,
         cancel_event=cancel_event,
     )
@@ -354,32 +327,6 @@ def _run_citations(
 # ---------------------------------------------------------------------------
 # Friction agent (Pass 3)
 # ---------------------------------------------------------------------------
-
-_FRICTION_SYSTEM = (
-    "You analyze UX research session transcripts for moments of friction — "
-    "points where the participant struggled, hesitated, got confused, or showed "
-    "frustration. You respond with a JSON array only."
-)
-
-_FRICTION_PROMPT = """\
-Session summary:
-{summary}
-
-Candidate segments (pre-filtered by automated heuristics; each line is \
-"[segment_id] (timestamp) text"):
-{segments}
-
-Friction categories: hesitation, confusion, frustration, surprise, \
-self_correction, help_seeking.
-
-Return EXACTLY {limit} moments where the participant most clearly shows friction.
-Each moment may span 1-3 contiguous segment IDs taken from the candidate list above.
-
-Output a JSON array only — no prose, no markdown fences, no <think> blocks:
-[
-  {{"segment_ids": ["P01:7", "P01:8"], "category": "frustration",
-    "rationale": "Participant repeatedly tried to find the save button", "score": 0.85}}
-]"""
 
 _MAX_FRICTION_SUMMARY_CHARS = 2000  # cap summary context fed to the friction prompt
 
@@ -526,7 +473,7 @@ def find_friction_moments(
     if not block:
         return []
 
-    prompt = _FRICTION_PROMPT.format(
+    prompt = config.OLLAMA_FRICTION_PROMPT.format(
         summary=_truncate_middle(summary, _MAX_FRICTION_SUMMARY_CHARS),
         segments=block,
         limit=config.FRICTION_MOMENT_LIMIT,
@@ -538,7 +485,7 @@ def find_friction_moments(
     response = ollama_client.generate(
         prompt,
         model=model,
-        system=_FRICTION_SYSTEM,
+        system=config.OLLAMA_FRICTION_SYSTEM,
         think=False,
         cancel_event=cancel_event,
     )
