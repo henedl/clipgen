@@ -2,6 +2,34 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.13.47 — 2026-06-29 — Screenspace
+**Boundary flags above the timeline**
+Scene boundaries render as flag glyphs in a rail above the timeline instead of in-band ticks; hover shows a tooltip and locator hairline, click seeks to the boundary time.
+
+## v0.13.46 — 2026-06-29 — Transcripts
+**Editable thinking-agent prompts**
+View, edit, and reset summary, citations, and friction prompts in Settings → Summaries → Agent prompts; edits persist and apply on the next run, with placeholder validation.
+
+## v0.13.45 — 2026-06-28 — Workflows
+**Canvas discoverability and run panel polish**
+Toolbar undo/redo, autosave status, shortcuts legend, and focus rings; run panel shows per-node status icons, duration, result filters, expandable result lists, and a Reconnecting pill when SSE drops; collapsible port-type legend and wider param-heavy node cards.
+
+## v0.13.43 — 2026-06-28 — Studio
+**Feedback, persistence, and accessibility polish**
+Stash saves animate the new card in; generation failures show per-cell reasons; sidebar filter selections persist across reload; focus-visible rings and modal focus traps; overlay cards fade in with reduced-motion support.
+
+## v0.13.43 — 2026-06-28 — Transcripts
+**Keyboard review loop and AI-trust cues**
+j/k/arrows move and seek segments, m marks, 1–6 set friction category, n/p jump between marks; auto-follow scrolls the active segment during playback; marks update optimistically; friction panel warns when segments were edited after AI analysis.
+
+## v0.13.43 — 2026-06-28 — Screenspace
+**Virtualized results and clearer task feedback**
+Large result lists lazy-render in chunks; loading indicators during fetch and participant switch; failed-task errors expand on click; SSE drop shows a one-shot toast; exclude/include toggles revert and toast on failure.
+
+## v0.13.42 — 2026-06-28 — Workflows
+**Run notes, skip fixes, and batch efficiency**
+Completed nodes surface non-fatal run notes when output is degraded; skip propagation respects optional merge inputs; validation warns on unwired or mismatched filter values; batch runs reuse participant-independent sheet data; watch-dir polling idles when disarmed; empty canvas offers built-in recipes and an armed auto-run indicator.
+
 ## v0.13.41 — 2026-06-27 — Workflows
 **Detect node, interval captures, and editor power tools**
 Unified Detect node over per-detector types; Interval Captures samples screenshots or GIFs across a range; per-node Ollama and Whisper model levers; palette search; blueprint JSON import/export; copy/paste/duplicate, mute, undo/redo; Run split-button with Run to here; middle-mouse pan and colour-coded title bars.
