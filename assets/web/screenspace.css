@@ -1122,6 +1122,52 @@ body[data-frontend="screenspace"] {
   flex: 1;
   min-width: 0;
   position: relative;
+  /* Reserve a gap above the canvas for the boundary flag rail. The rail sits
+   * in this gap (negative top) so #playheadCanvas can stay top:0 aligned with
+   * the timeline canvas. */
+  margin-top: var(--space-5);
+}
+
+/* Boundary flags are planted on top of the timeline, outside the result band —
+ * boundaries are orientation scaffolding (scene/section dividers), not findings. */
+#boundaryFlagRail {
+  position: absolute;
+  top: calc(-1 * var(--space-5));
+  left: 0;
+  right: 0;
+  height: var(--space-5);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.boundary-flag {
+  position: absolute;
+  bottom: 0;
+  /* Pole sits at the left ~15% of flag.svg's viewBox; nudge so it lands on the
+   * boundary's x position. */
+  transform: translateX(-2px);
+  pointer-events: auto;
+  cursor: pointer;
+  line-height: 0;
+  transition: opacity var(--duration-fast);
+}
+
+.boundary-flag.dimmed { opacity: 0.3; }
+.boundary-flag.excluded { opacity: 0.2; }
+
+.boundary-flag-icon {
+  display: inline-block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-image: url(icons/flag.svg);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: bottom left;
+  -webkit-mask-image: url(icons/flag.svg);
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: bottom left;
 }
 
 #playheadCanvas {

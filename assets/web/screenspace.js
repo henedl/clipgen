@@ -257,6 +257,7 @@
     draggingTemplate: null,
     multitoolSteps: [],
     hoveredResultSceneName: null,
+    hoveredBoundaryTs: null,
     videoPlaying: false,
     videoMuted: false,
     videoPlaybackRate: 1,
@@ -3286,6 +3287,9 @@
         if (!task.result || task.status === "cancelled") return;
         if (task.participant && task.participant !== state.selectedParticipant) return;
         if (task.type === "timelapse") return;
+        // Boundaries are orientation scaffolding, not events — keep them out of
+        // the event-density amplitude band (they render as flags above the timeline).
+        if (task.type === "boundary") return;
         if (!seriesByType[task.type]) {
           seriesByType[task.type] = { key: task.type, color: taskTypeColor(task.type), timestamps: [] };
         }
@@ -3342,12 +3346,12 @@
         });
       } else if (task.type === "timelapse") {
         // No timeline markers for timelapse
+      } else if (task.type === "boundary") {
+        // Boundaries are orientation scaffolding, not findings — rendered as
+        // flags above the timeline (renderBoundaryFlags), not in-band ticks.
       } else {
         // Point markers (change, similarity, text, numbers, template, flow, scene, running color)
-        // Boundaries are orientation scaffolding, not findings — draw them as
-        // thinner, lighter ticks so they read as a session skeleton.
-        var isBoundary = task.type === "boundary";
-        ctx.lineWidth = isBoundary ? 1.0 : 1.5;
+        ctx.lineWidth = 1.5;
         var results = task.result || [];
         results.forEach(function (r) {
           var ts = r.timestamp !== undefined ? r.timestamp : r.start;
@@ -3362,7 +3366,7 @@
             ctx.strokeStyle = hexToRgba(color, 0.15);
             ctx.setLineDash([]);
           } else {
-            ctx.strokeStyle = isBoundary ? hexToRgba(color, 0.55) : color;
+            ctx.strokeStyle = color;
             ctx.setLineDash([]);
           }
           var x = timeToX(ts);
@@ -3410,8 +3414,70 @@
       });
     }
 
+    renderBoundaryFlags(visStart, visLen, w, excludedByTask, focused);
     renderTimelineLegend();
     renderPlayhead();
+  }
+
+  // Boundary events render as flag glyphs in #boundaryFlagRail, planted on top
+  // of the timeline (outside the result band) — they are orientation
+  // scaffolding, not clip candidates. Rebuilt on every pan/zoom/resize/focus.
+  function renderBoundaryFlags(visStart, visLen, w, excludedByTask, focused) {
+    var rail = qs("#boundaryFlagRail");
+    if (!rail) return;
+    rail.innerHTML = "";
+    if (visLen <= 0) return;
+    var color = taskTypeColor("boundary");
+    var frag = document.createDocumentFragment();
+    state.tasks.forEach(function (task) {
+      if (task.type !== "boundary") return;
+      if (!task.result || task.status === "cancelled") return;
+      if (task.participant && task.participant !== state.selectedParticipant) return;
+      var dimmed = focused && task.id !== focused;
+      var taskExcluded = excludedByTask[task.id] || {};
+      task.result.forEach(function (r) {
+        var ts = r.timestamp !== undefined ? r.timestamp : r.start;
+        if (ts === undefined) return;
+        var x = ((ts - visStart) / visLen) * w;
+        if (x < 0 || x > w) return;
+        var flag = el("span", "boundary-flag");
+        if (taskExcluded[ts.toFixed(2)]) flag.classList.add("excluded");
+        else if (dimmed) flag.classList.add("dimmed");
+        flag.style.left = x + "px";
+        flag.style.color = color;
+        flag.appendChild(el("span", "boundary-flag-icon"));
+        // Per-flag hover/click: the rail itself is pointer-events:none, so each
+        // flag (pointer-events:auto) owns its own listeners — leaving a flag into
+        // empty rail space (or off-page) reliably fires its mouseleave. Hover only
+        // redraws the playhead overlay, never the rail, so the element persists.
+        wireBoundaryFlag(flag, task, r, ts);
+        frag.appendChild(flag);
+      });
+    });
+    rail.appendChild(frag);
+  }
+
+  function wireBoundaryFlag(flag, task, r, ts) {
+    function enter(e) {
+      showSsTooltip({ task: task, result: r }, e.clientX, e.clientY);
+      if (state.hoveredBoundaryTs !== ts) {
+        state.hoveredBoundaryTs = ts;
+        renderPlayhead();
+      }
+    }
+    flag.addEventListener("mouseenter", enter);
+    flag.addEventListener("mousemove", enter);
+    flag.addEventListener("mouseleave", function () {
+      hideSsTooltip();
+      if (state.hoveredBoundaryTs !== null) {
+        state.hoveredBoundaryTs = null;
+        renderPlayhead();
+      }
+    });
+    flag.addEventListener("click", function () {
+      state.resultOverlay = null;
+      loadFrame(ts);
+    });
   }
 
   function renderPlayhead() {
@@ -3425,6 +3491,22 @@
     if (dur <= 0) return;
     var visLen = dur / state.timelineZoom;
     var visStart = state.timelineOffset;
+
+    // Transient locator: faint hairline under the hovered boundary flag. Drawn on
+    // the playhead overlay (not the timeline canvas) so hovering never rebuilds the
+    // flag rail — keeping each flag's mouseleave reliable.
+    if (state.hoveredBoundaryTs !== null && state.hoveredBoundaryTs !== undefined) {
+      var hbx = ((state.hoveredBoundaryTs - visStart) / visLen) * w;
+      if (hbx >= 0 && hbx <= w) {
+        ctx.strokeStyle = hexToRgba(taskTypeColor("boundary"), 0.4);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(hbx, 0);
+        ctx.lineTo(hbx, h);
+        ctx.stroke();
+      }
+    }
+
     var px = ((state.currentTimestamp - visStart) / visLen) * w;
     var tc = getThemeColors();
     ctx.strokeStyle = tc.accent;
