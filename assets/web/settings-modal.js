@@ -472,6 +472,47 @@
       var kind = s.kind === "end" ? "end" : "title";
       _cardPickers.push({ container: controlDiv, settingName: settingName, kind: kind });
       _renderCardPicker(controlDiv, settingName, kind);
+    } else if (s.type === "prompt") {
+      row.classList.add("settings-row-stacked");
+      var phList = s.placeholders || [];
+      var hint = el("div", "settings-prompt-placeholders");
+      if (phList.length) {
+        hint.appendChild(el("span", "settings-prompt-hint-label", "Placeholders:"));
+        for (var pi = 0; pi < phList.length; pi++) {
+          hint.appendChild(el("code", "settings-prompt-chip", "{" + phList[pi] + "}"));
+        }
+      } else {
+        hint.appendChild(
+          el("span", "settings-prompt-hint-label", "Sent verbatim — no placeholders."),
+        );
+      }
+      controlDiv.appendChild(hint);
+
+      var ta = document.createElement("textarea");
+      ta.className = "settings-prompt-textarea";
+      ta.autocomplete = "off";
+      ta.spellcheck = false;
+      ta.rows = 8;
+      ta.value = s.value || "";
+      ta.addEventListener("change", function () {
+        var setting = _findSetting(settingName);
+        if (setting) setting.value = this.value;
+        _updateChanged(settingName);
+        _scheduleSave();
+      });
+      controlDiv.appendChild(ta);
+
+      var resetBtn = el("button", "btn btn-small settings-prompt-reset", "Reset to default");
+      resetBtn.type = "button";
+      resetBtn.addEventListener("click", function () {
+        var setting = _findSetting(settingName);
+        if (!setting) return;
+        setting.value = setting.default;
+        ta.value = setting.default || "";
+        _updateChanged(settingName);
+        _scheduleSave();
+      });
+      controlDiv.appendChild(resetBtn);
     } else {
       var input = document.createElement("input");
       input.type = "number";

@@ -208,6 +208,113 @@ def test_settings_records_include_ollama_model_pickers(client):
     assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
 
 
+def test_settings_records_include_agent_prompts(client):
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    for name in (
+        "OLLAMA_SUMMARY_PROMPT",
+        "OLLAMA_CITATIONS_SYSTEM",
+        "OLLAMA_CITATIONS_PROMPT",
+        "OLLAMA_FRICTION_SYSTEM",
+        "OLLAMA_FRICTION_PROMPT",
+    ):
+        assert by_name[name]["type"] == "prompt"
+        assert by_name[name]["tab"] == "Summaries"
+        assert by_name[name]["group"] == "Agent prompts"
+    # User prompts are .format()-ed; their placeholders drive validation.
+    assert by_name["OLLAMA_SUMMARY_PROMPT"]["placeholders"] == ["text"]
+    assert by_name["OLLAMA_CITATIONS_PROMPT"]["placeholders"] == [
+        "claims",
+        "transcript",
+    ]
+    assert by_name["OLLAMA_FRICTION_PROMPT"]["placeholders"] == [
+        "summary",
+        "segments",
+        "limit",
+    ]
+    # System prompts are sent verbatim — no placeholders.
+    assert by_name["OLLAMA_CITATIONS_SYSTEM"]["placeholders"] == []
+    assert by_name["OLLAMA_FRICTION_SYSTEM"]["placeholders"] == []
+
+
+def test_settings_put_persists_custom_prompt(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    # Baseline via monkeypatch so the PUT's direct setattr is restored on teardown.
+    monkeypatch.setattr(
+        server.config, "OLLAMA_SUMMARY_PROMPT", server.config.OLLAMA_SUMMARY_PROMPT
+    )
+    custom = "Custom summary instructions.\n\nTranscript:\n{text}"
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"OLLAMA_SUMMARY_PROMPT": custom}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.OLLAMA_SUMMARY_PROMPT == custom
+    saved = server.utils.load_json_manifest(
+        server.config.STUDIO_SETTINGS_FILENAME, default={}
+    )
+    assert saved.get("OLLAMA_SUMMARY_PROMPT") == custom
+    # GET reflects the new value.
+    by_name = {
+        s["name"]: s for s in client.get("/studio/api/settings").get_json()["settings"]
+    }
+    assert by_name["OLLAMA_SUMMARY_PROMPT"]["value"] == custom
+
+
+def test_settings_put_rejects_prompt_missing_placeholder(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    default = server.config.OLLAMA_SUMMARY_PROMPT
+    monkeypatch.setattr(server.config, "OLLAMA_SUMMARY_PROMPT", default)
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"OLLAMA_SUMMARY_PROMPT": "No placeholder here."}},
+    )
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert "{text}" in body["error"]
+    assert server.config.OLLAMA_SUMMARY_PROMPT == default  # unchanged
+
+
+def test_settings_put_rejects_prompt_unknown_placeholder(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    default = server.config.OLLAMA_CITATIONS_PROMPT
+    monkeypatch.setattr(server.config, "OLLAMA_CITATIONS_PROMPT", default)
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"OLLAMA_CITATIONS_PROMPT": "{claims} {transcript} {bogus}"}},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+    assert server.config.OLLAMA_CITATIONS_PROMPT == default
+
+
+def test_settings_put_accepts_system_prompt_verbatim(client, tmp_path, monkeypatch):
+    """*_SYSTEM prompts are never .format()-ed, so braces are literal and any
+    text is accepted."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "OLLAMA_CITATIONS_SYSTEM", "baseline")
+    weird = 'Reply with JSON like {"a": 1} and emphasise {clarity}.'
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"OLLAMA_CITATIONS_SYSTEM": weird}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.OLLAMA_CITATIONS_SYSTEM == weird
+
+
+def test_settings_reset_summaries_restores_prompt(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    default = server._settings_defaults["OLLAMA_SUMMARY_PROMPT"]
+    monkeypatch.setattr(server.config, "OLLAMA_SUMMARY_PROMPT", "Edited {text}")
+    resp = client.put("/studio/api/settings", json={"reset": "tab:Summaries"})
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    assert server.config.OLLAMA_SUMMARY_PROMPT == default
+
+
 def test_settings_records_include_boundary_post_processing(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}

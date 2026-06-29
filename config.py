@@ -401,6 +401,62 @@ OLLAMA_FRICTION_MODEL: str = (
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
 OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
 
+# ── Thinking-agent prompts ───────────────────────────────────────────
+# Editable via Settings → Summaries → "Agent prompts". thinking_agents.py reads
+# these at call time, so an edit takes effect on the next agent run. The user
+# prompts are .format()-ed with the placeholders noted below; the *_SYSTEM
+# prompts are sent verbatim (never formatted), so braces in them are literal.
+OLLAMA_SUMMARY_PROMPT: str = """\
+Summarize this user research session transcript. Write a concise paragraph \
+(2-4 sentences) describing what happened in the session. Then list the key \
+topics or themes as bullet points (prefix each with "- ").
+
+Transcript:
+{text}"""
+OLLAMA_CITATIONS_SYSTEM: str = (
+    "You match transcript segments to summary claims. "
+    "For each claim, select only the 1-3 most relevant and representative "
+    "segments. Prefer segments that most clearly and directly support the claim. "
+    "Use the exact format shown."
+)
+OLLAMA_CITATIONS_PROMPT: str = """\
+Claims:
+{claims}
+
+Transcript:
+{transcript}
+
+For each claim, pick the 1-3 BEST supporting timestamps — the clearest, \
+most direct evidence. Do not list every vaguely related segment.
+Format your response exactly as:
+1: 0:45, 1:02
+2: NONE
+Write NONE if no segments clearly support a claim."""
+OLLAMA_FRICTION_SYSTEM: str = (
+    "You analyze UX research session transcripts for moments of friction — "
+    "points where the participant struggled, hesitated, got confused, or showed "
+    "frustration. You respond with a JSON array only."
+)
+OLLAMA_FRICTION_PROMPT: str = """\
+Session summary:
+{summary}
+
+Candidate segments (pre-filtered by automated heuristics; each line is \
+"[segment_id] (timestamp) text"):
+{segments}
+
+Friction categories: hesitation, confusion, frustration, surprise, \
+self_correction, help_seeking.
+
+Return EXACTLY {limit} moments where the participant most clearly shows friction.
+Each moment may span 1-3 contiguous segment IDs taken from the candidate list above.
+
+Output a JSON array only — no prose, no markdown fences, no <think> blocks:
+[
+  {{"segment_ids": ["P01:7", "P01:8"], "category": "frustration",
+    "rationale": "Participant repeatedly tried to find the save button", "score": 0.85}}
+]"""
+
 # ── Friction detection ───────────────────────────────────────────────
 # Ordered category keys → display labels. Single source of truth, mirrored to
 # the frontend via utils.get_frontend_config(). The programmatic scorer in
@@ -465,6 +521,11 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries, citation linking, and friction detection.",
     "OLLAMA_FRICTION_MODEL": "Ollama model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
     "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
+    "OLLAMA_SUMMARY_PROMPT": "Prompt that generates each session summary. Keep the {text} placeholder — the transcript is inserted there.",
+    "OLLAMA_CITATIONS_SYSTEM": "System instruction that frames the citation agent's behavior. Sent verbatim; no placeholders.",
+    "OLLAMA_CITATIONS_PROMPT": "Prompt that links summary claims to transcript segments. Keep the {claims} and {transcript} placeholders.",
+    "OLLAMA_FRICTION_SYSTEM": "System instruction that frames the friction agent's behavior. Sent verbatim; no placeholders.",
+    "OLLAMA_FRICTION_PROMPT": "Prompt that detects friction moments. Keep the {summary}, {segments}, and {limit} placeholders.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
@@ -697,6 +758,36 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "emptyLabel": "Same as summary model",
     },
     "OLLAMA_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
+    "OLLAMA_SUMMARY_PROMPT": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": ["text"],
+    },
+    "OLLAMA_CITATIONS_SYSTEM": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": [],
+    },
+    "OLLAMA_CITATIONS_PROMPT": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": ["claims", "transcript"],
+    },
+    "OLLAMA_FRICTION_SYSTEM": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": [],
+    },
+    "OLLAMA_FRICTION_PROMPT": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": ["summary", "segments", "limit"],
+    },
     "SCREENSPACE_CV_RESOLUTION_SCALE": {
         "tab": "Screenspace",
         "group": "Analysis Quality",

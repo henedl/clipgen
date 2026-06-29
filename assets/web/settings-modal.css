@@ -275,6 +275,56 @@
   width: 100%;
 }
 
+/* ---- Agent prompt editor ---- */
+
+.settings-prompt-placeholders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.settings-prompt-hint-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.settings-prompt-chip {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-accent);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0 var(--space-1);
+}
+
+.settings-prompt-textarea {
+  width: 100%;
+  min-height: 9rem;
+  resize: vertical;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.settings-prompt-textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.settings-prompt-reset {
+  display: block;
+  width: max-content;
+  margin: var(--space-2) 0 0 auto;
+}
+
 .mark-cat-editor {
   display: flex;
   flex-direction: column;
