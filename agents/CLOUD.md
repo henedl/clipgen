@@ -66,3 +66,15 @@ GIT_COMMITTER_NAME=Henrik GIT_COMMITTER_EMAIL=henedl@users.noreply.github.com \
 ```
 
 (Adjust **name/email** if the maintainer changes.)
+
+### Pull requests — do not use `open_git_pr`
+
+The Cursor Automation `open_git_pr` MCP tool (and `gh` in this VM, which authenticates as the `cursor` GitHub App) **always opens PRs as `cursor[bot]`**. GitHub does not let you change PR author after the fact.
+
+**Policy:** push the branch with maintainer-authored commits, then **stop**. Do **not** call `open_git_pr`. Leave PR creation to the maintainer.
+
+**Maintainer opens the PR** from the compare URL (substitute the branch name):
+
+`https://github.com/henedl/clipgen/compare/master...<branch>?expand=1`
+
+If a `cursor[bot]` PR was opened by mistake, close it and open a fresh one from that URL while logged in as the maintainer. The commits on the branch are already correctly attributed if the hook bypass above was used.
