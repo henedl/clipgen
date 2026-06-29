@@ -40,6 +40,7 @@ import math
 import os
 import queue
 import re
+import string
 import sys
 import threading
 import time
@@ -2299,9 +2300,48 @@ def _settings_records() -> list[dict[str, Any]]:
                 "provider": meta.get("provider"),
                 "kind": meta.get("kind"),
                 "emptyLabel": meta.get("emptyLabel"),
+                "placeholders": meta.get("placeholders"),
             }
         )
     return records
+
+
+def _validate_prompt(text: str, placeholders: list[str]) -> str | None:
+    """Validate a user-edited thinking-agent prompt.
+
+    Returns an error string, or ``None`` if the prompt is safe to save. Prompts
+    that declare *placeholders* are ``.format()``-ed at runtime, so every
+    required placeholder must be present and the prompt must format cleanly with
+    exactly those keys. Prompts with no placeholders (the ``*_SYSTEM`` strings)
+    are sent to the model verbatim and accept any text.
+    """
+    if not placeholders:
+        return None
+    allowed = set(placeholders)
+    used: set[str] = set()
+    try:
+        for _literal, field_name, _spec, _conv in string.Formatter().parse(text):
+            if field_name:
+                # Strip any attribute/index access, e.g. "{a.b}" / "{a[0]}".
+                used.add(re.split(r"[.\[]", field_name, maxsplit=1)[0])
+    except (ValueError, IndexError):
+        return "unbalanced { } braces — escape literal braces as {{ and }}"
+    missing = allowed - used
+    if missing:
+        return "missing required placeholder(s): " + ", ".join(
+            "{" + p + "}" for p in sorted(missing)
+        )
+    # Ground truth: the prompt must .format() cleanly with exactly these keys.
+    # Catches unknown placeholders ({foo}), stray positional {}, and nested
+    # format-spec references the parse() scan above does not surface.
+    try:
+        text.format(**{p: "" for p in placeholders})
+    except (KeyError, IndexError, ValueError) as exc:
+        bad = exc.args[0] if exc.args else exc
+        return f"references an unknown placeholder ({bad}); allowed: " + ", ".join(
+            "{" + p + "}" for p in placeholders
+        )
+    return None
 
 
 def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
@@ -2397,6 +2437,14 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
                 return {}, f"Invalid {name} payload"
             setattr(config, name, cleaned)
             applied[name] = cleaned
+            continue
+        if meta.get("type") == "prompt":
+            text = str(value)
+            err = _validate_prompt(text, meta.get("placeholders") or [])
+            if err is not None:
+                return {}, f"Invalid {name}: {err}"
+            setattr(config, name, text)
+            applied[name] = text
             continue
         if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
             color = str(value)

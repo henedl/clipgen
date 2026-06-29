@@ -102,6 +102,21 @@ class TestSummarizeTranscript:
         assert "Second segment text here." in prompt
         assert "Third segment more text." in prompt
 
+    def test_uses_configurable_prompt(self, monkeypatch):
+        """The summary prompt is read from config at call time, so an edit in
+        Settings → Summaries takes effect on the next run."""
+        import config
+
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_PROMPT", "CUSTOM-MARKER\n{text}")
+        with patch("thinking_agents.ollama_client.generate") as mock_generate:
+            mock_generate.return_value = "ok"
+            thinking_agents.summarize_transcript(
+                [{"text": "A sufficiently long segment of text for the length check."}]
+            )
+        prompt = mock_generate.call_args[0][0]
+        assert prompt.startswith("CUSTOM-MARKER")
+        assert "A sufficiently long segment of text" in prompt
+
     @patch("thinking_agents.ollama_client.generate")
     def test_returns_generate_result(self, mock_generate):
         mock_generate.return_value = "This is a summary.\n- Point one\n- Point two"
