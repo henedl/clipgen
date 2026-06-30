@@ -3776,6 +3776,12 @@ def start_combined_server(
     # workflow runs alike.
     utils.NO_INPUT_MODE = True
 
+    # Pre-load the two FFmpeg-bundling libs (av via faster-whisper, cv2 via
+    # Screenspace) with native stderr silenced, so the macOS libavdevice
+    # ObjC duplicate-class warning never reaches the console once both
+    # subsystems are reachable on this combined server.
+    utils.preload_av_libs_quietly()
+
     # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel temp-clips)
     # a prior hard kill may have left in the output dir, before workers spin up.
     utils.sweep_stale_temp_artifacts()

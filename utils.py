@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """Utility functions for clipgen."""
 
+import contextlib
 import difflib
 import functools
 import json
 import math
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -22,6 +24,58 @@ import config
 # clipgen.py / excel_io.py / pipeline.py / video.py / utils.suggest_close_match
 # read this flag to fail fast (or skip) instead of blocking on stdin.
 NO_INPUT_MODE: bool = False
+
+
+# ---- Native (C/ObjC-level) stderr suppression ----
+
+
+@contextlib.contextmanager
+def suppress_native_stderr():
+    """Temporarily silence OS file descriptor 2 (stderr) for the duration.
+
+    Redirects fd 2 to /dev/null and restores it in ``finally``. Unlike
+    reassigning ``sys.stderr``, this also swallows writes from C/Objective-C
+    libraries (e.g. the dynamic linker / ObjC runtime), which write to the
+    fd directly. Use sparingly and around the narrowest possible block.
+    """
+    saved_fd = os.dup(2)
+    null_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(null_fd, 2)
+        yield
+    finally:
+        os.dup2(saved_fd, 2)
+        os.close(null_fd)
+        os.close(saved_fd)
+
+
+_av_libs_preloaded = False
+
+
+def preload_av_libs_quietly() -> None:
+    """Import ``av`` and ``cv2`` once, early, with native stderr silenced.
+
+    Both wheels bundle their own FFmpeg ``libavdevice`` (an AVFoundation
+    capture-device library clipgen never uses). On macOS, whichever loads
+    *second* makes the ObjC runtime print a "Class AVFFrameReceiver is
+    implemented in both ..." duplicate-class warning. Pre-loading both here
+    under :func:`suppress_native_stderr` means later lazy ``import cv2`` /
+    ``import av`` calls find them already resident (no second dlopen, no
+    warning). Idempotent; either import missing is a no-op.
+    """
+    global _av_libs_preloaded
+    if _av_libs_preloaded:
+        return
+    _av_libs_preloaded = True
+    with suppress_native_stderr():
+        try:
+            import av  # noqa: F401
+        except ImportError:
+            pass
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            pass
 
 
 # ---- Shared type definitions ----

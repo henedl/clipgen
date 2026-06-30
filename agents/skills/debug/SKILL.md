@@ -22,13 +22,15 @@
 
 8. **DBus errors in logs** — harmless. They come from Chrome attempting DBus connections in headless environments. Ignore them.
 
+9. **`objc[...] Class AVFFrameReceiver/AVFAudioReceiver is implemented in both ...` on macOS** — harmless. Both `opencv-python-headless` (cv2, Screenspace) and `av` (PyAV, pulled in by `faster-whisper` for Transcripts) bundle their own FFmpeg `libavdevice`, an AVFoundation capture-device library clipgen never uses; the ObjC runtime warns when both load in one process. `start_combined_server()` pre-loads both via `utils.preload_av_libs_quietly()` with native stderr silenced, so the combined web server stays quiet. A rare pure-CLI run that loads both libs may still print it — it's benign.
+
 ## Development / debugging
 
-9. **Enable debug mode** — set `config.DEBUGGING = True` to:
+10. **Enable debug mode** — set `config.DEBUGGING = True` to:
    - Enable icecream (`ic()`) output
    - Skip ffmpeg execution (video.py returns stubs)
    - Return stub transcript results without loading a Whisper model
 
-10. **Type errors in ty** — see [agents/skills/check/SKILL.md](../check/SKILL.md) for common ty failure patterns.
+11. **Type errors in ty** — see [agents/skills/check/SKILL.md](../check/SKILL.md) for common ty failure patterns.
 
-11. **Tests unexpectedly passing despite broken behavior** — check whether the test is mocking at too high a level. The project avoids mocking the database/sheets layer; if a test uses a mock that doesn't reflect reality, consider replacing it with a real fixture.
+12. **Tests unexpectedly passing despite broken behavior** — check whether the test is mocking at too high a level. The project avoids mocking the database/sheets layer; if a test uses a mock that doesn't reflect reality, consider replacing it with a real fixture.
