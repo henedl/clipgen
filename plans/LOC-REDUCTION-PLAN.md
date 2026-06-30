@@ -1,7 +1,7 @@
 # LOC-reduction opportunities — plan
 
-Status: **in progress** (2026-06-30). Items **1 (1a + 1b)** and **2** landed (see check-marks
-below); items 3–5 still open. Investigation targets for genuinely *reducing* total
+Status: **in progress** (2026-06-30). Items **1 (1a + 1b)**, **2**, and **3** landed (see
+check-marks below); items 4–5 still open. Investigation targets for genuinely *reducing* total
 lines of code (not relocating them). Each item is sized as one or more focused `refactor:`
 commits. Check items off and add a "Done" note as they land (per AGENTS.md plan-maintenance rule).
 
@@ -72,18 +72,31 @@ dozens of times.
 Shared with [FRONTEND-REFACTORS-PLAN.md](FRONTEND-REFACTORS-PLAN.md) Theme B — listed here because,
 unlike the carves, they remove duplication rather than move it.
 
-- [ ] **3a. `createSSEStream(url, {onMessage, onError, poll})`** in `utils.js` — collapses 4
-  near-identical `EventSource → onerror → createPoller` blocks (`screenspace-tasks.js:1064`,
-  `workflows-runs.js:77/142/1019`).
-- [ ] **3b. Generalize the modal focus-trap** — `studio.js openModalTrap` (~`4627`) vs
-  `transcripts.js confirmModelInstall` (~`2180`) are two implementations of the same lifecycle;
-  promote one `openBlockingModal({onEscape, onBackdropClick})` to `utils.js`. Leave singleton
-  pickers (`color-picker.js`, `settings-modal.js`) owning their own lifecycle.
-- [ ] **3c. Form-input factories** (`rangeInput`/`numberInput`/`textInput`) and color-conversion —
-  consolidate the duplicated copies (`screenspace-utils.js` vs `screenspace-multitool-params.js`;
-  `color-picker.js` vs `screenspace-utils.js`). **Caution:** color conversion uses two
-  *incompatible* HSV ranges (standard [0,1] vs OpenCV 0–180/0–255) — clarify names, don't blind-merge.
-- **Est. payoff:** ~100–200 lines.
+- [x] **3a. `createSSEStream(url, {onMessage, onOpen, onError, onUnsupported})`** in `utils.js` —
+  **Done.** Collapsed **3** (not 4 — `workflows-runs.js:1019` is a plain `createPoller` call, no
+  `EventSource`) near-identical `new EventSource → JSON-parse onmessage → onerror-fallback` blocks
+  (`screenspace-tasks.js startSSE`, `workflows-runs.js subscribeRun`/`subscribeBatch`). Each caller
+  keeps its own stream/poller state and drop handling; only the EventSource setup + parse wrapper are
+  shared. `tests/test_workflows_frontend_source.py` now asserts `createSSEStream` (the raw
+  `EventSource` literal moved to `utils.js`).
+- [x] **3b. Generalize the modal focus-trap** — **Done.** Promoted `openBlockingModal` /
+  `closeBlockingModal` to `utils.js` (focus-trap + focus-restore opt-in flags, optional
+  `onBackdropClick`). `studio.js openModalTrap`/`closeModalTrap` became thin delegators
+  (`trapFocus`+`restoreFocus` on) — the ~50-line implementation + `_activeTrap`/`_TRAP_FOCUSABLE`
+  moved to `utils.js`; Studio has 4 trap call sites (gallery/status/confirm/log), so wrappers beat
+  inlining. `transcripts.js _confirmModelInstallNow` dropped its hand-rolled Escape/backdrop
+  listeners for `openBlockingModal` (no trap, matching prior behavior). Singleton pickers
+  (`color-picker.js`, `settings-modal.js`) left owning their own lifecycle.
+- [x] **3c. Form-input factories + color-conversion** — **Descoped (investigated).** The form-input
+  factories (`rangeInput`/`numberInput`/`textInput`) are *already* shared: they live once in
+  `screenspace-utils.js` and `screenspace-multitool-params.js` just calls them — no duplication to
+  remove. The only real dup is `hexToRgb`/`rgbToHex` between `color-picker.js` and
+  `screenspace-utils.js` (~8 lines), and the two `rgbToHsv`/`hsvToRgb` pairs use **incompatible
+  ranges** (standard 0–360/[0,1] vs OpenCV 0–180/0–255) and must stay separate. Not worth churning
+  ~8 lines across two pages' load graphs; left as-is.
+- **Payoff (realized):** 3a + 3b deduped the SSE-setup and modal-lifecycle shapes onto `utils.js`
+  globals (one implementation each instead of per-page copies). Frontend-source + satellite-wiring
+  tests green.
 
 ## 4. CSS shared-component promotion
 
@@ -109,9 +122,10 @@ clipgen / screenspace / transcripts / workflows / stashes / settings.
 
 ## Suggested order
 
-1. **1a** (response helpers — biggest, safest win). 2. **1b** + **2** (decorator + arg parsing,
-   building on 1a). 3. **3a/3b/3c** (JS dedup, independent). 4. **4** (CSS, needs browser check).
-5. **5** only after the investigation confirms it's worthwhile.
+1. ~~**1a** (response helpers — biggest, safest win).~~ ✓ 2. ~~**1b** + **2** (decorator + arg
+   parsing, building on 1a).~~ ✓ 3. ~~**3a/3b** (JS dedup; 3c descoped — factories already
+   shared).~~ ✓ 4. **4** (CSS, needs browser check). 5. **5** only after the investigation
+   confirms it's worthwhile.
 
 Quantify before committing to a tier: a duplication scan (jscpd for JS/CSS, a `pylint`-style
 duplicate-code pass for Python) would put hard block counts behind each item.
