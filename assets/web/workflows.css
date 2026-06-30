@@ -1174,6 +1174,67 @@ body[data-frontend="workflows"] {
   width: auto;
 }
 
+/* ---- Participant multi-select (Video Source) ---- */
+
+.wf-participant-select {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Summary button styled like a param input, with a dropdown affordance. */
+.wf-participant-btn {
+  width: 100%;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wf-participant-menu {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: var(--z-dropdown);
+  min-width: 100%;
+  max-height: 12rem;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.wf-participant-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.wf-participant-opt:hover {
+  background: var(--bg-hover);
+}
+
+/* Separate the "All participants" shortcut from the individual rows. */
+.wf-participant-all {
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-1);
+  padding-bottom: var(--space-1-5);
+}
+
 /* ---- Multitool step-list (compound `steps` param) ---- */
 
 .wf-step-list {

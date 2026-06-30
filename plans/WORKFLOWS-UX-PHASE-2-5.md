@@ -89,7 +89,14 @@ If skipped, say so explicitly in the PR so it's not mistaken for done.
 
 ---
 
-## Phase 5 — Multi-select participant batch *(medium impact, medium effort)*
+## Phase 5 — Multi-select participant batch *(medium impact, medium effort)* — ✅ DONE (v0.13.49)
+
+Shipped: a checkbox-popover multi-select replaces the single `<select>` on the Video Source
+participant param (`buildParticipantSelect` in `workflows-nodes.js`, reusing the hub's `bindMenuToggle`).
+Value is normalized on write — a single id stays a string (server single-run path untouched), `__all__`
+for everyone, an array for a subset, `[]` for none. `blueprintWantsBatch`/`startBatch` send the subset
+as `participants`; an empty array raises a validation warning. Server already honored the subset; added
+a `test_batch_honors_participant_subset` regression guard.
 
 Today a Video Source's participant param is a single `<select>` offering each participant **or** the
 `__all__` sentinel (`WF.ALL_PARTICIPANTS`); "All" fans out to a batch over every participant. Goal:

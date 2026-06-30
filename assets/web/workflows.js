@@ -967,6 +967,9 @@
   // Published so the validate satellite re-gates the trigger toggle on every edit
   // (you can't arm a graph with errors), alongside its WF.syncRunButton call.
   WF.syncTriggerButton = syncTriggerButton;
+  // Published for the nodes satellite's participant multi-select popover (same
+  // outside-click/Escape toggle the run + shortcuts menus use).
+  WF.bindMenuToggle = bindMenuToggle;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

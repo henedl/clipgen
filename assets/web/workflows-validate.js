@@ -109,6 +109,16 @@
     if (node.type === "gate" && !inputWired(node.id, "value")) {
       warnings.push("Gate has no scalar source");
     }
+    // warning — a Video Source with an empty participant array has nothing to run
+    // (the multi-select stores [] when every box is unchecked). Not a hard error:
+    // the run/batch simply produces no clips for it.
+    if (
+      node.type === "video_source" &&
+      Array.isArray((node.params || {}).participant) &&
+      node.params.participant.length === 0
+    ) {
+      warnings.push("No participants selected");
+    }
     // warning — a filter/partition with an ordering comparison (>=,>,<=,<) needs a
     // numeric value; a non-numeric one fails the backend float() coerce and
     // silently drops every item. (Heuristic on the op, so no need to mirror the

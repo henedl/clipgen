@@ -685,6 +685,31 @@ def test_batch_runs_every_participant(wf_client, monkeypatch):
     assert all(r["batchId"] == batch["id"] for r in runs)
 
 
+def test_batch_honors_participant_subset(wf_client, monkeypatch):
+    # The multi-select widget can POST an explicit `participants` subset; the
+    # batch must fan out over only those (intersected with with-video ids), not
+    # every participant. Regression guard for the Phase 5 frontend wiring.
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02", "P03"))
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    subset = ["P01", "P03"]
+    created = wf_client.post(
+        "/workflows/api/batches",
+        json={"blueprintId": bp_id, "participants": subset},
+    )
+    assert created.status_code == 200
+    batch = created.get_json()["batch"]
+    assert set(batch["participants"]) == set(subset)
+
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "completed"
+    assert final["counts"].get("completed") == len(subset)
+    detail = wf_client.get(f"/workflows/api/batches/{batch['id']}").get_json()
+    assert {r["participant"] for r in detail["runs"]} == set(subset)
+
+
 def test_batch_seeds_sheet_selection_once(wf_client, monkeypatch):
     # sheet_selection is participant-independent and hits the rate-limited Sheets
     # API; a batch must compute it once, not once per participant.

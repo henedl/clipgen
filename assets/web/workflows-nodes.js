@@ -177,38 +177,7 @@
         WF.scheduleSave();
       });
     } else if (spec.type === "participant") {
-      input = el("select", "wf-param-input");
-      var participants = (state.context && state.context.participants) || [];
-      var options = participants.slice();
-      var ALL = WF.ALL_PARTICIPANTS;
-      // Keep a stored id that isn't in the discovered list (launched without it),
-      // but never the ALL sentinel (it gets its own option below).
-      if (value && value !== ALL && options.indexOf(value) < 0)
-        options.unshift(value);
-      var blank = el("option");
-      blank.value = "";
-      blank.textContent = "—";
-      input.appendChild(blank);
-      // "All participants" turns a Run into a whole-study batch (one run each).
-      // Only offered when there are participants with video to fan out over.
-      if (participants.length) {
-        var allOpt = el("option");
-        allOpt.value = ALL;
-        allOpt.textContent = "All participants";
-        if (value === ALL) allOpt.selected = true;
-        input.appendChild(allOpt);
-      }
-      options.forEach(function (pid) {
-        var opt = el("option");
-        opt.value = pid;
-        opt.textContent = pid;
-        if (pid === value) opt.selected = true;
-        input.appendChild(opt);
-      });
-      input.addEventListener("change", function () {
-        store[spec.name] = input.value;
-        WF.scheduleSave();
-      });
+      input = buildParticipantSelect(spec, store);
     } else {
       input = el("input", "wf-param-input");
       input.type = "text";
@@ -220,6 +189,123 @@
       });
     }
     return input;
+  }
+
+  // Multi-select participant picker: a summary button opening a checkbox popover
+  // (one row per discovered participant + an "All participants" shortcut). Writes
+  // a normalized value back to store[spec.name]:
+  //   • a single id string  → single run (server's scalar path, unchanged),
+  //   • the ALL sentinel     → batch over every participant,
+  //   • an array of ≥2 ids   → batch over that subset,
+  //   • an empty array       → nothing selected (flagged by validation).
+  // Normalizing a single pick to a string (never a 1-element array) keeps the
+  // server's single-run path untouched. Does NOT re-render the card on change
+  // (focus/open popover survive) — only the summary text updates, matching the
+  // scalar editors. Reuses the hub's bindMenuToggle for outside-click/Escape.
+  function buildParticipantSelect(spec, store) {
+    var ALL = WF.ALL_PARTICIPANTS;
+    var participants = (state.context && state.context.participants) || [];
+    var current = store ? store[spec.name] : spec.default;
+    var isAll = current === ALL;
+
+    // Discovered ids, plus any stored id not currently discovered (launched
+    // without it) so a saved selection round-trips.
+    var ids = participants.slice();
+    var initSel = {};
+    if (Array.isArray(current)) {
+      current.forEach(function (id) {
+        initSel[id] = true;
+      });
+    } else if (current && current !== ALL) {
+      initSel[current] = true;
+    }
+    Object.keys(initSel).forEach(function (id) {
+      if (ids.indexOf(id) < 0) ids.push(id);
+    });
+
+    var wrap = el("div", "wf-participant-select");
+    var btn = el("button", "wf-participant-btn");
+    btn.type = "button";
+    btn.setAttribute("aria-haspopup", "menu");
+    btn.setAttribute("aria-expanded", "false");
+    var menu = el("div", "wf-participant-menu hidden");
+    menu.setAttribute("role", "menu");
+    wrap.appendChild(btn);
+    wrap.appendChild(menu);
+
+    var allCb = null;
+    var rowCbs = {};
+
+    function pickedIds() {
+      return ids.filter(function (id) {
+        return rowCbs[id] && rowCbs[id].checked;
+      });
+    }
+    function refreshSummary() {
+      var picked = pickedIds();
+      var txt;
+      if (isAll) txt = "All participants";
+      else if (!picked.length) txt = "Select…";
+      else if (picked.length === 1) txt = picked[0];
+      else txt = picked.length + " participants";
+      btn.textContent = txt;
+    }
+    function persist() {
+      var picked = pickedIds();
+      var out;
+      if (isAll) out = ALL;
+      else if (!picked.length) out = [];
+      else if (picked.length === 1) out = picked[0];
+      else out = picked;
+      if (store) store[spec.name] = out;
+      refreshSummary();
+      WF.scheduleSave();
+    }
+
+    // "All participants" shortcut — only offered when there are participants to
+    // fan out over (matches the old select's gating).
+    if (participants.length) {
+      var allRow = el("label", "wf-participant-opt wf-participant-all");
+      allCb = el("input");
+      allCb.type = "checkbox";
+      allCb.checked = isAll;
+      allRow.appendChild(allCb);
+      allRow.appendChild(el("span", null, "All participants"));
+      menu.appendChild(allRow);
+      allCb.addEventListener("change", function () {
+        isAll = allCb.checked;
+        ids.forEach(function (id) {
+          if (rowCbs[id]) rowCbs[id].checked = isAll;
+        });
+        persist();
+      });
+    }
+
+    ids.forEach(function (id) {
+      var row = el("label", "wf-participant-opt");
+      var cb = el("input");
+      cb.type = "checkbox";
+      cb.checked = isAll || !!initSel[id];
+      rowCbs[id] = cb;
+      row.appendChild(cb);
+      row.appendChild(el("span", null, id));
+      menu.appendChild(row);
+      cb.addEventListener("change", function () {
+        // Every box checked collapses to the ALL sentinel; otherwise it's an
+        // explicit subset (or a single id, normalized in persist()).
+        isAll =
+          ids.length > 0 &&
+          ids.every(function (x) {
+            return rowCbs[x].checked;
+          });
+        if (allCb) allCb.checked = isAll;
+        persist();
+      });
+    });
+
+    if (WF.bindMenuToggle) WF.bindMenuToggle(btn, menu);
+    refreshSummary();
+    return wrap;
   }
 
   // Compound editor for the multitool `steps` param: an ordered list of step
