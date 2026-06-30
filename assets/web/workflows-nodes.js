@@ -465,6 +465,10 @@
     // mutates state.selection.
     if (WF.syncStashButton) WF.syncStashButton();
     if (WF.syncRunButton) WF.syncRunButton();
+
+    // Node set changed (add/delete/blueprint-load) → refresh the minimap. Pan/
+    // zoom and drag are covered by their own hooks in the canvas satellite.
+    if (WF.renderMinimap) WF.renderMinimap();
   }
 
   WF.renderNode = renderNode;

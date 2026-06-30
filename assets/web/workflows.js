@@ -741,6 +741,7 @@
       "#wfUndo",
       "#wfRedo",
       "#wfCleanUp",
+      "#wfFitView",
       "#wfRunBtn",
       "#wfRunMenuBtn",
       "#wfSaveStash",
@@ -908,6 +909,12 @@
     if (cleanBtn) {
       cleanBtn.addEventListener("click", function () {
         if (WF.autoArrange) WF.autoArrange();
+      });
+    }
+    var fitBtn = qs("#wfFitView");
+    if (fitBtn) {
+      fitBtn.addEventListener("click", function () {
+        if (WF.fitToView) WF.fitToView();
       });
     }
     var runBtn = qs("#wfRunBtn");
