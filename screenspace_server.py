@@ -69,6 +69,7 @@ import screenspace
 import spreadsheet
 import utils
 import video
+from server_utils import err, json_endpoint, ok, parse_number_arg
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -263,38 +264,38 @@ def api_participants() -> FlaskResponse:
                     for path, dur, cum in timeline
                 ]
         payload.append(entry)
-    return jsonify({"ok": True, "participants": payload})
+    return ok(participants=payload)
 
 
 @screenspace_bp.route("/api/participants/<pid>/notes")
 def api_participant_notes_get(pid: str) -> FlaskResponse:
     """Return persisted free-form notes for a participant."""
     if not _participant_exists(pid):
-        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+        return err(f"Unknown participant {pid}", 404)
     with _manifest_lock:
         entry = _manifest.get("per_participant", {}).get(pid, {})
         notes = entry.get("notes", "")
-    return jsonify({"ok": True, "notes": notes})
+    return ok(notes=notes)
 
 
 @screenspace_bp.route("/api/participants/<pid>/notes", methods=["PUT"])
 def api_participant_notes_set(pid: str) -> FlaskResponse:
     """Persist free-form notes for a participant."""
     if not _participant_exists(pid):
-        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+        return err(f"Unknown participant {pid}", 404)
     data = request.get_json(silent=True) or {}
     notes = data.get("notes", "")
     if not isinstance(notes, str):
-        return jsonify({"ok": False, "error": "notes must be a string"}), 400
+        return err("notes must be a string")
     if len(notes.encode("utf-8")) > _NOTES_MAX_BYTES:
-        return jsonify({"ok": False, "error": "notes too large"}), 413
+        return err("notes too large", 413)
 
     with _manifest_lock:
         per_participant = _manifest.setdefault("per_participant", {})
         entry = per_participant.setdefault(pid, {})
         entry["notes"] = notes
         _do_persist(drain_events=False)
-    return jsonify({"ok": True})
+    return ok()
 
 
 @screenspace_bp.route("/api/participants/<pid>/issues")
@@ -307,13 +308,13 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     match Studio's view.
     """
     if not _participant_exists(pid):
-        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+        return err(f"Unknown participant {pid}", 404)
 
     import server  # lazy: avoid module-level snapshot of _sheet_context
 
     ctx = getattr(server, "_sheet_context", None)
     if ctx is None:
-        return jsonify({"ok": True, "issues": []})
+        return ok(issues=[])
 
     import spreadsheet
 
@@ -321,7 +322,7 @@ def api_participant_issues(pid: str) -> FlaskResponse:
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
     if pid not in participants:
-        return jsonify({"ok": True, "issues": []})
+        return ok(issues=[])
     p_idx = participants.index(pid)
     col_idx = ctx.id_cell.col + p_idx
 
@@ -366,7 +367,7 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     )
     chosen = candidates[:5]
     issues = [{k: v for k, v in c.items() if not k.startswith("_")} for c in chosen]
-    return jsonify({"ok": True, "issues": issues})
+    return ok(issues=issues)
 
 
 @screenspace_bp.route("/api/participants/<pid>/marks")
@@ -378,12 +379,12 @@ def api_participant_marks(pid: str) -> FlaskResponse:
     Returns an empty list when the participant has no resolvable marks.
     """
     if not _participant_exists(pid):
-        return jsonify({"ok": False, "error": f"Unknown participant {pid}"}), 404
+        return err(f"Unknown participant {pid}", 404)
 
     import transcripts_server  # lazy: mirrors the `import server` pattern above
 
     marks = transcripts_server.marks_for_participant(pid)
-    return jsonify({"ok": True, "marks": marks, "categories": config.MARK_CATEGORIES})
+    return ok(marks=marks, categories=config.MARK_CATEGORIES)
 
 
 # ---- Calibration pins ----
@@ -462,48 +463,34 @@ def _find_pin(pin_id: str) -> tuple[str, list[dict[str, Any]], int] | None:
 def api_pins_list(participant: str) -> FlaskResponse:
     """List calibration pins for a participant (annotated with a stale flag)."""
     if not _participant_exists(participant):
-        return jsonify(
-            {"ok": False, "error": f"Unknown participant {participant}"}
-        ), 404
+        return err(f"Unknown participant {participant}", 404)
     with _manifest_lock:
         pins = copy.deepcopy(_participant_pin_list(participant))
-    return jsonify(
-        {
-            "ok": True,
-            "pins": _annotate_pin_staleness(participant, pins),
-            "max_pins": config.SCREENSPACE_MAX_PINS,
-        }
+    return ok(
+        pins=_annotate_pin_staleness(participant, pins),
+        max_pins=config.SCREENSPACE_MAX_PINS,
     )
 
 
 @screenspace_bp.route("/api/pins/<participant>", methods=["POST"])
+@json_endpoint
 def api_pins_create(participant: str) -> FlaskResponse:
     """Pin the given frame as a positive or negative calibration anchor."""
     if not _participant_exists(participant):
-        return jsonify(
-            {"ok": False, "error": f"Unknown participant {participant}"}
-        ), 404
+        return err(f"Unknown participant {participant}", 404)
     data = request.get_json(silent=True) or {}
 
-    raw_ts = data.get("timestamp")
-    if not isinstance(raw_ts, (int, float, str)):
-        return jsonify({"ok": False, "error": "timestamp must be a number"}), 400
-    try:
-        timestamp = float(raw_ts)
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "timestamp must be a number"}), 400
-    if not math.isfinite(timestamp) or timestamp < 0:
-        return jsonify({"ok": False, "error": "timestamp must be >= 0"}), 400
+    timestamp = parse_number_arg(
+        data.get("timestamp"), "timestamp", min_=0, finite=True
+    )
 
     polarity = data.get("polarity")
     if polarity not in _PIN_POLARITIES:
-        return jsonify(
-            {"ok": False, "error": "polarity must be 'positive' or 'negative'"}
-        ), 400
+        return err("polarity must be 'positive' or 'negative'")
 
     label = data.get("label", "")
     if not isinstance(label, str):
-        return jsonify({"ok": False, "error": "label must be a string"}), 400
+        return err("label must be a string")
     label = label.strip()[:_PIN_LABEL_MAX_CHARS]
 
     pin = {
@@ -516,15 +503,10 @@ def api_pins_create(participant: str) -> FlaskResponse:
     with _manifest_lock:
         pins = _participant_pin_list(participant, create=True)
         if len(pins) >= config.SCREENSPACE_MAX_PINS:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": f"Pin limit reached (max {config.SCREENSPACE_MAX_PINS})",
-                }
-            ), 409
+            return err(f"Pin limit reached (max {config.SCREENSPACE_MAX_PINS})", 409)
         pins.append(pin)
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "pin": pin})
+    return ok(pin=pin)
 
 
 @screenspace_bp.route("/api/pins/<pin_id>", methods=["PUT"])
@@ -534,21 +516,19 @@ def api_pins_update(pin_id: str) -> FlaskResponse:
     with _manifest_lock:
         found = _find_pin(pin_id)
         if found is None:
-            return jsonify({"ok": False, "error": "Pin not found"}), 404
+            return err("Pin not found", 404)
         _participant_id, pins, idx = found
         pin = pins[idx]
         if "polarity" in data:
             if data["polarity"] not in _PIN_POLARITIES:
-                return jsonify(
-                    {"ok": False, "error": "polarity must be 'positive' or 'negative'"}
-                ), 400
+                return err("polarity must be 'positive' or 'negative'")
             pin["polarity"] = data["polarity"]
         if "label" in data:
             if not isinstance(data["label"], str):
-                return jsonify({"ok": False, "error": "label must be a string"}), 400
+                return err("label must be a string")
             pin["label"] = data["label"].strip()[:_PIN_LABEL_MAX_CHARS]
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "pin": pin})
+    return ok(pin=pin)
 
 
 @screenspace_bp.route("/api/pins/<pin_id>", methods=["DELETE"])
@@ -557,13 +537,13 @@ def api_pins_delete(pin_id: str) -> FlaskResponse:
     with _manifest_lock:
         found = _find_pin(pin_id)
         if found is None:
-            return jsonify({"ok": False, "error": "Pin not found"}), 404
+            return err("Pin not found", 404)
         participant_id, pins, idx = found
         pins.pop(idx)
         if not pins:
             _pin_manifest().pop(participant_id, None)
         _do_persist(drain_events=False)
-    return jsonify({"ok": True})
+    return ok()
 
 
 @screenspace_bp.route("/api/pins/<participant>/all", methods=["DELETE"])
@@ -574,13 +554,11 @@ def api_pins_delete_all(participant: str) -> FlaskResponse:
     ``DELETE /api/pins/<pin_id>`` route above (both use the DELETE method).
     """
     if not _participant_exists(participant):
-        return jsonify(
-            {"ok": False, "error": f"Unknown participant {participant}"}
-        ), 404
+        return err(f"Unknown participant {participant}", 404)
     with _manifest_lock:
         _pin_manifest().pop(participant, None)
         _do_persist(drain_events=False)
-    return jsonify({"ok": True})
+    return ok()
 
 
 # ---- Pin calibration (synchronous, off the task queue) ----
@@ -688,13 +666,11 @@ def api_calibrate() -> FlaskResponse:
     """
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
 
     tool = (data.get("tool") or "").strip()
     if not _calibratable_tool(tool):
-        return jsonify(
-            {"ok": False, "error": f"Tool '{tool}' is not calibratable"}
-        ), 400
+        return err(f"Tool '{tool}' is not calibratable")
 
     # Reuse task-creation validation by reshaping the body into a task request.
     validated = _validate_task_request(
@@ -709,7 +685,7 @@ def api_calibrate() -> FlaskResponse:
     if _is_flask_error_response(validated):
         return validated
     if not (isinstance(validated, tuple) and len(validated) == 6):
-        return jsonify({"ok": False, "error": "Invalid calibration request"}), 400
+        return err("Invalid calibration request")
     (
         task_type,
         participant,
@@ -724,9 +700,7 @@ def api_calibrate() -> FlaskResponse:
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return jsonify(
-            {"ok": False, "error": f"No video for participant {participant}"}
-        ), 404
+        return err(f"No video for participant {participant}", 404)
     video_path, mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
@@ -769,7 +743,7 @@ def api_calibrate() -> FlaskResponse:
 
     pin_ids = data.get("pin_ids")
     if pin_ids is not None and not isinstance(pin_ids, list):
-        return jsonify({"ok": False, "error": "pin_ids must be a list"}), 400
+        return err("pin_ids must be a list")
 
     with _manifest_lock:
         all_pins = copy.deepcopy(_participant_pin_list(participant))
@@ -1017,15 +991,13 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     try:
         ts = float(timestamp)
     except (ValueError, TypeError):
-        return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
+        return err("Invalid timestamp")
 
     # Map the global timestamp into the owning sub-video (multi-video) so the
     # frontend can keep requesting frames by global time; single-video unchanged.
     mapped = _map_participant_time(participant, ts)
     if mapped is None:
-        return jsonify(
-            {"ok": False, "error": f"No video for participant {participant}"}
-        ), 404
+        return err(f"No video for participant {participant}", 404)
     video_path, local_ts = mapped
     mtime_ns = _mtime_or_zero(video_path)
 
@@ -1048,18 +1020,16 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     else:
         frame = video.extract_frame_at_timestamp(video_path, local_ts)
         if frame is None:
-            return jsonify(
-                {"ok": False, "error": "Could not read frame at timestamp"}
-            ), 400
+            return err("Could not read frame at timestamp")
         import cv2
 
         success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         if not success:
-            return jsonify({"ok": False, "error": "Could not extract frame"}), 400
+            return err("Could not extract frame")
         jpeg_bytes = jpeg.tobytes()
 
     if jpeg_bytes is None:
-        return jsonify({"ok": False, "error": "Could not extract frame"}), 400
+        return err("Could not extract frame")
 
     with _frame_cache_lock:
         _frame_cache[cache_key] = jpeg_bytes
@@ -1103,13 +1073,11 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     try:
         ts = float(timestamp)
     except (ValueError, TypeError):
-        return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
+        return err("Invalid timestamp")
 
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return jsonify(
-            {"ok": False, "error": f"No video for participant {participant}"}
-        ), 404
+        return err(f"No video for participant {participant}", 404)
 
     def _frame_at(global_ts: float) -> "Any | None":
         # Map a global timestamp into the owning sub-video (multi-video) before
@@ -1121,11 +1089,11 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
 
     tool = (request.args.get("tool") or "").strip() or "color"
     if tool not in _VALID_TASK_TYPES:
-        return jsonify({"ok": False, "error": f"Unknown tool: {tool}"}), 400
+        return err(f"Unknown tool: {tool}")
 
     frame = _frame_at(ts)
     if frame is None:
-        return jsonify({"ok": False, "error": "Could not read frame"}), 400
+        return err("Could not read frame")
     frame_h, frame_w = frame.shape[:2]
 
     region_coords: dict[str, int] | None = None
@@ -1136,7 +1104,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             try:
                 rx, ry, rw, rh = (float(p) for p in parts)
             except ValueError:
-                return jsonify({"ok": False, "error": "Invalid region"}), 400
+                return err("Invalid region")
             region_coords = {
                 "x": int(round(rx * frame_w)),
                 "y": int(round(ry * frame_h)),
@@ -1217,9 +1185,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             try:
                 bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
             except ValueError:
-                return jsonify(
-                    {"ok": False, "error": "Could not decode uploaded image"}
-                ), 400
+                return err("Could not decode uploaded image")
             params["template_image"] = bgr
             if mask is not None:
                 params["template_mask"] = mask
@@ -1254,20 +1220,15 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             )
         }
         if layer not in valid:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": f"Layer '{layer}' not available for tool '{tool}'",
-                }
-            ), 400
+            return err(f"Layer '{layer}' not available for tool '{tool}'")
         layer_img = screenspace_preview.build_overlay_layer(
             frame, prev_frame, region_coords, tool, layer, params
         )
         if layer_img is None or getattr(layer_img, "size", 0) == 0:
-            return jsonify({"ok": False, "error": "Could not build overlay layer"}), 500
+            return err("Could not build overlay layer", 500)
         png_bytes = screenspace_preview.encode_png(layer_img, cap_width=False)
         if not png_bytes:
-            return jsonify({"ok": False, "error": "Could not encode overlay"}), 500
+            return err("Could not encode overlay", 500)
         return Response(
             png_bytes,
             mimetype="image/png",
@@ -1278,11 +1239,11 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         frame, prev_frame, region_coords, tool, params
     )
     if img is None or getattr(img, "size", 0) == 0:
-        return jsonify({"ok": False, "error": "Could not build preview"}), 500
+        return err("Could not build preview", 500)
 
     png_bytes = screenspace_preview.encode_png(img)
     if not png_bytes:
-        return jsonify({"ok": False, "error": "Could not encode preview"}), 500
+        return err("Could not encode preview", 500)
     return Response(
         png_bytes,
         mimetype="image/png",
@@ -1305,7 +1266,7 @@ def api_preview_layers() -> FlaskResponse:
         ]
         for tool, layers in screenspace_preview.OVERLAY_LAYERS.items()
     }
-    return jsonify({"ok": True, "layers": out})
+    return ok(layers=out)
 
 
 @screenspace_bp.route("/api/video/info/<participant>")
@@ -1337,23 +1298,21 @@ def api_video_info(participant: str) -> FlaskResponse:
                 for p, d, c in timeline
             ],
         }
-        return jsonify({"ok": True, "info": info})
+        return ok(info=info)
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return jsonify(
-            {"ok": False, "error": f"No video for participant {participant}"}
-        ), 404
+        return err(f"No video for participant {participant}", 404)
     video_path, mtime_ns = resolved
 
     with _video_metadata_cache_lock:
         cached = _video_metadata_cache.get(participant)
     if cached is not None and cached[0] == mtime_ns:
-        return jsonify({"ok": True, "info": cached[1]})
+        return ok(info=cached[1])
 
     props = video.probe_video_properties(video_path)
     if props is None:
-        return jsonify({"ok": False, "error": "Could not probe video file"}), 500
+        return err("Could not probe video file", 500)
 
     vid_fps = props.get("fps", 0.0) or 30.0
     width = props.get("width", 0)
@@ -1377,7 +1336,7 @@ def api_video_info(participant: str) -> FlaskResponse:
     with _video_metadata_cache_lock:
         _video_metadata_cache[participant] = (mtime_ns, info)
 
-    return jsonify({"ok": True, "info": info})
+    return ok(info=info)
 
 
 @screenspace_bp.route("/api/video/stream/<participant>")
@@ -1393,10 +1352,7 @@ def api_video_stream(participant: str) -> FlaskResponse:
     """
     paths = _participant_video_paths(participant)
     if not paths:
-        return (
-            jsonify({"ok": False, "error": f"No video for participant {participant}"}),
-            404,
-        )
+        return err(f"No video for participant {participant}", 404)
     # Multi-video participants: ?part=N selects the sub-video; the frontend swaps
     # the <video> source per part as it scrubs the global timeline. Defaults to
     # part 0 (and is the only file for single-video participants).
@@ -1456,7 +1412,7 @@ def _resolve_region_request(
     try:
         return screenspace.resolve_region_request(region_name, region_ref, _manifest)
     except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        return err(str(exc))
 
 
 def _is_flask_error_response(value: Any) -> TypeGuard[FlaskResponse]:
@@ -1473,7 +1429,7 @@ def api_regions_list() -> FlaskResponse:
     """List all saved region definitions."""
     with _manifest_lock:
         regions = copy.deepcopy(_manifest.get("regions", {}))
-    return jsonify({"ok": True, "regions": regions})
+    return ok(regions=regions)
 
 
 @screenspace_bp.route("/api/regions", methods=["POST"])
@@ -1481,16 +1437,16 @@ def api_regions_create() -> FlaskResponse:
     """Create or update a named region."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
 
     name = data.get("name", "").strip()
     if not name:
-        return jsonify({"ok": False, "error": "Region name is required"}), 400
+        return err("Region name is required")
 
     for field in ("x", "y", "w", "h"):
         val = data.get(field)
         if val is None or not isinstance(val, (int, float)):
-            return jsonify({"ok": False, "error": f"'{field}' must be a number"}), 400
+            return err(f"'{field}' must be a number")
 
     canvas_w = data.get("canvas_width")
     canvas_h = data.get("canvas_height")
@@ -1500,15 +1456,7 @@ def api_regions_create() -> FlaskResponse:
         or canvas_w <= 0
         or canvas_h <= 0
     ):
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": "'canvas_width' and 'canvas_height' must be positive numbers",
-                }
-            ),
-            400,
-        )
+        return err("'canvas_width' and 'canvas_height' must be positive numbers")
 
     region = _normalize_region(
         data["x"], data["y"], data["w"], data["h"], int(canvas_w), int(canvas_h)
@@ -1520,7 +1468,7 @@ def api_regions_create() -> FlaskResponse:
         _manifest.setdefault("regions", {})[name] = region
         _do_persist(drain_events=False)
 
-    return jsonify({"ok": True, "region": region})
+    return ok(region=region)
 
 
 @screenspace_bp.route("/api/regions/<name>", methods=["DELETE"])
@@ -1529,11 +1477,11 @@ def api_regions_delete(name: str) -> FlaskResponse:
     with _manifest_lock:
         regions = _manifest.get("regions", {})
         if name not in regions:
-            return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
+            return err(f"Region '{name}' not found", 404)
         del regions[name]
         _do_persist(drain_events=False)
 
-    return jsonify({"ok": True})
+    return ok()
 
 
 @screenspace_bp.route("/api/regions", methods=["DELETE"])
@@ -1543,7 +1491,7 @@ def api_regions_delete_all() -> FlaskResponse:
         _manifest["regions"] = {}
         _do_persist(drain_events=False)
 
-    return jsonify({"ok": True})
+    return ok()
 
 
 @screenspace_bp.route("/api/regions/reorder", methods=["PUT"])
@@ -1551,25 +1499,20 @@ def api_regions_reorder() -> FlaskResponse:
     """Reorder active regions to match the given name order."""
     data = request.get_json(silent=True)
     if not data or not isinstance(data.get("names"), list):
-        return jsonify({"ok": False, "error": "names list required"}), 400
+        return err("names list required")
 
     with _manifest_lock:
         regions = _manifest.get("regions", {})
         names = data["names"]
         if not all(isinstance(name, str) for name in names):
-            return jsonify({"ok": False, "error": "names must be strings"}), 400
+            return err("names must be strings")
         region_names = list(regions.keys())
         if len(names) != len(region_names) or set(names) != set(region_names):
-            return (
-                jsonify(
-                    {"ok": False, "error": "names must match current regions exactly"}
-                ),
-                400,
-            )
+            return err("names must match current regions exactly")
         _manifest["regions"] = {name: regions[name] for name in names}
         _do_persist(drain_events=False)
 
-    return jsonify({"ok": True})
+    return ok()
 
 
 # ---- Stashes CRUD ----
@@ -1580,7 +1523,7 @@ def api_stashes_list() -> FlaskResponse:
     """List all region stashes."""
     with _manifest_lock:
         stashes = copy.deepcopy(_manifest.get("stashes", []))
-    return jsonify({"ok": True, "stashes": stashes})
+    return ok(stashes=stashes)
 
 
 @screenspace_bp.route("/api/stashes", methods=["POST"])
@@ -1588,7 +1531,7 @@ def api_stashes_create() -> FlaskResponse:
     """Stash all current regions and clear the active set."""
     regions = _manifest.get("regions", {})
     if not regions:
-        return jsonify({"ok": False, "error": "No regions to stash"}), 400
+        return err("No regions to stash")
 
     stash = {
         "id": "stash_" + uuid.uuid4().hex[:8],
@@ -1600,7 +1543,7 @@ def api_stashes_create() -> FlaskResponse:
         _manifest.setdefault("stashes", []).append(stash)
         _manifest["regions"] = {}
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "stash": stash})
+    return ok(stash=stash)
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
@@ -1608,18 +1551,18 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     """Update a stash (rename)."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
 
     name = data.get("name", "").strip()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
         stash = next((s for s in stashes if s["id"] == stash_id), None)
         if stash is None:
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+            return err("Stash not found", 404)
         if name:
             stash["name"] = name
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "stash": stash})
+    return ok(stash=stash)
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
@@ -1629,10 +1572,10 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
         stashes = _manifest.get("stashes", [])
         idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
         if idx is None:
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+            return err("Stash not found", 404)
         stashes.pop(idx)
         _do_persist(drain_events=False)
-    return jsonify({"ok": True})
+    return ok()
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>/restore", methods=["POST"])
@@ -1642,10 +1585,10 @@ def api_stashes_restore(stash_id: str) -> FlaskResponse:
         stashes = _manifest.get("stashes", [])
         stash = next((s for s in stashes if s["id"] == stash_id), None)
         if stash is None:
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+            return err("Stash not found", 404)
         _manifest["regions"] = copy.deepcopy(stash["regions"])
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "regions": _manifest["regions"]})
+    return ok(regions=_manifest["regions"])
 
 
 @screenspace_bp.route("/api/stashes/<stash_id>/regions", methods=["POST"])
@@ -1657,24 +1600,24 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
     """
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
     name = data.get("name", "").strip()
     if not name:
-        return jsonify({"ok": False, "error": "Region name is required"}), 400
+        return err("Region name is required")
 
     with _manifest_lock:
         regions = _manifest.get("regions", {})
         if name not in regions:
-            return jsonify({"ok": False, "error": f"Region '{name}' not found"}), 404
+            return err(f"Region '{name}' not found", 404)
         stash = next(
             (s for s in _manifest.get("stashes", []) if s["id"] == stash_id), None
         )
         if stash is None:
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+            return err("Stash not found", 404)
         stash.setdefault("regions", {})[name] = copy.deepcopy(regions[name])
         _do_persist(drain_events=False)
 
-    return jsonify({"ok": True, "stash": stash})
+    return ok(stash=stash)
 
 
 # ---- Tasks CRUD ----
@@ -1725,20 +1668,18 @@ def api_tasks_list() -> FlaskResponse:
     clean = [_clean_task(t) for t in tasks]
     paused = _worker.is_paused if _worker else False
     alive = _worker.is_alive if _worker else False
-    return jsonify(
-        {"ok": True, "tasks": clean, "paused": paused, "worker_alive": alive}
-    )
+    return ok(tasks=clean, paused=paused, worker_alive=alive)
 
 
 @screenspace_bp.route("/api/tasks/<task_id>")
 def api_tasks_get(task_id: str) -> FlaskResponse:
     """Get task detail including results."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
     task = _worker.get_task(task_id)
     if task is None:
-        return jsonify({"ok": False, "error": "Task not found"}), 404
-    return jsonify({"ok": True, "task": _clean_task(task)})
+        return err("Task not found", 404)
+    return ok(task=_clean_task(task))
 
 
 # ---- Task creation helpers ----
@@ -1762,16 +1703,11 @@ def _validate_task_request(
     """
     task_type = data.get("type", "").strip()
     if task_type not in _VALID_TASK_TYPES:
-        return jsonify(
-            {
-                "ok": False,
-                "error": f"type must be one of: {', '.join(_VALID_TASK_TYPES)}",
-            }
-        ), 400
+        return err(f"type must be one of: {', '.join(_VALID_TASK_TYPES)}")
 
     participant = data.get("participant", "").strip()
     if not participant:
-        return jsonify({"ok": False, "error": "participant is required"}), 400
+        return err("participant is required")
 
     region_name = data.get("region", "").strip()
     region_ref = data.get("region_ref")
@@ -1781,7 +1717,7 @@ def _validate_task_request(
     elif isinstance(raw_parameters, dict):
         parameters = raw_parameters
     else:
-        return jsonify({"ok": False, "error": "parameters must be an object"}), 400
+        return err("parameters must be an object")
 
     # Template tasks with an uploaded image scan the full frame; no region needed
     has_uploaded_template = task_type == "template" and parameters.get(
@@ -1797,51 +1733,33 @@ def _validate_task_request(
         and not has_uploaded_template
         and task_type != "multitool"
     ):
-        return jsonify({"ok": False, "error": "region is required"}), 400
+        return err("region is required")
 
     # Early validation for multitool steps
     if task_type == "multitool":
         mt_steps = parameters.get("steps")
         if not mt_steps or not isinstance(mt_steps, list) or len(mt_steps) < 2:
-            return jsonify(
-                {"ok": False, "error": "Multitool requires at least 2 steps"}
-            ), 400
+            return err("Multitool requires at least 2 steps")
         for i, step_raw in enumerate(mt_steps):
             if not isinstance(step_raw, dict):
-                return jsonify(
-                    {"ok": False, "error": f"Step {i}: must be an object"}
-                ), 400
+                return err(f"Step {i}: must be an object")
             step_v = cast(dict[str, Any], step_raw)
             stype = step_v.get("type", "")
             if stype not in _VALID_STEP_TYPES:
-                return jsonify(
-                    {"ok": False, "error": f"Step {i}: invalid type '{stype}'"}
-                ), 400
+                return err(f"Step {i}: invalid type '{stype}'")
             logic = step_v.get("logic")
             if logic is not None and logic not in ("AND", "NOT"):
-                return jsonify(
-                    {"ok": False, "error": f"Step {i}: logic must be 'AND' or 'NOT'"}
-                ), 400
+                return err(f"Step {i}: logic must be 'AND' or 'NOT'")
             offset = step_v.get("offset")
             if offset is not None:
                 if i == 0:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": "Step 0: offset is not allowed on the first step",
-                        }
-                    ), 400
+                    return err("Step 0: offset is not allowed on the first step")
                 if (
                     not isinstance(offset, dict)
                     or offset.get("min") is None
                     or offset.get("max") is None
                 ):
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: offset requires numeric min and max",
-                        }
-                    ), 400
+                    return err(f"Step {i}: offset requires numeric min and max")
 
     all_known_regions = _combined_region_lookup()
     requested_region: dict[str, Any] | None = None
@@ -1860,20 +1778,13 @@ def _validate_task_request(
             if not step_region and step_region_ref is None:
                 if step_uploaded_template:
                     continue
-                return jsonify(
-                    {"ok": False, "error": f"Step {i}: region is required"}
-                ), 400
+                return err(f"Step {i}: region is required")
             if step_region_ref is not None:
                 resolved = _resolve_region_request(step_region, step_region_ref)
                 if _is_flask_error_response(resolved):
                     return resolved
             elif step_region not in all_known_regions:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": f"Step {i}: region '{step_region}' not found",
-                    }
-                ), 400
+                return err(f"Step {i}: region '{step_region}' not found")
     elif has_region_request:
         resolved = _resolve_region_request(region_name, region_ref)
         if _is_flask_error_response(resolved):
@@ -1952,7 +1863,7 @@ def _coerce_task_params(
         if task_type == "template":
             _coerce_template_controls(parameters)
     except ValueError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        return err(str(exc))
 
     return parameters
 
@@ -1973,9 +1884,7 @@ def _extract_task_media(
         ref_ts = cast(float, parameters["reference_timestamp"])
         frame = frame_at(float(ref_ts))
         if frame is None:
-            return jsonify(
-                {"ok": False, "error": "Could not read reference frame"}
-            ), 400
+            return err("Could not read reference frame")
         ref_region = screenspace.extract_region(frame, region_coords)
         parameters["reference_frame"] = ref_region
 
@@ -1985,9 +1894,7 @@ def _extract_task_media(
             try:
                 bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
             except ValueError:
-                return jsonify(
-                    {"ok": False, "error": "Could not decode uploaded image"}
-                ), 400
+                return err("Could not decode uploaded image")
             parameters["template_image"] = bgr
             if mask is not None:
                 parameters["template_mask"] = mask
@@ -1995,9 +1902,7 @@ def _extract_task_media(
             ref_ts = cast(float, parameters["reference_timestamp"])
             frame = frame_at(float(ref_ts))
             if frame is None:
-                return jsonify(
-                    {"ok": False, "error": "Could not read template frame"}
-                ), 400
+                return err("Could not read template frame")
             parameters["template_image"] = screenspace.extract_region(
                 frame, region_coords
             )
@@ -2008,12 +1913,7 @@ def _extract_task_media(
         for ref in scene_refs:
             frame = frame_at(float(ref["timestamp"]))
             if frame is None:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": f"Could not read frame for scene '{ref['name']}'",
-                    }
-                ), 400
+                return err(f"Could not read frame for scene '{ref['name']}'")
             ref_region = screenspace.extract_region(frame, region_coords)
             scene_entry: dict = {"name": ref["name"], "frame": ref_region}
             if "threshold" in ref:
@@ -2059,12 +1959,7 @@ def _prepare_multitool_steps(
             ref_ts = cast(float, step["reference_timestamp"])
             frame = frame_at(float(ref_ts))
             if frame is None:
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": f"Step {i}: could not read reference frame",
-                    }
-                ), 400
+                return err(f"Step {i}: could not read reference frame")
             step["reference_frame"] = screenspace.extract_region(frame, step_rc)
 
         elif stype == "template":
@@ -2073,12 +1968,7 @@ def _prepare_multitool_steps(
                 try:
                     bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
                 except ValueError:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: could not decode uploaded image",
-                        }
-                    ), 400
+                    return err(f"Step {i}: could not decode uploaded image")
                 step["template_image"] = bgr
                 if mask is not None:
                     step["template_mask"] = mask
@@ -2086,12 +1976,7 @@ def _prepare_multitool_steps(
                 ref_ts = cast(float, step["reference_timestamp"])
                 frame = frame_at(float(ref_ts))
                 if frame is None:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: could not read template frame",
-                        }
-                    ), 400
+                    return err(f"Step {i}: could not read template frame")
                 step["template_image"] = screenspace.extract_region(frame, step_rc)
 
         elif stype == "scene":
@@ -2100,12 +1985,9 @@ def _prepare_multitool_steps(
             for ref in scene_refs:
                 frame = frame_at(float(ref["timestamp"]))
                 if frame is None:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": f"Step {i}: could not read frame for scene '{ref['name']}'",
-                        }
-                    ), 400
+                    return err(
+                        f"Step {i}: could not read frame for scene '{ref['name']}'"
+                    )
                 ref_region = screenspace.extract_region(frame, step_rc)
                 scene_entry: dict = {"name": ref["name"], "frame": ref_region}
                 if "threshold" in ref:
@@ -2120,11 +2002,11 @@ def _prepare_multitool_steps(
 def api_tasks_create() -> FlaskResponse:
     """Enqueue a new analysis task."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
 
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
 
     # Boundary is full-frame only by contract: ignore any caller-supplied region
     # so events and manifest metadata are never labeled with a region the scan
@@ -2157,9 +2039,7 @@ def api_tasks_create() -> FlaskResponse:
 
     video_paths = _participant_video_paths(participant)
     if not video_paths:
-        return jsonify(
-            {"ok": False, "error": f"No video for participant {participant}"}
-        ), 400
+        return err(f"No video for participant {participant}")
     video_path = video_paths[0]
 
     # Default per-task source label; the per-part scan tags each event with the
@@ -2241,72 +2121,72 @@ def api_tasks_create() -> FlaskResponse:
     _schedule_persist()
     _notify_sse_clients("task_created")
 
-    return jsonify({"ok": True, "task": _clean_task(task)})
+    return ok(task=_clean_task(task))
 
 
 @screenspace_bp.route("/api/tasks/<task_id>", methods=["DELETE"])
 def api_tasks_cancel(task_id: str) -> FlaskResponse:
     """Cancel or dismiss a task.  ?dismiss=true fully removes the task."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
     if request.args.get("dismiss") == "true":
         if not _worker.remove_task(task_id):
-            return jsonify({"ok": False, "error": "Task not found"}), 404
+            return err("Task not found", 404)
         _schedule_persist()
         _notify_sse_clients("task_dismissed")
-        return jsonify({"ok": True})
+        return ok()
     if _worker.cancel(task_id):
         _schedule_persist()
         _notify_sse_clients("task_cancelled")
-        return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
+        return ok()
+    return err("Task not found or already finished")
 
 
 @screenspace_bp.route("/api/tasks/reorder", methods=["PUT"])
 def api_tasks_reorder() -> FlaskResponse:
     """Reorder queued tasks by priority."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
     data = request.get_json(silent=True)
     if not data or "task_ids" not in data:
-        return jsonify({"ok": False, "error": "task_ids list required"}), 400
+        return err("task_ids list required")
     _worker.reorder(data["task_ids"])
     _schedule_persist()
     _notify_sse_clients("reorder")
-    return jsonify({"ok": True})
+    return ok()
 
 
 @screenspace_bp.route("/api/tasks/pause", methods=["POST"])
 def api_tasks_pause() -> FlaskResponse:
     """Pause the task queue."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
     _worker.pause()
     _schedule_persist()
     _notify_sse_clients("pause")
-    return jsonify({"ok": True, "paused": True})
+    return ok(paused=True)
 
 
 @screenspace_bp.route("/api/tasks/resume", methods=["POST"])
 def api_tasks_resume() -> FlaskResponse:
     """Resume the task queue."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
     _worker.resume()
     _schedule_persist()
     _notify_sse_clients("resume")
-    return jsonify({"ok": True, "paused": False})
+    return ok(paused=False)
 
 
 @screenspace_bp.route("/api/tasks/<task_id>/results")
 def api_tasks_results(task_id: str) -> FlaskResponse:
     """Get task results (timestamps, artifacts)."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
     task = _worker.get_task(task_id)
     if task is None:
-        return jsonify({"ok": False, "error": "Task not found"}), 404
-    return jsonify({"ok": True, "results": utils.sanitize_floats(task.get("result"))})
+        return err("Task not found", 404)
+    return ok(results=utils.sanitize_floats(task.get("result")))
 
 
 # ---- Events CRUD ----
@@ -2328,7 +2208,7 @@ def api_events_list() -> FlaskResponse:
     task_id = request.args.get("task_id")
     if task_id:
         events = [e for e in events if e.get("task_id") == task_id]
-    return jsonify({"ok": True, "events": utils.sanitize_floats(events)})
+    return ok(events=utils.sanitize_floats(events))
 
 
 @screenspace_bp.route("/api/export/events")
@@ -2377,8 +2257,8 @@ def api_export_events() -> FlaskResponse:
         )
         return response
     if fmt == "json":
-        return jsonify({"ok": True, "events": utils.sanitize_floats(records)})
-    return jsonify({"ok": False, "error": f"Unsupported format: {fmt}"}), 400
+        return ok(events=utils.sanitize_floats(records))
+    return err(f"Unsupported format: {fmt}")
 
 
 @screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
@@ -2389,8 +2269,8 @@ def api_event_exclude(event_id: str) -> FlaskResponse:
             if e["id"] == event_id:
                 e["excluded"] = True
                 _do_persist(drain_events=False)
-                return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "Event not found"}), 404
+                return ok()
+    return err("Event not found", 404)
 
 
 @screenspace_bp.route("/api/events/<event_id>/include", methods=["PUT"])
@@ -2401,8 +2281,8 @@ def api_event_include(event_id: str) -> FlaskResponse:
             if e["id"] == event_id:
                 e["excluded"] = False
                 _do_persist(drain_events=False)
-                return jsonify({"ok": True})
-    return jsonify({"ok": False, "error": "Event not found"}), 404
+                return ok()
+    return err("Event not found", 404)
 
 
 @screenspace_bp.route("/api/events/bulk-exclude", methods=["PUT"])
@@ -2411,7 +2291,7 @@ def api_events_bulk_exclude() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     ids = set(data.get("ids", []))
     if not ids:
-        return jsonify({"ok": False, "error": "ids list required"}), 400
+        return err("ids list required")
     with _manifest_lock:
         count = 0
         for e in _manifest.get("events", []):
@@ -2419,7 +2299,7 @@ def api_events_bulk_exclude() -> FlaskResponse:
                 e["excluded"] = True
                 count += 1
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "updated": count})
+    return ok(updated=count)
 
 
 @screenspace_bp.route("/api/events/bulk-include", methods=["PUT"])
@@ -2428,7 +2308,7 @@ def api_events_bulk_include() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     ids = set(data.get("ids", []))
     if not ids:
-        return jsonify({"ok": False, "error": "ids list required"}), 400
+        return err("ids list required")
     with _manifest_lock:
         count = 0
         for e in _manifest.get("events", []):
@@ -2436,7 +2316,7 @@ def api_events_bulk_include() -> FlaskResponse:
                 e["excluded"] = False
                 count += 1
         _do_persist(drain_events=False)
-    return jsonify({"ok": True, "updated": count})
+    return ok(updated=count)
 
 
 # ---- Helpers ----
