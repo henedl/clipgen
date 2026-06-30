@@ -42,10 +42,11 @@ otherwise late-bind `NS.fn(...)`).
 
 ### Studio (`window.ClipgenStudio` / STUDIO)
 
-- [ ] **A1. `studio-scrubber.js`** (~277 lines, `studio.js:2276–2553`). Card hover-scrub
-  (sprite sheet + audio). Lowest risk: feature-gated on `state.cardScrubberEnabled`,
-  read-only state, entry point `attachQueueScrubbers` is **already published** to STUDIO
-  (`studio.js:5265`). Keep `buildQueueCardThumb`/`ssClearPending` access via STUDIO.
+- [x] **A1. `studio-scrubber.js`** — Done (`5ca7440`). Carved the sprite-prefetch + per-card
+  scrubber wiring (the true cluster was `studio.js:2278–2396`, ~120 lines; the rest of the
+  agent's 2276–2553 range was unrelated drag/queue code). Hub keeps `attachQueueScrubbers` +
+  a new `resetScrubberPrefetch` delegator (the latter replaces a bare `_spritePrefetchQueue = []`
+  reset so the queue stays satellite-private). Loads before `studio-intake.js`. studio.js −121/+8.
 - [ ] **A2. `studio-trim.js`** (~354 lines, `studio.js:2729–3083`). Duration-badge trim
   popover + `buildCellOverrides()`. Self-contained; add hub delegators for `saveQueues()`/
   `renderQueue()`. **Must load before A3** (generate needs `buildCellOverrides`).
@@ -58,10 +59,13 @@ otherwise late-bind `NS.fn(...)`).
 
 ### Screenspace (`window.ClipgenScreenspace` / SS)
 
-- [ ] **A4. `screenspace-overlay.js`** (~218 lines, `screenspace.js:2763–2980`). Pure canvas
-  draw of regions/pending/template/heatmap/scene markers. Zero blockers — no writes; only
-  reads state + pure helpers (`regionToPixels`, `getThemeColors`, `hexToRgba`). `renderOverlay`
-  stays callable via a hub delegator (called from 6+ sites).
+- [x] **A4. `screenspace-overlay.js`** — Done. Carved `renderOverlay` (`screenspace.js:2763–2979`,
+  217 lines). It's a pure read of `state` + 7 hub helpers (reached via SS; `hexToRgba`/`qs` are
+  ambient utils.js globals). Hub keeps a `renderOverlay` delegator for its **33** call sites;
+  published the 5 helpers the satellite needs that weren't already on SS (`regionColorForIndex`,
+  `computeLabelRect`, `getThemeColors`, `templateOverlayBounds`, `_overlayEligibleForActiveTool`).
+  Loads after the hub, **before** `screenspace-tasks.js`/`-results.js` (they destructure
+  `SS.renderOverlay`). screenspace.js −216/+11.
 - [ ] **A5. `screenspace-timeline.js`** (~643 lines, `screenspace.js:2981–3623`). Canvas ruler,
   zoom/pan, scrubbing, markers, playhead, tooltips. Route `showSsTooltip`/`hideSsTooltip` and
   frame-load callbacks (`loadFrame`, `seekPlayhead`) through SS. Move `timelineZoom/Offset/
