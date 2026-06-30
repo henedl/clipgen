@@ -112,9 +112,23 @@ otherwise late-bind `NS.fn(...)`).
   region draw/drag/resize state machine). Medium: must route `setTargetColor`/pipette
   activation from the color satellite (already deferred via SS) and keep `renderOverlay`/
   `renderRegionChips` as delegators.
-- [ ] **A7. `screenspace-model-view.js`** (~514 lines, `screenspace.js:4347–4860`). Live
-  preview overlay + layer UI. Publish `_collectPreviewParams` via SS (hub's `initRunButton`
-  calls it). Self-contained sessionStorage.
+- [x] **A7. `screenspace-model-view.js`** — Done. Carved the live preprocessed-frame preview +
+  overlay-layer UI cluster (post-A4/A5 the range was `screenspace.js:3474–3986`, ~513 lines:
+  `initModelView`/`toggleModelView`/`refreshModelView`/`_doRefreshModelView`, the overlay-layer
+  helpers, the preview-region resolvers, and `_updateMinAreaReadout`/`_collectPreviewParams` +
+  the `_modelView*`/`MODEL_VIEW_META` vars). Self-contained sessionStorage (`ss_overlayEnabled`/
+  `ss_overlayLayer`). screenspace.js 4968 → 4462 (−506); satellite 559 lines.
+  - **Plan correction:** `_collectPreviewParams` is **not** called by `initRunButton` (that uses
+    `gatherWorkflowParams`) — it's internal to `_doRefreshModelView`, so it stays private, no SS
+    publication.
+  - **Reaches via SS:** `state`, `normalizeRegionRef`/`activeRegionRef` (destructured); `SS.renderOverlay(...)`
+    (3 sites) and `SS.getColorHiddenInputs()` late-bound (overlay/color load after).
+  - **Publishes** `initModelView`/`refreshModelView`/`_updateOverlayUi`/`_overlayEligibleForActiveTool`/
+    `_updateMinAreaReadout`/`_previewRegionRef`; hub keeps same-named delegators for the first five.
+    These three were moved off the hub's SS block (else the delegators would publish onto themselves
+    and recurse).
+  - **Load order:** loads first after the hub, **before** overlay/tasks/multitool-params/calibration,
+    which destructure `_overlayEligibleForActiveTool`/`_updateMinAreaReadout`/`_previewRegionRef`.
 - [ ] _Optional later:_ single-tool param builders (`3771–4346`, ~576) and run button
   (`4954–5296`, ~343). Lower ROI; param rehydration (`applyColorMode`/`applyNormalizeMode`)
   must stay hub-side for task restore.
