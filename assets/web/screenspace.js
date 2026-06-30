@@ -204,6 +204,11 @@
     draggingRegion: null,
     resizingRegion: null,
     hoveredRegion: null,
+    // Set by the hub's chip drag-reorder (initRegionDrag) to swallow the click
+    // that fires right after a drop; read/cleared by renderRegionChips' chip
+    // click handler in screenspace-overlay-interaction.js (cross-file — must
+    // live on state, not a hub-local var).
+    regionSuppressNextClick: false,
     timelineZoom: 1,
     timelineOffset: 0,
     inMarker: null,
@@ -1962,7 +1967,6 @@
   var _regionDragActive = false;
   var _regionDragMoved = false;
   var _regionDragDropped = false;
-  var _regionSuppressNextClick = false;
 
   function dataTransferHasType(dt, type) {
     if (!dt || !dt.types) return false;
@@ -2068,8 +2072,8 @@
       clearStashDragIndicators();
       _regionDragMidpoints = null;
       if (_regionDragMoved || _regionDragDropped) {
-        _regionSuppressNextClick = true;
-        setTimeout(function () { _regionSuppressNextClick = false; }, 250);
+        state.regionSuppressNextClick = true;
+        setTimeout(function () { state.regionSuppressNextClick = false; }, 250);
       }
       _regionDragActive = false;
       _regionDragMoved = false;

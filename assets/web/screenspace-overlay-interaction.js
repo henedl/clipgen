@@ -620,8 +620,8 @@
       chip.appendChild(dot);
       chip.appendChild(document.createTextNode(name));
       chip.addEventListener("click", function (e) {
-        if (_regionSuppressNextClick) {
-          _regionSuppressNextClick = false;
+        if (state.regionSuppressNextClick) {
+          state.regionSuppressNextClick = false;
           e.preventDefault();
           e.stopPropagation();
           return;
