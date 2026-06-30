@@ -47,9 +47,17 @@ otherwise late-bind `NS.fn(...)`).
   agent's 2276–2553 range was unrelated drag/queue code). Hub keeps `attachQueueScrubbers` +
   a new `resetScrubberPrefetch` delegator (the latter replaces a bare `_spritePrefetchQueue = []`
   reset so the queue stays satellite-private). Loads before `studio-intake.js`. studio.js −121/+8.
-- [ ] **A2. `studio-trim.js`** (~354 lines, `studio.js:2729–3083`). Duration-badge trim
-  popover + `buildCellOverrides()`. Self-contained; add hub delegators for `saveQueues()`/
-  `renderQueue()`. **Must load before A3** (generate needs `buildCellOverrides`).
+- [x] **A2. `studio-trim.js`** — Done. Carved the duration-badge trim pop-over cluster
+  (the post-A1 range was `studio.js:2616–2968`, ~353 lines: 5 `TRIM_*`/`activeTrim` vars +
+  `closeTrimPopover`/`positionTrimPopover`/`bindTrimDrag`/`makeTrimButton`/`openTrimPopover`/
+  `appendDurationBadge`/`buildCellOverrides`). Self-contained — no `state.*` access; mutates
+  the passed-in `item` + a satellite-local `activeTrim`. Hub keeps `appendDurationBadge`/
+  `buildCellOverrides` delegators (called at `studio.js:2268` and the generate/reel builders);
+  the satellite reaches the hub's `saveQueues`/`isIntakeSource` through STUDIO (no `renderQueue`
+  dep — the rerender flows via the passed-in `renderFn` callback). Loads after the hub, before
+  `studio-intake.js` (order vs. the other satellites is free — no cross-destructuring). studio.js
+  5164 → 4824 (−340); `studio-trim.js` 383 lines. **Must load before A3** (generate needs
+  `buildCellOverrides`).
 - [ ] **A3. `studio-generate.js`** (~393 lines, `studio.js:3743–4135`). Streaming artifact
   generation. Medium risk: needs delegators for `setArtifactGenerating`/`showResult`/
   `revealStatusOverlay`; ETA trackers + card-state painters **stay in hub** (shared with build).
