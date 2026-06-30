@@ -108,10 +108,29 @@ otherwise late-bind `NS.fn(...)`).
   - **Bare-var gotcha caught**: the resize/scroll handlers cleared the hub-owned `_cachedOverlayRect`
     (a strict-mode `ReferenceError` the wiring test can't see) — added `SS.invalidateOverlayRect`
     and route through it.
-- [ ] **A6. `screenspace-overlay-interaction.js`** (~586 lines, `screenspace.js:1818–2323`,
-  region draw/drag/resize state machine). Medium: must route `setTargetColor`/pipette
-  activation from the color satellite (already deferred via SS) and keep `renderOverlay`/
-  `renderRegionChips` as delegators.
+- [x] **A6. `screenspace-overlay-interaction.js`** — Done. Carved the region draw/drag/resize
+  state machine + region toolbar (post-A4/A5 the contiguous range was `screenspace.js:1735–2319`,
+  ~585 lines: `initRegionDrawing` + the overlay-canvas mousedown/move/up handlers, `canvasCoords`/
+  `findHitRegion`/`saveRegionUpdate`/`scheduleOverlayRender`/`flushOverlayRender`/`computeLabelRect`,
+  the region-name modal, `renderRegionChips`/`updateRegionButtons`/`updateRegionChipsOverflow`).
+  `initRegionDrag` + `templateOverlayBounds` (after the stashing gap) and the stashing section stay
+  in the hub. screenspace.js 4462 → 3885 (−577); satellite 662 lines.
+  - **Key gotcha (resolved):** moved `_overlayRaf` + `_cachedOverlayRect` + `invalidateOverlayRect`
+    into the satellite (the cluster owns ~all 15 uses). The hub's Escape handler now calls the
+    `invalidateOverlayRect()` delegator instead of touching the var; the timeline satellite drops
+    the rect via `SS.invalidateOverlayRect` (A6 loads before timeline). `_playheadRaf` (interleaved
+    with `_overlayRaf` in the hub var block) was **left in the hub** — it's the playhead's RAF.
+  - **Publishes** `initRegionDrawing`/`renderRegionChips`/`updateRegionButtons`/`computeLabelRect`/
+    `invalidateOverlayRect`/`hideRegionNameModal`; hub keeps same-named delegators for all but
+    `computeLabelRect` (publish-only — read by the overlay satellite, no hub caller). Removed those
+    SS publications from the hub block so the delegators don't republish onto themselves and recurse.
+  - **New hub publications for the satellite to read:** `pauseVideo` + the stash/pin toolbar
+    callbacks `stashRegions`/`pinCurrentFrame`/`togglePinTrayVisibility`/`clearAllPins`/
+    `updatePinButtons` (referenced as button-handler values inside `initRegionDrawing`, so a bare
+    cross-file reference that the wiring test can't see — caught by a free-identifier scan).
+    `renderOverlay`/`setTargetColor` are late-bound local wrappers (overlay/color load after A6).
+  - **Load order:** loads after model-view, **before** overlay (`SS.computeLabelRect`)/timeline
+    (`SS.invalidateOverlayRect`)/tasks (`SS.renderRegionChips`/`SS.updateRegionButtons`).
 - [x] **A7. `screenspace-model-view.js`** — Done. Carved the live preprocessed-frame preview +
   overlay-layer UI cluster (post-A4/A5 the range was `screenspace.js:3474–3986`, ~513 lines:
   `initModelView`/`toggleModelView`/`refreshModelView`/`_doRefreshModelView`, the overlay-layer
@@ -137,7 +156,8 @@ otherwise late-bind `NS.fn(...)`).
 invalidation guards, participant routing, frame loading, the `DOMContentLoaded` init loop,
 settings-sync, and STUDIO/SS namespace publication.
 
-Expected outcome: studio ~5278 → ~4250 (A1–A3); screenspace ~5835 → ~4460 (A4–A7, ~1375 lines moved).
+Outcome (A1–A3, A4–A7 all landed): studio 5278 → 4531; screenspace 5835 → 3885 (~1950 lines
+moved into 4 new screenspace satellites: overlay, timeline, model-view, overlay-interaction).
 
 ---
 
