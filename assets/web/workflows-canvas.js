@@ -58,24 +58,32 @@
     if (_vpRaf) return;
     _vpRaf = requestAnimationFrame(function () {
       _vpRaf = 0;
-      var world = qs("#wfWorld");
-      var canvas = qs("#wfCanvas");
-      var vp = state.viewport;
-      // One transform on #wfWorld pans/zooms both the cards and the nested wire
-      // layer in lockstep (no per-path recompute on pan/zoom — only on node move).
-      var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
-      if (world) world.style.transform = t;
-      if (canvas) {
-        var g = _gridBase * vp.zoom;
-        canvas.style.backgroundSize = g + "px " + g + "px";
-        canvas.style.backgroundPosition = vp.x + "px " + vp.y + "px";
-      }
-      // The wire-delete button is screen-positioned, so reposition it when the
-      // viewport changes (wires themselves move with the SVG transform).
-      if (WF.refreshWireDelete) WF.refreshWireDelete();
-      // Pan/zoom moved the viewport rectangle — redraw the minimap to match.
-      renderMinimap();
+      writeViewport();
     });
+  }
+
+  // Synchronously write the world transform + grid offset from the current
+  // viewport. Split out of applyViewport so the node-drag flush (already in a
+  // RAF) can apply an auto-pan transform in the SAME frame it positions the
+  // cards — deferring it would paint cards one pan-step ahead of the world.
+  function writeViewport() {
+    var world = qs("#wfWorld");
+    var canvas = qs("#wfCanvas");
+    var vp = state.viewport;
+    // One transform on #wfWorld pans/zooms both the cards and the nested wire
+    // layer in lockstep (no per-path recompute on pan/zoom — only on node move).
+    var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
+    if (world) world.style.transform = t;
+    if (canvas) {
+      var g = _gridBase * vp.zoom;
+      canvas.style.backgroundSize = g + "px " + g + "px";
+      canvas.style.backgroundPosition = vp.x + "px " + vp.y + "px";
+    }
+    // The wire-delete button is screen-positioned, so reposition it when the
+    // viewport changes (wires themselves move with the SVG transform).
+    if (WF.refreshWireDelete) WF.refreshWireDelete();
+    // Pan/zoom moved the viewport rectangle — redraw the minimap to match.
+    renderMinimap();
   }
 
   function clientToWorld(cx, cy) {
@@ -281,7 +289,9 @@
   // away from that edge so the drag can continue past the visible bounds.
   // Returns true if it nudged (the flush re-arms next frame while it does, so a
   // drag held still at the edge keeps scrolling). Uses the rect cached at drag
-  // start per the canvas-perf rule.
+  // start per the canvas-perf rule. Only mutates the viewport; the caller writes
+  // the transform synchronously (see scheduleNodePositionFlush) so it stays in
+  // step with the card positions painted the same frame.
   var EDGE_BAND = 40; // px from the canvas edge that arms auto-pan
   var EDGE_STEP = 12; // px/frame the viewport scrolls
   function autoPanWhileDragging() {
@@ -302,7 +312,6 @@
       vp.y -= EDGE_STEP;
       nudged = true;
     }
-    if (nudged) applyViewport();
     return nudged;
   }
 
@@ -314,6 +323,11 @@
     _moveRaf = requestAnimationFrame(function () {
       _moveRaf = 0;
       var panned = autoPanWhileDragging();
+      // Apply the auto-panned transform now, in this same frame, so the world
+      // transform and the card positions below are computed from one viewport
+      // value. Deferring via applyViewport() would lag the world a frame behind
+      // the cards, leaving dragged nodes a pan-step (EDGE_STEP) off the cursor.
+      if (panned) writeViewport();
       if (_dragRect && _dragOffsets) {
         var vp = state.viewport;
         // Cursor world point (post-pan), using the cached rect to avoid a layout
