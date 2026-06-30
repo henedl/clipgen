@@ -110,15 +110,20 @@ These follow the "convert touched values to tokens when editing" rule. Done as t
 commits **or** folded into whichever page CSS a Theme-A carve touches. **Not** a blanket sweep
 (AGENTS.md: "don't bulk-rewrite either system" / page-CSS spacing left alone unless touched).
 
-- [ ] **C1. `border-radius: 50%` → `var(--radius-full)`** — 21 occurrences across 9 CSS files.
-  Token already exists (`tokens.css:83`). Pure mechanical.
-- [ ] **C2. Backdrop literal `rgba(0,0,0,0.4)` ×10** → add a `--color-backdrop` token (or a shared
-  `.modal-backdrop` utility: `position:fixed; inset:0; background; z-index`) and replace copies in
-  screenspace/studio/transcripts/settings-modal CSS.
-- [ ] **C3. Consolidate `#themeToggle` button styling.** `topnav.js` *generates* the button
-  (`topnav.js:183`) but its 32×32 styling is re-declared in 7 page CSS files. Move the canonical
-  rule into `topnav.css` (the owner). Leave `gallery.css`/`viewer.css` standalone — those pages
-  ship their own toggle markup and aren't on topnav.
+- [x] **C1. `border-radius: 50%` → `var(--radius-full)`** — Done. 21 occurrences across 7 CSS
+  files; all verified square (circles/dots/spinners) so `50%`≡`999px`. `viewer.css` already uses
+  radius tokens, confirming they reach the offline export.
+- [x] **C2. Backdrop literal `rgba(0,0,0,0.4)`** → Done. Added `--color-backdrop` token
+  (`tokens.css`) and applied to the 7 true modal overlays (screenspace/studio×4/transcripts×2).
+  Left `settings-modal.css .card-tile-text-overlay` (a card text-legibility scrim, different
+  semantic) and the two box/drop-shadow literals as-is.
+- [x] **C3. Consolidate the duplicated theme-toggle.** Done — but narrower than first framed: the
+  *button base* is entangled with topnav's intentional `.topnav-right #themeToggle` override
+  (30px, 5px radius, transparent), so it stays per-page. The genuinely-duplicated **sun/moon icon
+  visuals** (byte-identical across all 4 topnav pages) moved into `topnav.css` once; removed from
+  studio/screenspace/transcripts/workflows CSS. `gallery.css`/`viewer.css` keep their copies (no
+  topnav.css). Updated `tests/test_workflows_frontend_source.py::test_theme_toggle_icons_styled`
+  to the new location. Net −94 lines.
 - [ ] _Opportunistic, not standalone:_ raw-px spacing/font-size/transition → tokens **only inside
   files a carve already touches**. There are ~200 such values; a dedicated mass-conversion is out
   of scope and against the "don't bulk-rewrite" guidance.
