@@ -19,6 +19,13 @@
   var _bound = false;
   var _vpRaf = 0;
   var _moveRaf = 0;
+  var _minimapRaf = 0;
+  // Node-drag / auto-pan state (set in startNodeDrag, cleared on mouseup).
+  var _draggingNode = false;
+  var _dragRect = null; // canvas getBoundingClientRect cached at drag start
+  var _dragCursorX = 0;
+  var _dragCursorY = 0;
+  var _dragOffsets = null; // { nodeId: {x, y} } world offset from cursor grab point
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
@@ -51,22 +58,32 @@
     if (_vpRaf) return;
     _vpRaf = requestAnimationFrame(function () {
       _vpRaf = 0;
-      var world = qs("#wfWorld");
-      var canvas = qs("#wfCanvas");
-      var vp = state.viewport;
-      // One transform on #wfWorld pans/zooms both the cards and the nested wire
-      // layer in lockstep (no per-path recompute on pan/zoom — only on node move).
-      var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
-      if (world) world.style.transform = t;
-      if (canvas) {
-        var g = _gridBase * vp.zoom;
-        canvas.style.backgroundSize = g + "px " + g + "px";
-        canvas.style.backgroundPosition = vp.x + "px " + vp.y + "px";
-      }
-      // The wire-delete button is screen-positioned, so reposition it when the
-      // viewport changes (wires themselves move with the SVG transform).
-      if (WF.refreshWireDelete) WF.refreshWireDelete();
+      writeViewport();
     });
+  }
+
+  // Synchronously write the world transform + grid offset from the current
+  // viewport. Split out of applyViewport so the node-drag flush (already in a
+  // RAF) can apply an auto-pan transform in the SAME frame it positions the
+  // cards — deferring it would paint cards one pan-step ahead of the world.
+  function writeViewport() {
+    var world = qs("#wfWorld");
+    var canvas = qs("#wfCanvas");
+    var vp = state.viewport;
+    // One transform on #wfWorld pans/zooms both the cards and the nested wire
+    // layer in lockstep (no per-path recompute on pan/zoom — only on node move).
+    var t = "translate(" + vp.x + "px," + vp.y + "px) scale(" + vp.zoom + ")";
+    if (world) world.style.transform = t;
+    if (canvas) {
+      var g = _gridBase * vp.zoom;
+      canvas.style.backgroundSize = g + "px " + g + "px";
+      canvas.style.backgroundPosition = vp.x + "px " + vp.y + "px";
+    }
+    // The wire-delete button is screen-positioned, so reposition it when the
+    // viewport changes (wires themselves move with the SVG transform).
+    if (WF.refreshWireDelete) WF.refreshWireDelete();
+    // Pan/zoom moved the viewport rectangle — redraw the minimap to match.
+    renderMinimap();
   }
 
   function clientToWorld(cx, cy) {
@@ -226,33 +243,41 @@
     }
     if (WF.renderAllNodes) WF.renderAllNodes();
 
-    var startX = e.clientX;
-    var startY = e.clientY;
-    var zoom = state.viewport.zoom;
-    var orig = {};
+    // Anchor the drag in world space: store each selected node's offset from the
+    // cursor's world point at grab time, then on every frame set its position to
+    // (cursorWorld + offset). World-anchoring (vs a screen-pixel delta) is what
+    // lets the node keep trailing the cursor while auto-pan scrolls the viewport
+    // — a pure screen delta would drift the node away from the cursor by the pan.
+    var canvasEl = qs("#wfCanvas");
+    _dragRect = canvasEl ? canvasEl.getBoundingClientRect() : null;
+    _dragCursorX = e.clientX;
+    _dragCursorY = e.clientY;
+    var grab = clientToWorld(e.clientX, e.clientY);
+    _dragOffsets = {};
     state.selection.forEach(function (sid) {
       var n = findNode(sid);
-      if (n) orig[sid] = { x: n.position.x || 0, y: n.position.y || 0 };
+      if (n) {
+        _dragOffsets[sid] = {
+          x: (n.position.x || 0) - grab.x,
+          y: (n.position.y || 0) - grab.y,
+        };
+      }
     });
+    _draggingNode = true;
     var moved = false;
 
     function move(ev) {
-      var dx = (ev.clientX - startX) / zoom;
-      var dy = (ev.clientY - startY) / zoom;
-      state.selection.forEach(function (sid) {
-        var n = findNode(sid);
-        var o = orig[sid];
-        if (n && o) {
-          n.position.x = o.x + dx;
-          n.position.y = o.y + dy;
-        }
-      });
+      _dragCursorX = ev.clientX;
+      _dragCursorY = ev.clientY;
       moved = true;
       scheduleNodePositionFlush();
     }
     function up() {
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
+      _draggingNode = false;
+      _dragRect = null;
+      _dragOffsets = null;
       if (moved) WF.scheduleSave();
     }
     document.addEventListener("mousemove", move);
@@ -260,22 +285,76 @@
     e.preventDefault(); // suppress text selection / native drag
   }
 
+  // When a node drag reaches an edge band of the canvas, scroll the viewport
+  // away from that edge so the drag can continue past the visible bounds.
+  // Returns true if it nudged (the flush re-arms next frame while it does, so a
+  // drag held still at the edge keeps scrolling). Uses the rect cached at drag
+  // start per the canvas-perf rule. Only mutates the viewport; the caller writes
+  // the transform synchronously (see scheduleNodePositionFlush) so it stays in
+  // step with the card positions painted the same frame.
+  var EDGE_BAND = 40; // px from the canvas edge that arms auto-pan
+  var EDGE_STEP = 12; // px/frame the viewport scrolls
+  function autoPanWhileDragging() {
+    if (!_draggingNode || !_dragRect) return false;
+    var vp = state.viewport;
+    var nudged = false;
+    if (_dragCursorX - _dragRect.left < EDGE_BAND) {
+      vp.x += EDGE_STEP;
+      nudged = true;
+    } else if (_dragRect.right - _dragCursorX < EDGE_BAND) {
+      vp.x -= EDGE_STEP;
+      nudged = true;
+    }
+    if (_dragCursorY - _dragRect.top < EDGE_BAND) {
+      vp.y += EDGE_STEP;
+      nudged = true;
+    } else if (_dragRect.bottom - _dragCursorY < EDGE_BAND) {
+      vp.y -= EDGE_STEP;
+      nudged = true;
+    }
+    return nudged;
+  }
+
   // RAF-throttled per-card style update (cf. the code-review canvas perf rule).
+  // Recomputes dragged-node positions from the live cursor world point so they
+  // track the cursor across auto-pan; updates only the moved cards + wires.
   function scheduleNodePositionFlush() {
     if (_moveRaf) return;
     _moveRaf = requestAnimationFrame(function () {
       _moveRaf = 0;
-      state.selection.forEach(function (sid) {
-        var n = findNode(sid);
-        var card = qs('.wf-node[data-node-id="' + sid + '"]');
-        if (n && card) {
-          card.style.left = (n.position.x || 0) + "px";
-          card.style.top = (n.position.y || 0) + "px";
-        }
-      });
+      var panned = autoPanWhileDragging();
+      // Apply the auto-panned transform now, in this same frame, so the world
+      // transform and the card positions below are computed from one viewport
+      // value. Deferring via applyViewport() would lag the world a frame behind
+      // the cards, leaving dragged nodes a pan-step (EDGE_STEP) off the cursor.
+      if (panned) writeViewport();
+      if (_dragRect && _dragOffsets) {
+        var vp = state.viewport;
+        // Cursor world point (post-pan), using the cached rect to avoid a layout
+        // read; mirrors clientToWorld's math.
+        var curX = (_dragCursorX - _dragRect.left - vp.x) / vp.zoom;
+        var curY = (_dragCursorY - _dragRect.top - vp.y) / vp.zoom;
+        state.selection.forEach(function (sid) {
+          var n = findNode(sid);
+          var o = _dragOffsets[sid];
+          var card = qs('.wf-node[data-node-id="' + sid + '"]');
+          if (n && o) {
+            n.position.x = curX + o.x;
+            n.position.y = curY + o.y;
+          }
+          if (n && card) {
+            card.style.left = (n.position.x || 0) + "px";
+            card.style.top = (n.position.y || 0) + "px";
+          }
+        });
+      }
       // Wires read live node.position (offsets stay cached — card internals are
       // unchanged), so a moved node's wires track it without a full re-render.
       if (WF.renderWires) WF.renderWires();
+      renderMinimap();
+      // Keep panning while a drag is held inside the edge band even if the
+      // cursor isn't moving (move() won't re-fire). Bounded to the drag.
+      if (panned && _draggingNode) scheduleNodePositionFlush();
     });
   }
 
@@ -440,6 +519,13 @@
         return;
       }
     }
+    // Fit-to-view — bare "f" (no modifier), skipped while typing in a field so
+    // it doesn't hijack "f" in a param input.
+    if (!e.metaKey && !e.ctrlKey && !inField && (e.key === "f" || e.key === "F")) {
+      fitToView();
+      e.preventDefault();
+      return;
+    }
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (inField) return;
     // A selected wire takes priority over node selection (wires satellite owns
@@ -552,6 +638,171 @@
     applyViewport();
   }
 
+  // ---- Fit to view ----
+
+  // World-space bounding box of every node card. Card pixel size is read the way
+  // focusNode does (offsetWidth/Height, default 200×120 for an unrendered card).
+  // Shared by fitToView and the minimap. Returns null when there are no nodes.
+  function nodesBoundingBox() {
+    var nodes = state.nodes || [];
+    if (!nodes.length) return null;
+    var minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      var x = (n.position && n.position.x) || 0;
+      var y = (n.position && n.position.y) || 0;
+      var card = qs('.wf-node[data-node-id="' + n.id + '"]');
+      var w = card ? card.offsetWidth : 200;
+      var h = card ? card.offsetHeight : 120;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x + w > maxX) maxX = x + w;
+      if (y + h > maxY) maxY = y + h;
+    }
+    return {
+      minX: minX,
+      minY: minY,
+      maxX: maxX,
+      maxY: maxY,
+      w: maxX - minX,
+      h: maxY - minY,
+    };
+  }
+
+  // Frame all nodes in the viewport: zoom to fit the bounding box (with padding,
+  // clamped) and centre it. Mirrors focusNode's centring math. No-op when not
+  // ready or empty (cf. autoArrange's guards).
+  function fitToView() {
+    if (!state.ready) return;
+    var box = nodesBoundingBox();
+    if (!box) return;
+    var canvas = qs("#wfCanvas");
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var pad = 40;
+    var vw = rect.width - pad * 2;
+    var vh = rect.height - pad * 2;
+    // Guard the degenerate single-node (zero-size) box and tiny viewports.
+    var zoomX = box.w > 0 ? vw / box.w : ZOOM_MAX;
+    var zoomY = box.h > 0 ? vh / box.h : ZOOM_MAX;
+    var zoom = clamp(Math.min(zoomX, zoomY), ZOOM_MIN, ZOOM_MAX);
+    var cx = box.minX + box.w / 2;
+    var cy = box.minY + box.h / 2;
+    var vp = state.viewport;
+    vp.zoom = zoom;
+    vp.x = rect.width / 2 - cx * zoom;
+    vp.y = rect.height / 2 - cy * zoom;
+    applyViewport();
+    WF.scheduleSave();
+  }
+
+  // ---- Minimap ----
+
+  // Draw a scaled overview of the graph plus the current viewport rectangle into
+  // the corner canvas. RAF-throttled (mirrors applyViewport's _vpRaf). Hidden
+  // when there are no nodes or the tab is backgrounded (canvas perf rule).
+  function renderMinimap() {
+    if (_minimapRaf) return;
+    _minimapRaf = requestAnimationFrame(function () {
+      _minimapRaf = 0;
+      var mm = qs("#wfMinimap");
+      if (!mm) return;
+      var canvas = qs("#wfCanvas");
+      var box = nodesBoundingBox();
+      if (!canvas || !box || document.hidden) {
+        mm.classList.add("hidden");
+        return;
+      }
+      mm.classList.remove("hidden");
+      var ctx = mm.getContext("2d");
+      if (!ctx) return;
+      var mmW = mm.width;
+      var mmH = mm.height;
+      ctx.clearRect(0, 0, mmW, mmH);
+
+      // Fit the world box (padded) into the minimap, centred.
+      var pad = 8;
+      var bw = box.w || 1;
+      var bh = box.h || 1;
+      var scale = Math.min((mmW - pad * 2) / bw, (mmH - pad * 2) / bh);
+      var offX = (mmW - bw * scale) / 2 - box.minX * scale;
+      var offY = (mmH - bh * scale) / 2 - box.minY * scale;
+      // Stash the transform so click/drag can invert it back to world coords.
+      _mmTransform = { scale: scale, offX: offX, offY: offY };
+
+      var styles = getComputedStyle(document.documentElement);
+      var nodeFill = (styles.getPropertyValue("--color-text-muted") || "#888").trim();
+      var vpStroke = (styles.getPropertyValue("--color-accent") || "#4a9").trim();
+
+      // Node rects.
+      ctx.fillStyle = nodeFill;
+      var nodes = state.nodes || [];
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        var nx = ((n.position && n.position.x) || 0) * scale + offX;
+        var ny = ((n.position && n.position.y) || 0) * scale + offY;
+        var card = qs('.wf-node[data-node-id="' + n.id + '"]');
+        var nw = (card ? card.offsetWidth : 200) * scale;
+        var nh = (card ? card.offsetHeight : 120) * scale;
+        ctx.fillRect(nx, ny, Math.max(2, nw), Math.max(2, nh));
+      }
+
+      // Visible-viewport rectangle: invert the world transform to the world rect
+      // currently shown, then map it through the minimap transform.
+      var rect = canvas.getBoundingClientRect();
+      var vp = state.viewport;
+      var wx = -vp.x / vp.zoom;
+      var wy = -vp.y / vp.zoom;
+      var ww = rect.width / vp.zoom;
+      var wh = rect.height / vp.zoom;
+      ctx.strokeStyle = vpStroke;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(wx * scale + offX, wy * scale + offY, ww * scale, wh * scale);
+    });
+  }
+
+  // Recenter the viewport on the world point under a minimap click/drag.
+  var _mmTransform = null;
+  var _mmDragging = false;
+  function minimapRecenter(ev) {
+    var mm = qs("#wfMinimap");
+    var canvas = qs("#wfCanvas");
+    if (!mm || !canvas || !_mmTransform) return;
+    var mmRect = mm.getBoundingClientRect();
+    var t = _mmTransform;
+    var worldX = (ev.clientX - mmRect.left - t.offX) / t.scale;
+    var worldY = (ev.clientY - mmRect.top - t.offY) / t.scale;
+    var rect = canvas.getBoundingClientRect();
+    var vp = state.viewport;
+    vp.x = rect.width / 2 - worldX * vp.zoom;
+    vp.y = rect.height / 2 - worldY * vp.zoom;
+    applyViewport();
+  }
+
+  function onMinimapMouseDown(e) {
+    if (!state.ready) return;
+    e.preventDefault();
+    // The minimap sits inside #wfCanvas — stop the mousedown bubbling to
+    // onCanvasMouseDown, which would otherwise start a marquee selection.
+    e.stopPropagation();
+    _mmDragging = true;
+    minimapRecenter(e);
+    function move(ev) {
+      if (_mmDragging) minimapRecenter(ev);
+    }
+    function up() {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      _mmDragging = false;
+      WF.scheduleSave();
+    }
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  }
+
   // ---- Boot ----
 
   function initCanvas() {
@@ -571,11 +822,22 @@
     canvas.addEventListener("mousedown", onCanvasMouseDown);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     document.addEventListener("keydown", onKeyDown);
+    var minimap = qs("#wfMinimap");
+    if (minimap) minimap.addEventListener("mousedown", onMinimapMouseDown);
+    // Redraw the minimap when the tab returns to the foreground (it skips
+    // drawing while hidden).
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) renderMinimap();
+    });
   }
 
   WF.initCanvas = initCanvas;
   WF.applyViewport = applyViewport;
   WF.autoArrange = autoArrange;
+  // Consumed by the hub toolbar (button + "F" shortcut) and the minimap sync
+  // hook in the nodes satellite (renderAllNodes → structural changes).
+  WF.fitToView = fitToView;
+  WF.renderMinimap = renderMinimap;
   // Consumed by the wires satellite (cursor→world for the in-flight wire; node
   // lookup for port endpoints).
   WF.clientToWorld = clientToWorld;

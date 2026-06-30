@@ -74,6 +74,10 @@
         </button>
         <button id="wfCleanUp" class="btn btn-small" type="button" disabled
                 title="Auto-arrange the nodes">Clean up</button>
+        <button id="wfFitView" class="btn btn-small wf-icon-btn" type="button" disabled
+                aria-label="Fit to view" title="Fit all nodes in view (F)">
+          <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
+        </button>
         <button id="wfSaveStash" class="btn btn-small" type="button" disabled
                 title="Save the selected nodes as a reusable stash">Stash selection</button>
         <div class="wf-run-split">
@@ -117,6 +121,7 @@
               <div><dt>Undo / Redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
               <div><dt>Copy / Paste / Duplicate</dt><dd><kbd>⌘C</kbd> <kbd>⌘V</kbd> <kbd>⌘D</kbd></dd></div>
               <div><dt>Delete selection</dt><dd><kbd>Delete</kbd></dd></div>
+              <div><dt>Fit to view</dt><dd><kbd>F</kbd></dd></div>
               <div><dt>Pan canvas</dt><dd>middle-drag</dd></div>
               <div><dt>Zoom</dt><dd>scroll</dd></div>
               <div><dt>Select</dt><dd>drag / shift-click</dd></div>
@@ -139,6 +144,10 @@
                 aria-label="Delete wire">
           <span class="wf-wire-delete-icon"></span>
         </button>
+        <!-- Corner overview of the whole graph + a viewport rectangle; click or
+             drag it to recenter. Hidden by the canvas satellite when empty. -->
+        <canvas id="wfMinimap" class="wf-minimap hidden" width="180" height="130"
+                aria-hidden="true"></canvas>
         <div id="wfCanvasEmpty" class="wf-canvas-empty">
           <h1>Workflows</h1>
           <p>Drag nodes from the palette to chain clip, Screenspace, and transcript actions.</p>

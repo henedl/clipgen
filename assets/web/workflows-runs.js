@@ -30,18 +30,17 @@
     return !!TERMINAL[status];
   }
 
-  // A blueprint fans out when any Video Source is set to "All participants" — the
-  // single Run button then launches a batch instead of one run.
+  // A blueprint fans out when any Video Source is set to "All participants" or to
+  // a subset of ≥2 participants — the single Run button then launches a batch
+  // instead of one run. A single id (string) or a 1-element array runs once.
   function blueprintWantsBatch() {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
-      if (
-        nodes[i].type === "video_source" &&
-        nodes[i].params &&
-        nodes[i].params.participant === WF.ALL_PARTICIPANTS
-      ) {
-        return true;
-      }
+      var n = nodes[i];
+      if (n.type !== "video_source" || !n.params) continue;
+      var p = n.params.participant;
+      if (p === WF.ALL_PARTICIPANTS) return true;
+      if (Array.isArray(p) && p.length >= 2) return true;
     }
     return false;
   }
@@ -227,16 +226,37 @@
     // UI flips to idle when the stream/poll reports the cancelled status.
   }
 
-  // Fan the active blueprint out across every participant (P3). One run per
-  // participant, sequential, grouped under one batch card. Reached from startRun
-  // when a Video Source is set to "All participants".
+  // The explicit participant subset to fan out over, or null for "all". Resolved
+  // from the first Video Source whose value is an array (subset) or the ALL
+  // sentinel — multiple Video Sources share one batch list (the server rebinds
+  // them all per child run; a per-source subset is out of scope). An array of ≥2
+  // ids is sent as-is; ALL (or no explicit selection) omits the field so the
+  // server's "all participants" branch runs.
+  function batchParticipants() {
+    var nodes = state.nodes || [];
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (n.type !== "video_source" || !n.params) continue;
+      var p = n.params.participant;
+      if (p === WF.ALL_PARTICIPANTS) return null;
+      if (Array.isArray(p) && p.length >= 2) return p.slice();
+    }
+    return null;
+  }
+
+  // Fan the active blueprint out across the selected participants (P3). One run
+  // per participant, sequential, grouped under one batch card. Reached from
+  // startRun when a Video Source is set to "All participants" or a subset.
   function startBatch() {
     if (!state.ready || !state.activeBlueprintId) return;
     if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
     setRunningUI(true);
     Promise.resolve(WF.flushSave ? WF.flushSave() : null)
       .then(function () {
-        return apiPost("api/batches", { blueprintId: state.activeBlueprintId });
+        var body = { blueprintId: state.activeBlueprintId };
+        var subset = batchParticipants();
+        if (subset) body.participants = subset;
+        return apiPost("api/batches", body);
       })
       .then(function (res) {
         if (!res || !res.ok || !res.batch) {

@@ -31,7 +31,11 @@ at `~/.claude/plans/system-instruction-you-are-working-scalable-emerson.md`.
 
 ---
 
-## Phase 2 — Canvas navigation *(high impact, medium effort)*
+## Phase 2 — Canvas navigation *(high impact, medium effort)* — ✅ DONE (v0.13.48)
+
+Shipped fit-to-view (button + `F`), auto-pan on node drag near the edge (world-anchored drag so the
+node tracks the cursor across the pan), **and** the minimap (2c was built, not deferred — corner
+overview + viewport rectangle + click/drag-to-recenter).
 
 Large graphs are hard to navigate: there's no way to frame the whole graph, no auto-pan when dragging
 a node off-screen, and no minimap. All work is in **`assets/web/workflows-canvas.js`** plus small
@@ -85,7 +89,14 @@ If skipped, say so explicitly in the PR so it's not mistaken for done.
 
 ---
 
-## Phase 5 — Multi-select participant batch *(medium impact, medium effort)*
+## Phase 5 — Multi-select participant batch *(medium impact, medium effort)* — ✅ DONE (v0.13.49)
+
+Shipped: a checkbox-popover multi-select replaces the single `<select>` on the Video Source
+participant param (`buildParticipantSelect` in `workflows-nodes.js`, reusing the hub's `bindMenuToggle`).
+Value is normalized on write — a single id stays a string (server single-run path untouched), `__all__`
+for everyone, an array for a subset, `[]` for none. `blueprintWantsBatch`/`startBatch` send the subset
+as `participants`; an empty array raises a validation warning. Server already honored the subset; added
+a `test_batch_honors_participant_subset` regression guard.
 
 Today a Video Source's participant param is a single `<select>` offering each participant **or** the
 `__all__` sentinel (`WF.ALL_PARTICIPANTS`); "All" fans out to a batch over every participant. Goal:
