@@ -73,6 +73,7 @@ import titlecards
 import utils
 import video
 import viewer
+from server_utils import err, ok
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -495,7 +496,7 @@ def _resolve_source_video(participant: str) -> Path | None:
 @studio_bp.route("/api/thumbnail/<participant>/<start_seconds>")
 def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
+        return err("No spreadsheet loaded", 404)
 
     try:
         # Parse via float so a fractional second (thumbnails are second-granular,
@@ -503,10 +504,10 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         # float-tolerant parsing the project's other media routes use.
         start_sec = max(0, int(float(start_seconds)))
     except (ValueError, TypeError):
-        return jsonify({"ok": False, "error": "Invalid timestamp"}), 400
+        return err("Invalid timestamp")
     sources = _resolve_participant_sources(participant)
     if not sources or not sources[0].is_file():
-        return jsonify({"ok": False, "error": "Source video not found"}), 404
+        return err("Source video not found", 404)
 
     # Multi-video participant: map the global second into the owning sub-video so
     # the hover thumbnail comes from the right file at the right local offset.
@@ -515,10 +516,10 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if len(sources) >= 2:
         timeline = video.build_source_timeline([str(p) for p in sources])
         if timeline is None:
-            return jsonify({"ok": False, "error": "Source video not found"}), 404
+            return err("Source video not found", 404)
         mapped = utils.resolve_timeline_segment(timeline, start_sec)
         if mapped is None:
-            return jsonify({"ok": False, "error": "Timestamp beyond recording"}), 404
+            return err("Timestamp beyond recording", 404)
         video_path = Path(mapped[0])
         cut_sec = int(mapped[1])
 
@@ -543,7 +544,7 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         str(video_path), cut_sec, width=config.STUDIO_THUMBNAIL_WIDTH
     )
     if jpeg_bytes is None:
-        return jsonify({"ok": False, "error": "Thumbnail extraction failed"}), 404
+        return err("Thumbnail extraction failed", 404)
 
     _thumbnail_cache_put(cache_key, jpeg_bytes)
     return Response(
@@ -599,15 +600,15 @@ def api_sprite(participant: str) -> FlaskResponse:
     sub-video and the sprite samples that file's tail (hover preview only).
     """
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
+        return err("No spreadsheet loaded", 404)
     window = _parse_clip_window()
     if window is None:
-        return jsonify({"ok": False, "error": "Invalid clip range"}), 400
+        return err("Invalid clip range")
     start_sec, duration = window
 
     resolved = _resolve_clip_media_source(participant, start_sec)
     if resolved is None:
-        return jsonify({"ok": False, "error": "Source video not found"}), 404
+        return err("Source video not found", 404)
     video_path, local_start = resolved
     cols = config.STUDIO_SCRUBBER_SPRITE_COLS
     rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
@@ -639,7 +640,7 @@ def api_sprite(participant: str) -> FlaskResponse:
         str(video_path), local_start, duration, cols, rows
     )
     if sprite_bytes is None:
-        return jsonify({"ok": False, "error": "Sprite extraction failed"}), 404
+        return err("Sprite extraction failed", 404)
 
     _sprite_cache_put(cache_key, sprite_bytes)
     return Response(
@@ -658,15 +659,15 @@ def api_clip_audio(participant: str) -> FlaskResponse:
     *start* into the owning sub-video (hover preview only).
     """
     if _sheet_context is None:
-        return jsonify({"ok": False, "error": "No spreadsheet loaded"}), 404
+        return err("No spreadsheet loaded", 404)
     window = _parse_clip_window()
     if window is None:
-        return jsonify({"ok": False, "error": "Invalid clip range"}), 400
+        return err("Invalid clip range")
     start_sec, duration = window
 
     resolved = _resolve_clip_media_source(participant, start_sec)
     if resolved is None:
-        return jsonify({"ok": False, "error": "Source video not found"}), 404
+        return err("Source video not found", 404)
     video_path, local_start = resolved
 
     try:
@@ -689,7 +690,7 @@ def api_clip_audio(participant: str) -> FlaskResponse:
         str(video_path), local_start, duration
     )
     if wav_bytes is None:
-        return jsonify({"ok": False, "error": "Audio extraction failed"}), 404
+        return err("Audio extraction failed", 404)
 
     _audio_cache_put(cache_key, wav_bytes)
     return Response(
@@ -805,11 +806,11 @@ def api_sheet_baseline() -> FlaskResponse:
     Empty baselines dict when no baseline row exists.
     """
     if _sheet_context is None:
-        return jsonify({"ok": True, "sheet_loaded": False, "baselines": {}})
+        return ok(sheet_loaded=False, baselines={})
 
     ctx = _sheet_context
     if ctx.baseline_row_idx is None:
-        return jsonify({"ok": True, "baselines": {}})
+        return ok(baselines={})
 
     participants = spreadsheet.get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
@@ -824,7 +825,7 @@ def api_sheet_baseline() -> FlaskResponse:
             value = ctx.sheet_data[ctx.baseline_row_idx][col_idx].strip()
         baselines[pid] = utils._clock_to_seconds(value) or 0
 
-    return jsonify({"ok": True, "baselines": baselines})
+    return ok(baselines=baselines)
 
 
 def _clean_convergence_offsets(raw: object) -> dict[str, dict[str, float]]:
@@ -873,7 +874,7 @@ def api_convergence_offsets_get() -> FlaskResponse:
         config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
     )
     raw = data.get("offsets") if isinstance(data, dict) else None
-    return jsonify({"ok": True, "offsets": _clean_convergence_offsets(raw)})
+    return ok(offsets=_clean_convergence_offsets(raw))
 
 
 @studio_bp.route("/api/convergence/offsets", methods=["PUT"])
@@ -888,7 +889,7 @@ def api_convergence_offsets_put() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     raw = data.get("offsets")
     if not isinstance(raw, dict):
-        return jsonify({"ok": False, "error": "Invalid offsets payload"}), 400
+        return err("Invalid offsets payload")
 
     cleaned = _clean_convergence_offsets(raw)
 
@@ -906,24 +907,19 @@ def api_convergence_offsets_put() -> FlaskResponse:
             config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}
         )
 
-    return jsonify({"ok": True, "offsets": cleaned})
+    return ok(offsets=cleaned)
 
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])
 def api_sheet_refresh() -> FlaskResponse:
     global _sheet_context
     if _worksheet is None:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No spreadsheet loaded — pick one from the Start panel.",
-            }
-        ), 400
+        return err("No spreadsheet loaded — pick one from the Start panel.")
     new_context = spreadsheet.build_sheet_context(_worksheet)
     if new_context is None:
-        return jsonify({"ok": False, "error": "Failed to refresh sheet data"}), 500
+        return err("Failed to refresh sheet data", 500)
     _sheet_context = new_context
-    return jsonify({"ok": True})
+    return ok()
 
 
 def _save_manifest_quiet() -> None:
@@ -1411,12 +1407,7 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
 @studio_bp.route("/api/generate", methods=["POST"])
 def api_generate() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No spreadsheet loaded — pick one from the Start panel.",
-            }
-        ), 400
+        return err("No spreadsheet loaded — pick one from the Start panel.")
 
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
@@ -1425,24 +1416,20 @@ def api_generate() -> FlaskResponse:
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
-        return jsonify({"ok": False, "error": "No cells specified"}), 400
+        return err("No cells specified")
 
     if output_format not in ("clip", "screen", "gif"):
-        return jsonify({"ok": False, "error": f"Invalid format: {output_format}"}), 400
+        return err(f"Invalid format: {output_format}")
 
     if not _try_claim_busy("generate"):
-        return jsonify(
-            {"ok": False, "error": "A clip generation is already in progress"}
-        ), 409
+        return err("A clip generation is already in progress", 409)
 
     try:
         cell_input = ", ".join(cell_strings)
         cell_specs = spreadsheet.parse_cell_specifications(cell_input)
         if not cell_specs:
             _release_busy("generate")
-            return jsonify(
-                {"ok": False, "error": "Could not parse cell specifications"}
-            ), 400
+            return err("Could not parse cell specifications")
 
         clips = spreadsheet.generate_list(
             _worksheet,
@@ -1454,7 +1441,7 @@ def api_generate() -> FlaskResponse:
         _apply_time_overrides(clips, overrides)
     except Exception as e:
         _release_busy("generate")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return err(str(e), 500)
 
     def stream() -> Any:
         _generate_cancel_event.clear()
@@ -1666,12 +1653,7 @@ def api_generate() -> FlaskResponse:
 @studio_bp.route("/api/highlights-preview", methods=["POST"])
 def api_highlights_preview() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No spreadsheet loaded — pick one from the Start panel.",
-            }
-        ), 400
+        return err("No spreadsheet loaded — pick one from the Start panel.")
 
     data = request.get_json(silent=True) or {}
     highlights_duration = data.get("highlights_duration")
@@ -1695,9 +1677,7 @@ def api_highlights_preview() -> FlaskResponse:
         )
 
     if not clips:
-        return jsonify(
-            {"ok": False, "error": "No clips found for highlights selection"}
-        ), 400
+        return err("No clips found for highlights selection")
 
     result = []
     for clip in clips:
@@ -1711,18 +1691,13 @@ def api_highlights_preview() -> FlaskResponse:
             }
         )
 
-    return jsonify({"ok": True, "clips": result})
+    return ok(clips=result)
 
 
 @studio_bp.route("/api/reel", methods=["POST"])
 def api_reel() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No spreadsheet loaded — pick one from the Start panel.",
-            }
-        ), 400
+        return err("No spreadsheet loaded — pick one from the Start panel.")
 
     data = request.get_json(silent=True) or {}
     cell_strings = data.get("cells", [])
@@ -1731,7 +1706,7 @@ def api_reel() -> FlaskResponse:
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
-        return jsonify({"ok": False, "error": "No cells specified"}), 400
+        return err("No cells specified")
 
     highlights_overrides: dict[str, Any] = {}
     if highlights_duration is not None:
@@ -1743,9 +1718,7 @@ def api_reel() -> FlaskResponse:
             pass
 
     if not _try_claim_busy("reel"):
-        return jsonify(
-            {"ok": False, "error": "A reel build is already in progress"}
-        ), 409
+        return err("A reel build is already in progress", 409)
 
     def stream() -> Any:
         # _stream_process_reel's worker takes ownership of the busy slot once
@@ -1863,12 +1836,7 @@ def api_viewer() -> FlaskResponse:
     with _generated_output_lock:
         artifacts = list(_generated_artifacts)
     if not artifacts:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No artifacts to build viewer from. Generate artifacts first.",
-            }
-        ), 400
+        return err("No artifacts to build viewer from. Generate artifacts first.")
 
     try:
         study = artifacts[0].get("study", "")
@@ -1883,11 +1851,11 @@ def api_viewer() -> FlaskResponse:
         )
         viewer_path = viewer.generate_timeline_viewer(data)
         if viewer_path:
-            return jsonify({"ok": True, "file": str(viewer_path)})
-        return jsonify({"ok": False, "error": "Failed to generate viewer"}), 500
+            return ok(file=str(viewer_path))
+        return err("Failed to generate viewer", 500)
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return err(str(e), 500)
 
 
 def _discard_artifact_files(artifacts: list[dict[str, Any]]) -> None:
@@ -1907,17 +1875,10 @@ def _discard_artifact_files(artifacts: list[dict[str, Any]]) -> None:
 @studio_bp.route("/api/timeline-viewer", methods=["POST"])
 def api_timeline_viewer() -> FlaskResponse:
     if _worksheet is None:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No spreadsheet loaded — pick one from the Start panel.",
-            }
-        ), 400
+        return err("No spreadsheet loaded — pick one from the Start panel.")
 
     if not _try_claim_busy("timeline_viewer"):
-        return jsonify(
-            {"ok": False, "error": "A timeline viewer build is already in progress."}
-        ), 409
+        return err("A timeline viewer build is already in progress.", 409)
 
     try:
         _timeline_viewer_cancel_event.clear()
@@ -1929,7 +1890,7 @@ def api_timeline_viewer() -> FlaskResponse:
             _worksheet, "batch", ctx=_sheet_context, skip_prompts=True
         )
         if not clips_list:
-            return jsonify({"ok": False, "error": "No clips found in sheet"}), 400
+            return err("No clips found in sheet")
 
         generated, artifacts = pipeline.process_clips(
             clips_list,
@@ -1940,7 +1901,7 @@ def api_timeline_viewer() -> FlaskResponse:
             _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
-            return jsonify({"ok": False, "error": "No artifacts were generated"}), 400
+            return err("No artifacts were generated")
 
         # Generate intake clips if requested. Accumulate (but don't publish)
         # alongside the sheet clips so a cancel anywhere below discards them all.
@@ -1982,19 +1943,14 @@ def api_timeline_viewer() -> FlaskResponse:
         )
         if viewer_path:
             _save_manifest_quiet()
-            return jsonify(
-                {
-                    "ok": True,
-                    "file": str(viewer_path),
-                    "generated": generated + len(intake_artifacts),
-                }
+            return ok(
+                file=str(viewer_path),
+                generated=generated + len(intake_artifacts),
             )
-        return jsonify(
-            {"ok": False, "error": "Failed to generate timeline viewer"}
-        ), 500
+        return err("Failed to generate timeline viewer", 500)
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return err(str(e), 500)
     finally:
         _release_busy("timeline_viewer")
 
@@ -2002,12 +1958,7 @@ def api_timeline_viewer() -> FlaskResponse:
 @studio_bp.route("/api/gallery", methods=["POST"])
 def api_gallery() -> FlaskResponse:
     if _sheet_context is None:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No spreadsheet loaded — pick one from the Start panel.",
-            }
-        ), 400
+        return err("No spreadsheet loaded — pick one from the Start panel.")
 
     data = request.get_json(silent=True) or {}
     participant = data.get("participant", "")
@@ -2016,15 +1967,13 @@ def api_gallery() -> FlaskResponse:
     bundle = bool(data.get("bundle", config.GALLERY_BUNDLE_ENABLED))
 
     if not participant:
-        return jsonify({"ok": False, "error": "No participant specified"}), 400
+        return err("No participant specified")
 
     if output_format not in ("screen", "gif"):
-        return jsonify({"ok": False, "error": f"Invalid format: {output_format}"}), 400
+        return err(f"Invalid format: {output_format}")
 
     if not _try_claim_busy("gallery"):
-        return jsonify(
-            {"ok": False, "error": "A gallery build is already in progress."}
-        ), 409
+        return err("A gallery build is already in progress.", 409)
 
     try:
         try:
@@ -2036,9 +1985,7 @@ def api_gallery() -> FlaskResponse:
 
         sources = _resolve_participant_sources(participant)
         if not sources or not sources[0].is_file():
-            return jsonify(
-                {"ok": False, "error": f"Source video not found for {participant}"}
-            ), 404
+            return err(f"Source video not found for {participant}", 404)
 
         _gallery_cancel_event.clear()
         # Multi-video participants form one continuous timeline: capture each part
@@ -2087,7 +2034,7 @@ def api_gallery() -> FlaskResponse:
             _discard_artifact_files(artifacts)
             return jsonify({"ok": False, "cancelled": True})
         if not artifacts:
-            return jsonify({"ok": False, "error": "No captures generated"}), 500
+            return err("No captures generated", 500)
 
         gallery_data = viewer.finalize_gallery_data(
             artifacts,
@@ -2105,11 +2052,11 @@ def api_gallery() -> FlaskResponse:
             return jsonify({"ok": False, "cancelled": True})
         gallery_path = viewer.generate_gallery_viewer(gallery_data)
         if gallery_path:
-            return jsonify({"ok": True, "file": str(gallery_path)})
-        return jsonify({"ok": False, "error": "Failed to generate gallery viewer"}), 500
+            return ok(file=str(gallery_path))
+        return err("Failed to generate gallery viewer", 500)
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return err(str(e), 500)
     finally:
         _release_busy("gallery")
 
@@ -2120,26 +2067,26 @@ def api_open_viewer() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     file_path = data.get("file", "")
     if not file_path:
-        return jsonify({"ok": False, "error": "No file specified"}), 400
+        return err("No file specified")
 
     p = Path(file_path).resolve()
     output_dir = Path(utils.get_effective_output_dir()).resolve()
 
     if p.suffix != ".html" or not p.is_relative_to(output_dir):
-        return jsonify({"ok": False, "error": "Invalid file path"}), 403
+        return err("Invalid file path", 403)
 
     if not p.is_file():
-        return jsonify({"ok": False, "error": "File not found"}), 404
+        return err("File not found", 404)
 
     webbrowser.open(p.as_uri())
-    return jsonify({"ok": True})
+    return ok()
 
 
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":
         artifacts, reels = viewer._load_manifest_both()
-        return jsonify({"ok": True, "artifacts": artifacts, "reels": reels})
+        return ok(artifacts=artifacts, reels=reels)
 
     # Snapshot the shared lists so a worker thread extending mid-export
     # can't produce a partial/aliased manifest snapshot.
@@ -2147,12 +2094,7 @@ def api_manifest() -> FlaskResponse:
         artifacts = list(_generated_artifacts)
         reels = list(_generated_reels)
     if not artifacts and not reels:
-        return jsonify(
-            {
-                "ok": False,
-                "error": "No artifacts to export. Generate artifacts first.",
-            }
-        ), 400
+        return err("No artifacts to export. Generate artifacts first.")
 
     try:
         study = ""
@@ -2170,11 +2112,11 @@ def api_manifest() -> FlaskResponse:
             mode="studio",
         )
         if manifest_path:
-            return jsonify({"ok": True, "file": str(manifest_path)})
-        return jsonify({"ok": False, "error": "Failed to write manifest"}), 500
+            return ok(file=str(manifest_path))
+        return err("Failed to write manifest", 500)
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return err(str(e), 500)
 
 
 @studio_bp.route("/api/regenerate", methods=["POST"])
@@ -2182,22 +2124,17 @@ def api_regenerate() -> FlaskResponse:
     try:
         artifacts, reels = viewer._load_manifest_both()
         if not artifacts and not reels:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "No manifest found on disk. Export a manifest first.",
-                }
-            ), 400
+            return err("No manifest found on disk. Export a manifest first.")
 
         media_count = sum(1 for a in artifacts if a.get("type") != "transcript")
         reel_count = len(reels)
         total = media_count + reel_count
 
         regenerated = pipeline.regenerate_from_manifest(artifacts, reels=reels)
-        return jsonify({"ok": True, "regenerated": regenerated, "total": total})
+        return ok(regenerated=regenerated, total=total)
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return err(str(e), 500)
 
 
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
@@ -2217,7 +2154,7 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
         if action == "create":
             items = data.get("items", [])
             if not items:
-                return jsonify({"ok": False, "error": "No items to stash"}), 400
+                return err("No items to stash")
             name = data.get("name", "")
             total_duration = data.get("totalDuration") or sum(
                 item.get("segDuration", 0) for item in items
@@ -2232,38 +2169,38 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
             }
             stashes.append(stash)
             save_fn(stashes)
-            return jsonify({"ok": True, "stash": stash})
+            return ok(stash=stash)
 
         if action == "update":
             stash_id = data.get("id")
             if not stash_id:
-                return jsonify({"ok": False, "error": "No stash ID"}), 400
+                return err("No stash ID")
             for s in stashes:
                 if s["id"] == stash_id:
                     name = data.get("name")
                     if name is not None:
                         s["name"] = name
                     save_fn(stashes)
-                    return jsonify({"ok": True, "stash": s})
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+                    return ok(stash=s)
+            return err("Stash not found", 404)
 
         if action == "delete":
             stash_id = data.get("id")
             if not stash_id:
-                return jsonify({"ok": False, "error": "No stash ID"}), 400
+                return err("No stash ID")
             for i, s in enumerate(stashes):
                 if s["id"] == stash_id:
                     stashes.pop(i)
                     save_fn(stashes)
-                    return jsonify({"ok": True})
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+                    return ok()
+            return err("Stash not found", 404)
 
-        return jsonify({"ok": False, "error": f"Unknown action: {action}"}), 400
+        return err(f"Unknown action: {action}")
 
 
 @studio_bp.route("/api/stashes", methods=["GET"])
 def api_stashes_get() -> FlaskResponse:
-    return jsonify({"ok": True, "stashes": _load_stashes()})
+    return ok(stashes=_load_stashes())
 
 
 @studio_bp.route("/api/stashes", methods=["POST"])
@@ -2273,7 +2210,7 @@ def api_stashes_post() -> FlaskResponse:
 
 @studio_bp.route("/api/artifact-stashes", methods=["GET"])
 def api_artifact_stashes_get() -> FlaskResponse:
-    return jsonify({"ok": True, "stashes": _load_artifact_stashes()})
+    return ok(stashes=_load_artifact_stashes())
 
 
 @studio_bp.route("/api/artifact-stashes", methods=["POST"])
@@ -2484,7 +2421,7 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
 
 @studio_bp.route("/api/settings", methods=["GET"])
 def api_settings_get() -> FlaskResponse:
-    return jsonify({"ok": True, "settings": _settings_records()})
+    return ok(settings=_settings_records())
 
 
 @studio_bp.route("/api/settings", methods=["PUT"])
@@ -2492,8 +2429,8 @@ def api_settings_put() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     applied, error = _apply_settings_payload(data)
     if error is not None:
-        return jsonify({"ok": False, "error": error}), 400
-    return jsonify({"ok": True, "applied": applied})
+        return err(error)
+    return ok(applied=applied)
 
 
 # ── Titlecard / endcard background picker ────────────────────────────────
@@ -2598,12 +2535,9 @@ def _card_picker_payload(kind: str) -> dict[str, Any]:
 @studio_bp.route("/api/titlecards", methods=["GET"])
 def api_titlecards_list() -> FlaskResponse:
     """List background choices (default, color, none, uploads) for both cards."""
-    return jsonify(
-        {
-            "ok": True,
-            "title": _card_picker_payload("title"),
-            "end": _card_picker_payload("end"),
-        }
+    return ok(
+        title=_card_picker_payload("title"),
+        end=_card_picker_payload("end"),
     )
 
 
@@ -2611,11 +2545,11 @@ def api_titlecards_list() -> FlaskResponse:
 def api_titlecard_default(kind: str) -> FlaskResponse:
     """Serve the bundled default titlecard/endcard image for previews."""
     if kind not in ("title", "end"):
-        return jsonify({"ok": False, "error": "Invalid kind"}), 400
+        return err("Invalid kind")
     asset = "titlecard.png" if kind == "title" else "endcard.png"
     path = utils.get_bundled_assets_root() / "assets" / asset
     if not path.is_file():
-        return jsonify({"ok": False, "error": "No default image"}), 404
+        return err("No default image", 404)
     return send_file(str(path))
 
 
@@ -2624,9 +2558,9 @@ def api_titlecard_image(name: str) -> FlaskResponse:
     """Serve an uploaded card background by filename (used for previews)."""
     safe = Path(name).name
     if safe != name or Path(safe).suffix.lower() not in _ALLOWED_CARD_EXTS:
-        return jsonify({"ok": False, "error": "Invalid filename"}), 400
+        return err("Invalid filename")
     if not (_titlecard_images_dir() / safe).is_file():
-        return jsonify({"ok": False, "error": "Not found"}), 404
+        return err("Not found", 404)
     return send_from_directory(str(_titlecard_images_dir()), safe)
 
 
@@ -2636,20 +2570,15 @@ def api_titlecard_upload() -> FlaskResponse:
     file = request.files.get("file")
     filename = file.filename if file is not None else None
     if file is None or not filename:
-        return jsonify({"ok": False, "error": "No file provided"}), 400
+        return err("No file provided")
     ext = Path(filename).suffix.lower()
     if ext not in _ALLOWED_CARD_EXTS:
-        return jsonify(
-            {
-                "ok": False,
-                "error": f"Unsupported file type '{ext}'. Use PNG, JPG, or WebP.",
-            }
-        ), 400
+        return err(f"Unsupported file type '{ext}'. Use PNG, JPG, or WebP.")
     file.seek(0, os.SEEK_END)
     size = file.tell()
     file.seek(0)
     if size > _MAX_CARD_UPLOAD_BYTES:
-        return jsonify({"ok": False, "error": "File too large (max 10 MB)."}), 400
+        return err("File too large (max 10 MB).")
 
     # sanitize_filename strips the dot from extensions, so clean the stem only,
     # then replace URL-reserved chars so the served image URL isn't truncated.
@@ -2667,18 +2596,15 @@ def api_titlecard_upload() -> FlaskResponse:
     try:
         file.save(str(images_dir / candidate))
     except OSError as error:
-        return jsonify({"ok": False, "error": str(error)}), 500
-    return jsonify(
-        {
-            "ok": True,
-            "item": {
-                "id": candidate,
-                "label": candidate,
-                "kind": "upload",
-                "url": f"/api/titlecards/image/{candidate}",
-                "deletable": True,
-            },
-        }
+        return err(str(error), 500)
+    return ok(
+        item={
+            "id": candidate,
+            "label": candidate,
+            "kind": "upload",
+            "url": f"/api/titlecards/image/{candidate}",
+            "deletable": True,
+        },
     )
 
 
@@ -2687,14 +2613,14 @@ def api_titlecard_delete(name: str) -> FlaskResponse:
     """Delete an uploaded card background; reset any selection that used it."""
     safe = Path(name).name
     if safe != name:
-        return jsonify({"ok": False, "error": "Invalid filename"}), 400
+        return err("Invalid filename")
     target = _titlecard_images_dir() / safe
     if not target.is_file():
-        return jsonify({"ok": False, "error": "Not found"}), 404
+        return err("Not found", 404)
     try:
         target.unlink()
     except OSError as error:
-        return jsonify({"ok": False, "error": str(error)}), 500
+        return err(str(error), 500)
     reset: dict[str, str] = {}
     for setting in ("TITLECARD_IMAGE", "ENDCARD_IMAGE"):
         if getattr(config, setting, "") == safe:
@@ -2703,7 +2629,7 @@ def api_titlecard_delete(name: str) -> FlaskResponse:
     if reset:
         merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS.keys()}
         _save_studio_settings(merged)
-    return jsonify({"ok": True, "reset": reset})
+    return ok(reset=reset)
 
 
 # ---- Screenspace Intake ----
@@ -2720,7 +2646,7 @@ def api_generate_intake() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     items = data.get("items", [])
     if not items:
-        return jsonify({"ok": False, "error": "No intake items specified"}), 400
+        return err("No intake items specified")
 
     output_format = data.get("format", "clip")
     study = _sheet_context.study_name if _sheet_context else ""
@@ -2825,12 +2751,10 @@ def api_reel_direct() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     segments = data.get("segments", [])
     if not segments:
-        return jsonify({"ok": False, "error": "No segments specified"}), 400
+        return err("No segments specified")
 
     if not _try_claim_busy("reel"):
-        return jsonify(
-            {"ok": False, "error": "A reel build is already in progress"}
-        ), 409
+        return err("A reel build is already in progress", 409)
 
     _reel_cancel_event.clear()
     _reset_reel_job_state("reel-direct")
@@ -3065,25 +2989,22 @@ def api_job_status() -> FlaskResponse:
         reel_snapshot = dict(_reel_job_state)
         generate_snapshot = dict(_generate_job_state)
         intake_snapshot = dict(_intake_job_state)
-    return jsonify(
-        {
-            "ok": True,
-            "reel": {
-                "in_progress": reel_busy,
-                "cancelling": reel_busy and _reel_cancel_event.is_set(),
-                **reel_snapshot,
-            },
-            "generate": {
-                "in_progress": generate_busy,
-                "cancelling": generate_busy and _generate_cancel_event.is_set(),
-                **generate_snapshot,
-            },
-            "intake": {
-                "in_progress": intake_busy,
-                "cancelling": intake_busy and _intake_cancel_event.is_set(),
-                **intake_snapshot,
-            },
-        }
+    return ok(
+        reel={
+            "in_progress": reel_busy,
+            "cancelling": reel_busy and _reel_cancel_event.is_set(),
+            **reel_snapshot,
+        },
+        generate={
+            "in_progress": generate_busy,
+            "cancelling": generate_busy and _generate_cancel_event.is_set(),
+            **generate_snapshot,
+        },
+        intake={
+            "in_progress": intake_busy,
+            "cancelling": intake_busy and _intake_cancel_event.is_set(),
+            **intake_snapshot,
+        },
     )
 
 
@@ -3091,14 +3012,14 @@ def api_job_status() -> FlaskResponse:
 def api_reel_cancel() -> FlaskResponse:
     """Signal cancellation for the in-progress reel build."""
     _reel_cancel_event.set()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @studio_bp.route("/api/generate/cancel", methods=["POST"])
 def api_generate_cancel() -> FlaskResponse:
     """Signal cancellation for the in-progress clip generation."""
     _generate_cancel_event.set()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @studio_bp.route("/api/generate-intake/cancel", methods=["POST"])
@@ -3110,21 +3031,21 @@ def api_generate_intake_cancel() -> FlaskResponse:
     endpoints to stop the full set of in-flight ffmpeg subprocesses.
     """
     _intake_cancel_event.set()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @studio_bp.route("/api/timeline-viewer/cancel", methods=["POST"])
 def api_timeline_viewer_cancel() -> FlaskResponse:
     """Signal cancellation for the in-progress timeline-viewer build."""
     _timeline_viewer_cancel_event.set()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @studio_bp.route("/api/gallery/cancel", methods=["POST"])
 def api_gallery_cancel() -> FlaskResponse:
     """Signal cancellation for the in-progress gallery build."""
     _gallery_cancel_event.set()
-    return jsonify({"ok": True})
+    return ok()
 
 
 # ---- State initialization ----
@@ -3391,13 +3312,10 @@ def build_combined_app(
         output_dir = Path(utils.get_effective_output_dir())
         screenspace = (output_dir / config.SCREENSPACE_MANIFEST_FILENAME).is_file()
         transcripts = (output_dir / config.TRANSCRIPTS_MANIFEST_FILENAME).is_file()
-        return jsonify(
-            {
-                "ok": True,
-                "screenspace": screenspace,
-                "transcripts": transcripts,
-                "any": screenspace or transcripts,
-            }
+        return ok(
+            screenspace=screenspace,
+            transcripts=transcripts,
+            any=screenspace or transcripts,
         )
 
     @combined.route("/api/export", methods=["POST"])
@@ -3408,25 +3326,18 @@ def build_combined_app(
         output_dir = Path(utils.get_effective_output_dir())
         try:
             written = data_export.write_export_bundle(output_dir)
-        except Exception as err:
-            return jsonify({"ok": False, "error": str(err)}), 500
+        except Exception as exc:
+            return err(str(exc), 500)
         if not written:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        "No manifests in output directory. Expected one of "
-                        f"{config.SCREENSPACE_MANIFEST_FILENAME} or "
-                        f"{config.TRANSCRIPTS_MANIFEST_FILENAME}."
-                    ),
-                }
-            ), 404
-        return jsonify(
-            {
-                "ok": True,
-                "written": [p.name for p in written],
-                "output_dir": str(output_dir),
-            }
+            return err(
+                "No manifests in output directory. Expected one of "
+                f"{config.SCREENSPACE_MANIFEST_FILENAME} or "
+                f"{config.TRANSCRIPTS_MANIFEST_FILENAME}.",
+                404,
+            )
+        return ok(
+            written=[p.name for p in written],
+            output_dir=str(output_dir),
         )
 
     # ---- Start overlay: directories, spreadsheet picker, persistence ----
@@ -3436,14 +3347,11 @@ def build_combined_app(
         import start_settings
 
         s = start_settings.load_start_settings()
-        return jsonify(
-            {
-                "ok": True,
-                "input": str(utils.get_effective_input_dir()),
-                "output": str(utils.get_effective_output_dir()),
-                "recent_inputs": s.get("recent_inputs", []),
-                "recent_outputs": s.get("recent_outputs", []),
-            }
+        return ok(
+            input=str(utils.get_effective_input_dir()),
+            output=str(utils.get_effective_output_dir()),
+            recent_inputs=s.get("recent_inputs", []),
+            recent_outputs=s.get("recent_outputs", []),
         )
 
     @combined.route("/api/dirs", methods=["POST"])
@@ -3486,51 +3394,42 @@ def build_combined_app(
                 if p.name.startswith("~$"):
                     continue
                 files_list.append({"path": str(p), "name": p.name})
-        return jsonify({"ok": True, "input_dir": str(input_dir), "files": files_list})
+        return ok(input_dir=str(input_dir), files=files_list)
 
     @combined.route("/api/spreadsheets/google", methods=["GET"])
     def api_spreadsheets_google() -> Response:
         if _google_auth.client is None:
-            return jsonify(
-                {
-                    "ok": True,
-                    "authenticated": False,
-                    "auth_in_flight": _google_auth.in_flight,
-                    "auth_error": _google_auth.error,
-                    "sheets": [],
-                }
+            return ok(
+                authenticated=False,
+                auth_in_flight=_google_auth.in_flight,
+                auth_error=_google_auth.error,
+                sheets=[],
             )
         import google_api
 
         try:
             names = google_api.get_all_spreadsheets(_google_auth.client)
         except Exception as exc:
-            return jsonify(
-                {
-                    "ok": True,
-                    "authenticated": True,
-                    "auth_in_flight": False,
-                    "auth_error": str(exc),
-                    "sheets": [],
-                }
+            return ok(
+                authenticated=True,
+                auth_in_flight=False,
+                auth_error=str(exc),
+                sheets=[],
             )
-        return jsonify(
-            {
-                "ok": True,
-                "authenticated": True,
-                "auth_in_flight": False,
-                "auth_error": "",
-                "sheets": [{"name": n, "id": n} for n in names],
-            }
+        return ok(
+            authenticated=True,
+            auth_in_flight=False,
+            auth_error="",
+            sheets=[{"name": n, "id": n} for n in names],
         )
 
     @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
     def api_spreadsheets_google_auth() -> FlaskResponse:
         with _google_auth.lock:
             if _google_auth.in_flight:
-                return jsonify({"ok": True, "started": False, "in_flight": True})
+                return ok(started=False, in_flight=True)
             if _google_auth.client is not None:
-                return jsonify({"ok": True, "started": False, "authenticated": True})
+                return ok(started=False, authenticated=True)
             _google_auth.in_flight = True
             _google_auth.error = ""
 
@@ -3564,23 +3463,14 @@ def build_combined_app(
         type_ = data.get("type", "")
         id_or_path = (data.get("id_or_path") or "").strip()
         if type_ not in ("google", "excel") or not id_or_path:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "Required: type ('google'|'excel') and id_or_path",
-                }
-            ), 400
+            return err("Required: type ('google'|'excel') and id_or_path")
 
         if _generation_busy():
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        "Generation is in progress — wait for it to finish "
-                        "before switching spreadsheets."
-                    ),
-                }
-            ), 409
+            return err(
+                "Generation is in progress — wait for it to finish "
+                "before switching spreadsheets.",
+                409,
+            )
 
         new_ws: Any = None
         label = ""
@@ -3592,15 +3482,9 @@ def build_combined_app(
                 label = Path(id_or_path).name
             else:
                 if _google_auth.client is None:
-                    return jsonify(
-                        {
-                            "ok": False,
-                            "error": (
-                                "Not authenticated with Google — "
-                                "click 'Connect Google' first."
-                            ),
-                        }
-                    ), 400
+                    return err(
+                        "Not authenticated with Google — click 'Connect Google' first."
+                    )
                 import clipgen as _clipgen
                 import google_api
 
@@ -3619,16 +3503,14 @@ def build_combined_app(
                     parent = getattr(new_ws, "spreadsheet", None)
                     label = getattr(parent, "title", "") or id_or_path
         except Exception as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            return err(str(exc), 500)
 
         if new_ws is None:
-            return jsonify({"ok": False, "error": "Could not open spreadsheet"}), 404
+            return err("Could not open spreadsheet", 404)
 
         _swap_worksheet(new_ws)
         if _sheet_context is None:
-            return jsonify(
-                {"ok": False, "error": "Could not parse the spreadsheet"}
-            ), 500
+            return err("Could not parse the spreadsheet", 500)
 
         start_settings.record_recent_spreadsheet(type_, id_or_path, label)
         start_settings.record_project_session(
@@ -3642,27 +3524,19 @@ def build_combined_app(
             "id_or_path": id_or_path,
             "label": label,
         }
-        return jsonify(
-            {
-                "ok": True,
-                "sheet_loaded": True,
-                "spreadsheet_label": _spreadsheet_label(),
-            }
+        return ok(
+            sheet_loaded=True,
+            spreadsheet_label=_spreadsheet_label(),
         )
 
     @combined.route("/api/spreadsheets/close", methods=["POST"])
     def api_spreadsheets_close() -> FlaskResponse:
         global _active_sheet_meta
         if _generation_busy():
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": "Generation is in progress — wait for it to finish.",
-                }
-            ), 409
+            return err("Generation is in progress — wait for it to finish.", 409)
         _swap_worksheet(None)
         _active_sheet_meta = None
-        return jsonify({"ok": True, "sheet_loaded": False})
+        return ok(sheet_loaded=False)
 
     @combined.route("/api/folder-picker", methods=["POST"])
     def api_folder_picker() -> Response:
@@ -3675,7 +3549,7 @@ def build_combined_app(
         data = request.get_json(silent=True) or {}
         initial = (data.get("initial") or "").strip()
         path = utils.open_native_folder_picker(initial)
-        return jsonify({"ok": True, "path": path})
+        return ok(path=path)
 
     @combined.route("/api/sessions/record", methods=["POST"])
     def api_sessions_record() -> FlaskResponse:
@@ -3691,9 +3565,9 @@ def build_combined_app(
         input_raw = data.get("input")
         output_raw = data.get("output")
         if input_raw is not None and not isinstance(input_raw, str):
-            return jsonify({"ok": False, "error": "input must be a string"}), 400
+            return err("input must be a string")
         if output_raw is not None and not isinstance(output_raw, str):
-            return jsonify({"ok": False, "error": "output must be a string"}), 400
+            return err("output must be a string")
         input_dir = (input_raw or "").strip()
         output_dir = (output_raw or "").strip()
 
@@ -3701,23 +3575,14 @@ def build_combined_app(
         spreadsheet_dict: dict[str, Any] | None = None
         if spreadsheet_payload is not None:
             if not isinstance(spreadsheet_payload, dict):
-                return jsonify(
-                    {"ok": False, "error": "spreadsheet must be an object or null"}
-                ), 400
+                return err("spreadsheet must be an object or null")
             ss_type = (spreadsheet_payload.get("type") or "").strip()
             ss_id = (spreadsheet_payload.get("id_or_path") or "").strip()
             ss_label = (spreadsheet_payload.get("label") or "").strip()
             if ss_type not in ("google", "excel"):
-                return jsonify(
-                    {
-                        "ok": False,
-                        "error": "spreadsheet.type must be 'google' or 'excel'",
-                    }
-                ), 400
+                return err("spreadsheet.type must be 'google' or 'excel'")
             if not ss_id:
-                return jsonify(
-                    {"ok": False, "error": "spreadsheet.id_or_path is required"}
-                ), 400
+                return err("spreadsheet.id_or_path is required")
             spreadsheet_dict = {
                 "type": ss_type,
                 "id_or_path": ss_id,
@@ -3728,19 +3593,19 @@ def build_combined_app(
             output_dir or str(utils.get_effective_output_dir()),
             spreadsheet_dict,
         )
-        return jsonify({"ok": True})
+        return ok()
 
     @combined.route("/api/changelog")
     def api_changelog() -> Response:
         import changelog
 
-        return jsonify({"ok": True, "entries": changelog.load_entries()})
+        return ok(entries=changelog.load_entries())
 
     @combined.route("/api/start-settings", methods=["GET"])
     def api_start_settings_get() -> Response:
         import start_settings
 
-        return jsonify({"ok": True, "settings": start_settings.load_start_settings()})
+        return ok(settings=start_settings.load_start_settings())
 
     @combined.route("/api/start-settings", methods=["POST"])
     def api_start_settings_post() -> FlaskResponse:
@@ -3749,21 +3614,21 @@ def build_combined_app(
         data = request.get_json(silent=True) or {}
         if "persist_enabled" in data:
             start_settings.set_persist_enabled(bool(data["persist_enabled"]))
-        return jsonify({"ok": True, "settings": start_settings.load_start_settings()})
+        return ok(settings=start_settings.load_start_settings())
 
     # ---- Shared settings (available from any page) ----
 
     @combined.route("/api/settings", methods=["GET"])
     def combined_settings_get() -> FlaskResponse:
-        return jsonify({"ok": True, "settings": _settings_records()})
+        return ok(settings=_settings_records())
 
     @combined.route("/api/settings", methods=["PUT"])
     def combined_settings_put() -> FlaskResponse:
         data = request.get_json(silent=True) or {}
         applied, error = _apply_settings_payload(data)
         if error is not None:
-            return jsonify({"ok": False, "error": error}), 400
-        return jsonify({"ok": True, "applied": applied})
+            return err(error)
+        return ok(applied=applied)
 
     # ---- Titlecard / endcard background picker (shared settings modal) ----
     combined.add_url_rule(
@@ -3840,17 +3705,14 @@ def build_combined_app(
                 }
             )
 
-        return jsonify(
-            {
-                "ok": True,
-                "whisper": {"models": whisper_models},
-                "ollama": {
-                    "available": ollama_available,
-                    "models": ollama_models,
-                    "agents": ollama_agents,
-                    "base_url": config.OLLAMA_BASE_URL,
-                },
-            }
+        return ok(
+            whisper={"models": whisper_models},
+            ollama={
+                "available": ollama_available,
+                "models": ollama_models,
+                "agents": ollama_agents,
+                "base_url": config.OLLAMA_BASE_URL,
+            },
         )
 
     return combined
