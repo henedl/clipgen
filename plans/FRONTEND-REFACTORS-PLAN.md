@@ -47,12 +47,36 @@ otherwise late-bind `NS.fn(...)`).
   agent's 2276–2553 range was unrelated drag/queue code). Hub keeps `attachQueueScrubbers` +
   a new `resetScrubberPrefetch` delegator (the latter replaces a bare `_spritePrefetchQueue = []`
   reset so the queue stays satellite-private). Loads before `studio-intake.js`. studio.js −121/+8.
-- [ ] **A2. `studio-trim.js`** (~354 lines, `studio.js:2729–3083`). Duration-badge trim
-  popover + `buildCellOverrides()`. Self-contained; add hub delegators for `saveQueues()`/
-  `renderQueue()`. **Must load before A3** (generate needs `buildCellOverrides`).
-- [ ] **A3. `studio-generate.js`** (~393 lines, `studio.js:3743–4135`). Streaming artifact
-  generation. Medium risk: needs delegators for `setArtifactGenerating`/`showResult`/
-  `revealStatusOverlay`; ETA trackers + card-state painters **stay in hub** (shared with build).
+- [x] **A2. `studio-trim.js`** — Done. Carved the duration-badge trim pop-over cluster
+  (the post-A1 range was `studio.js:2616–2968`, ~353 lines: 5 `TRIM_*`/`activeTrim` vars +
+  `closeTrimPopover`/`positionTrimPopover`/`bindTrimDrag`/`makeTrimButton`/`openTrimPopover`/
+  `appendDurationBadge`/`buildCellOverrides`). Self-contained — no `state.*` access; mutates
+  the passed-in `item` + a satellite-local `activeTrim`. Hub keeps `appendDurationBadge`/
+  `buildCellOverrides` delegators (called at `studio.js:2268` and the generate/reel builders);
+  the satellite reaches the hub's `saveQueues`/`isIntakeSource` through STUDIO (no `renderQueue`
+  dep — the rerender flows via the passed-in `renderFn` callback). Loads after the hub, before
+  `studio-intake.js` (order vs. the other satellites is free — no cross-destructuring). studio.js
+  5164 → 4824 (−340); `studio-trim.js` 383 lines. **Must load before A3** (generate needs
+  `buildCellOverrides`).
+- [x] **A3. `studio-generate.js`** — Done. Carved the streaming `api/generate` +
+  `api/generate-intake` flow: `onGenerate`, `onCancelGenerate`, `buildGenerateCardIndex`,
+  `isGenerateFetchAborted` (post-A2 the move-set was 3 non-contiguous ranges — `3290–3303`,
+  `3375–3662`, `3669–3679` — with the ETA section and `onCancelReel` left in the hub between
+  them). studio.js 4824 → 4531 (−293); satellite 365 lines.
+  - **Hub keeps** (shared with the deferred reel/build path + job-status polling, so they did
+    **not** move): the card painters `setCardQueued`/`clearCardStatus`/`setCardResult`,
+    `readNDJSONStream`, `updateGenerateProgress`, the `_paint*`/`_tick*` painters, and the
+    `_generateEtaTracker`/`_studioEtaTicker` objects. The satellite reaches all of these +
+    `setArtifactGenerating`/`showResult`/`revealStatusOverlay`/`stampLog`/`isIntakeSource`/
+    `buildCellOverrides` (trim) through STUDIO (11 new publications).
+  - **Hub delegators added**: `onGenerate`/`onCancelGenerate` (button wiring at `studio.js`
+    init still calls them).
+  - **Bare-var gotcha**: `onGenerate` drives the hub-owned `_generateEtaTracker`/
+    `_studioEtaTicker` — published as object refs on STUDIO (like `state`), not left bare.
+  - **`setButtonProgress`** is a `ClipgenPrimitives` namespace fn the hub aliases locally;
+    re-aliased the same way in the satellite (the wiring guard caught the missing alias).
+  - **Load order**: after `studio-trim.js` (uses its `STUDIO.buildCellOverrides`), before
+    `studio-intake.js`.
 - [ ] _Defer:_ **build** (`4136–4615`, reel/timeline/gallery interleaved — needs a separate
   reel-vs-viewer split first) and **stash** (`3240–3523`, coupled to `renderQueue`). Re-evaluate
   after A1–A3.
@@ -66,10 +90,24 @@ otherwise late-bind `NS.fn(...)`).
   `computeLabelRect`, `getThemeColors`, `templateOverlayBounds`, `_overlayEligibleForActiveTool`).
   Loads after the hub, **before** `screenspace-tasks.js`/`-results.js` (they destructure
   `SS.renderOverlay`). screenspace.js −216/+11.
-- [ ] **A5. `screenspace-timeline.js`** (~643 lines, `screenspace.js:2981–3623`). Canvas ruler,
-  zoom/pan, scrubbing, markers, playhead, tooltips. Route `showSsTooltip`/`hideSsTooltip` and
-  frame-load callbacks (`loadFrame`, `seekPlayhead`) through SS. Move `timelineZoom/Offset/
-  Dragging`, `inMarker/outMarker`, `hoveredBoundaryTs` onto `state` if any hub site still reads them.
+- [x] **A5. `screenspace-timeline.js`** — Done. Carved the timeline cluster (post-A4 range was
+  two non-contiguous blocks: `screenspace.js:2769–3411` + `renderTimelineLegend` at `3484–3507`,
+  with the unrelated "Tool info tooltip" block kept in the hub between them) plus the
+  `getTimelineRect` helper + `_timelineHitRects`/`_cachedTimelineRect`/`TIMELINE_CANVAS_HEIGHT`.
+  15 functions, ~660 lines. screenspace.js 5629 → 4968 (−661); satellite 714 lines.
+  - **state**: `timelineZoom/Offset/Dragging`, `inMarker/outMarker`, `hoveredBoundaryTs`,
+    `amplitudeGraphEnabled` were already on `state` (read by the run button etc.) — left there.
+  - **Hub delegators added** (`initTimeline`/`renderTimeline`/`renderPlayhead` — all called by
+    hub init/seekPlayhead/the video RAF loop). `showSsTooltip`/`hideSsTooltip`/`sizeTimelineCanvas`
+    etc. are cluster-internal — no delegators.
+  - **Satellite→hub via SS**: `loadFrame`/`seekPlayhead` (frame viewer, stay in hub — `seekPlayhead`
+    newly published), `taskTypeColor`/`getThemeColors`/`buildTypeIcon`/`iconSpan`. `findTask`/
+    `focusedTaskId` are **late-bound `SS.fn(...)`** (owned by tasks.js, which loads *after* timeline).
+  - **Load order**: timeline loads after the hub/overlay but **before** tasks/results, which
+    destructure `SS.renderTimeline`/`SS.updateMarkerInfo` at load.
+  - **Bare-var gotcha caught**: the resize/scroll handlers cleared the hub-owned `_cachedOverlayRect`
+    (a strict-mode `ReferenceError` the wiring test can't see) — added `SS.invalidateOverlayRect`
+    and route through it.
 - [ ] **A6. `screenspace-overlay-interaction.js`** (~586 lines, `screenspace.js:1818–2323`,
   region draw/drag/resize state machine). Medium: must route `setTargetColor`/pipette
   activation from the color satellite (already deferred via SS) and keep `renderOverlay`/
@@ -91,16 +129,12 @@ Expected outcome: studio ~5278 → ~4250 (A1–A3); screenspace ~5835 → ~4460 
 
 ## Theme B — cross-cutting JS consolidation
 
-- [ ] **B1. `createSSEStream()` in `utils.js`.** The EventSource→`onerror`→`createPoller`
-  fallback is duplicated across 4 sites: `screenspace-tasks.js:1064` and `workflows-runs.js`
-  (run `:77`, batch `:142`, discover `:1019`). Add `createSSEStream(url, {onMessage, onError, poll})`
-  returning `{ close() }`; migrate all four. Modest, mechanical.
-- [ ] **B2. Generalize the modal focus trap.** `studio.js` `openModalTrap`/`closeModalTrap`
-  (`4627–4687`) is a reusable blocking-dialog trap; `transcripts.js confirmModelInstall`
-  (`2180–2264`) hand-rolls the same backdrop/escape lifecycle. Promote a
-  `openBlockingModal({onEscape, onBackdropClick})` to `utils.js`; migrate both. Leave singleton
-  pickers (`color-picker.js`, `settings-modal.js`) owning their own lifecycle — they are not
-  blocking dialogs.
+- [x] **B1. `createSSEStream()` in `utils.js`** — Done in **#493** (landed on `master`
+  independently as `createSSEStream(url, opts)`; migrated `screenspace-tasks.js`,
+  `workflows-runs.js`, and the studio sites). A duplicate B1 was developed on this branch and
+  **dropped** when rebasing onto `master` to avoid the collision — #493's version stands.
+- [x] **B2. Generalize the modal focus trap** — Done in **#493** (`openBlockingModal` in
+  `utils.js`; `studio.js`/`transcripts.js` migrated off the hand-rolled traps).
 - [ ] _Investigate only (do not blind-merge):_ color conversion exists twice with **incompatible**
   HSV ranges — `color-picker.js:36–77` (h∈[0,1]) vs `screenspace-utils.js:14–51` (OpenCV h 0–180,
   s/v 0–255). Merging risks silent corruption. At most: clarify names/comments
