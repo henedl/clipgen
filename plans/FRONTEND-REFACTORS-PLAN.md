@@ -58,9 +58,25 @@ otherwise late-bind `NS.fn(...)`).
   `studio-intake.js` (order vs. the other satellites is free — no cross-destructuring). studio.js
   5164 → 4824 (−340); `studio-trim.js` 383 lines. **Must load before A3** (generate needs
   `buildCellOverrides`).
-- [ ] **A3. `studio-generate.js`** (~393 lines, `studio.js:3743–4135`). Streaming artifact
-  generation. Medium risk: needs delegators for `setArtifactGenerating`/`showResult`/
-  `revealStatusOverlay`; ETA trackers + card-state painters **stay in hub** (shared with build).
+- [x] **A3. `studio-generate.js`** — Done. Carved the streaming `api/generate` +
+  `api/generate-intake` flow: `onGenerate`, `onCancelGenerate`, `buildGenerateCardIndex`,
+  `isGenerateFetchAborted` (post-A2 the move-set was 3 non-contiguous ranges — `3290–3303`,
+  `3375–3662`, `3669–3679` — with the ETA section and `onCancelReel` left in the hub between
+  them). studio.js 4824 → 4531 (−293); satellite 365 lines.
+  - **Hub keeps** (shared with the deferred reel/build path + job-status polling, so they did
+    **not** move): the card painters `setCardQueued`/`clearCardStatus`/`setCardResult`,
+    `readNDJSONStream`, `updateGenerateProgress`, the `_paint*`/`_tick*` painters, and the
+    `_generateEtaTracker`/`_studioEtaTicker` objects. The satellite reaches all of these +
+    `setArtifactGenerating`/`showResult`/`revealStatusOverlay`/`stampLog`/`isIntakeSource`/
+    `buildCellOverrides` (trim) through STUDIO (11 new publications).
+  - **Hub delegators added**: `onGenerate`/`onCancelGenerate` (button wiring at `studio.js`
+    init still calls them).
+  - **Bare-var gotcha**: `onGenerate` drives the hub-owned `_generateEtaTracker`/
+    `_studioEtaTicker` — published as object refs on STUDIO (like `state`), not left bare.
+  - **`setButtonProgress`** is a `ClipgenPrimitives` namespace fn the hub aliases locally;
+    re-aliased the same way in the satellite (the wiring guard caught the missing alias).
+  - **Load order**: after `studio-trim.js` (uses its `STUDIO.buildCellOverrides`), before
+    `studio-intake.js`.
 - [ ] _Defer:_ **build** (`4136–4615`, reel/timeline/gallery interleaved — needs a separate
   reel-vs-viewer split first) and **stash** (`3240–3523`, coupled to `renderQueue`). Re-evaluate
   after A1–A3.
@@ -113,16 +129,12 @@ Expected outcome: studio ~5278 → ~4250 (A1–A3); screenspace ~5835 → ~4460 
 
 ## Theme B — cross-cutting JS consolidation
 
-- [ ] **B1. `createSSEStream()` in `utils.js`.** The EventSource→`onerror`→`createPoller`
-  fallback is duplicated across 4 sites: `screenspace-tasks.js:1064` and `workflows-runs.js`
-  (run `:77`, batch `:142`, discover `:1019`). Add `createSSEStream(url, {onMessage, onError, poll})`
-  returning `{ close() }`; migrate all four. Modest, mechanical.
-- [ ] **B2. Generalize the modal focus trap.** `studio.js` `openModalTrap`/`closeModalTrap`
-  (`4627–4687`) is a reusable blocking-dialog trap; `transcripts.js confirmModelInstall`
-  (`2180–2264`) hand-rolls the same backdrop/escape lifecycle. Promote a
-  `openBlockingModal({onEscape, onBackdropClick})` to `utils.js`; migrate both. Leave singleton
-  pickers (`color-picker.js`, `settings-modal.js`) owning their own lifecycle — they are not
-  blocking dialogs.
+- [x] **B1. `createSSEStream()` in `utils.js`** — Done in **#493** (landed on `master`
+  independently as `createSSEStream(url, opts)`; migrated `screenspace-tasks.js`,
+  `workflows-runs.js`, and the studio sites). A duplicate B1 was developed on this branch and
+  **dropped** when rebasing onto `master` to avoid the collision — #493's version stands.
+- [x] **B2. Generalize the modal focus trap** — Done in **#493** (`openBlockingModal` in
+  `utils.js`; `studio.js`/`transcripts.js` migrated off the hand-rolled traps).
 - [ ] _Investigate only (do not blind-merge):_ color conversion exists twice with **incompatible**
   HSV ranges — `color-picker.js:36–77` (h∈[0,1]) vs `screenspace-utils.js:14–51` (OpenCV h 0–180,
   s/v 0–255). Merging risks silent corruption. At most: clarify names/comments
