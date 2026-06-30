@@ -946,6 +946,90 @@ var createSSEStream = function (url, opts) {
   return es;
 };
 
+// ---- Blocking modal lifecycle (Escape / backdrop / optional focus trap) ----
+// Shared lifecycle for blocking overlays: closes on Escape, optionally on
+// backdrop click, optionally traps Tab/Shift+Tab inside the overlay and restores
+// focus to the trigger on release. Singleton — opening a new modal releases the
+// previous one (callers never stack blocking overlays). The returned trap's
+// release() is idempotent cleanup-only, so any dismiss path (button, backdrop,
+// Escape) can call closeBlockingModal safely.
+//
+// Options:
+//   onEscape()        — fired on Escape
+//   onBackdropClick() — fired when the overlay element itself is clicked
+//   trapFocus         — keep Tab/Shift+Tab inside the overlay and focus its first
+//                       control on open
+//   restoreFocus      — restore focus to the prior element on release
+var _TRAP_FOCUSABLE =
+  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+var _activeBlockingModal = null;
+
+var openBlockingModal = function (overlayEl, opts) {
+  opts = opts || {};
+  if (!overlayEl) return null;
+  if (_activeBlockingModal && _activeBlockingModal.el === overlayEl) {
+    _activeBlockingModal.opts = opts;
+    return _activeBlockingModal;
+  }
+  if (_activeBlockingModal) _activeBlockingModal.release();
+  var prevFocus = opts.restoreFocus ? document.activeElement : null;
+
+  function visibleFocusable() {
+    return Array.prototype.slice
+      .call(overlayEl.querySelectorAll(_TRAP_FOCUSABLE))
+      .filter(function (n) { return !n.disabled && n.offsetParent !== null; });
+  }
+  function onKey(ev) {
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if (trap.opts.onEscape) trap.opts.onEscape();
+      return;
+    }
+    if (!trap.opts.trapFocus || ev.key !== "Tab") return;
+    // Re-query each Tab — overlay button visibility can change between phases
+    // (e.g. a status overlay's in-progress vs result state).
+    var f = visibleFocusable();
+    if (f.length === 0) { ev.preventDefault(); return; }
+    var first = f[0];
+    var last = f[f.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  }
+  function onClick(ev) {
+    if (ev.target === overlayEl && trap.opts.onBackdropClick) {
+      trap.opts.onBackdropClick();
+    }
+  }
+  function release() {
+    if (_activeBlockingModal !== trap) return;
+    document.removeEventListener("keydown", onKey, true);
+    overlayEl.removeEventListener("click", onClick);
+    _activeBlockingModal = null;
+    if (prevFocus && prevFocus.focus) prevFocus.focus();
+  }
+
+  var trap = { el: overlayEl, opts: opts, release: release };
+  document.addEventListener("keydown", onKey, true);
+  if (opts.onBackdropClick) overlayEl.addEventListener("click", onClick);
+  if (opts.trapFocus) {
+    var initial = visibleFocusable();
+    if (initial.length) initial[0].focus();
+  }
+  _activeBlockingModal = trap;
+  return trap;
+};
+
+var closeBlockingModal = function (overlayEl) {
+  if (_activeBlockingModal && _activeBlockingModal.el === overlayEl) {
+    _activeBlockingModal.release();
+  }
+};
+
 // ---- Mark categories ----
 // Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
 // values are repopulated in place by setMarkCategories() once the page fetches

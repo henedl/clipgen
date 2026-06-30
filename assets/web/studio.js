@@ -4501,68 +4501,22 @@
 
   // ---- Modal focus trap (shared by the blocking overlays) ----
   //
-  // Keeps Tab/Shift+Tab inside the overlay, closes on Escape, and restores focus
-  // to the trigger on release. role=dialog + aria-modal live statically on each
-  // overlay's card in the HTML. Studio never stacks these overlays, so one active
-  // trap is enough — opening a new one releases the previous. release() is
-  // idempotent cleanup-only, so any dismiss path (button, backdrop, Escape) can
-  // call closeModalTrap safely.
-  var _activeTrap = null;
-  var _TRAP_FOCUSABLE =
-    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-
+  // Thin delegators onto utils.js's openBlockingModal — Studio's overlays all
+  // want the full lifecycle (Tab/Shift+Tab trap, Escape close, focus restore to
+  // the trigger). role=dialog + aria-modal live statically on each overlay's
+  // card in the HTML. Studio never stacks these overlays, so the helper's single
+  // active modal is enough. release() is idempotent cleanup-only, so any dismiss
+  // path (button, backdrop, Escape) can call closeModalTrap safely.
   function openModalTrap(overlayEl, onEscape) {
-    if (!overlayEl) return null;
-    if (_activeTrap && _activeTrap.el === overlayEl) {
-      _activeTrap.onEscape = onEscape;
-      return _activeTrap;
-    }
-    if (_activeTrap) _activeTrap.release();
-    var prevFocus = document.activeElement;
-
-    function visibleFocusable() {
-      return Array.prototype.slice
-        .call(overlayEl.querySelectorAll(_TRAP_FOCUSABLE))
-        .filter(function (n) { return !n.disabled && n.offsetParent !== null; });
-    }
-    function onKey(ev) {
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        if (trap.onEscape) trap.onEscape();
-        return;
-      }
-      if (ev.key !== "Tab") return;
-      // Re-query each Tab — overlay button visibility changes between phases
-      // (e.g. the status overlay's in-progress vs result state).
-      var f = visibleFocusable();
-      if (f.length === 0) { ev.preventDefault(); return; }
-      var first = f[0];
-      var last = f[f.length - 1];
-      if (ev.shiftKey && document.activeElement === first) {
-        ev.preventDefault();
-        last.focus();
-      } else if (!ev.shiftKey && document.activeElement === last) {
-        ev.preventDefault();
-        first.focus();
-      }
-    }
-    function release() {
-      if (_activeTrap !== trap) return;
-      document.removeEventListener("keydown", onKey, true);
-      _activeTrap = null;
-      if (prevFocus && prevFocus.focus) prevFocus.focus();
-    }
-
-    var trap = { el: overlayEl, onEscape: onEscape, release: release };
-    document.addEventListener("keydown", onKey, true);
-    var initial = visibleFocusable();
-    if (initial.length) initial[0].focus();
-    _activeTrap = trap;
-    return trap;
+    return openBlockingModal(overlayEl, {
+      onEscape: onEscape,
+      trapFocus: true,
+      restoreFocus: true,
+    });
   }
 
   function closeModalTrap(overlayEl) {
-    if (_activeTrap && _activeTrap.el === overlayEl) _activeTrap.release();
+    closeBlockingModal(overlayEl);
   }
 
   // ---- Status overlay ----
