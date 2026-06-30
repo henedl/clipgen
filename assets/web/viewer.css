@@ -724,7 +724,7 @@ body {
   content: "";
   width: 28px;
   height: 28px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-border);
   opacity: 0.4;
 }

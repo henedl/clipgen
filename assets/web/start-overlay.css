@@ -1083,7 +1083,7 @@
 .start-overlay .tool-tile__dot {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
 }
 
 .start-overlay .tool-tile__desc {

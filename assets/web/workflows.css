@@ -192,40 +192,6 @@ body[data-frontend="workflows"] {
   outline-offset: 2px;
 }
 
-.theme-toggle-icon {
-  position: absolute;
-  width: var(--icon-size-md);
-  height: var(--icon-size-md);
-  border-radius: var(--radius-full);
-  transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
-}
-
-.theme-icon-sun {
-  background: radial-gradient(circle at 30% 30%, #ffffff 0, #fde68a 40%, #fbbf24 70%, #f59e0b 100%);
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
-  opacity: 1;
-  transform: translateX(0) scale(1);
-}
-
-.theme-icon-moon {
-  background:
-    radial-gradient(circle at 30% 30%, #e5e7eb 0, #9ca3af 40%, #4b5563 100%),
-    radial-gradient(circle at 65% 35%, transparent 0, transparent 55%, rgba(15, 23, 42, 0.9) 56%, rgba(15, 23, 42, 0.9) 100%);
-  box-shadow: 0 0 10px rgba(148, 163, 184, 0.5);
-  opacity: 0;
-  transform: translateX(6px) scale(0.85);
-}
-
-#themeToggle[data-theme="dark"] .theme-icon-sun {
-  opacity: 0;
-  transform: translateX(-6px) scale(0.85);
-}
-
-#themeToggle[data-theme="dark"] .theme-icon-moon {
-  opacity: 1;
-  transform: translateX(0) scale(1);
-}
-
 /* Run split-button: primary "Run" joined to a caret that opens the more-options
    menu ("Run to here"). */
 .wf-run-split {

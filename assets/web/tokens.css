@@ -162,6 +162,7 @@
   --color-panel-bg:            rgba(20, 21, 24, 0.97);
   --color-panel-border:        var(--border);
   --color-panel-shadow:        rgba(0, 0, 0, 0.6);
+  --color-backdrop:            rgba(0, 0, 0, 0.4); /* dimming scrim behind modal overlays (both themes) */
 
   /* Shadows (depend on theme colors above) */
   --shadow-sm:    0 1px 3px var(--color-panel-shadow);

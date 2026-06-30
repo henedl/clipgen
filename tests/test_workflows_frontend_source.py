@@ -590,11 +590,13 @@ def test_run_to_selected_node():
 
 
 def test_theme_toggle_icons_styled():
-    """The TopNav renders #themeToggle, but each page must supply the sun/moon
-    icon visuals + the position:relative anchor (missing → blank toggle)."""
-    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
-    assert ".theme-icon-sun" in css
-    assert ".theme-icon-moon" in css
-    assert '#themeToggle[data-theme="dark"] .theme-icon-moon' in css
+    """The sun/moon icon visuals are identical on every TopNav page, so they live
+    once in topnav.css; each page still supplies the #themeToggle button base +
+    position:relative anchor the absolutely-positioned icons hang off of."""
+    topnav_css = (_WEB / "topnav.css").read_text(encoding="utf-8")
+    assert ".theme-icon-sun" in topnav_css
+    assert ".theme-icon-moon" in topnav_css
+    assert '#themeToggle[data-theme="dark"] .theme-icon-moon' in topnav_css
     # The absolutely-positioned icons need a positioned button to anchor to.
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
     assert "#themeToggle {" in css

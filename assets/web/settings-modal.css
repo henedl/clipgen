@@ -251,7 +251,7 @@
   width: 16px;
   height: 16px;
   background: var(--accent-fg);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   transition: transform var(--duration-normal);
 }
 

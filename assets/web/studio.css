@@ -100,40 +100,6 @@ body {
   outline-offset: 2px;
 }
 
-.theme-toggle-icon {
-  position: absolute;
-  width: var(--icon-size-md);
-  height: var(--icon-size-md);
-  border-radius: var(--radius-full);
-  transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
-}
-
-.theme-icon-sun {
-  background: radial-gradient(circle at 30% 30%, #ffffff 0, #fde68a 40%, #fbbf24 70%, #f59e0b 100%);
-  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
-  opacity: 1;
-  transform: translateX(0) scale(1);
-}
-
-.theme-icon-moon {
-  background:
-    radial-gradient(circle at 30% 30%, #e5e7eb 0, #9ca3af 40%, #4b5563 100%),
-    radial-gradient(circle at 65% 35%, transparent 0, transparent 55%, rgba(15, 23, 42, 0.9) 56%, rgba(15, 23, 42, 0.9) 100%);
-  box-shadow: 0 0 10px rgba(148, 163, 184, 0.5);
-  opacity: 0;
-  transform: translateX(6px) scale(0.85);
-}
-
-#themeToggle[data-theme="dark"] .theme-icon-sun {
-  opacity: 0;
-  transform: translateX(-6px) scale(0.85);
-}
-
-#themeToggle[data-theme="dark"] .theme-icon-moon {
-  opacity: 1;
-  transform: translateX(0) scale(1);
-}
-
 #tooltipToggle {
   position: relative;
   width: 32px;
@@ -538,7 +504,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   display: inline-block;
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: var(--color-pulse);
   margin-right: var(--space-1);
   vertical-align: middle;
@@ -932,7 +898,7 @@ body.bottom-animating #stashedArtifactsArea {
 .sev-pill-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   background: currentColor;
   flex-shrink: 0;
 }
@@ -1632,7 +1598,7 @@ body.dragging #sheetMain {
   background: rgba(0, 0, 0, 0.5);
   color: var(--accent-fg);
   border: none;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   width: 18px;
   height: 18px;
   display: flex;
@@ -1909,7 +1875,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: var(--bg-active);
   color: var(--fg);
   border: 1px solid var(--border-strong);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   font-size: 10px;
   line-height: 14px;
   text-align: center;
@@ -2096,7 +2062,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2244,7 +2210,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   left: 4px;
   width: 18px;
   height: 18px;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2316,7 +2282,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2422,7 +2388,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2469,7 +2435,7 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   height: 2rem;
   border: 3px solid var(--color-border);
   border-top-color: var(--color-accent);
-  border-radius: 50%;
+  border-radius: var(--radius-full);
   animation: spin 0.7s linear infinite;
 }
 
@@ -2561,7 +2527,7 @@ html[data-theme="dark"] .stash-card-name-input {
 #logOverlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;

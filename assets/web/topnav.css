@@ -179,9 +179,11 @@ body.dragging .topnav {
   margin: 0 4px;
 }
 
-/* Theme toggle inherits #themeToggle styling from page CSS today; the redesign
- * adds an explicit appearance to keep it visually consistent inside the TopNav.
- * Page-level #themeToggle rules are scoped narrowly enough not to fight us. */
+/* The #themeToggle button base still comes from each page's CSS; this override
+ * gives it the compact TopNav appearance. The sun/moon icon visuals below are
+ * identical on every TopNav page, so they live here once (page-independent).
+ * Page-level #themeToggle rules are scoped narrowly enough not to fight us.
+ * (Standalone gallery/viewer don't load topnav.css and keep their own copies.) */
 .topnav-right #themeToggle {
   width: 30px;
   height: 30px;
@@ -199,6 +201,43 @@ body.dragging .topnav {
 .topnav-right #themeToggle:hover {
   background: var(--bg-hover);
   color: var(--fg);
+}
+
+/* Sun/moon icon visuals — shared by every TopNav page (consolidated from the
+ * per-page #themeToggle blocks). The crossfade is driven by #themeToggle's
+ * [data-theme] attribute, which topnav.js keeps in sync. */
+.theme-toggle-icon {
+  position: absolute;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  border-radius: var(--radius-full);
+  transition: opacity var(--duration-normal) ease, transform var(--duration-normal) ease;
+}
+
+.theme-icon-sun {
+  background: radial-gradient(circle at 30% 30%, #ffffff 0, #fde68a 40%, #fbbf24 70%, #f59e0b 100%);
+  box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+.theme-icon-moon {
+  background:
+    radial-gradient(circle at 30% 30%, #e5e7eb 0, #9ca3af 40%, #4b5563 100%),
+    radial-gradient(circle at 65% 35%, transparent 0, transparent 55%, rgba(15, 23, 42, 0.9) 56%, rgba(15, 23, 42, 0.9) 100%);
+  box-shadow: 0 0 10px rgba(148, 163, 184, 0.5);
+  opacity: 0;
+  transform: translateX(6px) scale(0.85);
+}
+
+#themeToggle[data-theme="dark"] .theme-icon-sun {
+  opacity: 0;
+  transform: translateX(-6px) scale(0.85);
+}
+
+#themeToggle[data-theme="dark"] .theme-icon-moon {
+  opacity: 1;
+  transform: translateX(0) scale(1);
 }
 
 /* Version pill — small mono text */
