@@ -58,6 +58,7 @@ import thinking_agents
 import transcripts
 import utils
 import video
+from server_utils import err, ok
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -283,12 +284,9 @@ def api_participants() -> FlaskResponse:
                 break
         info["has_stale_artifacts"] = has_stale
 
-    return jsonify(
-        {
-            "ok": True,
-            "participants": result,
-            "transcribe_prewarm": _transcribe_prewarm_setting(),
-        }
+    return ok(
+        participants=result,
+        transcribe_prewarm=_transcribe_prewarm_setting(),
     )
 
 
@@ -343,7 +341,7 @@ def api_transcript(participant: str) -> FlaskResponse:
         src = _manifest.get("source_transcripts", {})
         entry = src.get(participant)
     if not entry or not entry.get("segments"):
-        return jsonify({"ok": False, "error": "No transcript for participant"}), 404
+        return err("No transcript for participant", 404)
 
     raw_segments = entry["segments"]
     corrections = _manifest.get("corrections", [])
@@ -371,15 +369,12 @@ def api_transcript(participant: str) -> FlaskResponse:
         }
         segments.append(seg)
 
-    return jsonify(
-        {
-            "ok": True,
-            "participant": participant,
-            "segments": segments,
-            "language": entry.get("language", ""),
-            "model": entry.get("model", ""),
-            "transcribed_at": entry.get("transcribed_at", ""),
-        }
+    return ok(
+        participant=participant,
+        segments=segments,
+        language=entry.get("language", ""),
+        model=entry.get("model", ""),
+        transcribed_at=entry.get("transcribed_at", ""),
     )
 
 
@@ -388,18 +383,18 @@ def api_edit_segment(participant: str) -> FlaskResponse:
     """Edit a segment's text. Creates a correction entry automatically."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+        return err("Missing JSON body")
 
     segment_id = data.get("segment_id", "")
     new_text = data.get("text", "").strip()
     if not segment_id or not new_text:
-        return jsonify({"ok": False, "error": "segment_id and text required"}), 400
+        return err("segment_id and text required")
 
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
         entry = src.get(participant)
         if not entry:
-            return jsonify({"ok": False, "error": "No transcript for participant"}), 404
+            return err("No transcript for participant", 404)
 
         # Find the raw segment by ID
         raw_seg = None
@@ -408,11 +403,11 @@ def api_edit_segment(participant: str) -> FlaskResponse:
                 raw_seg = seg
                 break
         if raw_seg is None:
-            return jsonify({"ok": False, "error": "Segment not found"}), 404
+            return err("Segment not found", 404)
 
         original_text = raw_seg["text"]
         if original_text == new_text:
-            return jsonify({"ok": True, "correction": None})
+            return ok(correction=None)
 
         # Create correction
         correction = {
@@ -426,7 +421,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         _mark_friction_stale(entry)  # edited segment text invalidates friction scores
 
     _schedule_persist()
-    return jsonify({"ok": True, "correction": correction})
+    return ok(correction=correction)
 
 
 # ---- WebVTT ----
@@ -576,14 +571,11 @@ def api_embed_subtitle(participant: str) -> FlaskResponse:
     outcome = _embed_subtitle_for_participant(participant, output_dir)
     if not outcome["ok"]:
         status = 404 if outcome["error"] == "No transcript for participant" else 500
-        return jsonify({"ok": False, "error": outcome["error"]}), status
-    return jsonify(
-        {
-            "ok": True,
-            "output_path": outcome["output_path"],
-            "output_filename": outcome["output_filename"],
-            "output_dir": str(output_dir),
-        }
+        return err(outcome["error"], status)
+    return ok(
+        output_path=outcome["output_path"],
+        output_filename=outcome["output_filename"],
+        output_dir=str(output_dir),
     )
 
 
@@ -595,16 +587,11 @@ def api_embed_all_subtitles() -> FlaskResponse:
         src = _manifest.get("source_transcripts", {})
         targets = [pid for pid, entry in src.items() if entry.get("segments")]
     if not targets:
-        return jsonify(
-            {"ok": False, "error": "No transcripts available to embed."}
-        ), 404
+        return err("No transcripts available to embed.", 404)
     results = [_embed_subtitle_for_participant(pid, output_dir) for pid in targets]
-    return jsonify(
-        {
-            "ok": True,
-            "results": results,
-            "output_dir": str(output_dir),
-        }
+    return ok(
+        results=results,
+        output_dir=str(output_dir),
     )
 
 
@@ -647,17 +634,17 @@ def api_summary_regenerate(participant: str) -> FlaskResponse:
     so the frontend's per-participant controls can force a run.
     """
     if _orchestrator.is_generating(participant, "summary"):
-        return jsonify({"ok": True, "generating": True})
+        return ok(generating=True)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("segments"):
-            return jsonify({"ok": False, "error": "No transcript found"}), 404
+            return err("No transcript found", 404)
         entry["summary"] = ""
         entry.pop("citations", None)
         _mark_friction_stale(entry)  # the new summary feeds the friction prompt
     _persist_manifest()
     _orchestrator.run_chain(participant, force=True)
-    return jsonify({"ok": True, "generating": True})
+    return ok(generating=True)
 
 
 @transcripts_bp.route("/api/summary/<participant>/stop", methods=["POST"])
@@ -673,7 +660,7 @@ def api_summary_stop(participant: str) -> FlaskResponse:
         model = _agent_model("summary")
         if model:
             _schedule_model_unload(model)
-    return jsonify({"ok": True, "running": False})
+    return ok(running=False)
 
 
 @transcripts_bp.route("/api/summary/<participant>", methods=["PUT"])
@@ -681,16 +668,16 @@ def api_summary_save(participant: str) -> FlaskResponse:
     """Save a user-edited summary for a participant."""
     data = request.get_json(silent=True)
     if not data or not data.get("summary", "").strip():
-        return jsonify({"ok": False, "error": "Summary text is required"}), 400
+        return err("Summary text is required")
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
-            return jsonify({"ok": False, "error": "Participant not found"}), 404
+            return err("Participant not found", 404)
         entry["summary"] = data["summary"].strip()
         entry.pop("citations", None)  # invalidate citations on edit
         _mark_friction_stale(entry)  # summary text feeds the friction prompt
     _schedule_persist()
-    return jsonify({"ok": True})
+    return ok()
 
 
 # ---- Citations ----
@@ -705,7 +692,7 @@ def api_citations(participant: str) -> FlaskResponse:
             return jsonify({"ok": False}), 404
         citations = entry.get("citations")
     if citations:
-        return jsonify({"ok": True, "citations": citations})
+        return ok(citations=citations)
     if _orchestrator.is_generating(participant, "citations"):
         return jsonify(
             {
@@ -724,17 +711,15 @@ def api_citations_regenerate(participant: str) -> FlaskResponse:
     Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False.
     """
     if _orchestrator.is_generating(participant, "citations"):
-        return jsonify({"ok": True, "generating": True})
+        return ok(generating=True)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("summary") or not entry.get("segments"):
-            return jsonify(
-                {"ok": False, "error": "No summary or transcript found"}
-            ), 404
+            return err("No summary or transcript found", 404)
         entry.pop("citations", None)
     _persist_manifest()
     _orchestrator.run_agent("citations", participant, force=True)
-    return jsonify({"ok": True, "generating": True})
+    return ok(generating=True)
 
 
 @transcripts_bp.route("/api/citations/<participant>/stop", methods=["POST"])
@@ -750,7 +735,7 @@ def api_citations_stop(participant: str) -> FlaskResponse:
         model = _agent_model("citations")
         if model:
             _schedule_model_unload(model)
-    return jsonify({"ok": True, "running": False})
+    return ok(running=False)
 
 
 # ---- Friction ----
@@ -769,7 +754,7 @@ def api_friction(participant: str) -> FlaskResponse:
             return jsonify({"ok": False}), 404
         friction_data = entry.get("friction")
     if friction_data:
-        return jsonify({"ok": True, "friction": friction_data})
+        return ok(friction=friction_data)
     if _orchestrator.is_generating(participant, "friction"):
         return jsonify(
             {
@@ -789,17 +774,15 @@ def api_friction_regenerate(participant: str) -> FlaskResponse:
     frontend's per-participant controls can force a run. Requires a summary.
     """
     if _orchestrator.is_generating(participant, "friction"):
-        return jsonify({"ok": True, "generating": True})
+        return ok(generating=True)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry or not entry.get("summary") or not entry.get("segments"):
-            return jsonify(
-                {"ok": False, "error": "No summary or transcript found"}
-            ), 404
+            return err("No summary or transcript found", 404)
         entry.pop("friction", None)
     _persist_manifest()
     _orchestrator.run_agent("friction", participant, force=True)
-    return jsonify({"ok": True, "generating": True})
+    return ok(generating=True)
 
 
 @transcripts_bp.route("/api/friction/<participant>/stop", methods=["POST"])
@@ -815,7 +798,7 @@ def api_friction_stop(participant: str) -> FlaskResponse:
         model = _agent_model("friction")
         if model:
             _schedule_model_unload(model)
-    return jsonify({"ok": True, "running": False})
+    return ok(running=False)
 
 
 # ---- Corrections ----
@@ -826,7 +809,7 @@ def api_corrections_list() -> FlaskResponse:
     """List all study-local corrections."""
     with _manifest_lock:
         corrections = list(_manifest.get("corrections", []))
-    return jsonify({"ok": True, "corrections": corrections})
+    return ok(corrections=corrections)
 
 
 @transcripts_bp.route("/api/corrections", methods=["POST"])
@@ -834,12 +817,12 @@ def api_corrections_add() -> FlaskResponse:
     """Add a manual correction."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+        return err("Missing JSON body")
 
     from_text = data.get("from", "").strip()
     to_text = data.get("to", "").strip()
     if not from_text or not to_text:
-        return jsonify({"ok": False, "error": "'from' and 'to' required"}), 400
+        return err("'from' and 'to' required")
 
     removed_id = None
     with _manifest_lock:
@@ -876,8 +859,8 @@ def api_corrections_add() -> FlaskResponse:
     # routes, so we never nest _manifest_lock -> _persist_timer_lock.
     _schedule_persist()
     if removed_id is not None:
-        return jsonify({"ok": True, "correction": None, "removed": removed_id})
-    return jsonify({"ok": True, "correction": correction})
+        return ok(correction=None, removed=removed_id)
+    return ok(correction=correction)
 
 
 @transcripts_bp.route("/api/corrections/<correction_id>", methods=["DELETE"])
@@ -894,10 +877,10 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
             _bump_corrections_version()  # deletion invalidates corrected cache
 
     if removed == 0:
-        return jsonify({"ok": False, "error": "Correction not found"}), 404
+        return err("Correction not found", 404)
 
     _schedule_persist()
-    return jsonify({"ok": True})
+    return ok()
 
 
 # ---- Marks ----
@@ -1019,12 +1002,9 @@ def api_marks_list() -> FlaskResponse:
     with _manifest_lock:
         raw_marks = list(_manifest.get("marks", []))
         resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
-    return jsonify(
-        {
-            "ok": True,
-            "marks": resolved,
-            "categories": config.MARK_CATEGORIES,
-        }
+    return ok(
+        marks=resolved,
+        categories=config.MARK_CATEGORIES,
     )
 
 
@@ -1033,11 +1013,11 @@ def api_marks_add() -> FlaskResponse:
     """Create marks for one or more segments."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+        return err("Missing JSON body")
 
     segment_ids = data.get("segment_ids", [])
     if not segment_ids:
-        return jsonify({"ok": False, "error": "segment_ids required"}), 400
+        return err("segment_ids required")
 
     category = data.get("category") or None
     label = data.get("label") or None
@@ -1070,7 +1050,7 @@ def api_marks_add() -> FlaskResponse:
                 created.append(m)
 
     _schedule_persist()
-    return jsonify({"ok": True, "marks": created})
+    return ok(marks=created)
 
 
 @transcripts_bp.route("/api/marks/<mark_id>", methods=["PUT"])
@@ -1078,7 +1058,7 @@ def api_marks_update(mark_id: str) -> FlaskResponse:
     """Update a mark's category or label."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+        return err("Missing JSON body")
 
     with _manifest_lock:
         marks = _manifest.get("marks", [])
@@ -1088,7 +1068,7 @@ def api_marks_update(mark_id: str) -> FlaskResponse:
                 target = m
                 break
         if not target:
-            return jsonify({"ok": False, "error": "Mark not found"}), 404
+            return err("Mark not found", 404)
 
         if "category" in data:
             target["category"] = data["category"] or None
@@ -1096,7 +1076,7 @@ def api_marks_update(mark_id: str) -> FlaskResponse:
             target["label"] = data["label"] or None
 
     _schedule_persist()
-    return jsonify({"ok": True, "mark": target})
+    return ok(mark=target)
 
 
 @transcripts_bp.route("/api/marks/<mark_id>", methods=["DELETE"])
@@ -1119,10 +1099,10 @@ def api_marks_delete(mark_id: str) -> FlaskResponse:
         removed = before - len(_manifest["marks"])
 
     if removed == 0:
-        return jsonify({"ok": False, "error": "Mark not found"}), 404
+        return err("Mark not found", 404)
 
     _schedule_persist()
-    return jsonify({"ok": True, "removed": removed})
+    return ok(removed=removed)
 
 
 # ---- Search ----
@@ -1133,14 +1113,11 @@ def api_search() -> FlaskResponse:
     """Keyword search across all transcribed participants."""
     query = request.args.get("q", "").strip()
     if not query:
-        return jsonify(
-            {
-                "ok": True,
-                "query": "",
-                "total_count": 0,
-                "results": [],
-                "counts_by_participant": {},
-            }
+        return ok(
+            query="",
+            total_count=0,
+            results=[],
+            counts_by_participant={},
         )
 
     query_lower = query.lower()
@@ -1176,14 +1153,11 @@ def api_search() -> FlaskResponse:
                 counts[pid] = participant_count
 
     total = sum(counts.values())
-    return jsonify(
-        {
-            "ok": True,
-            "query": query,
-            "total_count": total,
-            "results": results,
-            "counts_by_participant": counts,
-        }
+    return ok(
+        query=query,
+        total_count=total,
+        results=results,
+        counts_by_participant=counts,
     )
 
 
@@ -1208,16 +1182,13 @@ def api_transcribe_warmup() -> FlaskResponse:
     proceed after the user agrees.
     """
     if _transcribe_prewarm_setting() == "off":
-        return jsonify(
-            {
-                "ok": True,
-                "skipped": True,
-                "reason": "prewarm_disabled",
-            }
+        return ok(
+            skipped=True,
+            reason="prewarm_disabled",
         )
 
     if transcripts.is_transcription_model_loaded():
-        return jsonify({"ok": True, "already_loaded": True})
+        return ok(already_loaded=True)
 
     # Never download a model silently during prewarm. When the configured model
     # isn't cached yet, skip and report it so the frontend can confirm the
@@ -1226,23 +1197,20 @@ def api_transcribe_warmup() -> FlaskResponse:
     force = bool(data.get("force"))
     model = config.TRANSCRIBE_MODEL
     if not force and not transcripts.is_whisper_model_cached(model):
-        return jsonify(
-            {
-                "ok": True,
-                "skipped": True,
-                "reason": "model_not_cached",
-                "model": model,
-                "size_mb": _whisper_model_size_mb(model),
-            }
+        return ok(
+            skipped=True,
+            reason="model_not_cached",
+            model=model,
+            size_mb=_whisper_model_size_mb(model),
         )
 
     global _transcript_model_warming  # noqa: PLW0603
 
     with _transcript_model_warming_lock:
         if _transcript_model_warming:
-            return jsonify({"ok": True, "already_warming": True})
+            return ok(already_warming=True)
         if transcripts.is_transcription_model_loaded():
-            return jsonify({"ok": True, "already_loaded": True})
+            return ok(already_loaded=True)
         _transcript_model_warming = True
 
     def _run_warmup() -> None:
@@ -1256,7 +1224,7 @@ def api_transcribe_warmup() -> FlaskResponse:
     threading.Thread(
         target=_run_warmup, daemon=True, name="transcript-model-warmup"
     ).start()
-    return jsonify({"ok": True, "started": True})
+    return ok(started=True)
 
 
 @transcripts_bp.route("/api/transcribe/model-status")
@@ -1264,14 +1232,11 @@ def api_transcribe_model_status() -> FlaskResponse:
     """Report whether faster-whisper is loaded or a warm-up is in progress."""
     with _transcript_model_warming_lock:
         warming = _transcript_model_warming
-    return jsonify(
-        {
-            "ok": True,
-            "loaded": transcripts.is_transcription_model_loaded(),
-            "warming": warming,
-            "model": config.TRANSCRIBE_MODEL,
-            "prewarm": _transcribe_prewarm_setting(),
-        }
+    return ok(
+        loaded=transcripts.is_transcription_model_loaded(),
+        warming=warming,
+        model=config.TRANSCRIBE_MODEL,
+        prewarm=_transcribe_prewarm_setting(),
     )
 
 
@@ -1285,12 +1250,12 @@ def api_ollama_pull() -> FlaskResponse:
     data = request.get_json(silent=True) or {}
     model = (data.get("model") or "").strip()
     if not model:
-        return jsonify({"ok": False, "error": "Missing model"}), 400
+        return err("Missing model")
 
     with _ollama_pull_lock:
         existing = _ollama_pull_status.get(model)
         if existing is not None and not existing.get("done"):
-            return jsonify({"ok": True, "already_pulling": True})
+            return ok(already_pulling=True)
         _ollama_pull_status[model] = {
             "status": "starting",
             "completed": 0,
@@ -1331,7 +1296,7 @@ def api_ollama_pull() -> FlaskResponse:
                         st["error"] = "Pull failed"
 
     threading.Thread(target=_run_pull, daemon=True, name=f"ollama-pull-{model}").start()
-    return jsonify({"ok": True, "started": True})
+    return ok(started=True)
 
 
 @transcripts_bp.route("/api/models/ollama/pull-status")
@@ -1339,12 +1304,12 @@ def api_ollama_pull_status() -> FlaskResponse:
     """Report progress for a model pull started via /api/models/ollama/pull."""
     model = (request.args.get("model") or "").strip()
     if not model:
-        return jsonify({"ok": False, "error": "Missing model"}), 400
+        return err("Missing model")
     with _ollama_pull_lock:
         st = _ollama_pull_status.get(model)
         snapshot = dict(st) if st is not None else None
     if snapshot is None:
-        return jsonify({"ok": True, "found": False})
+        return ok(found=False)
     snapshot["ok"] = True
     snapshot["found"] = True
     return jsonify(snapshot)
@@ -1355,7 +1320,7 @@ def api_transcribe() -> FlaskResponse:
     """Enqueue participant(s) for background transcription."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "Missing JSON body"}), 400
+        return err("Missing JSON body")
 
     participant_ids = data.get("participants", [])
     force = data.get("force", False)
@@ -1363,7 +1328,7 @@ def api_transcribe() -> FlaskResponse:
     allow_download = bool(data.get("allow_download"))
 
     if not participant_ids:
-        return jsonify({"ok": False, "error": "No participants specified"}), 400
+        return err("No participants specified")
 
     # Build a lookup of available participants
     available = {p["id"]: p for p in _participants}
@@ -1430,7 +1395,7 @@ def api_transcribe() -> FlaskResponse:
                 }
             )
 
-    return jsonify({"ok": True, "tasks": enqueued})
+    return ok(tasks=enqueued)
 
 
 @transcripts_bp.route("/api/transcribe/status")
@@ -1451,12 +1416,9 @@ def api_transcribe_status() -> FlaskResponse:
             if t["status"] == transcripts.TASK_STATUS_RUNNING:
                 task_info["partial_segments"] = t.get("partial_segments", [])
             tasks.append(task_info)
-    return jsonify(
-        {
-            "ok": True,
-            "tasks": tasks,
-            "worker_alive": _worker.is_alive if _worker else False,
-        }
+    return ok(
+        tasks=tasks,
+        worker_alive=_worker.is_alive if _worker else False,
     )
 
 
@@ -1464,19 +1426,19 @@ def api_transcribe_status() -> FlaskResponse:
 def api_transcribe_cancel(task_id: str) -> FlaskResponse:
     """Cancel or dismiss a transcription task. ?dismiss=true fully removes it."""
     if not _worker:
-        return jsonify({"ok": False, "error": "Worker not initialized"}), 500
+        return err("Worker not initialized", 500)
 
     if request.args.get("dismiss") == "true":
         if not _worker.remove_task(task_id):
-            return jsonify({"ok": False, "error": "Task not found"}), 404
+            return err("Task not found", 404)
         _persist_manifest()
-        return jsonify({"ok": True})
+        return ok()
 
     if _worker.cancel(task_id):
         _persist_manifest()
-        return jsonify({"ok": True})
+        return ok()
 
-    return jsonify({"ok": False, "error": "Task not found or already finished"}), 400
+    return err("Task not found or already finished")
 
 
 # ---- Manifest persistence ----

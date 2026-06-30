@@ -29,11 +29,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, request
 
 import config
 import utils
 import workflows
+from server_utils import err, ok
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
@@ -127,22 +128,19 @@ def api_catalog() -> Any:
     run can't resolve).
     """
     videos = utils.discover_participant_videos()
-    return jsonify(
-        {
-            "ok": True,
-            "catalog": workflows.serialize_catalog(),
-            # Adapter pairs the runner coerces across (events→clipRecords, …) so
-            # the frontend's canConnect accepts the same wires the runner runs.
-            "adapters": workflows.serialize_adapters(),
-            "context": {
-                "sheet": _sheet_context is not None,
-                "videoDir": bool(videos),
-                "participants": [v["id"] for v in videos if v.get("has_video")],
-                # Where a run's artifacts land — surfaced in the run panel so the
-                # user knows where to find their clips/reels/viewers.
-                "outputDir": str(utils.get_effective_output_dir()),
-            },
-        }
+    return ok(
+        catalog=workflows.serialize_catalog(),
+        # Adapter pairs the runner coerces across (events→clipRecords, …) so
+        # the frontend's canConnect accepts the same wires the runner runs.
+        adapters=workflows.serialize_adapters(),
+        context={
+            "sheet": _sheet_context is not None,
+            "videoDir": bool(videos),
+            "participants": [v["id"] for v in videos if v.get("has_video")],
+            # Where a run's artifacts land — surfaced in the run panel so the
+            # user knows where to find their clips/reels/viewers.
+            "outputDir": str(utils.get_effective_output_dir()),
+        },
     )
 
 
@@ -154,7 +152,7 @@ def api_blueprints() -> Any:
     """Return the persisted workflow blueprints."""
     with _manifest_lock:
         blueprints = copy.deepcopy(_manifest.get("blueprints", []))
-    return jsonify({"ok": True, "blueprints": blueprints})
+    return ok(blueprints=blueprints)
 
 
 @workflows_bp.route("/api/blueprints", methods=["POST"])
@@ -173,7 +171,7 @@ def api_blueprints_create() -> Any:
     with _manifest_lock:
         _manifest.setdefault("blueprints", []).append(blueprint)
         _persist_locked()
-    return jsonify({"ok": True, "blueprint": blueprint})
+    return ok(blueprint=blueprint)
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>", methods=["PUT"])
@@ -181,17 +179,17 @@ def api_blueprints_update(bp_id: str) -> Any:
     """Update a blueprint's name/nodes/edges/viewport (the debounced autosave)."""
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
         blueprint = next((b for b in blueprints if b.get("id") == bp_id), None)
         if blueprint is None:
-            return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+            return err("Blueprint not found", 404)
         for key in ("name", "nodes", "edges", "viewport"):
             if key in data:
                 blueprint[key] = data[key]
         _persist_locked()
-    return jsonify({"ok": True, "blueprint": blueprint})
+    return ok(blueprint=blueprint)
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>", methods=["DELETE"])
@@ -201,10 +199,10 @@ def api_blueprints_delete(bp_id: str) -> Any:
         blueprints = _manifest.get("blueprints", [])
         idx = next((i for i, b in enumerate(blueprints) if b.get("id") == bp_id), None)
         if idx is None:
-            return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+            return err("Blueprint not found", 404)
         blueprints.pop(idx)
         _persist_locked()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @workflows_bp.route("/api/blueprints/<bp_id>/trigger", methods=["PUT"])
@@ -224,22 +222,14 @@ def api_blueprint_trigger(bp_id: str) -> Any:
         blueprints = _manifest.get("blueprints", [])
         target = next((b for b in blueprints if b.get("id") == bp_id), None)
         if target is None:
-            return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+            return err("Blueprint not found", 404)
         if enabled:
             try:
                 workflows.topo_order(target.get("nodes", []), target.get("edges", []))
             except workflows.WorkflowCycleError as exc:
-                return jsonify({"ok": False, "error": str(exc)}), 400
+                return err(str(exc))
             if not workflows.blueprint_participant_nodes(target):
-                return (
-                    jsonify(
-                        {
-                            "ok": False,
-                            "error": "Add a Video Source node before arming auto-run",
-                        }
-                    ),
-                    400,
-                )
+                return err("Add a Video Source node before arming auto-run")
             for b in blueprints:
                 if b is target:
                     b["trigger"] = {"type": "watch_dir", "enabled": True}
@@ -254,7 +244,7 @@ def api_blueprint_trigger(bp_id: str) -> Any:
     # work then), so this arm-time re-seed is what upholds the no-retro-fire promise.
     if enabled:
         _seed_watch_seen()
-    return jsonify({"ok": True, "blueprint": result})
+    return ok(blueprint=result)
 
 
 def _disarmed_trigger(trigger: Any) -> Any:
@@ -278,7 +268,7 @@ def api_stashes() -> Any:
     """Return the built-in recipes (read-only) followed by the user's stashes."""
     with _manifest_lock:
         user_stashes = copy.deepcopy(_manifest.get("stashes", []))
-    return jsonify({"ok": True, "stashes": workflows.BUILTIN_STASHES + user_stashes})
+    return ok(stashes=workflows.BUILTIN_STASHES + user_stashes)
 
 
 @workflows_bp.route("/api/stashes", methods=["POST"])
@@ -287,7 +277,7 @@ def api_stashes_create() -> Any:
     data = request.get_json(silent=True) or {}
     nodes = data.get("nodes", [])
     if not nodes:
-        return jsonify({"ok": False, "error": "No nodes to stash"}), 400
+        return err("No nodes to stash")
     stash = {
         "id": "stash_" + uuid.uuid4().hex[:8],
         "name": (data.get("name") or "Stash").strip() or "Stash",
@@ -299,41 +289,41 @@ def api_stashes_create() -> Any:
     with _manifest_lock:
         _manifest.setdefault("stashes", []).append(stash)
         _persist_locked()
-    return jsonify({"ok": True, "stash": stash})
+    return ok(stash=stash)
 
 
 @workflows_bp.route("/api/stashes/<stash_id>", methods=["PUT"])
 def api_stashes_update(stash_id: str) -> Any:
     """Rename a user stash. Built-in recipes are read-only (403)."""
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
-        return jsonify({"ok": False, "error": "Built-in recipes are read-only"}), 403
+        return err("Built-in recipes are read-only", 403)
     data = request.get_json(silent=True)
     if not data:
-        return jsonify({"ok": False, "error": "JSON body required"}), 400
+        return err("JSON body required")
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
         stash = next((s for s in stashes if s.get("id") == stash_id), None)
         if stash is None:
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+            return err("Stash not found", 404)
         if "name" in data:
             stash["name"] = (data["name"] or stash["name"]).strip() or stash["name"]
         _persist_locked()
-    return jsonify({"ok": True, "stash": stash})
+    return ok(stash=stash)
 
 
 @workflows_bp.route("/api/stashes/<stash_id>", methods=["DELETE"])
 def api_stashes_delete(stash_id: str) -> Any:
     """Delete a user stash by id. Built-in recipes are read-only (403)."""
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
-        return jsonify({"ok": False, "error": "Built-in recipes are read-only"}), 403
+        return err("Built-in recipes are read-only", 403)
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
         idx = next((i for i, s in enumerate(stashes) if s.get("id") == stash_id), None)
         if idx is None:
-            return jsonify({"ok": False, "error": "Stash not found"}), 404
+            return err("Stash not found", 404)
         stashes.pop(idx)
         _persist_locked()
-    return jsonify({"ok": True})
+    return ok()
 
 
 # ---- Run lifecycle (M4) ----
@@ -523,18 +513,18 @@ def api_run_create() -> Any:
         )
         blueprint = copy.deepcopy(blueprint) if blueprint else None
     if blueprint is None:
-        return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+        return err("Blueprint not found", 404)
     try:
         workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
     except workflows.WorkflowCycleError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        return err(str(exc))
     # Optional partial run: restrict to this node + its ancestors. Reject an
     # unknown id rather than silently running the whole graph (the runner would
     # ignore it), so a stale selection surfaces as a clear error.
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
-        return jsonify({"ok": False, "error": "Unknown target node"}), 400
-    return jsonify({"ok": True, "run": _launch_run(blueprint, target_node_id=target)})
+        return err("Unknown target node")
+    return ok(run=_launch_run(blueprint, target_node_id=target))
 
 
 def _merged_runs() -> dict[str, dict[str, Any]]:
@@ -558,7 +548,7 @@ def api_runs_list() -> Any:
     if bp_filter:
         runs = [r for r in runs if r.get("blueprintId") == bp_filter]
     runs.sort(key=lambda r: r.get("startedAt") or "", reverse=True)
-    return jsonify({"ok": True, "runs": runs})
+    return ok(runs=runs)
 
 
 @workflows_bp.route("/api/runs/<run_id>")
@@ -566,8 +556,8 @@ def api_run_get(run_id: str) -> Any:
     """Polling fallback for one run's live/persisted snapshot."""
     snap = _run_snapshot(run_id)
     if snap is None:
-        return jsonify({"ok": False, "error": "Run not found"}), 404
-    return jsonify({"ok": True, "run": snap})
+        return err("Run not found", 404)
+    return ok(run=snap)
 
 
 @workflows_bp.route("/api/runs/<run_id>/nodes/<node_id>/result")
@@ -581,7 +571,7 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
     safe_node = node_id == os.path.basename(node_id) and node_id not in (".", "..")
     safe_run = run_id == os.path.basename(run_id) and run_id not in (".", "..")
     if not (safe_node and safe_run):
-        return jsonify({"ok": False, "error": "Invalid id"}), 404
+        return err("Invalid id", 404)
     path = (
         workflows.run_results_dir(utils.get_effective_output_dir(), run_id)
         / f"{node_id}.json"
@@ -589,8 +579,8 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return jsonify({"ok": False, "error": "No result for node"}), 404
-    return jsonify({"ok": True, "result": payload})
+        return err("No result for node", 404)
+    return ok(result=payload)
 
 
 @workflows_bp.route("/api/runs/<run_id>/cancel", methods=["POST"])
@@ -599,9 +589,9 @@ def api_run_cancel(run_id: str) -> Any:
     with _runs_lock:
         runner = _runs.get(run_id)
     if runner is None:
-        return jsonify({"ok": False, "error": "Run not found or finished"}), 404
+        return err("Run not found or finished", 404)
     runner.cancel()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @workflows_bp.route("/api/runs/<run_id>/stream")
@@ -845,19 +835,14 @@ def api_batch_create() -> Any:
         )
         blueprint = copy.deepcopy(blueprint) if blueprint else None
     if blueprint is None:
-        return jsonify({"ok": False, "error": "Blueprint not found"}), 404
+        return err("Blueprint not found", 404)
     bp_id = str(blueprint.get("id", "") or "")
     if not workflows.blueprint_participant_nodes(blueprint):
-        return (
-            jsonify(
-                {"ok": False, "error": "Blueprint has no Video Source to fan out over"}
-            ),
-            400,
-        )
+        return err("Blueprint has no Video Source to fan out over")
     try:
         workflows.topo_order(blueprint.get("nodes", []), blueprint.get("edges", []))
     except workflows.WorkflowCycleError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        return err(str(exc))
 
     available = [
         v["id"] for v in utils.discover_participant_videos() if v.get("has_video")
@@ -868,7 +853,7 @@ def api_batch_create() -> Any:
     else:
         participants = available
     if not participants:
-        return jsonify({"ok": False, "error": "No participants with video found"}), 400
+        return err("No participants with video found")
 
     batch_id = "batch_" + uuid.uuid4().hex[:8]
     # Child runs are persisted as they execute, not up front: pre-persisting one
@@ -892,7 +877,7 @@ def api_batch_create() -> Any:
         daemon=True,
         name=f"workflow-batch-{batch_id}",
     ).start()
-    return jsonify({"ok": True, "batch": _batch_summary(batch_id)})
+    return ok(batch=_batch_summary(batch_id))
 
 
 @workflows_bp.route("/api/batches")
@@ -915,7 +900,7 @@ def api_batches_list() -> Any:
     if bp_filter:
         summaries = [s for s in summaries if s.get("blueprintId") == bp_filter]
     summaries.sort(key=lambda s: s.get("createdAt") or "", reverse=True)
-    return jsonify({"ok": True, "batches": summaries})
+    return ok(batches=summaries)
 
 
 @workflows_bp.route("/api/batches/<batch_id>")
@@ -923,10 +908,10 @@ def api_batch_get(batch_id: str) -> Any:
     """One batch's summary + per-child run snapshots (drill-in)."""
     summary = _batch_summary(batch_id)
     if summary is None:
-        return jsonify({"ok": False, "error": "Batch not found"}), 404
+        return err("Batch not found", 404)
     all_runs = _merged_runs()
     runs = [all_runs[c["runId"]] for c in summary["children"] if c["runId"] in all_runs]
-    return jsonify({"ok": True, "batch": summary, "runs": runs})
+    return ok(batch=summary, runs=runs)
 
 
 @workflows_bp.route("/api/batches/<batch_id>/cancel", methods=["POST"])
@@ -935,13 +920,13 @@ def api_batch_cancel(batch_id: str) -> Any:
     with _batches_lock:
         record = _batches.get(batch_id)
     if record is None:
-        return jsonify({"ok": False, "error": "Batch not found or finished"}), 404
+        return err("Batch not found or finished", 404)
     record["cancel_event"].set()
     with _runs_lock:
         for runner in _runs.values():
             if getattr(runner, "batch_id", "") == batch_id:
                 runner.cancel()
-    return jsonify({"ok": True})
+    return ok()
 
 
 @workflows_bp.route("/api/batches/<batch_id>/stream")
