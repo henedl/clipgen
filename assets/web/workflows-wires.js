@@ -79,15 +79,28 @@
       if (!dot) return null;
       var card = dot.closest(".wf-node");
       if (!card) return null;
-      // Measure relative to the card and divide by zoom → zoom-1 layout offset,
-      // exact across borders/padding. Cached, so this layout read happens once
-      // per renderAllNodes, not per drag frame.
+      // Measure relative to the card and divide out the card's ACTUAL rendered
+      // scale → zoom-1 layout offset, exact across borders/padding. Cached, so
+      // this layout read happens once per renderAllNodes, not per drag frame.
+      //
+      // Use the measured scale (transformed rect width vs untransformed
+      // offsetWidth), NOT state.viewport.zoom: renderAllNodes measures
+      // synchronously but applyViewport writes the #wfWorld transform a frame
+      // later, so on a fresh load of a blueprint saved at zoom != 1 the card is
+      // still at identity scale while the assumed zoom differs — that cached an
+      // offset wrong by offset*(zoom-1) and the wires rendered detached until a
+      // re-measure (clean up / node click). Measuring the real scale is correct
+      // whether or not the transform has been applied yet.
       var dotRect = dot.getBoundingClientRect();
       var cardRect = card.getBoundingClientRect();
-      var zoom = state.viewport.zoom || 1;
+      var ow = card.offsetWidth;
+      // Degenerate layout (card not yet sized / hidden) — skip without poisoning
+      // the cache so the next render re-measures once it has layout.
+      if (!ow || !cardRect.width) return null;
+      var scale = cardRect.width / ow;
       off = _portOffsets[key] = {
-        x: (dotRect.left + dotRect.width / 2 - cardRect.left) / zoom,
-        y: (dotRect.top + dotRect.height / 2 - cardRect.top) / zoom,
+        x: (dotRect.left + dotRect.width / 2 - cardRect.left) / scale,
+        y: (dotRect.top + dotRect.height / 2 - cardRect.top) / scale,
       };
     }
     return { x: (node.position.x || 0) + off.x, y: (node.position.y || 0) + off.y };
