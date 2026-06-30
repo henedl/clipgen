@@ -771,6 +771,9 @@
   function onMinimapMouseDown(e) {
     if (!state.ready) return;
     e.preventDefault();
+    // The minimap sits inside #wfCanvas — stop the mousedown bubbling to
+    // onCanvasMouseDown, which would otherwise start a marquee selection.
+    e.stopPropagation();
     _mmDragging = true;
     minimapRecenter(e);
     function move(ev) {
