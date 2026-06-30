@@ -1,6 +1,7 @@
 # LOC-reduction opportunities — plan
 
-Status: **proposed** (2026-06-30). Investigation targets for genuinely *reducing* total
+Status: **in progress** (2026-06-30). Items **1 (1a + 1b)** and **2** landed (see check-marks
+below); items 3–5 still open. Investigation targets for genuinely *reducing* total
 lines of code (not relocating them). Each item is sized as one or more focused `refactor:`
 commits. Check items off and add a "Done" note as they land (per AGENTS.md plan-maintenance rule).
 
@@ -35,17 +36,22 @@ return jsonify({"ok": False, "error": "timestamp must be a number"}), 400
 return jsonify({"ok": True, "pin": pin})
 ```
 
-- [ ] **1a. Response helpers.** Add `err(msg, code=400)` → `jsonify({"ok": False, "error": msg}), code`
-  and `ok(**fields)` → `jsonify({"ok": True, **fields})` (likely in a small shared module, or
-  `utils.py` if it stays import-clean). Collapses the ~280 error returns + ~150 success returns to
-  one line each.
-- [ ] **1b. `@json_endpoint` decorator** wrapping the repeated try/except → `err(...)` envelope, so
-  handlers raise/return data and the decorator formats failures. Removes most of the 113 server
-  try/excepts.
+- [x] **1a. Response helpers.** **Done** — `ok(**fields)` / `err(msg, code=400)` live in the new
+  Flask-only `server_utils.py` (not `utils.py`, which is deliberately Flask-free). Applied across all
+  four blueprints: workflows, transcripts, screenspace, server. Non-standard envelopes left raw on
+  purpose (`{"ok": False}` with no `error`; `{"ok": False, "generating": True, ...}` poll/cancelled
+  payloads; `{"errors": [...]}` plural; the 202 google-auth envelope; bare `jsonify(var)`; the two
+  `api_sheet` payloads `test_shared_constants` guards by source text; binary/SSE/VTT routes).
+- [x] **1b. `@json_endpoint` decorator** — **Done** (added to `server_utils.py`). Catches **only**
+  `ApiError` (not bare `Exception`) so it never swallows real 500s or fights routes with their own
+  cleanup/`finally`. Applied conservatively: most server try/excepts catch *specific* exceptions or do
+  resource cleanup (`_release_busy`), so they were left intact; the decorator currently backs the one
+  `parse_number_arg` site (screenspace `api_pins_create`). It's in place for future raise-based routes.
 - **Risk:** low. **Approach:** one blueprint at a time; every route already has test coverage, so
   convert + run that blueprint's tests before the next. Watch for routes with non-standard
   envelopes (not all use `{"ok": …}`) — leave those or special-case, don't force-fit.
-- **Est. payoff:** several hundred lines + far more scannable routes.
+- **Payoff (realized):** net **~−310 lines** across the four files (workflows −15, transcripts −38,
+  screenspace −120, server −138) + far more scannable routes. Full suite green (1745 passed).
 
 ## 2. Request-arg parsing/validation (rides on #1)
 
@@ -53,9 +59,13 @@ return jsonify({"ok": True, "pin": pin})
 converter 404s when JS sends ints). The "parse → on failure return error dict" block is copy-pasted
 dozens of times.
 
-- [ ] **2. `parse_number_arg(name, *, min=None, int_only=False)`** (and siblings) that parse + raise
-  a uniform error (caught by 1b's decorator, or returning the `err(...)` tuple). Each call site
-  drops from ~4 lines to 1.
+- [x] **2. `parse_number_arg(raw, name, *, int_only=False, min_=None, max_=None, finite=False)`** —
+  **Done** (in `server_utils.py`). Parses one numeric value and raises `ApiError(400)` (caught by 1b's
+  decorator) on bad value / out-of-bounds / non-finite. Applied where the clean *error-on-failure* shape
+  existed (screenspace `api_pins_create`: an isinstance + `float()` + finite/bounds block → one line).
+  **Note:** most numeric parsing in these files is *silent-fallback* (`except: x = default`) or
+  *returns `None`*, which deliberately must NOT raise — those sites were left as-is, so #2's reach is
+  smaller than the "dozens" first estimated. The helper is in place for future error-on-failure sites.
 
 ## 3. Cross-cutting JS dedup (these *delete* lines)
 
