@@ -2216,8 +2216,7 @@
       function cleanup() {
         cancelBtn.removeEventListener("click", onCancel);
         confirmBtn.removeEventListener("click", onConfirm);
-        modal.removeEventListener("click", onBackdrop);
-        document.removeEventListener("keydown", onKey);
+        closeBlockingModal(modal);
       }
       function close(result) {
         cancelled = true; // stop any in-flight pull poll and its late callbacks
@@ -2226,8 +2225,6 @@
         resolve(result);
       }
       function onCancel() { close(false); }
-      function onBackdrop(e) { if (e.target === modal) close(false); }
-      function onKey(e) { if (e.key === "Escape") close(false); }
       function onConfirm() {
         if (opts.kind === "whisper") { close(true); return; }
         // Ollama: kick off the pull and show progress in place. Cancel stays
@@ -2261,9 +2258,10 @@
 
       cancelBtn.addEventListener("click", onCancel);
       confirmBtn.addEventListener("click", onConfirm);
-      modal.addEventListener("click", onBackdrop);
-      document.addEventListener("keydown", onKey);
       modal.classList.remove("hidden");
+      // Escape and backdrop click both cancel (no focus trap — matches prior
+      // behavior for this lightweight progress dialog).
+      openBlockingModal(modal, { onEscape: onCancel, onBackdropClick: onCancel });
     });
   }
 
