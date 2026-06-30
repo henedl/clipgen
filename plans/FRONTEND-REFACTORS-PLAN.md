@@ -74,10 +74,24 @@ otherwise late-bind `NS.fn(...)`).
   `computeLabelRect`, `getThemeColors`, `templateOverlayBounds`, `_overlayEligibleForActiveTool`).
   Loads after the hub, **before** `screenspace-tasks.js`/`-results.js` (they destructure
   `SS.renderOverlay`). screenspace.js −216/+11.
-- [ ] **A5. `screenspace-timeline.js`** (~643 lines, `screenspace.js:2981–3623`). Canvas ruler,
-  zoom/pan, scrubbing, markers, playhead, tooltips. Route `showSsTooltip`/`hideSsTooltip` and
-  frame-load callbacks (`loadFrame`, `seekPlayhead`) through SS. Move `timelineZoom/Offset/
-  Dragging`, `inMarker/outMarker`, `hoveredBoundaryTs` onto `state` if any hub site still reads them.
+- [x] **A5. `screenspace-timeline.js`** — Done. Carved the timeline cluster (post-A4 range was
+  two non-contiguous blocks: `screenspace.js:2769–3411` + `renderTimelineLegend` at `3484–3507`,
+  with the unrelated "Tool info tooltip" block kept in the hub between them) plus the
+  `getTimelineRect` helper + `_timelineHitRects`/`_cachedTimelineRect`/`TIMELINE_CANVAS_HEIGHT`.
+  15 functions, ~660 lines. screenspace.js 5629 → 4968 (−661); satellite 714 lines.
+  - **state**: `timelineZoom/Offset/Dragging`, `inMarker/outMarker`, `hoveredBoundaryTs`,
+    `amplitudeGraphEnabled` were already on `state` (read by the run button etc.) — left there.
+  - **Hub delegators added** (`initTimeline`/`renderTimeline`/`renderPlayhead` — all called by
+    hub init/seekPlayhead/the video RAF loop). `showSsTooltip`/`hideSsTooltip`/`sizeTimelineCanvas`
+    etc. are cluster-internal — no delegators.
+  - **Satellite→hub via SS**: `loadFrame`/`seekPlayhead` (frame viewer, stay in hub — `seekPlayhead`
+    newly published), `taskTypeColor`/`getThemeColors`/`buildTypeIcon`/`iconSpan`. `findTask`/
+    `focusedTaskId` are **late-bound `SS.fn(...)`** (owned by tasks.js, which loads *after* timeline).
+  - **Load order**: timeline loads after the hub/overlay but **before** tasks/results, which
+    destructure `SS.renderTimeline`/`SS.updateMarkerInfo` at load.
+  - **Bare-var gotcha caught**: the resize/scroll handlers cleared the hub-owned `_cachedOverlayRect`
+    (a strict-mode `ReferenceError` the wiring test can't see) — added `SS.invalidateOverlayRect`
+    and route through it.
 - [ ] **A6. `screenspace-overlay-interaction.js`** (~586 lines, `screenspace.js:1818–2323`,
   region draw/drag/resize state machine). Medium: must route `setTargetColor`/pipette
   activation from the color satellite (already deferred via SS) and keep `renderOverlay`/
