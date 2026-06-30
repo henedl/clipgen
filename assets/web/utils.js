@@ -914,6 +914,38 @@ var createPoller = function (fn, intervalMs, opts) {
   };
 };
 
+// ---- SSE stream with standard parse + fallback hook ----
+// Open an EventSource with the project's standard JSON-parse onmessage wrapper
+// and auto-close-on-error. The caller owns its polling fallback — each subscriber
+// stores its own stream/poller and reacts to a drop differently — so onError
+// fires AFTER the stream is closed. Returns the EventSource (or null if the
+// browser lacks EventSource, in which case onUnsupported runs).
+//
+// Options:
+//   onMessage(data)   — called with the parsed JSON of each message
+//   onOpen()          — called when the connection (re)opens
+//   onError()         — called once the dropped stream has been closed
+//   onUnsupported()   — called instead of opening when window.EventSource is absent
+var createSSEStream = function (url, opts) {
+  opts = opts || {};
+  if (!window.EventSource) {
+    if (opts.onUnsupported) opts.onUnsupported();
+    return null;
+  }
+  var es = new EventSource(url);
+  if (opts.onOpen) es.onopen = function () { opts.onOpen(); };
+  es.onmessage = function (e) {
+    var data;
+    try { data = JSON.parse(e.data); } catch (_) { return; }
+    if (opts.onMessage) opts.onMessage(data);
+  };
+  es.onerror = function () {
+    es.close();
+    if (opts.onError) opts.onError();
+  };
+  return es;
+};
+
 // ---- Mark categories ----
 // Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
 // values are repopulated in place by setMarkCategories() once the page fetches

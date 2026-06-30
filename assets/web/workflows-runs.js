@@ -70,29 +70,20 @@
   function subscribeRun(runId) {
     stopTransport();
     _reconnecting = false; // fresh subscription — clear any stale gap state
-    if (!window.EventSource) {
-      startPolling(runId);
-      return;
-    }
-    var es = new EventSource("api/runs/" + encodeURIComponent(runId) + "/stream");
-    _stream = es;
-    es.onmessage = function (e) {
-      var data;
-      try {
-        data = JSON.parse(e.data);
-      } catch (_) {
-        return;
-      }
-      if (data && data.run) handleRunData(data.run);
-    };
-    es.onerror = function () {
-      // SSE dropped — flag the gap (surfaces a "Reconnecting…" pill) and fall
-      // back to polling so progress still flows; the next poll clears the flag.
-      _reconnecting = true;
-      stopStream();
-      startPolling(runId);
-      renderRuns();
-    };
+    _stream = createSSEStream("api/runs/" + encodeURIComponent(runId) + "/stream", {
+      onUnsupported: function () { startPolling(runId); },
+      onMessage: function (data) {
+        if (data && data.run) handleRunData(data.run);
+      },
+      onError: function () {
+        // SSE dropped — flag the gap (surfaces a "Reconnecting…" pill) and fall
+        // back to polling so progress still flows; the next poll clears the flag.
+        _reconnecting = true;
+        _stream = null;
+        startPolling(runId);
+        renderRuns();
+      },
+    });
   }
 
   function startPolling(runId) {
@@ -135,29 +126,21 @@
   function subscribeBatch(batchId) {
     stopBatchTransport();
     _reconnecting = false; // fresh subscription — clear any stale gap state
-    if (!window.EventSource) {
-      startBatchPolling(batchId);
-      return;
-    }
-    var es = new EventSource(
+    _batchStream = createSSEStream(
       "api/batches/" + encodeURIComponent(batchId) + "/stream",
+      {
+        onUnsupported: function () { startBatchPolling(batchId); },
+        onMessage: function (data) {
+          if (data && data.batch) handleBatchData(data.batch);
+        },
+        onError: function () {
+          _reconnecting = true;
+          _batchStream = null;
+          startBatchPolling(batchId);
+          renderRuns();
+        },
+      },
     );
-    _batchStream = es;
-    es.onmessage = function (e) {
-      var data;
-      try {
-        data = JSON.parse(e.data);
-      } catch (_) {
-        return;
-      }
-      if (data && data.batch) handleBatchData(data.batch);
-    };
-    es.onerror = function () {
-      _reconnecting = true;
-      stopBatchStream();
-      startBatchPolling(batchId);
-      renderRuns();
-    };
   }
 
   function startBatchPolling(batchId) {

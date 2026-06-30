@@ -1061,31 +1061,21 @@
 
   function startSSE() {
     if (state.eventSource) return;
-    var es = new EventSource("api/tasks/stream");
-    state.eventSource = es;
-
-    es.onopen = function () {
+    state.eventSource = createSSEStream("api/tasks/stream", {
       // A live connection re-arms the one-shot drop notice for any later drop.
-      state.sseFellBack = false;
-    };
-
-    es.onmessage = function (e) {
-      var data;
-      try { data = JSON.parse(e.data); } catch (_) { return; }
-      handleTaskData(data);
-    };
-
-    es.onerror = function () {
-      // Connection lost — fall back to polling. onerror can fire repeatedly, so
-      // toast only once per drop (the flag resets when SSE is re-established).
-      es.close();
-      state.eventSource = null;
-      if (!state.sseFellBack) {
-        state.sseFellBack = true;
-        showToast("Live updates interrupted — falling back to polling");
-      }
-      startPolling();
-    };
+      onOpen: function () { state.sseFellBack = false; },
+      onMessage: handleTaskData,
+      onError: function () {
+        // Connection lost — fall back to polling. onError can fire repeatedly,
+        // so toast only once per drop (the flag resets when SSE is re-established).
+        state.eventSource = null;
+        if (!state.sseFellBack) {
+          state.sseFellBack = true;
+          showToast("Live updates interrupted — falling back to polling");
+        }
+        startPolling();
+      },
+    });
   }
 
   // ---- Polling (fallback) ----

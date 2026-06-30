@@ -224,11 +224,13 @@ def test_run_panel_satellite_present_and_wired():
         "WF.renderRuns",
     ):
         assert fn in src, fn
-    # SSE stream with a polling fallback (mirrors screenspace-tasks).
+    # SSE stream with a polling fallback (mirrors screenspace-tasks). The raw
+    # EventSource setup now lives in utils.js's createSSEStream helper.
     runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
-    assert "EventSource" in runs
+    assert "createSSEStream" in runs
     assert "createPoller" in runs
     assert "api/runs" in runs
+    assert "createSSEStream" in (_WEB / "utils.js").read_text(encoding="utf-8")
 
 
 def test_batch_via_all_participants_option():
