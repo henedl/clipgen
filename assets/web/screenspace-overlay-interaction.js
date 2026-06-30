@@ -601,6 +601,11 @@
     if (names.length === 0) {
       var hint = el("span", "region-hint", "Click and drag on the video to create a region");
       container.appendChild(hint);
+      // Still refresh the run-region picker so it prunes any runRegions that
+      // referenced now-deleted / stashed regions (delete-all, delete-last,
+      // stash-all). Otherwise a stale region_ref survives and reaches the
+      // preview / calibrate endpoints, which 400 ("Region '<name>' not found").
+      renderRunRegionPicker();
       return;
     }
     names.forEach(function (name, i) {
