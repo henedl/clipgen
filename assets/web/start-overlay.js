@@ -135,6 +135,7 @@
     els.backdrop = root.querySelector('[data-role="backdrop"]');
     els.closeBtn = root.querySelector('[data-role="close"]');
     els.wordmark = root.querySelector('[data-role="wordmark"]');
+    els.mark = root.querySelector(".rail__mark");
 
     els.cascades = root.querySelectorAll(".cascade-in");
 
@@ -1090,6 +1091,26 @@
     }, 460);
   }
 
+  // Replay the rail brand-mark stroke-draw on every overlay open. The shared
+  // per-session gate in clipgenInitBrandMark (utils.js) draws only the first
+  // .brand-mark hydrated on the page — usually the topnav logo — so the launcher
+  // forces its own replay here, independent of that flag. Retries across a few
+  // animation frames because hydration (an async favicon.svg fetch) may not have
+  // landed yet on the first open; it no-ops once attempts run out.
+  function replayBrandMark(attempts) {
+    var mark = els.mark;
+    if (!mark) return;
+    if (mark.classList.contains("is-hydrated")) {
+      mark.classList.remove("is-animated");
+      void mark.offsetWidth; // force reflow so the draw-on restarts
+      mark.classList.add("is-animated");
+      return;
+    }
+    if (attempts > 0) {
+      requestAnimationFrame(function () { replayBrandMark(attempts - 1); });
+    }
+  }
+
   function runIntro() {
     if (!root) return;
     // Reset cascade-in elements so the animation can replay.
@@ -1118,6 +1139,9 @@
       void els.wordmark.offsetWidth;
       els.wordmark.style.animation = "";
     }
+
+    // Replay the brand-mark stroke-draw alongside the wordmark.
+    replayBrandMark(30);
 
     // Section cascade.
     Array.prototype.forEach.call(els.cascades, function (node) {
