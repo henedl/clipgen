@@ -54,7 +54,7 @@
             </button>
             <button type="button" class="path-input__btn path-input__btn--browse" data-role="input-browse">Browse…</button>
           </div>
-          <div class="recent-pop hidden" data-role="input-recents-list" role="menu"></div>
+          <div class="recent-pop cg-menu hidden" data-role="input-recents-list" role="menu"></div>
         </div>
 
         <div class="path-field" data-role="output-field">
@@ -72,7 +72,7 @@
             </button>
             <button type="button" class="path-input__btn path-input__btn--browse" data-role="output-browse">Browse…</button>
           </div>
-          <div class="recent-pop hidden" data-role="output-recents-list" role="menu"></div>
+          <div class="recent-pop cg-menu hidden" data-role="output-recents-list" role="menu"></div>
         </div>
       </section>
 
@@ -108,7 +108,7 @@
                   <span class="sheet-picker__label" data-role="google-picker-label">Select a Google Sheet…</span>
                   <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
                 </button>
-                <div class="sheet-picker__menu hidden" data-role="google-picker-menu" role="listbox"></div>
+                <div class="sheet-picker__menu cg-menu hidden" data-role="google-picker-menu" role="listbox"></div>
               </div>
               <div class="sheet-panel__paste">
                 <label for="startGooglePaste">Or paste a spreadsheet URL or name</label>
@@ -128,7 +128,7 @@
                   <span class="sheet-picker__label" data-role="excel-picker-label">Select an Excel file…</span>
                   <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
                 </button>
-                <div class="sheet-picker__menu hidden" data-role="excel-picker-menu" role="listbox"></div>
+                <div class="sheet-picker__menu cg-menu hidden" data-role="excel-picker-menu" role="listbox"></div>
               </div>
               <div class="sheet-panel__paste">
                 <label for="startExcelPaste">Or paste a full path to an .xlsx file</label>
@@ -340,11 +340,11 @@
             </div>
 
             <div data-extras-panel="updates" hidden>
-              <ul class="changelog" data-role="changelog-list"></ul>
+              <ul class="changelog cg-scroll-thin" data-role="changelog-list"></ul>
             </div>
 
             <div data-extras-panel="about" hidden>
-              <div class="about" data-role="about-grid"></div>
+              <div class="about cg-scroll-thin" data-role="about-grid"></div>
             </div>
           </div>
         </div>

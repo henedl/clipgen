@@ -1133,13 +1133,10 @@ body {
    colors still come from the manifest, not a hard-coded six. */
 
 .mark-popover {
+  /* Shell (bg/border/shadow/z-index) from .cg-menu; keeps its tighter radius. */
   position: fixed;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  box-shadow: var(--shadow-pop);
   padding: var(--space-2-5);
-  z-index: var(--z-dropdown);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

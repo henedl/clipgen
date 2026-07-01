@@ -1,7 +1,7 @@
 # LOC-reduction opportunities — plan
 
-Status: **in progress** (2026-06-30). Items **1 (1a + 1b)**, **2**, and **3** landed (see
-check-marks below); items 4–5 still open. Investigation targets for genuinely *reducing* total
+Status: **in progress** (2026-07-01). Items **1 (1a + 1b)**, **2**, **3**, and **4** landed (see
+check-marks below); item **5** still open. Investigation targets for genuinely *reducing* total
 lines of code (not relocating them). Each item is sized as one or more focused `refactor:`
 commits. Check items off and add a "Done" note as they land (per AGENTS.md plan-maintenance rule).
 
@@ -103,12 +103,32 @@ unlike the carves, they remove duplication rather than move it.
 Continues today's pass (radius-full, `--color-backdrop`, theme-toggle dedup landed in `0f1012b`).
 The CSS audit flagged more repeated blocks across the page stylesheets:
 
-- [ ] **4. Promote duplicated component blocks** to `primitives.css`/`tokens.css`: webkit
-  **scrollbar** styling (~studio + start-overlay), the floating **popover/dropdown container**
-  (position+shadow+border+padding, ~screenspace + studio), **icon-sizing** classes (`.ss-icon`/
-  `.cg-icon`/`.so-icon` variants with raw px), and the **badge/pill** micro-label pattern.
-- **Est. payoff:** ~20–30 rule blocks. **Risk:** medium (visual) — needs a browser check, and
-  page CSS that loads after `primitives.css` can override, so verify specificity.
+- [x] **4. Promote duplicated component blocks** — **Done (popover + scrollbar; icon/badge
+  descoped).** Two new primitives live in `tokens.css` (loaded on every page; `primitives.css` is
+  Studio-only so it can't host cross-page shared classes):
+  - **`.cg-menu`** — the floating-menu/dropdown *visual* shell (bg/border/radius/shadow/padding/
+    z-index). Deliberately sets **no `display`**, so it never fights a page's per-component
+    `.hidden`/`display:none` toggle. Adopted by adding `cg-menu` alongside the page class (like
+    `.btn`) and deleting the duplicated shell props from page CSS — `.wf-run-menu`,
+    `.wf-shortcuts-menu` (workflows), `.topnav-qa-panel` (topnav), `.mark-popover` (transcripts),
+    and the two start-overlay dropdowns. The two byte-identical start-overlay blocks
+    (`.recent-pop` / `.sheet-picker__menu`) were also merged into one grouped body (their
+    hardcoded `z-index: 10` now resolves to `var(--z-dropdown)`). Left as-is on purpose:
+    `.trim-popover` (bespoke dark blur), `.cgcp-popover` (singleton picker, `z-toast`), and
+    Screenspace's `.rp-switcher-panel`/`.rp-export-menu` (legacy `--color-*` + `--shadow-lg`, not
+    `--shadow-pop` — adopting would change the shadow).
+  - **`.cg-scroll-thin`** — theme-aware thin scrollbar (thumb `var(--border)`, hover
+    `var(--border-strong)`). Applied to `#studioSidebar` and the start-overlay Changelog/About
+    panels; the two always-dark launcher panels shifted from a hardcoded `rgba(255,255,255,0.08)`
+    thumb to the theme border color (accepted). `#regionChips` (hidden scrollbar) left untouched.
+  - **Descoped:** the **icon-mask base** (dedup needs either grouped selectors coupling the shared
+    file to page-local names, or markup+JS churn across pages; `.xref-badge-icon` already is the
+    base — not worth the churn) and the **badge/pill** micro-label (good `.filter-chip`/
+    `.participant-pill` primitives already exist in `primitives.css`; page-local badges are
+    context-specific — the item-5 over-abstraction risk).
+- **Payoff (realized):** net **~−55 lines** across `tokens.css`/`studio.css`/`start-overlay.css`/
+  `workflows.css`/`topnav.css`/`transcripts.css`, plus consistent menu + scrollbar styling.
+  **Risk:** medium (visual) — needs a browser check (menus + the two launcher scrollbars).
 
 ## 5. Manifest load/save patterns (investigation first)
 
@@ -124,8 +144,8 @@ clipgen / screenspace / transcripts / workflows / stashes / settings.
 
 1. ~~**1a** (response helpers — biggest, safest win).~~ ✓ 2. ~~**1b** + **2** (decorator + arg
    parsing, building on 1a).~~ ✓ 3. ~~**3a/3b** (JS dedup; 3c descoped — factories already
-   shared).~~ ✓ 4. **4** (CSS, needs browser check). 5. **5** only after the investigation
-   confirms it's worthwhile.
+   shared).~~ ✓ 4. ~~**4** (CSS `.cg-menu` + `.cg-scroll-thin`; icon/badge descoped).~~ ✓
+   5. **5** only after the investigation confirms it's worthwhile.
 
 Quantify before committing to a tier: a duplication scan (jscpd for JS/CSS, a `pylint`-style
 duplicate-code pass for Python) would put hard block counts behind each item.

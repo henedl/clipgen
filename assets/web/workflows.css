@@ -228,16 +228,11 @@ body[data-frontend="workflows"] {
 }
 
 .wf-run-menu {
+  /* Shell (bg/border/radius/shadow/padding/z-index) from .cg-menu. */
   position: absolute;
   top: calc(100% + var(--space-1));
   right: 0;
-  z-index: var(--z-dropdown);
   min-width: 9rem;
-  padding: var(--space-1);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-pop);
 }
 
 .wf-run-menu-item {
@@ -329,16 +324,12 @@ body[data-frontend="workflows"] {
 }
 
 .wf-shortcuts-menu {
+  /* Shell from .cg-menu; roomier padding override for the legend. */
   position: absolute;
   top: calc(100% + var(--space-1));
   right: 0;
-  z-index: var(--z-dropdown);
   min-width: 16rem;
   padding: var(--space-3);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-pop);
 }
 
 .wf-shortcuts-title {

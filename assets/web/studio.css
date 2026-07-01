@@ -219,18 +219,7 @@ body {
   border-right: 1px solid var(--hairline);
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-#studioSidebar::-webkit-scrollbar {
-  width: 6px;
-}
-#studioSidebar::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-#studioSidebar::-webkit-scrollbar-track {
-  background: transparent;
+  /* Thin themed scrollbar from .cg-scroll-thin (class on the element). */
 }
 /* Transition is gated on `tx-ready`, applied by studio.js after the first
  * paint. Otherwise the attribute flip from the persisted-collapsed state

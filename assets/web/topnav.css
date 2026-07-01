@@ -258,18 +258,14 @@ body.dragging .topnav {
 }
 
 .topnav-qa-panel {
+  /* Shell (bg/border/radius/shadow/z-index) from .cg-menu; keeps roomier padding. */
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   min-width: 240px;
-  padding: 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  box-shadow: var(--shadow-pop);
+  padding: var(--space-1-5);
   display: none;
   flex-direction: column;
-  z-index: var(--z-dropdown);
   font-size: 12.5px;
 }
 .topnav-qa-panel.is-open {
