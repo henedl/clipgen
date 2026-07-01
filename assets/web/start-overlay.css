@@ -23,6 +23,22 @@
   color: var(--fg);
   --host-blur: 0px;
   --veil-alpha: 0;
+
+  /* Local surfaces not covered by global tokens. Dark defaults == the values
+   * this overlay historically hardcoded, so dark mode is unchanged; the
+   * html[data-theme="light"] block at the end of this file overrides them. */
+  --so-field-bg:       #0b0d10;
+  --so-field-bg-focus: #0d0f13;
+  --so-field-inset:    rgba(0, 0, 0, 0.25);
+  --so-tabs-bg:        rgba(0, 0, 0, 0.18);
+  --so-hover-tint:     rgba(255, 255, 255, 0.04);
+  --so-grid-line:      rgba(140, 190, 255, 0.35);
+  --so-art-fade:       rgba(0, 0, 0, 0.25);   /* tool-tile art gradient bottom */
+  --so-art-panel:      rgba(255, 255, 255, 0.06);
+  --so-art-stroke:     rgba(255, 255, 255, 0.10);
+  --so-art-tick:       rgba(255, 255, 255, 0.22);
+  --so-art-line:       rgba(255, 255, 255, 0.10);
+  --so-art-line-fill:  rgba(255, 255, 255, 0.28);
 }
 
 .start-overlay.hidden {
@@ -148,7 +164,7 @@
 
 .start-overlay .rail {
   position: relative;
-  background: #0a0a0b;
+  background: var(--bg);
   border-right: 1px solid var(--border);
   padding: 40px 36px 28px;
   display: flex;
@@ -188,8 +204,8 @@
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(to right, rgba(140, 190, 255, 0.35) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(140, 190, 255, 0.35) 1px, transparent 1px);
+    linear-gradient(to right, var(--so-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--so-grid-line) 1px, transparent 1px);
   background-size: 36px 36px;
   background-position: 0 0;
   animation: rail-grid-pulse 6s ease-in-out infinite;
@@ -318,7 +334,7 @@
 }
 
 .start-overlay .rail-recent:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--so-hover-tint);
   border-color: var(--hairline);
 }
 
@@ -397,7 +413,7 @@
   padding: 2px 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--so-hover-tint);
   color: var(--fg-muted);
   line-height: 1;
 }
@@ -492,10 +508,10 @@
 .start-overlay .path-input {
   display: flex;
   align-items: stretch;
-  background: #0b0d10;
+  background: var(--so-field-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.25);
+  box-shadow: inset 0 1px 0 var(--so-field-inset);
   overflow: hidden;
   height: 38px;
   transition: border-color 150ms, box-shadow 150ms, background 150ms;
@@ -508,9 +524,9 @@
 .start-overlay .path-input:focus-within {
   border-color: var(--accent);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px var(--color-selected);
-  background: #0d0f13;
+  background: var(--so-field-bg-focus);
 }
 
 /* ---- Field state glow ------------------------------------------------ */
@@ -521,39 +537,39 @@
 .start-overlay .path-input.is-loaded {
   border-color: rgba(52, 211, 153, 0.55);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px rgba(52, 211, 153, 0.16);
 }
 .start-overlay .path-input.is-loaded:focus-within {
   border-color: rgba(52, 211, 153, 0.85);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px rgba(52, 211, 153, 0.28);
 }
 
 .start-overlay .path-input.is-dirty {
   border-color: rgba(45, 107, 255, 0.55);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px rgba(45, 107, 255, 0.16);
 }
 .start-overlay .path-input.is-dirty:focus-within {
   border-color: var(--accent);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px rgba(45, 107, 255, 0.28);
 }
 
 .start-overlay .path-input.is-error {
   border-color: rgba(248, 113, 113, 0.7);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px rgba(248, 113, 113, 0.18);
 }
 .start-overlay .path-input.is-error:focus-within {
   border-color: rgba(248, 113, 113, 0.9);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px rgba(248, 113, 113, 0.3);
 }
 
@@ -634,7 +650,7 @@
 }
 
 .start-overlay .path-input__btn:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--so-hover-tint);
   color: var(--fg);
 }
 
@@ -712,7 +728,7 @@
 .start-overlay .sheet-card__tabs {
   display: flex;
   border-bottom: 1px solid var(--hairline);
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--so-tabs-bg);
   border-top-left-radius: 12px;
   border-top-right-radius: 12px;
 }
@@ -737,7 +753,7 @@
 
 .start-overlay .sheet-card__tab:hover {
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--so-hover-tint);
 }
 
 .start-overlay .sheet-card__tab.is-active {
@@ -796,10 +812,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #0b0d10;
+  background: var(--so-field-bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.25);
+  box-shadow: inset 0 1px 0 var(--so-field-inset);
   color: var(--fg);
   font-family: inherit;
   font-size: 12.5px;
@@ -816,9 +832,9 @@
 
 .start-overlay .sheet-picker__trigger[aria-expanded="true"] {
   border-color: var(--accent);
-  background: #0d0f13;
+  background: var(--so-field-bg-focus);
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.25),
+    inset 0 1px 0 var(--so-field-inset),
     0 0 0 3px var(--color-selected);
 }
 
@@ -1060,16 +1076,27 @@
 }
 
 .start-overlay .tool-tile[data-tool="studio"] .tool-tile__art {
-  background: linear-gradient(180deg, rgba(96, 165, 250, 0.14), rgba(0, 0, 0, 0.25));
+  background: linear-gradient(180deg, rgba(96, 165, 250, 0.14), var(--so-art-fade));
 }
 
 .start-overlay .tool-tile[data-tool="screenspace"] .tool-tile__art {
-  background: linear-gradient(180deg, rgba(34, 211, 238, 0.14), rgba(0, 0, 0, 0.25));
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.14), var(--so-art-fade));
 }
 
 .start-overlay .tool-tile[data-tool="transcripts"] .tool-tile__art {
-  background: linear-gradient(180deg, rgba(52, 211, 153, 0.14), rgba(0, 0, 0, 0.25));
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.14), var(--so-art-fade));
 }
+
+/* Neutral SVG scaffolding inside the tool-tile artworks. CSS fill/stroke beat
+ * the inline presentation attributes, so the inline values stay as a dark
+ * fallback while these theme-aware vars drive the actual paint (accent-colored
+ * shapes keep their inline fills untouched). We avoid var() inside SVG
+ * presentation attributes for Safari's sake. */
+.start-overlay .so-art-clip { fill: var(--so-art-panel); stroke: var(--so-art-stroke); }
+.start-overlay .so-art-fill { fill: var(--so-art-panel); }
+.start-overlay .so-art-tick { stroke: var(--so-art-tick); }
+.start-overlay .so-art-line { fill: var(--so-art-line); }
+.start-overlay .art-transcripts__line-fill { fill: var(--so-art-line-fill); }
 
 .start-overlay .tool-tile__title {
   font-size: 13.5px;
@@ -1294,7 +1321,7 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-muted);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--so-hover-tint);
   border: 1px solid var(--hairline);
   border-radius: 4px;
   padding: 1px 6px;
@@ -1420,7 +1447,7 @@
   align-self: flex-start;
   align-items: center;
   padding: 2px 8px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--so-hover-tint);
   border: 1px solid var(--hairline);
   border-radius: 4px;
   font-family: var(--font-mono);
@@ -1529,6 +1556,49 @@
   padding: 0 22px;
   font-size: 14px;
   border-radius: 11px;
+}
+
+/* ---- Light theme ---------------------------------------------------- */
+/* Single override block: flips the scoped --so-* surfaces to light-readable
+ * values. Everything else in this file already rides the global theme tokens
+ * (--fg, --bg-input, --border, …), so the rail bg, logo, text, inputs, and
+ * card chrome adapt automatically. */
+
+html[data-theme="light"] .start-overlay {
+  --so-field-bg:       var(--bg-input);          /* #ffffff */
+  --so-field-bg-focus: color-mix(in srgb, var(--accent) 5%, var(--bg-input));
+  --so-field-inset:    rgba(0, 0, 0, 0.05);
+  --so-tabs-bg:        rgba(0, 0, 0, 0.03);
+  --so-hover-tint:     rgba(20, 21, 26, 0.05);
+  --so-grid-line:      rgba(45, 107, 255, 0.14);  /* subtle blue grid on white */
+  --so-art-fade:       rgba(0, 0, 0, 0.05);
+  --so-art-panel:      rgba(20, 21, 26, 0.05);
+  --so-art-stroke:     rgba(20, 21, 26, 0.12);
+  --so-art-tick:       rgba(20, 21, 26, 0.20);
+  --so-art-line:       rgba(20, 21, 26, 0.10);
+  --so-art-line-fill:  rgba(20, 21, 26, 0.28);
+}
+
+/* Diagonal shimmer sweep is white-on-dark; give it a faint blue tint so it
+ * still reads on the light rail. */
+html[data-theme="light"] .start-overlay .rail__shimmer::before {
+  background: linear-gradient(
+    115deg,
+    transparent 42%,
+    rgba(45, 107, 255, 0.04) 48%,
+    rgba(45, 107, 255, 0.08) 50%,
+    rgba(45, 107, 255, 0.04) 52%,
+    transparent 58%
+  );
+}
+
+/* Scrollbar thumbs default to white-on-dark; darken for light bg. */
+html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb,
+html[data-theme="light"] .start-overlay .about::-webkit-scrollbar-thumb {
+  background: rgba(20, 21, 26, 0.16);
+}
+html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb:hover {
+  background: rgba(20, 21, 26, 0.28);
 }
 
 /* ---- Reduced motion ------------------------------------------------- */
