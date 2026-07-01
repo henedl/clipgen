@@ -110,7 +110,7 @@
     qaTrigger.setAttribute("aria-expanded", "false");
     qaTrigger.innerHTML = '<span>Quick actions</span><span class="topnav-icon topnav-qa-caret" aria-hidden="true"></span>';
     var qaPanel = document.createElement("div");
-    qaPanel.className = "topnav-qa-panel";
+    qaPanel.className = "topnav-qa-panel cg-menu";
     qaPanel.setAttribute("role", "menu");
     qaWrap.appendChild(qaTrigger);
     qaWrap.appendChild(qaPanel);

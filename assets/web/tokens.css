@@ -559,6 +559,34 @@ html[data-theme="light"] .cg-logo {
    still blocks click regardless of pointer-events. */
 button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 
+/* Floating menu / dropdown visual shell — shared across pages. Add ALONGSIDE a
+   page-local class that owns geometry (display, position, anchor offsets, sizing)
+   and the show/hide toggle, e.g. class="wf-run-menu cg-menu". Deliberately does
+   NOT set `display`, so it never fights a page's .hidden / display:none toggle
+   (those toggles are defined per-component and vary in specificity). */
+.cg-menu {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  padding: var(--space-1);
+  z-index: var(--z-dropdown);
+}
+
+/* Thin custom scrollbar — theme-aware thumb (adapts to light mode via --border).
+   Apply to any overflow container that wants the slim 6px scrollbar. */
+.cg-scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.cg-scroll-thin::-webkit-scrollbar { width: 6px; }
+.cg-scroll-thin::-webkit-scrollbar-track { background: transparent; }
+.cg-scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.cg-scroll-thin::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
 /* Base button — shared across Studio / Screenspace / Transcripts. (Was copy-pasted
  * verbatim into all three page CSS files; consolidated here.) `.cg-btn`
  * (primitives.css, Studio-only) is a deliberately separate, richer button language

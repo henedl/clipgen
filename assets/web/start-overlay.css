@@ -648,20 +648,20 @@
   color: var(--fg-muted);
 }
 
-.start-overlay .recent-pop {
+/* Recent-folders + sheet-picker dropdowns share one anchored body; the visual
+   shell (bg/border/shadow/z-index) comes from .cg-menu. Only the overflow axis
+   differs, split out below. */
+.start-overlay .recent-pop,
+.start-overlay .sheet-picker__menu {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + var(--space-1-5));
   left: 0;
   right: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
   border-radius: 10px;
-  box-shadow: var(--shadow-pop);
-  padding: 6px;
-  z-index: 10;
+  padding: var(--space-1-5);
   max-height: 220px;
-  overflow: auto;
 }
+.start-overlay .recent-pop { overflow: auto; }
 
 .start-overlay .recent-pop.hidden {
   display: none;
@@ -847,20 +847,8 @@
   color: var(--accent);
 }
 
-.start-overlay .sheet-picker__menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  box-shadow: var(--shadow-pop);
-  padding: 6px;
-  z-index: 10;
-  max-height: 220px;
-  overflow-y: auto;
-}
+/* Body shared with .recent-pop above; this only sets the vertical overflow. */
+.start-overlay .sheet-picker__menu { overflow-y: auto; }
 
 .start-overlay .sheet-picker__menu.hidden {
   display: none;
@@ -1254,16 +1242,6 @@
   padding-right: 4px;
 }
 
-.start-overlay .changelog::-webkit-scrollbar { width: 6px; }
-.start-overlay .changelog::-webkit-scrollbar-track { background: transparent; }
-.start-overlay .changelog::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-}
-.start-overlay .changelog::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.16);
-}
-
 .start-overlay .changelog__empty {
   font-size: 12px;
   color: var(--fg-faint);
@@ -1352,12 +1330,6 @@
   padding-right: 4px;
 }
 
-.start-overlay .about::-webkit-scrollbar { width: 6px; }
-.start-overlay .about::-webkit-scrollbar-track { background: transparent; }
-.start-overlay .about::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
-}
 
 .start-overlay .about__row {
   display: grid;
