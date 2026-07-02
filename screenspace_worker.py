@@ -90,6 +90,8 @@ def dispatch_tool_scan(
     Shared by :meth:`ScreenspaceWorker._dispatch` and the Workflows ``ss_scan``
     node so both get identical single/multi-video behavior.
     """
+    if not video_paths:
+        return []
     timeline = video.timeline_or_none(video_paths)
     if timeline is None:
         return tool.scan(

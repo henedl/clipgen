@@ -13,6 +13,7 @@ from typing import Any, Callable
 import numpy as np
 
 import config
+import utils
 from screenspace_tools import (
     _extract_confidence,
     check_frame_for_tool,
@@ -89,6 +90,28 @@ def scan_multitool(
     if scan_end is None or scan_end > vid_duration:
         scan_end = vid_duration
     total_range = scan_end - scan_start
+
+    # Validate offset windows so a misconfigured offset doesn't silently yield an
+    # empty result with no explanation. Direct callers (MultitoolTool.scan, the
+    # Workflows ss_scan node) bypass the server route's _coerce_offset check.
+    for i in range(1, len(steps)):
+        off = steps[i].get("offset")
+        if not isinstance(off, dict):
+            continue
+        off_min = off.get("min")
+        off_max = off.get("max")
+        if off_min is None or off_max is None:
+            continue
+        if off_min > off_max:
+            utils.warning_print(
+                f"Multitool step {i}: offset min ({off_min}s) > max ({off_max}s) — "
+                "window is empty, this step will match nothing."
+            )
+        elif off_min > total_range or off_max < -total_range:
+            utils.warning_print(
+                f"Multitool step {i}: offset window [{off_min}s, {off_max}s] cannot "
+                f"overlap the {total_range:.1f}s scan span — this step will match nothing."
+            )
 
     tool_types = [s["type"] for s in steps]
     step_regions = [s.get("region_coords", region) for s in steps]

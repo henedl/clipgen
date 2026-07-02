@@ -832,6 +832,50 @@ class TestScanMultitool:
         monkeypatch.setattr(screenspace_multitool, "scan_video_full_frames", fake_scan)
         monkeypatch.setattr(screenspace_multitool, "check_frame_for_tool", check)
 
+    def test_offset_inverted_window_warns(self, monkeypatch):
+        # min > max is an empty window: warn, but don't raise.
+        from unittest.mock import Mock
+
+        warn = Mock()
+        monkeypatch.setattr(screenspace_multitool.utils, "warning_print", warn)
+
+        def check(ts, ttype, step):
+            return True, {"_confidence": 0.9}
+
+        self._setup_multiframe_stubs(monkeypatch, [0, 1, 2], check)
+        results = screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 5, "max": 1}},
+            ],
+        )
+        assert results == []
+        warn.assert_called_once()
+
+    def test_offset_out_of_range_window_warns(self, monkeypatch):
+        # Window starts beyond the whole scan span → can never match: warn.
+        from unittest.mock import Mock
+
+        warn = Mock()
+        monkeypatch.setattr(screenspace_multitool.utils, "warning_print", warn)
+
+        def check(ts, ttype, step):
+            return True, {"_confidence": 0.9}
+
+        # _probe_video_meta -> duration = max(ts)+1 = 4, so total_range ~= 4.
+        self._setup_multiframe_stubs(monkeypatch, [0, 1, 2, 3], check)
+        screenspace.scan_multitool(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            steps=[
+                {"type": "color"},
+                {"type": "change", "offset": {"min": 100, "max": 200}},
+            ],
+        )
+        warn.assert_called_once()
+
     def test_offset_and_hit(self, monkeypatch):
         # color @2; change @4 within the [+0,+3] window from the anchor.
         def check(ts, ttype, step):

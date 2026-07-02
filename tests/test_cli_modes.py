@@ -86,6 +86,34 @@ def test_generate_cli_clips_prefers_mixed_over_batch(monkeypatch):
     assert call_args.kwargs.get("reel_input") == "11, P01.5"
 
 
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_generate_cli_clips_rejects_nonpositive_highlights(monkeypatch, bad):
+    """-H 0 / -H -5 keep the default duration and warn instead of applying it."""
+    monkeypatch.setattr(config, "HIGHLIGHTS_REEL_DURATION_SECONDS", 180)
+    monkeypatch.setattr(cli.spreadsheet, "generate_list", Mock(return_value=[]))
+    warn = Mock()
+    monkeypatch.setattr(cli.utils, "warning_print", warn)
+
+    cli._generate_cli_clips(
+        object(), _args(highlights=bad), cli.CliModeArgs(None, None, None, None)
+    )
+
+    assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == 180
+    warn.assert_called_once()
+
+
+def test_generate_cli_clips_applies_positive_highlights(monkeypatch):
+    """A valid positive -H duration overrides the default."""
+    monkeypatch.setattr(config, "HIGHLIGHTS_REEL_DURATION_SECONDS", 180)
+    monkeypatch.setattr(cli.spreadsheet, "generate_list", Mock(return_value=[]))
+
+    cli._generate_cli_clips(
+        object(), _args(highlights="120"), cli.CliModeArgs(None, None, None, None)
+    )
+
+    assert config.HIGHLIGHTS_REEL_DURATION_SECONDS == 120
+
+
 def test_run_cli_mode_chronologic_reel_and_viewer(monkeypatch):
     worksheet = Namespace(title="Sheet", spreadsheet=Namespace(url="http://example"))
     args = _args(chronologic="P01", viewer=True)
