@@ -1045,11 +1045,18 @@ def _generate_cli_clips(
     # Apply custom highlights duration if specified (e.g. -H 120)
     if args.highlights and args.highlights != "highlights":
         try:
-            config.HIGHLIGHTS_REEL_DURATION_SECONDS = int(args.highlights)
+            duration = int(args.highlights)
         except ValueError:
             utils.warning_print(
                 f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
             )
+        else:
+            if duration <= 0:
+                utils.warning_print(
+                    f"Invalid highlights duration '{args.highlights}', using default ({config.HIGHLIGHTS_REEL_DURATION_SECONDS}s)."
+                )
+            else:
+                config.HIGHLIGHTS_REEL_DURATION_SECONDS = duration
 
     mode_dispatch: list[tuple] = [
         (

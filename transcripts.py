@@ -967,6 +967,14 @@ class TranscriptWorker:
         import video as video_mod
 
         video_paths = task["video_paths"]
+        if not video_paths:
+            with self._lock:
+                task["status"] = TASK_STATUS_FAILED
+                task["error"] = "No video files — nothing to transcribe."
+                task["partial_segments"] = []
+                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+            return
+
         # Multi-video participants form one continuous timeline; transcribe each
         # part and merge with global-shifted times. Single video → fast path,
         # no extra duration probe beyond the audio guard below.

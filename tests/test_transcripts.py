@@ -678,6 +678,26 @@ class TestTranscriptWorker:
         worker = transcripts.TranscriptWorker()
         assert worker.cancel("nonexistent") is False
 
+    def test_execute_task_empty_video_paths_fails_cleanly(self, monkeypatch):
+        """A task with no video files fails cleanly instead of raising IndexError."""
+        from unittest.mock import Mock
+
+        import video as video_mod
+
+        probe = Mock()
+        monkeypatch.setattr(video_mod, "probe_video_properties", probe)
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", [])
+        task["status"] = "running"
+
+        worker._execute_task(task)
+
+        assert task["status"] == transcripts.TASK_STATUS_FAILED
+        assert task["partial_segments"] == []
+        assert task["error"]
+        probe.assert_not_called()
+
     def test_execute_task_cancelled_before_model_load(self, monkeypatch):
         """A task cancelled before model load aborts without loading a model."""
         from unittest.mock import Mock

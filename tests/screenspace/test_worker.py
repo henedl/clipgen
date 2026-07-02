@@ -7,6 +7,7 @@ from unittest import mock
 
 import config
 import screenspace
+import screenspace_worker
 
 
 class TestCreateTask:
@@ -23,6 +24,25 @@ class TestCreateTask:
         assert task["type"] == "color"
         assert task["status"] == "queued"
         assert task["progress"] == 0.0
+
+
+class TestDispatchToolScan:
+    def test_empty_video_paths_returns_empty_without_touching_tool(self):
+        tool = mock.Mock()
+        result = screenspace_worker.dispatch_tool_scan(
+            tool,
+            [],
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            {},
+            task_id="ss_1",
+            scan_mode="full",
+            on_progress=lambda _p: None,
+            cancel_flag=lambda: False,
+            on_result=None,
+            fast_opts=None,
+        )
+        assert result == []
+        tool.scan.assert_not_called()
 
 
 class TestScreenspaceWorker:
