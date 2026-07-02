@@ -705,6 +705,85 @@ def test_regenerate_reel_releases_reservation_on_ffmpeg_failure(monkeypatch, tmp
     assert list(output_dir.iterdir()) == []
 
 
+def test_regenerate_reel_aborts_when_component_source_missing(monkeypatch, tmp_path):
+    """A missing source for any component must fail the whole reel rather than
+    silently concatenating the surviving components into a shorter reel."""
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "study_P01.mp4").write_bytes(b"\x00")
+    monkeypatch.setattr(config, "INPUT_DIR", str(input_dir), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+
+    # The present component would cut fine; the second source is absent.
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
+    concat_calls: list = []
+    monkeypatch.setattr(
+        pipeline.video,
+        "concatenate_clips",
+        lambda *a, **k: concat_calls.append(a) or True,
+    )
+
+    missing: set[str] = set()
+    reel = {
+        "file": "reel.mp4",
+        "components": [
+            {"sourceVideo": "study_P01.mp4", "start": 0, "end": 10},
+            {"sourceVideo": "gone_P02.mp4", "start": 0, "end": 10},
+        ],
+    }
+    ok = pipeline._regenerate_reel(reel, missing)
+
+    assert ok is False
+    assert concat_calls == []  # never concatenated a partial reel
+    assert any("gone_P02.mp4" in p for p in missing)  # missing source recorded
+    # No truncated output or leftover temp segments remain.
+    assert list(output_dir.iterdir()) == []
+
+
+def test_regenerate_reel_aborts_on_component_ffmpeg_failure(monkeypatch, tmp_path):
+    """An ffmpeg failure on any component aborts the reel without concatenating
+    or leaving temp segments behind."""
+    input_dir = tmp_path / "in"
+    output_dir = tmp_path / "out"
+    input_dir.mkdir()
+    output_dir.mkdir()
+    (input_dir / "study_P01.mp4").write_bytes(b"\x00")
+    (input_dir / "study_P02.mp4").write_bytes(b"\x00")
+    monkeypatch.setattr(config, "INPUT_DIR", str(input_dir), raising=False)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(output_dir), raising=False)
+
+    # First component's cut succeeds, second fails.
+    calls = {"n": 0}
+
+    def fake_ffmpeg(**_k):
+        calls["n"] += 1
+        return calls["n"] == 1
+
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", fake_ffmpeg)
+    concat_calls: list = []
+    monkeypatch.setattr(
+        pipeline.video,
+        "concatenate_clips",
+        lambda *a, **k: concat_calls.append(a) or True,
+    )
+
+    reel = {
+        "file": "reel.mp4",
+        "components": [
+            {"sourceVideo": "study_P01.mp4", "start": 0, "end": 10},
+            {"sourceVideo": "study_P02.mp4", "start": 0, "end": 10},
+        ],
+    }
+    ok = pipeline._regenerate_reel(reel, set())
+
+    assert ok is False
+    assert concat_calls == []  # never concatenated a partial reel
+    # The first component's temp segment and the failed reservation are cleaned up.
+    assert list(output_dir.iterdir()) == []
+
+
 def test_regenerate_from_manifest_parallel(monkeypatch):
     """Independent artifacts regenerate concurrently when workers >= 2."""
     artifacts = [

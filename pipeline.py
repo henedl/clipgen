@@ -1938,11 +1938,21 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
         return False
 
     temp_paths: list[str] = []
+
+    def _cleanup() -> None:
+        for p in temp_paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+
     for comp in components:
         # A boundary-spanning component carries a ``parts`` list; each part is a
         # separate cut. Since a reel is a concatenation, the parts simply become
         # consecutive entries in the temp list. Single-segment components cut
-        # directly from their mapped sub-video using local offsets.
+        # directly from their mapped sub-video using local offsets. Any missing
+        # source or failed cut aborts the whole reel (matching the multipart-clip
+        # path) rather than silently producing a shorter reel.
         segments = comp.get("parts") or [comp]
         for segment in segments:
             source = segment.get("sourceVideo", "")
@@ -1951,7 +1961,8 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
                 if source_path not in missing_videos:
                     missing_videos.add(source_path)
                     utils.warning_print(f"Source video not found: '{source}'")
-                continue
+                _cleanup()
+                return False
 
             local_start = segment.get("localStart", segment.get("start", 0))
             local_end = segment.get("localEnd", segment.get("end", 0))
@@ -1970,6 +1981,8 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
                 temp_paths.append(out_name)
             else:
                 files.release_reservation(out_name)
+                _cleanup()
+                return False
 
     if not temp_paths:
         return False
@@ -1977,9 +1990,5 @@ def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
     output_file = str(utils.resolve_output_path(reel.get("file", "reel.mp4")))
     ok = video.concatenate_clips(temp_paths, output_file, reencode_on_fail=True)
 
-    for p in temp_paths:
-        try:
-            Path(p).unlink(missing_ok=True)
-        except OSError:
-            pass
+    _cleanup()
     return ok
