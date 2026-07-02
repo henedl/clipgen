@@ -41,6 +41,59 @@ class TestScanInactivity:
         assert results[0]["duration"] == 4.0
         assert results[0]["avg_distance"] == 0.0
 
+    def test_span_start_not_negative_early_match(self, monkeypatch):
+        """First similar pair with ts < interval must not start before 0:00."""
+        frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        # First similar pair lands at ts=0.5 with a 1.0s interval, so the
+        # naive ``ts - interval_seconds`` would be -0.5.
+        timestamps = [0.0, 0.5, 1.5, 2.5, 3.5]
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for ts in timestamps:
+                if callback(ts, frame.copy()) is False:
+                    break
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 5.0)
+        )
+
+        results = screenspace.scan_inactivity(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 50, "h": 50},
+            threshold=15,
+            min_duration=1.0,
+            interval_seconds=1.0,
+        )
+        assert len(results) == 1
+        assert results[0]["start"] >= 0.0
+
+    def test_span_start_clamped_to_scan_start(self, monkeypatch):
+        """With start_seconds > 0 the span can't begin before the requested start."""
+        frame = np.full((50, 50, 3), 128, dtype=np.uint8)
+        timestamps = [10.0, 11.0, 12.0, 13.0]
+
+        def fake_scan(video_path, region, interval, callback, **kwargs):
+            for ts in timestamps:
+                if callback(ts, frame.copy()) is False:
+                    break
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 20.0)
+        )
+
+        results = screenspace.scan_inactivity(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 50, "h": 50},
+            threshold=15,
+            min_duration=1.0,
+            interval_seconds=1.0,
+            start_seconds=10.0,
+        )
+        assert len(results) == 1
+        assert results[0]["start"] >= 10.0
+
     def test_different_frames_not_detected(self, monkeypatch):
         """Frames with very different content should not produce a span."""
         timestamps = [0.0, 1.0, 2.0, 3.0]

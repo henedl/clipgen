@@ -204,6 +204,28 @@ def test_overlay_layer_encodes_at_native_resolution(
     assert decoded.shape[:2] == (region["h"], region["w"])
 
 
+def test_template_heatmap_with_mask_matches_scan_prep(
+    synthetic_frame: np.ndarray,
+) -> None:
+    """A masked template heatmap uses the scan's binarized-mask prep helper."""
+    template = synthetic_frame[10:50, 10:50].copy()
+    # Soft-alpha mask: an opaque center on a semi-transparent border. The scan
+    # binarizes this (>=128 -> 255); the preview must do the same so its heatmap
+    # reflects the real scan rather than a blurred approximation.
+    mask = np.full((40, 40), 100, dtype=np.uint8)
+    mask[10:30, 10:30] = 255
+    params = {"template_image": template, "template_mask": mask}
+
+    img = screenspace_preview.build_overlay_layer(
+        synthetic_frame, None, None, "template", "match_heatmap", params
+    )
+    assert img is not None
+    assert img.dtype == np.uint8
+    assert img.ndim == 3 and img.shape[2] == 3
+    # Frame-scoped: the heatmap covers the whole frame after border replication.
+    assert img.shape[:2] == synthetic_frame.shape[:2]
+
+
 def test_overlay_multitool_inherits_first_step(
     synthetic_frame: np.ndarray, region: dict[str, int]
 ) -> None:

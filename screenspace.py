@@ -52,6 +52,7 @@ from screenspace_primitives import (
     _merge_timestamp_spans,
     _morph_kernel,
     _prepare_template,
+    _template_correlation_map,
     average_color_hsv,
     color_matches,
     color_present,
