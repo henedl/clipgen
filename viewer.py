@@ -353,6 +353,16 @@ def _generate_viewer_html(
         template_html = template_html.replace("</body>", f"{inline_js_block}\n</body>")
 
     data_json = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    # Escape chars that could break out of the <script> tag or a JS string literal
+    # (</script>, <!--, <script, and the U+2028/U+2029 line separators). All stay valid
+    # JSON via \uXXXX, so JSON.parse decodes the payload back to the original unchanged.
+    data_json = (
+        data_json.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace(" ", "\\u2028")
+        .replace(" ", "\\u2029")
+    )
     script_block = f"<script>window.CLIPGEN_DATA={data_json};</script>"
 
     if _CLIPGEN_DATA_PLACEHOLDER in template_html:
