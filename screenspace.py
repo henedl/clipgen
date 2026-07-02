@@ -69,6 +69,7 @@ from screenspace_primitives import (
 from screenspace_ocr import (
     _get_ocr_reader,
     _ocr_readers,
+    _ocr_readtext,
     _preprocess_for_ocr,
     _score_numbers_readings,
     _score_text_readings,

@@ -42,6 +42,7 @@ from screenspace_ocr import (
     _effective_ocr_confidence_threshold,
     _get_ocr_reader,
     _normalize_ocr_text,
+    _ocr_readtext,
     _number_matches,
     _preprocess_for_ocr,
 )
@@ -406,7 +407,7 @@ def scan_text(
         ):
             return None
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = reader.readtext(ocr_input, detail=1)
+        ocr_results = _ocr_readtext(reader, ocr_input, detail=1)
         matched_rd: dict[str, Any] | None = None
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
@@ -523,7 +524,7 @@ def scan_numbers(
         ):
             return None
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = reader.readtext(ocr_input, **ocr_kwargs)
+        ocr_results = _ocr_readtext(reader, ocr_input, **ocr_kwargs)
         matched_rd: dict[str, Any] | None = None
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:

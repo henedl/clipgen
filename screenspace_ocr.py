@@ -25,6 +25,8 @@ from screenspace_primitives import extract_region
 
 _ocr_readers: dict[tuple, Any] = {}
 _ocr_lock = threading.Lock()
+# serializes readtext on the shared (non-thread-safe) Reader
+_ocr_infer_lock = threading.Lock()
 
 
 def _get_ocr_reader(languages: list[str]) -> Any:
@@ -36,6 +38,18 @@ def _get_ocr_reader(languages: list[str]) -> Any:
         if key not in _ocr_readers:
             _ocr_readers[key] = easyocr.Reader(list(key), verbose=False)
         return _ocr_readers[key]
+
+
+def _ocr_readtext(reader: Any, image: np.ndarray, **kwargs: Any) -> list[Any]:
+    """Run ``reader.readtext`` under a global lock.
+
+    EasyOCR/torch inference on a shared cached Reader is not thread-safe; with
+    parallel Screenspace workers (and the calibration route thread) hitting the
+    same Reader, concurrent readtext calls can corrupt results or crash. Reader
+    creation is already guarded by ``_ocr_lock``; this serializes inference.
+    """
+    with _ocr_infer_lock:
+        return reader.readtext(image, **kwargs)
 
 
 def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarray:
@@ -174,7 +188,7 @@ def _ocr_region_readings(
     kwargs: dict[str, Any] = {"detail": 1}
     if allowlist is not None:
         kwargs["allowlist"] = allowlist
-    return reader.readtext(pixels, **kwargs)
+    return _ocr_readtext(reader, pixels, **kwargs)
 
 
 def _score_text_readings(
