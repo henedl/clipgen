@@ -1529,17 +1529,17 @@ def api_stashes_list() -> FlaskResponse:
 @screenspace_bp.route("/api/stashes", methods=["POST"])
 def api_stashes_create() -> FlaskResponse:
     """Stash all current regions and clear the active set."""
-    regions = _manifest.get("regions", {})
-    if not regions:
-        return err("No regions to stash")
-
-    stash = {
-        "id": "stash_" + uuid.uuid4().hex[:8],
-        "name": "Stashed Regions",
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-        "regions": copy.deepcopy(regions),
-    }
     with _manifest_lock:
+        regions = _manifest.get("regions", {})
+        if not regions:
+            return err("No regions to stash")
+
+        stash = {
+            "id": "stash_" + uuid.uuid4().hex[:8],
+            "name": "Stashed Regions",
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "regions": copy.deepcopy(regions),
+        }
         _manifest.setdefault("stashes", []).append(stash)
         _manifest["regions"] = {}
         _do_persist(drain_events=False)
