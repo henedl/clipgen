@@ -1049,7 +1049,10 @@ def scan_inactivity(
             if dist <= threshold:
                 # Frame is similar — extend or start span
                 if span_start[0] is None:
-                    span_start[0] = ts - interval_seconds
+                    # Clamp to the scan start so a match early in the video
+                    # (ts < interval_seconds, or start_seconds > 0) can't begin
+                    # the span before 0:00 / the requested start.
+                    span_start[0] = max(start_seconds, ts - interval_seconds)
                 span_distances[0].append(dist)
             else:
                 # Frame changed — flush any active span

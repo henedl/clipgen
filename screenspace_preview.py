@@ -341,23 +341,17 @@ def _overlay_template_heatmap(
     template = params.get("template_image")
     if not (isinstance(template, np.ndarray) and template.size > 0):
         return None
-    k = config.SCREENSPACE_BLUR_KERNEL
-    frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    if (
-        tmpl_gray.shape[0] > frame_gray.shape[0]
-        or tmpl_gray.shape[1] > frame_gray.shape[1]
-        or float(np.std(tmpl_gray)) < 1e-6
-    ):
-        return None
     mask = params.get("template_mask")
-    gray_mask = None
-    if isinstance(mask, np.ndarray) and mask.size > 0:
-        gray_mask = cv2.GaussianBlur(mask, (k, k), 0)
-    result = cv2.matchTemplate(
-        frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
-    )
-    result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+    if not (isinstance(mask, np.ndarray) and mask.size > 0):
+        mask = None
+    # Reuse the scan's template-prep + correlation helpers so the preview
+    # heatmap reflects exactly what a real scan computes: the mask is binarized
+    # (not blurred), and the degeneracy/oversize checks match the scan path.
+    prepared = screenspace._prepare_template(template, mask)
+    result = screenspace._template_correlation_map(frame, prepared)
+    if result is None:
+        return None
+    tmpl_gray = prepared[0]
     norm = np.empty_like(result)
     cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
     heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
