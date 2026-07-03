@@ -1742,19 +1742,30 @@
 
   // ---- Region stashing ----
 
+  // Id of the stash just created, so renderStashCards() can play the landing
+  // animation on exactly the new card (consumed + cleared on first render).
+  var _justStashedStashId = null;
+
   function stashRegions() {
+    var chips = qsa("#regionChips .region-chip");
     apiPost("api/stashes", {}).then(function (data) {
       if (!data.ok) return;
-      state.stashes.push(data.stash);
-      state.regions = {};
-      state.activeRegion = null;
-      state.pendingRegion = null;
-      renderRegionChips();
-      renderOverlay();
-      updateRegionButtons();
-      updateRunButton();
-      renderStashCards();
-      showToast("Regions stashed");
+      var commit = function () {
+        state.stashes.push(data.stash);
+        _justStashedStashId = data.stash.id;
+        state.regions = {};
+        state.activeRegion = null;
+        state.pendingRegion = null;
+        renderRegionChips();
+        renderOverlay();
+        updateRegionButtons();
+        updateRunButton();
+        renderStashCards();
+        showToast("Regions stashed");
+      };
+      // Pills stash out (jump + wiggle + dissolve), then the stash card lands.
+      if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "stash").then(commit);
+      else commit();
     });
   }
 
@@ -1832,6 +1843,10 @@
     state.stashes.forEach(function (stash) {
       var card = el("div", "stash-card");
       card.dataset.stashId = stash.id;
+      if (stash.id === _justStashedStashId && window.ClipgenMotion) {
+        ClipgenMotion.animateIn(card, "stashLand");
+        _justStashedStashId = null;
+      }
       var regionNames = Object.keys(stash.regions);
 
       // Editable name

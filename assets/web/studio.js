@@ -2724,10 +2724,20 @@
     if (!ctx.locked) {
       removeBtn.addEventListener("click", function (ev) {
         ev.stopPropagation();
-        var removed = state[cfg.queueKey].splice(idx, 1)[0];
-        if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-        ctx.render();
-        if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+        var card = this.closest(".queue-card");
+        var commit = function () {
+          // Resolve by identity, not the captured idx: while the exit animation
+          // plays, an earlier card's removal can re-render and shift indices.
+          var q = state[cfg.queueKey];
+          var ix = q.indexOf(item);
+          if (ix < 0) return;
+          var removed = q.splice(ix, 1)[0];
+          if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
+          ctx.render();
+          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+        };
+        if (card && window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
+        else commit();
       });
     }
     card.appendChild(removeBtn);
@@ -2891,7 +2901,7 @@
     var card = el("div", "stash-card");
     card.setAttribute("data-stash-id", stash.id);
     if (stash.id === _justStashedId) {
-      card.classList.add("stash-card-landed");
+      if (window.ClipgenMotion) ClipgenMotion.animateIn(card, "stashLand");
       _justStashedId = null;
     }
     card.setAttribute("draggable", "true");
@@ -2945,20 +2955,28 @@
     if (cfg.isLocked() || state[cfg.queueKey].length === 0) return;
 
     var items = state[cfg.queueKey].slice();
+    // cfg.listSel points at the *stashed* list; the source cards live in the queue.
+    var sourceSel = cfg.queueKey === "reelQueue" ? "#reelList" : "#artifactsList";
+    var cards = qsa(sourceSel + " .queue-card");
     createStashViaAPI(cfg.apiPath, items, function (stash) {
-      state[cfg.stateKey].push(stash);
-      _justStashedId = stash.id;
-      var q = state[cfg.queueKey];
-      for (var i = 0; i < q.length; i++) {
-        var item = q[i];
-        delete state.cellResults[cellKey(item.participant, item.row)];
-      }
-      state[cfg.queueKey] = [];
-      cfg.renderQueue();
-      renderStashes(cfg);
-      for (var u = 0; u < items.length; u++) {
-        if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
-      }
+      var commit = function () {
+        state[cfg.stateKey].push(stash);
+        _justStashedId = stash.id;
+        var q = state[cfg.queueKey];
+        for (var i = 0; i < q.length; i++) {
+          var item = q[i];
+          delete state.cellResults[cellKey(item.participant, item.row)];
+        }
+        state[cfg.queueKey] = [];
+        cfg.renderQueue();
+        renderStashes(cfg);
+        for (var u = 0; u < items.length; u++) {
+          if (items[u].row) updateSingleCellClass(items[u].participant, items[u].row);
+        }
+      };
+      // Queue cards stash out, then the new stash card lands (renderStashes).
+      if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "stash").then(commit);
+      else commit();
     });
   }
 
@@ -3086,15 +3104,20 @@
   function bindButtons() {
     qs("#clearArtifactsBtn").addEventListener("click", function () {
       if (isArtifactQueueLocked()) return;
-      var cleared = state.artifactQueue.slice();
-      for (var i = 0; i < cleared.length; i++) {
-        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
-      }
-      state.artifactQueue = [];
-      renderArtifactQueue();
-      for (var u = 0; u < cleared.length; u++) {
-        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
-      }
+      var cards = qsa("#artifactsList .queue-card");
+      var commit = function () {
+        var cleared = state.artifactQueue.slice();
+        for (var i = 0; i < cleared.length; i++) {
+          delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
+        }
+        state.artifactQueue = [];
+        renderArtifactQueue();
+        for (var u = 0; u < cleared.length; u++) {
+          if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
+        }
+      };
+      if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+      else commit();
     });
 
     qs("#addToReelBtn").addEventListener("click", function () {
@@ -3105,15 +3128,20 @@
 
     qs("#clearReelBtn").addEventListener("click", function () {
       if (isReelQueueLocked()) return;
-      var cleared = state.reelQueue.slice();
-      for (var i = 0; i < cleared.length; i++) {
-        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
-      }
-      state.reelQueue = [];
-      renderReelQueue();
-      for (var u = 0; u < cleared.length; u++) {
-        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
-      }
+      var cards = qsa("#reelList .queue-card");
+      var commit = function () {
+        var cleared = state.reelQueue.slice();
+        for (var i = 0; i < cleared.length; i++) {
+          delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
+        }
+        state.reelQueue = [];
+        renderReelQueue();
+        for (var u = 0; u < cleared.length; u++) {
+          if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
+        }
+      };
+      if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+      else commit();
     });
 
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
