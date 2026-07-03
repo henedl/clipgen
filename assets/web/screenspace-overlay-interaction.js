@@ -438,9 +438,12 @@
     qs("#deleteRegionBtn").addEventListener("click", function () {
       if (!state.activeRegion) return;
       var name = state.activeRegion;
+      // The deleted region is always the active one, so its chip carries `.active`.
+      var chip = qs("#regionChips .region-chip.active");
       apiDelete("api/regions/" + encodeURIComponent(name))
         .then(function (data) {
-          if (data.ok) {
+          if (!data.ok) return;
+          var commit = function () {
             delete state.regions[name];
             state.activeRegion = null;
             renderRegionChips();
@@ -448,7 +451,9 @@
             updateRegionButtons();
             updateRunButton();
             showToast("Region '" + name + "' deleted");
-          }
+          };
+          if (chip && window.ClipgenMotion) ClipgenMotion.animateOut(chip, "delete").then(commit);
+          else commit();
         })
         .catch(function () { showToast("Failed to delete region"); });
     });
@@ -456,9 +461,11 @@
     qs("#deleteAllRegionsBtn").addEventListener("click", function () {
       if (Object.keys(state.regions).length === 0) return;
       if (!window.confirm("Delete all regions? Stashed regions are not affected.")) return;
+      var chips = qsa("#regionChips .region-chip");
       apiDelete("api/regions")
         .then(function (data) {
-          if (data.ok) {
+          if (!data.ok) return;
+          var commit = function () {
             state.regions = {};
             state.activeRegion = null;
             state.pendingRegion = null;
@@ -467,7 +474,9 @@
             updateRegionButtons();
             updateRunButton();
             showToast("All regions deleted");
-          }
+          };
+          if (chips.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(chips, "delete").then(commit);
+          else commit();
         })
         .catch(function () { showToast("Failed to delete regions"); });
     });
@@ -594,11 +603,17 @@
     toggleRegionsBtn.appendChild(state.showRegionOverlays ? iconSpan("eye") : iconSpan("eye-slash"));
   }
 
+  // Region names present at the last render, so renderRegionChips() can play the
+  // entry animation on just the newly-appeared pills (null on first render → no
+  // load-time burst; reset to {} whenever the bar empties).
+  var _prevRegionNames = null;
+
   function renderRegionChips() {
     var container = qs("#regionChips");
     container.innerHTML = "";
     var names = Object.keys(state.regions);
     if (names.length === 0) {
+      _prevRegionNames = {};
       var hint = el("span", "region-hint", "Click and drag on the video to create a region");
       container.appendChild(hint);
       // Still refresh the run-region picker so it prunes any runRegions that
@@ -608,6 +623,7 @@
       renderRunRegionPicker();
       return;
     }
+    var newPrev = {};
     names.forEach(function (name, i) {
       var color = regionColorForIndex(i);
       var chip = el("div", "region-chip" + (name === state.activeRegion ? " active" : ""));
@@ -638,7 +654,14 @@
         updateRunButton();
       });
       container.appendChild(chip);
+      // Animate in only pills that are new since the last render (created or
+      // restored) — reuses the shared stash-card landing animation.
+      if (_prevRegionNames && !_prevRegionNames[name] && window.ClipgenMotion) {
+        ClipgenMotion.animateIn(chip, "stashLand");
+      }
+      newPrev[name] = true;
     });
+    _prevRegionNames = newPrev;
     renderRunRegionPicker();
     updateRegionChipsOverflow();
     _updateMinAreaReadout(""); // region change → refresh color presence pixel estimate

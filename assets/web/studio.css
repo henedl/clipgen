@@ -1780,18 +1780,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   background: var(--bg-hover);
 }
 
-/* A stash just landed — the freshly-saved card animates in once (the list is
- * rebuilt on every stash mutation, so JS gates this on the new stash id). */
-@keyframes stash-card-land {
-  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.stash-card-landed {
-  animation: stash-card-land var(--duration-fast) cubic-bezier(0.2, 0.7, 0.3, 1);
-}
-@media (prefers-reduced-motion: reduce) {
-  .stash-card-landed { animation: none; }
-}
+/* Stash-card landing is animated by ClipgenMotion.animateIn(card, "stashLand")
+ * (see motion.js) — shared with Screenspace so both tools use one system. */
 
 /* Stack of up to three frame thumbnails — top item is fully visible, the
  * 2nd/3rd are offset 2px right + 2px up so the chip reads as a deck of
