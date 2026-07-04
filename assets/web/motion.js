@@ -337,6 +337,15 @@
   // brief window before it's connected to the DOM — so there's no first-frame flash.
   function animateIn(el, kind, opts) {
     opts = opts || {};
+    // Flush pending layout before starting. When the caller reveals `el` in the SAME
+    // tick (display:none → shown — e.g. un-hiding a toast or an overlay card), the
+    // browser hasn't laid it out yet, so starting the animation now makes it skip its
+    // opening frames: the element snaps straight to the end instead of easing in.
+    // Reading offsetWidth forces the layout so the entry paints from its first
+    // keyframe. Harmless otherwise (a just-appended card measures what it already is;
+    // a not-yet-connected element reads 0 and relies on the fill:"both" backwards
+    // fill below, exactly as before).
+    if (el) void el.offsetWidth;
     if (REDUCED.matches || !HAS_WAAPI) return reducedFade(el, true, false);
     var p = PARAMS[kind] || PARAMS.stashLand;
     var kf;

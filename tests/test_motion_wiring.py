@@ -107,6 +107,14 @@ def test_toast_uses_shared_fade():
     assert "window.ClipgenMotion" in utils
 
 
+def test_animate_in_flushes_layout_before_animating():
+    # A reveal (display:none → shown) followed by animate() in the same tick skips
+    # the entry's opening frames — the element snaps in. animateIn forces a reflow
+    # (offsetWidth read) first so toasts/overlay cards actually ease in.
+    src = MOTION_JS.read_text(encoding="utf-8")
+    assert "offsetWidth" in src
+
+
 def test_studio_overlays_pop_in_via_motion():
     # The Studio overlay cards' entrance was migrated off the CSS cg-overlay-pop
     # keyframe onto ClipgenMotion.animateIn(card, "pop"); leaving the keyframe behind
