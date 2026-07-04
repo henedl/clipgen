@@ -58,7 +58,7 @@ import thinking_agents
 import transcripts
 import utils
 import video
-from server_utils import err, ok
+from server_utils import err, make_debounced_persist, ok
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -856,7 +856,7 @@ def api_corrections_add() -> FlaskResponse:
 
         _bump_corrections_version()  # add/update/remove invalidates corrected cache
     # Schedule the debounced write OUTSIDE _manifest_lock, like the other edit
-    # routes, so we never nest _manifest_lock -> _persist_timer_lock.
+    # routes, so we never nest _manifest_lock -> the debounce timer lock.
     _schedule_persist()
     if removed_id is not None:
         return ok(correction=None, removed=removed_id)
@@ -1509,58 +1509,11 @@ def _do_persist() -> None:
 # in-memory _manifest under _manifest_lock, never disk. atexit fires the pending
 # flush on normal exit / SIGINT / SIGTERM, but not on SIGKILL or hard power-loss
 # — accepted because the transcripts manifest is recreatable (re-transcribe) and
-# a sub-2s window of edits is cheap to redo. Mirrors screenspace_server.py.
-_PERSIST_DEBOUNCE_SECONDS = 2.0
-_persist_timer: threading.Timer | None = None
-_persist_timer_lock = threading.Lock()
-_persist_dirty = False
-
-
-def _cancel_pending_persist_timer() -> bool:
-    """Cancel the debounce timer and clear the dirty flag. Returns prior dirty state."""
-    global _persist_timer, _persist_dirty  # noqa: PLW0603
-    with _persist_timer_lock:
-        timer = _persist_timer
-        _persist_timer = None
-        was_dirty = _persist_dirty
-        _persist_dirty = False
-    if timer is not None:
-        timer.cancel()
-    return was_dirty
-
-
-def _on_persist_timer() -> None:
-    global _persist_timer, _persist_dirty  # noqa: PLW0603
-    with _persist_timer_lock:
-        _persist_timer = None
-        if not _persist_dirty:
-            return
-        _persist_dirty = False
-    with _manifest_lock:
-        _do_persist()
-
-
-def _schedule_persist() -> None:
-    """Mark the manifest dirty and (re)arm the debounce timer.
-
-    Used by rapid UI-edit routes so a burst of edits coalesces into one write.
-    """
-    global _persist_timer, _persist_dirty  # noqa: PLW0603
-    with _persist_timer_lock:
-        _persist_dirty = True
-        if _persist_timer is not None:
-            _persist_timer.cancel()
-        _persist_timer = threading.Timer(_PERSIST_DEBOUNCE_SECONDS, _on_persist_timer)
-        _persist_timer.daemon = True
-        _persist_timer.start()
-
-
-def _flush_pending_persist() -> None:
-    """Cancel any pending debounced write and persist immediately if dirty."""
-    if _cancel_pending_persist_timer():
-        with _manifest_lock:
-            _do_persist()
-
+# a sub-2s window of edits is cheap to redo. The lambda looks up _do_persist at
+# call time so tests monkeypatching it are seen.
+(_schedule_persist, _flush_pending_persist, _cancel_pending_persist_timer) = (
+    make_debounced_persist(lambda: _do_persist(), _manifest_lock)
+)
 
 atexit.register(_flush_pending_persist)
 

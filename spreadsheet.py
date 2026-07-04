@@ -475,7 +475,7 @@ def parse_reel_input(input_string: str) -> ReelInput:
     return result
 
 
-def detect_mode_from_input(input_string: str) -> tuple[str | None, dict]:
+def detect_mode_from_input(input_string: str) -> tuple[str | None, dict[str, Any]]:
     """Detect mode from input syntax (for implicit mode selection).
 
     Only line, range, cell, and participant modes are auto-detected. Batch, browse,
