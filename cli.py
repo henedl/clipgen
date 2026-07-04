@@ -2431,7 +2431,7 @@ def _truncate_for_filename(text: str, *, limit: int = 60) -> str:
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
-    return text[:limit].rstrip() + "…"
+    return files._safe_truncate(text, limit).rstrip() + "…"
 
 
 def _run_ss_clips(args: argparse.Namespace) -> None:
