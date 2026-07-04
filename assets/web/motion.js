@@ -23,9 +23,9 @@
  *
  * Public surface (window.ClipgenMotion):
  *   PARAMS                              developer-tweakable config (see below)
- *   animateOut(el, kind, opts)  -> Promise   exit: "stash" | "delete"
+ *   animateOut(el, kind, opts)  -> Promise   exit: "stash" | "delete" | "pop" | "fade"
  *   animateOutAll(els, kind, opts) -> Promise  staggered exit for whole-list clears
- *   animateIn(el, kind, opts)   -> Promise   entry: "stashLand"
+ *   animateIn(el, kind, opts)   -> Promise   entry: "stashLand" | "pop" | "fade"
  *   flyTo(el, targetEl, opts)   -> Promise   FUTURE seam (ghost fly-to-target)
  */
 (function (global) {
@@ -74,6 +74,23 @@
       easing: "cubic-bezier(0.2, 0.7, 0.3, 1)",
       risePx: 6,
       scaleFrom: 0.96,
+    },
+    // Overlay/modal "pop" (enter + exit) — mirrors the studio.css cg-overlay-pop
+    // keyframe (translateY + scale + opacity). Meant for reused surfaces that toggle
+    // display rather than being removed, so callers pair animateIn on show with a
+    // guarded animateOut on hide (the newer entry animation cleanly supersedes a
+    // stale forwards-filled exit; see showToast).
+    pop: {
+      duration: 150, // == tokens.css --duration-fast
+      easing: "cubic-bezier(0.2, 0.7, 0.3, 1)",
+      risePx: 8,
+      scaleFrom: 0.98,
+    },
+    // Plain opacity fade (enter + exit) — the simplest kind, and what every other
+    // kind collapses to under reduced motion / no WAAPI.
+    fade: {
+      duration: 150,
+      easing: "ease",
     },
     // Stagger for *All variants: item i waits min(i*step, maxTotal) ms. The clamp
     // keeps "clear dozens of cards" finishing within ~maxTotal + duration.
@@ -175,6 +192,23 @@
     ];
   }
 
+  // Opacity-only fade. Entry 0→1, exit 1→0. Shared by the `fade` kind and the
+  // reduced-motion fallback (reducedFade).
+  function buildFadeKeyframes(isEntry) {
+    return isEntry ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }];
+  }
+
+  // Overlay "pop": a small translateY + scale paired with a fade. Entry rises from
+  // (risePx, scaleFrom, 0) to (0, 1, 1); exit is the reverse — settles down, shrinks,
+  // fades. Mirrors studio.css cg-overlay-pop (translateY starts BELOW, +risePx).
+  function buildPopKeyframes(p, isEntry) {
+    var rise = Math.abs(p.risePx);
+    var s = p.scaleFrom;
+    var shown = { transform: "translateY(0px) scale(1)", opacity: 1 };
+    var hidden = { transform: "translateY(" + rise + "px) scale(" + s + ")", opacity: 0 };
+    return isEntry ? [hidden, shown] : [shown, hidden];
+  }
+
   // ---- Size awareness ----------------------------------------------------------
   // The same tilt/travel looks far stronger on a big element than a small one.
   // measureSizeScale() returns a factor (≈1 for a pill-sized object, smaller for
@@ -242,7 +276,7 @@
   // ---- Public API --------------------------------------------------------------
 
   function reducedFade(el, isEntry, lockPointer) {
-    var kf = isEntry ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }];
+    var kf = buildFadeKeyframes(isEntry);
     return runOne(
       el,
       kf,
@@ -251,9 +285,9 @@
     );
   }
 
-  // Exit animation. `kind` ∈ {"stash","delete"}. opts.delay offsets the start.
-  // fill:"forwards" holds the end state (invisible) so there's no flash before the
-  // caller re-renders the list away.
+  // Exit animation. `kind` ∈ {"stash","delete","pop","fade"}. opts.delay offsets the
+  // start. fill:"forwards" holds the end state (invisible) so there's no flash before
+  // the caller re-renders the list away (or, for reused surfaces, hides + re-shows).
   function animateOut(el, kind, opts) {
     opts = opts || {};
     if (REDUCED.matches || !HAS_WAAPI) return reducedFade(el, false, true);
@@ -266,7 +300,11 @@
       scale = opts.sizeScale != null ? opts.sizeScale : measureSizeScale(el);
       dur = Math.round(p.duration * (1 + PARAMS.size.durationGain * Math.max(0, 1 - scale)));
     }
-    var kf = kind === "stash" ? buildStashKeyframes(p, scale) : buildDeleteKeyframes(p, scale);
+    var kf;
+    if (kind === "stash") kf = buildStashKeyframes(p, scale);
+    else if (kind === "pop") kf = buildPopKeyframes(p, false);
+    else if (kind === "fade") kf = buildFadeKeyframes(false);
+    else kf = buildDeleteKeyframes(p, scale);
     return runOne(el, kf, { duration: dur, delay: opts.delay || 0, easing: p.easing || "ease", fill: "forwards" }, true);
   }
 
@@ -299,9 +337,21 @@
   // brief window before it's connected to the DOM — so there's no first-frame flash.
   function animateIn(el, kind, opts) {
     opts = opts || {};
+    // Flush pending layout before starting. When the caller reveals `el` in the SAME
+    // tick (display:none → shown — e.g. un-hiding a toast or an overlay card), the
+    // browser hasn't laid it out yet, so starting the animation now makes it skip its
+    // opening frames: the element snaps straight to the end instead of easing in.
+    // Reading offsetWidth forces the layout so the entry paints from its first
+    // keyframe. Harmless otherwise (a just-appended card measures what it already is;
+    // a not-yet-connected element reads 0 and relies on the fill:"both" backwards
+    // fill below, exactly as before).
+    if (el) void el.offsetWidth;
     if (REDUCED.matches || !HAS_WAAPI) return reducedFade(el, true, false);
     var p = PARAMS[kind] || PARAMS.stashLand;
-    var kf = buildStashLandKeyframes(p);
+    var kf;
+    if (kind === "pop") kf = buildPopKeyframes(p, true);
+    else if (kind === "fade") kf = buildFadeKeyframes(true);
+    else kf = buildStashLandKeyframes(p);
     return runOne(el, kf, { duration: p.duration, delay: opts.delay || 0, easing: p.easing || "ease", fill: "both" }, false);
   }
 

@@ -3788,8 +3788,10 @@
     if (isAnyStudioJobRunning()) return;
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
+    var wasHidden = overlay.classList.contains("hidden");
     overlay.classList.remove("hidden");
     openModalTrap(overlay, closeGalleryDialog);
+    popOverlayCardIn(qs(".gallery-card"), wasHidden);
     var sel = qs("#galleryParticipant");
     if (sel) sel.focus();
   }
@@ -3897,13 +3899,26 @@
     closeBlockingModal(overlayEl);
   }
 
+  // Pop a just-revealed overlay card in via the shared motion engine. `wasHidden`
+  // is the container's hidden state captured BEFORE unhiding, so a content update
+  // on an already-open overlay (e.g. a build flipping in-progress → done) doesn't
+  // re-pop. Guarded on window.ClipgenMotion; without it the card just appears.
+  function popOverlayCardIn(cardEl, wasHidden) {
+    if (wasHidden && cardEl && window.ClipgenMotion) {
+      ClipgenMotion.animateIn(cardEl, "pop");
+    }
+  }
+
   // ---- Status overlay ----
 
   var _lastViewerFile = "";
 
   function revealStatusOverlay() {
-    qs("#statusOverlay").classList.remove("hidden");
-    openModalTrap(qs("#statusOverlay"), hideOverlay);
+    var overlay = qs("#statusOverlay");
+    var wasHidden = overlay.classList.contains("hidden");
+    overlay.classList.remove("hidden");
+    openModalTrap(overlay, hideOverlay);
+    popOverlayCardIn(qs(".status-card"), wasHidden);
   }
 
   function showOverlay(message) {
@@ -3984,7 +3999,10 @@
       cancelBtn.classList.add("hidden");
       _buildStatusCancelCleanup = null;
     }
-    qs("#buildStatus").classList.remove("hidden");
+    var buildEl = qs("#buildStatus");
+    var buildWasHidden = buildEl.classList.contains("hidden");
+    buildEl.classList.remove("hidden");
+    popOverlayCardIn(qs(".build-status-card"), buildWasHidden);
   }
 
   function showBuildResult(successMsg, errorMsg, filePath) {
@@ -4004,7 +4022,10 @@
       qs("#buildStatusOpen").classList.toggle("hidden", !filePath);
     }
     qs("#buildStatusDismiss").classList.remove("hidden");
-    qs("#buildStatus").classList.remove("hidden");
+    var buildEl = qs("#buildStatus");
+    var buildWasHidden = buildEl.classList.contains("hidden");
+    buildEl.classList.remove("hidden");
+    popOverlayCardIn(qs(".build-status-card"), buildWasHidden);
   }
 
   function hideBuildStatus() {
@@ -4022,7 +4043,10 @@
     if (_confirmCleanup) _confirmCleanup();
     qs("#confirmTitle").textContent = title;
     qs("#confirmMessage").textContent = message;
-    qs("#confirmOverlay").classList.remove("hidden");
+    var confirmEl = qs("#confirmOverlay");
+    var confirmWasHidden = confirmEl.classList.contains("hidden");
+    confirmEl.classList.remove("hidden");
+    popOverlayCardIn(qs(".confirm-card"), confirmWasHidden);
 
     var yesBtn = qs("#confirmYes");
     var noBtn = qs("#confirmNo");
@@ -4053,8 +4077,11 @@
   // ---- Artifact log ----
 
   function openLog() {
-    qs("#logOverlay").classList.remove("hidden");
-    openModalTrap(qs("#logOverlay"), closeLog);
+    var overlay = qs("#logOverlay");
+    var wasHidden = overlay.classList.contains("hidden");
+    overlay.classList.remove("hidden");
+    openModalTrap(overlay, closeLog);
+    popOverlayCardIn(qs(".log-panel"), wasHidden);
     renderLog();
   }
 

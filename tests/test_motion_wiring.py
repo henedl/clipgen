@@ -81,3 +81,49 @@ def test_old_css_stash_landing_removed():
     css = (_WEB / "studio.css").read_text(encoding="utf-8")
     assert "stash-card-land" not in css
     assert "stash-card-landed" not in css
+
+
+def test_motion_has_generic_fade_and_pop_kinds():
+    # Beyond stash/delete/stashLand, the engine exposes two reusable kinds:
+    # `fade` (opacity only) and `pop` (translateY + scale + opacity, mirroring the
+    # studio.css cg-overlay-pop entrance). Both are registered in PARAMS and
+    # dispatched by animateIn (entry) and animateOut (exit).
+    src = MOTION_JS.read_text(encoding="utf-8")
+    assert "function buildFadeKeyframes(" in src
+    assert "function buildPopKeyframes(" in src
+    assert "pop: {" in src
+    assert "fade: {" in src
+    assert 'kind === "pop"' in src
+    assert 'kind === "fade"' in src
+
+
+def test_toast_uses_shared_fade():
+    # showToast is the first reused (hide/re-show) surface to adopt the engine: it
+    # fades in on show and out on dismiss, guarded on window.ClipgenMotion so pages
+    # without motion.js still hide the toast (it just snaps as before).
+    utils = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert 'ClipgenMotion.animateIn(toastEl, "fade")' in utils
+    assert 'ClipgenMotion.animateOut(toastEl, "fade")' in utils
+    assert "window.ClipgenMotion" in utils
+
+
+def test_animate_in_flushes_layout_before_animating():
+    # A reveal (display:none → shown) followed by animate() in the same tick skips
+    # the entry's opening frames — the element snaps in. animateIn forces a reflow
+    # (offsetWidth read) first so toasts/overlay cards actually ease in.
+    src = MOTION_JS.read_text(encoding="utf-8")
+    assert "offsetWidth" in src
+
+
+def test_studio_overlays_pop_in_via_motion():
+    # The Studio overlay cards' entrance was migrated off the CSS cg-overlay-pop
+    # keyframe onto ClipgenMotion.animateIn(card, "pop"); leaving the keyframe behind
+    # would resurrect a parallel second animation system (cf. the stash landing).
+    css = (_WEB / "studio.css").read_text(encoding="utf-8")
+    # The keyframe and its animation rule are gone (a history note in a comment is
+    # fine); an orphaned `animation: cg-overlay-pop` would be a parallel system.
+    assert "@keyframes cg-overlay-pop" not in css
+    assert "animation: cg-overlay-pop" not in css
+    studio = (_WEB / "studio.js").read_text(encoding="utf-8")
+    assert "function popOverlayCardIn(" in studio
+    assert 'ClipgenMotion.animateIn(cardEl, "pop")' in studio
