@@ -981,11 +981,12 @@ def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
     assert resp.status_code == 200
     # Debounced: the route armed a timer but has not written to disk yet.
     assert saved["count"] == 0
-    assert transcripts_server._persist_dirty is True
     # Flushing collapses the pending write into a single save.
     transcripts_server._flush_pending_persist()
     assert saved["count"] == 1
-    assert transcripts_server._persist_dirty is False
+    # The flush cleared the dirty state: a second flush writes nothing.
+    transcripts_server._flush_pending_persist()
+    assert saved["count"] == 1
 
 
 def test_corrected_segments_cached_and_invalidated_on_correction(

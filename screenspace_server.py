@@ -69,7 +69,13 @@ import screenspace
 import spreadsheet
 import utils
 import video
-from server_utils import err, json_endpoint, ok, parse_number_arg
+from server_utils import (
+    err,
+    json_endpoint,
+    make_debounced_persist,
+    ok,
+    parse_number_arg,
+)
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -2629,55 +2635,11 @@ def _do_persist(*, drain_events: bool = True) -> None:
 # pause / resume) coalesce into one disk write after a short quiet period.
 # atexit fires the pending flush on normal exit / SIGINT / SIGTERM, but not
 # on SIGKILL or hard power-loss — accepted because screenspace manifest is
-# recreatable analysis state.
-_PERSIST_DEBOUNCE_SECONDS = 2.0
-_persist_timer: threading.Timer | None = None
-_persist_timer_lock = threading.Lock()
-_persist_dirty = False
-
-
-def _cancel_pending_persist_timer() -> bool:
-    """Cancel the debounce timer and clear the dirty flag. Returns prior dirty state."""
-    global _persist_timer, _persist_dirty
-    with _persist_timer_lock:
-        timer = _persist_timer
-        _persist_timer = None
-        was_dirty = _persist_dirty
-        _persist_dirty = False
-    if timer is not None:
-        timer.cancel()
-    return was_dirty
-
-
-def _on_persist_timer() -> None:
-    global _persist_timer, _persist_dirty
-    with _persist_timer_lock:
-        _persist_timer = None
-        if not _persist_dirty:
-            return
-        _persist_dirty = False
-    with _manifest_lock:
-        _do_persist(drain_events=False)
-
-
-def _schedule_persist() -> None:
-    """Mark the manifest dirty and (re)arm the debounce timer."""
-    global _persist_timer, _persist_dirty
-    with _persist_timer_lock:
-        _persist_dirty = True
-        if _persist_timer is not None:
-            _persist_timer.cancel()
-        _persist_timer = threading.Timer(_PERSIST_DEBOUNCE_SECONDS, _on_persist_timer)
-        _persist_timer.daemon = True
-        _persist_timer.start()
-
-
-def _flush_pending_persist() -> None:
-    """Cancel any pending debounced write and persist immediately if dirty."""
-    if _cancel_pending_persist_timer():
-        with _manifest_lock:
-            _do_persist(drain_events=False)
-
+# recreatable analysis state. The lambda looks up _do_persist at call time so
+# tests monkeypatching it are seen.
+(_schedule_persist, _flush_pending_persist, _cancel_pending_persist_timer) = (
+    make_debounced_persist(lambda: _do_persist(drain_events=False), _manifest_lock)
+)
 
 atexit.register(_flush_pending_persist)
 
