@@ -761,9 +761,19 @@ var showToast = function (msg, opts) {
   if (!toastEl) return;
   toastEl.textContent = msg;
   toastEl.classList.remove("hidden");
+  // Generation token: the toast is a reused element, so a fade-out that started
+  // before a re-show must not add `.hidden` when it settles onto the fresh toast.
+  var gen = (toastEl._toastGen = (toastEl._toastGen || 0) + 1);
+  // Fade in on show; the newer entry animation supersedes any stale exit fill.
+  // Guarded because motion.js only loads on some pages (elsewhere the toast snaps).
+  if (window.ClipgenMotion) ClipgenMotion.animateIn(toastEl, "fade");
   clearTimeout(toastEl._timer);
   toastEl._timer = setTimeout(function () {
-    toastEl.classList.add("hidden");
+    var hide = function () {
+      if (toastEl._toastGen === gen) toastEl.classList.add("hidden");
+    };
+    if (window.ClipgenMotion) ClipgenMotion.animateOut(toastEl, "fade").then(hide);
+    else hide();
   }, durationMs);
 };
 
