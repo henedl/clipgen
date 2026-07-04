@@ -2234,28 +2234,11 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* Status overlay */
 
-/* Shared entrance for the Studio overlay cards. The overlays toggle
- * display:none↔flex, so a transition wouldn't fire on un-hide — an animation
- * runs the moment the card becomes rendered. One keyframe, applied to every
- * card so the modals stop popping in abruptly. */
-@keyframes cg-overlay-pop {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.status-card,
-.confirm-card,
-.gallery-card,
-.log-panel,
-.build-status-card {
-  animation: cg-overlay-pop var(--duration-fast) cubic-bezier(0.2, 0.7, 0.3, 1);
-}
-@media (prefers-reduced-motion: reduce) {
-  .status-card,
-  .confirm-card,
-  .gallery-card,
-  .log-panel,
-  .build-status-card { animation: none; }
-}
+/* Studio overlay cards (.status-card / .confirm-card / .gallery-card / .log-panel
+ * / .build-status-card) pop in via the shared motion engine: studio.js calls
+ * ClipgenMotion.animateIn(card, "pop") on reveal (see popOverlayCardIn). The
+ * former cg-overlay-pop @keyframes was retired to keep a single animation system;
+ * motion.js handles the prefers-reduced-motion fallback (a short opacity fade). */
 
 #statusOverlay {
   position: fixed;

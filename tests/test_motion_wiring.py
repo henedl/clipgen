@@ -105,3 +105,17 @@ def test_toast_uses_shared_fade():
     assert 'ClipgenMotion.animateIn(toastEl, "fade")' in utils
     assert 'ClipgenMotion.animateOut(toastEl, "fade")' in utils
     assert "window.ClipgenMotion" in utils
+
+
+def test_studio_overlays_pop_in_via_motion():
+    # The Studio overlay cards' entrance was migrated off the CSS cg-overlay-pop
+    # keyframe onto ClipgenMotion.animateIn(card, "pop"); leaving the keyframe behind
+    # would resurrect a parallel second animation system (cf. the stash landing).
+    css = (_WEB / "studio.css").read_text(encoding="utf-8")
+    # The keyframe and its animation rule are gone (a history note in a comment is
+    # fine); an orphaned `animation: cg-overlay-pop` would be a parallel system.
+    assert "@keyframes cg-overlay-pop" not in css
+    assert "animation: cg-overlay-pop" not in css
+    studio = (_WEB / "studio.js").read_text(encoding="utf-8")
+    assert "function popOverlayCardIn(" in studio
+    assert 'ClipgenMotion.animateIn(cardEl, "pop")' in studio
