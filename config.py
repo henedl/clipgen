@@ -197,13 +197,10 @@ SCREENSPACE_OCR_MIN_HEIGHT: int = (
 )
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD: float = 2.0  # mean-abs-diff cutoff for skipping near-identical frames (Similarity/Text/Numbers/Scene scans)
-SCREENSPACE_SEQUENTIAL_READ_MAX_INTERVAL: float = 3.0
-SCREENSPACE_INTAKE_CLUSTER_SECONDS: int = 5
 SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70
 SCREENSPACE_TEMPLATE_NMS_OVERLAP: float = 0.50
 SCREENSPACE_TEMPLATE_SCALE_MIN: float = 0.25
 SCREENSPACE_TEMPLATE_SCALE_MAX: float = 2.0
-SCREENSPACE_TEMPLATE_SCALE_STEP: float = 0.05
 SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD: float = 2.0
 SCREENSPACE_FLOW_PYR_SCALE: float = 0.5
 SCREENSPACE_SCENE_SIMILARITY_THRESHOLD: float = 0.75
@@ -221,9 +218,6 @@ SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC: float = (
 )
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
-SCREENSPACE_BATCH_EXTRACT: bool = (
-    True  # use ffmpeg pipe for frame extraction; falls back to cv2
-)
 SCREENSPACE_PARALLEL_WORKERS: int = (
     2  # max concurrent analysis tasks in ScreenspaceWorker
 )
@@ -471,7 +465,6 @@ FRICTION_CATEGORIES: dict[str, str] = {
 }
 FRICTION_CANDIDATE_LIMIT: int = 15  # top-N scored segments fed to the LLM stage
 FRICTION_MOMENT_LIMIT: int = 5  # number of moments the LLM returns
-FRICTION_HEATMAP_WINDOW: int = 5  # rolling-mean window for the timeline heatmap
 
 # ── Rich Output ──────────────────────────────────────────────────────
 RICH_COLORS: bool = True  # Enable/disable colored output (set False for piped output)
