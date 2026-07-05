@@ -2,6 +2,22 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.13.51 — 2026-07-04 — Core
+**Unified motion for toasts and Studio overlays**
+Toast and Studio overlay cards animate through the shared ClipgenMotion engine with fade/pop entrances; duplicate CSS keyframes retired, and overlays no longer snap in when revealed from hidden.
+
+## v0.13.50 — 2026-07-03 — Core
+**Animated stash and delete exits**
+Screenspace region pills and Studio queue, artifact, and reel cards play staged exit animations on stash, delete, and clear before the list re-renders, with reduced-motion fallbacks.
+
+## v0.13.49 — 2026-06-30 — Workflows
+**Multi-select participant batch**
+Video Source participant param is a checkbox popover — pick any subset to fan out a batch instead of only one participant or all; empty selection raises a validation warning.
+
+## v0.13.48 — 2026-06-30 — Workflows
+**Canvas navigation**
+Fit-to-view button and F shortcut frame all nodes; dragging near the canvas edge auto-pans; a corner minimap shows the graph with click/drag-to-recenter.
+
 ## v0.13.47 — 2026-06-29 — Screenspace
 **Boundary flags above the timeline**
 Scene boundaries render as flag glyphs in a rail above the timeline instead of in-band ticks; hover shows a tooltip and locator hairline, click seeks to the boundary time.
