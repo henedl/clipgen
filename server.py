@@ -81,6 +81,8 @@ FlaskResponse = Response | tuple[Response, int]
 
 _worksheet: Any = None
 _sheet_context: spreadsheet.SheetContext | None = None
+_sheet_payload_cache: tuple[Any, dict[str, Any]] | None = None
+_sheet_payload_cache_lock = threading.Lock()
 # Metadata for the active spreadsheet — used by /api/status so the Start
 # overlay can pre-select the right tab (Google/Excel) and re-highlight the
 # right item. Only set when the spreadsheet was opened via the runtime
@@ -700,27 +702,7 @@ def api_clip_audio(participant: str) -> FlaskResponse:
     )
 
 
-@studio_bp.route("/api/sheet")
-def api_sheet() -> FlaskResponse:
-    if _sheet_context is None:
-        return jsonify(
-            {
-                "ok": True,
-                "sheet_loaded": False,
-                "study": "",
-                "version": utils.get_version(),
-                "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
-                "titlecardsEnabled": config.TITLECARDS_ENABLED,
-                "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
-                "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-                "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
-                "config": utils.get_frontend_config(),
-                "participants": [],
-                "rows": [],
-            }
-        )
-
-    ctx = _sheet_context
+def _build_sheet_payload(ctx: spreadsheet.SheetContext) -> dict[str, Any]:
     participants = spreadsheet.get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
@@ -777,6 +759,54 @@ def api_sheet() -> FlaskResponse:
             }
         )
 
+    return {"participants": participants, "rows": rows}
+
+
+def _get_sheet_payload(ctx: spreadsheet.SheetContext) -> dict[str, Any]:
+    global _sheet_payload_cache
+
+    with _sheet_payload_cache_lock:
+        if _sheet_payload_cache is not None:
+            cached_ctx, cached_payload = _sheet_payload_cache
+            if cached_ctx is ctx:
+                return cached_payload
+        payload = _build_sheet_payload(ctx)
+        _sheet_payload_cache = (ctx, payload)
+        return payload
+
+
+def _set_sheet_context(ctx: spreadsheet.SheetContext | None) -> None:
+    """Replace the active sheet context and clear derived row payloads atomically."""
+    global _sheet_context, _sheet_payload_cache
+
+    with _sheet_payload_cache_lock:
+        _sheet_context = ctx
+        _sheet_payload_cache = None
+
+
+@studio_bp.route("/api/sheet")
+def api_sheet() -> FlaskResponse:
+    if _sheet_context is None:
+        return jsonify(
+            {
+                "ok": True,
+                "sheet_loaded": False,
+                "study": "",
+                "version": utils.get_version(),
+                "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
+                "titlecardsEnabled": config.TITLECARDS_ENABLED,
+                "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
+                "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
+                "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
+                "config": utils.get_frontend_config(),
+                "participants": [],
+                "rows": [],
+            }
+        )
+
+    ctx = _sheet_context
+    sheet_payload = _get_sheet_payload(ctx)
+
     return jsonify(
         {
             "ok": True,
@@ -790,8 +820,8 @@ def api_sheet() -> FlaskResponse:
             "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
             "defaultDuration": config.DEFAULT_DURATION_SECONDS,
             "config": utils.get_frontend_config(),
-            "participants": participants,
-            "rows": rows,
+            "participants": sheet_payload["participants"],
+            "rows": sheet_payload["rows"],
         }
     )
 
@@ -912,13 +942,12 @@ def api_convergence_offsets_put() -> FlaskResponse:
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])
 def api_sheet_refresh() -> FlaskResponse:
-    global _sheet_context
     if _worksheet is None:
         return err("No spreadsheet loaded — pick one from the Start panel.")
     new_context = spreadsheet.build_sheet_context(_worksheet)
     if new_context is None:
         return err("Failed to refresh sheet data", 500)
-    _sheet_context = new_context
+    _set_sheet_context(new_context)
     return ok()
 
 
@@ -3074,13 +3103,13 @@ def _init_studio_state(worksheet: Any) -> None:
 
     _load_studio_settings()
     _worksheet = worksheet
+    new_context = None
     if worksheet is not None:
-        _sheet_context = spreadsheet.build_sheet_context(worksheet)
-        if _sheet_context is None:
+        new_context = spreadsheet.build_sheet_context(worksheet)
+        if new_context is None:
             utils.error_print("Could not load spreadsheet data for Studio.")
             sys.exit(1)
-    else:
-        _sheet_context = None
+    _set_sheet_context(new_context)
     # Rebind the shared generated lists under their lock so a streaming
     # generate/intake append can't run against a half-swapped reference.
     with _generated_output_lock:
@@ -3179,7 +3208,7 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         )
     except Exception:
         _worksheet = prev_worksheet
-        _sheet_context = prev_sheet_context
+        _set_sheet_context(prev_sheet_context)
         with _generated_output_lock:
             _generated_artifacts = prev_artifacts
             _generated_reels = prev_reels

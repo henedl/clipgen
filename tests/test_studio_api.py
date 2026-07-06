@@ -24,6 +24,7 @@ def client(monkeypatch):
     # Default: no worksheet/context loaded (error state)
     monkeypatch.setattr(server, "_worksheet", None)
     monkeypatch.setattr(server, "_sheet_context", None)
+    monkeypatch.setattr(server, "_sheet_payload_cache", None)
     _set_artifacts(monkeypatch, [])
     monkeypatch.setattr(server, "_generated_reels", [])
     server._release_busy("generate")
@@ -2334,6 +2335,158 @@ def test_api_sheet_marks_valid_timestamps_only(client, monkeypatch):
     assert row_empty["P01"]["hasText"] is False
     assert row_empty["P02"]["valid"] is False
     assert row_empty["P02"]["hasText"] is True
+
+
+def test_api_sheet_reuses_derived_payload_for_same_context(client, monkeypatch):
+    """Repeated /api/sheet calls should not re-parse unchanged sheet cells."""
+    import types
+
+    sheet_data = [
+        ["ID", "P01", "Observation", "Category"],
+        ["1", "0:10-0:20 !key", "obs A", "catA"],
+    ]
+    ctx = types.SimpleNamespace(
+        header_row=sheet_data[0],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=1,
+        study_name="study",
+        observation_cell=types.SimpleNamespace(col=3),
+        category_cell=types.SimpleNamespace(col=4),
+        severity_cell=None,
+        baseline_row_idx=None,
+        filename_row_idx=None,
+        first_data_row_idx=1,
+        sheet_data=sheet_data,
+    )
+    parse_calls = {"annotations": 0, "timestamps": 0}
+
+    def fake_parse_cell_annotations(value):
+        parse_calls["annotations"] += 1
+        return value.replace(" !key", ""), set(), {"key"}
+
+    def fake_parse_timestamps(value):
+        parse_calls["timestamps"] += 1
+        return [("0:10", "0:20")]
+
+    monkeypatch.setattr(server, "_sheet_context", ctx)
+    monkeypatch.setattr(
+        server.utils, "parse_cell_annotations", fake_parse_cell_annotations
+    )
+    monkeypatch.setattr(server.utils, "parse_timestamps", fake_parse_timestamps)
+
+    first = client.get("/studio/api/sheet").get_json()
+    second = client.get("/studio/api/sheet").get_json()
+
+    assert first["rows"] == second["rows"]
+    assert parse_calls == {"annotations": 1, "timestamps": 1}
+
+
+def test_api_sheet_refresh_invalidates_derived_payload(client, monkeypatch):
+    """Refreshing the sheet swaps context and rebuilds the cached row payload."""
+    import types
+
+    def make_context(timestamp, observation):
+        sheet_data = [
+            ["ID", "P01", "Observation", "Category"],
+            ["1", timestamp, observation, "catA"],
+        ]
+        return types.SimpleNamespace(
+            header_row=sheet_data[0],
+            id_cell=types.SimpleNamespace(row=1, col=1),
+            num_participants=1,
+            study_name="study",
+            observation_cell=types.SimpleNamespace(col=3),
+            category_cell=types.SimpleNamespace(col=4),
+            severity_cell=None,
+            baseline_row_idx=None,
+            filename_row_idx=None,
+            first_data_row_idx=1,
+            sheet_data=sheet_data,
+        )
+
+    old_ctx = make_context("0:10-0:20", "old obs")
+    new_ctx = make_context("0:30-0:40", "new obs")
+    parse_calls = {"annotations": 0, "timestamps": 0}
+
+    def fake_parse_cell_annotations(value):
+        parse_calls["annotations"] += 1
+        return value, set(), set()
+
+    def fake_parse_timestamps(value):
+        parse_calls["timestamps"] += 1
+        return [tuple(value.split("-", 1))]
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(server, "_sheet_context", old_ctx)
+    monkeypatch.setattr(server.spreadsheet, "build_sheet_context", lambda ws: new_ctx)
+    monkeypatch.setattr(
+        server.utils, "parse_cell_annotations", fake_parse_cell_annotations
+    )
+    monkeypatch.setattr(server.utils, "parse_timestamps", fake_parse_timestamps)
+
+    old_data = client.get("/studio/api/sheet").get_json()
+    refresh = client.post("/studio/api/sheet/refresh").get_json()
+    new_data = client.get("/studio/api/sheet").get_json()
+
+    assert refresh["ok"] is True
+    assert old_data["rows"][0]["observation"] == "old obs"
+    assert new_data["rows"][0]["observation"] == "new obs"
+    assert parse_calls == {"annotations": 2, "timestamps": 2}
+
+
+def test_swap_worksheet_rollback_clears_sheet_payload_cache(monkeypatch):
+    """A failed sheet swap must not leave the attempted sheet payload cached."""
+    import types
+
+    import spreadsheet
+
+    prev_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="previous",
+    )
+    attempted_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="attempted",
+    )
+
+    def fake_init_studio_state(new_worksheet):
+        server._worksheet = new_worksheet
+        server._sheet_context = attempted_ctx
+        server._sheet_payload_cache = (attempted_ctx, {"participants": [], "rows": []})
+
+    def fail_screenspace_init(**kwargs):
+        raise RuntimeError("screenspace failed")
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(server, "_sheet_context", prev_ctx)
+    monkeypatch.setattr(server, "_sheet_payload_cache", (prev_ctx, {}))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_init_studio_state", fake_init_studio_state)
+
+    import screenspace_server
+    import transcripts_server
+
+    monkeypatch.setattr(
+        screenspace_server, "_init_screenspace_state", fail_screenspace_init
+    )
+    monkeypatch.setattr(
+        transcripts_server, "_init_transcripts_state", lambda **kw: None
+    )
+
+    with pytest.raises(RuntimeError, match="screenspace failed"):
+        server._swap_worksheet(object())
+
+    assert server._sheet_context is prev_ctx
+    assert server._sheet_payload_cache is None
 
 
 def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
