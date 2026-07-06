@@ -42,7 +42,9 @@ from screenspace_multitool import _multitool_has_offset
 from screenspace_frames import _probe_video_meta
 
 
-def _copy_task_for_read(task: dict[str, Any]) -> dict[str, Any]:
+def _copy_task_for_read(
+    task: dict[str, Any], include_results: bool = True
+) -> dict[str, Any]:
     """Deep-copy a task for external reads, omitting server-only ``change_grid``.
 
     ``change_grid`` is large per-frame data consumed once by heatmap generation
@@ -50,17 +52,30 @@ def _copy_task_for_read(task: dict[str, Any]) -> dict[str, Any]:
     needs). Excluding it before the deep copy keeps progress-driven SSE reads
     (~every 0.5s on long Change scans) from repeatedly duplicating per-frame
     grids that are immediately discarded by the API layer.
+
+    ``include_results=False`` drops the ever-growing ``result``/``_raw_results``
+    lists entirely (reporting ``result_count`` instead), so status ticks stop
+    deep-copying the whole detection list every 0.5s; clients pull new results
+    via :meth:`ScreenspaceWorker.get_task_result_tail`.
     """
     slim = dict(task)
-    for key in ("result", "_raw_results"):
-        seq = task.get(key)
-        if isinstance(seq, list) and seq:
-            slim[key] = [
-                {k: v for k, v in r.items() if k != "change_grid"}
-                if isinstance(r, dict)
-                else r
-                for r in seq
-            ]
+    if include_results:
+        for key in ("result", "_raw_results"):
+            seq = task.get(key)
+            if isinstance(seq, list) and seq:
+                slim[key] = [
+                    {k: v for k, v in r.items() if k != "change_grid"}
+                    if isinstance(r, dict)
+                    else r
+                    for r in seq
+                ]
+    else:
+        res = task.get("result")
+        # Mirror the frontend's old count logic: list → len, truthy non-list
+        # (e.g. a single string artifact path) → 1, empty/None → 0.
+        slim["result_count"] = len(res) if isinstance(res, list) else (1 if res else 0)
+        slim.pop("result", None)
+        slim.pop("_raw_results", None)
     return copy.deepcopy(slim)
 
 
@@ -244,19 +259,48 @@ class ScreenspaceWorker:
                 return None
             return _copy_task_for_read(task)
 
-    def get_all_tasks(self) -> list[dict[str, Any]]:
+    def get_all_tasks(self, include_results: bool = True) -> list[dict[str, Any]]:
         """Return all tasks (thread-safe copies).
 
         Tasks flagged ``_remove_on_finish`` (dismissed while running) are hidden:
         they are gone as far as the UI and manifest are concerned, even though
         they linger in ``_tasks`` until their worker thread notices the cancel.
+
+        ``include_results=False`` returns slim status copies (no ``result``/
+        ``_raw_results``, just ``result_count``) for the ≈0.5s SSE/poll ticks.
         """
         with self._lock:
             return [
-                _copy_task_for_read(t)
+                _copy_task_for_read(t, include_results=include_results)
                 for t in self._tasks.values()
                 if not t.get("_remove_on_finish")
             ]
+
+    def get_task_result_tail(
+        self, task_id: str, since: int = 0
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        """Thread-safe copy of a task's result tail from index ``since``.
+
+        Results are appended in scan order during a run (see ``_on_result``), so a
+        count cursor yields exactly the new detections and keeps the live-results
+        fetch flat. Strips server-only ``change_grid`` like :func:`_copy_task_for_read`.
+        Returns ``(tail, total)``, or ``None`` if the task is unknown.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return None
+            res = task.get("result") or []
+            total = len(res)
+            start = max(since, 0)
+            tail = res[start:] if start < total else []
+            stripped = [
+                {k: v for k, v in r.items() if k != "change_grid"}
+                if isinstance(r, dict)
+                else r
+                for r in tail
+            ]
+            return copy.deepcopy(stripped), total
 
     def reorder(self, task_ids: list[str]) -> bool:
         """Reorder queued tasks by the given ID sequence.

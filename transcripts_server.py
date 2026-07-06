@@ -1403,7 +1403,10 @@ def api_transcribe_status() -> FlaskResponse:
     """Poll transcription task status."""
     tasks = []
     if _worker:
-        for t in _worker.get_all_tasks():
+        # include_partials=False keeps the 3 s poll from deep-copying every
+        # running task's growing segment tail; clients pull new segments via
+        # /api/transcribe/<task_id>/segments?since=N using partial_count.
+        for t in _worker.get_all_tasks(include_partials=False):
             task_info = {
                 "id": t["id"],
                 "participant": t["participant"],
@@ -1414,12 +1417,25 @@ def api_transcribe_status() -> FlaskResponse:
                 "completed_at": t.get("completed_at"),
             }
             if t["status"] == transcripts.TASK_STATUS_RUNNING:
-                task_info["partial_segments"] = t.get("partial_segments", [])
+                task_info["partial_count"] = t.get("partial_count", 0)
             tasks.append(task_info)
     return ok(
         tasks=tasks,
         worker_alive=_worker.is_alive if _worker else False,
     )
+
+
+@transcripts_bp.route("/api/transcribe/<task_id>/segments")
+def api_transcribe_segments(task_id: str) -> FlaskResponse:
+    """Return a running task's partial-segment tail from ``?since=N`` (append-only)."""
+    if not _worker:
+        return err("Worker not initialized", 500)
+    try:
+        since = int(request.args.get("since", 0))
+    except (TypeError, ValueError):
+        since = 0
+    segments, total = _worker.get_partial_segments(task_id, since)
+    return ok(segments=segments, total=total)
 
 
 @transcripts_bp.route("/api/transcribe/<task_id>", methods=["DELETE"])

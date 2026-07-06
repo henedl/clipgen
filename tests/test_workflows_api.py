@@ -857,6 +857,56 @@ def test_batches_list_and_filter(wf_client, monkeypatch):
     )
 
 
+def test_batch_summary_historical_from_persisted_runs(wf_client):
+    """A finished batch (no live record) is rebuilt from persisted runs by reading
+    scalars only, and its summary stays stable as unrelated history grows."""
+    workflows_server._manifest["runs"] = [
+        {
+            "id": "run_a",
+            "batchId": "batch_x",
+            "participant": "P01",
+            "blueprintId": "bp1",
+            "startedAt": "2026-01-01T00:00:00",
+            "status": workflows.RUN_STATUS_COMPLETED,
+        },
+        {
+            "id": "run_b",
+            "batchId": "batch_x",
+            "participant": "P02",
+            "blueprintId": "bp1",
+            "startedAt": "2026-01-01T00:00:01",
+            "status": workflows.RUN_STATUS_FAILED,
+        },
+    ]
+    summary = workflows_server._batch_summary("batch_x")
+    assert summary is not None
+    assert summary["blueprintId"] == "bp1"
+    assert summary["participants"] == ["P01", "P02"]
+    assert summary["counts"] == {
+        workflows.RUN_STATUS_COMPLETED: 1,
+        workflows.RUN_STATUS_FAILED: 1,
+    }
+    child_status = {c["runId"]: c["status"] for c in summary["children"]}
+    assert child_status == {
+        "run_a": workflows.RUN_STATUS_COMPLETED,
+        "run_b": workflows.RUN_STATUS_FAILED,
+    }
+
+    # Growing unrelated run history must not perturb this batch's summary.
+    workflows_server._manifest["runs"].append(
+        {
+            "id": "run_c",
+            "batchId": "batch_other",
+            "participant": "P09",
+            "blueprintId": "bp2",
+            "startedAt": "2026-01-02T00:00:00",
+            "status": workflows.RUN_STATUS_RUNNING,
+        }
+    )
+    assert workflows_server._batch_summary("batch_x") == summary
+    assert workflows_server._batch_summary("batch_missing") is None
+
+
 def test_batch_get_and_cancel_404_when_unknown(wf_client):
     assert wf_client.get("/workflows/api/batches/batch_nope").status_code == 404
     assert wf_client.post("/workflows/api/batches/batch_nope/cancel").status_code == 404

@@ -675,6 +675,39 @@ class TestTranscriptWorker:
         assert task["id"] == "tr_test1234"
         assert worker.get_task("nonexistent") is None
 
+    def test_get_all_tasks_slim_omits_partial_segments(self):
+        """include_partials=False drops the growing segment tail, reports count."""
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["partial_segments"] = [
+                {"start": 0.0, "end": 1.0, "text": "a"},
+                {"start": 1.0, "end": 2.0, "text": "b"},
+            ]
+        slim = worker.get_all_tasks(include_partials=False)[0]
+        assert "partial_segments" not in slim
+        assert slim["partial_count"] == 2
+        # Default path still carries the full array.
+        full = worker.get_all_tasks()[0]
+        assert len(full["partial_segments"]) == 2
+
+    def test_get_partial_segments_tail(self):
+        """Since-cursor returns exactly the appended tail plus the running total."""
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        worker.enqueue(task)
+        segs = [{"start": float(i), "end": i + 1.0, "text": str(i)} for i in range(3)]
+        with worker._lock:
+            worker._tasks[task["id"]]["partial_segments"] = segs
+        tail, total = worker.get_partial_segments(task["id"], since=1)
+        assert total == 3
+        assert [s["text"] for s in tail] == ["1", "2"]
+        # A cursor at/after the end yields no new segments.
+        assert worker.get_partial_segments(task["id"], since=3) == ([], 3)
+        # Unknown task → empty tail (the endpoint just reports no new segments).
+        assert worker.get_partial_segments("nope", 0) == ([], 0)
+
     def test_cancel_queued_task(self):
         worker = transcripts.TranscriptWorker()
         task = transcripts.create_transcript_task("P01", ["/v.mp4"])

@@ -1512,6 +1512,41 @@ def test_task_results_not_found(client):
     assert resp.status_code == 404
 
 
+def test_task_results_since_cursor(client):
+    """?since=N returns only the result tail plus the running total."""
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "change", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
+    with worker._lock:
+        worker._tasks[task["id"]]["result"] = [
+            {"timestamp": float(i), "magnitude": 0.1} for i in range(3)
+        ]
+    full = client.get(f"/screenspace/api/tasks/{task['id']}/results").get_json()
+    assert full["ok"] and len(full["results"]) == 3 and full["total"] == 3
+    tail = client.get(f"/screenspace/api/tasks/{task['id']}/results?since=2").get_json()
+    assert [r["timestamp"] for r in tail["results"]] == [2.0]
+    assert tail["total"] == 3
+
+
+def test_tasks_list_slim_omits_results(client):
+    """The polling/SSE task list carries result_count, not the result list."""
+    worker = screenspace_server._worker
+    assert worker is not None
+    task = screenspace.create_task(
+        "change", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+    )
+    worker.enqueue(task)
+    with worker._lock:
+        worker._tasks[task["id"]]["result"] = [{"timestamp": 0.0, "magnitude": 0.1}]
+    data = client.get("/screenspace/api/tasks").get_json()
+    t = next(t for t in data["tasks"] if t["id"] == task["id"])
+    assert "result" not in t
+    assert t["result_count"] == 1
+
+
 def test_reorder_missing_body(client):
     resp = client.put("/screenspace/api/tasks/reorder", json={})
     assert resp.status_code == 400

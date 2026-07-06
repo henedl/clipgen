@@ -225,6 +225,9 @@ SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC: float = (
 )
 SCREENSPACE_FAST_SCAN_INTERVAL_MULTIPLIER: float = 3.0
 SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD: int = 12  # tighter than general 15
+SCREENSPACE_FAST_SCAN_SKIP_NONKEY: bool = True  # fast-scan: decode only keyframes (H.264/HEVC) for GOP-sized decode savings; auto-disabled per-video when the probed worst-case keyframe gap is too long, and the sample grid is tightened by that gap so coverage is never coarser than the interval
+SCREENSPACE_KEYFRAME_PROBE_SECONDS: float = 20.0  # window (seconds from start) the keyframe-gap probe inspects to find the worst-case (max) GOP length
+SCREENSPACE_KEYFRAME_SKIP_MARGIN: float = 1.0  # enable keyframe-only decode only when the max keyframe gap <= sampling_interval * this margin (lower = only very dense keyframes qualify)
 SCREENSPACE_PARALLEL_WORKERS: int = (
     2  # max concurrent analysis tasks in ScreenspaceWorker
 )
@@ -547,6 +550,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
+    "SCREENSPACE_FAST_SCAN_SKIP_NONKEY": "Fast scans decode only keyframes on H.264/HEVC when the source's keyframe interval is short enough that no samples are lost (auto-probed per video), giving large decode savings. Turn off to always full-decode. Only affects fast scans; the precise scan path is never changed.",
     "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": "Skip frames whose average pixel difference from the previous sampled frame is below this value (Similarity/Text/Numbers/Scene scans). Lower = process more frames (catch subtle changes); higher = skip more aggressively on noisy footage. Default 2.0.",
     "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
@@ -852,6 +856,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0.25,
         "max": 4.0,
         "step": 0.25,
+    },
+    "SCREENSPACE_FAST_SCAN_SKIP_NONKEY": {
+        "tab": "Screenspace",
+        "group": "Analysis Quality",
+        "type": "bool",
     },
     "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": {
         "tab": "Screenspace",

@@ -456,6 +456,143 @@ class TestScanViaFfmpegPipe:
         assert call_count[0] == 2
 
 
+class TestKeyframeSkipGating:
+    """`-skip_frame nokey` is emitted only in fast-scan mode when the probed
+    keyframe interval confirms short-enough GOP; the precise path never gets it."""
+
+    def _capture_cmd(self, monkeypatch):
+        captured: dict = {}
+
+        def fake_popen(cmd, *a, **kw):
+            captured["cmd"] = list(cmd)
+            proc = mock.MagicMock()
+            proc.stdout = io.BytesIO(b"")  # empty → generator exits immediately
+            proc.stderr = io.BytesIO(b"")
+            proc.terminate = mock.MagicMock()
+            proc.wait = mock.MagicMock()
+            return proc
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/ffmpeg")
+        monkeypatch.setattr("subprocess.Popen", fake_popen)
+        return captured
+
+    def test_skip_frame_present_when_enabled(self, monkeypatch):
+        captured = self._capture_cmd(monkeypatch)
+        list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4",
+                1.0,
+                start_seconds=15.0,
+                end_seconds=20.0,
+                frame_width=4,
+                frame_height=2,
+                skip_non_keyframes=True,
+            )
+        )
+        cmd = captured["cmd"]
+        assert "-skip_frame" in cmd
+        sf_idx = cmd.index("-skip_frame")
+        assert cmd[sf_idx + 1] == "nokey"
+        # Input-level option: after any pre-input -ss, before -i.
+        assert sf_idx < cmd.index("-i")
+        assert sf_idx > cmd.index("-ss")
+        # Additive: the accurate-PTS machinery is unchanged.
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "select=" in vf and "showinfo" in vf
+        assert cmd[cmd.index("-fps_mode") + 1] == "vfr"
+
+    def test_skip_frame_absent_by_default(self, monkeypatch):
+        captured = self._capture_cmd(monkeypatch)
+        list(
+            screenspace._ffmpeg_pipe_frames(
+                "/fake.mp4", 1.0, frame_width=4, frame_height=2
+            )
+        )
+        assert "-skip_frame" not in captured["cmd"]
+
+    def _run_scan(self, monkeypatch, *, codec, kf_gap, fast_opts, interval=3.0):
+        captured = self._capture_cmd(monkeypatch)
+        monkeypatch.setattr(
+            "video.probe_video_properties",
+            lambda _: {"width": 4, "height": 2, "video_codec": codec},
+        )
+        monkeypatch.setattr("video.probe_max_keyframe_gap", lambda _: kf_gap)
+        monkeypatch.setattr(config, "SCREENSPACE_FAST_SCAN_SKIP_NONKEY", True)
+        screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4",
+            None,
+            interval,
+            lambda ts, f: None,
+            duration=30.0,
+            full_frame=True,
+            fast_opts=fast_opts,
+        )
+        return captured["cmd"]
+
+    def test_enables_skip_when_gop_short(self, monkeypatch):
+        cmd = self._run_scan(
+            monkeypatch, codec="h264", kf_gap=1.0, fast_opts={"phash_skip": True}
+        )
+        assert "-skip_frame" in cmd and cmd[cmd.index("-skip_frame") + 1] == "nokey"
+
+    def test_select_interval_tightened_by_keyframe_gap(self, monkeypatch):
+        # #1 fix: with a 1s worst-case gap and a 3s interval, the select grid is
+        # tightened to 3-1=2s so keyframe snapping never overshoots past 3s.
+        cmd = self._run_scan(
+            monkeypatch,
+            codec="h264",
+            kf_gap=1.0,
+            interval=3.0,
+            fast_opts={"phash_skip": True},
+        )
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "gte(t-prev_selected_t,2.0)" in vf
+        assert "gte(t-prev_selected_t,3.0)" not in vf
+
+    def test_disables_skip_when_gop_long(self, monkeypatch):
+        cmd = self._run_scan(
+            monkeypatch, codec="h264", kf_gap=10.0, fast_opts={"phash_skip": True}
+        )
+        assert "-skip_frame" not in cmd
+        # Grid unchanged when skip is off: select still uses the full interval.
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "gte(t-prev_selected_t,3.0)" in vf
+
+    def test_disables_skip_when_probe_none(self, monkeypatch):
+        cmd = self._run_scan(
+            monkeypatch, codec="h264", kf_gap=None, fast_opts={"phash_skip": True}
+        )
+        assert "-skip_frame" not in cmd
+
+    def test_no_skip_without_fast_opts(self, monkeypatch):
+        # Precise path: fast_opts is None, so the probe is never consulted and
+        # the flag never appears regardless of GOP.
+        probe_calls = []
+        captured = self._capture_cmd(monkeypatch)
+        monkeypatch.setattr(
+            "video.probe_video_properties",
+            lambda _: {"width": 4, "height": 2, "video_codec": "h264"},
+        )
+
+        def _probe(_):
+            probe_calls.append(1)
+            return 1.0
+
+        monkeypatch.setattr("video.probe_max_keyframe_gap", _probe)
+        monkeypatch.setattr(config, "SCREENSPACE_FAST_SCAN_SKIP_NONKEY", True)
+        screenspace._scan_via_ffmpeg_pipe(
+            "/fake.mp4", None, 3.0, lambda ts, f: None, duration=30.0, full_frame=True
+        )
+        assert "-skip_frame" not in captured["cmd"]
+        assert probe_calls == []
+
+    def test_no_skip_for_non_h264_codec(self, monkeypatch):
+        cmd = self._run_scan(
+            monkeypatch, codec="vp9", kf_gap=1.0, fast_opts={"phash_skip": True}
+        )
+        assert "-skip_frame" not in cmd
+
+
 class TestAnalysisPreviewAlignment:
     """End-to-end: each ts yielded by `_ffmpeg_pipe_frames` must point at the
     exact same source frame that `video.extract_frame_at_timestamp(ts)` returns,

@@ -743,10 +743,12 @@
       loadTranscript(pid);
       loadSummary(pid);
       loadFriction(pid);
-    } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_segments && taskForPid.partial_segments.length > 0) {
-      renderPartialSegments(taskForPid.partial_segments, taskForPid.progress);
+    } else if (taskForPid && taskForPid.status === "running" && taskForPid.partial_count > 0) {
       state.streamingParticipant = pid;
       clearAnalysisPanel();
+      _syncStreamSegs(taskForPid, function (segs) {
+        if (segs.length > 0) renderPartialSegments(segs, taskForPid.progress);
+      });
     } else {
       state.segments = [];
       state.streamingParticipant = null;
@@ -913,6 +915,46 @@
     segments: null,
     marksVersion: 0,
   };
+
+  // Client-side accumulator for streaming partial segments. The status poll only
+  // carries partial_count now (not the full array), so we fetch the tail beyond
+  // our cursor and append. partial_segments is append-only server-side, so the
+  // count is a safe cursor and the request payload stays flat as the transcript
+  // grows. Resets when the streamed task changes.
+  var _streamSegs = { taskId: null, segments: [], fetching: false };
+
+  function _syncStreamSegs(task, cb) {
+    if (_streamSegs.taskId !== task.id) {
+      _streamSegs.taskId = task.id;
+      _streamSegs.segments = [];
+      _streamSegs.fetching = false;
+    }
+    var count = task.partial_count || 0;
+    var have = _streamSegs.segments.length;
+    if (count <= have || _streamSegs.fetching) {
+      cb(_streamSegs.segments);
+      return;
+    }
+    _streamSegs.fetching = true;
+    var reqTaskId = task.id;
+    var since = have;
+    apiGet(
+      "api/transcribe/" + encodeURIComponent(task.id) + "/segments?since=" + since
+    ).then(
+      function (data) {
+        _streamSegs.fetching = false;
+        // Reject if the streamed task changed or our cursor moved under us.
+        if (!data.ok || _streamSegs.taskId !== reqTaskId) return;
+        if (since === _streamSegs.segments.length && data.segments && data.segments.length) {
+          _streamSegs.segments = _streamSegs.segments.concat(data.segments);
+        }
+        cb(_streamSegs.segments);
+      },
+      function () {
+        _streamSegs.fetching = false;
+      }
+    );
+  }
 
   function _renderPartialSegmentRow(seg, i, pid) {
     var segId = pid + ":" + i;
@@ -1947,15 +1989,17 @@
       var selectedRunningTask = null;
       if (state.selectedParticipant) {
         data.tasks.forEach(function (t) {
-          if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_segments) {
+          if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_count) {
             selectedRunningTask = t;
           }
         });
       }
-      if (selectedRunningTask && selectedRunningTask.partial_segments.length > 0) {
-        renderPartialSegments(selectedRunningTask.partial_segments, selectedRunningTask.progress);
+      if (selectedRunningTask) {
         state.streamingParticipant = state.selectedParticipant;
         _loadStreamingMarks(state.selectedParticipant);
+        _syncStreamSegs(selectedRunningTask, function (segs) {
+          if (segs.length > 0) renderPartialSegments(segs, selectedRunningTask.progress);
+        });
       } else if (state.streamingParticipant) {
         // The selected participant's streaming view is up but it has no running
         // task. Finalize in place once its transcript is ready. This is
@@ -2562,6 +2606,11 @@
   TS.loadTranscript = loadTranscript; // corrections, search, agents
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
+  // Accumulated streaming segments for the currently-streamed participant. The
+  // status poll no longer carries partial_segments, so search reads them here.
+  TS.streamingSegmentsFor = function (pid) {
+    return pid && pid === state.streamingParticipant ? _streamSegs.segments : [];
+  }; // search
   TS.getMarkForSegment = getMarkForSegment; // video (timeline markers + tooltip)
   TS.toggleMark = toggleMark; // video (keyboard marking)
   TS.updateMarkCategory = updateMarkCategory; // video (keyboard category set)
