@@ -77,6 +77,49 @@ class TestScreenspaceWorker:
         ids = {t["id"] for t in all_tasks}
         assert t1["id"] in ids and t2["id"] in ids
 
+    def test_get_all_tasks_slim_omits_results(self):
+        """include_results=False drops the growing result lists, reports count."""
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "change", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["result"] = [
+                {"timestamp": 0.0, "magnitude": 0.1, "change_grid": [[1, 2]]},
+                {"timestamp": 1.0, "magnitude": 0.2},
+            ]
+            worker._tasks[task["id"]]["_raw_results"] = [{"timestamp": 0.0}]
+        slim = worker.get_all_tasks(include_results=False)[0]
+        assert "result" not in slim
+        assert "_raw_results" not in slim
+        assert slim["result_count"] == 2
+        # Default path still carries results (change_grid stripped as before).
+        full = worker.get_all_tasks()[0]
+        assert len(full["result"]) == 2
+        assert "change_grid" not in full["result"][0]
+
+    def test_get_task_result_tail(self):
+        """Since-cursor returns the appended tail (change_grid stripped) + total."""
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "change", "P01", "s.mp4", ["/v.mp4"], "r", {"x": 0, "y": 0, "w": 1, "h": 1}
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            worker._tasks[task["id"]]["result"] = [
+                {"timestamp": float(i), "magnitude": 0.1, "change_grid": [[i]]}
+                for i in range(3)
+            ]
+        out = worker.get_task_result_tail(task["id"], since=1)
+        assert out is not None
+        tail, total = out
+        assert total == 3
+        assert [r["timestamp"] for r in tail] == [1.0, 2.0]
+        assert all("change_grid" not in r for r in tail)
+        assert worker.get_task_result_tail(task["id"], since=3) == ([], 3)
+        assert worker.get_task_result_tail("nope", 0) is None
+
     def test_cancel_queued_task(self):
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(

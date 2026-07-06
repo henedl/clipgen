@@ -892,24 +892,23 @@
 
       // Status text
       var statusText = task.status;
+      // Ticks carry result_count (not the result list); use it for the badge.
+      var rLen = task.result_count || 0;
       if (task.status === "running") {
         var rPct = Math.round((task.progress || 0) * 100);
-        var rLen = Array.isArray(task.result) ? task.result.length : 0;
         // "0% \u00b7 scanning\u2026" reads as in-progress rather than hung when a running
         // task hasn't produced any hits yet.
         statusText = rPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : " \u00b7 scanning\u2026");
       }
       if (task.status === "paused") {
         var pPct = Math.round((task.progress || 0) * 100);
-        var pLen = Array.isArray(task.result) ? task.result.length : 0;
-        statusText = "paused " + pPct + "%" + (pLen ? " \u00b7 " + pLen + " result" + (pLen !== 1 ? "s" : "") : "");
+        statusText = "paused " + pPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : "");
       }
       if (task.status === "failed" && task.error) {
         statusText = task.error;
         card.title = task.error;
       }
-      if (task.status === "completed" && task.result) {
-        rLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
+      if (task.status === "completed" && rLen) {
         statusText = rLen + " result" + (rLen !== 1 ? "s" : "");
       }
       var statusSpan = el("span", "task-card-status", statusText);
@@ -1008,6 +1007,81 @@
     return (t.heatmap || "") + "|" + (t.heatmap_gif || "") + "|" + (t.heatmap_rolling_gif || "");
   }
 
+  // Per-task result sync. Status ticks no longer carry result lists (just
+  // result_count), so we pull the tail beyond our cached length and append into
+  // state.taskResults[id]. result is append-only during a scan, so the count is
+  // a safe cursor and each fetch payload stays flat. The timeline and results
+  // panel both read from the cache, so one sync feeds both. Scoped to the
+  // selected participant's tasks — the only ones the timeline draws.
+  var _resultFetching = {};
+  var _taskStatusSeen = {};
+
+  // Drop cached results that are no longer append-consistent so _syncTaskResults
+  // refetches the authoritative list. Two cases: (1) a task transitions into a
+  // terminal state — color/inactivity reshape point hits into merged spans on
+  // completion, so the tail cursor would otherwise keep stale point rows;
+  // (2) result_count drops below what we cached (pause/resume clears results).
+  function _reconcileResultCache(tasks) {
+    var seenNow = {};
+    tasks.forEach(function (t) {
+      seenNow[t.id] = t.status;
+      var prev = _taskStatusSeen[t.id];
+      var terminal = t.status === "completed" || t.status === "failed" || t.status === "cancelled";
+      if (prev && prev !== t.status && terminal) {
+        delete state.taskResults[t.id];
+      }
+      var cached = state.taskResults[t.id];
+      if (Array.isArray(cached) && (t.result_count || 0) < cached.length) {
+        delete state.taskResults[t.id];
+      }
+    });
+    // Prune cache/fetch state for tasks that no longer exist (dismissed).
+    Object.keys(state.taskResults).forEach(function (id) {
+      if (!(id in seenNow)) delete state.taskResults[id];
+    });
+    Object.keys(_resultFetching).forEach(function (id) {
+      if (!(id in seenNow)) delete _resultFetching[id];
+    });
+    _taskStatusSeen = seenNow;
+  }
+
+  function _syncTaskResults() {
+    if (!Array.isArray(state.tasks)) return;
+    state.tasks.forEach(function (t) {
+      if (t.status === "cancelled") return;
+      if (t.participant && t.participant !== state.selectedParticipant) return;
+      var count = t.result_count || 0;
+      var cached = state.taskResults[t.id];
+      var have = Array.isArray(cached) ? cached.length : 0;
+      if (count <= have || _resultFetching[t.id]) return;
+      _resultFetching[t.id] = true;
+      var reqId = t.id;
+      var since = have;
+      apiGet("api/tasks/" + reqId + "/results?since=" + since).then(
+        function (data) {
+          _resultFetching[reqId] = false;
+          if (!data || !data.ok) return;
+          var base = Array.isArray(state.taskResults[reqId]) ? state.taskResults[reqId] : [];
+          // Reject if the cursor moved under us; the next tick reconciles.
+          if (since !== base.length) return;
+          if (data.results && data.results.length) {
+            state.taskResults[reqId] = base.concat(data.results);
+          } else if (!Array.isArray(state.taskResults[reqId])) {
+            state.taskResults[reqId] = base;
+          }
+          if (reqId === state.selectedTaskId) {
+            state.selectedTaskResults = state.taskResults[reqId];
+            SS.renderResults();
+          }
+          renderTimeline();
+        },
+        function () {
+          _resultFetching[reqId] = false;
+        }
+      );
+    });
+  }
+
   function handleTaskData(data) {
     if (!data.ok) return;
     var oldSelected = state.selectedTaskId;
@@ -1015,6 +1089,7 @@
     var wasRunning = oldTask && (oldTask.status === "queued" || oldTask.status === "running");
     var oldHeatmapSig = _heatmapSig(oldTask);
     state.tasks = data.tasks;
+    _reconcileResultCache(data.tasks);
     // Only rebuild the pause/play icon when the queue state actually flips —
     // handleTaskData runs on every SSE push (≈2/s while a task streams
     // progress), and re-creating the icon span each time re-fetches its svg.
@@ -1033,14 +1108,9 @@
       renderTaskList();
       renderTimeline();
     }
-    // Auto-update results for selected running task
-    if (oldSelected) {
-      var selTask = findTask(oldSelected);
-      if (selTask && selTask.status === "running" && selTask.result) {
-        state.selectedTaskResults = selTask.result;
-        SS.renderResults();
-      }
-    }
+    // Pull result tails for the selected participant's tasks (ticks no longer
+    // carry result lists) so the timeline and results panel stay current.
+    _syncTaskResults();
     // Auto-load results when selected task completes
     if (wasRunning && oldSelected) {
       var newTask = findTask(oldSelected);
@@ -1154,6 +1224,11 @@
   SS.focusedTaskId = focusedTaskId;
   SS.renderTaskList = renderTaskList;
   SS.startSSE = startSSE;
+  // The result cache is normally kept current inside handleTaskData (SSE/poll),
+  // but the boot path and participant switches also need it filled so the
+  // timeline has markers without waiting for a tick.
+  SS.syncTaskResults = _syncTaskResults;
+  SS.reconcileResultCache = _reconcileResultCache;
   SS.setRightPaneTab = setRightPaneTab;
   SS.updateResultsCrumb = updateResultsCrumb;
   SS.initRightPaneTabs = initRightPaneTabs;

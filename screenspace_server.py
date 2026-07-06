@@ -210,7 +210,8 @@ def _notify_sse_clients(event_type: str = "update") -> None:
 
 def _sse_task_payload() -> str:
     """Build an SSE data line with current task state."""
-    tasks = _worker.get_all_tasks() if _worker else []
+    # Slim ticks: no result lists (clients pull tails via /api/tasks/<id>/results).
+    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
     clean = [_clean_task(t) for t in tasks]
     paused = _worker.is_paused if _worker else False
     alive = _worker.is_alive if _worker else False
@@ -1670,7 +1671,8 @@ def api_tasks_stream() -> FlaskResponse:
 @screenspace_bp.route("/api/tasks")
 def api_tasks_list() -> FlaskResponse:
     """List all tasks with status and progress."""
-    tasks = _worker.get_all_tasks() if _worker else []
+    # Polling fallback for the SSE stream — slim, same as _sse_task_payload.
+    tasks = _worker.get_all_tasks(include_results=False) if _worker else []
     clean = [_clean_task(t) for t in tasks]
     paused = _worker.is_paused if _worker else False
     alive = _worker.is_alive if _worker else False
@@ -2186,13 +2188,24 @@ def api_tasks_resume() -> FlaskResponse:
 
 @screenspace_bp.route("/api/tasks/<task_id>/results")
 def api_tasks_results(task_id: str) -> FlaskResponse:
-    """Get task results (timestamps, artifacts)."""
+    """Get task results (timestamps, artifacts).
+
+    ``?since=N`` returns only the result tail beyond index N (results are
+    append-only during a scan), letting the frontend stream live results for a
+    running task without re-fetching the whole list each tick. Omit for the full
+    list (completion load). Always reports ``total`` for the next cursor.
+    """
     if not _worker:
         return err("Worker not initialized", 500)
-    task = _worker.get_task(task_id)
-    if task is None:
+    try:
+        since = int(request.args.get("since", 0))
+    except (TypeError, ValueError):
+        since = 0
+    out = _worker.get_task_result_tail(task_id, since)
+    if out is None:
         return err("Task not found", 404)
-    return ok(results=utils.sanitize_floats(task.get("result")))
+    results, total = out
+    return ok(results=utils.sanitize_floats(results), total=total)
 
 
 # ---- Events CRUD ----

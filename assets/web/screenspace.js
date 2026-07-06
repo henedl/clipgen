@@ -222,6 +222,10 @@
     selectedTaskId: null,
     hoveredTaskId: null,
     selectedTaskResults: null,
+    // Per-task result cache (taskId -> results array). Status ticks no longer
+    // carry result lists; the timeline and results panel read from here, kept
+    // current by appending result tails (see _syncTaskResults in tasks).
+    taskResults: {},
     resultsLoading: false,
     resultsLazyObserver: null,
     // Coordination flags shared between the hub and screenspace-tasks.js:
@@ -977,6 +981,10 @@
     state.heatmapOverlayRequestVersion += 1;
     state.selectedParticipant = pid;
     setStoredUIStateField("screenspace", "selectedParticipant", pid);
+    // Fill the result cache for the newly selected participant's tasks so the
+    // timeline draws their markers (the sync is participant-scoped, and no SSE
+    // tick may follow when their tasks are already completed).
+    if (SS.syncTaskResults) SS.syncTaskResults();
     state.currentTimestamp = 0;
     state.videoInfo = null;
     state.videoActivePart = 0;
@@ -3828,6 +3836,11 @@
           state.tasks = data.tasks || [];
           renderTaskList();
           renderTimeline();
+          // Fill the per-task result cache so the timeline has markers on load.
+          // handleTaskData does this on every tick, but with all tasks already
+          // completed the SSE stream below never starts, so seed it here too.
+          if (SS.reconcileResultCache) SS.reconcileResultCache(state.tasks);
+          if (SS.syncTaskResults) SS.syncTaskResults();
           if (state.tasks.some(function (t) { return t.status === "queued" || t.status === "running"; })) {
             startSSE();
           }
