@@ -775,10 +775,12 @@ def _get_sheet_payload(ctx: spreadsheet.SheetContext) -> dict[str, Any]:
         return payload
 
 
-def _invalidate_sheet_payload_cache() -> None:
-    global _sheet_payload_cache
+def _set_sheet_context(ctx: spreadsheet.SheetContext | None) -> None:
+    """Replace the active sheet context and clear derived row payloads atomically."""
+    global _sheet_context, _sheet_payload_cache
 
     with _sheet_payload_cache_lock:
+        _sheet_context = ctx
         _sheet_payload_cache = None
 
 
@@ -940,14 +942,12 @@ def api_convergence_offsets_put() -> FlaskResponse:
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])
 def api_sheet_refresh() -> FlaskResponse:
-    global _sheet_context
     if _worksheet is None:
         return err("No spreadsheet loaded — pick one from the Start panel.")
     new_context = spreadsheet.build_sheet_context(_worksheet)
     if new_context is None:
         return err("Failed to refresh sheet data", 500)
-    _sheet_context = new_context
-    _invalidate_sheet_payload_cache()
+    _set_sheet_context(new_context)
     return ok()
 
 
@@ -3103,14 +3103,13 @@ def _init_studio_state(worksheet: Any) -> None:
 
     _load_studio_settings()
     _worksheet = worksheet
+    new_context = None
     if worksheet is not None:
-        _sheet_context = spreadsheet.build_sheet_context(worksheet)
-        if _sheet_context is None:
+        new_context = spreadsheet.build_sheet_context(worksheet)
+        if new_context is None:
             utils.error_print("Could not load spreadsheet data for Studio.")
             sys.exit(1)
-    else:
-        _sheet_context = None
-    _invalidate_sheet_payload_cache()
+    _set_sheet_context(new_context)
     # Rebind the shared generated lists under their lock so a streaming
     # generate/intake append can't run against a half-swapped reference.
     with _generated_output_lock:
@@ -3209,7 +3208,7 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         )
     except Exception:
         _worksheet = prev_worksheet
-        _sheet_context = prev_sheet_context
+        _set_sheet_context(prev_sheet_context)
         with _generated_output_lock:
             _generated_artifacts = prev_artifacts
             _generated_reels = prev_reels

@@ -2434,6 +2434,61 @@ def test_api_sheet_refresh_invalidates_derived_payload(client, monkeypatch):
     assert parse_calls == {"annotations": 2, "timestamps": 2}
 
 
+def test_swap_worksheet_rollback_clears_sheet_payload_cache(monkeypatch):
+    """A failed sheet swap must not leave the attempted sheet payload cached."""
+    import types
+
+    import spreadsheet
+
+    prev_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="previous",
+    )
+    attempted_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="attempted",
+    )
+
+    def fake_init_studio_state(new_worksheet):
+        server._worksheet = new_worksheet
+        server._sheet_context = attempted_ctx
+        server._sheet_payload_cache = (attempted_ctx, {"participants": [], "rows": []})
+
+    def fail_screenspace_init(**kwargs):
+        raise RuntimeError("screenspace failed")
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr(server, "_sheet_context", prev_ctx)
+    monkeypatch.setattr(server, "_sheet_payload_cache", (prev_ctx, {}))
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_init_studio_state", fake_init_studio_state)
+
+    import screenspace_server
+    import transcripts_server
+
+    monkeypatch.setattr(
+        screenspace_server, "_init_screenspace_state", fail_screenspace_init
+    )
+    monkeypatch.setattr(
+        transcripts_server, "_init_transcripts_state", lambda **kw: None
+    )
+
+    with pytest.raises(RuntimeError, match="screenspace failed"):
+        server._swap_worksheet(object())
+
+    assert server._sheet_context is prev_ctx
+    assert server._sheet_payload_cache is None
+
+
 def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
     """Generate passes per-request titlecard options without mutating config."""
     import types
