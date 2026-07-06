@@ -101,15 +101,12 @@
   function _searchPartialSegments(query, pid) {
     var results = [];
     var lowerQ = query.toLowerCase();
-    var task = null;
-    state.tasks.forEach(function (t) {
-      if (t.participant === pid && t.status === "running" && t.partial_segments) {
-        task = t;
-      }
-    });
-    if (!task) return results;
-    for (var i = 0; i < task.partial_segments.length; i++) {
-      var seg = task.partial_segments[i];
+    // Status polls carry partial_count, not the segment array; the streaming
+    // participant's accumulated segments live in the hub (fetched via the tail
+    // cursor). This is only called for state.streamingParticipant.
+    var segments = TS.streamingSegmentsFor(pid);
+    for (var i = 0; i < segments.length; i++) {
+      var seg = segments[i];
       if (seg.text.toLowerCase().indexOf(lowerQ) >= 0) {
         results.push({
           participant: pid,

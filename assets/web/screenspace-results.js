@@ -312,6 +312,14 @@
       .then(function (data) {
         if (resultsRequestVersion !== state.resultsRequestVersion || state.selectedTaskId !== selectedTaskId) return null;
         state.selectedTaskResults = data.results;
+        // Seed the shared per-task cache so the timeline draws these results and
+        // _syncTaskResults appends further tails from here rather than re-fetching.
+        // Redraw now: when the cache was empty (fresh completed task) nothing else
+        // fires renderTimeline, so the markers would otherwise never paint.
+        if (Array.isArray(data.results)) {
+          state.taskResults[selectedTaskId] = data.results;
+          renderTimeline();
+        }
         return apiGet("api/events?task_id=" + selectedTaskId);
       })
       .then(function (evData) {
@@ -321,6 +329,9 @@
         state.resultsLoading = false;
         renderResults();
         renderTaskList();
+        // Repaint the timeline now that excluded events are known, so excluded
+        // markers get their dashed/faded styling.
+        renderTimeline();
         updateResultsCrumb();
       })
       .catch(function () {

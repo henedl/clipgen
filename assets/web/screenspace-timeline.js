@@ -37,6 +37,16 @@
   var _timelineHitRects = [];
   var _cachedTimelineRect = null;
 
+  // Status ticks no longer carry result lists; results live in the per-task
+  // cache (state.taskResults), filled by _syncTaskResults in the tasks satellite.
+  // Returns the cached array, or null when this task's results aren't loaded yet
+  // (mirrors the old `task.result` absent-check; a renderTimeline fires once the
+  // tail lands).
+  function _taskResults(task) {
+    var r = state.taskResults[task.id];
+    return Array.isArray(r) ? r : null;
+  }
+
   function getTimelineRect(canvas) {
     if (!_cachedTimelineRect) _cachedTimelineRect = canvas.getBoundingClientRect();
     return _cachedTimelineRect;
@@ -344,7 +354,8 @@
     if (ampOn) {
       var seriesByType = {};
       state.tasks.forEach(function (task) {
-        if (!task.result || task.status === "cancelled") return;
+        var ampRes = _taskResults(task);
+        if (!ampRes || task.status === "cancelled") return;
         if (task.participant && task.participant !== state.selectedParticipant) return;
         if (task.type === "timelapse") return;
         // Boundaries are orientation scaffolding, not events — keep them out of
@@ -354,7 +365,7 @@
           seriesByType[task.type] = { key: task.type, color: taskTypeColor(task.type), timestamps: [] };
         }
         var dst = seriesByType[task.type].timestamps;
-        var results = task.result || [];
+        var results = ampRes;
         for (var ri = 0; ri < results.length; ri++) {
           var r = results[ri];
           var ts = r.timestamp !== undefined ? r.timestamp : r.start;
@@ -388,14 +399,15 @@
     });
 
     state.tasks.forEach(function (task) {
-      if (!task.result || task.status === "cancelled") return;
+      var taskRes = _taskResults(task);
+      if (!taskRes || task.status === "cancelled") return;
       if (task.participant && task.participant !== state.selectedParticipant) return;
       var color = taskTypeColor(task.type);
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
       if ((task.type === "color" || task.type === "inactivity") && task.status === "completed") {
         // Completed color: merged spans
-        task.result.forEach(function (span) {
+        taskRes.forEach(function (span) {
           var isExcluded = taskExcluded[span.start.toFixed(2)];
           ctx.fillStyle = hexToRgba(color, isExcluded ? 0.05 : (dimmed ? 0.10 : 0.35));
           var x1 = timeToX(span.start);
@@ -412,7 +424,7 @@
       } else {
         // Point markers (change, similarity, text, numbers, template, flow, scene, running color)
         ctx.lineWidth = 1.5;
-        var results = task.result || [];
+        var results = taskRes;
         results.forEach(function (r) {
           var ts = r.timestamp !== undefined ? r.timestamp : r.start;
           if (ts === undefined) return;
@@ -491,11 +503,12 @@
     var frag = document.createDocumentFragment();
     state.tasks.forEach(function (task) {
       if (task.type !== "boundary") return;
-      if (!task.result || task.status === "cancelled") return;
+      var bRes = _taskResults(task);
+      if (!bRes || task.status === "cancelled") return;
       if (task.participant && task.participant !== state.selectedParticipant) return;
       var dimmed = focused && task.id !== focused;
       var taskExcluded = excludedByTask[task.id] || {};
-      task.result.forEach(function (r) {
+      bRes.forEach(function (r) {
         var ts = r.timestamp !== undefined ? r.timestamp : r.start;
         if (ts === undefined) return;
         var x = ((ts - visStart) / visLen) * w;
@@ -687,7 +700,7 @@
     container.innerHTML = "";
     var hasTypes = {};
     state.tasks.forEach(function (t) {
-      if ((t.status === "completed" || t.status === "running") && t.result) hasTypes[t.type] = true;
+      if ((t.status === "completed" || t.status === "running") && t.result_count) hasTypes[t.type] = true;
     });
     var types = Object.keys(hasTypes);
     if (types.length === 0) return;

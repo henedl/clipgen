@@ -73,6 +73,32 @@ def test_prewarm_invalid_config_normalized_in_participants(tr_client, monkeypatc
     assert resp.get_json()["transcribe_prewarm"] == "queue_open"
 
 
+def test_transcribe_status_slim_and_segments_tail(tr_client):
+    """Status poll reports partial_count (not the array); the segments endpoint
+    serves the tail from a cursor."""
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+    worker.enqueue(task)
+    with worker._lock:
+        t = worker._tasks[task["id"]]
+        t["status"] = transcripts.TASK_STATUS_RUNNING
+        t["partial_segments"] = [
+            {"start": float(i), "end": i + 1.0, "text": str(i)} for i in range(3)
+        ]
+    transcripts_server._worker = worker
+
+    status = tr_client.get("/transcripts/api/transcribe/status").get_json()
+    entry = next(x for x in status["tasks"] if x["id"] == task["id"])
+    assert "partial_segments" not in entry
+    assert entry["partial_count"] == 3
+
+    seg = tr_client.get(
+        f"/transcripts/api/transcribe/{task['id']}/segments?since=1"
+    ).get_json()
+    assert [s["text"] for s in seg["segments"]] == ["1", "2"]
+    assert seg["total"] == 3
+
+
 def test_participants_includes_video_version(tr_client, tmp_path):
     """video_version (mtime_ns) drives the frontend's media/<file>?v=… cache-bust."""
     video_file = tmp_path / "study_P09.mp4"
