@@ -273,6 +273,28 @@ class TestBuildTranscribeKwargs:
         kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
         assert kwargs["vad_filter"] is False
 
+    def test_vad_parameters_included_when_vad_on(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", True)
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_THRESHOLD", 0.3)
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_SPEECH_PAD_MS", 400)
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_MIN_SILENCE_MS", 2000)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert kwargs["vad_parameters"] == {
+            "threshold": 0.3,
+            "speech_pad_ms": 400,
+            "min_silence_duration_ms": 2000,
+        }
+
+    def test_vad_parameters_omitted_when_vad_off(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", False)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert "vad_parameters" not in kwargs
+
+    def test_beam_size_from_config(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_BEAM_SIZE", 2)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert kwargs["beam_size"] == 2
+
     def test_hallucination_threshold_enables_word_timestamps(self, monkeypatch):
         monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 2.0)
         kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
@@ -834,6 +856,46 @@ class TestTranscriptWorker:
 # ---------------------------------------------------------------------------
 # Whisper model cache detection (gates silent downloads)
 # ---------------------------------------------------------------------------
+
+
+class TestLoadModelCpuThreads:
+    @staticmethod
+    def _capture_model(monkeypatch):
+        """Patch faster_whisper.WhisperModel to record constructor kwargs and
+        reset the module-level model cache so the load actually runs."""
+        seen: dict = {}
+
+        class FakeModel:
+            def __init__(self, name, **kwargs):
+                seen["name"] = name
+                seen["kwargs"] = kwargs
+
+        import faster_whisper
+
+        monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
+        monkeypatch.setattr(transcripts, "_cached_model", None)
+        monkeypatch.setattr(transcripts, "_cached_model_name", None)
+        return seen
+
+    def test_cpu_threads_passed_when_set(self, monkeypatch):
+        seen = self._capture_model(monkeypatch)
+        monkeypatch.setattr(config, "TRANSCRIBE_CPU_THREADS", 7)
+        transcripts._load_model("base")
+        assert seen["kwargs"].get("cpu_threads") == 7
+
+    def test_cpu_threads_auto_resolves_to_cpu_count(self, monkeypatch):
+        seen = self._capture_model(monkeypatch)
+        monkeypatch.setattr(config, "TRANSCRIBE_CPU_THREADS", 0)
+        monkeypatch.setattr(transcripts.os, "cpu_count", lambda: 6)
+        transcripts._load_model("base")
+        assert seen["kwargs"].get("cpu_threads") == 6
+
+    def test_cpu_threads_omitted_when_unresolvable(self, monkeypatch):
+        seen = self._capture_model(monkeypatch)
+        monkeypatch.setattr(config, "TRANSCRIBE_CPU_THREADS", 0)
+        monkeypatch.setattr(transcripts.os, "cpu_count", lambda: None)
+        transcripts._load_model("base")
+        assert "cpu_threads" not in seen["kwargs"]
 
 
 class TestIsWhisperModelCached:

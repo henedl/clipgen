@@ -349,8 +349,20 @@ TRANSCRIBE_LANGUAGE: str | None = None  # None = auto-detect
 TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
-TRANSCRIBE_BEAM_SIZE: int = 5  # beam search width
-TRANSCRIBE_VAD_FILTER: bool = False  # Silero VAD: transcribe speech spans only
+TRANSCRIBE_BEAM_SIZE: int = (
+    2  # beam search width (1 = greedy; higher = slower, marginally better)
+)
+# CTranslate2 CPU threads for the Whisper model; 0 = auto (os.cpu_count()).
+TRANSCRIBE_CPU_THREADS: int = 0
+TRANSCRIBE_VAD_FILTER: bool = True  # Silero VAD: transcribe speech spans only
+# VAD tuning (only applied when TRANSCRIBE_VAD_FILTER is on). Defaults are chosen
+# recall-safe: a lower-than-Silero-default threshold plus boundary padding so quiet
+# speech and word onsets/offsets aren't clipped.
+TRANSCRIBE_VAD_THRESHOLD: float = 0.2  # Silero speech-probability cutoff (lower = more permissive; 0.3 missed quiet speech in testing)
+TRANSCRIBE_VAD_SPEECH_PAD_MS: int = (
+    400  # padding added to each speech span so word edges aren't clipped
+)
+TRANSCRIBE_VAD_MIN_SILENCE_MS: int = 2000  # minimum silence gap before splitting a span
 TRANSCRIBE_NO_SPEECH_THRESHOLD: float = (
     0.6  # drop segments with high no-speech probability
 )
@@ -494,7 +506,12 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_MODEL": "Whisper model size: tiny, base, small, medium, large-v3.",
     "TRANSCRIBE_FORMAT": "Transcript output format: md (Markdown), srt, or vtt.",
     "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening a pill's options pane or hovering a pill that needs transcription), or page_load (after listing participants).",
+    "TRANSCRIBE_BEAM_SIZE": "Beam-search width. 1 = greedy (fastest); higher is slower for marginally better accuracy.",
+    "TRANSCRIBE_CPU_THREADS": "CTranslate2 CPU threads for the Whisper model. 0 = auto (all cores).",
     "TRANSCRIBE_VAD_FILTER": "Use Silero VAD to transcribe speech spans only, skipping long silence (reduces silence hallucinations).",
+    "TRANSCRIBE_VAD_THRESHOLD": "Silero speech-probability cutoff when VAD is on. Lower = more permissive (catches quieter speech, fewer dropped words).",
+    "TRANSCRIBE_VAD_SPEECH_PAD_MS": "Padding (ms) added to each detected speech span so word onsets/offsets aren't clipped by VAD.",
+    "TRANSCRIBE_VAD_MIN_SILENCE_MS": "Minimum silence gap (ms) before VAD splits a speech span; higher avoids over-fragmenting.",
     "TRANSCRIBE_NO_SPEECH_THRESHOLD": "Drop segments when no-speech probability exceeds this value (higher = stricter).",
     "TRANSCRIBE_LOG_PROB_THRESHOLD": "Drop segments below this average log-probability (higher = stricter).",
     "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD": "Drop segments whose gzip compression ratio exceeds this (catches repetitive loops).",
@@ -674,10 +691,50 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "select",
         "options": ["off", "queue_open", "page_load"],
     },
+    "TRANSCRIBE_CPU_THREADS": {
+        "tab": "Transcription",
+        "group": "Transcription",
+        "type": "int",
+        "min": 0,
+        "max": 64,
+        "step": 1,
+    },
+    "TRANSCRIBE_BEAM_SIZE": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "int",
+        "min": 1,
+        "max": 5,
+        "step": 1,
+    },
     "TRANSCRIBE_VAD_FILTER": {
         "tab": "Transcription",
         "group": "Transcription quality",
         "type": "bool",
+    },
+    "TRANSCRIBE_VAD_THRESHOLD": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "float",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.05,
+    },
+    "TRANSCRIBE_VAD_SPEECH_PAD_MS": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "int",
+        "min": 0,
+        "max": 1000,
+        "step": 50,
+    },
+    "TRANSCRIBE_VAD_MIN_SILENCE_MS": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "int",
+        "min": 0,
+        "max": 10000,
+        "step": 250,
     },
     "TRANSCRIBE_NO_SPEECH_THRESHOLD": {
         "tab": "Transcription",
