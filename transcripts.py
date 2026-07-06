@@ -40,6 +40,7 @@ hallucination silence skip (requires word timestamps when > 0), and condition-on
 
 import copy
 
+import os
 import queue
 import re
 import threading
@@ -187,7 +188,17 @@ def _load_model(model_name: str | None = None) -> Any:
             gc.collect()
 
         def _do_load() -> Any:
-            return WhisperModel(model_name, compute_type=config.TRANSCRIBE_COMPUTE_TYPE)
+            # cpu_threads: 0 = auto (all cores). CTranslate2's own default heuristic
+            # under-uses many-core CPUs, so resolve to os.cpu_count() when unset.
+            # num_workers is left at its default — the transcript poller runs one job
+            # at a time and >1 workers multiplies model memory for no gain here.
+            threads = config.TRANSCRIBE_CPU_THREADS or (os.cpu_count() or 0)
+            load_kwargs: dict[str, Any] = {
+                "compute_type": config.TRANSCRIBE_COMPUTE_TYPE
+            }
+            if threads > 0:
+                load_kwargs["cpu_threads"] = threads
+            return WhisperModel(model_name, **load_kwargs)
 
         utils.info_print(f"Loading transcription model '{model_name}'...")
         _cached_model = utils.run_with_spinner(
@@ -213,6 +224,15 @@ def _build_transcribe_kwargs(
         "compression_ratio_threshold": config.TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD,
         "condition_on_previous_text": config.TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT,
     }
+    # Recall-safe VAD tuning: a lower threshold plus boundary padding so quiet
+    # speech and word edges aren't clipped. Only sent when VAD is on; faster-whisper
+    # merges this partial dict with its VadOptions defaults.
+    if config.TRANSCRIBE_VAD_FILTER:
+        kwargs["vad_parameters"] = {
+            "threshold": config.TRANSCRIBE_VAD_THRESHOLD,
+            "speech_pad_ms": config.TRANSCRIBE_VAD_SPEECH_PAD_MS,
+            "min_silence_duration_ms": config.TRANSCRIBE_VAD_MIN_SILENCE_MS,
+        }
     hall_silence = config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD
     if hall_silence > 0:
         kwargs["hallucination_silence_threshold"] = hall_silence
