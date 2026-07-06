@@ -7,7 +7,6 @@ import unicodedata
 from pathlib import Path
 
 import gspread
-from icecream import ic
 
 import config
 import utils
@@ -251,7 +250,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
         The same dict with 'times' added and sanitized 'desc' and 'category'
     """
     if config.DEBUGGING:
-        ic(clip)
+        config.debug_ic(clip)
 
     # Pre-parsed fast path: callers (e.g. --ss-clips, --transcript-clips) build
     # synthetic clips with timestamps already resolved. Skip the cell-based parse
@@ -303,7 +302,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
             pair for index, pair in enumerate(clip["times"]) if index in selected_set
         ]
     if config.DEBUGGING:
-        ic(clip["times"])
+        config.debug_ic(clip["times"])
 
     # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
     if not clip["times"] and utils.has_non_ignored_timestamp_content(
@@ -327,7 +326,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     )
     clip["desc"] = utils.sanitize_filename(cleaned_desc)
     if config.DEBUGGING:
-        ic(clip["desc"])
+        config.debug_ic(clip["desc"])
 
     # Sanitize category (handle None/empty)
     if clip["category"]:
@@ -335,8 +334,8 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     else:
         clip["category"] = "uncategorized"
     if config.DEBUGGING:
-        ic(clip["category"])
-        ic(clip)
+        config.debug_ic(clip["category"])
+        config.debug_ic(clip)
     return clip
 
 

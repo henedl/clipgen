@@ -45,7 +45,6 @@ from collections.abc import Sequence
 from typing import Any, NamedTuple
 
 import gspread
-from icecream import ic
 
 import config
 import google_api
@@ -215,7 +214,7 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
 
     id_cell, observation_cell, category_cell = header_result
     if config.DEBUGGING:
-        ic(id_cell, observation_cell, category_cell)
+        config.debug_ic(id_cell, observation_cell, category_cell)
 
     baseline_row_idx = _detect_baseline_row(sheet_data)
 
@@ -659,14 +658,14 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
         List of clip records, one per timestamp found
     """
     if config.DEBUGGING:
-        ic(line_index, ctx.num_participants, ctx.study_name)
+        config.debug_ic(line_index, ctx.num_participants, ctx.study_name)
     utils.debug_print(
         f"Running method get_line_timestamps, starting line index {line_index} (real sheet line {line_index + 1})"
     )
 
     if line_index < 0 or line_index >= len(ctx.sheet_data):
         if config.DEBUGGING:
-            ic(line_index, len(ctx.sheet_data))
+            config.debug_ic(line_index, len(ctx.sheet_data))
         utils.error_print(
             f"Line index {line_index} (row {line_index + 1}) is out of bounds.",
             [f"Spreadsheet has {len(ctx.sheet_data)} rows."],
@@ -689,12 +688,12 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
             else:
                 issue = _make_clip_record(ctx, line_index, col_index, value)
                 if config.DEBUGGING:
-                    ic(
+                    config.debug_ic(
                         issue.get("participant"),
                         issue.get("desc"),
                         issue.get("category"),
                     )
-                    ic(issue)
+                    config.debug_ic(issue)
                 utils.debug_print(
                     f"Participant ID at R{ctx.id_cell.row},C{col_index} -> '{issue.get('participant')}'"
                 )
@@ -717,7 +716,7 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
                 )
     except IndexError as e:
         if config.DEBUGGING:
-            ic(e, line_index)
+            config.debug_ic(e, line_index)
         utils.error_print(
             f"Index error while reading row {line_index + 1}: {e}",
             ["The spreadsheet structure may be malformed."],
@@ -727,7 +726,7 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
         f"Line completed, returning list of {len(clips)} potential clips."
     )
     if config.DEBUGGING:
-        ic(clips)
+        config.debug_ic(clips)
     return clips
 
 
@@ -865,7 +864,7 @@ def generate_list(
         List of clip records
     """
     if config.DEBUGGING:
-        ic(mode, line_numbers, range_start, range_end)
+        config.debug_ic(mode, line_numbers, range_start, range_end)
 
     if ctx is None:
         ctx = build_sheet_context(sheet)

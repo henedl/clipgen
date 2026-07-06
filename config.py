@@ -20,9 +20,8 @@ Sections
   Settings Metadata    Descriptions and Studio UI metadata
 """
 
+import importlib
 from typing import Any
-
-from icecream import ic
 
 # ── Core Runtime ─────────────────────────────────────────────────────
 REENCODING: bool = False
@@ -64,18 +63,26 @@ STANDARD: int = 1
 VERBOSE: int = 2
 VERBOSITY: int = STANDARD
 
+_ICECREAM_IC: Any | None = None
+
+
+def debug_ic(*args: Any, **kwargs: Any) -> Any:
+    """Lazy icecream debug printer; no import cost unless DEBUGGING is enabled."""
+    if not DEBUGGING:
+        return None
+    global _ICECREAM_IC
+    if _ICECREAM_IC is None:
+        _ICECREAM_IC = importlib.import_module("icecream").ic
+        _ICECREAM_IC.configureOutput(prefix="! DEBUG ic| ", includeContext=False)
+    return _ICECREAM_IC(*args, **kwargs)
+
+
 # ── Directories ──────────────────────────────────────────────────────
 # When left empty, clipgen will use the current working directory for
 # both input (source videos) and output (generated artifacts), matching
 # the existing default behavior.
 INPUT_DIR: str = ""
 OUTPUT_DIR: str = ""
-
-# Configure Icecream debugging
-if DEBUGGING:
-    ic.configureOutput(prefix="! DEBUG ic| ", includeContext=False)
-else:
-    ic.disable()
 
 # ── Spreadsheet ──────────────────────────────────────────────────────
 ID_HEADER: str = "ID"

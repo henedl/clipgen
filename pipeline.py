@@ -23,8 +23,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from icecream import ic
-
 import config
 import files
 import titlecards
@@ -549,10 +547,10 @@ def _process_single_clip_segments(
         try:
             out_name = files.get_unique_filename(template, file_format=file_extension)
             if config.DEBUGGING:
-                ic(out_name)
+                config.debug_ic(out_name)
         except (TypeError, UnicodeEncodeError, UnicodeDecodeError) as e:
             if config.DEBUGGING:
-                ic(e, clip)
+                config.debug_ic(e, clip)
             utils.error_print(
                 f"Character encoding issue occurred: {e}",
                 [
@@ -1006,7 +1004,7 @@ def process_clips(
         Tuple of (count of files generated, list of artifact records).
     """
     if config.DEBUGGING:
-        ic(len(clips_list))
+        config.debug_ic(len(clips_list))
 
     if not clips_list:
         utils.warning_print(

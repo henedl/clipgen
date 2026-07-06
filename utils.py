@@ -14,8 +14,6 @@ from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, Callable, TypedDict, TypeVar
 
-from icecream import ic
-
 import config
 
 
@@ -1343,14 +1341,14 @@ def parse_timestamps(
         and reported via warning_print.
     """
     if config.DEBUGGING:
-        ic(cell_value, cell_ref)
+        config.debug_ic(cell_value, cell_ref)
     parsed_timestamps = []
     skipped_timestamps = []
     ignored_tokens = get_ignored_timestamp_tokens()
     # Unify delimiters (+, ;, ,) to spaces so split() yields one token per time or range
     raw_times = _split_timestamp_tokens(cell_value)
     if config.DEBUGGING:
-        ic(raw_times)
+        config.debug_ic(raw_times)
     debug_print(f"raw_times content after split is {raw_times}")
     debug_print(f"Timestamp list raw_times is {len(raw_times)} entries long")
 
@@ -1361,7 +1359,7 @@ def parse_timestamps(
         pair = _parse_single_timestamp_token(token)
         if pair is not None:
             if config.DEBUGGING and len(pair) == 2:
-                ic(pair)
+                config.debug_ic(pair)
             parsed_timestamps.append(pair)
         elif token and token not in ignored_tokens:
             skipped_timestamps.append(token)
@@ -1369,7 +1367,7 @@ def parse_timestamps(
     # Report skipped timestamps: list up to MAX_SKIPPED_TIMESTAMPS_TO_SHOW, then "... and N more"
     if skipped_timestamps:
         if config.DEBUGGING:
-            ic(skipped_timestamps)
+            config.debug_ic(skipped_timestamps)
         # Only show detailed skipped-timestamp warnings at verbose verbosity.
         if getattr(config, "VERBOSITY", config.STANDARD) >= config.VERBOSE:
             cell_info = f" in cell {cell_ref}" if cell_ref else ""
@@ -1389,7 +1387,7 @@ def parse_timestamps(
             )
 
     if config.DEBUGGING:
-        ic(parsed_timestamps)
+        config.debug_ic(parsed_timestamps)
     return parsed_timestamps
 
 

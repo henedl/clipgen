@@ -14,8 +14,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from icecream import ic
-
 import config
 import files
 import utils
@@ -557,7 +555,7 @@ def mux_subtitles(
 
     utils.verbose_print(f"Muxing subtitles into {Path(output_video).name} ({codec}).")
     if config.DEBUGGING:
-        ic(ffmpeg_command)
+        config.debug_ic(ffmpeg_command)
         return False
 
     result = run_ffmpeg_process(
@@ -606,7 +604,7 @@ def run_ffmpeg(
         True if video was generated successfully, False otherwise.
     """
     if config.DEBUGGING:
-        ic(input_file, output_file, start_pos, end_pos)
+        config.debug_ic(input_file, output_file, start_pos, end_pos)
     if not Path(input_file).is_file():
         utils.error_print(
             f"Input video file not found: '{input_file}'",
@@ -654,7 +652,7 @@ def run_ffmpeg(
         )
         return False
     if config.DEBUGGING:
-        ic(duration, duration_seconds)
+        config.debug_ic(duration, duration_seconds)
     if duration > config.MAX_CLIP_DURATION_SECONDS:
         if utils.NO_INPUT_MODE:
             utils.warning_print(
@@ -733,7 +731,7 @@ def extract_screenshot(
         True if screenshot was generated successfully, False otherwise.
     """
     if config.DEBUGGING:
-        ic(input_file, output_file, timestamp)
+        config.debug_ic(input_file, output_file, timestamp)
     if output_file.lower().endswith(".webp") and not check_webp_support():
         _warn_webp_unavailable_once(output_file)
         return False
@@ -824,7 +822,7 @@ def extract_thumbnail_bytes(
     failure.
     """
     if config.DEBUGGING:
-        ic(input_file, start_seconds, width)
+        config.debug_ic(input_file, start_seconds, width)
         return None
 
     if not Path(input_file).is_file():
@@ -882,7 +880,7 @@ def extract_sprite_sheet_bytes(
     failure.
     """
     if config.DEBUGGING:
-        ic(input_file, start_seconds, duration_seconds, cols, rows)
+        config.debug_ic(input_file, start_seconds, duration_seconds, cols, rows)
         return None
 
     if not Path(input_file).is_file():
@@ -940,7 +938,7 @@ def extract_audio_segment_bytes(
     a video container. Returns WAV bytes or ``None`` on failure.
     """
     if config.DEBUGGING:
-        ic(input_file, start_seconds, duration_seconds, sample_rate)
+        config.debug_ic(input_file, start_seconds, duration_seconds, sample_rate)
         return None
 
     if not Path(input_file).is_file():
@@ -1009,7 +1007,7 @@ def extract_gif(
         True if GIF was generated successfully, False otherwise.
     """
     if config.DEBUGGING:
-        ic(input_file, output_file, timestamp, duration_seconds)
+        config.debug_ic(input_file, output_file, timestamp, duration_seconds)
     if output_file.lower().endswith(".webp") and not check_webp_support():
         _warn_webp_unavailable_once(output_file)
         return False
@@ -1462,7 +1460,7 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
         Duration in seconds, or None if timestamps are invalid.
     """
     if config.DEBUGGING:
-        ic(start_time, end_time)
+        config.debug_ic(start_time, end_time)
     utils.debug_print(f"start_time is {start_time}, end_time is {end_time}")
 
     if end_time is INVALID_END_TIMESTAMP:
@@ -1493,7 +1491,7 @@ def get_duration(start_time: str, end_time: str | None) -> int | None:
 
     duration = int(end_seconds - start_seconds)
     if config.DEBUGGING:
-        ic(duration)
+        config.debug_ic(duration)
     return duration
 
 

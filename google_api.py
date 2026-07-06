@@ -7,7 +7,6 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 import gspread
-from icecream import ic
 
 import config
 import utils
@@ -116,7 +115,7 @@ def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:
         The index of matching sheet, or -1 if not found.
     """
     if config.DEBUGGING:
-        ic(search_name)
+        config.debug_ic(search_name)
     utils.debug_print("Running method find_spreadsheet_by_name()")
     search_name = search_name.strip().lower()
     search_name_guess = search_name + " data set"
@@ -127,14 +126,14 @@ def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:
     for i, doc in enumerate(doc_list):
         doc_name = doc.strip().lower()
         if config.DEBUGGING:
-            ic(doc_name, search_name)
+            config.debug_ic(doc_name, search_name)
         utils.debug_print(
             f"Attempting exact match with '{doc}', formatted as '{doc_name}'"
         )
         if doc_name == search_name:
             utils.debug_print(f"Matched sheet '{doc_name}' with input '{search_name}'")
             if config.DEBUGGING:
-                ic(i)
+                config.debug_ic(i)
             return i
         utils.debug_print(f"Found no exact match at step {i}")
 
@@ -148,10 +147,10 @@ def find_spreadsheet_by_name(search_name: str, doc_list: list[str]) -> int:
                 f"Matched sheet '{doc_name}' with guess '{search_name_guess}'"
             )
             if config.DEBUGGING:
-                ic(i)
+                config.debug_ic(i)
             return i
         utils.debug_print(f"Found no guess match at step {i}")
 
     if config.DEBUGGING:
-        ic(-1)
+        config.debug_ic(-1)
     return -1
