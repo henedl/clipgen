@@ -83,8 +83,15 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
                     "codec_name": "h264",
                     "width": 1920,
                     "height": 1080,
+                    "pix_fmt": "yuv420p",
                 },
-                {"codec_type": "audio", "codec_name": "aac"},
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "channel_layout": "stereo",
+                },
             ]
         }
     )
@@ -96,6 +103,10 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "height": 1080,
         "video_codec": "h264",
         "audio_codec": "aac",
+        "pix_fmt": "yuv420p",
+        "audio_sample_rate": 48000,
+        "audio_channels": 2,
+        "audio_channel_layout": "stereo",
         "fps": 0.0,
         "duration": 0.0,
         "nb_frames": 0,
@@ -125,6 +136,10 @@ def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
     assert result["audio_codec"] is None
     assert result["video_codec"] == "hevc"
     assert result["width"] == 1280
+    # No audio stream → audio params are absent/zero.
+    assert result["audio_sample_rate"] == 0
+    assert result["audio_channels"] == 0
+    assert result["audio_channel_layout"] is None
 
 
 def test_probe_video_properties_failure(monkeypatch, tmp_path):

@@ -51,6 +51,51 @@ def _x264_video_args() -> list[str]:
     ]
 
 
+def _resolve_channel_layout(probed: dict) -> str | None:
+    """Resolve a silent-audio channel layout matching the probed body audio.
+
+    Prefers the probed channel_layout; falls back to mono/stereo derived from the
+    channel count. Returns None when the layout can't be resolved (unsupported).
+    """
+    layout = probed.get("audio_channel_layout")
+    if isinstance(layout, str) and layout.strip():
+        return layout.strip()
+    channels = probed.get("audio_channels") or 0
+    if channels == 1:
+        return "mono"
+    if channels == 2:
+        return "stereo"
+    return None
+
+
+def _body_is_copy_safe(probed: dict | None) -> bool:
+    """Whether the clip body can be stream-copy-concatenated with freshly built cards.
+
+    Conservative gate: only h264 / yuv420p bodies with a finite fps qualify, and if
+    the body has audio it must be aac with a usable sample rate and a resolvable
+    channel layout (so we can build a matching silent card audio track). Anything
+    else routes to the filter_complex re-encode path. This gate — not a return-code
+    check — is the sole guard against silent stream-copy corruption.
+    """
+    if not probed:
+        return False
+    if probed.get("video_codec") != "h264":
+        return False
+    if probed.get("pix_fmt") != "yuv420p":
+        return False
+    fps = probed.get("fps") or 0.0
+    if not (isinstance(fps, (int, float)) and fps > 0):
+        return False
+    if probed.get("audio_codec"):
+        if probed.get("audio_codec") != "aac":
+            return False
+        if not (probed.get("audio_sample_rate") or 0) > 0:
+            return False
+        if _resolve_channel_layout(probed) is None:
+            return False
+    return True
+
+
 def _build_drawtext_filter(text: str) -> str:
     safe_text = (text or "").strip()
     # The description has already been sanitized for filenames, but escape colons and backslashes just in case.
@@ -86,6 +131,8 @@ def _build_card_frame(
     fill_color: str = "black",
     cancel_flag: Callable[[], bool] | None = None,
     card_duration_seconds: int | None = None,
+    match_fps: float | None = None,
+    audio_match: dict | None = None,
 ) -> str | None:
     """Generate a short title/end card video segment.
 
@@ -93,6 +140,12 @@ def _build_card_frame(
     Returns the path to the generated card video, or None on failure. A None
     *background_path* (or a path that doesn't exist) renders a solid-color card
     when *allow_color_fallback* is set, otherwise returns None.
+
+    When *match_fps* / *audio_match* are supplied (the stream-copy wrap path), the
+    card is encoded to match the clip body: a fixed framerate + timebase and a
+    self-contained silent AAC track at the body's sample rate / channel layout, so
+    the card can be concat-demuxed alongside the body with ``-c copy``. Without
+    them the card is video-only (the filter_complex wrap injects silence itself).
     """
     if not resolution:
         return None
@@ -137,46 +190,70 @@ def _build_card_frame(
 
     vf_with_scale = (
         f"scale={resolution}:force_original_aspect_ratio=decrease,"
-        f"pad={width_str}:{height_str}:(ow-iw)/2:(oh-ih)/2"
+        f"pad={width_str}:{height_str}:(ow-iw)/2:(oh-ih)/2,setsar=1"
     )
     if drawtext_filter:
         vf_with_scale += f",{drawtext_filter}"
 
     if use_image_background:
         assert background_path is not None  # guaranteed by use_image_background
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        video_input = [
             "-loop",
             "1",
             "-t",
             str(duration),
             "-i",
             str(background_path),
-            "-vf",
-            vf_with_scale,
-            *_x264_video_args(),
-            card_path,
         ]
         input_label = str(background_path)
     else:
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        video_input = [
             "-f",
             "lavfi",
             "-i",
             f"color=c={_ffmpeg_color(fill_color)}:s={resolution}:d={duration}",
-            "-vf",
-            vf_with_scale,
-            *_x264_video_args(),
-            card_path,
         ]
         input_label = "lavfi:color"
+
+    # Silent AAC track matching the body so the card can be stream-copied alongside
+    # it (stream-copy wrap path only). Video is always input 0, silence input 1.
+    audio_input: list[str] = []
+    audio_out_args: list[str] = []
+    map_args: list[str] = []
+    if audio_match:
+        layout = audio_match["channel_layout"]
+        rate = int(audio_match["sample_rate"])
+        channels = int(audio_match.get("channels") or (1 if layout == "mono" else 2))
+        audio_input = [
+            "-f",
+            "lavfi",
+            "-t",
+            str(duration),
+            "-i",
+            f"anullsrc=channel_layout={layout}:sample_rate={rate}",
+        ]
+        audio_out_args = ["-c:a", "aac", "-ar", str(rate), "-ac", str(channels)]
+        map_args = ["-map", "0:v", "-map", "1:a"]
+
+    video_out_args = list(_x264_video_args())
+    if match_fps:
+        # Fixed framerate + timebase so concat-demuxer copy sees consistent cards.
+        video_out_args += ["-r", "%g" % match_fps, "-video_track_timescale", "90000"]
+
+    ffmpeg_command = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        config.FFMPEG_LOGLEVEL,
+        *video_input,
+        *audio_input,
+        "-vf",
+        vf_with_scale,
+        *map_args,
+        *video_out_args,
+        *audio_out_args,
+        card_path,
+    ]
 
     utils.debug_print(f"ffmpeg {label} command: {' '.join(ffmpeg_command)}")
     ffmpeg_result = video.run_ffmpeg_process(
@@ -268,6 +345,8 @@ def build_titlecard_frame(
     *,
     cancel_flag: Callable[[], bool] | None = None,
     card_duration_seconds: int | None = None,
+    match_fps: float | None = None,
+    audio_match: dict | None = None,
 ) -> str | None:
     """Generate a short titlecard video segment for a clip."""
     background_path, allow_color, skip, fill_color = resolve_card_background("title")
@@ -282,6 +361,8 @@ def build_titlecard_frame(
         fill_color=fill_color,
         cancel_flag=cancel_flag,
         card_duration_seconds=card_duration_seconds,
+        match_fps=match_fps,
+        audio_match=audio_match,
     )
 
 
@@ -290,6 +371,8 @@ def build_endcard_frame(
     *,
     cancel_flag: Callable[[], bool] | None = None,
     card_duration_seconds: int | None = None,
+    match_fps: float | None = None,
+    audio_match: dict | None = None,
 ) -> str | None:
     """Generate a short endcard video segment for the configured background."""
     background_path, allow_color, skip, fill_color = resolve_card_background("end")
@@ -303,7 +386,16 @@ def build_endcard_frame(
         fill_color=fill_color,
         cancel_flag=cancel_flag,
         card_duration_seconds=card_duration_seconds,
+        match_fps=match_fps,
+        audio_match=audio_match,
     )
+
+
+def _audio_match_signature(audio_match: dict | None) -> str:
+    """Cache-key fragment identifying an endcard's silent-audio params (or none)."""
+    if not audio_match:
+        return "noaudio"
+    return f"{audio_match.get('sample_rate')}:{audio_match.get('channel_layout')}"
 
 
 def get_or_build_endcard(
@@ -311,6 +403,8 @@ def get_or_build_endcard(
     *,
     cancel_flag: Callable[[], bool] | None = None,
     card_duration_seconds: int | None = None,
+    match_fps: float | None = None,
+    audio_match: dict | None = None,
 ) -> str | None:
     """Return a cached endcard path for the given resolution, building if needed."""
     duration = (
@@ -319,17 +413,26 @@ def get_or_build_endcard(
         else card_duration_seconds
     )
     # Key by the selected endcard so switching the background (or, for a solid
-    # color, the color itself) doesn't reuse a stale cached file.
+    # color, the color itself) doesn't reuse a stale cached file. The fps + audio
+    # signature must be part of the key: a copy-path endcard is encoded to match a
+    # specific body's framerate/audio, so reusing it for a body with different
+    # params would silently desync the stream-copy concat.
     endcard_id = config.ENDCARD_IMAGE or "__default__"
     if config.ENDCARD_IMAGE == config.CARD_IMAGE_COLOR:
         endcard_id = endcard_id + config.ENDCARD_COLOR
-    cache_key = f"{resolution}:{duration}:{endcard_id}"
+    audio_sig = _audio_match_signature(audio_match)
+    fps_sig = ("%g" % match_fps) if match_fps else "nofps"
+    cache_key = f"{resolution}:{duration}:{endcard_id}:{fps_sig}:{audio_sig}"
     with _endcard_lock:
         cached = _endcard_cache.get(cache_key)
         if cached and Path(cached).is_file():
             return cached
     path = build_endcard_frame(
-        resolution, cancel_flag=cancel_flag, card_duration_seconds=duration
+        resolution,
+        cancel_flag=cancel_flag,
+        card_duration_seconds=duration,
+        match_fps=match_fps,
+        audio_match=audio_match,
     )
     if path:
         with _endcard_lock:
@@ -460,14 +563,19 @@ def wrap_clip_with_cards(
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
 ) -> bool:
-    """Prepend a titlecard and append an endcard to a clip in a single ffmpeg encode.
+    """Prepend a titlecard and append an endcard to a clip.
 
-    Replaces the previous two-invocation (prepend then append) flow so the clip body
-    is decoded and re-encoded once instead of twice. Returns True when the clip file
-    is usable afterwards (either wrapped or left untouched on soft failure), and
-    False only on a hard failure (e.g. the clip file is missing). When *cancel_flag*
-    is supplied and returns True during a card or wrap encode, the in-flight ffmpeg
-    is terminated and the original clip file is left untouched.
+    Fast path: when the clip body is a copy-safe shape (see _body_is_copy_safe), only
+    the two cards are encoded — matched to the body's fps/pixel-format and (if present)
+    a silent AAC track at the body's audio params — then all three are joined with the
+    concat demuxer + ``-c copy``, so the already-cut body is not re-encoded. Any
+    non-copy-safe body, or a failed copy concat, falls back to a single filter_complex
+    encode that re-encodes the whole clip.
+
+    Returns True when the clip file is usable afterwards (either wrapped or left
+    untouched on soft failure), and False only on a hard failure (e.g. the clip file
+    is missing). When *cancel_flag* is supplied and returns True during a card or wrap
+    encode, the in-flight ffmpeg is terminated and the original clip is left untouched.
     """
     cards_enabled = (
         config.TITLECARDS_ENABLED
@@ -516,32 +624,100 @@ def wrap_clip_with_cards(
         clip_duration + 2 * card_duration if clip_duration > 0 else None
     )
 
-    titlecard_path = build_titlecard_frame(
-        clip,
-        resolution,
-        cancel_flag=cancel_flag,
-        card_duration_seconds=card_duration,
-    )
-    endcard_path = get_or_build_endcard(
-        resolution,
-        cancel_flag=cancel_flag,
-        card_duration_seconds=card_duration,
-    )
+    # When the body is a known copy-safe shape (h264 / yuv420p / aac), encode only
+    # the cards to match it and concat-demux with -c copy, avoiding a full body
+    # re-encode. Otherwise (or if the copy concat fails) fall back to the
+    # filter_complex re-encode path below.
+    copy_safe = _body_is_copy_safe(probed)
+    match_fps: float | None = None
+    audio_match: dict | None = None
+    if copy_safe and probed:
+        match_fps = float(probed["fps"])
+        if has_clip_audio:
+            audio_match = {
+                "sample_rate": probed["audio_sample_rate"],
+                "channel_layout": _resolve_channel_layout(probed),
+                "channels": probed.get("audio_channels") or 0,
+            }
 
-    if not titlecard_path and not endcard_path:
-        # Both cards failed to build; nothing to do, keep clip as-is.
-        return True
-
-    input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
-        titlecard_path=titlecard_path,
-        clip_path=clip_path,
-        endcard_path=endcard_path,
-        has_clip_audio=has_clip_audio,
-        card_duration=card_duration,
-    )
-
+    titlecard_temps: list[str] = []
     output_temp_path: str | None = None
     try:
+        if copy_safe:
+            titlecard_path = build_titlecard_frame(
+                clip,
+                resolution,
+                cancel_flag=cancel_flag,
+                card_duration_seconds=card_duration,
+                match_fps=match_fps,
+                audio_match=audio_match,
+            )
+            if titlecard_path:
+                titlecard_temps.append(titlecard_path)
+            endcard_path = get_or_build_endcard(
+                resolution,
+                cancel_flag=cancel_flag,
+                card_duration_seconds=card_duration,
+                match_fps=match_fps,
+                audio_match=audio_match,
+            )
+            if not titlecard_path and not endcard_path:
+                # Both cards failed to build; nothing to do, keep clip as-is.
+                return True
+
+            segments = [p for p in (titlecard_path, clip_path, endcard_path) if p]
+            with tempfile.NamedTemporaryFile(
+                suffix=config.FILEFORMAT, delete=False
+            ) as out_tmp:
+                output_temp_path = out_tmp.name
+            if video.concat_copy(
+                segments,
+                output_temp_path,
+                cancel_flag=cancel_flag,
+                on_progress=on_progress,
+                expected_duration_sec=expected_wrap_duration,
+            ):
+                os.replace(output_temp_path, clip_path)
+                output_temp_path = None
+                return True
+            # Copy concat failed — discard the temp output and fall through to the
+            # re-encode path (which rebuilds video-only cards).
+            if output_temp_path:
+                try:
+                    Path(output_temp_path).unlink()
+                except OSError:
+                    pass
+                output_temp_path = None
+            utils.debug_print(
+                f"Stream-copy card wrap failed for '{clip_path}'; re-encoding instead."
+            )
+
+        # Fallback: single filter_complex encode that re-encodes the whole clip.
+        titlecard_path = build_titlecard_frame(
+            clip,
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=card_duration,
+        )
+        if titlecard_path:
+            titlecard_temps.append(titlecard_path)
+        endcard_path = get_or_build_endcard(
+            resolution,
+            cancel_flag=cancel_flag,
+            card_duration_seconds=card_duration,
+        )
+        if not titlecard_path and not endcard_path:
+            # Both cards failed to build; nothing to do, keep clip as-is.
+            return True
+
+        input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
+            titlecard_path=titlecard_path,
+            clip_path=clip_path,
+            endcard_path=endcard_path,
+            has_clip_audio=has_clip_audio,
+            card_duration=card_duration,
+        )
+
         with tempfile.NamedTemporaryFile(
             suffix=config.FILEFORMAT, delete=False
         ) as out_tmp:
@@ -591,9 +767,9 @@ def wrap_clip_with_cards(
         return True
     finally:
         # Titlecards are per-clip temps; endcards are managed by _endcard_cache.
-        if titlecard_path:
+        for titlecard_temp in titlecard_temps:
             try:
-                Path(titlecard_path).unlink()
+                Path(titlecard_temp).unlink()
             except OSError:
                 pass
         if output_temp_path:

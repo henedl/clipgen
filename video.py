@@ -1270,6 +1270,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "height": 1080,
             "video_codec": "h264",
             "audio_codec": "aac",
+            "pix_fmt": "yuv420p",
+            "audio_sample_rate": 48000,
+            "audio_channels": 2,
+            "audio_channel_layout": "stereo",
             "fps": 30.0,
             "duration": 300.0,
             "nb_frames": 9000,
@@ -1292,7 +1296,8 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "-v",
         "error",
         "-show_entries",
-        "stream=width,height,codec_name,codec_type,r_frame_rate,nb_frames",
+        "stream=width,height,codec_name,codec_type,r_frame_rate,nb_frames,"
+        "pix_fmt,sample_rate,channels,channel_layout",
         "-show_entries",
         "format=duration",
         "-of",
@@ -1313,6 +1318,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     width = height = 0
     video_codec: str | None = None
     audio_codec: str | None = None
+    pix_fmt: str | None = None
+    audio_sample_rate = 0
+    audio_channels = 0
+    audio_channel_layout: str | None = None
     fps = 0.0
     nb_frames = 0
     for stream in streams:
@@ -1321,6 +1330,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             width = int(stream.get("width", 0))
             height = int(stream.get("height", 0))
             video_codec = stream.get("codec_name")
+            pix_fmt = stream.get("pix_fmt")
             # Parse r_frame_rate (e.g. "30/1", "30000/1001")
             rfr = stream.get("r_frame_rate", "")
             if "/" in rfr:
@@ -1336,6 +1346,15 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
                 nb_frames = 0
         elif codec_type == "audio" and audio_codec is None:
             audio_codec = stream.get("codec_name")
+            try:
+                audio_sample_rate = int(stream.get("sample_rate") or 0)
+            except (ValueError, TypeError):
+                audio_sample_rate = 0
+            try:
+                audio_channels = int(stream.get("channels") or 0)
+            except (ValueError, TypeError):
+                audio_channels = 0
+            audio_channel_layout = stream.get("channel_layout")
 
     if not video_codec or width <= 0 or height <= 0:
         return None
@@ -1356,6 +1375,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "height": height,
         "video_codec": video_codec,
         "audio_codec": audio_codec,
+        "pix_fmt": pix_fmt,
+        "audio_sample_rate": audio_sample_rate,
+        "audio_channels": audio_channels,
+        "audio_channel_layout": audio_channel_layout,
         "fps": fps,
         "duration": fmt_duration,
         "nb_frames": nb_frames,
@@ -2036,6 +2059,75 @@ def _concatenate_demuxer(
         return True
     except OSError as e:
         utils.error_print(f"Concatenation failed: {e}")
+        return False
+    finally:
+        concat_path = Path(concat_list_file)
+        if concat_path.exists():
+            try:
+                concat_path.unlink()
+            except OSError as e:
+                utils.debug_print(
+                    f"Could not remove concat list file '{concat_list_file}': {e}"
+                )
+
+
+def concat_copy(
+    clip_paths: list[str],
+    output_file: str,
+    *,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    expected_duration_sec: float | None = None,
+) -> bool:
+    """Concat clips with the demuxer + stream copy (no re-encode), or return False.
+
+    A focused, quiet variant of _concatenate_demuxer for callers that build their
+    own copy-safe inputs and own the fallback decision: no re-encode retry and no
+    user-facing success message. Returns True only when the copy succeeds and the
+    output verifies. Callers MUST guarantee the inputs are stream-copy compatible
+    (matching codec/pix_fmt/SAR/timebase and audio params) — a mismatch produces a
+    silently corrupt file with a zero return code, which this cannot detect.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as file_handle:
+        concat_list_file = file_handle.name
+        for path in clip_paths:
+            abs_path = str(Path(path).resolve())
+            escaped_path = abs_path.replace("'", "'\\''")
+            file_handle.write(f"file '{escaped_path}'\n")
+
+    try:
+        ffmpeg_command = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            config.FFMPEG_LOGLEVEL,
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_file,
+            "-c",
+            "copy",
+            output_file,
+        ]
+        utils.debug_print(f"ffmpeg concat-copy command: {' '.join(ffmpeg_command)}")
+        ffmpeg_result = run_ffmpeg_process(
+            ffmpeg_command,
+            input_file=concat_list_file,
+            output_file=output_file,
+            os_error_message="Stream-copy concat failed.",
+            cancel_flag=cancel_flag,
+            on_progress=on_progress,
+            expected_duration_sec=expected_duration_sec,
+        )
+        if ffmpeg_result is None or ffmpeg_result.returncode != 0:
+            return False
+        return verify_output_file(output_file, "Concat")
+    except OSError as e:
+        utils.debug_print(f"Stream-copy concat failed: {e}")
         return False
     finally:
         concat_path = Path(concat_list_file)
