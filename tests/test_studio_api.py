@@ -1,6 +1,7 @@
 import io
 import json
 from collections import OrderedDict
+from unittest.mock import Mock
 
 import pytest
 
@@ -182,6 +183,33 @@ def test_process_intake_item_releases_reservation_on_cut_exception(
     with pytest.raises(RuntimeError):
         server._process_intake_item(item, "clip", "study")
     assert list(tmp_path.glob("*.mp4")) == []
+
+
+def test_process_intake_item_enforces_size_cap_for_clip_only(tmp_path, monkeypatch):
+    """A clip intake compresses to the cap (no wrap here); screenshots/GIFs do not."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "MAX_FILESIZE_MB", 50)
+    monkeypatch.setattr(
+        server, "_resolve_intake_video_paths", lambda *a, **k: ["v.mp4"]
+    )
+    monkeypatch.setattr(server.video, "timeline_or_none", lambda *a, **k: None)
+    monkeypatch.setattr(
+        server.pipeline,
+        "cut_global_range",
+        lambda *a, **k: {"sourceVideo": "v.mp4", "localStart": 0.0, "localEnd": 5.0},
+    )
+
+    enforce = Mock()
+    monkeypatch.setattr(server.video, "enforce_filesize_limit", enforce)
+
+    item = {"participant": "P01", "start": 0.0, "end": 5.0}
+
+    server._process_intake_item(item, "clip", "study")
+    assert enforce.call_count == 1
+
+    server._process_intake_item(item, "screen", "study")
+    server._process_intake_item(item, "gif", "study")
+    assert enforce.call_count == 1  # unchanged — only the clip was compressed
 
 
 def test_settings_records_include_card_pickers(client):

@@ -488,6 +488,7 @@ def _process_single_clip_segments(
     output_format: str = "clip",
     collect_paths: bool = False,
     include_severity: bool = False,
+    enforce_size: bool = True,
     cancel_flag: Callable[[], bool] | None = None,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
@@ -502,6 +503,10 @@ def _process_single_clip_segments(
         missing_videos: Set of already-reported missing paths (read-only here)
         filename_prefix: Prefix for output filename (e.g. '_reel_part_' for reel)
         collect_paths: If True, return list of (output_path, time_index) pairs; otherwise return empty list
+        enforce_size: If True (default), compress each final clip to config.MAX_FILESIZE_MB
+            after the titlecard wrap. Pass False for intermediate cuts (e.g. reel parts)
+            that get concatenated/re-encoded downstream, so the size cap is applied once
+            to the final artifact rather than wasted on throwaway pieces.
         include_severity: If True and clip has severity, include [Severity] in filename
         cancel_flag: Optional callable; checked before each segment and forwarded to
             ffmpeg helpers so an in-flight encode can be terminated. Already-finished
@@ -604,6 +609,10 @@ def _process_single_clip_segments(
                     titlecards_enabled=cards_enabled,
                     titlecard_duration_seconds=card_duration,
                 )
+            # Enforce the size cap on the finished clip (after any wrap re-encode),
+            # not on intermediate reel parts (enforce_size=False).
+            if ok and enforce_size:
+                video.enforce_filesize_limit(out_name, cancel_flag=cancel_flag)
         else:  # output_format == 'screen' or 'gif' — keys off the start time only
             src_path: str | None = base_video
             cut_ts = start_time
@@ -1471,6 +1480,7 @@ def _process_reel(
             missing_videos,
             filename_prefix="_reel_part_",
             collect_paths=True,
+            enforce_size=False,  # parts are concatenated into an uncapped reel
             cancel_flag=cancel_flag,
             titlecards_enabled=titlecards_enabled,
             titlecard_duration_seconds=titlecard_duration_seconds,
@@ -1875,6 +1885,8 @@ def _regenerate_single_artifact(
             Path(p).unlink(missing_ok=True)
         if ok and artifact.get("titlecards"):
             ok = _reapply_titlecards(artifact, output_path)
+        if ok:
+            video.enforce_filesize_limit(output_path)
         return ok
 
     source_name = artifact.get("sourceVideo", "")
@@ -1907,6 +1919,8 @@ def _regenerate_single_artifact(
         # Reapply titlecards if the manifest entry was generated with them.
         if ok and artifact.get("titlecards"):
             ok = _reapply_titlecards(artifact, output_path)
+        if ok:
+            video.enforce_filesize_limit(output_path)
         return ok
     elif artifact_type == "screen":
         return video.extract_screenshot(
