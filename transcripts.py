@@ -946,10 +946,42 @@ class TranscriptWorker:
             t = self._tasks.get(task_id)
             return copy.deepcopy(t) if t else None
 
-    def get_all_tasks(self) -> list[dict[str, Any]]:
-        """Return all tasks (thread-safe copies)."""
+    def get_all_tasks(self, include_partials: bool = True) -> list[dict[str, Any]]:
+        """Return all tasks (thread-safe copies).
+
+        ``include_partials=False`` omits each task's ever-growing
+        ``partial_segments`` list (reporting ``partial_count`` instead), so the
+        3 s status poll no longer deep-copies the whole segment tail on every
+        tick; clients pull new segments via :meth:`get_partial_segments`.
+        """
         with self._lock:
-            return [copy.deepcopy(t) for t in self._tasks.values()]
+            if include_partials:
+                return [copy.deepcopy(t) for t in self._tasks.values()]
+            slim: list[dict[str, Any]] = []
+            for t in self._tasks.values():
+                segs = t.get("partial_segments") or []
+                light = {k: v for k, v in t.items() if k != "partial_segments"}
+                copied = copy.deepcopy(light)
+                copied["partial_count"] = len(segs)
+                slim.append(copied)
+            return slim
+
+    def get_partial_segments(
+        self, task_id: str, since: int = 0
+    ) -> tuple[list[TranscriptSegment], int]:
+        """Thread-safe copy of a task's partial-segment tail from index ``since``.
+
+        ``partial_segments`` is append-only during transcription (see
+        :meth:`_on_seg`), so a count cursor yields exactly the new segments.
+        Returns ``(tail, total)`` where ``total`` is the current segment count.
+        """
+        with self._lock:
+            t = self._tasks.get(task_id)
+            segs = (t.get("partial_segments") if t else None) or []
+            total = len(segs)
+            start = max(since, 0)
+            tail = copy.deepcopy(segs[start:]) if start < total else []
+            return tail, total
 
     @property
     def is_alive(self) -> bool:
