@@ -3199,6 +3199,28 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         raise
 
 
+def _set_cache_headers(response):
+    """after_request hook: apply content-type-aware caching to static assets.
+
+    ``send_from_directory`` stamps a bare ``Cache-Control: no-cache`` by default
+    (Werkzeug, when ``max_age`` is unset), which carries no real caching intent —
+    let it fall through so static css/js/svg get their TTLs. Deliberate cache
+    headers set by a route (thumbnails, SSE streams, video previews) are anything
+    other than a bare ``no-cache`` and are preserved untouched.
+    """
+    existing = response.headers.get("Cache-Control")
+    if existing and existing != "no-cache":
+        return response
+    ct = response.content_type or ""
+    if ct.startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache"
+    elif ct.startswith(("text/css", "application/javascript", "text/javascript")):
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    elif ct.startswith("image/svg"):
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
+
 def build_combined_app(
     worksheet: Any = None,
     default_page: str = "studio",
@@ -3261,19 +3283,7 @@ def build_combined_app(
     )
     combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
 
-    @combined.after_request
-    def _set_cache_headers(response):
-        # Skip if a route already set Cache-Control (e.g. thumbnails)
-        if "Cache-Control" in response.headers:
-            return response
-        ct = response.content_type or ""
-        if ct.startswith("text/html"):
-            response.headers["Cache-Control"] = "no-cache"
-        elif ct.startswith(("text/css", "application/javascript", "text/javascript")):
-            response.headers["Cache-Control"] = "public, max-age=3600"
-        elif ct.startswith("image/svg"):
-            response.headers["Cache-Control"] = "public, max-age=86400"
-        return response
+    combined.after_request(_set_cache_headers)
 
     @combined.route("/")
     def root():
