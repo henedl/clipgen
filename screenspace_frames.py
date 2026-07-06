@@ -26,6 +26,11 @@ import utils
 import video
 from screenspace_primitives import ScanCallback, compute_phash
 
+# Codecs where keyframe-only decode (`-skip_frame nokey`) pays off: long-GOP
+# inter-coded formats. Intra-only formats (every frame is a keyframe) gain
+# nothing, so they are left on the full-decode path.
+_NONKEY_SKIP_CODECS = frozenset({"h264", "hevc"})
+
 
 def scan_video_frames(
     video_path: str,
@@ -132,6 +137,7 @@ def _ffmpeg_pipe_frames(
     frame_height: int = 0,
     max_dim: int = 0,
     cv_scale: float = 1.0,
+    skip_non_keyframes: bool = False,
 ) -> Iterator[tuple[float, np.ndarray]]:
     """Yield ``(timestamp, frame)`` tuples extracted via an ffmpeg pipe.
 
@@ -142,6 +148,14 @@ def _ffmpeg_pipe_frames(
     *region* applies an ffmpeg ``crop`` filter so only the ROI pixels are
     decoded and transferred.  *max_dim* adds a ``scale`` filter to cap the
     largest output dimension (useful for fast-scan downscaling).
+
+    *skip_non_keyframes* adds the input-level ``-skip_frame nokey`` decoder
+    option so only keyframes are decoded (GOP-sized savings). The ``select``
+    filter still thins them to ``interval_seconds`` apart, and ``showinfo``
+    still reports each keyframe's true PTS, so timestamps stay accurate — only
+    temporal resolution drops to keyframe granularity. The caller must gate this
+    so it is used only when keyframes are frequent enough (see
+    ``_scan_via_ffmpeg_pipe``).
 
     The caller can stop iteration at any time (e.g. on cancel); the
     ``finally`` block ensures the subprocess is cleaned up.
@@ -201,6 +215,12 @@ def _ffmpeg_pipe_frames(
     cmd: list[str] = ["ffmpeg"]
     if start_seconds > 0:
         cmd += ["-ss", str(start_seconds)]
+    if skip_non_keyframes:
+        # Input-level decoder option (must precede -i): the H.264/HEVC decoder
+        # drops non-keyframe packets before decode, so only keyframes reach the
+        # filter graph. The first yielded frame may land up to one GOP past
+        # start_seconds, which is benign — showinfo still reports its real PTS.
+        cmd += ["-skip_frame", "nokey"]
     cmd += ["-i", video_path]
     if end_seconds > start_seconds:
         cmd += ["-t", str(end_seconds - start_seconds)]
@@ -337,10 +357,37 @@ def _scan_via_ffmpeg_pipe(
     # we downscale in Python after the hash check.
     pipe_max_dim = _max_dim if (not _phash_skip and _max_dim > 0) else 0
 
+    # Keyframe-only decode (fast-scan only): decode just keyframes when the
+    # source is an inter-coded codec whose GOP is short enough. Gated on
+    # fast_opts (so precise/boundary scans are untouched), a codec allowlist, the
+    # master switch, and a per-video probe of the *worst-case* keyframe gap. Any
+    # probe uncertainty (None) leaves it off — full decode.
+    skip_non_keyframes = False
+    select_interval = interval_seconds
+    if (
+        fast_opts
+        and config.SCREENSPACE_FAST_SCAN_SKIP_NONKEY
+        and props.get("video_codec") in _NONKEY_SKIP_CODECS
+    ):
+        max_gap = video.probe_max_keyframe_gap(video_path)
+        if (
+            max_gap is not None
+            and max_gap <= interval_seconds * config.SCREENSPACE_KEYFRAME_SKIP_MARGIN
+        ):
+            skip_non_keyframes = True
+            # `select` snaps each sample up to the next keyframe, overshooting
+            # the interval grid whenever the GOP doesn't divide the interval
+            # (e.g. 2s GOP, 3s interval → samples at 0,4,8 not 0,3,6). Shrinking
+            # the select interval by the worst-case gap guarantees consecutive
+            # samples stay < interval apart (in [interval-max_gap, interval)), so
+            # coverage is never coarser than requested — at the cost of a bounded
+            # (<2x for uniform GOP) oversample that phash-skip largely absorbs.
+            select_interval = max(0.0, interval_seconds - max_gap)
+
     try:
         for ts, frame in _ffmpeg_pipe_frames(
             video_path,
-            interval_seconds,
+            select_interval,
             start_seconds=start_seconds,
             end_seconds=end_seconds,
             region=pipe_region,
@@ -348,6 +395,7 @@ def _scan_via_ffmpeg_pipe(
             frame_height=frame_height,
             max_dim=pipe_max_dim,
             cv_scale=cv_scale,
+            skip_non_keyframes=skip_non_keyframes,
         ):
             if _phash_skip:
                 fh = compute_phash(frame)

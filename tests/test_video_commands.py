@@ -159,6 +159,57 @@ def test_probe_video_properties_file_not_found():
     assert video.probe_video_properties("/nonexistent/missing.mp4") is None
 
 
+# -- probe_max_keyframe_gap tests --
+
+
+def test_probe_max_keyframe_gap_uses_max_not_median(monkeypatch, tmp_path):
+    video._keyframe_gap_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    # Keyframes at 0, 1, 2, 8 (gaps 1, 1, 6). The max (6.0) is returned — a
+    # single long-GOP stretch must not be masked by the surrounding short gaps
+    # (median would be 1.0). Interior non-keyframe packets are ignored.
+    csv = "\n".join(
+        [
+            "0.000000,K__",
+            "0.033000,__",
+            "1.000000,K__",
+            "2.000000,K__",
+            "8.000000,K__",
+        ]
+    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: csv)
+    assert video.probe_max_keyframe_gap(str(clip)) == 6.0
+
+
+def test_probe_max_keyframe_gap_failure_returns_none(monkeypatch, tmp_path):
+    video._keyframe_gap_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+
+    def raise_cpe(_cmd, **_kw):
+        raise subprocess.CalledProcessError(returncode=1, cmd="ffprobe")
+
+    monkeypatch.setattr(video.subprocess, "check_output", raise_cpe)
+    assert video.probe_max_keyframe_gap(str(clip)) is None
+
+
+def test_probe_max_keyframe_gap_single_keyframe_returns_none(monkeypatch, tmp_path):
+    video._keyframe_gap_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    # Only one keyframe in the probe window → GOP longer than the window; can't
+    # confirm short cadence, so treat as unknown (None → do not skip).
+    csv = "\n".join(["0.000000,K__", "0.033000,__", "1.000000,__"])
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: csv)
+    assert video.probe_max_keyframe_gap(str(clip)) is None
+
+
+def test_probe_max_keyframe_gap_file_not_found():
+    video._keyframe_gap_cache.clear()
+    assert video.probe_max_keyframe_gap("/nonexistent/missing.mp4") is None
+
+
 def test_probe_video_properties_reprobes_after_mtime_change(monkeypatch, tmp_path):
     """A re-encoded file (new mtime_ns) invalidates the cached props."""
     import os

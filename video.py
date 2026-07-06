@@ -31,6 +31,9 @@ FFMPEG_PRESEEK_SECONDS = 2.0
 # the pattern in viewer.py and pipeline.py.
 _file_duration_cache: dict[tuple[str, int], int] = {}
 _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
+# Max keyframe gap (seconds) per file; None means "unknown / too sparse to
+# confirm" and callers must treat that as "do not enable keyframe-only decode".
+_keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
 
 
 def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
@@ -1384,6 +1387,79 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     _video_properties_cache[key] = result
     if fmt_duration > 0:
         _file_duration_cache[key] = round(fmt_duration)
+    return result
+
+
+def probe_max_keyframe_gap(filepath: str) -> float | None:
+    """Return the largest gap (seconds) between consecutive keyframes near the start.
+
+    Reads packet flags — no decoding — over the first
+    ``config.SCREENSPACE_KEYFRAME_PROBE_SECONDS`` of video and returns the
+    **maximum** interval between consecutive keyframes. The max (not the median)
+    is the safe measure for gating keyframe-only decode: a single long-GOP
+    stretch inside the window is a real coverage hole and must not be masked by
+    surrounding short gaps.
+
+    Returns ``None`` when the cadence can't be confirmed: fewer than two keyframes
+    in the probe window (GOP longer than the window), ffprobe/parse failure, or a
+    missing file. Callers treat ``None`` as "keyframes too sparse — do not enable
+    keyframe-only decode". Result is cached per ``(resolved_path, mtime)``.
+    """
+    if config.DEBUGGING:
+        # Synthetic short GOP so DEBUGGING/dev runs don't shell out to ffprobe;
+        # mirrors probe_video_properties' DEBUGGING branch.
+        return 1.0
+
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
+        return None
+    if key in _keyframe_gap_cache:
+        return _keyframe_gap_cache[key]
+
+    window = config.SCREENSPACE_KEYFRAME_PROBE_SECONDS
+    probe_command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-read_intervals",
+        f"%{window}",
+        "-show_entries",
+        "packet=pts_time,flags",
+        "-of",
+        "csv=print_section=0",
+        filepath,
+    ]
+    result: float | None = None
+    try:
+        raw = subprocess.check_output(probe_command, encoding="utf-8")
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        _keyframe_gap_cache[key] = None
+        return None
+
+    # Each CSV row is "pts_time,flags" (e.g. "1.000000,K__"). A keyframe packet
+    # carries 'K' as the first flag char. Collect keyframe PTS in order.
+    keyframe_times: list[float] = []
+    for line in raw.splitlines():
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        pts_str, flags = parts[0], parts[1]
+        if not flags or flags[0] != "K":
+            continue
+        try:
+            keyframe_times.append(float(pts_str))
+        except ValueError:
+            continue
+
+    if len(keyframe_times) >= 2:
+        keyframe_times.sort()
+        gaps = [b - a for a, b in zip(keyframe_times, keyframe_times[1:]) if b - a > 0]
+        if gaps:
+            result = max(gaps)
+
+    _keyframe_gap_cache[key] = result
     return result
 
 
