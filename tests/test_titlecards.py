@@ -273,6 +273,215 @@ def test_wrap_clip_with_cards_no_cards_is_noop(monkeypatch, make_clip):
     assert ffmpeg_calls == []
 
 
+_COPY_SAFE_PROBE = {
+    "width": 1280,
+    "height": 720,
+    "video_codec": "h264",
+    "audio_codec": "aac",
+    "pix_fmt": "yuv420p",
+    "audio_sample_rate": 48000,
+    "audio_channels": 2,
+    "audio_channel_layout": "stereo",
+    "fps": 30.0,
+    "duration": 12.0,
+    "nb_frames": 360,
+}
+
+
+def test_wrap_clip_with_cards_copy_path_builds_matching_cards(monkeypatch, make_clip):
+    """A copy-safe body: cards get a matching silent AAC track + fixed fps and the
+    body is joined via concat-demuxer -c copy (no re-encode)."""
+    clip = make_clip()
+    titlecards.clear_endcard_cache()
+    monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(titlecards.config, "ENDCARD_IMAGE", "")
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda _p: dict(_COPY_SAFE_PROBE)
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    commands = []
+
+    def fake_run(cmd, **_k):
+        commands.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    replaced = {}
+    monkeypatch.setattr(
+        titlecards.os, "replace", lambda src, dst: replaced.update({"dst": dst})
+    )
+
+    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    assert ok is True
+
+    joined = [" ".join(c) for c in commands]
+    # Both card builds carry a matching silent AAC track, fixed fps, and SAR.
+    card_cmds = [j for j in joined if "anullsrc" in j]
+    assert len(card_cmds) == 2
+    for j in card_cmds:
+        assert "anullsrc=channel_layout=stereo:sample_rate=48000" in j
+        assert "-c:a aac" in j
+        assert "-r 30" in j
+        assert "setsar=1" in j
+    # The body is joined with the concat demuxer + stream copy, not filter_complex.
+    concat_cmds = [j for j in joined if "-f concat" in j]
+    assert len(concat_cmds) == 1
+    assert "-c copy" in concat_cmds[0]
+    assert not any("-filter_complex" in j for j in joined)
+    assert replaced.get("dst") == "clip.mp4"
+    titlecards.clear_endcard_cache()
+
+
+def test_wrap_clip_with_cards_copy_path_no_audio(monkeypatch, make_clip):
+    """A copy-safe body without audio: video-only cards, still concat -c copy."""
+    clip = make_clip()
+    titlecards.clear_endcard_cache()
+    probe: dict = {
+        **_COPY_SAFE_PROBE,
+        "audio_codec": None,
+        "audio_sample_rate": 0,
+        "audio_channels": 0,
+        "audio_channel_layout": None,
+    }
+    monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(titlecards.config, "ENDCARD_IMAGE", "")
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "probe_video_properties", lambda _p: dict(probe))
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
+
+    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    assert ok is True
+    joined = [" ".join(c) for c in commands]
+    assert not any("anullsrc" in j for j in joined)
+    assert not any("-c:a" in j for j in joined)
+    concat_cmds = [j for j in joined if "-f concat" in j]
+    assert len(concat_cmds) == 1 and "-c copy" in concat_cmds[0]
+    titlecards.clear_endcard_cache()
+
+
+def test_wrap_clip_with_cards_non_copy_safe_reencodes(monkeypatch, make_clip):
+    """A non-yuv420p body is not copy-safe → filter_complex re-encode path."""
+    clip = make_clip()
+    probe = dict(_COPY_SAFE_PROBE)
+    probe["pix_fmt"] = "yuv444p"
+    monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "probe_video_properties", lambda _p: dict(probe))
+    monkeypatch.setattr(
+        titlecards, "build_titlecard_frame", lambda *_a, **_k: "titlecard.mp4"
+    )
+    monkeypatch.setattr(
+        titlecards, "get_or_build_endcard", lambda *_a, **_k: "endcard.mp4"
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    commands = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_k: (
+            commands.append(cmd)
+            or subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+        ),
+    )
+    monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
+
+    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    assert ok is True
+    assert len(commands) == 1
+    joined = " ".join(commands[0])
+    assert "-filter_complex" in joined
+    assert "concat=n=3:v=1:a=1" in joined
+    assert "-f concat" not in joined
+    assert "-c copy" not in joined
+
+
+def test_wrap_clip_with_cards_copy_failure_falls_back(monkeypatch, make_clip):
+    """When the -c copy concat fails, wrap re-encodes via the filter path."""
+    clip = make_clip()
+    titlecards.clear_endcard_cache()
+    monkeypatch.setattr(titlecards.config, "TITLECARDS_ENABLED", True)
+    monkeypatch.setattr(titlecards.config, "ENDCARD_IMAGE", "")
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda _p: dict(_COPY_SAFE_PROBE)
+    )
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_k: True)
+
+    commands = []
+
+    def fake_run(cmd, **_k):
+        commands.append(cmd)
+        # Fail only the stream-copy concat; card builds and re-encode succeed.
+        rc = 1 if ("-f" in cmd and "concat" in cmd and "copy" in cmd) else 0
+        return subprocess.CompletedProcess(args=cmd, returncode=rc, stderr="boom")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    replaced = {}
+    monkeypatch.setattr(
+        titlecards.os, "replace", lambda src, dst: replaced.update({"dst": dst})
+    )
+
+    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    assert ok is True
+    joined = [" ".join(c) for c in commands]
+    # The copy concat was attempted...
+    assert any("-f concat" in j and "-c copy" in j for j in joined)
+    # ...then the filter_complex re-encode ran and produced the final output.
+    assert any("-filter_complex" in j for j in joined)
+    assert replaced.get("dst") == "clip.mp4"
+    titlecards.clear_endcard_cache()
+
+
+def test_get_or_build_endcard_cache_keyed_by_audio_and_fps(monkeypatch):
+    """Endcards built for different body fps/audio params must not be cross-reused."""
+    titlecards.clear_endcard_cache()
+    builds = []
+
+    def fake_build(_resolution, *, match_fps=None, audio_match=None, **_k):
+        sig = f"{match_fps}:{audio_match and audio_match.get('sample_rate')}"
+        path = f"endcard_{sig}.mp4"
+        builds.append(path)
+        return path
+
+    monkeypatch.setattr(titlecards, "build_endcard_frame", fake_build)
+    monkeypatch.setattr(titlecards.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(config, "ENDCARD_IMAGE", "")
+
+    a = titlecards.get_or_build_endcard(
+        "1280x720",
+        match_fps=30.0,
+        audio_match={"sample_rate": 48000, "channel_layout": "stereo"},
+    )
+    a2 = titlecards.get_or_build_endcard(
+        "1280x720",
+        match_fps=30.0,
+        audio_match={"sample_rate": 48000, "channel_layout": "stereo"},
+    )
+    b = titlecards.get_or_build_endcard(
+        "1280x720",
+        match_fps=25.0,
+        audio_match={"sample_rate": 44100, "channel_layout": "mono"},
+    )
+    assert a2 == a  # same params → cached
+    assert b != a  # different params → rebuilt
+    assert len(builds) == 2
+    titlecards.clear_endcard_cache()
+
+
 def test_resolve_card_background_title_default(monkeypatch):
     monkeypatch.setattr(config, "TITLECARD_IMAGE", "")
     path, allow_color, skip, fill_color = titlecards.resolve_card_background("title")
@@ -391,7 +600,7 @@ def test_get_or_build_endcard_cache_keyed_by_selection(monkeypatch):
     titlecards.clear_endcard_cache()
     builds = []
 
-    def fake_build(_resolution, *, cancel_flag=None, card_duration_seconds=None):
+    def fake_build(_resolution, *, cancel_flag=None, card_duration_seconds=None, **_k):
         path = f"endcard_{config.ENDCARD_IMAGE or 'default'}.mp4"
         builds.append(path)
         return path
@@ -453,7 +662,7 @@ def test_get_or_build_endcard_cache_keyed_by_color(monkeypatch):
     titlecards.clear_endcard_cache()
     builds = []
 
-    def fake_build(_resolution, *, cancel_flag=None, card_duration_seconds=None):
+    def fake_build(_resolution, *, cancel_flag=None, card_duration_seconds=None, **_k):
         path = f"endcard_{config.ENDCARD_COLOR}.mp4"
         builds.append(path)
         return path
