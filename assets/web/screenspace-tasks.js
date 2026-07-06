@@ -38,7 +38,11 @@
     updateRunButton = SS.updateRunButton;
 
   // ---- ETA tracking + poll fingerprint (moved from the hub module scope) ----
-  var _lastPollFingerprint = "";
+  // Structural gate (id:status:heatmap) rebuilds the task list only on
+  // transitions — progress + the result-count badge move in place via
+  // tickTaskProgress, and new detections redraw the timeline through
+  // _syncTaskResults, so neither needs to force a full list rebuild.
+  var _lastTaskFp = "";
   // Per-task elapsed/ETA trackers, keyed by task id. Screenspace progress is a
   // linear fraction of scanned duration, so the ETA extrapolation is meaningful.
   var _etaTrackers = {};
@@ -878,6 +882,7 @@
       if (task.status === "running" || task.status === "paused") {
         var prog = el("div", "task-card-progress");
         var fill = el("div", "task-card-progress-fill");
+        fill.dataset.taskProgress = task.id;
         fill.style.width = Math.round((task.progress || 0) * 100) + "%";
         prog.appendChild(fill);
         info.appendChild(prog);
@@ -890,28 +895,12 @@
       }
       card.appendChild(info);
 
-      // Status text
-      var statusText = task.status;
-      // Ticks carry result_count (not the result list); use it for the badge.
-      var rLen = task.result_count || 0;
-      if (task.status === "running") {
-        var rPct = Math.round((task.progress || 0) * 100);
-        // "0% \u00b7 scanning\u2026" reads as in-progress rather than hung when a running
-        // task hasn't produced any hits yet.
-        statusText = rPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : " \u00b7 scanning\u2026");
-      }
-      if (task.status === "paused") {
-        var pPct = Math.round((task.progress || 0) * 100);
-        statusText = "paused " + pPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : "");
-      }
-      if (task.status === "failed" && task.error) {
-        statusText = task.error;
-        card.title = task.error;
-      }
-      if (task.status === "completed" && rLen) {
-        statusText = rLen + " result" + (rLen !== 1 ? "s" : "");
-      }
-      var statusSpan = el("span", "task-card-status", statusText);
+      // Status text. Ticks carry result_count (not the result list \u2014 see #521),
+      // so taskStatusText reads that. The running/paused text is refreshed in
+      // place by tickTaskProgress on each push rather than rebuilding the card.
+      if (task.status === "failed" && task.error) card.title = task.error;
+      var statusSpan = el("span", "task-card-status", taskStatusText(task));
+      statusSpan.dataset.taskStatus = task.id;
       if (task.status === "failed" && task.error) {
         // The status text truncates with ellipsis; let users read the whole
         // error via a toast without leaving the queue. stopPropagation so the
@@ -952,6 +941,48 @@
 
   function taskIsActive(task) {
     return task.status === "running" || task.status === "paused";
+  }
+
+  // The task-card status line. Progress is NOT part of renderTaskList's rebuild
+  // gate (that would rebuild the whole list ~2/s to move a bar); instead this
+  // text + the progress fill are refreshed in place by tickTaskProgress. Kept
+  // pure (no side effects) so both the card build and the ticker can call it.
+  function taskStatusText(task) {
+    // Ticks carry result_count (not the result list — see #521); use it here.
+    var rLen = task.result_count || 0;
+    if (task.status === "running") {
+      var rPct = Math.round((task.progress || 0) * 100);
+      // "0% · scanning…" reads as in-progress rather than hung when a running
+      // task hasn't produced any hits yet.
+      return rPct + "%" + (rLen ? " · " + rLen + " result" + (rLen !== 1 ? "s" : "") : " · scanning…");
+    }
+    if (task.status === "paused") {
+      var pPct = Math.round((task.progress || 0) * 100);
+      return "paused " + pPct + "%" + (rLen ? " · " + rLen + " result" + (rLen !== 1 ? "s" : "") : "");
+    }
+    if (task.status === "failed" && task.error) return task.error;
+    if (task.status === "completed" && rLen) {
+      return rLen + " result" + (rLen !== 1 ? "s" : "");
+    }
+    return task.status;
+  }
+
+  // In-place refresh of running/paused cards on each data push: move the progress
+  // fill + rewrite the status text without rebuilding the list (status/heatmap
+  // transitions still go through renderTaskList via the structural fingerprint).
+  function tickTaskProgress() {
+    var fills = document.querySelectorAll("#taskList [data-task-progress]");
+    for (var i = 0; i < fills.length; i++) {
+      var t = findTask(fills[i].dataset.taskProgress);
+      if (t && taskIsActive(t)) {
+        fills[i].style.width = Math.round((t.progress || 0) * 100) + "%";
+      }
+    }
+    var spans = document.querySelectorAll("#taskList [data-task-status]");
+    for (var j = 0; j < spans.length; j++) {
+      var st = findTask(spans[j].dataset.taskStatus);
+      if (st && taskIsActive(st)) spans[j].textContent = taskStatusText(st);
+    }
   }
 
   // Ensure a tracker exists for an active task and return its "0:42 · ~1:20 left"
@@ -1097,19 +1128,27 @@
       state.queuePaused = data.paused;
       updatePauseButton();
     }
-    // Heatmap fields are part of the fingerprint so a push that only attaches
-    // them (status/progress unchanged at completed:1) still refreshes the list.
-    var fp = JSON.stringify(data.tasks.map(function (t) {
-      return t.id + ":" + t.status + ":" + t.progress + ":" + _heatmapSig(t);
+    // Structural gate: rebuild the list only on status/heatmap transitions.
+    // Progress + result-count status text move in place via tickTaskProgress, so
+    // a running task no longer rebuilds the whole list ~2/s just to nudge a bar.
+    // (Heatmap fields matter so a push that only attaches them — status/progress
+    // unchanged at completed:1 — still refreshes the list.) result_count is left
+    // out on purpose: the badge count updates in place, and new detections redraw
+    // the timeline through _syncTaskResults (which fetches the result tail).
+    var taskFp = JSON.stringify(data.tasks.map(function (t) {
+      return t.id + ":" + t.status + ":" + _heatmapSig(t);
     }));
-    var changed = fp !== _lastPollFingerprint;
-    _lastPollFingerprint = fp;
-    if (changed) {
+    var taskChanged = taskFp !== _lastTaskFp;
+    _lastTaskFp = taskFp;
+    if (taskChanged) {
       renderTaskList();
       renderTimeline();
+    } else {
+      tickTaskProgress(); // in-place bar + status refresh when no rebuild
     }
     // Pull result tails for the selected participant's tasks (ticks no longer
-    // carry result lists) so the timeline and results panel stay current.
+    // carry result lists) so the timeline and results panel stay current — this
+    // is what redraws the timeline as new hits land during a scan.
     _syncTaskResults();
     // Auto-load results when selected task completes
     if (wasRunning && oldSelected) {
