@@ -164,15 +164,13 @@ _FRAME_CACHE_MAX = 256
 _frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
 _frame_cache_lock = threading.Lock()
 
-# Calibration caches (Phase 2). Pins are scored synchronously and re-scored on
-# every parameter nudge, so decoded frames and raw OCR readings are memoized to
-# keep slider drags interactive. Both keys include ``mtime_ns`` so a re-encoded
-# source video invalidates naturally. Decoded frames (not JPEG bytes) are held
-# here — distinct from ``_frame_cache`` above — covering pins plus their
-# companion frames for change/flow/inactivity.
-_PIN_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
-_pin_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
-_pin_frame_cache_lock = threading.Lock()
+# Decoded-frame cache for synchronous CV helpers. Calibration and preview are
+# re-run on every parameter nudge, so decoded BGR frames are memoized separately
+# from the JPEG byte cache above. Keys include ``mtime_ns`` so re-encoded source
+# videos invalidate naturally.
+_DECODED_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
+_decoded_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
+_decoded_frame_cache_lock = threading.Lock()
 _PIN_OCR_CACHE_MAX = 64
 _pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
 _pin_ocr_cache_lock = threading.Lock()
@@ -570,25 +568,26 @@ def api_pins_delete_all(participant: str) -> FlaskResponse:
 # ---- Pin calibration (synchronous, off the task queue) ----
 
 
-def _decoded_pin_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | None":
+def _decoded_video_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | None":
     """Return a decoded BGR frame at ``ts``, memoized per (video, mtime, ts).
 
-    Backs calibration so repeated parameter nudges don't re-decode the same pin
-    (or companion) frames. Returns ``None`` when extraction fails.
+    Backs calibration and preview so repeated parameter nudges don't re-decode
+    the same current, companion, or reference frames. Returns ``None`` when
+    extraction fails.
     """
     key = (video_path, mtime_ns, round(ts, 3))
-    with _pin_frame_cache_lock:
-        cached = _pin_frame_cache.get(key)
+    with _decoded_frame_cache_lock:
+        cached = _decoded_frame_cache.get(key)
         if cached is not None:
-            _pin_frame_cache.move_to_end(key)
+            _decoded_frame_cache.move_to_end(key)
             return cached
     frame = video.extract_frame_at_timestamp(video_path, ts)
     if frame is None:
         return None
-    with _pin_frame_cache_lock:
-        _pin_frame_cache[key] = frame
-        while len(_pin_frame_cache) > _PIN_FRAME_CACHE_MAX:
-            _pin_frame_cache.popitem(last=False)
+    with _decoded_frame_cache_lock:
+        _decoded_frame_cache[key] = frame
+        while len(_decoded_frame_cache) > _DECODED_FRAME_CACHE_MAX:
+            _decoded_frame_cache.popitem(last=False)
     return frame
 
 
@@ -783,7 +782,7 @@ def api_calibrate() -> FlaskResponse:
                 continue
             sub_path, local_ts = mapped
             sub_mtime = _mtime_or_zero(sub_path)
-            frame = _decoded_pin_frame(sub_path, sub_mtime, local_ts)
+            frame = _decoded_video_frame(sub_path, sub_mtime, local_ts)
             if frame is None:
                 entry["status"] = "not_evaluable"
                 results.append(entry)
@@ -794,7 +793,7 @@ def api_calibrate() -> FlaskResponse:
             if needs_prev and ts >= interval:
                 mapped_prev = _map_participant_time(participant, ts - interval)
                 if mapped_prev is not None:
-                    prev_frame = _decoded_pin_frame(
+                    prev_frame = _decoded_video_frame(
                         mapped_prev[0], _mtime_or_zero(mapped_prev[0]), mapped_prev[1]
                     )
             ocr_reader = _make_pin_ocr_reader(sub_path, sub_mtime, local_ts, frame)
@@ -912,7 +911,7 @@ def _participant_frame_extractor(
         mapped = _map_participant_time(participant_id, global_ts)
         if mapped is None:
             return None
-        return video.extract_frame_at_timestamp(mapped[0], mapped[1])
+        return _decoded_video_frame(mapped[0], _mtime_or_zero(mapped[0]), mapped[1])
 
     return _extract
 
@@ -1085,19 +1084,12 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
     if video_path is None:
         return err(f"No video for participant {participant}", 404)
 
-    def _frame_at(global_ts: float) -> "Any | None":
-        # Map a global timestamp into the owning sub-video (multi-video) before
-        # extracting; single-video maps to the same path at the same time.
-        mapped = _map_participant_time(participant, global_ts)
-        if mapped is None:
-            return None
-        return video.extract_frame_at_timestamp(mapped[0], mapped[1])
-
     tool = (request.args.get("tool") or "").strip() or "color"
     if tool not in _VALID_TASK_TYPES:
         return err(f"Unknown tool: {tool}")
 
-    frame = _frame_at(ts)
+    frame_at = _participant_frame_extractor(participant)
+    frame = frame_at(ts)
     if frame is None:
         return err("Could not read frame")
     frame_h, frame_w = frame.shape[:2]
@@ -1130,7 +1122,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         else:
             prev_ts = max(0.0, ts - 1.0)
         if prev_ts < ts:
-            prev_frame = _frame_at(prev_ts)
+            prev_frame = frame_at(prev_ts)
 
     # Build params dict for the preview (subset of task parameters)
     params: dict[str, Any] = {}
@@ -1169,7 +1161,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             except ValueError:
                 pass
             if ref_ts is not None:
-                ref_frame = _frame_at(ref_ts)
+                ref_frame = frame_at(ref_ts)
                 if ref_frame is not None:
                     import screenspace as _ss
 
@@ -1204,7 +1196,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 except ValueError:
                     pass
                 if ref_ts_tpl is not None:
-                    ref_frame_tpl = _frame_at(ref_ts_tpl)
+                    ref_frame_tpl = frame_at(ref_ts_tpl)
                     if ref_frame_tpl is not None:
                         params["template_image"] = _ss_tpl.extract_region(
                             ref_frame_tpl, region_coords
