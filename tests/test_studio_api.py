@@ -4184,3 +4184,29 @@ def test_api_clip_audio_happy_path(client, monkeypatch):
     assert resp.mimetype == "audio/wav"
     assert resp.headers["Cache-Control"] == "public, max-age=86400"
     assert resp.data == b"WAVDATA"
+
+
+def test_static_cache_headers():
+    """Static css/js/svg get their content-type TTLs; html stays no-cache.
+
+    Regression guard: ``send_from_directory`` defaults to a bare ``no-cache``,
+    which the ``_set_cache_headers`` after_request hook must override rather than
+    treat as a deliberate cache header (server.py). The ``client`` fixture omits
+    the hook, so register it explicitly here.
+    """
+    app = Flask(__name__)
+    app.register_blueprint(server.studio_bp, url_prefix="/studio")
+    app.after_request(server._set_cache_headers)
+    with app.test_client() as c:
+        assert (
+            c.get("/studio/utils.js").headers["Cache-Control"] == "public, max-age=3600"
+        )
+        assert (
+            c.get("/studio/tokens.css").headers["Cache-Control"]
+            == "public, max-age=3600"
+        )
+        assert (
+            c.get("/studio/icons/x-mark.svg").headers["Cache-Control"]
+            == "public, max-age=86400"
+        )
+        assert c.get("/studio/").headers["Cache-Control"] == "no-cache"
