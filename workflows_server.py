@@ -354,6 +354,41 @@ def _run_snapshot(run_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _run_meta_index() -> dict[str, dict[str, Any]]:
+    """Per-run scalar metadata keyed by id, without deep-copying run records.
+
+    The batch-summary and batch-discover paths only read a handful of scalars per
+    child run (status + grouping fields), yet fire on every child node transition
+    and every discover poll. Reading scalars here avoids ``_merged_runs``'s
+    whole-history deep copy on those hot paths.
+    """
+    meta: dict[str, dict[str, Any]] = {}
+    with _manifest_lock:
+        for record in _manifest.get("runs", []):
+            rid = record.get("id")
+            if rid:
+                meta[rid] = {
+                    "id": rid,
+                    "status": record.get("status", workflows.RUN_STATUS_QUEUED),
+                    "batchId": record.get("batchId", ""),
+                    "participant": record.get("participant", ""),
+                    "blueprintId": record.get("blueprintId", ""),
+                    "startedAt": record.get("startedAt"),
+                }
+    with _runs_lock:
+        live = list(_runs.items())
+    for run_id, runner in live:
+        meta[run_id] = {
+            "id": run_id,
+            "status": runner.status,
+            "batchId": runner.batch_id,
+            "participant": runner.participant,
+            "blueprintId": runner.blueprint_id,
+            "startedAt": runner.started_at,
+        }
+    return meta
+
+
 def _trim_run_history(runs: list[dict[str, Any]]) -> list[str]:
     """Cap persisted run history in place, evicting whole units oldest-first.
 
@@ -681,7 +716,7 @@ def _batch_summary(batch_id: str) -> dict[str, Any] | None:
     grouping the persisted runs that carry this ``batchId``. Returns ``None`` if no
     such batch exists in either place.
     """
-    all_runs = _merged_runs()
+    all_meta = _run_meta_index()
     with _batches_lock:
         live = _batches.get(batch_id)
         record = dict(live) if live else None
@@ -693,7 +728,7 @@ def _batch_summary(batch_id: str) -> dict[str, Any] | None:
         created_at = record.get("createdAt")
     else:
         grouped = [
-            r for r in all_runs.values() if r.get("batchId") == batch_id and r.get("id")
+            r for r in all_meta.values() if r.get("batchId") == batch_id and r.get("id")
         ]
         if not grouped:
             return None
@@ -707,8 +742,8 @@ def _batch_summary(batch_id: str) -> dict[str, Any] | None:
     counts: dict[str, int] = {}
     child_statuses: list[str] = []
     for run_id, participant in zip(run_ids, participants):
-        snap = all_runs.get(run_id)
-        status = (snap or {}).get("status", workflows.RUN_STATUS_QUEUED)
+        meta = all_meta.get(run_id)
+        status = (meta or {}).get("status", workflows.RUN_STATUS_QUEUED)
         child_statuses.append(status)
         counts[status] = counts.get(status, 0) + 1
         children.append({"runId": run_id, "participant": participant, "status": status})
@@ -891,7 +926,7 @@ def api_batches_list() -> Any:
             if bid not in seen:
                 batch_ids.append(bid)
                 seen.add(bid)
-    for run in _merged_runs().values():
+    for run in _run_meta_index().values():
         bid = run.get("batchId")
         if bid and bid not in seen:
             batch_ids.append(bid)
