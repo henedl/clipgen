@@ -33,11 +33,22 @@
   --wf-type-value: var(--severity-medium); /* scalar/number/string */
 }
 
+html {
+  /* Root rem anchor — must stay a concrete px. A rem-based token (--text-md
+     is 1rem) would resolve against the browser's default font size, scaling
+     every rem-based --space-* token (and the page-local --wf-* rem dims). */
+  font-size: 16px;
+}
+
 body[data-frontend="workflows"] {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
 }
 
 #wfShell {
