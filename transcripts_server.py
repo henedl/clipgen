@@ -39,16 +39,18 @@ API endpoints (all under /transcripts/):
 """
 
 import atexit
+import json
 import os
 import tempfile
 import threading
+import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 import config
 import files
@@ -610,6 +612,7 @@ def api_summary(participant: str) -> FlaskResponse:
                         "ok": False,
                         "generating": True,
                         "started_at": _orchestrator.started_at(participant, "summary"),
+                        "partial": _orchestrator.partial_text(participant, "summary"),
                     }
                 )
             return jsonify({"ok": False}), 404
@@ -624,6 +627,53 @@ def api_summary(participant: str) -> FlaskResponse:
             participant, "citations"
         )
     return jsonify(resp)
+
+
+# Server-side cadence for the summary token stream. The agent runs in the
+# orchestrator's daemon thread and appends tokens to the shared partial buffer;
+# this SSE generator samples that buffer in-process and pushes deltas to the
+# browser, so the client sees near-real-time word-by-word text over one
+# connection instead of hammering the GET poll.
+_SUMMARY_STREAM_TICK = 0.1  # seconds between buffer samples
+_SUMMARY_STREAM_START_GRACE = 2.0  # seconds to wait for the run to claim its slot
+
+
+@transcripts_bp.route("/api/summary/<participant>/stream")
+def api_summary_stream(participant: str) -> FlaskResponse:
+    """Stream summary tokens to the browser via SSE as the model produces them.
+
+    Emits ``data: {"partial": "<text-so-far>"}`` each time the buffer grows and a
+    final ``data: {"done": true}`` when the run finishes (or was never running).
+    The client closes the stream on ``done`` — EventSource would otherwise treat
+    the server-side close as an error and reconnect. On any transport failure the
+    client falls back to the GET poll, so this is a pure enhancement.
+    """
+
+    def _events():  # type: ignore[no-untyped-def]
+        sent = 0
+        deadline = time.monotonic() + _SUMMARY_STREAM_START_GRACE
+        while True:
+            generating = _orchestrator.is_generating(participant, "summary")
+            text = _orchestrator.partial_text(participant, "summary")
+            if len(text) > sent:
+                sent = len(text)
+                yield f"data: {json.dumps({'partial': text})}\n\n"
+            if not generating:
+                # Guard the open race: the client opens the stream right after
+                # regenerate claims the slot, but tolerate a brief window where
+                # is_generating hasn't flipped true yet before declaring done.
+                if sent == 0 and time.monotonic() < deadline:
+                    time.sleep(_SUMMARY_STREAM_TICK)
+                    continue
+                yield f"data: {json.dumps({'done': True})}\n\n"
+                return
+            time.sleep(_SUMMARY_STREAM_TICK)
+
+    return Response(
+        stream_with_context(_events()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @transcripts_bp.route("/api/summary/<participant>/regenerate", methods=["POST"])
@@ -1629,6 +1679,19 @@ class AgentOrchestrator:
         self._threads: dict[str, set[threading.Thread]] = {
             a["key"]: set() for a in thinking_agents.AGENTS
         }
+        # Accumulated streamed tokens per in-flight run, so the poll endpoint can
+        # surface partial text (only the summary agent fills this — structured
+        # agents don't stream). Guarded by its own lock, kept off _manifest_lock
+        # so per-token appends never contend with manifest reads / poll handlers.
+        self._partial: dict[str, dict[str, list[str]]] = {
+            a["key"]: {} for a in thinking_agents.AGENTS
+        }
+        self._partial_lock = threading.Lock()
+
+    def partial_text(self, participant: str, agent_key: str) -> str:
+        """Return the tokens streamed so far for an in-flight run (``""`` if none)."""
+        with self._partial_lock:
+            return "".join(self._partial.get(agent_key, {}).get(participant, []))
 
     def is_generating(self, participant: str, agent_key: str) -> bool:
         """Return True if *agent_key* is currently running for *participant*."""
@@ -1655,6 +1718,8 @@ class AgentOrchestrator:
             event = self._cancel_events.get(agent_key, {}).get(participant)
             self._in_flight[agent_key].discard(participant)
             self._started_at.get(agent_key, {}).pop(participant, None)
+        with self._partial_lock:
+            self._partial.get(agent_key, {}).pop(participant, None)
         if event is not None:
             event.set()
         return True
@@ -1712,6 +1777,8 @@ class AgentOrchestrator:
             self._started_at[agent_key][participant] = datetime.now(
                 timezone.utc
             ).timestamp()
+        with self._partial_lock:
+            self._partial[agent_key][participant] = []
 
         # If a Stop just scheduled an unload for this model, cancel it — the
         # next request would only force a reload.
@@ -1728,7 +1795,14 @@ class AgentOrchestrator:
                     # Snapshot the entry so the agent does not hold the lock
                     # during the (potentially slow) model call.
                     snapshot = dict(entry)
-                result = agent["run"](snapshot, cancel_event)
+
+                def _sink(tok: str) -> None:
+                    with self._partial_lock:
+                        buf = self._partial.get(agent_key, {}).get(participant)
+                        if buf is not None:
+                            buf.append(tok)
+
+                result = agent["run"](snapshot, cancel_event, _sink)
                 # Defense in depth: if the model finished in the same tick as a
                 # Stop click, drop the result and skip the chain advance.
                 if cancel_event.is_set():
@@ -1774,6 +1848,8 @@ class AgentOrchestrator:
                         self._in_flight[agent_key].discard(participant)
                         self._cancel_events[agent_key].pop(participant, None)
                         self._started_at[agent_key].pop(participant, None)
+                        with self._partial_lock:
+                            self._partial.get(agent_key, {}).pop(participant, None)
                     self._threads[agent_key].discard(t)
 
         t = threading.Thread(

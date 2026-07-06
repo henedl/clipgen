@@ -62,10 +62,15 @@ class Agent(TypedDict):
                           debugging).
       run:                Callable invoked inside the daemon thread. Receives
                           the transcript entry (the ``source_transcripts[pid]``
-                          dict) and an optional ``threading.Event`` that, when
+                          dict), an optional ``threading.Event`` that, when
                           set, signals the agent to abort its in-flight model
-                          call. Returns the value to store under
-                          ``manifest_field``, or ``None`` to skip storage.
+                          call, and an optional ``on_token`` callback for
+                          streaming partial text (only the summary agent uses
+                          it — structured agents ignore it). Returns the value
+                          to store under ``manifest_field``, or ``None`` to skip
+                          storage. Typed loosely (``Callable[..., Any]``) so the
+                          orchestrator's 3-arg call and 2-arg test calls both
+                          typecheck.
     """
 
     key: str
@@ -74,7 +79,7 @@ class Agent(TypedDict):
     manifest_field: str
     depends_on: list[str]
     thread_name_prefix: str
-    run: Callable[[dict[str, Any], threading.Event | None], Any]
+    run: Callable[..., Any]
 
 
 # ---------------------------------------------------------------------------
@@ -99,12 +104,19 @@ def summarize_transcript(
     *,
     model: str | None = None,
     cancel_event: threading.Event | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> str | None:
     """Summarize transcript segments into a paragraph + bullet points.
 
     Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an explicit model override is
     provided. If *cancel_event* is set during the model call, the request is
-    aborted and ``None`` is returned.
+    aborted and ``None`` is returned. When *on_token* is provided it is invoked
+    with each streamed piece so callers can surface the summary as it forms.
+
+    Thinking is disabled (``think=False``, matching the citations and friction
+    agents): a reasoning model would otherwise spend its first chunk of time in
+    a silent think phase that emits no ``response`` text — dead air with nothing
+    to stream, and pure added latency for a task that doesn't need reasoning.
     """
     text = " ".join(seg.get("text", "").strip() for seg in segments).strip()
     if len(text) < _MIN_TEXT_LENGTH:
@@ -120,17 +132,25 @@ def summarize_transcript(
         f"{len(text)} chars) with model {model}"
     )
     prompt = config.OLLAMA_SUMMARY_PROMPT.format(text=text)
-    result = ollama_client.generate(prompt, model=model, cancel_event=cancel_event)
+    result = ollama_client.generate(
+        prompt,
+        model=model,
+        think=False,
+        cancel_event=cancel_event,
+        on_token=on_token,
+    )
     if result:
         utils.verbose_print(f"Summary generated ({len(result)} chars)")
     return result
 
 
 def _run_summary(
-    entry: dict[str, Any], cancel_event: threading.Event | None
+    entry: dict[str, Any],
+    cancel_event: threading.Event | None,
+    on_token: Callable[[str], None] | None = None,
 ) -> str | None:
     segments = entry.get("segments") or []
-    return summarize_transcript(segments, cancel_event=cancel_event)
+    return summarize_transcript(segments, cancel_event=cancel_event, on_token=on_token)
 
 
 # ---------------------------------------------------------------------------
@@ -317,8 +337,13 @@ def find_citations(
 
 
 def _run_citations(
-    entry: dict[str, Any], cancel_event: threading.Event | None
+    entry: dict[str, Any],
+    cancel_event: threading.Event | None,
+    on_token: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]] | None:
+    # on_token is accepted for uniform dispatch but ignored: citations are
+    # parsed line-by-line from the *complete* response, so streaming raw tokens
+    # to the UI would be meaningless.
     summary = entry.get("summary") or ""
     segments = entry.get("segments") or []
     return find_citations(summary, segments, cancel_event=cancel_event)
@@ -523,13 +548,17 @@ def _segments_duration(segments: list[dict[str, Any]]) -> float:
 
 
 def _run_friction(
-    entry: dict[str, Any], cancel_event: threading.Event | None
+    entry: dict[str, Any],
+    cancel_event: threading.Event | None,
+    on_token: Callable[[str], None] | None = None,
 ) -> dict[str, Any] | None:
     """Assemble the complete friction result: programmatic scores + LLM moments.
 
     Returns the full dict stored under ``source_transcripts[pid].friction`` (the
     orchestrator assigns it wholesale — no partial writes), or ``None`` when
-    there is no transcript/summary or the run was cancelled.
+    there is no transcript/summary or the run was cancelled. *on_token* is
+    accepted for uniform dispatch but ignored — friction parses a JSON array
+    from the complete response.
     """
     segments = entry.get("segments") or []
     summary = entry.get("summary") or ""

@@ -312,6 +312,36 @@ class TestGenerate:
         result = ollama_client.generate("test prompt")
         assert result == "fine"
 
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_on_token_fires_per_chunk_and_returns_joined(self, mock_urlopen):
+        # on_token sees each streamed piece live, in order; the return value is
+        # still the joined text (the done chunk's empty response is not emitted).
+        lines = _ndjson_lines(
+            {"response": "Hello", "done": False},
+            {"response": " world", "done": False},
+            {"response": "", "done": True},
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        seen: list[str] = []
+        result = ollama_client.generate("test prompt", on_token=seen.append)
+        assert result == "Hello world"
+        assert seen == ["Hello", " world"]
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_on_token_error_does_not_break_stream(self, mock_urlopen):
+        # A raising callback is swallowed — the accumulated result is unaffected.
+        lines = _ndjson_lines(
+            {"response": "Hello", "done": False},
+            {"response": " world", "done": True},
+        )
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+
+        def _boom(_piece: str) -> None:
+            raise RuntimeError("callback blew up")
+
+        result = ollama_client.generate("test prompt", on_token=_boom)
+        assert result == "Hello world"
+
 
 class _StubOllamaHandler(http.server.BaseHTTPRequestHandler):
     """Test HTTP handler that mimics Ollama /api/generate streaming.

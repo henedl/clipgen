@@ -49,6 +49,11 @@
   // was started for.
 
   var _summaryPoller = null;
+  // SSE token stream: the primary live-update transport while a summary
+  // generates — pushes each token as the model emits it (true word-by-word).
+  // _summaryPoller is the fallback used when EventSource is unsupported or the
+  // stream drops mid-run.
+  var _summaryStream = null;
 
   function loadSummary(pid) {
     var ver = state.participantReqVer;
@@ -88,7 +93,8 @@
         }
       } else if (data.generating) {
         renderSummaryGenerating(data.started_at ? data.started_at * 1000 : undefined);
-        _startSummaryPoll(pid);
+        if (data.partial) _updateSummaryStream(data.partial);
+        _startSummaryStream(pid);
         _refreshAgentStateNow();
       } else {
         renderSummaryEmpty();
@@ -103,7 +109,11 @@
   function _startSummaryPoll(pid) {
     _stopSummaryPoll();
     var ver = state.participantReqVer;
-    // runImmediately is false to match the previous setInterval (first poll after 3s).
+    // Poll fast (1.2s) while the summary generates so streamed partial text
+    // updates feel live; runImmediately is false so the first poll waits one
+    // interval (the initial render already painted the generating box). The
+    // endpoint is a cheap in-memory read and createPoller auto-pauses on hidden
+    // tabs.
     _summaryPoller = createPoller(function () {
       if (ver !== state.participantReqVer || state.selectedParticipant !== pid) {
         _stopSummaryPoll();
@@ -130,7 +140,17 @@
             );
             _startCitationsPoll(pid);
           }
-        } else if (!data.generating) {
+        } else if (data.generating) {
+          // Still generating — stream in whatever tokens have arrived so far.
+          // Rebuild the generating box if a re-render dropped it (e.g. the
+          // panel was cleared and re-shown), then push the partial text.
+          if (!qs("#summaryStream")) {
+            renderSummaryGenerating(
+              data.started_at ? data.started_at * 1000 : undefined
+            );
+          }
+          if (data.partial) _updateSummaryStream(data.partial);
+        } else {
           // Generation finished without result — stop polling
           _stopSummaryPoll();
           renderSummaryEmpty();
@@ -140,15 +160,64 @@
         _stopSummaryPoll();
         renderSummaryEmpty();
       });
-    }, 3000, { runImmediately: false });
+    }, 1200, { runImmediately: false });
     _summaryPoller.start();
   }
 
+  // Open the SSE token stream for a generating summary. Falls back to the GET
+  // poll if EventSource is unavailable or the stream drops. onMessage carries
+  // either {partial} (text so far) or {done} (run finished → render the
+  // finalized summary via loadSummary, which also kicks the citations chain).
+  function _startSummaryStream(pid) {
+    _stopSummaryPoll(); // clear any prior poller/stream before (re)starting
+    var ver = state.participantReqVer;
+    _summaryStream = createSSEStream("api/summary/" + pid + "/stream", {
+      onMessage: function (data) {
+        if (ver !== state.participantReqVer || state.selectedParticipant !== pid) {
+          _stopSummaryStream();
+          return;
+        }
+        if (data.done) {
+          _stopSummaryStream();
+          loadSummary(pid); // finalized summary + citation status in one GET
+          return;
+        }
+        if (data.partial != null) {
+          // Rebuild the generating box if a re-render dropped it, then stream in.
+          if (!qs("#summaryStream")) renderSummaryGenerating();
+          _updateSummaryStream(data.partial);
+        }
+      },
+      onError: function () {
+        // Transport dropped mid-run → degrade to the GET poll (unless we've
+        // since navigated away).
+        _summaryStream = null;
+        if (ver === state.participantReqVer && state.selectedParticipant === pid) {
+          _startSummaryPoll(pid);
+        }
+      },
+      onUnsupported: function () {
+        _startSummaryPoll(pid);
+      },
+    });
+  }
+
+  function _stopSummaryStream() {
+    if (_summaryStream) {
+      _summaryStream.close();
+      _summaryStream = null;
+    }
+  }
+
+  // Stops all live summary updates — the poller AND the SSE stream — so every
+  // existing teardown site (participant switch, clear, cancel, completion)
+  // covers both transports without needing to know which one is active.
   function _stopSummaryPoll() {
     if (_summaryPoller) {
       _summaryPoller.stop();
       _summaryPoller = null;
     }
+    _stopSummaryStream();
   }
 
   // startedAtMs (optional): server-recorded run start in epoch ms. Seeds the
@@ -156,7 +225,11 @@
   // time instead of zero; omit it for a just-clicked manual run (starts now).
   function renderSummaryGenerating(startedAtMs) {
     var content = qs("#summaryContent");
+    // #summaryStream is a separate node so streamed partial text can be updated
+    // by later polls (via _updateSummaryStream) without disturbing the elapsed
+    // clock / Cancel wiring below, which is built once here.
     content.innerHTML =
+      '<div class="summary-stream" id="summaryStream"></div>' +
       '<p class="summary-generating">Generating summary\u2026' +
       '<span class="agent-elapsed" id="summaryElapsed"></span>' +
       '<button type="button" class="agent-cancel-btn" id="summaryCancel">Cancel</button></p>';
@@ -176,6 +249,15 @@
     // refresh the friction header so Re-run disables now and re-enables in
     // renderSummary() once the summary lands.
     _renderFrictionHeader();
+  }
+
+  // Push streamed partial summary text into the #summaryStream node built by
+  // renderSummaryGenerating, without touching the elapsed clock / Cancel footer.
+  // Plain textContent (CSS white-space: pre-wrap handles newlines); citation
+  // anchors are added only when the finished summary lands via renderSummary.
+  function _updateSummaryStream(text) {
+    var stream = qs("#summaryStream");
+    if (stream) stream.textContent = text;
   }
 
   function renderSummaryEmpty() {
@@ -471,7 +553,7 @@
       renderSummaryGenerating();
       apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
         if (data.ok && data.generating) {
-          _startSummaryPoll(pid);
+          _startSummaryStream(pid);
           _refreshAgentStateNow();
         }
       }).catch(function () {
@@ -1207,6 +1289,8 @@
   TS._frictionDepMet = _frictionDepMet;
   TS._showFrictionTooltip = _showFrictionTooltip;
   TS._hideFrictionTooltip = _hideFrictionTooltip;
-  TS.isSummaryPolling = function () { return !!_summaryPoller; };
+  // True while a summary is being live-tracked by EITHER transport, so the hub's
+  // grace-window re-arm doesn't restart the stream out from under itself.
+  TS.isSummaryPolling = function () { return !!(_summaryPoller || _summaryStream); };
 })();
 
