@@ -37,8 +37,13 @@
     updateRegionButtons = SS.updateRegionButtons,
     updateRunButton = SS.updateRunButton;
 
-  // ---- ETA tracking + poll fingerprint (moved from the hub module scope) ----
-  var _lastPollFingerprint = "";
+  // ---- ETA tracking + poll fingerprints (moved from the hub module scope) ----
+  // Two gates: the structural one (id:status:heatmap) rebuilds the task list only
+  // on transitions — progress moves in place via tickTaskProgress. The timeline
+  // gate adds the per-task result count so live detections still redraw the
+  // timeline (but not on every progress tick that yields no new hit).
+  var _lastTaskFp = "";
+  var _lastTimelineFp = "";
   // Per-task elapsed/ETA trackers, keyed by task id. Screenspace progress is a
   // linear fraction of scanned duration, so the ETA extrapolation is meaningful.
   var _etaTrackers = {};
@@ -878,6 +883,7 @@
       if (task.status === "running" || task.status === "paused") {
         var prog = el("div", "task-card-progress");
         var fill = el("div", "task-card-progress-fill");
+        fill.dataset.taskProgress = task.id;
         fill.style.width = Math.round((task.progress || 0) * 100) + "%";
         prog.appendChild(fill);
         info.appendChild(prog);
@@ -890,29 +896,11 @@
       }
       card.appendChild(info);
 
-      // Status text
-      var statusText = task.status;
-      if (task.status === "running") {
-        var rPct = Math.round((task.progress || 0) * 100);
-        var rLen = Array.isArray(task.result) ? task.result.length : 0;
-        // "0% \u00b7 scanning\u2026" reads as in-progress rather than hung when a running
-        // task hasn't produced any hits yet.
-        statusText = rPct + "%" + (rLen ? " \u00b7 " + rLen + " result" + (rLen !== 1 ? "s" : "") : " \u00b7 scanning\u2026");
-      }
-      if (task.status === "paused") {
-        var pPct = Math.round((task.progress || 0) * 100);
-        var pLen = Array.isArray(task.result) ? task.result.length : 0;
-        statusText = "paused " + pPct + "%" + (pLen ? " \u00b7 " + pLen + " result" + (pLen !== 1 ? "s" : "") : "");
-      }
-      if (task.status === "failed" && task.error) {
-        statusText = task.error;
-        card.title = task.error;
-      }
-      if (task.status === "completed" && task.result) {
-        rLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
-        statusText = rLen + " result" + (rLen !== 1 ? "s" : "");
-      }
-      var statusSpan = el("span", "task-card-status", statusText);
+      // Status text (running/paused progress text is refreshed in place by
+      // tickTaskProgress on each push \u2014 see taskStatusText).
+      if (task.status === "failed" && task.error) card.title = task.error;
+      var statusSpan = el("span", "task-card-status", taskStatusText(task));
+      statusSpan.dataset.taskStatus = task.id;
       if (task.status === "failed" && task.error) {
         // The status text truncates with ellipsis; let users read the whole
         // error via a toast without leaving the queue. stopPropagation so the
@@ -953,6 +941,49 @@
 
   function taskIsActive(task) {
     return task.status === "running" || task.status === "paused";
+  }
+
+  // The task-card status line. Progress is NOT part of renderTaskList's rebuild
+  // gate (that would rebuild the whole list ~2/s to move a bar); instead this
+  // text + the progress fill are refreshed in place by tickTaskProgress. Kept
+  // pure (no side effects) so both the card build and the ticker can call it.
+  function taskStatusText(task) {
+    if (task.status === "running") {
+      var rPct = Math.round((task.progress || 0) * 100);
+      var rLen = Array.isArray(task.result) ? task.result.length : 0;
+      // "0% · scanning…" reads as in-progress rather than hung when a running
+      // task hasn't produced any hits yet.
+      return rPct + "%" + (rLen ? " · " + rLen + " result" + (rLen !== 1 ? "s" : "") : " · scanning…");
+    }
+    if (task.status === "paused") {
+      var pPct = Math.round((task.progress || 0) * 100);
+      var pLen = Array.isArray(task.result) ? task.result.length : 0;
+      return "paused " + pPct + "%" + (pLen ? " · " + pLen + " result" + (pLen !== 1 ? "s" : "") : "");
+    }
+    if (task.status === "failed" && task.error) return task.error;
+    if (task.status === "completed" && task.result) {
+      var cLen = Array.isArray(task.result) ? task.result.length : (typeof task.result === "string" ? 1 : 0);
+      return cLen + " result" + (cLen !== 1 ? "s" : "");
+    }
+    return task.status;
+  }
+
+  // In-place refresh of running/paused cards on each data push: move the progress
+  // fill + rewrite the status text without rebuilding the list (status/heatmap
+  // transitions still go through renderTaskList via the structural fingerprint).
+  function tickTaskProgress() {
+    var fills = document.querySelectorAll("#taskList [data-task-progress]");
+    for (var i = 0; i < fills.length; i++) {
+      var t = findTask(fills[i].dataset.taskProgress);
+      if (t && taskIsActive(t)) {
+        fills[i].style.width = Math.round((t.progress || 0) * 100) + "%";
+      }
+    }
+    var spans = document.querySelectorAll("#taskList [data-task-status]");
+    for (var j = 0; j < spans.length; j++) {
+      var st = findTask(spans[j].dataset.taskStatus);
+      if (st && taskIsActive(st)) spans[j].textContent = taskStatusText(st);
+    }
   }
 
   // Ensure a tracker exists for an active task and return its "0:42 · ~1:20 left"
@@ -1022,15 +1053,26 @@
       state.queuePaused = data.paused;
       updatePauseButton();
     }
-    // Heatmap fields are part of the fingerprint so a push that only attaches
-    // them (status/progress unchanged at completed:1) still refreshes the list.
-    var fp = JSON.stringify(data.tasks.map(function (t) {
-      return t.id + ":" + t.status + ":" + t.progress + ":" + _heatmapSig(t);
+    // Structural gate: rebuild the list only on status/heatmap transitions.
+    // Progress + result-count status text move in place via tickTaskProgress, so
+    // a running task no longer rebuilds the whole list ~2/s just to nudge a bar.
+    // (Heatmap fields matter so a push that only attaches them — status/progress
+    // unchanged at completed:1 — still refreshes the list.)
+    var taskFp = JSON.stringify(data.tasks.map(function (t) {
+      return t.id + ":" + t.status + ":" + _heatmapSig(t);
     }));
-    var changed = fp !== _lastPollFingerprint;
-    _lastPollFingerprint = fp;
-    if (changed) {
-      renderTaskList();
+    // Timeline gate adds each task's result count: the timeline draws live
+    // detections from task.result, so it must redraw when a new hit lands.
+    var timelineFp = JSON.stringify(data.tasks.map(function (t) {
+      var rLen = Array.isArray(t.result) ? t.result.length : (t.result ? 1 : 0);
+      return t.id + ":" + t.status + ":" + rLen + ":" + _heatmapSig(t);
+    }));
+    var taskChanged = taskFp !== _lastTaskFp;
+    _lastTaskFp = taskFp;
+    if (taskChanged) renderTaskList();
+    else tickTaskProgress(); // in-place bar + status refresh when no rebuild
+    if (timelineFp !== _lastTimelineFp) {
+      _lastTimelineFp = timelineFp;
       renderTimeline();
     }
     // Auto-update results for selected running task

@@ -348,6 +348,44 @@
 
   // ---- Data handling --------------------------------------------------------
 
+  // Dirty-check gate for the run panel (mirrors screenspace-tasks' fingerprint).
+  // handleRunData/handleBatchData fire on every SSE push / poll tick; without a
+  // gate renderRuns() wipes + rebuilds #wfRuns each time, churning the panel and
+  // (before the scroll-preserve below) yanking it to the top. renderRuns() itself
+  // refreshes _lastRunsFp at the end, so user-driven renders (filter/focus/lifecycle)
+  // keep it current too.
+  var _lastRunsFp = "";
+
+  function runsFingerprint() {
+    return JSON.stringify({
+      activeRunId: state.activeRunId,
+      activeBatchId: state.activeBatchId,
+      runFilter: state.runFilter,
+      reconnecting: _reconnecting,
+      runs: (state.runs || []).map(function (r) {
+        var ns = r.nodeStates || {};
+        var nodes = Object.keys(ns).map(function (id) {
+          return id + ":" + ns[id].status + ":" + (ns[id].progress || 0);
+        });
+        return [
+          r.id,
+          r.status,
+          r.startedAt,
+          r.completedAt,
+          r.triggered,
+          r.blueprintId,
+          nodes,
+        ];
+      }),
+      batches: (state.batches || []).map(function (b) {
+        var children = (b.children || []).map(function (c) {
+          return c.status + ":" + c.runId;
+        });
+        return [b.id, b.status, b.counts, children];
+      }),
+    });
+  }
+
   function findRun(id) {
     for (var i = 0; i < state.runs.length; i++) {
       if (state.runs[i].id === id) return state.runs[i];
@@ -375,7 +413,7 @@
       // child must not flip them back to idle while siblings are still running.
       if (!activeBatchInFlight()) setRunningUI(false);
     }
-    renderRuns();
+    if (runsFingerprint() !== _lastRunsFp) renderRuns();
     annotateCanvas(run);
   }
 
@@ -405,7 +443,7 @@
       stopBatchTransport();
       setRunningUI(false);
     }
-    renderRuns();
+    if (runsFingerprint() !== _lastRunsFp) renderRuns();
   }
 
   // Drill into one participant's run: stream its per-node detail + tint the canvas
@@ -889,6 +927,10 @@
     renderOutputDir();
     var container = qs("#wfRuns");
     if (!container) return;
+    // Every render refreshes the dirty-check baseline so the SSE/poll handlers
+    // (and user-driven callers) share one source of truth.
+    _lastRunsFp = runsFingerprint();
+    var prevScrollTop = container.scrollTop;
     container.innerHTML = "";
     // Batch children are surfaced inside their batch card, not as loose runs.
     var looseRuns = (state.runs || []).filter(function (r) {
@@ -926,6 +968,7 @@
       frag.appendChild(buildRunCard(run, run.id === state.activeRunId));
     });
     container.appendChild(frag);
+    container.scrollTop = prevScrollTop;
   }
 
   // Wire the status-filter chips above the run list (set state.runFilter, toggle

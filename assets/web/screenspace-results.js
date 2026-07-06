@@ -437,6 +437,51 @@
     return row;
   }
 
+  // Task types whose detections carry a confidence score (drive the certainty
+  // slider + histogram). Shared by the full render's filter and the streaming
+  // append fast path so the two never drift.
+  var CONF_TASK_TYPES = {
+    change: 1, similarity: 1, text: 1, numbers: 1, template: 1,
+    scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1,
+  };
+
+  function taskHasConfidence(task) {
+    return !!(task && CONF_TASK_TYPES[task.type]);
+  }
+
+  // Confidence value for a result under its task's detector (null when the
+  // detector has none). Only meaningful when taskHasConfidence(task).
+  function resultConfidence(r, task) {
+    if (task.type === "change") return r.magnitude;
+    if (task.type === "similarity") return r.score;
+    if (task.type === "text") return r.confidence;
+    if (task.type === "numbers") return r.confidence;
+    if (task.type === "template") return r.best_score;
+    if (task.type === "flow") return Math.min(r.magnitude / 10, 1);
+    if (task.type === "scene") return r.score;
+    if (task.type === "multitool") return r.min_confidence;
+    if (task.type === "inactivity") return Math.min((r.duration || 0) / 30, 1);
+    if (task.type === "boundary") return r._confidence;
+    return null;
+  }
+
+  // Signature of what renderResults last painted, so a streaming push that only
+  // grew the tail can append the new rows instead of a full rebuild (see the
+  // fast path in renderResults). null after any non-array/early-return render.
+  var _lastResultsSig = null;
+
+  function resultsSignature(results, task) {
+    return {
+      taskId: state.selectedTaskId,
+      cutoff: state.certaintyCutoff,
+      showExcluded: state.showExcluded,
+      eventsLen: (state.taskEvents[state.selectedTaskId] || []).length,
+      heatmapSig: (task.heatmap || "") + "|" + (task.heatmap_gif || "") + "|" + (task.heatmap_rolling_gif || ""),
+      fastScan: (task.parameters || {}).scan_mode === "fast",
+      rawLen: Array.isArray(results) ? results.length : -1,
+    };
+  }
+
   // Render all rows inline below this many; above it, rows stream in chunks via
   // an IntersectionObserver so a 500+ result task doesn't build thousands of DOM
   // nodes (and reflow) in one synchronous pass. Variable row heights (wrapping
@@ -459,6 +504,50 @@
     var actionsEl = qs("#resultsActions");
     var results = state.selectedTaskResults;
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
+
+    // Streaming-append fast path: while the selected task is still running, each
+    // push only grows state.selectedTaskResults at the tail (events aren't fetched
+    // until completion, so there's no per-timestamp event matching / exclude
+    // buttons to reconcile). Append just the new rows instead of wiping + rebuilding
+    // the whole list and re-creating the IntersectionObserver every ~500ms — the
+    // latter is O(n) per push, O(n²) over a scan. Any change to the task, filters,
+    // events, or heatmap breaks the signature match and falls through to the full
+    // render (which, while running, renders eagerly with no observer — see below).
+    if (!state.resultsLoading && task && task.status === "running" && Array.isArray(results)) {
+      var sig = resultsSignature(results, task);
+      var prev = _lastResultsSig;
+      if (
+        prev
+        && prev.taskId === sig.taskId
+        && prev.cutoff === sig.cutoff
+        && prev.showExcluded === sig.showExcluded
+        && prev.fastScan === sig.fastScan
+        && prev.heatmapSig === sig.heatmapSig
+        && prev.eventsLen === 0 && sig.eventsLen === 0
+        && sig.rawLen >= prev.rawLen
+      ) {
+        if (sig.rawLen > prev.rawLen) {
+          var hasConfFast = taskHasConfidence(task);
+          var appendFrag = document.createDocumentFragment();
+          for (var ai = prev.rawLen; ai < results.length; ai++) {
+            var ar = results[ai];
+            if (hasConfFast && state.certaintyCutoff > 0) {
+              var acv = resultConfidence(ar, task);
+              if (acv !== null && acv < state.certaintyCutoff) continue;
+            }
+            appendFrag.appendChild(buildResultRow(ar, ai, null, false, task));
+          }
+          container.appendChild(appendFrag);
+          countEl.textContent = "(" + results.length + ")";
+        }
+        _lastResultsSig = sig;
+        return;
+      }
+    }
+    // Falling through to a full render — clear the signature so the early-return
+    // branches below (loading/timelapse/non-array) leave it null; the successful
+    // array render re-stamps it.
+    _lastResultsSig = null;
 
     // Manage fast scan label — between panel-header and resultsList
     var fastLabel = qs("#fastScanLabel");
@@ -521,7 +610,7 @@
     }
 
     // Show/hide certainty controls based on whether the tool has confidence scores
-    var hasConf = task && { change: 1, similarity: 1, text: 1, numbers: 1, template: 1, scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1 }[task.type];
+    var hasConf = taskHasConfidence(task);
     var certWrap = qs("#certaintyCutoffWrap");
     var exclBtn = qs("#excludeNonVisibleBtn");
     if (certWrap) certWrap.classList.toggle("hidden", !hasConf);
@@ -719,17 +808,7 @@
 
       // Certainty filtering
       if (hasConf && state.certaintyCutoff > 0) {
-        var confValue = null;
-        if (task.type === "change") confValue = r.magnitude;
-        else if (task.type === "similarity") confValue = r.score;
-        else if (task.type === "text") confValue = r.confidence;
-        else if (task.type === "numbers") confValue = r.confidence;
-        else if (task.type === "template") confValue = r.best_score;
-        else if (task.type === "flow") confValue = Math.min(r.magnitude / 10, 1);
-        else if (task.type === "scene") confValue = r.score;
-        else if (task.type === "multitool") confValue = r.min_confidence;
-        else if (task.type === "inactivity") confValue = Math.min((r.duration || 0) / 30, 1);
-        else if (task.type === "boundary") confValue = r._confidence;
+        var confValue = resultConfidence(r, task);
         if (confValue !== null && confValue < state.certaintyCutoff) return;
       }
 
@@ -754,8 +833,14 @@
       return rendered < visibleRows.length;
     }
 
-    if (visibleRows.length <= RESULTS_RENDER_ALL) {
-      // Small lists render in full \u2014 no observer, identical to old behavior.
+    // Stamp what this render covers so a subsequent streaming push can append the
+    // tail instead of rebuilding (see the fast path at the top of renderResults).
+    _lastResultsSig = resultsSignature(results, task);
+
+    // Small lists (and any running task) render in full with no observer \u2014 the
+    // observer's sentinel/closure can't coexist with the fast path's tail appends,
+    // and a live scan grows the DOM a few rows per push rather than all at once.
+    if (visibleRows.length <= RESULTS_RENDER_ALL || task.status === "running") {
       while (renderChunk()) { /* render everything */ }
       container.scrollTop = prevResultsScrollTop;
       return;
