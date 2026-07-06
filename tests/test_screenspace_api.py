@@ -1,11 +1,15 @@
 """Tests for Screenspace server API endpoints."""
 
+import os
+
+import numpy as np
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
 import config  # noqa: E402
 import screenspace  # noqa: E402
+import screenspace_preview  # noqa: E402
 import screenspace_server  # noqa: E402
 
 
@@ -30,8 +34,8 @@ def client(tmp_path, monkeypatch):
     ]
     screenspace_server._output_dir = str(tmp_path)
     screenspace_server._worker = screenspace.ScreenspaceWorker()
-    # Module-level calibration caches persist across tests — reset them.
-    screenspace_server._pin_frame_cache.clear()
+    # Module-level calibration/preview caches persist across tests; reset them.
+    screenspace_server._decoded_frame_cache.clear()
     screenspace_server._pin_ocr_cache.clear()
 
     monkeypatch.setattr(
@@ -1657,6 +1661,57 @@ def test_video_frame_cache_invalidates_on_mtime_change(client, tmp_path, monkeyp
     assert len(calls) == 2
 
 
+def test_preview_change_cache_reuses_decoded_frames_until_mtime_changes(
+    client, tmp_path, monkeypatch
+):
+    """Slider nudges should re-render CV output without re-decoding source frames."""
+    video_file = tmp_path / "study_P06.mp4"
+    video_file.write_bytes(b"\x00original")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P06", "video_paths": [str(video_file)], "has_video": True}],
+    )
+
+    calls = []
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    def fake_extract(path, ts):
+        calls.append((path, ts, video_file.stat().st_mtime_ns))
+        return frame
+
+    monkeypatch.setattr(
+        screenspace_server.video, "extract_frame_at_timestamp", fake_extract
+    )
+    monkeypatch.setattr(
+        screenspace_preview,
+        "build_preview",
+        lambda frame, prev_frame, region, tool, params: frame,
+    )
+    monkeypatch.setattr(screenspace_preview, "encode_png", lambda *a, **kw: b"png")
+
+    base_url = "/screenspace/api/preview/P06/1.0?tool=change&prev=0.0&region=0,0,1,1"
+    first = client.get(f"{base_url}&noise=5")
+    assert first.status_code == 200
+    again = client.get(f"{base_url}&noise=10")
+    assert again.status_code == 200
+    assert [(path, ts) for path, ts, _mtime in calls] == [
+        (str(video_file), 1.0),
+        (str(video_file), 0.0),
+    ]
+
+    new_mtime = video_file.stat().st_mtime_ns + 10**9
+    os.utime(video_file, ns=(new_mtime, new_mtime))
+    fresh = client.get(f"{base_url}&noise=15")
+    assert fresh.status_code == 200
+    assert [(path, ts) for path, ts, _mtime in calls] == [
+        (str(video_file), 1.0),
+        (str(video_file), 0.0),
+        (str(video_file), 1.0),
+        (str(video_file), 0.0),
+    ]
+
+
 def test_video_info_reprobes_on_mtime_change(client, tmp_path, monkeypatch):
     """info response carries current mtime as version and re-probes on change."""
     import video as video_mod
@@ -2651,7 +2706,7 @@ def test_calibrate_respects_pin_ids_filter(calib_client, monkeypatch):
     assert pins[0]["pin_id"] == keep["id"]
 
 
-def test_calibrate_frame_cache_reuses_decoded_pin_frame(calib_client, monkeypatch):
+def test_calibrate_frame_cache_reuses_decoded_video_frame(calib_client, monkeypatch):
     import numpy as np
     import video
 
