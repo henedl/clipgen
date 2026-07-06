@@ -1012,7 +1012,14 @@ def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
     monkeypatch.setattr(video, "get_duration", lambda *_a: 5)
     monkeypatch.setattr(video, "get_file_duration", lambda *_a: 60)
     monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
-    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
+    # Even with a size cap set, run_ffmpeg is a pure cut and must NOT compress —
+    # enforcement moved to the callers, applied after any titlecard wrap/concat.
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 50)
+
+    def _no_compress(*_a, **_kw):
+        raise AssertionError("run_ffmpeg must not call compress_to_size")
+
+    monkeypatch.setattr(video, "compress_to_size", _no_compress)
 
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
@@ -1023,6 +1030,33 @@ def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
     )
     assert ok is True
     assert captured == [sentinel]
+
+
+def test_enforce_filesize_limit_noop_when_disabled(monkeypatch):
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
+
+    def _no_compress(*_a, **_kw):
+        raise AssertionError("compress_to_size must not run when the cap is disabled")
+
+    monkeypatch.setattr(video, "compress_to_size", _no_compress)
+    # Should return without touching compress_to_size.
+    video.enforce_filesize_limit("out.mp4")
+
+
+def test_enforce_filesize_limit_compresses_and_forwards_cancel_flag(monkeypatch):
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 50)
+
+    captured: list = []
+
+    def _fake_compress(path, target_mb, *, cancel_flag=None):
+        captured.append((path, target_mb, cancel_flag))
+        return True
+
+    monkeypatch.setattr(video, "compress_to_size", _fake_compress)
+
+    sentinel = lambda: False  # noqa: E731
+    video.enforce_filesize_limit("out.mp4", cancel_flag=sentinel)
+    assert captured == [("out.mp4", 50, sentinel)]
 
 
 def test_extract_screenshot_forwards_cancel_flag(monkeypatch):

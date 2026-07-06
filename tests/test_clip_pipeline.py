@@ -470,6 +470,72 @@ def test_process_clips_forwards_titlecard_options_to_wrap(monkeypatch, make_clip
     assert captured["titlecard_duration_seconds"] == 6
 
 
+def test_process_clips_compresses_after_titlecard_wrap(monkeypatch, make_clip):
+    """The size cap is enforced on the final clip AFTER the wrap, not before it.
+
+    Regression for the compress-before-wrap bug: compression used to run inside
+    run_ffmpeg (before the CRF wrap discarded it), wasting passes and letting the
+    output exceed the cap.
+    """
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(config, "MAX_FILESIZE_MB", 50)
+    monkeypatch.setattr(
+        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+    )
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+
+    order: list[str] = []
+
+    def fake_wrap(_clip, _out_name, **_kwargs):
+        order.append("wrap")
+        return True
+
+    def fake_enforce(_path, **_kwargs):
+        order.append("enforce")
+
+    monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
+    monkeypatch.setattr(pipeline.video, "enforce_filesize_limit", fake_enforce)
+
+    pipeline.process_clips([raw_clip], output_format="clip", titlecards_enabled=True)
+
+    assert order == ["wrap", "enforce"]
+
+
+def test_reel_part_cut_is_not_size_capped(monkeypatch, make_clip):
+    """Reel parts (enforce_size=False) skip compression; the cap applies to the reel-less final clip only."""
+    monkeypatch.setattr(config, "MAX_FILESIZE_MB", 50)
+    monkeypatch.setattr(
+        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+    )
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
+
+    enforce = Mock()
+    monkeypatch.setattr(pipeline.video, "enforce_filesize_limit", enforce)
+
+    prepared = _prepared_clip(make_clip(), [("00:10", "00:20")])
+
+    # enforce_size=False (reel-part path) → no compression.
+    pipeline._process_single_clip_segments(
+        prepared, "src.mp4", set(), collect_paths=True, enforce_size=False
+    )
+    assert enforce.call_count == 0
+
+    # enforce_size defaults True (final clip) → compression runs once.
+    pipeline._process_single_clip_segments(
+        prepared, "src.mp4", set(), collect_paths=True
+    )
+    assert enforce.call_count == 1
+
+
 def test_build_reel_transcript_uses_request_titlecard_duration(monkeypatch):
     """Reel transcript offsets honor per-request titlecard duration."""
     components = [

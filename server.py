@@ -1064,6 +1064,11 @@ def _process_intake_item(
         files.release_reservation(out_path)
         return {"_ok": False, "_error": "ffmpeg failed"}
 
+    # Enforce the size cap on the finished clip (intake has no titlecard wrap, so
+    # this is the only gate). Screenshots/GIFs are never compressed.
+    if output_format == "clip":
+        video.enforce_filesize_limit(out_path, cancel_flag=cancel_flag)
+
     default_desc = (
         "Transcript intake" if source == "transcript" else "Screenspace intake"
     )

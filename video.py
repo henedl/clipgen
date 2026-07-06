@@ -702,12 +702,11 @@ def run_ffmpeg(
     if not verify_output_file(output_file, "ffmpeg"):
         return False
 
-    if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
-        if not compress_to_size(
-            output_file, config.MAX_FILESIZE_MB, cancel_flag=cancel_flag
-        ):
-            utils.warning_print(f"Could not compress '{output_file}' to target size")
-
+    # NB: file-size enforcement is deliberately NOT done here. A cut is often
+    # followed by a titlecard wrap or a concat that re-encodes the body, which
+    # would discard any bitrate targeting applied at cut time (and waste two
+    # passes). Callers apply enforce_filesize_limit() to the *final* artifact
+    # after all wrapping/concat instead.
     utils.verbose_print(
         f"+ Generated video '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n Expected duration: {duration} s\n"
     )
@@ -1498,6 +1497,20 @@ def calculate_target_bitrate(
 
     video_bitrate_kbps = int(total_bitrate_kbps - audio_bitrate_kbps)
     return max(video_bitrate_kbps, config.MIN_VIDEO_BITRATE_KBPS)
+
+
+def enforce_filesize_limit(
+    path: str, *, cancel_flag: Callable[[], bool] | None = None
+) -> None:
+    """Compress *path* down to ``config.MAX_FILESIZE_MB`` when the limit is set.
+
+    No-op when the limit is disabled (``0``). Apply this to a *final* clip
+    artifact after any titlecard wrap or concat — never to an intermediate cut
+    that will be re-encoded downstream (see the note in :func:`run_ffmpeg`).
+    """
+    if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
+        if not compress_to_size(path, config.MAX_FILESIZE_MB, cancel_flag=cancel_flag):
+            utils.warning_print(f"Could not compress '{path}' to target size")
 
 
 def compress_to_size(
