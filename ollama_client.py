@@ -259,6 +259,7 @@ def _shutdown_response_socket(resp: Any) -> None:
 def _do_generate(
     body: dict[str, Any],
     cancel_event: threading.Event | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> str | None:
     """Execute a single Ollama /api/generate request (streaming).
 
@@ -267,6 +268,11 @@ def _do_generate(
     watcher thread shuts down the underlying socket so the blocked readline()
     unblocks and the function returns ``None`` promptly — freeing Ollama for
     another run.
+
+    When *on_token* is provided it is called with each ``response`` piece as it
+    streams in, letting callers surface partial text live. A raising callback is
+    swallowed so it can never break the read loop; the accumulated return value
+    is unchanged.
     """
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
@@ -326,6 +332,11 @@ def _do_generate(
             piece = chunk.get("response", "")
             if piece:
                 parts.append(piece)
+                if on_token is not None:
+                    try:
+                        on_token(piece)
+                    except Exception as exc:
+                        utils.verbose_print(f"Ollama on_token callback failed: {exc}")
             if chunk.get("done"):
                 break
     finally:
@@ -363,6 +374,7 @@ def generate(
     system: str | None = None,
     think: bool | None = None,
     cancel_event: threading.Event | None = None,
+    on_token: Callable[[str], None] | None = None,
 ) -> str | None:
     """Send a prompt to Ollama and return the generated text.
 
@@ -378,6 +390,8 @@ def generate(
         cancel_event: Optional event used to abort the in-flight request. When
             set, the underlying HTTP response is closed and ``None`` is
             returned promptly so Ollama is freed for another run.
+        on_token: Optional callback invoked with each streamed response piece,
+            for surfacing partial text live. Errors from it are swallowed.
 
     Returns the generated text string, or None on any failure or cancellation.
     """
@@ -393,7 +407,7 @@ def generate(
         body["think"] = think
 
     try:
-        return _do_generate(body, cancel_event=cancel_event)
+        return _do_generate(body, cancel_event=cancel_event, on_token=on_token)
     except urllib.error.HTTPError as exc:
         utils.warning_print(f"Ollama generate failed (HTTP {exc.code}): {exc.reason}")
         return None
@@ -407,7 +421,7 @@ def generate(
         if not _start_server():
             return None
         try:
-            return _do_generate(body, cancel_event=cancel_event)
+            return _do_generate(body, cancel_event=cancel_event, on_token=on_token)
         except (
             urllib.error.URLError,
             urllib.error.HTTPError,

@@ -360,6 +360,8 @@ def _agent_state_clean():
             transcripts_server._orchestrator._cancel_events[key].clear()
         for key in transcripts_server._orchestrator._started_at:
             transcripts_server._orchestrator._started_at[key].clear()
+        for key in transcripts_server._orchestrator._partial:
+            transcripts_server._orchestrator._partial[key].clear()
         with transcripts_server._pending_model_unloads_lock:
             for timer in transcripts_server._pending_model_unloads.values():
                 timer.cancel()
@@ -452,7 +454,7 @@ def test_orchestrator_stop_then_restart_isolates_run_state(
     started_first = threading.Event()
     release_first = threading.Event()
 
-    def blocking_run_first(snapshot, cancel_event):
+    def blocking_run_first(snapshot, cancel_event, on_token=None):
         started_first.set()
         release_first.wait(timeout=5)
         return None
@@ -477,7 +479,7 @@ def test_orchestrator_stop_then_restart_isolates_run_state(
     started_second = threading.Event()
     release_second = threading.Event()
 
-    def blocking_run_second(snapshot, cancel_event):
+    def blocking_run_second(snapshot, cancel_event, on_token=None):
         started_second.set()
         release_second.wait(timeout=5)
         return None
@@ -505,6 +507,102 @@ def test_orchestrator_stop_then_restart_isolates_run_state(
 
     # Let the second daemon drain so it does not outlive the test.
     release_second.set()
+
+
+def test_summary_partial_streams_via_sink_and_clears(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """The orchestrator feeds a per-run token sink into the agent; the streamed
+    text is exposed by partial_text() and the GET /api/summary poll while the
+    run is in flight, then cleared once the run finishes."""
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+
+    transcripts_server._manifest = {
+        "source_transcripts": {pid: {"segments": [{"id": "s0", "text": "x"}]}},
+        "corrections": [],
+        "marks": [],
+    }
+
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+
+    streamed = threading.Event()
+    release = threading.Event()
+
+    def streaming_run(snapshot, cancel_event, on_token=None):
+        assert on_token is not None, "orchestrator must supply a token sink"
+        on_token("Hello")
+        on_token(" world")
+        streamed.set()
+        release.wait(timeout=5)
+        return None  # don't commit; finally releases the slot
+
+    monkeypatch.setitem(summary_agent, "run", streaming_run)
+
+    orch.run_agent("summary", pid, force=True)
+    try:
+        assert streamed.wait(timeout=2), "agent never streamed its tokens"
+        assert orch.partial_text(pid, "summary") == "Hello world"
+
+        # The GET poll surfaces the same partial while generating.
+        resp = tr_client.get(f"/transcripts/api/summary/{pid}")
+        data = resp.get_json()
+        assert data["generating"] is True
+        assert data["partial"] == "Hello world"
+    finally:
+        release.set()
+
+    _join_orchestrator_threads(orch)
+    # Slot released → buffer cleared, poll no longer reports it.
+    assert orch.partial_text(pid, "summary") == ""
+
+
+def test_summary_stream_emits_partial_then_done(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """GET /api/summary/<pid>/stream yields the accumulated partial text, then a
+    done event once the run is no longer generating."""
+    # Grace window only applies to the not-yet-started race; zero it so a
+    # not-generating stream with buffered text returns immediately.
+    monkeypatch.setattr(transcripts_server, "_SUMMARY_STREAM_START_GRACE", 0)
+    pid = "P01"
+    orch = transcripts_server._orchestrator
+    # Buffer holds text but the run is not in flight → the generator emits the
+    # partial once, sees not-generating, and finishes with done.
+    with orch._partial_lock:
+        orch._partial["summary"][pid] = ["Hello", " world"]
+
+    resp = tr_client.get(f"/transcripts/api/summary/{pid}/stream")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/event-stream"
+    body = resp.get_data(as_text=True)
+    assert '"partial": "Hello world"' in body
+    assert '"done": true' in body
+
+
+def test_summary_stream_done_when_idle(tr_client, _agent_state_clean, monkeypatch):
+    """A stream opened when nothing is generating (empty buffer) ends with done
+    after the start grace, without emitting a partial."""
+    monkeypatch.setattr(transcripts_server, "_SUMMARY_STREAM_START_GRACE", 0)
+    resp = tr_client.get("/transcripts/api/summary/P01/stream")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert '"done": true' in body
+    assert '"partial"' not in body
+
+
+def test_summary_stop_clears_partial(tr_client, _agent_state_clean):
+    """Stopping an in-flight summary run drops its partial buffer."""
+    pid = "P01"
+    orch = transcripts_server._orchestrator
+    orch._in_flight["summary"].add(pid)
+    orch._cancel_events["summary"][pid] = threading.Event()
+    with orch._partial_lock:
+        orch._partial["summary"][pid] = ["partial text"]
+
+    assert orch.stop("summary", pid) is True
+    assert orch.partial_text(pid, "summary") == ""
 
 
 # ---- Model unload scheduling ----
@@ -838,7 +936,7 @@ def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch
 
     done = threading.Event()
 
-    def stub_run(snapshot, cancel_event):
+    def stub_run(snapshot, cancel_event, on_token=None):
         done.set()
         return None
 
@@ -1083,10 +1181,10 @@ def test_citations_regenerate_does_not_run_disabled_friction(
 
     friction_ran = threading.Event()
 
-    def cit_stub(snapshot, cancel_event):
+    def cit_stub(snapshot, cancel_event, on_token=None):
         return [{"sentence": "s2", "refs": []}]  # non-None → commits → cascade fires
 
-    def fr_stub(snapshot, cancel_event):
+    def fr_stub(snapshot, cancel_event, on_token=None):
         friction_ran.set()
         return None
 
@@ -1177,7 +1275,7 @@ def test_on_task_complete_registers_summary_before_disk_write(
     started = threading.Event()
     release = threading.Event()
 
-    def _blocking_summary(snapshot, cancel_event):
+    def _blocking_summary(snapshot, cancel_event, on_token=None):
         started.set()
         release.wait(2.0)
         return None  # don't commit/chain; the finally{} block releases the slot

@@ -173,6 +173,44 @@ class TestSummarizeTranscript:
         thinking_agents.summarize_transcript(segments, cancel_event=evt)
         assert mock_generate.call_args[1]["cancel_event"] is evt
 
+    @patch("thinking_agents.ollama_client.generate")
+    def test_disables_thinking(self, mock_generate):
+        # Summaries run with think=False (like citations/friction): a reasoning
+        # model would otherwise stall in a silent think phase with no response
+        # text to stream and pure added latency.
+        mock_generate.return_value = "ok"
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        thinking_agents.summarize_transcript(segments)
+        assert mock_generate.call_args[1]["think"] is False
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_forwards_on_token_to_generate(self, mock_generate):
+        mock_generate.return_value = "ok"
+        sink = lambda _tok: None  # noqa: E731
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        thinking_agents.summarize_transcript(segments, on_token=sink)
+        assert mock_generate.call_args[1]["on_token"] is sink
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_run_summary_forwards_on_token(self, mock_generate):
+        mock_generate.return_value = "ok"
+        sink = lambda _tok: None  # noqa: E731
+        entry = {
+            "segments": [
+                {"text": "A sufficiently long segment of text for the length check."}
+            ]
+        }
+        thinking_agents._run_summary(entry, None, sink)
+        assert mock_generate.call_args[1]["on_token"] is sink
+
 
 class TestSplitSummarySentences:
     def test_splits_paragraph_on_sentence_boundaries(self):

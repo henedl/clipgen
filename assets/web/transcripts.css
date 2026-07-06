@@ -675,6 +675,18 @@ body {
   color: var(--color-text-dim);
 }
 
+/* Streamed partial summary text: rendered live as tokens arrive, above the
+   "Generating summary…" footer. pre-wrap preserves model newlines. */
+.summary-stream {
+  white-space: pre-wrap;
+  color: var(--color-text);
+  margin-bottom: var(--space-2);
+}
+
+.summary-stream:empty {
+  margin-bottom: 0;
+}
+
 .summary-generating {
   color: var(--color-text-dim);
   font-style: italic;
