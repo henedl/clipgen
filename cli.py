@@ -16,8 +16,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
-from icecream import ic
-
 import clipgen
 import config
 import files
@@ -964,7 +962,7 @@ def select_worksheet(
             worksheet = clipgen.select_spreadsheet(gspread_client, doc_list)
 
     if worksheet and config.DEBUGGING:
-        ic(worksheet.title)
+        config.debug_ic(worksheet.title)
     if clipgen._is_excel_worksheet(worksheet):
         utils.standard_print("Using local Excel file.")
     else:
@@ -3638,7 +3636,7 @@ def main() -> None:
 
     utils.NO_INPUT_MODE = bool(getattr(args, "no_input", False))
     if config.DEBUGGING:
-        ic(args)
+        config.debug_ic(args)
 
     # Validate mutually exclusive mode flags
     modes = _validate_mode_conflicts(args)
