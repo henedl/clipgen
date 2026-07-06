@@ -473,18 +473,24 @@ def _print_completion_message(
     )
 
 
-def _prompt_chronologic_participant_selection(worksheet: Any) -> str | None:
-    """Prompt user to pick exactly one participant for chronologic reels."""
+def _prompt_chronologic_participant_selection(
+    worksheet: Any,
+) -> tuple[str | None, spreadsheet.SheetContext | None]:
+    """Prompt user to pick exactly one participant for chronologic reels.
+
+    Returns (selected_participant_id, ctx). The context built here is handed
+    back so the caller can pass it to generate_list and avoid a second fetch.
+    """
     ctx = spreadsheet.build_sheet_context(worksheet)
     if ctx is None:
-        return None
+        return None, None
 
     available_list = spreadsheet.get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
     if not available_list:
         utils.info_print("No participants found in the spreadsheet.")
-        return None
+        return None, None
 
     utils.print_mode_heading("Chronologic participant", "mode.chronologic")
     utils.info_print("Chronologic mode requires exactly one participant.")
@@ -508,7 +514,7 @@ def _prompt_chronologic_participant_selection(worksheet: Any) -> str | None:
         if token.isdigit():
             idx = int(token)
             if 1 <= idx <= len(available_list):
-                return available_list[idx - 1]
+                return available_list[idx - 1], ctx
             utils.info_print(
                 f"Not found: {token}. Available: {', '.join(available_list)}"
             )
@@ -523,8 +529,8 @@ def _prompt_chronologic_participant_selection(worksheet: Any) -> str | None:
             )
             continue
         if col_idx < len(ctx.header_row):
-            return utils.normalize_participant_id(ctx.header_row[col_idx])
-        return token
+            return utils.normalize_participant_id(ctx.header_row[col_idx]), ctx
+        return token, ctx
 
 
 def _run_reel_mode_interactive(
@@ -559,6 +565,9 @@ def _run_reel_mode_interactive(
         utils.info_print("No input. Skipping reel.")
         return ([], False, None)
 
+    # Reused by generate_list below when the chronologic prompt builds it; stays
+    # None for every other reel path (generate_list then fetches once itself).
+    reel_ctx: spreadsheet.SheetContext | None = None
     parsed_reel = spreadsheet.parse_reel_input(reel_input)
     if parsed_reel.get("highlights") and (
         parsed_reel["severity"] or parsed_reel["chronologic"]
@@ -584,13 +593,17 @@ def _run_reel_mode_interactive(
             )
             return ([], False, None)
         if len(parsed_reel["participants"]) == 0:
-            selected_pid = _prompt_chronologic_participant_selection(worksheet)
+            selected_pid, reel_ctx = _prompt_chronologic_participant_selection(
+                worksheet
+            )
             if not selected_pid:
                 return ([], False, None)
             reel_input = f"{reel_input}, {selected_pid}"
             parsed_reel["participants"] = [selected_pid]
 
-    clips_list = spreadsheet.generate_list(worksheet, "reel", reel_input=reel_input)
+    clips_list = spreadsheet.generate_list(
+        worksheet, "reel", ctx=reel_ctx, reel_input=reel_input
+    )
     if not clips_list:
         utils.info_print("No clips matched. Try different selectors.")
         return ([], False, None)

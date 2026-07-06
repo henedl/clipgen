@@ -17,7 +17,6 @@ import webbrowser
 from typing import Any, Callable
 
 import config
-import google_api
 import spreadsheet
 import utils
 from spreadsheet import SheetContext
@@ -433,39 +432,24 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
         process_fn: Optional callback (clips_list, output_format) -> (outputs_generated, artifacts).
     """
 
-    def _load_browse_data() -> tuple:
-        sheet_data = google_api.get_sheet_values(sheet)
-        if len(sheet_data) <= 1:
-            return (None, None)
-        header_result = spreadsheet.validate_spreadsheet_headers(sheet_data)
-        if header_result is None:
-            return (None, None)
-        return (header_result, sheet_data)
-
-    header_result, sheet_data = (
-        utils.run_with_spinner("Loading spreadsheet...", _load_browse_data)
-        if utils.use_progress()
-        else _load_browse_data()
-    )
-    if header_result is None:
-        return
-
-    id_cell, observation_cell, category_cell = header_result
-    utils.debug_print(f"Sheet dumped into memory at {utils.get_current_time()}")
-
-    # Get participant info
-    header_row = sheet_data[id_cell.row - 1]
-    col_count = max(len(row) for row in sheet_data)
-    num_participants = spreadsheet.get_num_participants(header_row, id_cell, col_count)
-
-    if num_participants == 0:
-        utils.warning_print(
-            "No participant columns found in the spreadsheet.",
-            [
-                f"Looking for columns starting with: {', '.join(config.PARTICIPANT_PREFIXES)}"
-            ],
+    # Build the context once on entry; reuse it for both display and any
+    # generate action below so we never re-fetch the sheet per generate.
+    ctx = (
+        utils.run_with_spinner(
+            "Loading spreadsheet...", lambda: spreadsheet.build_sheet_context(sheet)
         )
+        if utils.use_progress()
+        else spreadsheet.build_sheet_context(sheet)
+    )
+    if ctx is None:
         return
+
+    id_cell = ctx.id_cell
+    observation_cell = ctx.observation_cell
+    category_cell = ctx.category_cell
+    sheet_data = ctx.sheet_data
+    header_row = ctx.header_row
+    num_participants = ctx.num_participants
 
     # Browse state: all row indices are 0-based (into sheet_data).
     # Data starts immediately below the Observation header row.
@@ -780,7 +764,9 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
                         "Chronologic selector is not supported in browse mode."
                     )
                 else:
-                    clips = spreadsheet.generate_list(sheet, "reel", reel_input=raw)
+                    clips = spreadsheet.generate_list(
+                        sheet, "reel", ctx=ctx, reel_input=raw
+                    )
                     if clips:
                         format_label = {
                             "clip": "clip(s)",
