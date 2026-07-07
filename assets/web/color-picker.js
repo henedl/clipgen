@@ -1,8 +1,9 @@
 /* clipgen reusable color picker — color-picker.js
  *
  * A small, dependency-light popover color picker for any clipgen web UI.
- * Vanilla JS, no frameworks. Self-contained (its own HSV/hex math) so it can be
- * loaded on any page without pulling in page-specific helpers.
+ * Vanilla JS, no frameworks. Keeps its own HSV math (h in [0,360), s/v in
+ * [0,1]) but reuses hexToRgb/rgbToHex and positionPopoverAnchored from utils.js,
+ * which every page loads before this file.
  *
  * Usage:
  *   window.ClipgenColorPicker.open({
@@ -33,21 +34,7 @@
 
   function _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 
-  function hexToRgb(hex) {
-    var m = /^#?([0-9a-fA-F]{6})$/.exec((hex || "").trim());
-    if (!m) return null;
-    var n = parseInt(m[1], 16);
-    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-  }
-
-  function rgbToHex(r, g, b) {
-    function h(x) {
-      x = Math.max(0, Math.min(255, Math.round(x)));
-      var s = x.toString(16);
-      return s.length < 2 ? "0" + s : s;
-    }
-    return "#" + h(r) + h(g) + h(b);
-  }
+  // hexToRgb / rgbToHex come from utils.js (loaded before this file).
 
   function rgbToHsv(r, g, b) {
     r /= 255; g /= 255; b /= 255;

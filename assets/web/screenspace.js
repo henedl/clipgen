@@ -337,6 +337,7 @@
       border: base.border,
       textDim: base.textDim,
       accent: base.accent,
+      positive: base.positive,
       fontMono: base.fontMono,
       regionPalette: _cachedRegionPalette,
     };

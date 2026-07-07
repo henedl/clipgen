@@ -711,6 +711,27 @@ var hexToRgba = function (hex, alpha) {
   return "rgba(" + r + "," + g + "," + b + "," + alpha + ")";
 };
 
+// Canonical hex <-> rgb helpers (previously duplicated in screenspace-utils.js
+// and color-picker.js). hexToRgb accepts "#rgb"/"#rrggbb" (with or without the
+// hash) and returns null on anything else; rgbToHex clamps + rounds so it is
+// safe on float channel values from HSV sliders.
+var hexToRgb = function (hex) {
+  var h = String(hex == null ? "" : hex).trim().replace(/^#/, "");
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  var n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+};
+
+var rgbToHex = function (r, g, b) {
+  function c(x) {
+    x = Math.max(0, Math.min(255, Math.round(x)));
+    var s = x.toString(16);
+    return s.length < 2 ? "0" + s : s;
+  }
+  return "#" + c(r) + c(g) + c(b);
+};
+
 // Read a CSS custom property from :root, returning fallback when unset/empty.
 // Pages use this for theme-aware values (--color-accent, --color-heatmap, ...).
 var getCSSVar = function (name, fallback) {
@@ -743,6 +764,7 @@ var getCanvasThemeColors = function () {
     textDim:    v("--color-text-dim",    "#6b7280"),
     accent:     v("--color-accent",      "#1d4f72"),
     heatmap:    v("--color-heatmap",     "#3b82f6"),
+    positive:   v("--cell-data-positive-fg", "#16a34a"),
     fontMono:   v("--font-mono",         "monospace"),
   };
   return _canvasThemeColorsCache;
