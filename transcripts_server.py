@@ -976,10 +976,11 @@ def _resolve_mark(
     entry = src.get(pid, {})
     segments = entry.get("segments", [])
     if 0 <= idx < len(segments):
-        raw_seg = segments[idx]
         corrections = _manifest.get("corrections", [])
-        corrected = transcripts.apply_corrections([raw_seg], corrections)
-        seg = corrected[0]
+        # Correct the whole participant list once (memoized by corrections
+        # version) instead of recompiling the regex set per mark.
+        corrected = _corrected_segments(pid, segments, corrections)
+        seg = corrected[idx]
         return {
             **mark,
             "valid": True,
