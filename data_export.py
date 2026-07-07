@@ -421,6 +421,27 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
     base = Path(output_dir) if output_dir else Path(utils.get_effective_output_dir())
     written: list[Path] = []
     summaries: list[str] = []
+    # Several surfaces share a manifest (e.g. transcripts + friction_moments +
+    # friction_segments all read the transcripts manifest), so read+parse each
+    # file at most once per export. ``None`` records a missing/unreadable file.
+    manifest_cache: dict[str, dict[str, Any] | None] = {}
+
+    def _load_manifest(manifest_filename: str) -> dict[str, Any] | None:
+        if manifest_filename in manifest_cache:
+            return manifest_cache[manifest_filename]
+        manifest_path = base / manifest_filename
+        parsed: dict[str, Any] | None = None
+        if manifest_path.is_file():
+            try:
+                parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as err:
+                utils.warning_print(
+                    f"Skipping {manifest_filename}: could not read manifest.",
+                    [f"Error: {err}"],
+                )
+                parsed = None
+        manifest_cache[manifest_filename] = parsed
+        return parsed
 
     progress = utils.create_progress_bar()
 
@@ -430,16 +451,8 @@ def write_export_bundle(output_dir: Path | None = None) -> list[Path]:
         manifest_filename: str,
         preferred_cols: tuple[str, ...],
     ) -> None:
-        manifest_path = base / manifest_filename
-        if not manifest_path.is_file():
-            return
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as err:
-            utils.warning_print(
-                f"Skipping {manifest_filename}: could not read manifest.",
-                [f"Error: {err}"],
-            )
+        manifest = _load_manifest(manifest_filename)
+        if manifest is None:
             return
         records = builder(manifest)
         if not records:
