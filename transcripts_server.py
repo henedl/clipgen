@@ -448,7 +448,9 @@ def api_vtt(participant: str) -> FlaskResponse:
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
 
-    corrected = transcripts.apply_corrections(segments_snapshot, corrections_snapshot)
+    corrected = _corrected_segments(
+        participant, segments_snapshot, corrections_snapshot
+    )
     result = transcripts.TranscriptResult(
         segments=corrected,
         language=language,
@@ -512,7 +514,9 @@ def _embed_subtitle_for_participant(
         }
     video_path = video_paths[0]
 
-    corrected = transcripts.apply_corrections(segments_snapshot, corrections_snapshot)
+    corrected = _corrected_segments(
+        participant, segments_snapshot, corrections_snapshot
+    )
     result = transcripts.TranscriptResult(
         segments=corrected,
         language=language,

@@ -1196,6 +1196,34 @@ def test_corrected_segments_cached_and_invalidated_on_correction(
     assert seg["corrected"] is True
 
 
+def test_vtt_shares_corrected_segments_cache(tr_client, monkeypatch):
+    """api_vtt routes through the memoized cache, so a second request for the
+    same participant does not recompute corrections."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    transcripts_server._bump_corrections_version()  # start from a cold cache
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+    transcripts_server._manifest["corrections"] = [{"from": "teh", "to": "the"}]
+
+    r1 = tr_client.get("/transcripts/api/vtt/P01")
+    assert r1.status_code == 200
+    assert "the cat" in r1.get_data(as_text=True)
+    assert calls["n"] == 1
+
+    # Second request hits the cache — no recompute.
+    r2 = tr_client.get("/transcripts/api/vtt/P01")
+    assert r2.status_code == 200
+    assert calls["n"] == 1
+
+
 def test_persist_keeps_corrected_cache_for_unchanged_transcription(
     tr_client, monkeypatch
 ):
