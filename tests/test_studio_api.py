@@ -1,6 +1,5 @@
 import io
 import json
-from collections import OrderedDict
 from unittest.mock import Mock
 
 import pytest
@@ -836,7 +835,9 @@ def test_api_thumbnail_returns_jpeg(client, monkeypatch, tmp_path):
         sheet_data=[],
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
-    monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
+    monkeypatch.setattr(
+        server, "_thumbnail_cache", server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+    )
     monkeypatch.setattr("config.INPUT_DIR", str(tmp_path))
     monkeypatch.setattr(video, "extract_thumbnail_bytes", lambda *a, **kw: fake_jpeg)
 
@@ -865,7 +866,9 @@ def test_api_thumbnail_caches(client, monkeypatch, tmp_path):
         sheet_data=[],
     )
     monkeypatch.setattr(server, "_sheet_context", ctx)
-    monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
+    monkeypatch.setattr(
+        server, "_thumbnail_cache", server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+    )
     monkeypatch.setattr("config.INPUT_DIR", str(tmp_path))
 
     def counting_extract(*a, **kw):
@@ -3223,20 +3226,53 @@ def test_api_generate_intake_persists_on_early_client_close(client, monkeypatch)
     assert saved == [True]
 
 
-def test_thumbnail_cache_put_is_threadsafe(monkeypatch):
-    """Concurrent _thumbnail_cache_put calls keep the LRU bounded without
-    corrupting the OrderedDict mid-eviction."""
+def test_media_cache_lru_is_threadsafe(monkeypatch):
+    """Concurrent get_or_compute calls keep the LRU bounded without corrupting
+    the OrderedDict mid-eviction."""
     import concurrent.futures
 
-    monkeypatch.setattr(server, "_thumbnail_cache", OrderedDict())
+    cache = server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+    monkeypatch.setattr(server, "_thumbnail_cache", cache)
 
     def put(i: int) -> None:
-        server._thumbnail_cache_put((f"v{i}", i), b"jpeg")
+        cache.get_or_compute((f"v{i}", i), lambda: b"jpeg")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
         list(pool.map(put, range(2000)))
 
-    assert len(server._thumbnail_cache) <= server._THUMBNAIL_CACHE_MAX
+    assert len(cache._store) <= server._THUMBNAIL_CACHE_MAX
+
+
+def test_media_cache_single_flight():
+    """Concurrent identical cache misses must run the producer (ffmpeg) once —
+    the stampede guard the plain lock-around-dict-access could not provide. A
+    barrier forces every thread into the miss path before any producer returns,
+    which the old release-lock-before-compute pattern would have failed."""
+    import concurrent.futures
+    import threading
+    import time
+
+    cache = server._MediaCache(server._THUMBNAIL_CACHE_MAX)
+    workers = 8
+    barrier = threading.Barrier(workers)
+    call_count = [0]
+    count_lock = threading.Lock()
+
+    def produce():
+        with count_lock:
+            call_count[0] += 1
+        time.sleep(0.05)  # hold the producer so overlapping misses would stack
+        return b"jpeg"
+
+    def fetch(_):
+        barrier.wait()  # release all threads into get_or_compute together
+        return cache.get_or_compute(("v", 5), produce)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(fetch, range(workers)))
+
+    assert all(r == b"jpeg" for r in results)
+    assert call_count[0] == 1
 
 
 def _poll_until(predicate, *, timeout=5.0, interval=0.02):
