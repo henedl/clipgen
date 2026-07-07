@@ -1270,6 +1270,11 @@ def sort_clips_by_severity(clips: list[ClipRecord]) -> None:
 
 # ---- Highlights reel scoring ----
 
+# Largest friction magnitude in the severity scale (critical = -4 → 4), used to
+# normalize highlight severity scores into 0-1. Derived from config so the scale
+# can't drift from the canonical severity labels.
+_MAX_SEVERITY_MAGNITUDE = -min(config.SEVERITY_LABEL_TO_NUMERIC.values())
+
 
 def _clip_duration_seconds(clip: Any) -> float:
     """Estimate a clip's total duration in seconds from its raw cell value."""
@@ -1294,10 +1299,10 @@ def _clip_highlight_score(clip: Any, lowered_filenames: Sequence[str]) -> float:
     artifact), and keyword annotation, weighted by config constants.
     ``lowered_filenames`` must already be lowercased by the caller.
     """
-    # Severity: map to 0-1 range
-    severity_scores = {"critical": 1.0, "high": 0.75, "medium": 0.5, "low": 0.25}
+    # Severity: friction magnitude normalized to 0-1 (positive/neutral labels score 0).
     sev_label = clip.get("severity", "").strip().lower()
-    sev = severity_scores.get(sev_label, 0.0)
+    numeric = config.SEVERITY_LABEL_TO_NUMERIC.get(sev_label, 0)
+    sev = max(0, -numeric) / _MAX_SEVERITY_MAGNITUDE
 
     # Uniqueness: 1.0 if no matching artifact exists
     study = (clip.get("study") or "").lower()
