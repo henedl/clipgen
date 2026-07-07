@@ -60,6 +60,12 @@ class Agent(TypedDict):
                           can run. Also used to skip Pass 2 when Pass 1 failed.
       thread_name_prefix: Prefix for the daemon thread name (useful for
                           debugging).
+      on_upstream_change: How this agent's result reacts when an upstream
+                          dependency is regenerated: ``"clear"`` drops the
+                          field (the default), ``"stale"`` keeps it but flags
+                          it for a prompted re-run (only the friction shape
+                          carries a ``stale`` flag today). Read generically by
+                          the regenerate route's dependent-invalidation.
       run:                Callable invoked inside the daemon thread. Receives
                           the transcript entry (the ``source_transcripts[pid]``
                           dict), an optional ``threading.Event`` that, when
@@ -79,6 +85,7 @@ class Agent(TypedDict):
     manifest_field: str
     depends_on: list[str]
     thread_name_prefix: str
+    on_upstream_change: str
     run: Callable[..., Any]
 
 
@@ -610,6 +617,7 @@ AGENTS: list[Agent] = [
         manifest_field="summary",
         depends_on=[],
         thread_name_prefix="summary",
+        on_upstream_change="clear",
         run=_run_summary,
     ),
     Agent(
@@ -619,6 +627,7 @@ AGENTS: list[Agent] = [
         manifest_field="citations",
         depends_on=["summary"],
         thread_name_prefix="citations",
+        on_upstream_change="clear",
         run=_run_citations,
     ),
     Agent(
@@ -628,6 +637,7 @@ AGENTS: list[Agent] = [
         manifest_field="friction",
         depends_on=["summary"],
         thread_name_prefix="friction",
+        on_upstream_change="stale",
         run=_run_friction,
     ),
 ]

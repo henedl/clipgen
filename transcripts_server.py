@@ -14,13 +14,11 @@ API endpoints (all under /transcripts/):
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
   POST /api/embed-subtitle/<participant>          - mux participant transcript into a copy of their video
   POST /api/embed-all-subtitles                   - mux every participant's transcript into a subtitled copy of their video
-  GET  /api/summary/<participant>                - AI-generated transcript summary
-  POST /api/summary/<participant>/regenerate    - re-trigger AI summary generation
-  POST /api/summary/<participant>/stop          - flag in-flight summary for discard
-  PUT  /api/summary/<participant>               - save user-edited summary
-  GET  /api/citations/<participant>             - citation refs for summary sentences
-  POST /api/citations/<participant>/regenerate  - re-trigger citation generation
-  POST /api/citations/<participant>/stop        - flag in-flight citations for discard
+  GET  /api/agent/<key>/<participant>            - a thinking agent's result (summary/citations/friction), status, or 404
+  POST /api/agent/<key>/<participant>/regenerate - clear + re-trigger an agent (forces past its enabled config)
+  POST /api/agent/<key>/<participant>/stop       - flag an in-flight agent run for discard
+  GET  /api/agent/summary/<participant>/stream   - SSE token stream of the summary as it generates (summary-only)
+  PUT  /api/agent/summary/<participant>          - save a user-edited summary (summary-only)
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
@@ -174,6 +172,23 @@ def _mark_friction_stale(entry: dict[str, Any]) -> None:
     fr = entry.get("friction")
     if isinstance(fr, dict):
         fr["stale"] = True
+
+
+def _invalidate_dependents(entry: dict[str, Any], agent: thinking_agents.Agent) -> None:
+    """Invalidate every agent whose result depends on *agent*'s field.
+
+    Driven off ``depends_on`` + each dependent's ``on_upstream_change`` so this
+    stays generic: ``"stale"`` keeps the result but flags it for a prompted
+    re-run (friction), ``"clear"`` drops it (citations). Callers must hold
+    ``_manifest_lock``.
+    """
+    for dep in thinking_agents.AGENTS:
+        if agent["manifest_field"] not in dep["depends_on"]:
+            continue
+        if dep.get("on_upstream_change") == "stale":
+            _mark_friction_stale(entry)  # only the friction shape has a stale flag
+        else:
+            entry.pop(dep["manifest_field"], None)
 
 
 def _transcribe_prewarm_setting() -> str:
@@ -597,36 +612,108 @@ def api_embed_all_subtitles() -> FlaskResponse:
     )
 
 
-# ---- AI Summary ----
+# ---- AI thinking agents (summary / citations / friction) ----
+#
+# Three generic routes cover every agent in thinking_agents.AGENTS, keyed by
+# <agent_key>, so appending an Agent needs no new endpoints here. Summary keeps
+# two extra routes below that are genuinely unique to it (the SSE token stream
+# and the user-edit PUT).
 
 
-@transcripts_bp.route("/api/summary/<participant>")
-def api_summary(participant: str) -> FlaskResponse:
-    """Return AI-generated summary, generation status, or 404."""
+@transcripts_bp.route("/api/agent/<agent_key>/<participant>")
+def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
+    """Return an agent's result, its generation status, or 404.
+
+    Success carries the result under the agent's ``manifest_field`` key, so the
+    summary/citations/friction responses keep their historic shape. For every
+    agent that depends on this one, a ``<dep_field>_generating`` flag (and
+    ``<dep_field>_started_at`` when true) is added generically — that is how the
+    summary poll still surfaces citation-generation status to the UI without
+    special-casing it.
+    """
+    agent = thinking_agents.get_agent(agent_key)
+    if agent is None:
+        return jsonify({"ok": False}), 404
+    field = agent["manifest_field"]
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry or not entry.get("summary"):
-            if _orchestrator.is_generating(participant, "summary"):
-                return jsonify(
-                    {
-                        "ok": False,
-                        "generating": True,
-                        "started_at": _orchestrator.started_at(participant, "summary"),
-                        "partial": _orchestrator.partial_text(participant, "summary"),
-                    }
-                )
-            return jsonify({"ok": False}), 404
-        summary = entry["summary"]
-        citations = entry.get("citations")
-    resp: dict[str, Any] = {"ok": True, "summary": summary}
-    if citations:
-        resp["citations"] = citations
-    resp["citations_generating"] = _orchestrator.is_generating(participant, "citations")
-    if resp["citations_generating"]:
-        resp["citations_started_at"] = _orchestrator.started_at(
-            participant, "citations"
+        result = entry.get(field) if entry else None
+    if result:
+        resp: dict[str, Any] = {"ok": True, field: result}
+        for dep in thinking_agents.AGENTS:
+            if field in dep["depends_on"]:
+                dep_field = dep["manifest_field"]
+                generating = _orchestrator.is_generating(participant, dep["key"])
+                resp[f"{dep_field}_generating"] = generating
+                if generating:
+                    resp[f"{dep_field}_started_at"] = _orchestrator.started_at(
+                        participant, dep["key"]
+                    )
+        return jsonify(resp)
+    if _orchestrator.is_generating(participant, agent_key):
+        return jsonify(
+            {
+                "ok": False,
+                "generating": True,
+                "started_at": _orchestrator.started_at(participant, agent_key),
+                "partial": _orchestrator.partial_text(participant, agent_key),
+            }
         )
-    return jsonify(resp)
+    return jsonify({"ok": False}), 404
+
+
+@transcripts_bp.route(
+    "/api/agent/<agent_key>/<participant>/regenerate", methods=["POST"]
+)
+def api_agent_regenerate(agent_key: str, participant: str) -> FlaskResponse:
+    """Clear an agent's result and re-trigger it (bypassing its enabled config).
+
+    Manual trigger: runs even when the agent's enabled config is False so the
+    frontend's per-participant controls can force a run. Requires a transcript
+    and every dependency's result. Regenerating an agent also invalidates its
+    dependents (``_invalidate_dependents``): e.g. regenerating summary clears
+    citations and flags friction stale. ``run_agent`` auto-advances the chain
+    on completion, so downstream enabled agents still run.
+    """
+    agent = thinking_agents.get_agent(agent_key)
+    if agent is None:
+        return jsonify({"ok": False}), 404
+    if _orchestrator.is_generating(participant, agent_key):
+        return ok(generating=True)
+    with _manifest_lock:
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if (
+            not entry
+            or not entry.get("segments")
+            or not _agent_dependencies_met(agent, entry)
+        ):
+            return err("No transcript or unmet dependency", 404)
+        entry.pop(agent["manifest_field"], None)
+        _invalidate_dependents(entry, agent)
+    _persist_manifest()
+    _orchestrator.run_agent(agent_key, participant, force=True)
+    return ok(generating=True)
+
+
+@transcripts_bp.route("/api/agent/<agent_key>/<participant>/stop", methods=["POST"])
+def api_agent_stop(agent_key: str, participant: str) -> FlaskResponse:
+    """Abort an in-flight agent run.
+
+    Sets the cancel event so the streaming Ollama call closes its response
+    promptly, freeing the model for another run. The UI flips to idle
+    immediately. After a short delay, the model is unloaded from memory if no
+    new run has started in the meantime.
+    """
+    if thinking_agents.get_agent(agent_key) is None:
+        return jsonify({"ok": False}), 404
+    if _orchestrator.stop(agent_key, participant):
+        model = _agent_model(agent_key)
+        if model:
+            _schedule_model_unload(model)
+    return ok(running=False)
+
+
+# ---- Summary-only routes (SSE token stream + user edit) ----
 
 
 # Server-side cadence for the summary token stream. The agent runs in the
@@ -638,7 +725,7 @@ _SUMMARY_STREAM_TICK = 0.1  # seconds between buffer samples
 _SUMMARY_STREAM_START_GRACE = 2.0  # seconds to wait for the run to claim its slot
 
 
-@transcripts_bp.route("/api/summary/<participant>/stream")
+@transcripts_bp.route("/api/agent/summary/<participant>/stream")
 def api_summary_stream(participant: str) -> FlaskResponse:
     """Stream summary tokens to the browser via SSE as the model produces them.
 
@@ -676,44 +763,7 @@ def api_summary_stream(participant: str) -> FlaskResponse:
     )
 
 
-@transcripts_bp.route("/api/summary/<participant>/regenerate", methods=["POST"])
-def api_summary_regenerate(participant: str) -> FlaskResponse:
-    """Clear existing summary and re-trigger AI generation.
-
-    Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False
-    so the frontend's per-participant controls can force a run.
-    """
-    if _orchestrator.is_generating(participant, "summary"):
-        return ok(generating=True)
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry or not entry.get("segments"):
-            return err("No transcript found", 404)
-        entry["summary"] = ""
-        entry.pop("citations", None)
-        _mark_friction_stale(entry)  # the new summary feeds the friction prompt
-    _persist_manifest()
-    _orchestrator.run_chain(participant, force=True)
-    return ok(generating=True)
-
-
-@transcripts_bp.route("/api/summary/<participant>/stop", methods=["POST"])
-def api_summary_stop(participant: str) -> FlaskResponse:
-    """Abort an in-flight summary run.
-
-    Sets the cancel event so the streaming Ollama call closes its response
-    promptly, freeing the model for another run. The UI flips to idle
-    immediately. After a short delay, the model is unloaded from memory if
-    no new run has started in the meantime.
-    """
-    if _orchestrator.stop("summary", participant):
-        model = _agent_model("summary")
-        if model:
-            _schedule_model_unload(model)
-    return ok(running=False)
-
-
-@transcripts_bp.route("/api/summary/<participant>", methods=["PUT"])
+@transcripts_bp.route("/api/agent/summary/<participant>", methods=["PUT"])
 def api_summary_save(participant: str) -> FlaskResponse:
     """Save a user-edited summary for a participant."""
     data = request.get_json(silent=True)
@@ -728,127 +778,6 @@ def api_summary_save(participant: str) -> FlaskResponse:
         _mark_friction_stale(entry)  # summary text feeds the friction prompt
     _schedule_persist()
     return ok()
-
-
-# ---- Citations ----
-
-
-@transcripts_bp.route("/api/citations/<participant>")
-def api_citations(participant: str) -> FlaskResponse:
-    """Return citation refs for a participant's summary, or generation status."""
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry:
-            return jsonify({"ok": False}), 404
-        citations = entry.get("citations")
-    if citations:
-        return ok(citations=citations)
-    if _orchestrator.is_generating(participant, "citations"):
-        return jsonify(
-            {
-                "ok": False,
-                "generating": True,
-                "started_at": _orchestrator.started_at(participant, "citations"),
-            }
-        )
-    return jsonify({"ok": False}), 404
-
-
-@transcripts_bp.route("/api/citations/<participant>/regenerate", methods=["POST"])
-def api_citations_regenerate(participant: str) -> FlaskResponse:
-    """Clear existing citations and re-trigger citation generation (Pass 2).
-
-    Manual trigger: runs even when config.OLLAMA_SUMMARY_ENABLED is False.
-    """
-    if _orchestrator.is_generating(participant, "citations"):
-        return ok(generating=True)
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry or not entry.get("summary") or not entry.get("segments"):
-            return err("No summary or transcript found", 404)
-        entry.pop("citations", None)
-    _persist_manifest()
-    _orchestrator.run_agent("citations", participant, force=True)
-    return ok(generating=True)
-
-
-@transcripts_bp.route("/api/citations/<participant>/stop", methods=["POST"])
-def api_citations_stop(participant: str) -> FlaskResponse:
-    """Abort an in-flight citations run.
-
-    Sets the cancel event so the streaming Ollama call closes its response
-    promptly, freeing the model for another run. The UI flips to idle
-    immediately. After a short delay, the model is unloaded from memory if
-    no new run has started in the meantime.
-    """
-    if _orchestrator.stop("citations", participant):
-        model = _agent_model("citations")
-        if model:
-            _schedule_model_unload(model)
-    return ok(running=False)
-
-
-# ---- Friction ----
-
-
-@transcripts_bp.route("/api/friction/<participant>")
-def api_friction(participant: str) -> FlaskResponse:
-    """Return friction analysis for a participant, or generation status.
-
-    The returned object carries its own ``stale`` flag (set after segment/summary
-    edits) so the UI can prompt for a re-run without a separate request.
-    """
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry:
-            return jsonify({"ok": False}), 404
-        friction_data = entry.get("friction")
-    if friction_data:
-        return ok(friction=friction_data)
-    if _orchestrator.is_generating(participant, "friction"):
-        return jsonify(
-            {
-                "ok": False,
-                "generating": True,
-                "started_at": _orchestrator.started_at(participant, "friction"),
-            }
-        )
-    return jsonify({"ok": False}), 404
-
-
-@transcripts_bp.route("/api/friction/<participant>/regenerate", methods=["POST"])
-def api_friction_regenerate(participant: str) -> FlaskResponse:
-    """Clear friction and re-trigger analysis (Pass 3).
-
-    Manual trigger: runs even when config.OLLAMA_FRICTION_ENABLED is False so the
-    frontend's per-participant controls can force a run. Requires a summary.
-    """
-    if _orchestrator.is_generating(participant, "friction"):
-        return ok(generating=True)
-    with _manifest_lock:
-        entry = _manifest.get("source_transcripts", {}).get(participant)
-        if not entry or not entry.get("summary") or not entry.get("segments"):
-            return err("No summary or transcript found", 404)
-        entry.pop("friction", None)
-    _persist_manifest()
-    _orchestrator.run_agent("friction", participant, force=True)
-    return ok(generating=True)
-
-
-@transcripts_bp.route("/api/friction/<participant>/stop", methods=["POST"])
-def api_friction_stop(participant: str) -> FlaskResponse:
-    """Abort an in-flight friction run.
-
-    Sets the cancel event so the streaming Ollama call closes its response
-    promptly, freeing the model for another run. The UI flips to idle
-    immediately. After a short delay, the model is unloaded from memory if no new
-    run has started in the meantime.
-    """
-    if _orchestrator.stop("friction", participant):
-        model = _agent_model("friction")
-        if model:
-            _schedule_model_unload(model)
-    return ok(running=False)
 
 
 # ---- Corrections ----
