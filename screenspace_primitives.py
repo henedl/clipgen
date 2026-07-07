@@ -130,6 +130,25 @@ def _is_static_skip(
     return False
 
 
+def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> bool:
+    """True when *curr_gray* is a near-duplicate of the last processed gray frame.
+
+    A frame is "static" when its mean grayscale diff from *prev_gray* is below
+    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``. Returns False when *prev_gray*
+    is ``None`` (no baseline yet). Unlike :func:`_is_static_skip`, this is a bare
+    predicate with no consecutive-buffer/progress side effects, so callers apply
+    whatever skip semantics fit their scan (reset a motion run, extend a span,
+    skip a per-frame op, or carry the last result). Shared by scan_similarity,
+    scan_flow, scan_inactivity, scan_boundaries, and scan_template.
+    """
+    if prev_gray is None:
+        return False
+    return (
+        float(np.mean(cv2.absdiff(prev_gray, curr_gray)))
+        < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
+    )
+
+
 # ---------------------------------------------------------------------------
 # Analysis primitives
 # ---------------------------------------------------------------------------

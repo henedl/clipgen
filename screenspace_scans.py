@@ -21,6 +21,7 @@ import config
 import utils
 from screenspace_primitives import (
     _ConsecutiveBuffer,
+    _frame_is_static,
     _is_static_skip,
     _match_template_prepared,
     _merge_timestamp_spans,
@@ -293,14 +294,10 @@ def scan_similarity(
             return False
         # Static-frame skip
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        if prev_skip_gray[0] is not None:
-            if (
-                float(np.mean(cv2.absdiff(prev_skip_gray[0], gray)))
-                < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
-            ):
-                if on_progress and total_range > 0:
-                    on_progress((ts - start_seconds) / total_range)
-                return None
+        if _frame_is_static(prev_skip_gray[0], gray):
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
         prev_skip_gray[0] = gray
 
         frame_phash = compute_phash(pixels)
@@ -715,9 +712,37 @@ def scan_template(
         else 1.0
     )
 
+    # Static-frame carry: template results are per-frame rows with no consecutive
+    # buffer, so a naive skip would drop a persistent match's rows and make the
+    # detection flicker. Cache the last processed frame's result and, on a static
+    # frame, re-emit it (re-stamped) instead of re-running the expensive match.
+    prev_skip_gray: list[np.ndarray | None] = [None]
+    last_rd: list[dict[str, Any] | None] = [None]
+
     def _cb(ts: float, frame: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
+        curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if _frame_is_static(prev_skip_gray[0], curr_gray):
+            # Near-duplicate of the last matched frame — matches (already in
+            # original-frame coords) still hold. Carry the row forward; keep
+            # prev_skip_gray as the baseline so drift out of the run recomputes.
+            if last_rd[0] is not None:
+                carried = dict(last_rd[0])
+                carried["timestamp"] = ts
+                results.append(carried)
+                if on_result:
+                    on_result(
+                        {
+                            "timestamp": ts,
+                            "best_score": carried["best_score"],
+                            "match_count": carried["match_count"],
+                        }
+                    )
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
+        prev_skip_gray[0] = curr_gray
         work_frame = frame
         scale_back = 1
         if _tmpl_downscale:
@@ -749,6 +774,7 @@ def scan_template(
                 "match_count": len(matches),
             }
             results.append(rd)
+            last_rd[0] = rd
             if on_result:
                 on_result(
                     {
@@ -757,6 +783,9 @@ def scan_template(
                         "match_count": rd["match_count"],
                     }
                 )
+        else:
+            # No match this frame — a subsequent static frame has nothing to carry.
+            last_rd[0] = None
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -817,6 +846,16 @@ def scan_flow(
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        # Static-frame skip: a near-duplicate of the previous frame produces
+        # ~zero optical flow, so the expensive Farneback pass would only confirm
+        # magnitude < threshold and reset the run anyway. Short-circuit to that
+        # outcome, still advancing prev_gray (flow is measured frame-to-frame).
+        if _frame_is_static(prev_gray[0], curr_gray):
+            buf.reset()
+            prev_gray[0] = curr_gray
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
         if prev_gray[0] is not None:
             flow_result = compute_optical_flow(
                 prev_gray[0], curr_gray, return_grid=True
@@ -1010,9 +1049,19 @@ def scan_inactivity(
 
     results: list[dict[str, Any]] = []
     prev_hash: list["imagehash.ImageHash | None"] = [None]
+    prev_skip_gray: list[np.ndarray | None] = [None]
     span_start: list[float | None] = [None]
     span_distances: list[list[int]] = [[]]
     last_ts: list[float] = [start_seconds]
+
+    def _extend_span(ts: float, dist: int) -> None:
+        # Frame is similar — extend or start span.
+        if span_start[0] is None:
+            # Clamp to the scan start so a match early in the video
+            # (ts < interval_seconds, or start_seconds > 0) can't begin
+            # the span before 0:00 / the requested start.
+            span_start[0] = max(start_seconds, ts - interval_seconds)
+        span_distances[0].append(dist)
 
     def _flush_span(span_end: float) -> None:
         if span_start[0] is not None:
@@ -1036,19 +1085,28 @@ def scan_inactivity(
         if cancel_flag and cancel_flag():
             return False
 
-        curr_hash = compute_phash(pixels)
         last_ts[0] = ts
+
+        # Static-frame fast-path: a gray mean-diff below the static threshold
+        # implies a phash Hamming distance of ~0 — well within the (always ≥1)
+        # inactivity threshold — so the frame is provably inactive. Extend the
+        # span with a nominal 0 distance and skip the much heavier compute_phash.
+        # prev_hash/prev_skip_gray are left as the run baseline so slow drift is
+        # still measured against the start of the frozen run.
+        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if _frame_is_static(prev_skip_gray[0], curr_gray):
+            _extend_span(ts, 0)
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
+        prev_skip_gray[0] = curr_gray
+
+        curr_hash = compute_phash(pixels)
 
         if prev_hash[0] is not None:
             dist = int(curr_hash - prev_hash[0])
             if dist <= threshold:
-                # Frame is similar — extend or start span
-                if span_start[0] is None:
-                    # Clamp to the scan start so a match early in the video
-                    # (ts < interval_seconds, or start_seconds > 0) can't begin
-                    # the span before 0:00 / the requested start.
-                    span_start[0] = max(start_seconds, ts - interval_seconds)
-                span_distances[0].append(dist)
+                _extend_span(ts, dist)
             else:
                 # Frame changed — flush any active span
                 _flush_span(ts - interval_seconds)
@@ -1344,9 +1402,21 @@ def scan_boundaries(
 
     if not use_scene:
         # ---- v1 phash path: consecutive-frame spike, streamed live ----
+        prev_skip_gray: list[np.ndarray | None] = [None]
+
         def _cb_phash(ts: float, pixels: np.ndarray) -> bool | None:
             if cancel_flag and cancel_flag():
                 return False
+            # Static-frame skip: a near-duplicate frame yields a phash distance
+            # ~0, far below the boundary threshold, so it can never be a scene
+            # boundary. Skip the heavy compute_phash and keep prev_hash as the
+            # run baseline (a real spike is never gray-static, so none is missed).
+            curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+            if _frame_is_static(prev_skip_gray[0], curr_gray):
+                if on_progress and total_range > 0:
+                    on_progress((ts - start_seconds) / total_range)
+                return None
+            prev_skip_gray[0] = curr_gray
             curr_hash = compute_phash(pixels)
             if prev_hash[0] is not None:
                 dist = int(curr_hash - prev_hash[0])

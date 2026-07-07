@@ -48,6 +48,7 @@ from screenspace_primitives import (
     FULL_FRAME_REGION_NAME,
     ScanCallback,
     _ConsecutiveBuffer,
+    _frame_is_static,
     _is_static_skip,
     _merge_timestamp_spans,
     _morph_kernel,
