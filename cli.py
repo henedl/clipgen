@@ -2413,7 +2413,7 @@ def _truncate_for_filename(text: str, *, limit: int = 60) -> str:
     text = " ".join(text.split())
     if len(text) <= limit:
         return text
-    return files._safe_truncate(text, limit).rstrip() + "…"
+    return files.safe_truncate(text, limit).rstrip() + "…"
 
 
 def _run_ss_clips(args: argparse.Namespace) -> None:
@@ -3303,7 +3303,7 @@ def _dispatch_standalone_mode(
     """
     # Standalone viewer: regenerate viewer from saved manifest
     if getattr(args, "viewer", False) and not cli_mode:
-        existing_artifacts, existing_reels = viewer._load_manifest_both()
+        existing_artifacts, existing_reels = viewer.load_manifest_both()
         if not existing_artifacts and not existing_reels:
             utils.error_print(
                 "No manifest found or manifest is empty.",
@@ -3406,7 +3406,7 @@ def _dispatch_standalone_mode(
 
     # Standalone regenerate from manifest
     if getattr(args, "regenerate", False) and not cli_mode:
-        existing_artifacts, existing_reels = viewer._load_manifest_both()
+        existing_artifacts, existing_reels = viewer.load_manifest_both()
         if not existing_artifacts and not existing_reels:
             utils.error_print(
                 "No manifest found or manifest is empty.",

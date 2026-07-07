@@ -329,7 +329,7 @@
         ctx.fillRect(outX, 0, w - outX, h);
       }
       // Marker lines
-      ctx.strokeStyle = "#16a34a";
+      ctx.strokeStyle = tc.positive;
       ctx.lineWidth = 2;
       if (state.inMarker !== null) {
         var ix = timeToX(state.inMarker);

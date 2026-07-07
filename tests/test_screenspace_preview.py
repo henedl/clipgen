@@ -226,6 +226,38 @@ def test_template_heatmap_with_mask_matches_scan_prep(
     assert img.shape[:2] == synthetic_frame.shape[:2]
 
 
+def test_composite_template_preview_binarizes_mask(
+    synthetic_frame: np.ndarray,
+) -> None:
+    """The composite template preview binarizes the mask like the real scan.
+
+    ``_prepare_template`` thresholds the alpha mask at 127, so a soft mask and
+    its pre-binarized equivalent must yield an identical composite. A blurred
+    mask (the previous behavior) would let the semi-transparent border leak into
+    ``TM_CCOEFF_NORMED`` and diverge between the two.
+    """
+    template = synthetic_frame[10:50, 10:50].copy()
+    soft = np.full((40, 40), 100, dtype=np.uint8)  # semi-transparent border
+    soft[10:30, 10:30] = 255  # opaque center
+    hard = np.where(soft >= 128, 255, 0).astype(np.uint8)
+
+    img_soft = screenspace_preview.build_preview(
+        synthetic_frame,
+        None,
+        None,
+        "template",
+        {"template_image": template, "template_mask": soft},
+    )
+    img_hard = screenspace_preview.build_preview(
+        synthetic_frame,
+        None,
+        None,
+        "template",
+        {"template_image": template, "template_mask": hard},
+    )
+    assert np.array_equal(img_soft, img_hard)
+
+
 def test_overlay_multitool_inherits_first_step(
     synthetic_frame: np.ndarray, region: dict[str, int]
 ) -> None:

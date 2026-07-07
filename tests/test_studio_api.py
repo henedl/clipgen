@@ -890,7 +890,7 @@ def test_api_manifest_get_returns_artifacts(client, monkeypatch):
     fake_artifacts = [
         {"id": "a5c2s0", "type": "clip", "participant": "P01", "cellRow": 5}
     ]
-    monkeypatch.setattr(viewer, "_load_manifest_both", lambda: (fake_artifacts, []))
+    monkeypatch.setattr(viewer, "load_manifest_both", lambda: (fake_artifacts, []))
     resp = client.get("/studio/api/manifest")
     assert resp.status_code == 200
     data = resp.get_json()
@@ -903,7 +903,7 @@ def test_api_manifest_get_returns_artifacts(client, monkeypatch):
 def test_api_manifest_get_empty(client, monkeypatch):
     import viewer
 
-    monkeypatch.setattr(viewer, "_load_manifest_both", lambda: ([], []))
+    monkeypatch.setattr(viewer, "load_manifest_both", lambda: ([], []))
     resp = client.get("/studio/api/manifest")
     assert resp.status_code == 200
     data = resp.get_json()

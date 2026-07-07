@@ -6,30 +6,46 @@ Studio, Screenspace, Transcripts, and Workflows blueprints on one app at config.
 Module-level state: _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 (initialized by _init_studio_state()).
 
-Studio API endpoints (all under /studio/):
-  GET  /api/sheet              – spreadsheet grid data (rows, participants, timestamps)
-  POST /api/sheet/refresh      – re-fetch spreadsheet data from source (Google/Excel)
-  GET  /api/thumbnail/<p>/<t>  – JPEG thumbnail frame from participant video
-  POST /api/generate           – generate clip/screen/gif artifacts for specified cells
-  POST /api/generate/cancel    – cancel an in-progress clip generation
-  POST /api/highlights-preview – preview highlights reel selection without generating
-  POST /api/reel               – build a reel from specified cells
-  POST /api/reel-direct        – build a reel from explicit clip paths
-  POST /api/reel/cancel        – cancel an in-progress reel build
-  POST /api/viewer             – generate timeline viewer from session artifacts
-  POST /api/timeline-viewer    – batch-export all clips and generate timeline viewer
-  POST /api/gallery            – generate gallery from a video file
-  GET/POST /api/manifest       – read or write the cumulative artifact manifest
-  POST /api/regenerate         – regenerate all media from saved manifest
-  GET/POST /api/stashes        – reel stash CRUD
-  GET/POST /api/artifact-stashes – artifact stash CRUD
-  POST /api/generate-intake    – generate artifacts from an intake/screenspace manifest
-  GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
-  GET  /api/convergence/offsets – per-participant convergence display offsets
-  PUT  /api/convergence/offsets – persist per-participant convergence display offsets
-  GET  /api/settings           – read current config settings
-  PUT  /api/settings           – update config settings
-  GET  /api/status             – reports which interfaces are active (studio/screenspace/transcripts)
+Studio API endpoints (studio_bp, mounted under /studio/):
+  Media  GET  /api/thumbnail/<p>/<t>   – JPEG thumbnail frame from participant video
+         GET  /api/sprite/<p>          – hover-scrubber sprite sheet for a clip
+         GET  /api/clip-audio/<p>      – hover-scrubber audio snippet for a clip
+  Sheet  GET  /api/sheet               – spreadsheet grid data (rows, participants, timestamps)
+         POST /api/sheet/refresh       – re-fetch spreadsheet data from source (Google/Excel)
+         GET  /api/sheet/baseline      – per-participant baseline timestamps for convergence
+         GET/PUT /api/convergence/offsets – read/persist per-participant convergence offsets
+  Build  POST /api/generate            – generate clip/screen/gif artifacts for cells
+         POST /api/generate/cancel     – cancel an in-progress clip generation
+         POST /api/generate-intake     – generate artifacts from an intake/screenspace manifest
+         POST /api/generate-intake/cancel – cancel an in-progress intake generation
+         POST /api/highlights-preview  – preview highlights reel selection without generating
+         POST /api/reel                – build a reel from specified cells
+         POST /api/reel-direct         – build a reel from explicit clip paths
+         POST /api/reel/cancel         – cancel an in-progress reel build
+         GET  /api/job-status          – poll the status of a background build job
+  Export POST /api/viewer              – generate timeline viewer from session artifacts
+         POST /api/open-viewer         – open an already-generated viewer HTML
+         POST /api/timeline-viewer     – batch-export all clips and generate timeline viewer
+         POST /api/timeline-viewer/cancel – cancel a batch timeline-viewer export
+         POST /api/gallery             – generate gallery from a video file
+         POST /api/gallery/cancel      – cancel a gallery build
+  State  GET/POST /api/manifest        – read or write the cumulative artifact manifest
+         POST /api/regenerate          – regenerate all media from saved manifest
+         GET/POST /api/stashes         – reel stash CRUD
+         GET/POST /api/artifact-stashes – artifact stash CRUD
+  Cards  GET  /api/titlecards          – list title/end card background options
+         GET  /api/titlecards/default/<kind> – default title/end card image
+         GET/DELETE /api/titlecards/image/<path:name> – fetch or remove an uploaded card
+         POST /api/titlecards/upload   – upload a title/end card background
+  Config GET/PUT /api/settings         – read or update config settings
+
+Combined app-level routes (registered by start_combined_server, not under /studio/):
+  GET  /                        – Start overlay / active-tool landing page
+  GET  /api/status              – which interfaces are active (studio/screenspace/transcripts)
+  GET  /api/export/status, POST /api/export – analysis-ready JSON/CSV export
+  GET/POST /api/dirs            – input/output directory picker
+  GET  /api/spreadsheets/excel|google – spreadsheet discovery
+  POST /api/spreadsheets/google/auth, /api/spreadsheets/open – Google auth + open
 """
 
 import concurrent.futures
@@ -73,7 +89,7 @@ import titlecards
 import utils
 import video
 import viewer
-from server_utils import err, ok
+from server_utils import err, json_endpoint, ok, parse_number_arg
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -534,17 +550,15 @@ def _resolve_source_video(participant: str) -> Path | None:
 
 
 @studio_bp.route("/api/thumbnail/<participant>/<start_seconds>")
+@json_endpoint
 def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
 
-    try:
-        # Parse via float so a fractional second (thumbnails are second-granular,
-        # so floor it) does not 400 the way bare int("12.5") would; matches the
-        # float-tolerant parsing the project's other media routes use.
-        start_sec = max(0, int(float(start_seconds)))
-    except (ValueError, TypeError):
-        return err("Invalid timestamp")
+    # Thumbnails are second-granular; int_only floors "12.5" (float-tolerant) and
+    # the max(0, ...) clamps negatives to 0 rather than rejecting, matching the
+    # float-tolerant parsing the project's other media routes use.
+    start_sec = max(0, parse_number_arg(start_seconds, "timestamp", int_only=True))
     sources = _resolve_participant_sources(participant)
     if not sources or not sources[0].is_file():
         return err("Source video not found", 404)
@@ -2176,7 +2190,7 @@ def api_open_viewer() -> FlaskResponse:
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":
-        artifacts, reels = viewer._load_manifest_both()
+        artifacts, reels = viewer.load_manifest_both()
         return ok(artifacts=artifacts, reels=reels)
 
     # Snapshot the shared lists so a worker thread extending mid-export
@@ -2213,7 +2227,7 @@ def api_manifest() -> FlaskResponse:
 @studio_bp.route("/api/regenerate", methods=["POST"])
 def api_regenerate() -> FlaskResponse:
     try:
-        artifacts, reels = viewer._load_manifest_both()
+        artifacts, reels = viewer.load_manifest_both()
         if not artifacts and not reels:
             return err("No manifest found on disk. Export a manifest first.")
 
@@ -3098,7 +3112,7 @@ def _init_studio_state(worksheet: Any) -> None:
     # Rebind the shared generated lists under their lock so a streaming
     # generate/intake append can't run against a half-swapped reference.
     with _generated_output_lock:
-        _generated_artifacts, _generated_reels = viewer._load_manifest_both()
+        _generated_artifacts, _generated_reels = viewer.load_manifest_both()
         _rebuild_artifact_index()
     _thumbnail_cache.clear()
     _sprite_cache.clear()

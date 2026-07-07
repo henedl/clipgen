@@ -258,7 +258,10 @@ def _handle_spreadsheet_command(
         return None
     # Handle 'last' command
     if input_name.startswith(config.COMMAND_OPEN_LAST):
-        latest_spreadsheet_name = google_api.get_all_spreadsheets(gspread_client)[0]
+        # doc_list is already the get_all_spreadsheets() result (newest first,
+        # same source the 'new' command reads); reuse it rather than paying
+        # another rate-limited Google Sheets round-trip for data in hand.
+        latest_spreadsheet_name = doc_list[0]
         return open_spreadsheet_by_name(
             gspread_client, doc_list, latest_spreadsheet_name, use_spinner=True
         )
@@ -880,7 +883,7 @@ def _run_viewer_mode(worksheet: Any) -> None:
 
 def _run_regenerate_mode() -> None:
     """Regenerate all media artifacts and reels from saved manifest."""
-    existing_artifacts, existing_reels = viewer._load_manifest_both()
+    existing_artifacts, existing_reels = viewer.load_manifest_both()
     if not existing_artifacts and not existing_reels:
         utils.info_print(
             "No manifest file found.\nGenerate clips first with --manifest to save one."

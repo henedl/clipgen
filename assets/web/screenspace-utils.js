@@ -38,17 +38,9 @@ function hsvToRgb(h, s, v) {
   return { r: Math.round((r1 + m) * 255), g: Math.round((g1 + m) * 255), b: Math.round((b1 + m) * 255) };
 }
 
-function rgbToHex(r, g, b) {
-  return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
-}
-
-function hexToRgb(hex) {
-  hex = hex.replace(/^#/, "");
-  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return null;
-  var n = parseInt(hex, 16);
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-}
+// hexToRgb / rgbToHex live in utils.js (loaded first); screenspace reaches them
+// via the scope chain. rgbToHsv / hsvToRgb stay here — they use OpenCV-style
+// ranges (h 0–180, s/v 0–255) to match screenspace.py, unlike any utils.js math.
 
 // ---- Form input builders ----
 
