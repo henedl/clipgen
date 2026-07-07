@@ -1146,3 +1146,53 @@ def test_run_clip_pipeline_cancel_captures_started_clip_results(monkeypatch):
     # Each captured result is the proper (segment_paths, components) tuple shape.
     for segment_paths, components in results:
         assert isinstance(segment_paths, list)
+
+
+def test_parallel_map_ordered_collects_in_original_order():
+    items = [3, 1, 2, 4]
+    results: list = [None] * len(items)
+    pipeline._parallel_map_ordered(
+        items,
+        lambda n: n * 10,
+        workers=4,
+        results=results,
+        on_error=lambda idx, exc: "err",
+    )
+    assert results == [30, 10, 20, 40]
+
+
+def test_parallel_map_ordered_on_error_fills_failing_slot():
+    items = [1, 2, 3]
+    results: list = [None] * len(items)
+
+    def worker(n):
+        if n == 2:
+            raise ValueError("boom")
+        return n
+
+    pipeline._parallel_map_ordered(
+        items,
+        worker,
+        workers=3,
+        results=results,
+        on_error=lambda idx, exc: f"failed:{idx}",
+    )
+    assert results == [1, "failed:1", 3]
+
+
+def test_parallel_map_ordered_cancel_leaves_prefilled_sentinel():
+    items = list(range(6))
+    sentinel = (0, [])
+    results: list = [sentinel] * len(items)
+
+    # Cancel immediately: the as_completed loop breaks before collecting, so
+    # every slot keeps the caller's pre-filled sentinel.
+    pipeline._parallel_map_ordered(
+        items,
+        lambda n: (1, [str(n)]),
+        workers=2,
+        results=results,
+        on_error=lambda idx, exc: sentinel,
+        cancel_flag=lambda: True,
+    )
+    assert all(r == sentinel for r in results)
