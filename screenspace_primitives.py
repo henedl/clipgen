@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Screenspace image-analysis primitives (pure cv2/numpy/PIL).
+"""Screenspace image-analysis primitives (pure cv2/numpy).
 
 Region cropping/denormalization/resolution, HSV color math, frame-diff, SSIM,
 perceptual hashing, template matching, optical flow, and scene fingerprinting,
@@ -404,13 +404,20 @@ def regions_are_similar(
 
 
 def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
-    """Compute perceptual hash of a region for fast similarity scanning."""
-    import imagehash
-    from PIL import Image
+    """Compute perceptual hash of a region for fast similarity scanning.
 
-    rgb = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(rgb)
-    return imagehash.phash(pil_img)
+    Mirrors ``imagehash.phash`` (grayscale → 32×32 → 2D DCT → top-left 8×8 →
+    median threshold) natively in cv2, skipping the per-frame BGR→RGB +
+    ``PIL.Image`` round-trip that dominates this hot scan-callback path.
+    """
+    import imagehash
+
+    gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+    dct = cv2.dct(small)
+    dctlowfreq = dct[:8, :8]
+    diff = dctlowfreq > np.median(dctlowfreq)
+    return imagehash.ImageHash(diff)
 
 
 # Prepared template payload shared across frames in a scan: grayscale blurred
