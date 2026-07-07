@@ -225,7 +225,7 @@ def test_studio_card_scrubber_wiring():
 
     html = STUDIO_HTML.read_text(encoding="utf-8")
     assert '<link rel="stylesheet" href="card-scrubber.css">' in html
-    assert '<script src="card-scrubber.js"></script>' in html
+    assert '<script src="card-scrubber.js" defer></script>' in html
 
 
 def test_studio_card_scrubber_gates_on_thumbnail_and_prefetches():

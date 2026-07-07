@@ -43,7 +43,7 @@ def test_motion_wiggle_is_tunable():
 def test_motion_loaded_after_utils_on_both_pages():
     for page in ("screenspace.html", "studio.html"):
         html = (_WEB / page).read_text(encoding="utf-8")
-        assert '<script src="motion.js"></script>' in html, (
+        assert '<script src="motion.js" defer></script>' in html, (
             f"{page} must load motion.js"
         )
         # motion.js provides window.ClipgenMotion; it must load after utils.js and
