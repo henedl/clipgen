@@ -23,7 +23,8 @@ import cv2
 import numpy as np
 
 import config
-import screenspace
+import screenspace_ocr
+import screenspace_primitives
 
 
 # Max width (px) of the composite preview image.  Kept modest: the UI pane is
@@ -161,7 +162,7 @@ def build_overlay_layer(
 
     if tool in ("text", "numbers") and layer == "gray":
         if params.get("ocr_preprocess"):
-            pixels = screenspace._preprocess_for_ocr(pixels)
+            pixels = screenspace_ocr._preprocess_for_ocr(pixels)
         return _gray_to_bgr(cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY))
 
     if tool == "scene" and layer == "edges":
@@ -291,7 +292,7 @@ def _overlay_flow(
     prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
 
     # Compute flow at the same downscaled resolution as
-    # screenspace.compute_optical_flow so the overlay shows the same vectors
+    # screenspace_primitives.compute_optical_flow so the overlay shows the same vectors
     # the CV pipeline actually scored. Background gray stays at native
     # resolution so the user sees a crisp image; arrow coordinates are
     # scaled up via _draw_flow_arrows' coord_scale.
@@ -347,8 +348,8 @@ def _overlay_template_heatmap(
     # Reuse the scan's template-prep + correlation helpers so the preview
     # heatmap reflects exactly what a real scan computes: the mask is binarized
     # (not blurred), and the degeneracy/oversize checks match the scan path.
-    prepared = screenspace._prepare_template(template, mask)
-    result = screenspace._template_correlation_map(frame, prepared)
+    prepared = screenspace_primitives._prepare_template(template, mask)
+    result = screenspace_primitives._template_correlation_map(frame, prepared)
     if result is None:
         return None
     tmpl_gray = prepared[0]
@@ -459,7 +460,7 @@ def _clip_region_pixels(
 ) -> "np.ndarray | None":
     if region is None:
         return None
-    pixels = screenspace.extract_region(frame, region)
+    pixels = screenspace_primitives.extract_region(frame, region)
     if pixels.size == 0:
         return None
     return pixels
@@ -487,7 +488,7 @@ def _preview_color(
         )
     else:
         down = pixels.copy()
-    mean_hsv = screenspace.average_color_hsv(pixels)
+    mean_hsv = screenspace_primitives.average_color_hsv(pixels)
 
     # Target swatch from params (falls back to computed mean)
     tgt_h = float(params.get("h", mean_hsv["h"]))
@@ -621,7 +622,7 @@ def _preview_text_numbers(
         return _placeholder("Select a region to preview")
     label = "OCR input (gray)"
     if params.get("ocr_preprocess"):
-        pixels = screenspace._preprocess_for_ocr(pixels)
+        pixels = screenspace_ocr._preprocess_for_ocr(pixels)
         label = "OCR input (enhanced)"
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     return _label_panel(_fit_width(gray, 300), label)
@@ -652,20 +653,16 @@ def _preview_template(
         )
         panels.append(_label_panel(_fit_width(tmpl_gray, 120), "template"))
 
-        # Match heatmap (only when template fits inside the frame)
-        if (
-            tmpl_gray.shape[0] <= frame_gray.shape[0]
-            and tmpl_gray.shape[1] <= frame_gray.shape[1]
-            and float(np.std(tmpl_gray)) >= 1e-6
-        ):
-            mask = params.get("template_mask")
-            gray_mask = None
-            if isinstance(mask, np.ndarray) and mask.size > 0:
-                gray_mask = cv2.GaussianBlur(mask, (k, k), 0)
-            result = cv2.matchTemplate(
-                frame_gray, tmpl_gray, cv2.TM_CCOEFF_NORMED, mask=gray_mask
-            )
-            result = np.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+        # Match heatmap. Reuse the real scan's prepared-template pipeline
+        # (binarized mask, degenerate-template guard, finite neutralization) so
+        # the preview reflects exactly what a scan computes — a blurred mask here
+        # would inflate TM_CCOEFF_NORMED and show a different model than reality.
+        mask = params.get("template_mask")
+        if not (isinstance(mask, np.ndarray) and mask.size > 0):
+            mask = None
+        prepared = screenspace_primitives._prepare_template(template, mask)
+        result = screenspace_primitives._template_correlation_map(frame, prepared)
+        if result is not None:
             norm = np.empty_like(result)
             cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
             heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
@@ -754,7 +751,7 @@ def _preview_scene(
         pixels_small = pixels
 
     # Canny at native region resolution to match
-    # screenspace.compute_scene_fingerprint and the full-frame overlay; then
+    # screenspace_primitives.compute_scene_fingerprint and the full-frame overlay; then
     # downscale the binary edge map for display so the small panel reflects
     # the same edges that drive scene scoring.
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
@@ -806,7 +803,7 @@ def _preview_inactivity(
     if pixels is None:
         return _placeholder("Select a region to preview")
 
-    ph = screenspace.compute_phash(pixels)
+    ph = screenspace_primitives.compute_phash(pixels)
     # imagehash.ImageHash exposes .hash as a 2D bool ndarray (typically 8×8 for phash)
     bits = np.asarray(ph.hash, dtype=np.uint8) * 255
     # Upscale to a visible grid
