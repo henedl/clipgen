@@ -574,6 +574,67 @@ class TestTranscriptsManifest:
         m = transcripts.load_transcripts_manifest()
         assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
 
+    def test_load_returns_independent_deep_copies(self, tmp_path, monkeypatch):
+        """Mutating a returned entry in place must not corrupt the cache."""
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts._reset_transcripts_manifest_cache()
+        source = {
+            "P01": {
+                "segments": [{"start": 0.0, "end": 1.0, "text": "hi"}],
+                "language": "en",
+                "model": "base",
+                "source_file": "v.mp4",
+                "transcribed_at": "2025-01-01T00:00:00+00:00",
+            }
+        }
+        transcripts.save_transcripts_manifest(source, [])
+
+        first = transcripts.load_transcripts_manifest()
+        # Deep-mutate a nested entry exactly like --summarize / --citations do.
+        first["source_transcripts"]["P01"]["summary"] = "leaked"
+
+        second = transcripts.load_transcripts_manifest()
+        assert "summary" not in second["source_transcripts"]["P01"]
+
+    def test_repeated_load_reuses_cache(self, tmp_path, monkeypatch):
+        """A second load with an unchanged file must not re-read/parse from disk."""
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts._reset_transcripts_manifest_cache()
+        transcripts.save_transcripts_manifest(
+            {}, [{"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"}]
+        )
+
+        calls = {"n": 0}
+        real_load = utils.load_json_manifest
+
+        def _counting_load(*args, **kwargs):
+            calls["n"] += 1
+            return real_load(*args, **kwargs)
+
+        monkeypatch.setattr(utils, "load_json_manifest", _counting_load)
+
+        transcripts.load_transcripts_manifest()  # miss -> one disk read
+        transcripts.load_transcripts_manifest()  # hit  -> no disk read
+        assert calls["n"] == 1
+
+    def test_save_busts_cache(self, tmp_path, monkeypatch):
+        """After a save the next load must reflect the new data, not the cache."""
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts._reset_transcripts_manifest_cache()
+        transcripts.save_transcripts_manifest(
+            {}, [{"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"}]
+        )
+        assert len(transcripts.load_transcripts_manifest()["corrections"]) == 1
+
+        transcripts.save_transcripts_manifest(
+            {},
+            [
+                {"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"},
+                {"id": "c2", "from": "c", "to": "d", "created": "2025-01-01T00:00:00"},
+            ],
+        )
+        assert len(transcripts.load_transcripts_manifest()["corrections"]) == 2
+
 
 # ---------------------------------------------------------------------------
 # ManifestSegment type
