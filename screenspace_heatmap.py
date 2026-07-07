@@ -194,29 +194,28 @@ def generate_heatmap_gif(
     if heatmap_type in ("flow", "change"):
         acc_h = acc_w = 256
 
-    # First pass: compute global max for consistent normalization
-    global_acc = np.zeros((acc_h, acc_w), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(global_acc, r, heatmap_type)
-    global_max = float(global_acc.max())
-    if global_max == 0:
-        return None
-
-    # Second pass: build progressive frames
+    # Single pass: accumulate progressively, snapshotting each frame's state.
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
-    frames: list[Image.Image] = []
-
+    snapshots: list[np.ndarray | None] = []
     for frame_idx in range(num_frames):
         start_idx, end_idx = _frame_bucket_bounds(frame_idx, len(results), num_frames)
         for r_idx in range(start_idx, end_idx):
             _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
+        snapshots.append(accumulator.copy())
 
-        frames.append(
-            _heatmap_frame_image(accumulator, global_max, heatmap_type, width, height)
-        )
-
-    if not frames:
+    # Monotonic accumulation → the final cumulative state carries the global max.
+    global_max = float(accumulator.max())
+    if global_max == 0:
         return None
+
+    frames: list[Image.Image] = []
+    for idx in range(num_frames):
+        snap = snapshots[idx]
+        assert snap is not None  # freshly filled above; released only after use
+        frames.append(
+            _heatmap_frame_image(snap, global_max, heatmap_type, width, height)
+        )
+        snapshots[idx] = None  # release the array once colorized (bound peak memory)
 
     frames[0].save(
         output_path,
@@ -266,21 +265,24 @@ def generate_rolling_heatmap_gif(
                 _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
         return acc
 
-    # First pass: densest window sets the shared normalization ceiling.
-    global_max = 0.0
-    for frame_idx in range(num_frames):
-        global_max = max(global_max, float(_accumulate_window(frame_idx).max()))
+    # Single pass: build each window once, cache it, and track the shared ceiling.
+    window_accs: list[np.ndarray | None] = [
+        _accumulate_window(i) for i in range(num_frames)
+    ]
+    global_max = max(
+        (float(a.max()) for a in window_accs if a is not None), default=0.0
+    )
     if global_max == 0:
         return None
 
-    # Second pass: render each window as a frame.
     frames: list[Image.Image] = []
-    for frame_idx in range(num_frames):
+    for idx in range(num_frames):
+        acc = window_accs[idx]
+        assert acc is not None  # freshly filled above; released only after use
         frames.append(
-            _heatmap_frame_image(
-                _accumulate_window(frame_idx), global_max, heatmap_type, width, height
-            )
+            _heatmap_frame_image(acc, global_max, heatmap_type, width, height)
         )
+        window_accs[idx] = None  # release once colorized
 
     frames[0].save(
         output_path,
