@@ -73,7 +73,7 @@ import titlecards
 import utils
 import video
 import viewer
-from server_utils import err, ok
+from server_utils import err, json_endpoint, ok, parse_number_arg
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -534,17 +534,15 @@ def _resolve_source_video(participant: str) -> Path | None:
 
 
 @studio_bp.route("/api/thumbnail/<participant>/<start_seconds>")
+@json_endpoint
 def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
 
-    try:
-        # Parse via float so a fractional second (thumbnails are second-granular,
-        # so floor it) does not 400 the way bare int("12.5") would; matches the
-        # float-tolerant parsing the project's other media routes use.
-        start_sec = max(0, int(float(start_seconds)))
-    except (ValueError, TypeError):
-        return err("Invalid timestamp")
+    # Thumbnails are second-granular; int_only floors "12.5" (float-tolerant) and
+    # the max(0, ...) clamps negatives to 0 rather than rejecting, matching the
+    # float-tolerant parsing the project's other media routes use.
+    start_sec = max(0, parse_number_arg(start_seconds, "timestamp", int_only=True))
     sources = _resolve_participant_sources(participant)
     if not sources or not sources[0].is_file():
         return err("Source video not found", 404)
