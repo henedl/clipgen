@@ -79,6 +79,7 @@ from screenspace_ocr import (
 from screenspace_frames import (
     _ffmpeg_pipe_frames,
     _probe_video_meta,
+    _resolve_scan_window,
     _scan_via_ffmpeg_pipe,
     build_timelapse_command,
     scan_video_frames,

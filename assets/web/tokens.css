@@ -249,6 +249,13 @@
   --layout-max-width: 1120px;
   --layout-padding-x: var(--space-5);
 
+  /* Floating chrome — the fixed TopNav + subheader strip. --chrome-height
+   * (48 + 44 = 92px) is the combined offset content clears below both bars. */
+  --topnav-height: 48px;
+  --subheader-height: 44px;
+  --chrome-height: calc(var(--topnav-height) + var(--subheader-height));
+  --subheader-font-size: 12.5px; /* intentional off-scale, between --text-xs/--text-sm */
+
   /* Sidebar widths */
   --sidebar-width-default: 340px;
   --sidebar-width-wide: 420px;
@@ -408,6 +415,11 @@ html[data-theme="light"] .cg-logo {
 }
 @media (prefers-reduced-motion: reduce) {
   .skeleton { animation: none; }
+}
+/* Shared 360° rotation for every page spinner. Pages keep their own duration
+ * on the animated selector and reference this keyframe by name. */
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 /* Cross-reference badge icon (mask-image from assets/icons/) */
 .xref-badge-icon {
@@ -664,17 +676,17 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 #trSubheader {
   display: flex;
   align-items: center;
-  height: 44px;
-  padding: 0 16px;
+  height: var(--subheader-height);
+  padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--bg) 72%, transparent);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
-  font-size: 12.5px;
+  font-size: var(--subheader-font-size);
   color: var(--fg-muted);
-  gap: 16px;
+  gap: var(--space-4);
   position: fixed;
-  top: 48px;
+  top: var(--topnav-height);
   left: 0;
   right: 0;
   /* Sits at --z-dropdown so popovers anchored inside a subheader (e.g. the

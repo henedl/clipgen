@@ -19,13 +19,13 @@ import numpy as np
 import config
 import utils
 from screenspace_primitives import (
-    _morph_kernel,
     _prepare_template,
     _scale_template,
     _template_correlation_map,
     color_matches,
     color_present,
     compare_scene_fingerprints,
+    compute_frame_diff,
     compute_optical_flow,
     compute_phash,
     compute_scene_fingerprint,
@@ -316,18 +316,7 @@ class ChangeTool(AnalysisTool):
         noise_threshold = params.get(
             "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
         )
-        k = config.SCREENSPACE_BLUR_KERNEL
-        morph_kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
-        curr_gray = cv2.cvtColor(
-            cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
-        prev_gray = cv2.cvtColor(
-            cv2.GaussianBlur(prev_pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
-        diff = cv2.absdiff(prev_gray, curr_gray)
-        _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
-        mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
+        mag = compute_frame_diff(prev_pixels, pixels, noise_threshold)
         return mag >= threshold, {"magnitude": round(mag, 4)}
 
     def scan(

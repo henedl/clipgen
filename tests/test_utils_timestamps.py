@@ -52,6 +52,17 @@ def test_timestamp_to_seconds_allows_minutes_over_59_in_mmss():
     assert utils.timestamp_to_seconds("1:2:3:4") is None
 
 
+def test_split_selector_tokens_splits_on_comma_and_plus():
+    # Shared helper for CLI/spreadsheet selectors: split on ',' or '+',
+    # strip whitespace, drop empty tokens.
+    assert utils.split_selector_tokens("P01,P02") == ["P01", "P02"]
+    assert utils.split_selector_tokens("P01+P02") == ["P01", "P02"]
+    assert utils.split_selector_tokens("P01 + P02, P03") == ["P01", "P02", "P03"]
+    assert utils.split_selector_tokens("1++2") == ["1", "2"]
+    assert utils.split_selector_tokens("  ,+ ") == []
+    assert utils.split_selector_tokens("") == []
+
+
 def test_seconds_to_timestamp_handles_float_input():
     # Shared helper: a float arg must not crash the int format specs.
     assert utils.seconds_to_timestamp(75.9) == "1:15"

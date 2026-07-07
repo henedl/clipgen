@@ -8,6 +8,7 @@ import pytest
 
 import config
 import screenspace
+import screenspace_frames
 import screenspace_multitool
 import screenspace_ocr
 import screenspace_scans
@@ -305,7 +306,7 @@ class TestScanBoundaries:
         # frames: list of (timestamp, tag). Same tag → distance 0; different
         # tags → distance == |Δtag|. Each frame is filled with its tag value.
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda _p: (30.0, 100.0)
+            screenspace_frames, "_probe_video_meta", lambda _p: (30.0, 100.0)
         )
         monkeypatch.setattr(
             screenspace_scans,
@@ -586,7 +587,7 @@ class TestScanBoundariesSceneHybrid:
     def _setup(monkeypatch, frames):
         # frames: list of (ts, scene_tag, phash_val)
         monkeypatch.setattr(
-            screenspace_scans,
+            screenspace_frames,
             "_probe_video_meta",
             lambda _p: (30.0, float(len(frames) + 1)),
         )

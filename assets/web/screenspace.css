@@ -152,38 +152,6 @@ body {
   color: var(--color-text-dim);
 }
 
-/* Theme toggle (matches Studio) */
-
-#themeToggle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-alt);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
-  flex-shrink: 0;
-}
-
-#themeToggle:hover {
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
-}
-
-#themeToggle:active {
-  transform: scale(0.96);
-}
-
-#themeToggle:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
 /* Main content */
 
 #ssMain {
@@ -192,7 +160,7 @@ body {
   /* Floating-nav scroll-under: TopNav (48px) + subheader (44px) are
    * `position: fixed`. The 92px top inset pushes visible content below
    * chrome; scrolled content slides up *under* the glass. */
-  padding: calc(var(--space-4) + 92px) var(--space-5) var(--space-4);
+  padding: calc(var(--space-4) + var(--chrome-height)) var(--space-5) var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -233,7 +201,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-height: calc(100vh - var(--bottom-panel-height) - 92px - var(--space-4) * 2);
+  max-height: calc(100vh - var(--bottom-panel-height) - var(--chrome-height) - var(--space-4) * 2);
   overflow-y: auto;
   /* Left padding makes room for foldable section chevrons that pull
    * themselves outside the info-block content edge via negative margin
@@ -314,7 +282,7 @@ body {
 .ss-info-expand-btn {
   position: fixed;
   left: var(--space-3);
-  top: calc(92px + var(--space-4));
+  top: calc(var(--chrome-height) + var(--space-4));
   z-index: var(--z-float);
 }
 
@@ -3223,10 +3191,6 @@ body.panel-dragging #bottomPanel {
   cursor: grabbing;
 }
 
-@keyframes task-card-spin {
-  to { transform: rotate(360deg); }
-}
-
 .task-card-spinner {
   display: inline-flex;
   align-items: center;
@@ -3244,7 +3208,7 @@ body.panel-dragging #bottomPanel {
   border: 1.5px solid var(--color-border);
   border-top-color: var(--color-accent);
   border-radius: var(--radius-full);
-  animation: task-card-spin 0.7s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 
 .task-card-pause-icon {
@@ -3784,7 +3748,7 @@ body.panel-dragging #bottomPanel {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: var(--z-dropdown);
+  z-index: var(--z-modal);
 }
 
 .modal-card {
@@ -3950,33 +3914,20 @@ body.panel-dragging #bottomPanel {
   font-size: var(--text-xs);
 }
 
-/* Dark mode — system preference */
-
-/* Dark element overrides — shared dark tokens are in tokens.css */
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .modal-card {
-    background: var(--color-surface-alt);
-  }
-  :root:not([data-theme="light"]) .region-chip.active {
-    background: rgba(255, 255, 255, 0.08);
-  }
-}
-
-html[data-theme="dark"] .modal-card {
+/* Dark mode — page-specific overrides (shared tokens live in tokens.css). Dark
+ * is the default theme, so this single selector matches everything except an
+ * explicit light opt-in. */
+:root:not([data-theme="light"]) .modal-card {
   background: var(--color-surface-alt);
 }
-
-html[data-theme="dark"] .region-chip.active {
+:root:not([data-theme="light"]) .region-chip.active {
   background: rgba(255, 255, 255, 0.08);
 }
-
-html[data-theme="dark"] .run-picker-panel {
+:root:not([data-theme="light"]) .run-picker-panel {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
-
-html[data-theme="dark"] .stash-card-name:hover,
-html[data-theme="dark"] .stash-card-name:focus {
+:root:not([data-theme="light"]) .stash-card-name:hover,
+:root:not([data-theme="light"]) .stash-card-name:focus {
   background: rgba(255, 255, 255, 0.08);
 }
 

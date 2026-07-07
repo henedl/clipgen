@@ -90,6 +90,23 @@ class Agent(TypedDict):
 
 
 # ---------------------------------------------------------------------------
+# Shared response helpers
+# ---------------------------------------------------------------------------
+
+_THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
+
+
+def _strip_think(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks a model may emit despite think=False.
+
+    Reasoning models sometimes emit chain-of-thought scaffolding even when asked
+    not to; stripping it is response parsing, so every agent cleans its own raw
+    completion here rather than relying on the transport layer.
+    """
+    return _THINK_RE.sub("", text).strip()
+
+
+# ---------------------------------------------------------------------------
 # Summary agent (Pass 1)
 # ---------------------------------------------------------------------------
 
@@ -147,7 +164,10 @@ def summarize_transcript(
         on_token=on_token,
     )
     if result:
-        utils.verbose_print(f"Summary generated ({len(result)} chars)")
+        result = _strip_think(result)
+    if not result:
+        return None
+    utils.verbose_print(f"Summary generated ({len(result)} chars)")
     return result
 
 
@@ -201,19 +221,6 @@ def _format_segment_chunk(segments: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _timestamp_to_seconds(ts: str) -> float | None:
-    """Parse ``M:SS`` or ``H:MM:SS`` to seconds."""
-    parts = ts.split(":")
-    try:
-        if len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1])
-        if len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-    except ValueError:
-        pass
-    return None
-
-
 def _find_closest_segment(
     target_seconds: float,
     sorted_starts: list[float],
@@ -265,7 +272,7 @@ def _parse_citation_response(
             continue
         refs: list[dict[str, Any]] = []
         for ts_match in _TIMESTAMP_RE.finditer(body):
-            ts_seconds = _timestamp_to_seconds(ts_match.group(1))
+            ts_seconds = utils.timestamp_to_seconds(ts_match.group(1))
             if ts_seconds is None:
                 continue
             best_idx = _find_closest_segment(ts_seconds, sorted_starts, sorted_indices)
@@ -329,7 +336,7 @@ def find_citations(
 
     parsed: dict[int, list[dict[str, Any]]] = {}
     if response:
-        parsed = _parse_citation_response(response, segments)
+        parsed = _parse_citation_response(_strip_think(response), segments)
 
     citations: list[dict[str, Any]] = []
     for i, sentence in enumerate(sentences):
@@ -373,7 +380,7 @@ def _extract_json_array(text: str) -> list[Any]:
     """
     if not text:
         return []
-    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    cleaned = _strip_think(text)
 
     fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", cleaned, re.DOTALL)
     if fence:

@@ -760,12 +760,7 @@ def _vtt_time_to_seconds(ts: str) -> float:
 
 
 def _md_time_to_seconds(ts: str) -> float:
-    parts = ts.strip().split(":")
-    if len(parts) == 2:
-        return int(parts[0]) * 60 + int(parts[1])
-    if len(parts) == 3:
-        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-    return 0.0
+    return utils.timestamp_to_seconds(ts) or 0.0
 
 
 def _parse_srt(text: str, filepath: str) -> TranscriptResult:

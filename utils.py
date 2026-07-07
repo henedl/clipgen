@@ -1147,6 +1147,17 @@ def _split_timestamp_tokens(cell_value: str) -> list[str]:
     )
 
 
+def split_selector_tokens(text: str) -> list[str]:
+    """Split a selector string on ',' or '+' into stripped, non-empty tokens.
+
+    Used by the CLI category/severity/keyword/line selectors and the spreadsheet
+    participant/cell selectors, which all accept comma- or plus-separated lists.
+    """
+    if not text:
+        return []
+    return [tok.strip() for tok in text.replace(",", "+").split("+") if tok.strip()]
+
+
 def _clean_timestamp_token(token: str) -> str:
     """Normalize one token before timestamp parsing."""
     return token.strip().rstrip(",").rstrip("-").replace(".", ":")

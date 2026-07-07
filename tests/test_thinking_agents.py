@@ -140,6 +140,29 @@ class TestSummarizeTranscript:
         assert result is None
 
     @patch("thinking_agents.ollama_client.generate")
+    def test_strips_think_block_from_result(self, mock_generate):
+        # Transport now returns raw text; the summary agent owns <think> stripping.
+        mock_generate.return_value = "<think>reasoning</think>\n\nActual summary."
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        result = thinking_agents.summarize_transcript(segments)
+        assert result == "Actual summary."
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_returns_none_when_only_think_block(self, mock_generate):
+        mock_generate.return_value = "<think>Thinking but producing nothing.</think>"
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        result = thinking_agents.summarize_transcript(segments)
+        assert result is None
+
+    @patch("thinking_agents.ollama_client.generate")
     def test_passes_model_override(self, mock_generate):
         mock_generate.return_value = "ok"
         segments = [
@@ -307,6 +330,13 @@ class TestParseCitationResponse:
         segments = self._make_segments([100])
         response = "1: 0:10"  # 10s is 90s away from 100s
         result = thinking_agents._parse_citation_response(response, segments)
+        assert result == {}
+
+    def test_rejects_timestamps_with_seconds_over_59(self):
+        # Timestamps route through the strict utils.timestamp_to_seconds, so a
+        # malformed seconds field (>= 60) is dropped rather than parsed as 75s.
+        segments = self._make_segments([75])
+        result = thinking_agents._parse_citation_response("1: 0:75", segments)
         assert result == {}
 
     def test_handles_unsorted_segments(self):

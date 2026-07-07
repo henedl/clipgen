@@ -4,6 +4,7 @@ import numpy as np
 
 import config
 import screenspace
+import screenspace_frames
 import screenspace_heatmap
 import screenspace_scans
 from _ss_helpers import _make_icon, _make_icon_frame
@@ -76,7 +77,7 @@ class TestScanTemplateControls:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
     def test_scale_fixes_size_mismatch(self, monkeypatch):

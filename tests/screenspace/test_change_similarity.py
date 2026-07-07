@@ -4,6 +4,7 @@ import numpy as np
 
 import config
 import screenspace
+import screenspace_frames
 import screenspace_scans
 
 
@@ -88,7 +89,7 @@ class TestScanChangesEmitsGrid:
             cb(1.0, frame_b)
             return []
 
-        monkeypatch.setattr(screenspace_scans, "_probe_video_meta", fake_probe)
+        monkeypatch.setattr(screenspace_frames, "_probe_video_meta", fake_probe)
         monkeypatch.setattr(
             screenspace_scans, "scan_video_frames", fake_scan_video_frames
         )
