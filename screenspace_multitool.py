@@ -116,6 +116,10 @@ def scan_multitool(
     tool_types = [s["type"] for s in steps]
     step_regions = [s.get("region_coords", region) for s in steps]
     prev_frame: list[np.ndarray | None] = [None]
+    # Per-frame memo shared across a frame's steps, rolled forward so temporal
+    # tools (change/flow/inactivity) reuse the previous frame's crop/gray/phash
+    # instead of recomputing it. See check_frame_for_tool's cache/prev_cache.
+    prev_cache: list[dict[Any, Any] | None] = [None]
     results: list[dict[str, Any]] = []
 
     def _cancel() -> bool:
@@ -135,13 +139,21 @@ def scan_multitool(
             if _cancel():
                 return False
             ts_list.append(round(ts, 2))
+            cache: dict[Any, Any] = {}
             for i, step in enumerate(steps):
                 passed, rd = check_frame_for_tool(
-                    frame, prev_frame[0], step_regions[i], step["type"], step
+                    frame,
+                    prev_frame[0],
+                    step_regions[i],
+                    step["type"],
+                    step,
+                    cache,
+                    prev_cache[0],
                 )
                 passed_cols[i].append(bool(passed))
                 detail_cols[i].append(rd)
             prev_frame[0] = frame
+            prev_cache[0] = cache
             if on_progress and total_range > 0:
                 # Reserve the last 10% for the join (cheap, but keeps the bar
                 # from sitting at 100% while the join runs).
@@ -187,11 +199,18 @@ def scan_multitool(
         if _cancel():
             return False
 
+        cache: dict[Any, Any] = {}
         step_results: list[dict[str, Any]] = []
         chain_ok = True
         for i, step in enumerate(steps):
             passed, rd = check_frame_for_tool(
-                frame, prev_frame[0], step_regions[i], step["type"], step
+                frame,
+                prev_frame[0],
+                step_regions[i],
+                step["type"],
+                step,
+                cache,
+                prev_cache[0],
             )
             logic = (step.get("logic") or "AND").upper() if i > 0 else "AND"
             if logic == "NOT":
@@ -206,6 +225,7 @@ def scan_multitool(
                 step_results.append(rd)
 
         prev_frame[0] = frame
+        prev_cache[0] = cache
 
         if chain_ok and len(step_results) == len(steps):
             confidences = []

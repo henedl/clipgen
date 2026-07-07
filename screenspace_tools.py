@@ -89,12 +89,107 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
     return 1.0
 
 
+# ---------------------------------------------------------------------------
+# Per-frame memoization (multitool chains)
+# ---------------------------------------------------------------------------
+#
+# Within a multitool chain every step re-derives crop / gray / phash / OCR from
+# the same ``(frame, region)``. ``scan_multitool`` passes a fresh dict per frame
+# as ``cache`` (and the previous frame's dict as ``prev_cache``, rolled forward)
+# so steps sharing a region compute each derived value once, and temporal tools
+# (change / flow / inactivity) reuse the previous frame's already-computed crop /
+# gray instead of recomputing it. Single-frame callers (pin calibration) pass no
+# cache — ``None`` disables memoization and keeps results byte-identical.
+
+_MISSING = object()
+
+
+def _region_key(prefix: str, region: dict[str, int]) -> tuple[Any, ...]:
+    """Cache key scoped to a region's pixel rect (steps may use distinct regions)."""
+    return (prefix, region.get("x"), region.get("y"), region.get("w"), region.get("h"))
+
+
+def _memo(
+    cache: dict[Any, Any] | None, key: tuple[Any, ...], compute: Callable[[], Any]
+) -> Any:
+    """Return ``cache[key]``, computing and storing it on miss. ``None`` cache = no memo."""
+    if cache is None:
+        return compute()
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = compute()
+        cache[key] = value
+    return value
+
+
+def _cached_crop(
+    cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
+) -> np.ndarray:
+    """Region crop of *frame*, memoized on *cache* (shared across chain steps)."""
+    return _memo(
+        cache, _region_key("crop", region), lambda: extract_region(frame, region)
+    )
+
+
+def _cached_gray(
+    cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
+) -> np.ndarray:
+    """Grayscale of the region crop, memoized on *cache* (reuses the cached crop)."""
+    return _memo(
+        cache,
+        _region_key("gray", region),
+        lambda: cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY),
+    )
+
+
+def _cached_phash(
+    cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
+) -> "Any":
+    """Perceptual hash of the region crop, memoized on *cache* (reuses the crop)."""
+    return _memo(
+        cache,
+        _region_key("phash", region),
+        lambda: compute_phash(_cached_crop(cache, frame, region)),
+    )
+
+
+def _cached_ocr(
+    cache: dict[Any, Any] | None,
+    frame: np.ndarray,
+    region: dict[str, int],
+    *,
+    languages: list[str],
+    allowlist: str | None,
+    preprocess: bool,
+) -> list[Any]:
+    """OCR readings for the region crop, memoized on *cache*.
+
+    Keyed by ``(region, languages, allowlist, preprocess)`` so only *identical*
+    OCR calls dedup (e.g. two Text steps on one region). Text (no allowlist) and
+    Numbers (digit allowlist) key differently and are intentionally not shared.
+    """
+    langs = tuple(languages)
+    key = _region_key("ocr", region) + (langs, allowlist, preprocess)
+    return _memo(
+        cache,
+        key,
+        lambda: _ocr_region_readings(
+            _cached_crop(cache, frame, region),
+            languages=list(langs),
+            allowlist=allowlist,
+            preprocess=preprocess,
+        ),
+    )
+
+
 def check_frame_for_tool(
     frame: np.ndarray,
     prev_frame: np.ndarray | None,
     region: dict[str, int],
     tool_type: str,
     parameters: dict[str, Any],
+    cache: dict[Any, Any] | None = None,
+    prev_cache: dict[Any, Any] | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
     """Evaluate whether a single frame passes a tool's criteria.
 
@@ -105,6 +200,10 @@ def check_frame_for_tool(
     For **change** and **flow** tools *prev_frame* is required (the frame
     immediately before the candidate timestamp).  If it is ``None`` the
     check is skipped (returns ``(False, None)``).
+
+    ``cache`` / ``prev_cache`` are optional per-frame memo dicts (this frame's and
+    the previous frame's) that let chained steps sharing a region reuse crop /
+    gray / phash / OCR work; ``None`` (the calibration path) disables memoization.
 
     Degenerate regions (width or height ≤ 0, e.g. a 1-px user draw rounded
     to zero pixels on a small preview) are treated as a non-match here so
@@ -118,7 +217,7 @@ def check_frame_for_tool(
     tool = TOOLS.get(tool_type)
     if tool is None:
         return False, None
-    return tool.check_frame(frame, prev_frame, region, parameters)
+    return tool.check_frame(frame, prev_frame, region, parameters, cache, prev_cache)
 
 
 def _score_result(
@@ -210,8 +309,14 @@ class AnalysisTool:
         prev_frame: np.ndarray | None,
         region: dict[str, int],
         params: dict[str, Any],
+        cache: dict[Any, Any] | None = None,
+        prev_cache: dict[Any, Any] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         """Evaluate a single frame for use in a multitool chain step.
+
+        ``cache`` / ``prev_cache`` are optional per-frame memo dicts (see
+        :func:`check_frame_for_tool`); subclasses that crop a region route through
+        the ``_cached_*`` helpers so chained steps sharing a region reuse the work.
 
         Default: tool not supported as a multitool step.
         """
@@ -255,8 +360,10 @@ class ColorTool(AnalysisTool):
     fast_scan_region_dim = 32
     score_key = "_confidence"
 
-    def check_frame(self, frame, prev_frame, region, params):
-        pixels = extract_region(frame, region)
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
+        pixels = _cached_crop(cache, frame, region)
         target = params.get("target_color", {"h": 0, "s": 0, "v": 0})
         tol = params.get("tolerance", {"h": 10, "s": 50, "v": 50})
         if params.get("color_mode") == "presence":
@@ -307,11 +414,13 @@ class ChangeTool(AnalysisTool):
     fast_scan_region_dim = 128
     score_key = "magnitude"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         if prev_frame is None:
             return False, None
-        pixels = extract_region(frame, region)
-        prev_pixels = extract_region(prev_frame, region)
+        pixels = _cached_crop(cache, frame, region)
+        prev_pixels = _cached_crop(prev_cache, prev_frame, region)
         threshold = params.get("threshold", config.SCREENSPACE_CHANGE_RATIO_THRESHOLD)
         noise_threshold = params.get(
             "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
@@ -359,11 +468,13 @@ class SimilarityTool(AnalysisTool):
     fast_scan_region_dim = 128
     score_key = "score"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         ref = params.get("reference_frame")
         if ref is None:
             return False, None
-        pixels = extract_region(frame, region)
+        pixels = _cached_crop(cache, frame, region)
         threshold = params.get("threshold", config.SCREENSPACE_SSIM_THRESHOLD)
         is_sim, score = regions_are_similar(pixels, ref, threshold)
         return is_sim, {"score": round(score, 4)}
@@ -406,13 +517,17 @@ class TextTool(AnalysisTool):
     # different axes; do not unify them.
     score_key = "fuzzy_ratio"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         if not params.get("search_string", ""):
             return False, None
-        pixels = extract_region(frame, region)
-        readings = _ocr_region_readings(
-            pixels,
+        readings = _cached_ocr(
+            cache,
+            frame,
+            region,
             languages=params.get("languages") or ["en"],
+            allowlist=None,
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_text_readings(readings, params)
@@ -454,11 +569,14 @@ class NumbersTool(AnalysisTool):
     name = "numbers"
     score_key = "confidence"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         languages = params.get("languages") or ["en"]
-        pixels = extract_region(frame, region)
-        readings = _ocr_region_readings(
-            pixels,
+        readings = _cached_ocr(
+            cache,
+            frame,
+            region,
             languages=languages,
             allowlist=_numbers_ocr_allowlist(
                 languages, params.get("integers_only", False)
@@ -507,7 +625,11 @@ class TemplateTool(AnalysisTool):
     fast_scan_extra_opts: ClassVar[dict[str, Any]] = {"template_downscale": True}
     score_key = "best_score"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
+        # Template matches the full frame (ignores region); nothing region-scoped
+        # to memoize, and it already caches its scaled template on ``params``.
         template_img = params.get("template_image")
         if template_img is None:
             return False, None
@@ -600,13 +722,13 @@ class FlowTool(AnalysisTool):
     fast_scan_region_dim = 128
     score_key = "magnitude"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         if prev_frame is None:
             return False, None
-        pixels = extract_region(frame, region)
-        prev_pixels = extract_region(prev_frame, region)
-        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        prev_gray_f = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
+        curr_gray = _cached_gray(cache, frame, region)
+        prev_gray_f = _cached_gray(prev_cache, prev_frame, region)
         magnitude_threshold = params.get(
             "magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
         )
@@ -649,15 +771,20 @@ class SceneTool(AnalysisTool):
     fast_scan_region_dim = 64
     score_key = "score"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         ref_scenes = params.get("reference_scenes")
         if not ref_scenes:
             return False, None
         threshold = params.get(
             "threshold", config.SCREENSPACE_SCENE_SIMILARITY_THRESHOLD
         )
-        pixels = extract_region(frame, region)
-        fp = compute_scene_fingerprint(pixels)
+        fp = _memo(
+            cache,
+            _region_key("fingerprint", region),
+            lambda: compute_scene_fingerprint(_cached_crop(cache, frame, region)),
+        )
         best_name = ""
         best_score = 0.0
         for ref in ref_scenes:
@@ -713,14 +840,14 @@ class InactivityTool(AnalysisTool):
     # the strip inverts the axis for display (lower distance = more inactive).
     score_key = "distance"
 
-    def check_frame(self, frame, prev_frame, region, params):
+    def check_frame(
+        self, frame, prev_frame, region, params, cache=None, prev_cache=None
+    ):
         if prev_frame is None:
             return False, None
-        pixels = extract_region(frame, region)
-        prev_pixels = extract_region(prev_frame, region)
         thresh = params.get("threshold", config.SCREENSPACE_INACTIVITY_PHASH_THRESHOLD)
-        curr_h = compute_phash(pixels)
-        prev_h = compute_phash(prev_pixels)
+        curr_h = _cached_phash(cache, frame, region)
+        prev_h = _cached_phash(prev_cache, prev_frame, region)
         dist = int(curr_h - prev_h)
         if thresh > 0:
             conf = max(0.0, min((thresh - dist) / float(thresh), 1.0))

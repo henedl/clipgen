@@ -729,7 +729,7 @@ class TestScanMultitool:
         monkeypatch.setattr(screenspace_multitool, "check_frame_for_tool", check_fn)
 
     def test_not_operator_rejects_when_negated_match(self, monkeypatch):
-        def check(frame, prev, region, ttype, step):
+        def check(frame, prev, region, ttype, step, cache=None, prev_cache=None):
             return True, {"_confidence": 0.9}
 
         self._setup_stubs(monkeypatch, check)
@@ -741,7 +741,7 @@ class TestScanMultitool:
         assert results == []
 
     def test_not_operator_passes_when_negated_misses(self, monkeypatch):
-        def check(frame, prev, region, ttype, step):
+        def check(frame, prev, region, ttype, step, cache=None, prev_cache=None):
             if ttype == "color":
                 return True, {"_confidence": 0.8}
             return False, None
@@ -757,7 +757,7 @@ class TestScanMultitool:
         assert results[0]["min_confidence"] == 0.8
 
     def test_and_default_when_logic_missing(self, monkeypatch):
-        def check(frame, prev, region, ttype, step):
+        def check(frame, prev, region, ttype, step, cache=None, prev_cache=None):
             if ttype == "color":
                 return True, {"_confidence": 0.7}
             return True, {"magnitude": 0.5}
@@ -772,7 +772,7 @@ class TestScanMultitool:
         assert results[0]["min_confidence"] == 0.5
 
     def test_inactivity_step_uses_per_frame_confidence(self, monkeypatch):
-        def check(frame, prev, region, ttype, step):
+        def check(frame, prev, region, ttype, step, cache=None, prev_cache=None):
             if ttype == "inactivity":
                 return True, {"distance": 0, "_confidence": 0.75}
             return True, {"_confidence": 0.9}
@@ -790,7 +790,7 @@ class TestScanMultitool:
         # Regression: after Phase 2, check_frame returns a detail dict on the
         # fail branch too. The AND chain must still exclude the frame — it
         # short-circuits on `not passed`, never on `rd is None`.
-        def check(frame, prev, region, ttype, step):
+        def check(frame, prev, region, ttype, step, cache=None, prev_cache=None):
             if ttype == "color":
                 return True, {"_confidence": 0.9}
             return False, {"magnitude": 0.01}  # miss, but detail is non-None now
@@ -837,7 +837,7 @@ class TestScanMultitool:
                 if callback(ts, frame) is False:
                     break
 
-        def check(frame, prev, region, ttype, step):
+        def check(frame, prev, region, ttype, step, cache=None, prev_cache=None):
             return check_fn(state["ts"], ttype, step)
 
         monkeypatch.setattr(screenspace_multitool, "scan_video_full_frames", fake_scan)
@@ -1418,6 +1418,101 @@ class TestScoreMultitoolFrame:
         assert [s["passed"] for s in scored["steps"]] == [
             s["passed"] for s in without["steps"]
         ]
+
+
+# ---------------------------------------------------------------------------
+# Per-frame memoization (crop / gray / phash / OCR reuse within a chain)
+# ---------------------------------------------------------------------------
+
+
+class TestMultitoolMemoization:
+    """The per-frame cache must not change detections vs the uncached path."""
+
+    region = {"x": 4, "y": 4, "w": 48, "h": 36}
+
+    @staticmethod
+    def _frames():
+        # Two deterministic frames with a bright block that moves between them,
+        # so change / flow / inactivity all see real motion (non-trivial results).
+        f0 = np.zeros((80, 80, 3), dtype=np.uint8)
+        f0[10:40, 10:40] = (200, 120, 60)
+        f1 = np.zeros((80, 80, 3), dtype=np.uint8)
+        f1[16:46, 18:48] = (200, 120, 60)
+        return f0, f1
+
+    def _steps(self):
+        # Spatial (color) + temporal (change/flow/inactivity) tools sharing one
+        # region: exercises crop reuse across steps and prev-frame roll-forward.
+        return [
+            {
+                "type": "color",
+                "target_color": {"h": 15, "s": 180, "v": 200},
+                "tolerance": {"h": 40, "s": 120, "v": 120},
+            },
+            {"type": "change"},
+            {"type": "flow"},
+            {"type": "inactivity"},
+        ]
+
+    def test_shared_cache_and_rollforward_match_uncached(self):
+        f0, f1 = self._frames()
+        steps = self._steps()
+        region = self.region
+
+        def uncached(frame, prev):
+            return [
+                screenspace.check_frame_for_tool(frame, prev, region, s["type"], s)
+                for s in steps
+            ]
+
+        def cached(frame, prev, cache, prev_cache):
+            # One shared cache per frame, passed to every step — mirrors _cb.
+            return [
+                screenspace.check_frame_for_tool(
+                    frame, prev, region, s["type"], s, cache, prev_cache
+                )
+                for s in steps
+            ]
+
+        ref0, ref1 = uncached(f0, None), uncached(f1, f0)
+
+        c0: dict = {}
+        got0 = cached(f0, None, c0, None)
+        c1: dict = {}
+        got1 = cached(f1, f0, c1, c0)  # prev_cache=c0 exercises roll-forward
+
+        assert got0 == ref0
+        assert got1 == ref1
+
+    def test_ocr_memoized_for_identical_steps_but_not_text_vs_numbers(
+        self, monkeypatch
+    ):
+        import screenspace_tools
+
+        calls = {"n": 0}
+
+        def fake_readings(pixels, *, languages=None, allowlist=None, preprocess=False):
+            calls["n"] += 1
+            return [([[0, 0], [10, 0], [10, 10], [0, 10]], "hello", 0.99)]
+
+        monkeypatch.setattr(screenspace_tools, "_ocr_region_readings", fake_readings)
+
+        frame = np.zeros((40, 40, 3), dtype=np.uint8)
+        region = {"x": 0, "y": 0, "w": 40, "h": 40}
+        text = {"type": "text", "search_string": "hello"}
+        cache: dict = {}
+
+        # Two identical Text steps sharing region + cache -> OCR runs once.
+        screenspace.check_frame_for_tool(frame, None, region, "text", text, cache, None)
+        screenspace.check_frame_for_tool(frame, None, region, "text", text, cache, None)
+        assert calls["n"] == 1
+
+        # Numbers keys differently (digit allowlist) -> intentionally NOT shared.
+        numbers = {"type": "numbers", "operator": "gt", "target_value": 0}
+        screenspace.check_frame_for_tool(
+            frame, None, region, "numbers", numbers, cache, None
+        )
+        assert calls["n"] == 2
 
 
 # ---------------------------------------------------------------------------
