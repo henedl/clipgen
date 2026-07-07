@@ -221,19 +221,6 @@ def _format_segment_chunk(segments: list[dict[str, Any]], offset: int) -> str:
     return "\n".join(lines)
 
 
-def _timestamp_to_seconds(ts: str) -> float | None:
-    """Parse ``M:SS`` or ``H:MM:SS`` to seconds."""
-    parts = ts.split(":")
-    try:
-        if len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1])
-        if len(parts) == 3:
-            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-    except ValueError:
-        pass
-    return None
-
-
 def _find_closest_segment(
     target_seconds: float,
     sorted_starts: list[float],
@@ -285,7 +272,7 @@ def _parse_citation_response(
             continue
         refs: list[dict[str, Any]] = []
         for ts_match in _TIMESTAMP_RE.finditer(body):
-            ts_seconds = _timestamp_to_seconds(ts_match.group(1))
+            ts_seconds = utils.timestamp_to_seconds(ts_match.group(1))
             if ts_seconds is None:
                 continue
             best_idx = _find_closest_segment(ts_seconds, sorted_starts, sorted_indices)

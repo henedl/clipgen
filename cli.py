@@ -738,8 +738,9 @@ def parse_cli_mode_args(args: Any) -> CliModeArgs:
     if args.lines:
         try:
             # Support both + and , as separators
-            line_str = args.lines.replace(",", "+")
-            cli_line_numbers = [int(num.strip()) for num in line_str.split("+")]
+            cli_line_numbers = [
+                int(num) for num in utils.split_selector_tokens(args.lines)
+            ]
         except ValueError:
             utils.error_print(
                 f'Invalid line numbers "{args.lines}". Use format: 1+4+5 or 1,4,5'
@@ -991,13 +992,9 @@ def _generate_cli_clips(
         """Parse CLI category string into a list of category names."""
         if not raw:
             return []
-        combined = raw.replace(",", "+")
         seen = set()
         result: list[str] = []
-        for token in combined.split("+"):
-            name = token.strip()
-            if not name:
-                continue
+        for name in utils.split_selector_tokens(raw):
             if name not in seen:
                 seen.add(name)
                 result.append(name)
@@ -1008,11 +1005,10 @@ def _generate_cli_clips(
     def _parse_cli_severities(raw: str | None) -> list[str]:
         if not raw:
             return []
-        combined = raw.replace(",", "+")
         seen = set()
         result: list[str] = []
-        for token in combined.split("+"):
-            name = utils.normalize_severity(token.strip())
+        for token in utils.split_selector_tokens(raw):
+            name = utils.normalize_severity(token)
             if not name:
                 continue
             if name not in seen:
@@ -1024,9 +1020,8 @@ def _generate_cli_clips(
 
     cli_annotation_ids = None
     if isinstance(args.keyword, str):
-        combined = args.keyword.replace(",", "+")
         cli_annotation_ids = [
-            t.strip().lower().lstrip("!") for t in combined.split("+") if t.strip()
+            t.lower().lstrip("!") for t in utils.split_selector_tokens(args.keyword)
         ] or None
 
     # Apply custom highlights duration if specified (e.g. -H 120)

@@ -332,6 +332,13 @@ class TestParseCitationResponse:
         result = thinking_agents._parse_citation_response(response, segments)
         assert result == {}
 
+    def test_rejects_timestamps_with_seconds_over_59(self):
+        # Timestamps route through the strict utils.timestamp_to_seconds, so a
+        # malformed seconds field (>= 60) is dropped rather than parsed as 75s.
+        segments = self._make_segments([75])
+        result = thinking_agents._parse_citation_response("1: 0:75", segments)
+        assert result == {}
+
     def test_handles_unsorted_segments(self):
         # Segments supplied out of start order; the binary search must still
         # resolve to the correct *original* segment index.

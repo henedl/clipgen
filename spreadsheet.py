@@ -294,11 +294,8 @@ def parse_participant_selection(input_str: str) -> list[str]:
     Returns:
         List of participant ID strings (e.g. ['P01', 'P03'])
     """
-    if not input_str or not input_str.strip():
-        return []
     # Support both + and , as separators
-    combined = input_str.replace(",", "+")
-    return [s.strip() for s in combined.split("+") if s.strip()]
+    return utils.split_selector_tokens(input_str)
 
 
 def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
@@ -318,14 +315,9 @@ def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
         ValueError: If format is invalid
     """
     # Support both + and , as separators; normalize to + then split
-    cell_str = cell_input.replace(",", "+")
     specs = []
 
-    for spec in cell_str.split("+"):
-        spec = spec.strip()
-        if not spec:
-            continue
-
+    for spec in utils.split_selector_tokens(cell_input):
         # Exactly one dot: participant_id.row_number (split('.', 1) avoids splitting IDs like P01.02)
         if "." not in spec:
             raise ValueError(
