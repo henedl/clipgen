@@ -2937,6 +2937,37 @@ def test_load_studio_settings_skips_invalid_card_image(monkeypatch, tmp_path):
     assert server.config.ENDCARD_IMAGE == "good.png"
 
 
+def test_load_studio_settings_skips_invalid_prompt(monkeypatch, tmp_path):
+    """A persisted prompt that PUT would reject is not applied on load.
+
+    Regression: the load path shared its coercion ladder with the PUT path, but
+    used to lack the ``prompt`` branch, so a tampered prompt was applied without
+    _validate_prompt. It must now be skipped (config keeps its default), matching
+    the card_picker guard, while a valid setting alongside it still applies.
+    """
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    default_prompt = server.config.OLLAMA_FRICTION_PROMPT
+    monkeypatch.setattr(server.config, "OLLAMA_FRICTION_PROMPT", default_prompt)
+    monkeypatch.setattr(server.config, "REENCODING", server.config.REENCODING)
+
+    settings_file = tmp_path / server.config.STUDIO_SETTINGS_FILENAME
+    settings_file.write_text(
+        json.dumps(
+            {
+                # Missing required {summary}/{segments}/{limit} placeholders → rejected.
+                "OLLAMA_FRICTION_PROMPT": "tampered prompt with no placeholders",
+                "REENCODING": True,  # valid → applied
+            }
+        )
+    )
+
+    applied = server._load_studio_settings()
+    assert "OLLAMA_FRICTION_PROMPT" not in applied
+    assert server.config.OLLAMA_FRICTION_PROMPT == default_prompt
+    assert applied["REENCODING"] is True
+    assert server.config.REENCODING is True
+
+
 def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
     """Only non-default values are written; all-defaults deletes the file."""
     import config
