@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 """Google Sheets API integration for clipgen."""
 
+from __future__ import annotations
+
 import time
 
 from collections.abc import Callable
-from typing import Any, TypeVar
-
-import gspread
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import config
 import utils
+
+if TYPE_CHECKING:
+    import gspread
 
 _T = TypeVar("_T")
 
@@ -25,6 +28,8 @@ def _is_transient_api_error(exc: gspread.exceptions.APIError) -> bool:
 
 def _call_with_api_retry(fn: Callable[[], _T], operation: str) -> _T:
     """Call *fn*, retrying on transient Google API errors with exponential backoff."""
+    import gspread
+
     max_retries = config.GOOGLE_API_MAX_RETRIES
     for attempt in range(max_retries + 1):
         try:
@@ -54,6 +59,8 @@ def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
     Returns:
         A gspread Worksheet object
     """
+    import gspread
+
     # Get all worksheet titles from the spreadsheet
     worksheets = spreadsheet.worksheets()
     worksheet_titles = [ws.title for ws in worksheets]

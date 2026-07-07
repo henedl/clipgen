@@ -44,8 +44,6 @@ from dataclasses import dataclass
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
-import gspread
-
 import config
 import google_api
 import utils
@@ -579,6 +577,10 @@ def _make_clip_record(
     - category: Category label from the same row (category column).
     'times' is added later when timestamps are resolved to [start, end] ranges.
     """
+    # Lazy import: keeps gspread (and its heavy google.auth/cryptography chain)
+    # off the CLI startup path; only spreadsheet parsing needs the Cell type.
+    import gspread
+
     # Excel cells may yield numbers, datetimes, or None; gspread always returns
     # strings. Coerce here so downstream timestamp parsing (which calls .lower())
     # never sees a non-string.
@@ -696,13 +698,11 @@ def get_line_timestamps(ctx: SheetContext, line_index: int) -> list[ClipRecord]:
                     f"Timestamp at R{issue['cell'].row - 1},C{issue['cell'].col - 1} -> '{issue['cell'].value}'"
                 )
                 utils.debug_print(
-                    f"Actual cell at address {gspread.utils.rowcol_to_a1(issue['cell'].row, issue['cell'].col)}"
+                    f"Actual cell at address {utils.safe_cell_a1(issue['cell'].row, issue['cell'].col)}"
                 )
                 clips.append(issue)
                 display_value = value.replace("\n", " ")
-                cell_addr = gspread.utils.rowcol_to_a1(
-                    issue["cell"].row, issue["cell"].col
-                )
+                cell_addr = utils.safe_cell_a1(issue["cell"].row, issue["cell"].col)
                 utils.verbose_print(
                     f"+ Found timestamp: {display_value} at address {cell_addr}"
                 )
@@ -1145,7 +1145,7 @@ def generate_participant_timestamps(
         issue = _make_clip_record(ctx, row_idx, col_idx, cell_value)
         clips.append(issue)
         display_value = cell_value.replace("\n", " ")
-        cell_addr = gspread.utils.rowcol_to_a1(issue["cell"].row, issue["cell"].col)
+        cell_addr = utils.safe_cell_a1(issue["cell"].row, issue["cell"].col)
         utils.verbose_print(
             f"+ Found timestamp: {display_value} at row {row_idx + 1} ({cell_addr})"
         )
@@ -1219,7 +1219,7 @@ def generate_cell_timestamps(
             )
         clips.append(issue)
         display_value = cell_value.replace("\n", " ")
-        cell_addr = gspread.utils.rowcol_to_a1(issue["cell"].row, issue["cell"].col)
+        cell_addr = utils.safe_cell_a1(issue["cell"].row, issue["cell"].col)
         utils.verbose_print(
             f"+ Found timestamp: {display_value} at cell {participant_id}.{row_number} ({cell_addr})"
         )

@@ -18,8 +18,6 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-import gspread
-
 import config
 import files
 import google_api
@@ -152,6 +150,8 @@ _STANDARD_MODES = {
 
 def _open_worksheet(open_callable: Callable[[], Any], error_context: str) -> Any | None:
     """Try to open a worksheet via a callable; catch gspread errors and print a consistent message."""
+    import gspread
+
     try:
         return google_api.get_worksheet(open_callable())
     except (
@@ -282,6 +282,8 @@ def _handle_spreadsheet_command(
 
 def select_spreadsheet(gspread_client: Any, doc_list: list[str]) -> Any:
     """Interactive spreadsheet selection. Returns the selected worksheet."""
+    import gspread
+
     if utils.NO_INPUT_MODE:
         utils.error_print(
             "Spreadsheet selection requires -s in non-interactive mode.",
@@ -1140,6 +1142,8 @@ def _dispatch_interactive_mode(
 
 def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
     """Execute interactive mode - main processing loop."""
+    import gspread
+
     if utils.NO_INPUT_MODE:
         utils.error_print(
             "No CLI mode flag provided; cannot enter interactive mode under --no-input.",
