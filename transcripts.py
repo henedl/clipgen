@@ -436,14 +436,66 @@ def _is_empty_transcripts_manifest(data: dict[str, Any]) -> bool:
     )
 
 
+# Module-level cache for the parsed transcripts manifest, keyed on the file's
+# path and mtime_ns. Per-reel builds and the CLI hit load_transcripts_manifest()
+# repeatedly, and the manifest (every participant's full segment list) is easily
+# multi-MB, so re-reading and re-parsing the JSON each time is pure overhead. The
+# cache invalidates automatically whenever the file is rewritten (the atomic
+# save_transcripts_manifest bumps mtime); _reset_transcripts_manifest_cache()
+# exists only as a guard against coarse filesystem mtime resolution eliding a
+# same-tick save->load, and for test fixtures that reuse one output dir.
+_TRANSCRIPTS_MANIFEST_CACHE_LOCK = threading.Lock()
+_transcripts_manifest_cache: dict[str, Any] = {
+    "path": None,
+    "mtime_ns": None,
+    "data": None,
+}
+
+
+def _reset_transcripts_manifest_cache() -> None:
+    """Drop the in-memory transcripts-manifest cache. For save() + test fixtures."""
+    with _TRANSCRIPTS_MANIFEST_CACHE_LOCK:
+        _transcripts_manifest_cache["path"] = None
+        _transcripts_manifest_cache["mtime_ns"] = None
+        _transcripts_manifest_cache["data"] = None
+
+
 def load_transcripts_manifest() -> dict[str, Any]:
     """Load the transcripts manifest from the output directory.
 
     Returns a dict with ``source_transcripts``, ``corrections``, and ``marks`` keys.
+
+    Memoizes the parsed result keyed on the manifest's path + mtime_ns so repeated
+    calls from the same process share a single read/parse until the file is
+    rewritten. Returns a deep copy so callers that mutate the returned structure in
+    place (e.g. ``--summarize``/``--citations`` set fields on ``source_transcripts``
+    entries before saving) cannot corrupt the cached state.
     """
-    return utils.load_json_manifest(
+    path = Path(utils.get_effective_output_dir()) / config.TRANSCRIPTS_MANIFEST_FILENAME
+    path_str = str(path)
+    try:
+        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
+    except OSError:
+        mtime_ns = None
+
+    with _TRANSCRIPTS_MANIFEST_CACHE_LOCK:
+        if (
+            mtime_ns is not None
+            and _transcripts_manifest_cache["path"] == path_str
+            and _transcripts_manifest_cache["mtime_ns"] == mtime_ns
+        ):
+            return copy.deepcopy(_transcripts_manifest_cache["data"])
+
+    data = utils.load_json_manifest(
         config.TRANSCRIPTS_MANIFEST_FILENAME, default=_empty_transcripts_manifest()
     )
+
+    with _TRANSCRIPTS_MANIFEST_CACHE_LOCK:
+        _transcripts_manifest_cache["path"] = path_str
+        _transcripts_manifest_cache["mtime_ns"] = mtime_ns
+        _transcripts_manifest_cache["data"] = data
+
+    return copy.deepcopy(data)
 
 
 def save_transcripts_manifest(
@@ -481,12 +533,20 @@ def save_transcripts_manifest(
     }
     if _is_empty_transcripts_manifest(data):
         utils.remove_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME)
+        # Invalidate the cache so the next load reflects the removal even if the
+        # filesystem's mtime resolution would elide the change.
+        _reset_transcripts_manifest_cache()
         return None
-    return utils.save_json_manifest(
+    result = utils.save_json_manifest(
         config.TRANSCRIPTS_MANIFEST_FILENAME,
         data,
         warn_label="transcripts manifest",
     )
+    # Invalidate the cache so the next load picks up what we just wrote, even if
+    # the filesystem's mtime resolution would elide the change.
+    if result is not None:
+        _reset_transcripts_manifest_cache()
+    return result
 
 
 # ---------------------------------------------------------------------------
