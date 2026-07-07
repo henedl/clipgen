@@ -340,20 +340,24 @@ def _corrected_segments(
 def api_transcript(participant: str) -> FlaskResponse:
     """Return full transcript segments for a participant (corrections applied)."""
     with _manifest_lock:
-        src = _manifest.get("source_transcripts", {})
-        entry = src.get(participant)
-    if not entry or not entry.get("segments"):
-        return err("No transcript for participant", 404)
-
-    raw_segments = entry["segments"]
-    corrections = _manifest.get("corrections", [])
+        entry = _manifest.get("source_transcripts", {}).get(participant)
+        if not entry or not entry.get("segments"):
+            return err("No transcript for participant", 404)
+        # Snapshot under the lock so a concurrent edit/transcribe/mark can't
+        # mutate segments, corrections, or marks mid-iteration (mirrors api_vtt).
+        raw_segments = list(entry["segments"])
+        corrections = list(_manifest.get("corrections", []))
+        marks_snapshot = list(_manifest.get("marks", []))
+        language = entry.get("language", "")
+        model = entry.get("model", "")
+        transcribed_at = entry.get("transcribed_at", "")
 
     # Apply corrections to get corrected text (memoized per participant)
     corrected_segments = _corrected_segments(participant, raw_segments, corrections)
 
     # Build marks-by-segment-id lookup
     marks_by_seg: dict[str, list[dict[str, Any]]] = {}
-    for mark in _manifest.get("marks", []):
+    for mark in marks_snapshot:
         sid = mark.get("segment_id", "")
         marks_by_seg.setdefault(sid, []).append(mark)
 
@@ -374,9 +378,9 @@ def api_transcript(participant: str) -> FlaskResponse:
     return ok(
         participant=participant,
         segments=segments,
-        language=entry.get("language", ""),
-        model=entry.get("model", ""),
-        transcribed_at=entry.get("transcribed_at", ""),
+        language=language,
+        model=model,
+        transcribed_at=transcribed_at,
     )
 
 
