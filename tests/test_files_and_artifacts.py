@@ -278,7 +278,6 @@ def test_build_artifact_records_for_clip_and_finalize_timeline_data(
         worksheet_title="Sheet",
         is_excel=False,
         mode="batch",
-        output_format="clip",
     )
 
     assert data["meta"]["study"] == "study"

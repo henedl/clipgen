@@ -270,14 +270,7 @@ def _build_card_frame(
             if ffmpeg_result and ffmpeg_result.stderr
             else None,
         )
-        try:
-            Path(card_path).unlink(missing_ok=True)
-        except TypeError:
-            if Path(card_path).exists():
-                try:
-                    Path(card_path).unlink()
-                except OSError:
-                    pass
+        Path(card_path).unlink(missing_ok=True)
         return None
 
     if not video.verify_output_file(card_path, f"{label.capitalize()} generation"):
@@ -453,7 +446,7 @@ def clear_endcard_cache() -> None:
         for path in _endcard_cache.values():
             try:
                 Path(path).unlink(missing_ok=True)
-            except (OSError, TypeError):
+            except OSError:
                 pass
         _endcard_cache.clear()
 

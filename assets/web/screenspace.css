@@ -1986,15 +1986,6 @@ body[data-frontend="screenspace"] {
   pointer-events: none;
 }
 
-.cal-axis-note {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-  font-style: italic;
-  align-self: center;
-}
-
 .cal-threshold {
   position: absolute;
   top: 0;

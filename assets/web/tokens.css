@@ -592,7 +592,7 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
  * (primitives.css, Studio-only) is a deliberately separate, richer button language
  * (compact ghost/solid/bare + sm/md/lg + a createBtn() factory). The two coexist on
  * purpose; pages migrate from `.btn` onto `.cg-btn` button-by-button over time, not
- * all at once. Page-specific `.btn` extras (e.g. studio `.btn-cancel`, screenspace
+ * all at once. Page-specific `.btn` extras (e.g. screenspace
  * `.btn-icon .ss-task-icon`) stay in their own files. */
 .btn {
   padding: var(--space-2) var(--space-4);

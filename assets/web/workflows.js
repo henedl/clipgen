@@ -955,7 +955,6 @@
   // participant"; the Run button turns such a blueprint into a batch. (Frontend-
   // only — the batch rebinds each video_source to a real participant per run.)
   WF.ALL_PARTICIPANTS = "__all__";
-  WF.boot = boot;
   WF.scheduleSave = scheduleSave;
   WF.undo = undo;
   WF.redo = redo;

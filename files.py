@@ -131,27 +131,6 @@ def _apply_default_extension(name: str) -> str:
     return name if Path(name).suffix else name + config.FILEFORMAT
 
 
-def get_source_video_filename(
-    study: str, participant: str, override: str | None = None
-) -> str:
-    """Resolve the expected source video filename for a clip.
-
-    Args:
-        study: Normalized study name
-        participant: Normalized participant ID
-        override: Optional filename override from the spreadsheet
-
-    Returns:
-        Filename to use when looking for the source video.
-    """
-    if override is not None:
-        override = override.strip()
-    if override:
-        # If override includes an extension, respect it as-is; else append default.
-        return _apply_default_extension(override)
-    return f"{study}_{participant}{config.FILEFORMAT}"
-
-
 def get_source_video_filenames(
     study: str, participant: str, override: str | None = None
 ) -> list[str]:
@@ -162,7 +141,7 @@ def get_source_video_filenames(
 
     - With an *override* (the spreadsheet ``Filename`` row): split on ``+`` so a
       cell like ``"morning.mp4 + afternoon.mp4"`` yields two files in order. Each
-      part follows the same extension rule as :func:`get_source_video_filename`.
+      part follows the same default-extension rule (:func:`_apply_default_extension`).
       Empty parts are dropped. Order is authoritative (concatenation order).
     - Without an override: returns the single plain name
       ``{study}_{participant}.mp4``. On-disk numbered-suffix auto-detection

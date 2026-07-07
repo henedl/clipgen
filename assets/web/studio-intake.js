@@ -36,7 +36,6 @@
 
   // ---- Screenspace Intake ----
 
-  var INTAKE_DETECTOR_COLORS = DETECTOR_COLORS;
   // Ordered detector list for the intake filter chips — copied from utils.js's
   // canonical `_DETECTOR_TYPES` (includes `boundary`) so a new detector automatically
   // gets a chip instead of being silently un-filterable.

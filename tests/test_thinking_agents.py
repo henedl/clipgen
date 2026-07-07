@@ -244,7 +244,7 @@ class TestFormatSegmentChunk:
             {"start": 0, "end": 5, "text": "Hello"},
             {"start": 65, "end": 70, "text": "World"},
         ]
-        result = thinking_agents._format_segment_chunk(segments, 0)
+        result = thinking_agents._format_segment_chunk(segments)
         assert result == "[0:00] Hello\n[1:05] World"
 
     def test_skips_segments_with_empty_text(self):
@@ -253,7 +253,7 @@ class TestFormatSegmentChunk:
             {"start": 10, "end": 15, "text": ""},
             {"start": 20, "end": 25, "text": "End"},
         ]
-        result = thinking_agents._format_segment_chunk(segments, 0)
+        result = thinking_agents._format_segment_chunk(segments)
         assert result == "[0:00] Hello\n[0:20] End"
 
 

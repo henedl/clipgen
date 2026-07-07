@@ -808,19 +808,6 @@ var severityRank = function (raw) {
   return null;
 };
 
-// Same as severityRank but keyed by CSS class (sev-critical, sev-high, ...).
-// Useful when the caller has already resolved the class via severityClass().
-// Returns null for unknown class so sort callers can fall back to 999.
-var severityRankByClass = function (cssClass) {
-  if (!cssClass) return null;
-  for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
-    if (CLIPGEN_CONFIG.severity[i].cssClass === cssClass) {
-      return CLIPGEN_CONFIG.severity[i].rank;
-    }
-  }
-  return null;
-};
-
 // ---- API helpers (always check r.ok) ----
 
 var apiGet = function (path) {
