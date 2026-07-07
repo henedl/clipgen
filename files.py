@@ -7,8 +7,6 @@ import threading
 import unicodedata
 from pathlib import Path
 
-import gspread
-
 import config
 import utils
 from utils import ClipRecord
@@ -276,7 +274,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     utils.debug_print("Will attempt to split the cell contents")
 
     # Get cell reference for error messages
-    cell_ref = gspread.utils.rowcol_to_a1(clip["cell"].row, clip["cell"].col)
+    cell_ref = utils.safe_cell_a1(clip["cell"].row, clip["cell"].col)
 
     # Parse inline annotations (e.g. !key), then parse timestamps from cleaned value.
     cleaned_cell_value, segment_annotations, cell_annotations = (
