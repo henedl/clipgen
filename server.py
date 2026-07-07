@@ -3763,6 +3763,8 @@ _QUIET_POLL_PATHS: frozenset[str] = frozenset(
     {
         "/screenspace/api/tasks",
         "/screenspace/api/events",
+        "/screenspace/api/intake-poll",
+        "/transcripts/api/intake-poll",
         "/transcripts/api/marks",
         "/transcripts/api/transcribe/status",
         "/transcripts/api/transcribe/model-status",
