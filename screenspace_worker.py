@@ -214,13 +214,7 @@ class ScreenspaceWorker:
         with self._lock:
             for t in tasks:
                 if t.get("id"):
-                    restored = copy.deepcopy(t)
-                    # Tasks now carry ``video_paths`` (multi-video timeline); a
-                    # task persisted before that change has only ``video_path``.
-                    # Normalize on load so resume()/_dispatch never KeyError on it.
-                    if not restored.get("video_paths") and restored.get("video_path"):
-                        restored["video_paths"] = [restored["video_path"]]
-                    self._tasks[t["id"]] = restored
+                    self._tasks[t["id"]] = copy.deepcopy(t)
 
     def stop(self) -> None:
         """Signal the worker thread to stop."""

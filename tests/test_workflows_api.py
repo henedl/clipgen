@@ -25,20 +25,26 @@ def wf_client(tmp_path, monkeypatch):
     app = Flask(__name__)
     app.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
 
-    workflows_server._manifest = workflows.empty_workflows_manifest()
-    workflows_server._input_dir = str(tmp_path)
-    workflows_server._sheet_context = None
-    workflows_server._worksheet = None
-    # Reset run state so runners/SSE clients never leak across tests. The SSE
-    # registries are the channel's live lists (make_sse_channel) — clear in place,
-    # never rebind, or the notify/stream closures detach from the module name.
-    workflows_server._runs = {}
+    # Seed module globals via monkeypatch so they auto-restore on teardown —
+    # otherwise a later test that reads these globals without the fixture would
+    # inherit this test's state (matters under random ordering).
+    monkeypatch.setattr(
+        workflows_server, "_manifest", workflows.empty_workflows_manifest()
+    )
+    monkeypatch.setattr(workflows_server, "_input_dir", str(tmp_path))
+    monkeypatch.setattr(workflows_server, "_sheet_context", None)
+    monkeypatch.setattr(workflows_server, "_worksheet", None)
+    # Reset run state so runners/SSE clients never leak across tests.
+    monkeypatch.setattr(workflows_server, "_runs", {})
+    monkeypatch.setattr(workflows_server, "_batches", {})
+    # The SSE registries are the channel's live lists (make_sse_channel) — clear
+    # them in place, never monkeypatch-rebind, or the notify/stream closures
+    # detach from the module name and the reset silently does nothing.
     workflows_server._sse_clients.clear()
-    workflows_server._batches = {}
     workflows_server._batch_sse_clients.clear()
     # Reset watch-dir trigger state (P6) so seen pids never leak across tests.
-    workflows_server._watch_seen = set()
-    workflows_server._watch_pending = {}
+    monkeypatch.setattr(workflows_server, "_watch_seen", set())
+    monkeypatch.setattr(workflows_server, "_watch_pending", {})
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 

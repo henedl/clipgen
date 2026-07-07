@@ -139,7 +139,7 @@ def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> boo
     predicate with no consecutive-buffer/progress side effects, so callers apply
     whatever skip semantics fit their scan (reset a motion run, extend a span,
     skip a per-frame op, or carry the last result). Shared by scan_similarity,
-    scan_flow, scan_inactivity, scan_boundaries, and scan_template.
+    scan_flow, scan_inactivity, scan_boundaries, scan_scene, and scan_template.
     """
     if prev_gray is None:
         return False

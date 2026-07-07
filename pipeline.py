@@ -657,6 +657,46 @@ def _process_single_clip_segments(
     return (generated, output_paths)
 
 
+def _parallel_map_ordered(
+    items: list[Any],
+    worker_fn: Callable[[Any], Any],
+    *,
+    workers: int,
+    results: list[Any],
+    on_error: Callable[[int, Exception], Any],
+    cancel_flag: Callable[[], bool] | None = None,
+    on_done: Callable[[], None] | None = None,
+) -> dict[concurrent.futures.Future[Any], int]:
+    """Submit ``worker_fn`` over ``items`` to a ThreadPoolExecutor, collecting
+    each result into ``results`` at its original index.
+
+    The caller owns ``results`` (pre-allocated to ``len(items)``), so it sets the
+    sentinel/shape for slots that never complete. On cancel, pending futures are
+    cancelled and the collection loop breaks, leaving un-collected slots at their
+    pre-filled value. ``on_error`` receives ``(idx, exc)`` for a per-item failure
+    and returns the value to store. ``on_done`` fires once per collected future
+    (e.g. to advance a progress bar). Returns the future->index map so callers
+    that need post-cancel draining (see ``_run_clip_pipeline``) can use it.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_idx = {
+            pool.submit(worker_fn, item): idx for idx, item in enumerate(items)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            if cancel_flag and cancel_flag():
+                for f in future_to_idx:
+                    f.cancel()
+                break
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception as exc:
+                results[idx] = on_error(idx, exc)
+            if on_done is not None:
+                on_done()
+    return future_to_idx
+
+
 def _run_clip_pipeline(
     clips_list: list[Any],
     *,
@@ -723,6 +763,15 @@ def _run_clip_pipeline(
                 except Exception:
                     results[idx] = None
 
+    def _clip_error(idx: int, exc: Exception) -> Any:
+        clip = clips_list[idx]
+        desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+        utils.error_print(
+            f"Clip failed: [{clip.get('participant', '')}] {desc}",
+            [str(exc)],
+        )
+        return []
+
     if use_parallel:
         results: list[Any] = [None] * total_clips
         progress = utils.create_progress_bar()
@@ -731,59 +780,33 @@ def _run_clip_pipeline(
             _active_progress = progress
             with progress:
                 task = progress.add_task(task_label, total=total_clips)
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                    future_to_idx = {
-                        pool.submit(wrapped_process, clip): idx
-                        for idx, clip in enumerate(clips_list)
-                    }
-                    for future in concurrent.futures.as_completed(future_to_idx):
-                        if cancel_flag and cancel_flag():
-                            for f in future_to_idx:
-                                f.cancel()
-                            break
-                        idx = future_to_idx[future]
-                        try:
-                            results[idx] = future.result()
-                        except Exception as exc:
-                            clip = clips_list[idx]
-                            desc = (clip.get("desc") or "")[
-                                : config.PROGRESS_DESCRIPTION_LENGTH
-                            ]
-                            utils.error_print(
-                                f"Clip failed: [{clip.get('participant', '')}] {desc}",
-                                [str(exc)],
-                            )
-                            results[idx] = []
-                        progress.update(task, advance=1)
-                        _notify_clip_done()
+
+                def _on_done() -> None:
+                    progress.update(task, advance=1)
+                    _notify_clip_done()
+
+                future_to_idx = _parallel_map_ordered(
+                    clips_list,
+                    wrapped_process,
+                    workers=workers,
+                    results=results,
+                    on_error=_clip_error,
+                    cancel_flag=cancel_flag,
+                    on_done=_on_done,
+                )
                 _drain_ran_futures(future_to_idx, results)
             _active_progress = None
             _active_secondary_task = None
         else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                future_to_idx = {
-                    pool.submit(wrapped_process, clip): idx
-                    for idx, clip in enumerate(clips_list)
-                }
-                for future in concurrent.futures.as_completed(future_to_idx):
-                    if cancel_flag and cancel_flag():
-                        for f in future_to_idx:
-                            f.cancel()
-                        break
-                    idx = future_to_idx[future]
-                    try:
-                        results[idx] = future.result()
-                    except Exception as exc:
-                        clip = clips_list[idx]
-                        desc = (clip.get("desc") or "")[
-                            : config.PROGRESS_DESCRIPTION_LENGTH
-                        ]
-                        utils.error_print(
-                            f"Clip failed: [{clip.get('participant', '')}] {desc}",
-                            [str(exc)],
-                        )
-                        results[idx] = []
-                    _notify_clip_done()
+            future_to_idx = _parallel_map_ordered(
+                clips_list,
+                wrapped_process,
+                workers=workers,
+                results=results,
+                on_error=_clip_error,
+                cancel_flag=cancel_flag,
+                on_done=_notify_clip_done,
+            )
             _drain_ran_futures(future_to_idx, results)
     else:
         results = []
@@ -1078,84 +1101,52 @@ def process_clips(
     results: list[tuple[int, list[tuple[str, int]]]] = [_EMPTY_RESULT] * len(prepared)
 
     if use_parallel:
+
+        def _cut(pair: tuple[ClipRecord, str]) -> tuple[int, list[tuple[str, int]]]:
+            clip, base_video = pair
+            return _process_single_clip_segments(
+                clip,
+                base_video,
+                missing_videos,
+                output_format=output_format,
+                collect_paths=True,
+                include_severity=include_severity,
+                cancel_flag=cancel_flag,
+                titlecards_enabled=titlecards_enabled,
+                titlecard_duration_seconds=titlecard_duration_seconds,
+            )
+
+        def _cut_error(idx: int, exc: Exception) -> tuple[int, list[tuple[str, int]]]:
+            clip, _ = prepared[idx]
+            desc = (clip.get("desc") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+            utils.error_print(
+                f"Clip failed: [{clip.get('participant', '')}] {desc}",
+                [str(exc)],
+            )
+            return (0, [])
+
         progress = utils.create_progress_bar()
         if progress:
             with progress:
                 cut_task = progress.add_task("Processing clips", total=len(prepared))
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=workers,
-                ) as pool:
-                    future_to_idx = {
-                        pool.submit(
-                            _process_single_clip_segments,
-                            clip,
-                            base_video,
-                            missing_videos,
-                            output_format=output_format,
-                            collect_paths=True,
-                            include_severity=include_severity,
-                            cancel_flag=cancel_flag,
-                            titlecards_enabled=titlecards_enabled,
-                            titlecard_duration_seconds=titlecard_duration_seconds,
-                        ): idx
-                        for idx, (clip, base_video) in enumerate(prepared)
-                    }
-                    for future in concurrent.futures.as_completed(future_to_idx):
-                        if cancel_flag and cancel_flag():
-                            for f in future_to_idx:
-                                f.cancel()
-                            break
-                        idx = future_to_idx[future]
-                        try:
-                            results[idx] = future.result()
-                        except Exception as exc:
-                            clip, _ = prepared[idx]
-                            desc = (clip.get("desc") or "")[
-                                : config.PROGRESS_DESCRIPTION_LENGTH
-                            ]
-                            utils.error_print(
-                                f"Clip failed: [{clip.get('participant', '')}] {desc}",
-                                [str(exc)],
-                            )
-                            results[idx] = (0, [])
-                        progress.update(cut_task, advance=1)
+                _parallel_map_ordered(
+                    prepared,
+                    _cut,
+                    workers=workers,
+                    results=results,
+                    on_error=_cut_error,
+                    cancel_flag=cancel_flag,
+                    on_done=lambda: progress.update(cut_task, advance=1),
+                )
         else:
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=workers,
-            ) as pool:
-                future_to_idx = {
-                    pool.submit(
-                        _process_single_clip_segments,
-                        clip,
-                        base_video,
-                        missing_videos,
-                        output_format=output_format,
-                        collect_paths=True,
-                        include_severity=include_severity,
-                        cancel_flag=cancel_flag,
-                        titlecards_enabled=titlecards_enabled,
-                        titlecard_duration_seconds=titlecard_duration_seconds,
-                    ): idx
-                    for idx, (clip, base_video) in enumerate(prepared)
-                }
-                for future in concurrent.futures.as_completed(future_to_idx):
-                    if cancel_flag and cancel_flag():
-                        for f in future_to_idx:
-                            f.cancel()
-                        break
-                    idx = future_to_idx[future]
-                    try:
-                        results[idx] = future.result()
-                    except Exception as exc:
-                        clip, _ = prepared[idx]
-                        desc = (clip.get("desc") or "")[
-                            : config.PROGRESS_DESCRIPTION_LENGTH
-                        ]
-                        utils.error_print(
-                            f"Clip failed: [{clip.get('participant', '')}] {desc}",
-                            [str(exc)],
-                        )
-                        results[idx] = (0, [])
+            _parallel_map_ordered(
+                prepared,
+                _cut,
+                workers=workers,
+                results=results,
+                on_error=_cut_error,
+                cancel_flag=cancel_flag,
+            )
     else:
         # Sequential execution (workers=1 or single clip)
         progress = utils.create_progress_bar()
@@ -1631,6 +1622,57 @@ def _process_reel(
 # ---- Manifest regeneration ----
 
 
+def _regenerate_batch(
+    items: list[dict[str, Any]],
+    worker_fn: Callable[[dict[str, Any]], bool],
+    *,
+    describe: Callable[[dict[str, Any]], str],
+    error_prefix: str,
+    workers: int,
+    progress: Any = None,
+    task: Any = None,
+) -> int:
+    """Regenerate a batch of items (media artifacts or reels).
+
+    Runs in parallel when ``workers >= 2`` and there are at least 2 items, else
+    sequentially. Advances ``task`` per item when a progress bar is active.
+    Returns the count of truthy ``worker_fn`` results.
+    """
+    if not items:
+        return 0
+
+    if workers >= 2 and len(items) >= 2:
+        results: list[bool] = [False] * len(items)
+
+        def _on_error(idx: int, exc: Exception) -> bool:
+            utils.error_print(f"{error_prefix}: {describe(items[idx])}", [str(exc)])
+            return False
+
+        _parallel_map_ordered(
+            items,
+            worker_fn,
+            workers=workers,
+            results=results,
+            on_error=_on_error,
+            on_done=(
+                (lambda: progress.update(task, advance=1))
+                if progress is not None
+                else None
+            ),
+        )
+        return sum(1 for ok in results if ok)
+
+    count = 0
+    for item in items:
+        if progress is not None:
+            progress.update(task, description=describe(item))
+        if worker_fn(item):
+            count += 1
+        if progress is not None:
+            progress.update(task, advance=1)
+    return count
+
+
 def regenerate_from_manifest(
     artifacts: list[dict[str, Any]],
     reels: list[dict[str, Any]] | None = None,
@@ -1645,7 +1687,8 @@ def regenerate_from_manifest(
     Returns the number of successfully regenerated items.
     """
     media = [a for a in artifacts if a.get("type") != "transcript"]
-    total = len(media) + len(reels or [])
+    reel_list = reels or []
+    total = len(media) + len(reel_list)
     if total == 0:
         utils.warning_print("No media artifacts or reels to regenerate.")
         return 0
@@ -1653,13 +1696,10 @@ def regenerate_from_manifest(
     utils.print_mode_heading("Regenerating artifacts", "mode.regenerate")
     missing_videos: set[str] = set()
     missing_lock = threading.Lock()
-    generated = 0
-    reel_list = reels or []
     workers = _resolve_clip_workers()
-    parallel_media = workers >= 2 and len(media) >= 2
     parallel_reels = workers >= 2 and len(reel_list) >= 2
 
-    def _regenerate_artifact_threadsafe(artifact: dict[str, Any]) -> bool:
+    def _regen_artifact(artifact: dict[str, Any]) -> bool:
         local_missing: set[str] = set()
         ok = _regenerate_single_artifact(artifact, local_missing)
         if local_missing:
@@ -1667,165 +1707,50 @@ def regenerate_from_manifest(
                 missing_videos.update(local_missing)
         return ok
 
-    def _regenerate_reel_threadsafe(reel: dict[str, Any]) -> bool:
+    def _regen_reel(reel: dict[str, Any]) -> bool:
         local_missing: set[str] = set()
-        # parallel=False: reels already run concurrently here, so cutting each
-        # reel's components sequentially avoids nested CPU oversubscription.
-        ok = _regenerate_reel(reel, local_missing, parallel=False)
+        # When the reel batch itself runs concurrently (parallel_reels), cut each
+        # reel's components sequentially to avoid nested CPU oversubscription;
+        # otherwise let a lone/large reel parallelize its own segment cuts.
+        ok = _regenerate_reel(reel, local_missing, parallel=not parallel_reels)
         if local_missing:
             with missing_lock:
                 missing_videos.update(local_missing)
         return ok
 
+    def _describe_artifact(a: dict[str, Any]) -> str:
+        desc = (a.get("description") or "")[: config.PROGRESS_DESCRIPTION_LENGTH]
+        return f"[{a.get('participant', '')}] {desc}..."
+
+    def _describe_reel(r: dict[str, Any]) -> str:
+        return r.get("description", "Reel")[: config.PROGRESS_DESCRIPTION_LENGTH]
+
+    def _run(progress: Any, task: Any) -> int:
+        return _regenerate_batch(
+            media,
+            _regen_artifact,
+            describe=_describe_artifact,
+            error_prefix="Regenerate failed",
+            workers=workers,
+            progress=progress,
+            task=task,
+        ) + _regenerate_batch(
+            reel_list,
+            _regen_reel,
+            describe=_describe_reel,
+            error_prefix="Reel regen failed",
+            workers=workers,
+            progress=progress,
+            task=task,
+        )
+
     progress = utils.create_progress_bar()
     if progress:
         with progress:
             task = progress.add_task("Regenerating", total=total)
-            if parallel_media:
-                results: list[bool] = [False] * len(media)
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=workers,
-                ) as pool:
-                    future_to_idx = {
-                        pool.submit(_regenerate_artifact_threadsafe, art): idx
-                        for idx, art in enumerate(media)
-                    }
-                    for future in concurrent.futures.as_completed(future_to_idx):
-                        idx = future_to_idx[future]
-                        try:
-                            results[idx] = future.result()
-                        except Exception as exc:
-                            art = media[idx]
-                            desc_preview = (art.get("description") or "")[
-                                : config.PROGRESS_DESCRIPTION_LENGTH
-                            ]
-                            utils.error_print(
-                                f"Regenerate failed: [{art.get('participant', '')}] {desc_preview}",
-                                [str(exc)],
-                            )
-                            results[idx] = False
-                        progress.update(task, advance=1)
-                generated += sum(1 for ok in results if ok)
-            else:
-                for artifact in media:
-                    desc_preview = (artifact.get("description") or "")[
-                        : config.PROGRESS_DESCRIPTION_LENGTH
-                    ]
-                    progress.update(
-                        task,
-                        description=f"[{artifact.get('participant', '')}] {desc_preview}...",
-                    )
-                    if _regenerate_single_artifact(artifact, missing_videos):
-                        generated += 1
-                    progress.update(task, advance=1)
-            if parallel_reels:
-                reel_results: list[bool] = [False] * len(reel_list)
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=workers,
-                ) as pool:
-                    reel_future_to_idx = {
-                        pool.submit(_regenerate_reel_threadsafe, reel): idx
-                        for idx, reel in enumerate(reel_list)
-                    }
-                    for future in concurrent.futures.as_completed(reel_future_to_idx):
-                        idx = reel_future_to_idx[future]
-                        try:
-                            reel_results[idx] = future.result()
-                        except Exception as exc:
-                            reel = reel_list[idx]
-                            utils.error_print(
-                                f"Reel regen failed: {reel.get('description', 'reel')[: config.PROGRESS_DESCRIPTION_LENGTH]}",
-                                [str(exc)],
-                            )
-                            reel_results[idx] = False
-                        progress.update(task, advance=1)
-                generated += sum(1 for ok in reel_results if ok)
-            else:
-                for reel in reel_list:
-                    progress.update(
-                        task,
-                        description=reel.get("description", "Reel")[
-                            : config.PROGRESS_DESCRIPTION_LENGTH
-                        ],
-                    )
-                    # parallel=True: no reel-level pool here (single or <2 reels),
-                    # so a single large reel parallelizes its own segment cuts.
-                    if _regenerate_reel(reel, missing_videos, parallel=True):
-                        generated += 1
-                    progress.update(task, advance=1)
-    elif parallel_media:
-        results = [False] * len(media)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            future_to_idx = {
-                pool.submit(_regenerate_artifact_threadsafe, art): idx
-                for idx, art in enumerate(media)
-            }
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    results[idx] = future.result()
-                except Exception as exc:
-                    art = media[idx]
-                    utils.error_print(
-                        f"Regenerate failed: [{art.get('participant', '')}]",
-                        [str(exc)],
-                    )
-                    results[idx] = False
-        generated += sum(1 for ok in results if ok)
-        if parallel_reels:
-            reel_results = [False] * len(reel_list)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                reel_future_to_idx = {
-                    pool.submit(_regenerate_reel_threadsafe, reel): idx
-                    for idx, reel in enumerate(reel_list)
-                }
-                for future in concurrent.futures.as_completed(reel_future_to_idx):
-                    idx = reel_future_to_idx[future]
-                    try:
-                        reel_results[idx] = future.result()
-                    except Exception as exc:
-                        reel = reel_list[idx]
-                        utils.error_print(
-                            f"Reel regen failed: {reel.get('description', 'reel')[: config.PROGRESS_DESCRIPTION_LENGTH]}",
-                            [str(exc)],
-                        )
-                        reel_results[idx] = False
-            generated += sum(1 for ok in reel_results if ok)
-        else:
-            for reel in reel_list:
-                # parallel=True: no reel-level pool here (single or <2 reels), so
-                # a single large reel parallelizes its own segment cuts.
-                if _regenerate_reel(reel, missing_videos, parallel=True):
-                    generated += 1
+            generated = _run(progress, task)
     else:
-        for artifact in media:
-            if _regenerate_single_artifact(artifact, missing_videos):
-                generated += 1
-        if parallel_reels:
-            reel_results = [False] * len(reel_list)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                reel_future_to_idx = {
-                    pool.submit(_regenerate_reel_threadsafe, reel): idx
-                    for idx, reel in enumerate(reel_list)
-                }
-                for future in concurrent.futures.as_completed(reel_future_to_idx):
-                    idx = reel_future_to_idx[future]
-                    try:
-                        reel_results[idx] = future.result()
-                    except Exception as exc:
-                        reel = reel_list[idx]
-                        utils.error_print(
-                            f"Reel regen failed: {reel.get('description', 'reel')[: config.PROGRESS_DESCRIPTION_LENGTH]}",
-                            [str(exc)],
-                        )
-                        reel_results[idx] = False
-            generated += sum(1 for ok in reel_results if ok)
-        else:
-            for reel in reel_list:
-                # parallel=True: no reel-level pool here (single or <2 reels), so
-                # a single large reel parallelizes its own segment cuts.
-                if _regenerate_reel(reel, missing_videos, parallel=True):
-                    generated += 1
+        generated = _run(None, None)
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")

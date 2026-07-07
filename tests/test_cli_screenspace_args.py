@@ -31,7 +31,6 @@ def _ss_args(**overrides):
         "manifest": False,
         "regenerate": False,
         "studio": False,
-        "insights": False,
         "screenspace": False,
         "transcripts": False,
         "timeline_viewer": False,
