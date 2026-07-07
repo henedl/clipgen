@@ -427,6 +427,30 @@ def test_spreadsheets_open_rejected_during_intake(client, monkeypatch):
     assert resp.get_json()["ok"] is False
 
 
+def test_spreadsheets_open_rejected_during_timeline_viewer(client, monkeypatch):
+    """A timeline-viewer build blocks a spreadsheet switch: it appends into the
+    shared generated list/manifest, so a swap mid-build would rebind those under
+    it and mix old-sheet artifacts into the new sheet."""
+    monkeypatch.setattr(server, "_timeline_viewer_in_progress", True)
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
+def test_spreadsheets_open_rejected_during_gallery(client, monkeypatch):
+    """A gallery build also blocks a spreadsheet switch."""
+    monkeypatch.setattr(server, "_gallery_in_progress", True)
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
 def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
     """Closing the spreadsheet is rejected with 409 while a reel build runs."""
     monkeypatch.setattr(server, "_reel_in_progress", True)
