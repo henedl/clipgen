@@ -7,6 +7,7 @@ from unittest import mock
 
 import config
 import screenspace
+import screenspace_ocr
 import screenspace_worker
 
 
@@ -590,34 +591,65 @@ class TestWorkerParallel:
             worker.stop()
 
 
-class TestOcrReaderLock:
-    def test_ocr_lock_prevents_duplicate_creation(self, monkeypatch):
-        """Only one EasyOCR Reader is created even with concurrent calls."""
-        call_count = {"n": 0}
-        fake_reader = mock.MagicMock()
+class TestOcrReaderPool:
+    def test_pool_caps_reader_creation(self, monkeypatch):
+        """At most pool-size Readers are built, even under concurrent checkout."""
+        monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 1)
+        screenspace_ocr._ocr_pools.clear()
 
-        def fake_reader_init(languages, verbose=False):
-            call_count["n"] += 1
+        build_count = {"n": 0}
+
+        def fake_build(languages):
+            build_count["n"] += 1
             time.sleep(0.05)  # simulate slow init
-            return fake_reader
+            return mock.MagicMock()
 
-        # Clear cache
-        screenspace._ocr_readers.clear()
+        monkeypatch.setattr(screenspace_ocr, "_build_ocr_reader", fake_build)
 
-        mock_easyocr = mock.MagicMock()
-        mock_easyocr.Reader = fake_reader_init
-        monkeypatch.setitem(__import__("sys").modules, "easyocr", mock_easyocr)
+        def _use():
+            with screenspace_ocr._checkout_ocr_reader(["en"]):
+                time.sleep(0.02)
 
-        threads = []
-        for _ in range(4):
-            t = threading.Thread(target=screenspace._get_ocr_reader, args=(["en"],))
-            threads.append(t)
+        threads = [threading.Thread(target=_use) for _ in range(4)]
+        for t in threads:
             t.start()
         for t in threads:
             t.join()
 
-        assert call_count["n"] == 1
-        screenspace._ocr_readers.clear()
+        # Pool size 1 => exactly one Reader ever built, reused by all callers.
+        assert build_count["n"] == 1
+        screenspace_ocr._ocr_pools.clear()
+
+    def test_pool_hands_distinct_readers_to_concurrent_callers(self, monkeypatch):
+        """Two concurrent checkouts hold distinct Readers — OCR is no longer serialized."""
+        monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 2)
+        screenspace_ocr._ocr_pools.clear()
+
+        monkeypatch.setattr(
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: object()
+        )
+
+        # Both threads must be inside the context at once; a serializing pool
+        # (size 1) would deadlock here and fail the test via the barrier timeout.
+        barrier = threading.Barrier(2, timeout=5)
+        held: list[int] = []
+        held_lock = threading.Lock()
+
+        def _use():
+            with screenspace_ocr._checkout_ocr_reader(["en"]) as reader:
+                with held_lock:
+                    held.append(id(reader))
+                barrier.wait()
+
+        threads = [threading.Thread(target=_use) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(held) == 2
+        assert held[0] != held[1]
+        screenspace_ocr._ocr_pools.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -68,8 +68,9 @@ from screenspace_primitives import (
     resolve_region_request,
 )
 from screenspace_ocr import (
-    _get_ocr_reader,
-    _ocr_readers,
+    _build_ocr_reader,
+    _checkout_ocr_reader,
+    _ocr_pools,
     _ocr_readtext,
     _preprocess_for_ocr,
     _score_numbers_readings,

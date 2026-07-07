@@ -5,9 +5,25 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import config
 import screenspace
+import screenspace_ocr
 import screenspace_primitives
 import screenspace_scans
+
+
+@pytest.fixture(autouse=True)
+def _reset_ocr_pool(monkeypatch):
+    """Isolate the process-wide OCR reader pool between tests.
+
+    Readers are cached in ``screenspace_ocr._ocr_pools``; pin the pool to a
+    single slot so each test builds exactly one (patched) fake Reader, and clear
+    it so a fake from a prior test never leaks in.
+    """
+    monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 1)
+    screenspace_ocr._ocr_pools.clear()
+    yield
+    screenspace_ocr._ocr_pools.clear()
 
 
 class _FakeReader:
@@ -65,7 +81,7 @@ class TestOcrPreprocess:
                 return []
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _l: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _l: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -95,7 +111,7 @@ class TestOcrPreprocess:
                 return []
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _l: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _l: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -125,7 +141,7 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.2)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -164,7 +180,7 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "l00", 0.9)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -204,7 +220,7 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5top", 0.9)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -246,7 +262,7 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "1n", 0.9)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -294,7 +310,7 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -343,7 +359,7 @@ class TestScanText:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -459,7 +475,7 @@ class TestScanNumbers:
         # missing-video test would otherwise download/load the real EasyOCR
         # model. Stub it out to stay fast and offline.
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         for op in ("eq", "gt", "lt", "gte", "lte", "range"):
             # Should not raise ValueError -- returns [] because video doesn't exist
@@ -476,7 +492,7 @@ class TestScanNumbers:
     def test_dispatch_routes_numbers(self, monkeypatch):
         # Same reason as test_valid_operators_accepted: avoid loading real OCR.
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
@@ -515,7 +531,7 @@ class TestScanNumbers:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -589,7 +605,7 @@ class TestScanNumbers:
                 return []
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -628,7 +644,7 @@ class TestScanNumbers:
                 return []
 
         monkeypatch.setattr(
-            screenspace_scans, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
             screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
