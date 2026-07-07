@@ -454,13 +454,21 @@ def _mark_intake_active(active: bool) -> None:
 
 
 def _generation_busy() -> bool:
-    """Return True while any clip, reel, or intake generation is in flight.
+    """Return True while any clip, reel, timeline-viewer, gallery, or intake
+    generation is in flight.
 
-    Consulted before a sheet swap so generated lists are not rebound under
-    an active stream.
+    Consulted before a sheet swap so generated lists/manifest are not rebound
+    under an active build (e.g. a timeline-viewer build would otherwise append
+    old-sheet artifacts into the new sheet's freshly-rebound list/manifest).
     """
     with _busy_lock:
-        return _generate_in_progress or _reel_in_progress or _intake_active > 0
+        return (
+            _generate_in_progress
+            or _reel_in_progress
+            or _timeline_viewer_in_progress
+            or _gallery_in_progress
+            or _intake_active > 0
+        )
 
 
 @contextmanager
