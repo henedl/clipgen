@@ -3,6 +3,7 @@
 
 import os
 import re
+import threading
 import unicodedata
 from pathlib import Path
 
@@ -11,6 +12,14 @@ import gspread
 import config
 import utils
 from utils import ClipRecord
+
+# Per-template high-water counter so a batch of same-named reservations doesn't
+# re-probe 0,1,2,… from scratch each call (which is O(n²) syscalls). Keyed on
+# (directory, base, extension); only ever advances, so released slots leave
+# harmless gaps but uniqueness is preserved. Guarded because get_unique_filename
+# runs inside the clip ThreadPoolExecutor.
+_unique_high_water: dict[tuple[str, str, str], int] = {}
+_unique_high_water_lock = threading.Lock()
 
 
 def _safe_truncate(text: str, max_chars: int) -> str:
@@ -73,7 +82,14 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
         truncated_base = _safe_truncate(base, max_base - len(suffix))
         return directory / (truncated_base + suffix + file_extension)
 
-    counter = 0
+    key = (str(directory), base, file_extension)
+    with _unique_high_water_lock:
+        counter = _unique_high_water.get(key, 0)
+
+    def _record_high_water(used: int) -> None:
+        with _unique_high_water_lock:
+            _unique_high_water[key] = max(_unique_high_water.get(key, 0), used + 1)
+
     while True:
         candidate = _candidate(counter)
         try:
@@ -88,9 +104,11 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
             while candidate.is_file():
                 counter += 1
                 candidate = _candidate(counter)
+            _record_high_water(counter)
             return str(candidate)
         else:
             os.close(fd)
+            _record_high_water(counter)
             return str(candidate)
 
 
