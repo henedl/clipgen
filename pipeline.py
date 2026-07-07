@@ -1669,7 +1669,9 @@ def regenerate_from_manifest(
 
     def _regenerate_reel_threadsafe(reel: dict[str, Any]) -> bool:
         local_missing: set[str] = set()
-        ok = _regenerate_reel(reel, local_missing)
+        # parallel=False: reels already run concurrently here, so cutting each
+        # reel's components sequentially avoids nested CPU oversubscription.
+        ok = _regenerate_reel(reel, local_missing, parallel=False)
         if local_missing:
             with missing_lock:
                 missing_videos.update(local_missing)
@@ -1746,7 +1748,9 @@ def regenerate_from_manifest(
                             : config.PROGRESS_DESCRIPTION_LENGTH
                         ],
                     )
-                    if _regenerate_reel(reel, missing_videos):
+                    # parallel=True: no reel-level pool here (single or <2 reels),
+                    # so a single large reel parallelizes its own segment cuts.
+                    if _regenerate_reel(reel, missing_videos, parallel=True):
                         generated += 1
                     progress.update(task, advance=1)
     elif parallel_media:
@@ -1789,7 +1793,9 @@ def regenerate_from_manifest(
             generated += sum(1 for ok in reel_results if ok)
         else:
             for reel in reel_list:
-                if _regenerate_reel(reel, missing_videos):
+                # parallel=True: no reel-level pool here (single or <2 reels), so
+                # a single large reel parallelizes its own segment cuts.
+                if _regenerate_reel(reel, missing_videos, parallel=True):
                     generated += 1
     else:
         for artifact in media:
@@ -1816,7 +1822,9 @@ def regenerate_from_manifest(
             generated += sum(1 for ok in reel_results if ok)
         else:
             for reel in reel_list:
-                if _regenerate_reel(reel, missing_videos):
+                # parallel=True: no reel-level pool here (single or <2 reels), so
+                # a single large reel parallelizes its own segment cuts.
+                if _regenerate_reel(reel, missing_videos, parallel=True):
                     generated += 1
 
     if missing_videos:
@@ -1943,64 +1951,99 @@ def _regenerate_single_artifact(
         return False
 
 
-def _regenerate_reel(reel: dict[str, Any], missing_videos: set[str]) -> bool:
-    """Regenerate a reel from its manifest entry by cutting components then concatenating."""
+def _regenerate_reel(
+    reel: dict[str, Any], missing_videos: set[str], parallel: bool = False
+) -> bool:
+    """Regenerate a reel from its manifest entry by cutting components then concatenating.
+
+    A boundary-spanning component carries a ``parts`` list; each part is a
+    separate cut and the parts simply become consecutive entries. Single-segment
+    components cut directly from their mapped sub-video using local offsets. Any
+    missing source or failed cut aborts the whole reel (matching the
+    multipart-clip path) rather than silently producing a shorter reel.
+
+    When *parallel* is True (a single large reel being regenerated on its own),
+    the independent segment cuts run through a ThreadPoolExecutor, mirroring the
+    fresh-build reel path. Callers that already parallelize *across* reels pass
+    ``parallel=False`` so the two levels don't oversubscribe the CPU.
+    """
     components = reel.get("components", [])
     if not components:
         return False
 
-    temp_paths: list[str] = []
-
-    def _cleanup() -> None:
-        for p in temp_paths:
-            try:
-                Path(p).unlink(missing_ok=True)
-            except OSError:
-                pass
-
+    # Pre-flight: flatten segments into an ordered task list and validate every
+    # source up front (cheap stat calls, single-threaded) before spending any
+    # ffmpeg time. A missing source aborts the whole reel without reserving or
+    # cutting anything.
+    tasks: list[dict[str, Any]] = []
     for comp in components:
-        # A boundary-spanning component carries a ``parts`` list; each part is a
-        # separate cut. Since a reel is a concatenation, the parts simply become
-        # consecutive entries in the temp list. Single-segment components cut
-        # directly from their mapped sub-video using local offsets. Any missing
-        # source or failed cut aborts the whole reel (matching the multipart-clip
-        # path) rather than silently producing a shorter reel.
-        segments = comp.get("parts") or [comp]
-        for segment in segments:
+        for segment in comp.get("parts") or [comp]:
             source = segment.get("sourceVideo", "")
             source_path = str(utils.resolve_input_path(source))
             if not Path(source_path).is_file():
                 if source_path not in missing_videos:
                     missing_videos.add(source_path)
                     utils.warning_print(f"Source video not found: '{source}'")
-                _cleanup()
                 return False
-
             local_start = segment.get("localStart", segment.get("start", 0))
             local_end = segment.get("localEnd", segment.get("end", 0))
-            start_ts = utils.seconds_to_timestamp(int(local_start))
-            end_ts = utils.seconds_to_timestamp(int(local_end))
-            out_name = files.get_unique_filename(
-                f"_reel_part_{len(temp_paths) + 1}{config.FILEFORMAT}"
+            tasks.append(
+                {
+                    "idx": len(tasks),
+                    "source_path": source_path,
+                    "start_ts": utils.seconds_to_timestamp(int(local_start)),
+                    "end_ts": utils.seconds_to_timestamp(int(local_end)),
+                }
             )
-            if video.run_ffmpeg(
-                input_file=source_path,
-                output_file=out_name,
-                start_pos=start_ts,
-                end_pos=end_ts,
-                reencode=config.REENCODING,
-            ):
-                temp_paths.append(out_name)
-            else:
-                files.release_reservation(out_name)
-                _cleanup()
-                return False
 
-    if not temp_paths:
+    if not tasks:
+        return False
+
+    def _cut_segment(task: dict[str, Any]) -> tuple[int, str, bool]:
+        """Reserve a part name and cut one segment; returns (idx, path, ok)."""
+        out_name = files.get_unique_filename(
+            f"_reel_part_{task['idx'] + 1}{config.FILEFORMAT}"
+        )
+        ok = video.run_ffmpeg(
+            input_file=task["source_path"],
+            output_file=out_name,
+            start_pos=task["start_ts"],
+            end_pos=task["end_ts"],
+            reencode=config.REENCODING,
+        )
+        return (task["idx"], out_name, ok)
+
+    workers = _resolve_clip_workers()
+    cut_results: dict[int, tuple[str, bool]] = {}
+    if parallel and len(tasks) >= 2 and workers >= 2:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            for future in concurrent.futures.as_completed(
+                [pool.submit(_cut_segment, t) for t in tasks]
+            ):
+                idx, out_name, ok = future.result()
+                cut_results[idx] = (out_name, ok)
+    else:
+        for t in tasks:
+            idx, out_name, ok = _cut_segment(t)
+            cut_results[idx] = (out_name, ok)
+
+    # Reassemble in concat order regardless of completion order.
+    ordered = [cut_results[t["idx"]] for t in tasks]
+    all_names = [name for name, _ok in ordered]
+
+    def _cleanup() -> None:
+        for p in all_names:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    if not all(ok for _name, ok in ordered):
+        _cleanup()  # any failed cut aborts the whole reel
         return False
 
     output_file = str(utils.resolve_output_path(reel.get("file", "reel.mp4")))
-    ok = video.concatenate_clips(temp_paths, output_file, reencode_on_fail=True)
+    ok = video.concatenate_clips(all_names, output_file, reencode_on_fail=True)
 
     _cleanup()
     return ok
