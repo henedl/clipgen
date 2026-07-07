@@ -53,7 +53,6 @@ import binascii
 import copy
 import json
 import math
-import queue as queue_mod
 import threading
 import uuid
 from collections import OrderedDict
@@ -73,6 +72,7 @@ from server_utils import (
     err,
     json_endpoint,
     make_debounced_persist,
+    make_sse_channel,
     ok,
     parse_number_arg,
 )
@@ -177,33 +177,21 @@ _pin_ocr_cache_lock = threading.Lock()
 
 # ---- SSE (Server-Sent Events) client registry ----
 
-_sse_clients: list[queue_mod.Queue[str]] = []
-_sse_clients_lock = threading.Lock()
+# Broadcast channel (all task-stream clients registered under the None key);
+# ``_sse_clients`` is the channel's live registry list. See make_sse_channel.
+_sse_notify, _sse_stream, _sse_clients = make_sse_channel()
 _manifest_lock = threading.Lock()
 
 
 def _notify_sse_clients(event_type: str = "update") -> None:
-    """Push a notification to all connected SSE clients.
+    """Broadcast a task-state change to every connected SSE client.
 
-    A slow client's bounded queue can fill up. Rather than silently dropping
-    the change — which would leave that client stale until some unrelated
-    notification happened to fit — coalesce on overflow: discard one stale
-    entry and leave a single ``update`` marker, so the client still emits
-    fresh task state once it catches up.
+    Thin adapter over the shared channel's coalescing ``notify`` (see
+    make_sse_channel): on a full client queue it discards one stale entry and
+    re-pushes a marker, so a lagging client still re-emits fresh task state once
+    it catches up.
     """
-    with _sse_clients_lock:
-        for q in _sse_clients:
-            try:
-                q.put_nowait(event_type)
-            except queue_mod.Full:
-                try:
-                    q.get_nowait()
-                except queue_mod.Empty:
-                    pass
-                try:
-                    q.put_nowait("update")
-                except queue_mod.Full:
-                    pass
+    _sse_notify(marker=event_type)
 
 
 def _sse_task_payload() -> str:
@@ -710,42 +698,24 @@ def api_calibrate() -> FlaskResponse:
     video_path, mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
-
-    def _resolve_region_coords(
-        name: str, region_data: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        rd = region_data if region_data is not None else all_known_regions[name]
-        if props and props.get("width") and props.get("height"):
-            return screenspace.denormalize_region(rd, props["width"], props["height"])
-        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+    resolve_region = _region_coords_resolver(props, all_known_regions)
 
     if requested_region is not None:
-        region_coords = _resolve_region_coords(region_name, requested_region)
+        region_coords = resolve_region(region_name, requested_region)
     else:
         region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
 
-    coerced = _coerce_task_params(task_type, parameters)
-    if isinstance(coerced, tuple):
-        return coerced
-    parameters = cast(dict[str, Any], coerced)
-
-    frame_at = _participant_frame_extractor(participant)
-    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
-    if isinstance(extracted, tuple):
-        return extracted
-    parameters = cast(dict[str, Any], extracted)
-
-    if task_type == "multitool":
-        prepared = _prepare_multitool_steps(
-            parameters,
-            all_known_regions,
-            frame_at,
-            region_coords,
-            _resolve_region_coords,
-        )
-        if isinstance(prepared, tuple):
-            return prepared
-        parameters = cast(dict[str, Any], prepared)
+    prepared = _prepare_task_media(
+        task_type,
+        participant,
+        parameters,
+        all_known_regions,
+        region_coords,
+        resolve_region,
+    )
+    if isinstance(prepared, tuple):
+        return prepared
+    parameters = cast(dict[str, Any], prepared)
 
     pin_ids = data.get("pin_ids")
     if pin_ids is not None and not isinstance(pin_ids, list):
@@ -1625,39 +1595,7 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
 @screenspace_bp.route("/api/tasks/stream")
 def api_tasks_stream() -> FlaskResponse:
     """SSE endpoint for live task updates (replaces polling)."""
-    client_q: queue_mod.Queue[str] = queue_mod.Queue(maxsize=64)
-    with _sse_clients_lock:
-        _sse_clients.append(client_q)
-
-    def generate():  # type: ignore[no-untyped-def]
-        try:
-            # Send current state immediately on connect
-            yield _sse_task_payload()
-            while True:
-                try:
-                    client_q.get(timeout=15)
-                    # Drain any queued notifications (coalesce rapid updates)
-                    while not client_q.empty():
-                        try:
-                            client_q.get_nowait()
-                        except queue_mod.Empty:
-                            break
-                    yield _sse_task_payload()
-                except queue_mod.Empty:
-                    # Keepalive comment to prevent connection timeout
-                    yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            with _sse_clients_lock:
-                if client_q in _sse_clients:
-                    _sse_clients.remove(client_q)
-
-    return Response(
-        generate(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_stream(_sse_task_payload)
 
 
 @screenspace_bp.route("/api/tasks")
@@ -1801,6 +1739,39 @@ def _validate_task_request(
     )
 
 
+def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -> None:
+    """Coerce one tool spec's type-specific fields (task params or a multitool step).
+
+    Mutates *spec* in place; raises ``ValueError`` on bad input. *context* prefixes
+    error messages (e.g. ``"Step 0: "``). Shared by the task-level and per-step paths.
+    """
+    if tool_type == "similarity":
+        spec["reference_timestamp"] = _coerce_float(
+            spec.get("reference_timestamp"),
+            "reference_timestamp",
+            required=True,
+            context=context,
+        )
+    elif tool_type == "template" and not spec.get("template_image_data"):
+        spec["reference_timestamp"] = _coerce_float(
+            spec.get("reference_timestamp"),
+            "reference_timestamp",
+            required=True,
+            context=context,
+        )
+    elif tool_type == "scene":
+        spec["scene_references"] = _validate_scene_references(
+            spec.get("scene_references"),
+            context=context,
+        )
+    elif tool_type in ("text", "numbers"):
+        _coerce_ocr_controls(spec, context=context)
+    elif tool_type == "color":
+        _coerce_color_controls(spec, context=context)
+    if tool_type == "template":
+        _coerce_template_controls(spec)
+
+
 def _coerce_task_params(
     task_type: str, parameters: dict[str, Any]
 ) -> dict[str, Any] | FlaskResponse:
@@ -1809,63 +1780,74 @@ def _coerce_task_params(
     Returns the updated parameters on success, or a Flask error response on failure.
     """
     try:
-        if task_type == "similarity":
-            parameters["reference_timestamp"] = _coerce_float(
-                parameters.get("reference_timestamp"),
-                "reference_timestamp",
-                required=True,
-            )
-        elif task_type == "template" and not parameters.get("template_image_data"):
-            parameters["reference_timestamp"] = _coerce_float(
-                parameters.get("reference_timestamp"),
-                "reference_timestamp",
-                required=True,
-            )
-        elif task_type == "scene":
-            parameters["scene_references"] = _validate_scene_references(
-                parameters.get("scene_references")
-            )
-        elif task_type in ("text", "numbers"):
-            _coerce_ocr_controls(parameters)
-        elif task_type == "color":
-            _coerce_color_controls(parameters)
-        elif task_type == "multitool":
+        if task_type == "multitool":
             for i, step in enumerate(parameters.get("steps", [])):
                 step_context = f"Step {i}: "
-                if step["type"] == "similarity":
-                    step["reference_timestamp"] = _coerce_float(
-                        step.get("reference_timestamp"),
-                        "reference_timestamp",
-                        required=True,
-                        context=step_context,
-                    )
-                elif step["type"] == "template" and not step.get("template_image_data"):
-                    step["reference_timestamp"] = _coerce_float(
-                        step.get("reference_timestamp"),
-                        "reference_timestamp",
-                        required=True,
-                        context=step_context,
-                    )
-                elif step["type"] == "scene":
-                    step["scene_references"] = _validate_scene_references(
-                        step.get("scene_references"),
-                        context=step_context,
-                    )
-                if step.get("type") == "template":
-                    _coerce_template_controls(step)
-                if step.get("type") in ("text", "numbers"):
-                    _coerce_ocr_controls(step, context=step_context)
-                if step.get("type") == "color":
-                    _coerce_color_controls(step, context=step_context)
+                _coerce_tool_spec(step, step.get("type", ""), context=step_context)
                 _coerce_offset(step, context=step_context)
-        if task_type in ("text", "numbers", "change", "flow"):
-            _coerce_consecutive(parameters)
-        if task_type == "template":
-            _coerce_template_controls(parameters)
+        else:
+            _coerce_tool_spec(parameters, task_type)
+            if task_type in ("text", "numbers", "change", "flow"):
+                _coerce_consecutive(parameters)
     except ValueError as exc:
         return err(str(exc))
 
     return parameters
+
+
+def _extract_tool_media(
+    spec: dict[str, Any],
+    tool_type: str,
+    frame_at: Callable[[float], "Any | None"],
+    region_coords: dict[str, Any],
+    context: str = "",
+) -> None | FlaskResponse:
+    """Extract the reference frame / template image into one spec.
+
+    Mutates *spec* in place (task params or a multitool step). *frame_at* maps a
+    GLOBAL reference timestamp into the owning sub-video. *context* prefixes error
+    messages (e.g. ``"Step 0: "``). Returns a Flask error response on failure, else
+    ``None``. Shared by the task-level and per-step multitool paths.
+    """
+    if tool_type == "similarity":
+        ref_ts = cast(float, spec["reference_timestamp"])
+        frame = frame_at(float(ref_ts))
+        if frame is None:
+            return err(f"{context}could not read reference frame")
+        spec["reference_frame"] = screenspace.extract_region(frame, region_coords)
+
+    elif tool_type == "template":
+        upload_b64 = spec.pop("template_image_data", None)
+        if upload_b64:
+            try:
+                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
+            except ValueError:
+                return err(f"{context}could not decode uploaded image")
+            spec["template_image"] = bgr
+            if mask is not None:
+                spec["template_mask"] = mask
+        else:
+            ref_ts = cast(float, spec["reference_timestamp"])
+            frame = frame_at(float(ref_ts))
+            if frame is None:
+                return err(f"{context}could not read template frame")
+            spec["template_image"] = screenspace.extract_region(frame, region_coords)
+
+    elif tool_type == "scene":
+        scene_refs = cast(list[dict[str, Any]], spec["scene_references"])
+        reference_scenes = []
+        for ref in scene_refs:
+            frame = frame_at(float(ref["timestamp"]))
+            if frame is None:
+                return err(f"{context}could not read frame for scene '{ref['name']}'")
+            ref_region = screenspace.extract_region(frame, region_coords)
+            scene_entry: dict = {"name": ref["name"], "frame": ref_region}
+            if "threshold" in ref:
+                scene_entry["threshold"] = float(ref["threshold"])
+            reference_scenes.append(scene_entry)
+        spec["reference_scenes"] = reference_scenes
+
+    return None
 
 
 def _extract_task_media(
@@ -1880,47 +1862,9 @@ def _extract_task_media(
     returns the frame (single-video participants extract unchanged). Returns the
     updated parameters on success, or a Flask error response on failure.
     """
-    if task_type == "similarity":
-        ref_ts = cast(float, parameters["reference_timestamp"])
-        frame = frame_at(float(ref_ts))
-        if frame is None:
-            return err("Could not read reference frame")
-        ref_region = screenspace.extract_region(frame, region_coords)
-        parameters["reference_frame"] = ref_region
-
-    if task_type == "template":
-        upload_b64 = parameters.pop("template_image_data", None)
-        if upload_b64:
-            try:
-                bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-            except ValueError:
-                return err("Could not decode uploaded image")
-            parameters["template_image"] = bgr
-            if mask is not None:
-                parameters["template_mask"] = mask
-        else:
-            ref_ts = cast(float, parameters["reference_timestamp"])
-            frame = frame_at(float(ref_ts))
-            if frame is None:
-                return err("Could not read template frame")
-            parameters["template_image"] = screenspace.extract_region(
-                frame, region_coords
-            )
-
-    if task_type == "scene":
-        scene_refs = cast(list[dict[str, Any]], parameters["scene_references"])
-        reference_scenes = []
-        for ref in scene_refs:
-            frame = frame_at(float(ref["timestamp"]))
-            if frame is None:
-                return err(f"Could not read frame for scene '{ref['name']}'")
-            ref_region = screenspace.extract_region(frame, region_coords)
-            scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-            if "threshold" in ref:
-                scene_entry["threshold"] = float(ref["threshold"])
-            reference_scenes.append(scene_entry)
-        parameters["reference_scenes"] = reference_scenes
-
+    error = _extract_tool_media(parameters, task_type, frame_at, region_coords)
+    if error is not None:
+        return error
     return parameters
 
 
@@ -1955,45 +1899,67 @@ def _prepare_multitool_steps(
 
         step_rc = step["region_coords"]
 
-        if stype == "similarity":
-            ref_ts = cast(float, step["reference_timestamp"])
-            frame = frame_at(float(ref_ts))
-            if frame is None:
-                return err(f"Step {i}: could not read reference frame")
-            step["reference_frame"] = screenspace.extract_region(frame, step_rc)
+        error = _extract_tool_media(
+            step, stype, frame_at, step_rc, context=f"Step {i}: "
+        )
+        if error is not None:
+            return error
 
-        elif stype == "template":
-            upload_b64 = step.pop("template_image_data", None)
-            if upload_b64:
-                try:
-                    bgr, mask = _template_bgr_and_mask_from_b64(upload_b64)
-                except ValueError:
-                    return err(f"Step {i}: could not decode uploaded image")
-                step["template_image"] = bgr
-                if mask is not None:
-                    step["template_mask"] = mask
-            else:
-                ref_ts = cast(float, step["reference_timestamp"])
-                frame = frame_at(float(ref_ts))
-                if frame is None:
-                    return err(f"Step {i}: could not read template frame")
-                step["template_image"] = screenspace.extract_region(frame, step_rc)
+    return parameters
 
-        elif stype == "scene":
-            scene_refs = cast(list[dict[str, Any]], step["scene_references"])
-            ref_scenes_list = []
-            for ref in scene_refs:
-                frame = frame_at(float(ref["timestamp"]))
-                if frame is None:
-                    return err(
-                        f"Step {i}: could not read frame for scene '{ref['name']}'"
-                    )
-                ref_region = screenspace.extract_region(frame, step_rc)
-                scene_entry: dict = {"name": ref["name"], "frame": ref_region}
-                if "threshold" in ref:
-                    scene_entry["threshold"] = float(ref["threshold"])
-                ref_scenes_list.append(scene_entry)
-            step["reference_scenes"] = ref_scenes_list
+
+def _region_coords_resolver(
+    props: dict[str, Any] | None, all_known_regions: dict[str, Any]
+) -> Callable[..., dict[str, Any]]:
+    """Return a closure that converts a named/inline region to pixel coords.
+
+    When *region_data* is omitted the region is looked up by name in
+    *all_known_regions*. Shared by the task-creation and calibration routes.
+    """
+
+    def _resolve(
+        name: str, region_data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        rd = region_data if region_data is not None else all_known_regions[name]
+        if props and props.get("width") and props.get("height"):
+            return screenspace.denormalize_region(rd, props["width"], props["height"])
+        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+
+    return _resolve
+
+
+def _prepare_task_media(
+    task_type: str,
+    participant: str,
+    parameters: dict[str, Any],
+    all_known_regions: dict[str, Any],
+    region_coords: dict[str, Any],
+    resolve_region_fn: Callable[..., dict[str, Any]],
+) -> dict[str, Any] | FlaskResponse:
+    """Coerce params, extract reference media, and resolve multitool steps.
+
+    Shared preparation pipeline for the task-creation and calibration routes: each
+    resolves ``region_coords`` its own way (their region-naming rules differ) then
+    hands off here. Returns the enriched parameters, or a Flask error response.
+    """
+    coerced = _coerce_task_params(task_type, parameters)
+    if isinstance(coerced, tuple):
+        return coerced
+    parameters = cast(dict[str, Any], coerced)
+
+    frame_at = _participant_frame_extractor(participant)
+    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
+    if isinstance(extracted, tuple):
+        return extracted
+    parameters = cast(dict[str, Any], extracted)
+
+    if task_type == "multitool":
+        prepared = _prepare_multitool_steps(
+            parameters, all_known_regions, frame_at, region_coords, resolve_region_fn
+        )
+        if isinstance(prepared, tuple):
+            return prepared
+        parameters = cast(dict[str, Any], prepared)
 
     return parameters
 
@@ -2048,23 +2014,15 @@ def api_tasks_create() -> FlaskResponse:
 
     # Region coords come from the first part's resolution (parts share it).
     props = video.probe_video_properties(video_path)
-
-    def _resolve_region_coords(
-        name: str, region_data: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """Convert a named region to pixel coordinates."""
-        rd = region_data if region_data is not None else all_known_regions[name]
-        if props and props.get("width") and props.get("height"):
-            return screenspace.denormalize_region(rd, props["width"], props["height"])
-        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+    resolve_region = _region_coords_resolver(props, all_known_regions)
 
     if requested_region is not None:
-        region_coords = _resolve_region_coords(region_name, requested_region)
+        region_coords = resolve_region(region_name, requested_region)
     elif task_type == "multitool":
         first_step_region = parameters.get("steps", [{}])[0].get("region", "")
         if first_step_region and first_step_region in all_known_regions:
             region_name = first_step_region
-            region_coords = _resolve_region_coords(first_step_region)
+            region_coords = resolve_region(first_step_region)
         else:
             region_name = "per_step"
             region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
@@ -2072,28 +2030,17 @@ def api_tasks_create() -> FlaskResponse:
         region_name = "full_frame"
         region_coords = {"x": 0, "y": 0, "w": 0, "h": 0}
 
-    coerced = _coerce_task_params(task_type, parameters)
-    if isinstance(coerced, tuple):
-        return coerced  # Flask error response
-    parameters = cast(dict[str, Any], coerced)
-
-    frame_at = _participant_frame_extractor(participant)
-    extracted = _extract_task_media(task_type, parameters, frame_at, region_coords)
-    if isinstance(extracted, tuple):
-        return extracted  # Flask error response
-    parameters = cast(dict[str, Any], extracted)
-
-    if task_type == "multitool":
-        prepared = _prepare_multitool_steps(
-            parameters,
-            all_known_regions,
-            frame_at,
-            region_coords,
-            _resolve_region_coords,
-        )
-        if isinstance(prepared, tuple):
-            return prepared  # Flask error response
-        parameters = cast(dict[str, Any], prepared)
+    prepared = _prepare_task_media(
+        task_type,
+        participant,
+        parameters,
+        all_known_regions,
+        region_coords,
+        resolve_region,
+    )
+    if isinstance(prepared, tuple):
+        return prepared  # Flask error response
+    parameters = cast(dict[str, Any], prepared)
 
     # Snapshot the global CV resolution scale into the task so the manifest
     # records what scale produced each result (useful when re-running with

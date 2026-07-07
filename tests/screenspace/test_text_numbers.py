@@ -453,12 +453,14 @@ class TestConsecutiveBuffer:
 def test_static_skip_uses_config():
     """The static-frame-skip sites reference the config constant, not a 2.0
     literal. scan_text/scan_numbers share the _is_static_skip helper and
-    similarity/flow/inactivity/boundaries/template share the _frame_is_static
-    predicate (both in screenspace_primitives); scan_scene applies the threshold
-    inline (in screenspace_scans)."""
+    similarity/flow/inactivity/boundaries/scene/template share the
+    _frame_is_static predicate (both in screenspace_primitives)."""
     src = Path(screenspace_primitives.__file__).read_text(encoding="utf-8")
     src += Path(screenspace_scans.__file__).read_text(encoding="utf-8")
-    assert src.count("config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD") >= 3
+    # Both shared helpers (_is_static_skip, _frame_is_static) live in
+    # screenspace_primitives and reference the constant; every scan routes
+    # through one of them rather than inlining the threshold.
+    assert src.count("config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD") >= 2
     assert "< 2.0" not in src
 
 

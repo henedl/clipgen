@@ -12,8 +12,8 @@
  *
  * The ETA trackers + ticker and _updateAgentElapsed live in the hub (shared with
  * the transcription ETA path) and are used here by reference. isSummaryPolling
- * lets the hub poller re-arm the summary poll without reading _summaryPoller
- * directly. Plain utils.js globals (qs/el/escapeHtml/apiGet/apiPost/formatTime/
+ * lets the hub poller re-arm the summary poll without reaching into the
+ * summary descriptor's poller directly. Plain utils.js globals (qs/el/escapeHtml/apiGet/apiPost/formatTime/
  * createPoller/MARK_CATEGORIES/CLIPGEN_CONFIG/...) are reached via the scope chain.
  */
 (function () {
@@ -36,23 +36,144 @@
     _updateAgentElapsed = TS._updateAgentElapsed,
     _currentParticipantHasTranscript = TS._currentParticipantHasTranscript;
 
+  // ---- Thinking-agent plumbing (shared poll factory) ----
+  //
+  // summary / citations / friction all poll the same generic /api/agent/<key>/
+  // endpoints; only the URL base, cadence, and result-handling hooks differ, so
+  // one _makeAgentPoll scaffold drives all three (the "one JS poll factory").
+  // Adding an agent is a descriptor entry + its render hooks — no new poll/stop
+  // plumbing. Summary stays richest (SSE token stream + citation chaining +
+  // inline edit); its extra behavior rides in its hooks and the bespoke run
+  // helpers further down.
+
+  // Hard cap on agent polls (citations + friction). Long Ollama runs on big
+  // transcripts once outlived a shorter timeout, so the result landed in the
+  // manifest after we'd given up and only surfaced on a full reload. Five
+  // minutes covers realistic completion; the server's `generating: false`
+  // stops the poll earlier when the agent finishes or fails sooner. Summary has
+  // no cap — its SSE stream (or 1.2s fallback poll) runs until done.
+  var _AGENT_POLL_TIMEOUT = 300000;
+
+  var AGENT_DESCRIPTORS = {
+    summary: {
+      key: "summary",
+      urlBase: "api/agent/summary",
+      interval: 1200,
+      timeout: null,
+      _poller: null,
+      getResult: function (d) { return d.summary; },
+      onResult: function (pid, d) { _onSummaryResult(pid, d); },
+      onGenerating: function (pid, d) {
+        // Still generating — stream in whatever tokens have arrived. Rebuild the
+        // generating box if a re-render dropped it, then push the partial text.
+        if (!qs("#summaryStream")) {
+          renderSummaryGenerating(d.started_at ? d.started_at * 1000 : undefined);
+        }
+        if (d.partial) _updateSummaryStream(d.partial);
+      },
+      onEmpty: function () { renderSummaryEmpty(); },
+      // Participant switch: just stop — don't paint an empty box into the panel,
+      // which now belongs to a different participant.
+      onStale: function () {},
+    },
+    citations: {
+      key: "citations",
+      urlBase: "api/agent/citations",
+      interval: 3000,
+      timeout: _AGENT_POLL_TIMEOUT,
+      _poller: null,
+      getResult: function (d) { return d.citations; },
+      onResult: function (pid, d) {
+        state.summaryCitations = d.citations;
+        state.citationsGenerating = false;
+        renderCitations();
+      },
+      onEmpty: function () { _clearCitationsStatus(); },
+      onStale: function () { _clearCitationsStatus(); },
+    },
+    friction: {
+      key: "friction",
+      urlBase: "api/agent/friction",
+      interval: 3000,
+      timeout: _AGENT_POLL_TIMEOUT,
+      _poller: null,
+      getResult: function (d) { return d.friction; },
+      onResult: function (pid, d) { _setFrictionData(d.friction); },
+      onEmpty: function () { state.frictionGenerating = false; renderFrictionEmpty(); },
+      onStale: function () { state.frictionGenerating = false; renderFriction(); },
+    },
+  };
+
+  // The one poll scaffold. The version/participant staleness guard + optional
+  // timeout are identical across agents; per-result behavior is the descriptor's
+  // hooks. runImmediately:false so the first poll waits one interval (the
+  // initial render already painted the box). createPoller auto-pauses on hidden
+  // tabs and the endpoints are cheap in-memory reads.
+  function _makeAgentPoll(desc) {
+    return function (pid) {
+      _stopAgentPoll(desc);
+      var started = Date.now();
+      var ver = state.participantReqVer;
+      desc._poller = createPoller(function () {
+        if (ver !== state.participantReqVer ||
+            state.selectedParticipant !== pid ||
+            (desc.timeout && Date.now() - started > desc.timeout)) {
+          _stopAgentPoll(desc);
+          desc.onStale(pid);
+          return;
+        }
+        apiGet(desc.urlBase + "/" + pid).then(function (data) {
+          if (ver !== state.participantReqVer) return;
+          if (data.ok && desc.getResult(data)) {
+            _stopAgentPoll(desc);
+            desc.onResult(pid, data);
+          } else if (data.generating) {
+            if (desc.onGenerating) desc.onGenerating(pid, data);
+          } else {
+            _stopAgentPoll(desc);
+            desc.onEmpty(pid);
+          }
+        }).catch(function () {
+          if (ver !== state.participantReqVer) return;
+          _stopAgentPoll(desc);
+          desc.onEmpty(pid);
+        });
+      }, desc.interval, { runImmediately: false });
+      desc._poller.start();
+    };
+  }
+
+  // Timer-only teardown (mirrors the old per-agent _stop*Poll): does NOT reset
+  // ETA trackers — render*Status/*Generating reset-then-seed, so resetting here
+  // would wipe the seed when a poll restarts.
+  function _stopAgentPoll(desc) {
+    if (desc._poller) {
+      desc._poller.stop();
+      desc._poller = null;
+    }
+  }
+
+  var _startSummaryPoll = _makeAgentPoll(AGENT_DESCRIPTORS.summary);
+  var _startCitationsPoll = _makeAgentPoll(AGENT_DESCRIPTORS.citations);
+  var _startFrictionPoll = _makeAgentPoll(AGENT_DESCRIPTORS.friction);
+
   // ---- AI Summary ----
   //
-  // Two cooperating pollers (createPoller handles):
-  //   _summaryPoller   — runs while the backend is still generating the
-  //                      summary. Stops as soon as a summary lands, or
-  //                      when the user switches participant.
-  //   _citationsPoller — runs after the summary arrives if citations are
-  //                      still being computed (citations depend on summary).
+  // Two cooperating pollers, both built by _makeAgentPoll above:
+  //   AGENT_DESCRIPTORS.summary._poller   — runs while the backend is still
+  //                      generating the summary. Stops as soon as a summary
+  //                      lands, or when the user switches participant.
+  //   AGENT_DESCRIPTORS.citations._poller — runs after the summary arrives if
+  //                      citations are still computing (citations depend on
+  //                      summary).
   // Both are stopped by their own _stop*Poll() helpers; either also stops if
   // `state.selectedParticipant` no longer matches the participant the poll
   // was started for.
 
-  var _summaryPoller = null;
   // SSE token stream: the primary live-update transport while a summary
   // generates — pushes each token as the model emits it (true word-by-word).
-  // _summaryPoller is the fallback used when EventSource is unsupported or the
-  // stream drops mid-run.
+  // The summary poll (AGENT_DESCRIPTORS.summary._poller) is the fallback used
+  // when EventSource is unsupported or the stream drops mid-run.
   var _summaryStream = null;
 
   function loadSummary(pid) {
@@ -67,30 +188,11 @@
       _setAnalysisPanelVisible(true);
     }
 
-    apiGet("api/summary/" + pid).then(function (data) {
+    apiGet(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid).then(function (data) {
       if (ver !== state.participantReqVer) return;
       if (data.ok && data.summary) {
         _stopSummaryPoll();
-        // Clear any citation state carried over from a previous participant
-        // before rendering — renderSummary() reapplies state.summaryCitations,
-        // so stale superscripts would otherwise leak onto this summary.
-        state.summaryCitations = null;
-        state.citationsGenerating = false;
-        renderSummary(data.summary);
-        // Handle citations
-        if (data.citations && data.citations.length > 0) {
-          state.summaryCitations = data.citations;
-          state.citationsGenerating = false;
-          renderCitations();
-        } else if (data.citations_generating) {
-          state.summaryCitations = null;
-          state.citationsGenerating = true;
-          renderCitationsStatus(
-            data.citations_started_at ? data.citations_started_at * 1000 : undefined
-          );
-          _startCitationsPoll(pid);
-          _refreshAgentStateNow();
-        }
+        _onSummaryResult(pid, data);
       } else if (data.generating) {
         renderSummaryGenerating(data.started_at ? data.started_at * 1000 : undefined);
         if (data.partial) _updateSummaryStream(data.partial);
@@ -106,62 +208,30 @@
     });
   }
 
-  function _startSummaryPoll(pid) {
-    _stopSummaryPoll();
-    var ver = state.participantReqVer;
-    // Poll fast (1.2s) while the summary generates so streamed partial text
-    // updates feel live; runImmediately is false so the first poll waits one
-    // interval (the initial render already painted the generating box). The
-    // endpoint is a cheap in-memory read and createPoller auto-pauses on hidden
-    // tabs.
-    _summaryPoller = createPoller(function () {
-      if (ver !== state.participantReqVer || state.selectedParticipant !== pid) {
-        _stopSummaryPoll();
-        return;
-      }
-      apiGet("api/summary/" + pid).then(function (data) {
-        if (ver !== state.participantReqVer) return;
-        if (data.ok && data.summary) {
-          _stopSummaryPoll();
-          // Clear stale citation state before render (see loadSummary).
-          state.summaryCitations = null;
-          state.citationsGenerating = false;
-          renderSummary(data.summary);
-          // Summary just arrived — check citation status
-          if (data.citations && data.citations.length > 0) {
-            state.summaryCitations = data.citations;
-            state.citationsGenerating = false;
-            renderCitations();
-          } else if (data.citations_generating) {
-            state.summaryCitations = null;
-            state.citationsGenerating = true;
-            renderCitationsStatus(
-              data.citations_started_at ? data.citations_started_at * 1000 : undefined
-            );
-            _startCitationsPoll(pid);
-          }
-        } else if (data.generating) {
-          // Still generating — stream in whatever tokens have arrived so far.
-          // Rebuild the generating box if a re-render dropped it (e.g. the
-          // panel was cleared and re-shown), then push the partial text.
-          if (!qs("#summaryStream")) {
-            renderSummaryGenerating(
-              data.started_at ? data.started_at * 1000 : undefined
-            );
-          }
-          if (data.partial) _updateSummaryStream(data.partial);
-        } else {
-          // Generation finished without result — stop polling
-          _stopSummaryPoll();
-          renderSummaryEmpty();
-        }
-      }).catch(function () {
-        if (ver !== state.participantReqVer) return;
-        _stopSummaryPoll();
-        renderSummaryEmpty();
-      });
-    }, 1200, { runImmediately: false });
-    _summaryPoller.start();
+  // Summary landed (via initial load OR the fallback poll's onResult hook):
+  // render it, then — if citations are still generating server-side — surface
+  // their status and start the citations poll. Shared so the loader and the
+  // poll stay in lockstep (the summary poll's descriptor onResult delegates here).
+  function _onSummaryResult(pid, data) {
+    // Clear any citation state carried over from a previous participant before
+    // rendering — renderSummary() reapplies state.summaryCitations, so stale
+    // superscripts would otherwise leak onto this summary.
+    state.summaryCitations = null;
+    state.citationsGenerating = false;
+    renderSummary(data.summary);
+    if (data.citations && data.citations.length > 0) {
+      state.summaryCitations = data.citations;
+      state.citationsGenerating = false;
+      renderCitations();
+    } else if (data.citations_generating) {
+      state.summaryCitations = null;
+      state.citationsGenerating = true;
+      renderCitationsStatus(
+        data.citations_started_at ? data.citations_started_at * 1000 : undefined
+      );
+      _startCitationsPoll(pid);
+      _refreshAgentStateNow();
+    }
   }
 
   // Open the SSE token stream for a generating summary. Falls back to the GET
@@ -171,7 +241,7 @@
   function _startSummaryStream(pid) {
     _stopSummaryPoll(); // clear any prior poller/stream before (re)starting
     var ver = state.participantReqVer;
-    _summaryStream = createSSEStream("api/summary/" + pid + "/stream", {
+    _summaryStream = createSSEStream(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid + "/stream", {
       onMessage: function (data) {
         if (ver !== state.participantReqVer || state.selectedParticipant !== pid) {
           _stopSummaryStream();
@@ -213,10 +283,7 @@
   // existing teardown site (participant switch, clear, cancel, completion)
   // covers both transports without needing to know which one is active.
   function _stopSummaryPoll() {
-    if (_summaryPoller) {
-      _summaryPoller.stop();
-      _summaryPoller = null;
-    }
+    _stopAgentPoll(AGENT_DESCRIPTORS.summary);
     _stopSummaryStream();
   }
 
@@ -398,7 +465,14 @@
 
   // ---- Citation rendering (Pass 2) ----
 
-  var _citationsPoller = null;
+  // Citations cleanup shared by the poll's onEmpty/onStale hooks, the cancel
+  // path, and the regenerate error path: drop the generating flag and remove
+  // the "Finding sources…" status line from the summary panel.
+  function _clearCitationsStatus() {
+    state.citationsGenerating = false;
+    var status = qs("#summaryContent .citations-status");
+    if (status) status.remove();
+  }
 
   function renderCitations() {
     // Remove any existing status text
@@ -470,61 +544,8 @@
     _txEtaTicker.ensure();
   }
 
-  // Hard cap on agent polls (citations and friction). The previous 90 s value
-  // was shorter than some real Ollama runs on long transcripts, so the result
-  // would land in the manifest after we'd given up — and the UI only picked it
-  // up on a full page reload. Five minutes covers realistic completion times;
-  // the server-side `generating: false` signal stops the poll earlier when the
-  // agent finishes (or fails) sooner.
-  var _AGENT_POLL_TIMEOUT = 300000;
-
-  function _startCitationsPoll(pid) {
-    _stopCitationsPoll();
-    var started = Date.now();
-    var ver = state.participantReqVer;
-    // runImmediately is false to match the previous setInterval (first poll after 3s).
-    _citationsPoller = createPoller(function () {
-      if (ver !== state.participantReqVer ||
-          state.selectedParticipant !== pid ||
-          Date.now() - started > _AGENT_POLL_TIMEOUT) {
-        _stopCitationsPoll();
-        state.citationsGenerating = false;
-        var status = qs("#summaryContent .citations-status");
-        if (status) status.remove();
-        return;
-      }
-      apiGet("api/citations/" + pid).then(function (data) {
-        if (ver !== state.participantReqVer) return;
-        if (data.ok && data.citations) {
-          _stopCitationsPoll();
-          state.summaryCitations = data.citations;
-          state.citationsGenerating = false;
-          renderCitations();
-        } else if (!data.generating) {
-          _stopCitationsPoll();
-          state.citationsGenerating = false;
-          var status = qs("#summaryContent .citations-status");
-          if (status) status.remove();
-        }
-      }).catch(function () {
-        if (ver !== state.participantReqVer) return;
-        _stopCitationsPoll();
-        state.citationsGenerating = false;
-        var status = qs("#summaryContent .citations-status");
-        if (status) status.remove();
-      });
-    }, 3000, { runImmediately: false });
-    _citationsPoller.start();
-  }
-
-  // Poller teardown only — does NOT reset _citationsEtaTracker (renderCitationsStatus
-  // resets-then-seeds), mirroring _stopSummaryPoll / _stopFrictionPoll. Resetting
-  // here would wipe the seed when _startCitationsPoll restarts the poll.
   function _stopCitationsPoll() {
-    if (_citationsPoller) {
-      _citationsPoller.stop();
-      _citationsPoller = null;
-    }
+    _stopAgentPoll(AGENT_DESCRIPTORS.citations);
   }
 
   function _stopCitationsRun() {
@@ -533,10 +554,8 @@
     // Citations run after the summary exists, so keep the summary visible and
     // only remove the "Finding sources…" status line.
     _stopCitationsPoll();
-    state.citationsGenerating = false;
-    var status = qs("#summaryContent .citations-status");
-    if (status) status.remove();
-    apiPost("api/citations/" + pid + "/stop", {}).then(function () {
+    _clearCitationsStatus();
+    apiPost(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid + "/stop", {}).then(function () {
       _refreshAgentStateNow();
     }).catch(function () {});
   }
@@ -551,7 +570,7 @@
       state.citationsGenerating = false;
       _stopCitationsPoll();
       renderSummaryGenerating();
-      apiPost("api/summary/" + pid + "/regenerate", {}).then(function (data) {
+      apiPost(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid + "/regenerate", {}).then(function (data) {
         if (data.ok && data.generating) {
           _startSummaryStream(pid);
           _refreshAgentStateNow();
@@ -576,8 +595,8 @@
     // running. Re-sync only after both stops are acknowledged, otherwise the
     // follow-up GET can still see citations in-flight and restart its poll.
     Promise.all([
-      apiPost("api/summary/" + pid + "/stop", {}),
-      apiPost("api/citations/" + pid + "/stop", {}),
+      apiPost(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid + "/stop", {}),
+      apiPost(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid + "/stop", {}),
     ]).then(function () {
       _refreshAgentStateNow();
       loadSummary(pid); // re-sync with backend (mirrors friction's loadFriction)
@@ -617,15 +636,13 @@
         state.citationsGenerating = true;
         renderCitations(); // clear existing links
         renderCitationsStatus();
-        apiPost("api/citations/" + pid + "/regenerate", {}).then(function (data) {
+        apiPost(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid + "/regenerate", {}).then(function (data) {
           if (data.ok && data.generating) {
             _startCitationsPoll(pid);
           }
         }).catch(function () {
           showToast("Failed to regenerate citations");
-          state.citationsGenerating = false;
-          var status = qs("#summaryContent .citations-status");
-          if (status) status.remove();
+          _clearCitationsStatus();
         });
       });
     });
@@ -662,7 +679,7 @@
           showToast("Summary cannot be empty");
           return;
         }
-        apiPut("api/summary/" + pid, { summary: newText }).then(function () {
+        apiPut(AGENT_DESCRIPTORS.summary.urlBase + "/" + pid, { summary: newText }).then(function () {
           state.summaryCitations = null;
           state.citationsGenerating = false;
           _stopCitationsPoll();
@@ -682,8 +699,6 @@
   // top moments; the timeline heatmap + segment tints read the per-segment
   // scores. Generation mirrors summary/citations (poll until done; manual
   // run/cancel bypass the global flag).
-
-  var _frictionPoller = null;
 
   function _currentParticipant() {
     var pid = state.selectedParticipant;
@@ -737,7 +752,7 @@
     state.frictionData = null;
     state.frictionBySegId = {};
     state.frictionGenerating = false;
-    apiGet("api/friction/" + pid).then(function (data) {
+    apiGet(AGENT_DESCRIPTORS.friction.urlBase + "/" + pid).then(function (data) {
       if (ver !== state.participantReqVer) return;
       if (data.ok && data.friction) {
         _setFrictionData(data.friction);
@@ -892,45 +907,8 @@
     dot.classList.toggle("hidden", !(state.frictionData && state.frictionData.stale));
   }
 
-  function _startFrictionPoll(pid) {
-    _stopFrictionPoll();
-    var started = Date.now();
-    var ver = state.participantReqVer;
-    // runImmediately is false to match the previous setInterval (first poll after 3s).
-    _frictionPoller = createPoller(function () {
-      if (ver !== state.participantReqVer ||
-          state.selectedParticipant !== pid ||
-          Date.now() - started > _AGENT_POLL_TIMEOUT) {
-        _stopFrictionPoll();
-        state.frictionGenerating = false;
-        renderFriction();
-        return;
-      }
-      apiGet("api/friction/" + pid).then(function (data) {
-        if (ver !== state.participantReqVer) return;
-        if (data.ok && data.friction) {
-          _stopFrictionPoll();
-          _setFrictionData(data.friction);
-        } else if (!data.generating) {
-          _stopFrictionPoll();
-          state.frictionGenerating = false;
-          renderFrictionEmpty();
-        }
-      }).catch(function () {
-        if (ver !== state.participantReqVer) return;
-        _stopFrictionPoll();
-        state.frictionGenerating = false;
-        renderFrictionEmpty();
-      });
-    }, 3000, { runImmediately: false });
-    _frictionPoller.start();
-  }
-
   function _stopFrictionPoll() {
-    if (_frictionPoller) {
-      _frictionPoller.stop();
-      _frictionPoller = null;
-    }
+    _stopAgentPoll(AGENT_DESCRIPTORS.friction);
   }
 
   function _startFrictionRun() {
@@ -941,7 +919,7 @@
       state.frictionGenerating = true;
       state.frictionStartedAt = null;
       renderFrictionGenerating();
-      apiPost("api/friction/" + pid + "/regenerate", {}).then(function (data) {
+      apiPost(AGENT_DESCRIPTORS.friction.urlBase + "/" + pid + "/regenerate", {}).then(function (data) {
         if (data.ok && data.generating) {
           _startFrictionPoll(pid);
           _refreshAgentStateNow();
@@ -962,7 +940,7 @@
     if (!pid) return;
     _stopFrictionPoll();
     state.frictionGenerating = false;
-    apiPost("api/friction/" + pid + "/stop", {}).then(function () {
+    apiPost(AGENT_DESCRIPTORS.friction.urlBase + "/" + pid + "/stop", {}).then(function () {
       _refreshAgentStateNow();
       loadFriction(pid);
     }).catch(function () {});
@@ -1291,6 +1269,8 @@
   TS._hideFrictionTooltip = _hideFrictionTooltip;
   // True while a summary is being live-tracked by EITHER transport, so the hub's
   // grace-window re-arm doesn't restart the stream out from under itself.
-  TS.isSummaryPolling = function () { return !!(_summaryPoller || _summaryStream); };
+  TS.isSummaryPolling = function () {
+    return !!(AGENT_DESCRIPTORS.summary._poller || _summaryStream);
+  };
 })();
 

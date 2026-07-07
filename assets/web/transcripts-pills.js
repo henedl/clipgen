@@ -425,7 +425,7 @@
       onStart: function () {
         ensureAgentModelInstalled("summary").then(function (ok) {
           if (!ok) return;
-          apiPost("api/summary/" + p.id + "/regenerate", {}).then(function () {
+          apiPost("api/agent/summary/" + p.id + "/regenerate", {}).then(function () {
             _refreshAgentStateNow();
           }).catch(function () {
             showToast("Failed to start summary");
@@ -433,7 +433,7 @@
         });
       },
       onStop: function () {
-        apiPost("api/summary/" + p.id + "/stop", {}).then(function () {
+        apiPost("api/agent/summary/" + p.id + "/stop", {}).then(function () {
           _refreshAgentStateNow();
         }).catch(function () {
           showToast("Failed to stop summary");
@@ -454,7 +454,7 @@
       onStart: function () {
         ensureAgentModelInstalled("citations").then(function (ok) {
           if (!ok) return;
-          apiPost("api/citations/" + p.id + "/regenerate", {}).then(function () {
+          apiPost("api/agent/citations/" + p.id + "/regenerate", {}).then(function () {
             _refreshAgentStateNow();
           }).catch(function () {
             showToast("Failed to start citations");
@@ -462,7 +462,7 @@
         });
       },
       onStop: function () {
-        apiPost("api/citations/" + p.id + "/stop", {}).then(function () {
+        apiPost("api/agent/citations/" + p.id + "/stop", {}).then(function () {
           _refreshAgentStateNow();
         }).catch(function () {
           showToast("Failed to stop citations");
@@ -483,7 +483,7 @@
       onStart: function () {
         ensureAgentModelInstalled("friction").then(function (ok) {
           if (!ok) return;
-          apiPost("api/friction/" + p.id + "/regenerate", {}).then(function () {
+          apiPost("api/agent/friction/" + p.id + "/regenerate", {}).then(function () {
             _refreshAgentStateNow();
             // loadFriction lives in the agents satellite (loads after this one).
             if (state.selectedParticipant === p.id && TS.loadFriction) TS.loadFriction(p.id);
@@ -493,7 +493,7 @@
         });
       },
       onStop: function () {
-        apiPost("api/friction/" + p.id + "/stop", {}).then(function () {
+        apiPost("api/agent/friction/" + p.id + "/stop", {}).then(function () {
           _refreshAgentStateNow();
           if (state.selectedParticipant === p.id && TS.loadFriction) TS.loadFriction(p.id);
         }).catch(function () {

@@ -454,13 +454,21 @@ def _mark_intake_active(active: bool) -> None:
 
 
 def _generation_busy() -> bool:
-    """Return True while any clip, reel, or intake generation is in flight.
+    """Return True while any clip, reel, timeline-viewer, gallery, or intake
+    generation is in flight.
 
-    Consulted before a sheet swap so generated lists are not rebound under
-    an active stream.
+    Consulted before a sheet swap so generated lists/manifest are not rebound
+    under an active build (e.g. a timeline-viewer build would otherwise append
+    old-sheet artifacts into the new sheet's freshly-rebound list/manifest).
     """
     with _busy_lock:
-        return _generate_in_progress or _reel_in_progress or _intake_active > 0
+        return (
+            _generate_in_progress
+            or _reel_in_progress
+            or _timeline_viewer_in_progress
+            or _gallery_in_progress
+            or _intake_active > 0
+        )
 
 
 @contextmanager
@@ -1232,6 +1240,68 @@ def _save_artifact_stashes(stashes: list[dict[str, Any]]) -> Path | None:
     return utils.save_json_manifest(config.ARTIFACT_STASHES_MANIFEST_FILENAME, stashes)
 
 
+def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None]:
+    """Coerce/validate one studio setting against its STUDIO_SETTINGS meta.
+
+    The single source of truth for the settings type ladder, shared by the load
+    path (_load_studio_settings) and the PUT path (_apply_settings_payload) so a
+    new setting type is added once, not twice. Returns (ok, coerced, error):
+
+      - ok=True                     -> ``coerced`` is the value to setattr on config.
+      - ok=False, error is not None -> hard validation failure (bad mark_categories /
+                                       card_picker / prompt / color). The PUT path surfaces
+                                       ``error``; the load path skips the key (keeps the
+                                       default), so a stale/tampered studio_settings.json can
+                                       never apply a value the PUT path would reject.
+      - ok=False, error is None     -> soft coercion failure (bad int/float cast). Both skip.
+
+    Callers must have already confirmed ``name in config.STUDIO_SETTINGS``.
+    """
+    meta = config.STUDIO_SETTINGS[name]
+    default = _settings_defaults.get(name)
+    stype = meta.get("type")
+
+    if stype == "mark_categories":
+        cleaned = _coerce_mark_categories(value)
+        if cleaned is None:
+            return False, None, f"Invalid {name} payload"
+        return True, cleaned, None
+    if stype == "card_picker":
+        cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
+        if cleaned is None:
+            return False, None, f"Invalid {name} payload"
+        return True, cleaned, None
+    if stype == "prompt":
+        text = str(value)
+        err = _validate_prompt(text, meta.get("placeholders") or [])
+        if err is not None:
+            return False, None, f"Invalid {name}: {err}"
+        return True, text, None
+    if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
+        color = str(value)
+        if not _HEX_COLOR_RE.match(color):
+            return False, None, f"Invalid {name}: expected a #rrggbb hex color"
+        return True, color, None
+
+    expected_type = type(default) if default is not None else str
+    try:
+        if expected_type is bool:
+            coerced: Any = (
+                value
+                if isinstance(value, bool)
+                else str(value).lower() in ("true", "1", "yes", "on")
+            )
+        elif expected_type is int:
+            coerced = int(value)
+        elif expected_type is float:
+            coerced = float(value)
+        else:
+            coerced = str(value)
+    except (ValueError, TypeError):
+        return False, None, None  # soft skip in both paths
+    return True, coerced, None
+
+
 def _load_studio_settings() -> dict[str, Any]:
     """Load studio_settings.json and apply non-default values to config module."""
     data = utils.load_json_manifest(config.STUDIO_SETTINGS_FILENAME, default={})
@@ -1240,47 +1310,8 @@ def _load_studio_settings() -> dict[str, Any]:
     for name, value in data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
-        meta = config.STUDIO_SETTINGS[name]
-        default = _settings_defaults.get(name)
-        if meta.get("type") == "mark_categories":
-            cleaned = _coerce_mark_categories(value)
-            if cleaned is None:
-                continue
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if meta.get("type") == "card_picker":
-            # Validate persisted selections too, so a stale studio_settings.json
-            # (traversal, a deleted upload, or __none__ on a titlecard) doesn't
-            # apply a value the PUT path would reject; leave config at its default.
-            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
-            if cleaned is None:
-                continue
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
-            color = str(value)
-            if not _HEX_COLOR_RE.match(color):
-                continue  # ignore a tampered/invalid value, keep the default
-            setattr(config, name, color)
-            applied[name] = color
-            continue
-        expected_type = type(default) if default is not None else str
-        try:
-            if expected_type is bool:
-                coerced = (
-                    value
-                    if isinstance(value, bool)
-                    else str(value).lower() in ("true", "1", "yes", "on")
-                )
-            elif expected_type is int:
-                coerced = int(value)
-            elif expected_type is float:
-                coerced = float(value)
-            else:
-                coerced = str(value)
-        except (ValueError, TypeError):
+        ok, coerced, _ = _coerce_studio_setting(name, value)
+        if not ok:
             continue
         setattr(config, name, coerced)
         applied[name] = coerced
@@ -1333,21 +1364,26 @@ def _find_existing_artifacts(
     return results
 
 
-def _stream_process_reel(
-    clips: list[Any],
-    cancel_flag: Any,
+def _stream_reel_job(
+    work: Callable[[Callable[[dict[str, Any]], None]], None],
     *,
-    titlecards_enabled: bool | None = None,
-    titlecard_duration_seconds: int | None = None,
+    slot: str = "reel",
+    on_cleanup: Callable[[], None] | None = None,
 ) -> Iterator[str]:
-    """Run pipeline.process_reel on a worker thread and yield its progress events
-    as NDJSON lines, finishing with a final result/error line.
+    """Run a reel build on a worker thread and stream its events as NDJSON.
 
-    The worker thread also owns result persistence and busy-slot release, so
-    that a client disconnect (e.g. browser navigation) does not abort the
-    encode or orphan the reel from the manifest. The generator can die at any
-    point; the worker keeps running until ffmpeg completes, then persists and
-    frees the slot in its finally.
+    Shared scaffold for the reel-building endpoints (``/api/reel`` and
+    ``/api/reel-direct``). *work* receives an ``emit_event`` callback: every
+    call mirrors the event into the reel job-status snapshot and enqueues it
+    for the NDJSON stream, and *work* reports its terminal result by emitting
+    a final ``{"ok": ...}`` line the same way.
+
+    The worker thread owns busy-slot release (in its ``finally``), so a client
+    disconnect (e.g. browser navigation) does not abort the encode or orphan
+    the reel from the manifest. The generator can die at any point; the worker
+    keeps running until ffmpeg completes, then runs *on_cleanup* (if given) and
+    frees the slot. *on_cleanup* is for per-request teardown such as purging
+    temp files or a titlecard cache.
     """
     event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
     sentinel: dict[str, Any] = {"__sentinel__": True}
@@ -1358,36 +1394,20 @@ def _stream_process_reel(
 
     def worker() -> None:
         try:
-            generated, reel_records = pipeline.process_reel(
-                clips,
-                cancel_flag=cancel_flag,
-                progress_cb=emit_event,
-                titlecards_enabled=titlecards_enabled,
-                titlecard_duration_seconds=titlecard_duration_seconds,
-            )
-            if cancel_flag and cancel_flag():
-                event_queue.put(
-                    {
-                        "ok": False,
-                        "cancelled": True,
-                        "error": "Reel generation cancelled",
-                    }
-                )
-                return
-            _extend_generated_reels(reel_records)
-            _save_manifest_quiet()
-            event_queue.put({"ok": True, "generated": generated, "reels": reel_records})
+            work(emit_event)
         except Exception as exc:
-            event_queue.put({"ok": False, "error": str(exc)})
+            emit_event({"ok": False, "error": str(exc)})
         finally:
+            if on_cleanup is not None:
+                on_cleanup()
             event_queue.put(sentinel)
-            _release_busy("reel")
+            _release_busy(slot)
 
     try:
         threading.Thread(target=worker, daemon=True).start()
     except BaseException:
         # Worker never ran, so its finally won't release the slot.
-        _release_busy("reel")
+        _release_busy(slot)
         raise
 
     while True:
@@ -1395,6 +1415,40 @@ def _stream_process_reel(
         if event is sentinel:
             return
         yield json.dumps(event) + "\n"
+
+
+def _stream_process_reel(
+    clips: list[Any],
+    cancel_flag: Any,
+    *,
+    titlecards_enabled: bool | None = None,
+    titlecard_duration_seconds: int | None = None,
+) -> Iterator[str]:
+    """Run pipeline.process_reel on a worker thread and yield its progress events
+    as NDJSON lines, finishing with a final result/error line."""
+
+    def work(emit_event: Callable[[dict[str, Any]], None]) -> None:
+        generated, reel_records = pipeline.process_reel(
+            clips,
+            cancel_flag=cancel_flag,
+            progress_cb=emit_event,
+            titlecards_enabled=titlecards_enabled,
+            titlecard_duration_seconds=titlecard_duration_seconds,
+        )
+        if cancel_flag and cancel_flag():
+            emit_event(
+                {
+                    "ok": False,
+                    "cancelled": True,
+                    "error": "Reel generation cancelled",
+                }
+            )
+            return
+        _extend_generated_reels(reel_records)
+        _save_manifest_quiet()
+        emit_event({"ok": True, "generated": generated, "reels": reel_records})
+
+    yield from _stream_reel_job(work)
 
 
 def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
@@ -2392,56 +2446,14 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
                 "(requires libfreetype). Install an ffmpeg build with libfreetype to enable titlecards."
             )
 
-    applied = {}
+    applied: dict[str, Any] = {}
     for name, value in settings_data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
-        meta = config.STUDIO_SETTINGS[name]
-        default = _settings_defaults.get(name)
-        if meta.get("type") == "mark_categories":
-            cleaned = _coerce_mark_categories(value)
-            if cleaned is None:
-                return {}, f"Invalid {name} payload"
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if meta.get("type") == "card_picker":
-            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
-            if cleaned is None:
-                return {}, f"Invalid {name} payload"
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if meta.get("type") == "prompt":
-            text = str(value)
-            err = _validate_prompt(text, meta.get("placeholders") or [])
-            if err is not None:
-                return {}, f"Invalid {name}: {err}"
-            setattr(config, name, text)
-            applied[name] = text
-            continue
-        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
-            color = str(value)
-            if not _HEX_COLOR_RE.match(color):
-                return {}, f"Invalid {name}: expected a #rrggbb hex color"
-            setattr(config, name, color)
-            applied[name] = color
-            continue
-        expected_type = type(default) if default is not None else str
-        try:
-            if expected_type is bool:
-                coerced: Any = (
-                    value
-                    if isinstance(value, bool)
-                    else str(value).lower() in ("true", "1", "yes", "on")
-                )
-            elif expected_type is int:
-                coerced = int(value)
-            elif expected_type is float:
-                coerced = float(value)
-            else:
-                coerced = str(value)
-        except (ValueError, TypeError):
+        ok, coerced, error = _coerce_studio_setting(name, value)
+        if not ok:
+            if error is not None:
+                return {}, error
             continue
         setattr(config, name, coerced)
         applied[name] = coerced
@@ -2802,21 +2814,13 @@ def api_reel_direct() -> FlaskResponse:
     )
 
     def stream() -> Iterator[str]:
-        # The worker thread does the actual ffmpeg work and owns the busy
-        # slot. The generator just drains its event queue so that a client
-        # disconnect (e.g. browser navigation to a sibling frontend) does not
-        # abort the encode or orphan the reel from the manifest.
-        event_queue: queue.Queue[dict[str, Any]] = queue.Queue()
-        sentinel: dict[str, Any] = {"__sentinel__": True}
+        # temp_clips is hoisted so cleanup() can purge it after the worker
+        # finishes, even on a mid-build failure.
+        temp_clips: list[str] = []
 
-        def emit_event(event: dict[str, Any]) -> None:
-            _record_reel_event(event)
-            event_queue.put(event)
-
-        def worker() -> None:
+        def work(emit_event: Callable[[dict[str, Any]], None]) -> None:
             output_dir = Path(utils.get_effective_output_dir())
             clip_paths: list[str] = []
-            temp_clips: list[str] = []
             # Throttle concat progress emissions to ~5 Hz, same as before.
             concat_last_emit = [0.0]
 
@@ -2833,86 +2837,18 @@ def api_reel_direct() -> FlaskResponse:
                 concat_last_emit[0] = now
                 emit_event({"phase": "concat", "progress": fraction})
 
-            try:
-                total = len(segments)
-                emit_event({"phase": "start", "total_clips": total})
+            total = len(segments)
+            emit_event({"phase": "start", "total_clips": total})
 
-                completed = 0
-                for seg in segments:
-                    if _reel_cancel_event.is_set():
-                        break
+            completed = 0
+            for seg in segments:
+                if _reel_cancel_event.is_set():
+                    break
 
-                    participant = seg.get("participant", "")
-                    start = float(seg.get("start", 0))
-                    end = float(seg.get("end", 0))
-                    if end <= start:
-                        completed += 1
-                        emit_event(
-                            {
-                                "phase": "clip_done",
-                                "clip_index": completed - 1,
-                                "total_clips": total,
-                            }
-                        )
-                        continue
-
-                    source = seg.get("source", "screenspace")
-                    video_paths = _resolve_intake_video_paths(participant, source)
-
-                    if not video_paths:
-                        completed += 1
-                        emit_event(
-                            {
-                                "phase": "clip_done",
-                                "clip_index": completed - 1,
-                                "total_clips": total,
-                            }
-                        )
-                        continue
-                    timeline = video.timeline_or_none(video_paths)
-
-                    fd, tmp_path = tempfile.mkstemp(
-                        prefix=config.TEMP_ARTIFACT_PREFIX,
-                        suffix=config.FILEFORMAT,
-                        dir=str(output_dir),
-                    )
-                    # Track for cleanup BEFORE os.close(fd) or any other call
-                    # that could raise; otherwise the tmp file is on disk but
-                    # not in temp_clips, so the finally block won't unlink it.
-                    temp_clips.append(tmp_path)
-                    os.close(fd)
-
-                    # Map the global span into the participant's source video(s)
-                    # (stitching across a recording boundary); single-video is a plain cut.
-                    ok = (
-                        pipeline.cut_global_range(
-                            timeline,
-                            video_paths[0],
-                            start,
-                            end,
-                            tmp_path,
-                            reencode=config.REENCODING,
-                            cancel_flag=_reel_cancel_event.is_set,
-                        )
-                        is not None
-                    )
-                    if ok and cards_enabled:
-                        # Wrap at the cut clip's own resolution (probed inside
-                        # wrap_clip_with_cards). A global span may be cut from a
-                        # later source part whose resolution differs from the
-                        # first; trusting the clip avoids a concat mismatch.
-                        wrap_clip: utils.ClipRecord = {
-                            "desc": seg.get("event_type") or seg.get("desc") or "",
-                        }
-                        ok = titlecards.wrap_clip_with_cards(
-                            wrap_clip,
-                            tmp_path,
-                            cancel_flag=_reel_cancel_event.is_set,
-                            titlecards_enabled=cards_enabled,
-                            titlecard_duration_seconds=card_duration,
-                        )
-                    if ok:
-                        clip_paths.append(tmp_path)
+                participant = seg.get("participant", "")
+                start = float(seg.get("start", 0))
+                end = float(seg.get("end", 0))
+                if end <= start:
                     completed += 1
                     emit_event(
                         {
@@ -2921,84 +2857,137 @@ def api_reel_direct() -> FlaskResponse:
                             "total_clips": total,
                         }
                     )
+                    continue
 
-                if _reel_cancel_event.is_set():
+                source = seg.get("source", "screenspace")
+                video_paths = _resolve_intake_video_paths(participant, source)
+
+                if not video_paths:
+                    completed += 1
                     emit_event(
                         {
-                            "ok": False,
-                            "error": "Reel generation cancelled",
-                            "cancelled": True,
+                            "phase": "clip_done",
+                            "clip_index": completed - 1,
+                            "total_clips": total,
                         }
                     )
-                    return
+                    continue
+                timeline = video.timeline_or_none(video_paths)
 
-                if not clip_paths:
-                    emit_event({"ok": False, "error": "No clips could be generated"})
-                    return
+                fd, tmp_path = tempfile.mkstemp(
+                    prefix=config.TEMP_ARTIFACT_PREFIX,
+                    suffix=config.FILEFORMAT,
+                    dir=str(output_dir),
+                )
+                # Track for cleanup BEFORE os.close(fd) or any other call
+                # that could raise; otherwise the tmp file is on disk but
+                # not in temp_clips, so cleanup() won't unlink it.
+                temp_clips.append(tmp_path)
+                os.close(fd)
 
-                reel_study = _sheet_context.study_name if _sheet_context else ""
-                reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
-                reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
-
-                try:
-                    concat_ok = video.concatenate_clips(
-                        clip_paths,
-                        reel_name,
-                        reencode_on_fail=True,
+                # Map the global span into the participant's source video(s)
+                # (stitching across a recording boundary); single-video is a plain cut.
+                ok = (
+                    pipeline.cut_global_range(
+                        timeline,
+                        video_paths[0],
+                        start,
+                        end,
+                        tmp_path,
+                        reencode=config.REENCODING,
                         cancel_flag=_reel_cancel_event.is_set,
-                        on_progress=on_concat_progress,
                     )
-                except Exception as exc:
-                    utils.error_print(f"Concat failed: {exc}")
-                    concat_ok = False
-
-                if concat_ok:
-                    direct_title_img, direct_end_img = (
-                        pipeline._resolve_titlecard_images(cards_enabled)
-                    )
-                    reel_record: dict[str, Any] = {
-                        "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
-                        "file": Path(reel_name).name,
-                        "source": "intake",
-                        "description": f"Intake reel ({len(clip_paths)} segments)",
-                        "titlecards": cards_enabled,
-                        "titlecardDuration": card_duration if cards_enabled else 0,
-                        "titlecardImage": direct_title_img,
-                        "endcardImage": direct_end_img,
+                    is not None
+                )
+                if ok and cards_enabled:
+                    # Wrap at the cut clip's own resolution (probed inside
+                    # wrap_clip_with_cards). A global span may be cut from a
+                    # later source part whose resolution differs from the
+                    # first; trusting the clip avoids a concat mismatch.
+                    wrap_clip: utils.ClipRecord = {
+                        "desc": seg.get("event_type") or seg.get("desc") or "",
                     }
-                    _append_generated_reel(reel_record)
-                    _save_manifest_quiet()
-                    emit_event({"ok": True, "generated": 1, "reels": [reel_record]})
-                else:
-                    files.release_reservation(reel_name)
-                    emit_event({"ok": False, "error": "Reel concatenation failed"})
-            except Exception as exc:
-                emit_event({"ok": False, "error": str(exc)})
-            finally:
-                # Endcard temp files are cached per-process across all wrap
-                # calls; purge them here so per-request cards do not leak
-                # between consecutive reel builds.
-                titlecards.clear_endcard_cache()
-                for tmp in temp_clips:
-                    try:
-                        Path(tmp).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                event_queue.put(sentinel)
-                _release_busy("reel")
+                    ok = titlecards.wrap_clip_with_cards(
+                        wrap_clip,
+                        tmp_path,
+                        cancel_flag=_reel_cancel_event.is_set,
+                        titlecards_enabled=cards_enabled,
+                        titlecard_duration_seconds=card_duration,
+                    )
+                if ok:
+                    clip_paths.append(tmp_path)
+                completed += 1
+                emit_event(
+                    {
+                        "phase": "clip_done",
+                        "clip_index": completed - 1,
+                        "total_clips": total,
+                    }
+                )
 
-        try:
-            threading.Thread(target=worker, daemon=True).start()
-        except BaseException:
-            # Worker never ran, so its finally won't release the slot.
-            _release_busy("reel")
-            raise
-
-        while True:
-            event = event_queue.get()
-            if event is sentinel:
+            if _reel_cancel_event.is_set():
+                emit_event(
+                    {
+                        "ok": False,
+                        "error": "Reel generation cancelled",
+                        "cancelled": True,
+                    }
+                )
                 return
-            yield json.dumps(event) + "\n"
+
+            if not clip_paths:
+                emit_event({"ok": False, "error": "No clips could be generated"})
+                return
+
+            reel_study = _sheet_context.study_name if _sheet_context else ""
+            reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
+            reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
+
+            try:
+                concat_ok = video.concatenate_clips(
+                    clip_paths,
+                    reel_name,
+                    reencode_on_fail=True,
+                    cancel_flag=_reel_cancel_event.is_set,
+                    on_progress=on_concat_progress,
+                )
+            except Exception as exc:
+                utils.error_print(f"Concat failed: {exc}")
+                concat_ok = False
+
+            if concat_ok:
+                direct_title_img, direct_end_img = pipeline._resolve_titlecard_images(
+                    cards_enabled
+                )
+                reel_record: dict[str, Any] = {
+                    "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
+                    "file": Path(reel_name).name,
+                    "source": "intake",
+                    "description": f"Intake reel ({len(clip_paths)} segments)",
+                    "titlecards": cards_enabled,
+                    "titlecardDuration": card_duration if cards_enabled else 0,
+                    "titlecardImage": direct_title_img,
+                    "endcardImage": direct_end_img,
+                }
+                _append_generated_reel(reel_record)
+                _save_manifest_quiet()
+                emit_event({"ok": True, "generated": 1, "reels": [reel_record]})
+            else:
+                files.release_reservation(reel_name)
+                emit_event({"ok": False, "error": "Reel concatenation failed"})
+
+        def cleanup() -> None:
+            # Endcard temp files are cached per-process across all wrap calls;
+            # purge them here so per-request cards do not leak between
+            # consecutive reel builds.
+            titlecards.clear_endcard_cache()
+            for tmp in temp_clips:
+                try:
+                    Path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        yield from _stream_reel_job(work, on_cleanup=cleanup)
 
     return Response(
         stream(),
@@ -3763,6 +3752,8 @@ _QUIET_POLL_PATHS: frozenset[str] = frozenset(
     {
         "/screenspace/api/tasks",
         "/screenspace/api/events",
+        "/screenspace/api/intake-poll",
+        "/transcripts/api/intake-poll",
         "/transcripts/api/marks",
         "/transcripts/api/transcribe/status",
         "/transcripts/api/transcribe/model-status",

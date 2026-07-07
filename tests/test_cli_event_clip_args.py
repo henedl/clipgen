@@ -91,6 +91,10 @@ def test_parse_transcript_clips_with_mark(monkeypatch):
             True,
         ),
         ({"transcript_clips": True, "screenspace": True}, True),
+        # Previously-uncaught pairs: --ss-run-task was in no other mode's
+        # conflict list and vice-versa. The all-pairs derivation closes the gap.
+        ({"ss_run_task": "ss_1", "ss_clips": True}, True),
+        ({"ss_run_task": "ss_1", "transcript_mark": "insight"}, True),
         ({"ss_clips": True}, False),
     ],
     ids=[
@@ -98,6 +102,8 @@ def test_parse_transcript_clips_with_mark(monkeypatch):
         "ss_clips_with_studio",
         "ss_clips_with_ss_task",
         "transcript_clips_with_screenspace",
+        "ss_run_task_with_ss_clips",
+        "ss_run_task_with_transcript_mark",
         "ss_clips_alone",
     ],
 )

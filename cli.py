@@ -984,18 +984,7 @@ def _generate_cli_clips(
     output_format = "screen" if args.screen else "gif" if args.gif else "clip"
 
     selection_mode_set = bool(
-        args.batch
-        or args.lines
-        or args.range
-        or args.category
-        or args.cell
-        or args.participant
-        or args.keyword
-        or args.severity
-        or mixed_selectors
-        or args.reel
-        or args.chronologic
-        or args.highlights
+        any(getattr(args, a, None) for a in _SELECTION_ATTRS) or args.highlights
     )
 
     def _parse_cli_categories(raw: str | None) -> list[str]:
@@ -3027,7 +3016,10 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
 # ---- Main entry point ----
 
 
-_BASE_SELECTOR_ATTRS = (
+# Clip-selection flags (which rows/timestamps become clips). Shared across the
+# three sites that enumerate them: _generate_cli_clips, _BASE_SELECTOR_ATTRS,
+# and main()'s cli_mode detection.
+_SELECTION_ATTRS = (
     "batch",
     "lines",
     "range",
@@ -3039,22 +3031,25 @@ _BASE_SELECTOR_ATTRS = (
     "mixed",
     "reel",
     "chronologic",
-    "screen",
-    "gif",
-    "viewer",
-    "regenerate",
 )
+
+_BASE_SELECTOR_ATTRS = _SELECTION_ATTRS + ("screen", "gif", "viewer", "regenerate")
 
 
 class _ModeSpec(NamedTuple):
-    """Declarative description of one exclusive mode for conflict validation."""
+    """Declarative description of one exclusive mode for conflict validation.
+
+    Every standalone mode is mutually exclusive with every other standalone
+    mode; that all-pairs rule is derived in _validate_mode_conflicts, not
+    hand-listed per spec.
+    """
 
     key: str  # attribute on args (also returned in result dict)
     truthy: Callable[[Any], bool]  # how to detect this mode is active
     error: str
     hint: str
     selector_attrs: tuple[str, ...] = _BASE_SELECTOR_ATTRS
-    blocks_modes: tuple[str, ...] = ()  # earlier mode keys that conflict
+    implies_cli_mode: bool = False  # headless CLI mode (vs. web/standalone dispatch)
 
 
 _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
@@ -3063,55 +3058,31 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         truthy=lambda a: bool(getattr(a, "timeline_viewer", False)),
         error="--timeline-viewer cannot be combined with mode, format, or --viewer/--regenerate flags.",
         hint="Only -s (spreadsheet) and -v (verbose) may be used alongside --timeline-viewer.",
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="studio",
         truthy=lambda a: bool(getattr(a, "studio", False)),
         error="--studio cannot be combined with mode, format, or --viewer/--regenerate flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --studio.",
-        blocks_modes=("timeline_viewer",),
     ),
     _ModeSpec(
         key="screenspace",
         truthy=lambda a: bool(getattr(a, "screenspace", False)),
         error="--screenspace cannot be combined with mode, format, or --viewer/--regenerate/--studio flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --screenspace.",
-        blocks_modes=("timeline_viewer", "studio", "transcripts", "export"),
     ),
     _ModeSpec(
         key="transcripts",
         truthy=lambda a: bool(getattr(a, "transcripts", False)),
         error="--transcripts cannot be combined with mode, format, or --viewer/--regenerate/--studio/--screenspace flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --transcripts.",
-        blocks_modes=("timeline_viewer", "studio", "screenspace", "export"),
     ),
     _ModeSpec(
         key="workflows",
         truthy=lambda a: bool(getattr(a, "workflows", False)),
         error="--workflows cannot be combined with mode, format, or other web/CLI mode flags.",
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --workflows.",
-        # Self-contained: list every other exclusive mode so --workflows conflicts
-        # with all of them regardless of declaration order.
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_run_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-            "ss_clips",
-            "transcript_clips",
-            "transcript_mark",
-            "regenerate",
-        ),
     ),
     _ModeSpec(
         key="gallery",
@@ -3123,13 +3094,6 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         selector_attrs=tuple(
             a for a in _BASE_SELECTOR_ATTRS if a not in ("screen", "gif")
         ),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "export",
-        ),
     ),
     _ModeSpec(
         key="pre_transcribe",
@@ -3138,14 +3102,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --pre-transcribe.",
         # pre-transcribe additionally conflicts with --highlights.
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "export",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="export",
@@ -3153,14 +3110,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--export cannot be combined with mode, format, or other standalone flags.",
         hint="Use --export with -i/-o (directories) and -v (verbose) only.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_task",
@@ -3168,20 +3118,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--ss-task cannot be combined with mode, format, or other standalone flags.",
         hint="Use --ss-task with -i/-o (directories) and -v (verbose) only.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_run_task",
@@ -3189,21 +3126,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--ss-run-task cannot be combined with mode, format, or other standalone flags.",
         hint="Use --ss-run-task with -i/-o (directories) and -v (verbose) only.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_list_regions",
@@ -3211,20 +3134,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--ss-list-regions cannot be combined with other modes.",
         hint="Use --ss-list-regions on its own (with -i/-o for directories).",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_list_stashes",
@@ -3232,20 +3142,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--ss-list-stashes cannot be combined with other modes.",
         hint="Use --ss-list-stashes on its own (with -i/-o for directories).",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_list_tasks",
@@ -3253,20 +3150,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--ss-list-tasks cannot be combined with other modes.",
         hint="Use --ss-list-tasks on its own (with -i/-o for directories).",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "summarize",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="summarize",
@@ -3274,20 +3158,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--summarize cannot be combined with mode, format, or other standalone flags.",
         hint="Use --summarize with -i/-o (directories), -v (verbose), and --ollama-model.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="citations",
@@ -3295,20 +3166,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         error="--citations cannot be combined with mode, format, or other standalone flags.",
         hint="Use --citations with -i/-o (directories), -v (verbose), and --ollama-model.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="ss_clips",
@@ -3320,21 +3178,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "and --ss-clips-* filters."
         ),
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="transcript_clips",
@@ -3346,22 +3190,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "and --transcript-clips-* filters."
         ),
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-            "ss_clips",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="transcript_mark",
@@ -3373,23 +3202,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
             "--transcript-mark-participant / --transcript-mark-label."
         ),
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
-        blocks_modes=(
-            "timeline_viewer",
-            "studio",
-            "screenspace",
-            "transcripts",
-            "gallery",
-            "pre_transcribe",
-            "export",
-            "ss_task",
-            "ss_list_regions",
-            "ss_list_stashes",
-            "ss_list_tasks",
-            "summarize",
-            "citations",
-            "ss_clips",
-            "transcript_clips",
-        ),
+        implies_cli_mode=True,
     ),
     _ModeSpec(
         key="regenerate",
@@ -3414,7 +3227,8 @@ def _validate_mode_conflicts(args: Any) -> dict[str, Any]:
         if not active[spec.key]:
             continue
         conflicts = [getattr(args, attr, None) for attr in spec.selector_attrs]
-        conflicts.extend(active[m] for m in spec.blocks_modes)
+        # Every standalone mode is mutually exclusive with every other one.
+        conflicts.extend(v for k, v in active.items() if k != spec.key)
         if any(conflicts):
             utils.error_print(spec.error, [spec.hint])
             sys.exit(1)
@@ -3644,36 +3458,16 @@ def main() -> None:
     gallery_arg = modes["gallery_arg"]
     pre_transcribe_mode = modes["pre_transcribe"]
 
-    # Determine if running in CLI mode (any mode argument provided)
-    mixed_selectors = getattr(args, "mixed", None)
+    # Determine if running in CLI mode (any mode argument provided). Headless
+    # CLI modes are flagged via _ModeSpec.implies_cli_mode; the web/standalone
+    # frontends (studio/screenspace/transcripts/workflows/gallery/regenerate)
+    # deliberately do not set cli_mode.
     cli_mode = (
-        args.batch
-        or args.lines
-        or args.range
-        or args.category
-        or args.cell
-        or args.participant
-        or args.keyword
-        or args.severity
-        or mixed_selectors
-        or args.reel
-        or args.chronologic
+        any(getattr(args, a, None) for a in _SELECTION_ATTRS)
         or args.highlights
         or args.screen
         or args.gif
-        or timeline_viewer
-        or modes["ss_task"]
-        or modes["ss_run_task"]
-        or modes["ss_list_regions"]
-        or modes["ss_list_stashes"]
-        or modes["ss_list_tasks"]
-        or modes["summarize"]
-        or modes["citations"]
-        or modes["export"]
-        or modes["ss_clips"]
-        or modes["transcript_clips"]
-        or modes["transcript_mark"]
-        or pre_transcribe_mode
+        or any(modes[s.key] for s in _EXCLUSIVE_MODES if s.implies_cli_mode)
     )
 
     cli_mode_args = _apply_config_overrides(args, cli_mode)

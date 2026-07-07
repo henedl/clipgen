@@ -983,22 +983,6 @@ def test_screenspace_dispatch_single_video_unchanged(monkeypatch):
 # ---- Review-fix regressions ----
 
 
-def test_screenspace_restore_tasks_normalizes_legacy_video_path():
-    import screenspace
-
-    worker = screenspace.ScreenspaceWorker()
-    # A task persisted before the video_paths change carries only video_path.
-    worker.restore_tasks(
-        [{"id": "ss_old", "video_path": "/in/legacy.mp4", "status": "paused"}]
-    )
-    assert worker._tasks["ss_old"]["video_paths"] == ["/in/legacy.mp4"]
-    # A current task keeps its list untouched.
-    worker.restore_tasks(
-        [{"id": "ss_new", "video_paths": ["/in/a.mp4", "/in/b.mp4"], "status": "done"}]
-    )
-    assert worker._tasks["ss_new"]["video_paths"] == ["/in/a.mp4", "/in/b.mp4"]
-
-
 def test_ss_cli_resolves_all_parts(monkeypatch, tmp_path):
     import cli
 

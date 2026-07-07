@@ -2,6 +2,7 @@
 """Video processing operations for clipgen."""
 
 import concurrent.futures
+import contextlib
 import json
 import os
 import shutil
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import threading
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -427,6 +428,69 @@ def verify_output_file(output_file: str, operation_label: str) -> bool:
     return False
 
 
+def _finalize_ffmpeg_output(
+    ffmpeg_result: subprocess.CompletedProcess[str] | None,
+    output_file: str,
+    *,
+    error_message: str,
+    error_details: list[str],
+    verify_label: str,
+    success_noun: str | None = None,
+    success_extra: str = "",
+) -> bool:
+    """Shared post-run tail for single-output ffmpeg ops.
+
+    None → OS/cancel failure (already reported). Non-zero rc → report with
+    trimmed stderr. Then require a non-empty output. When *success_noun* is
+    given, emit the standard success line (with filesize + optional extra).
+    """
+    if ffmpeg_result is None:
+        return False
+    if ffmpeg_result.returncode != 0:
+        utils.error_print(
+            f"{error_message} with exit code {ffmpeg_result.returncode}",
+            _add_ffmpeg_stderr(error_details, ffmpeg_result),
+        )
+        return False
+    if not verify_output_file(output_file, verify_label):
+        return False
+    if success_noun is not None:
+        size = utils.format_filesize(Path(output_file).stat().st_size)
+        utils.verbose_print(
+            f"+ Generated {success_noun} '{output_file}' successfully.\n"
+            f" File size: {size}\n{success_extra}"
+        )
+    return True
+
+
+@contextlib.contextmanager
+def _concat_list_file(clip_paths: list[str]) -> Iterator[str]:
+    """Write an ffmpeg concat-demuxer list file; unlink it on exit.
+
+    Yields the temp path; each clip is a `file '...'` line with single
+    quotes escaped. Always cleaned up on block exit (best-effort).
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, encoding="utf-8"
+    ) as file_handle:
+        concat_list_file = file_handle.name
+        for path in clip_paths:
+            abs_path = str(Path(path).resolve())
+            escaped_path = abs_path.replace("'", "'\\''")
+            file_handle.write(f"file '{escaped_path}'\n")
+    try:
+        yield concat_list_file
+    finally:
+        concat_path = Path(concat_list_file)
+        if concat_path.exists():
+            try:
+                concat_path.unlink()
+            except OSError as e:
+                utils.debug_print(
+                    f"Could not remove concat list file '{concat_list_file}': {e}"
+                )
+
+
 def build_ffmpeg_cut_command(
     input_file: str,
     output_file: str,
@@ -567,20 +631,17 @@ def mux_subtitles(
         output_file=output_video,
         os_error_message="Failed to mux subtitles into video.",
     )
-    if result is None:
-        return False
-    if result.returncode != 0:
-        details = _add_ffmpeg_stderr(
-            [
-                f"Input video: '{input_video}'",
-                f"Subtitle: '{srt_path}'",
-                f"Output: '{output_video}'",
-            ],
-            result,
-        )
-        utils.error_print("ffmpeg returned a non-zero exit status.", details)
-        return False
-    return verify_output_file(output_video, "Subtitle mux")
+    return _finalize_ffmpeg_output(
+        result,
+        output_video,
+        error_message="ffmpeg subtitle mux failed",
+        error_details=[
+            f"Input video: '{input_video}'",
+            f"Subtitle: '{srt_path}'",
+            f"Output: '{output_video}'",
+        ],
+        verify_label="Subtitle mux",
+    )
 
 
 def run_ffmpeg(
@@ -686,32 +747,23 @@ def run_ffmpeg(
         os_error_message="ffmpeg could not successfully run.",
         cancel_flag=cancel_flag,
     )
-    if ffmpeg_result is None:
-        return False
-
-    if ffmpeg_result.returncode != 0:
-        error_details = [
-            f"Input: '{input_file}', Output: '{output_file}'",
-            f"Timestamps: {start_pos} to {end_pos}",
-        ]
-        utils.error_print(
-            f"ffmpeg failed with exit code {ffmpeg_result.returncode}",
-            _add_ffmpeg_stderr(error_details, ffmpeg_result),
-        )
-        return False
-
-    if not verify_output_file(output_file, "ffmpeg"):
-        return False
-
     # NB: file-size enforcement is deliberately NOT done here. A cut is often
     # followed by a titlecard wrap or a concat that re-encodes the body, which
     # would discard any bitrate targeting applied at cut time (and waste two
     # passes). Callers apply enforce_filesize_limit() to the *final* artifact
     # after all wrapping/concat instead.
-    utils.verbose_print(
-        f"+ Generated video '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n Expected duration: {duration} s\n"
+    return _finalize_ffmpeg_output(
+        ffmpeg_result,
+        output_file,
+        error_message="ffmpeg failed",
+        error_details=[
+            f"Input: '{input_file}', Output: '{output_file}'",
+            f"Timestamps: {start_pos} to {end_pos}",
+        ],
+        verify_label="ffmpeg",
+        success_noun="video",
+        success_extra=f" Expected duration: {duration} s\n",
     )
-    return True
 
 
 def extract_screenshot(
@@ -789,25 +841,17 @@ def extract_screenshot(
         os_error_message="ffmpeg could not successfully run for screenshot extraction.",
         cancel_flag=cancel_flag,
     )
-    if ffmpeg_result is None:
-        return False
-
-    if ffmpeg_result.returncode != 0:
-        error_details = [
+    return _finalize_ffmpeg_output(
+        ffmpeg_result,
+        output_file,
+        error_message="ffmpeg screenshot failed",
+        error_details=[
             f"Input: '{input_file}', Output: '{output_file}'",
             f"Timestamp: {timestamp}",
-        ]
-        utils.error_print(
-            f"ffmpeg screenshot failed with exit code {ffmpeg_result.returncode}",
-            _add_ffmpeg_stderr(error_details, ffmpeg_result),
-        )
-        return False
-    if not verify_output_file(output_file, "ffmpeg screenshot"):
-        return False
-    utils.verbose_print(
-        f"+ Generated screenshot '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n"
+        ],
+        verify_label="ffmpeg screenshot",
+        success_noun="screenshot",
     )
-    return True
 
 
 def extract_thumbnail_bytes(
@@ -1104,25 +1148,17 @@ def extract_gif(
         os_error_message="ffmpeg could not successfully run for GIF extraction.",
         cancel_flag=cancel_flag,
     )
-    if ffmpeg_result is None:
-        return False
-
-    if ffmpeg_result.returncode != 0:
-        error_details = [
+    return _finalize_ffmpeg_output(
+        ffmpeg_result,
+        output_file,
+        error_message="ffmpeg GIF extraction failed",
+        error_details=[
             f"Input: '{input_file}', Output: '{output_file}'",
             f"Timestamp: {timestamp}, Duration: {duration_seconds}s",
-        ]
-        utils.error_print(
-            f"ffmpeg GIF extraction failed with exit code {ffmpeg_result.returncode}",
-            _add_ffmpeg_stderr(error_details, ffmpeg_result),
-        )
-        return False
-    if not verify_output_file(output_file, "ffmpeg GIF extraction"):
-        return False
-    utils.verbose_print(
-        f"+ Generated GIF '{output_file}' successfully.\n File size: {utils.format_filesize(Path(output_file).stat().st_size)}\n"
+        ],
+        verify_label="ffmpeg GIF extraction",
+        success_noun="GIF",
     )
-    return True
 
 
 def _probe_duration_seconds_ffprobe_format(filepath: str) -> int | None:
@@ -2045,48 +2081,9 @@ def _concatenate_demuxer(
     expected_duration_sec: float | None = None,
 ) -> bool:
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as file_handle:
-        concat_list_file = file_handle.name
-        for path in clip_paths:
-            abs_path = str(Path(path).resolve())
-            escaped_path = abs_path.replace("'", "'\\''")
-            file_handle.write(f"file '{escaped_path}'\n")
-
-    try:
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_list_file,
-            "-c",
-            "copy",
-            output_file,
-        ]
-        utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
-
-        ffmpeg_result = run_ffmpeg_process(
-            ffmpeg_command,
-            input_file=concat_list_file,
-            output_file=output_file,
-            os_error_message="Concatenation failed.",
-            cancel_flag=cancel_flag,
-        )
-        if ffmpeg_result is None:
-            return False
-
-        if ffmpeg_result.returncode != 0 and reencode_on_fail:
-            utils.warning_print(
-                "Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding."
-            )
-            ffmpeg_command_reencode = [
+    with _concat_list_file(clip_paths) as concat_list_file:
+        try:
+            ffmpeg_command = [
                 "ffmpeg",
                 "-y",
                 "-loglevel",
@@ -2097,52 +2094,74 @@ def _concatenate_demuxer(
                 "0",
                 "-i",
                 concat_list_file,
-                "-c:v",
-                "libx264",
-                "-c:a",
-                "aac",
+                "-c",
+                "copy",
                 output_file,
             ]
+            utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
+
             ffmpeg_result = run_ffmpeg_process(
-                ffmpeg_command_reencode,
+                ffmpeg_command,
                 input_file=concat_list_file,
                 output_file=output_file,
-                os_error_message="Concatenation failed during re-encoding fallback.",
+                os_error_message="Concatenation failed.",
                 cancel_flag=cancel_flag,
-                on_progress=on_progress,
-                expected_duration_sec=expected_duration_sec,
             )
             if ffmpeg_result is None:
                 return False
 
-        if ffmpeg_result.returncode != 0:
-            error_details = [
-                f"Output: '{output_file}'",
-                f"Clips: {len(clip_paths)} files",
-            ]
-            utils.error_print(
-                "ffmpeg concat failed.",
-                _add_ffmpeg_stderr(error_details, ffmpeg_result),
-            )
-            return False
-
-        if not verify_output_file(output_file, "Concat"):
-            return False
-
-        utils.standard_print(f"+ Generated reel '{output_file}' successfully.")
-        return True
-    except OSError as e:
-        utils.error_print(f"Concatenation failed: {e}")
-        return False
-    finally:
-        concat_path = Path(concat_list_file)
-        if concat_path.exists():
-            try:
-                concat_path.unlink()
-            except OSError as e:
-                utils.debug_print(
-                    f"Could not remove concat list file '{concat_list_file}': {e}"
+            if ffmpeg_result.returncode != 0 and reencode_on_fail:
+                utils.warning_print(
+                    "Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding."
                 )
+                ffmpeg_command_reencode = [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    config.FFMPEG_LOGLEVEL,
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    concat_list_file,
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                    output_file,
+                ]
+                ffmpeg_result = run_ffmpeg_process(
+                    ffmpeg_command_reencode,
+                    input_file=concat_list_file,
+                    output_file=output_file,
+                    os_error_message="Concatenation failed during re-encoding fallback.",
+                    cancel_flag=cancel_flag,
+                    on_progress=on_progress,
+                    expected_duration_sec=expected_duration_sec,
+                )
+                if ffmpeg_result is None:
+                    return False
+
+            if ffmpeg_result.returncode != 0:
+                error_details = [
+                    f"Output: '{output_file}'",
+                    f"Clips: {len(clip_paths)} files",
+                ]
+                utils.error_print(
+                    "ffmpeg concat failed.",
+                    _add_ffmpeg_stderr(error_details, ffmpeg_result),
+                )
+                return False
+
+            if not verify_output_file(output_file, "Concat"):
+                return False
+
+            utils.standard_print(f"+ Generated reel '{output_file}' successfully.")
+            return True
+        except OSError as e:
+            utils.error_print(f"Concatenation failed: {e}")
+            return False
 
 
 def concat_copy(
@@ -2162,56 +2181,39 @@ def concat_copy(
     (matching codec/pix_fmt/SAR/timebase and audio params) — a mismatch produces a
     silently corrupt file with a zero return code, which this cannot detect.
     """
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False, encoding="utf-8"
-    ) as file_handle:
-        concat_list_file = file_handle.name
-        for path in clip_paths:
-            abs_path = str(Path(path).resolve())
-            escaped_path = abs_path.replace("'", "'\\''")
-            file_handle.write(f"file '{escaped_path}'\n")
-
-    try:
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            concat_list_file,
-            "-c",
-            "copy",
-            output_file,
-        ]
-        utils.debug_print(f"ffmpeg concat-copy command: {' '.join(ffmpeg_command)}")
-        ffmpeg_result = run_ffmpeg_process(
-            ffmpeg_command,
-            input_file=concat_list_file,
-            output_file=output_file,
-            os_error_message="Stream-copy concat failed.",
-            cancel_flag=cancel_flag,
-            on_progress=on_progress,
-            expected_duration_sec=expected_duration_sec,
-        )
-        if ffmpeg_result is None or ffmpeg_result.returncode != 0:
+    with _concat_list_file(clip_paths) as concat_list_file:
+        try:
+            ffmpeg_command = [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                config.FFMPEG_LOGLEVEL,
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_list_file,
+                "-c",
+                "copy",
+                output_file,
+            ]
+            utils.debug_print(f"ffmpeg concat-copy command: {' '.join(ffmpeg_command)}")
+            ffmpeg_result = run_ffmpeg_process(
+                ffmpeg_command,
+                input_file=concat_list_file,
+                output_file=output_file,
+                os_error_message="Stream-copy concat failed.",
+                cancel_flag=cancel_flag,
+                on_progress=on_progress,
+                expected_duration_sec=expected_duration_sec,
+            )
+            if ffmpeg_result is None or ffmpeg_result.returncode != 0:
+                return False
+            return verify_output_file(output_file, "Concat")
+        except OSError as e:
+            utils.debug_print(f"Stream-copy concat failed: {e}")
             return False
-        return verify_output_file(output_file, "Concat")
-    except OSError as e:
-        utils.debug_print(f"Stream-copy concat failed: {e}")
-        return False
-    finally:
-        concat_path = Path(concat_list_file)
-        if concat_path.exists():
-            try:
-                concat_path.unlink()
-            except OSError as e:
-                utils.debug_print(
-                    f"Could not remove concat list file '{concat_list_file}': {e}"
-                )
 
 
 def _batch_extract_screenshots(

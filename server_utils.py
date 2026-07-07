@@ -13,6 +13,9 @@ block dozens of times. This module collapses that scaffolding:
   :class:`ApiError` on bad input (caught by :func:`json_endpoint`).
 - :func:`make_debounced_persist` builds the manifest-write debounce shared by
   the screenspace and transcripts blueprints.
+- :func:`make_sse_channel` builds one Server-Sent-Events pub/sub channel
+  (bounded per-client queue + coalesce-on-overflow + keepalive + cleanup),
+  shared by the run / batch / task streaming endpoints.
 
 Kept deliberately tiny and Flask-only (no ``config``/``utils`` imports) so it
 stays import-clean — ``utils`` is Flask-free on purpose and imported by
@@ -22,11 +25,12 @@ non-server modules, so these helpers must not live there.
 from __future__ import annotations
 
 import math
+import queue
 import threading
 from functools import wraps
 from typing import Any, Callable
 
-from flask import jsonify
+from flask import Response, jsonify
 
 
 def ok(**fields: Any):
@@ -166,3 +170,87 @@ def make_debounced_persist(
                 persist()
 
     return schedule_persist, flush_pending_persist, cancel_pending_persist_timer
+
+
+def make_sse_channel(
+    *, maxsize: int = 64, keepalive_seconds: float = 15.0
+) -> tuple[
+    Callable[..., None],
+    Callable[..., Response],
+    list[tuple[Any, "queue.Queue[str]"]],
+]:
+    """Build one SSE pub/sub channel; returns ``(notify, stream, clients)``.
+
+    Collapses the bounded-queue + coalesce-on-overflow + keepalive + cleanup
+    boilerplate otherwise duplicated across the run / batch / task SSE endpoints.
+
+    - ``notify(key=None, marker="update")`` wakes every client registered with a
+      matching ``key`` (``key=None`` = broadcast). On a full queue it coalesces:
+      drop one stale entry, re-push ``marker`` (dropped silently if still full).
+      The queued token is never inspected by the streamer — it only triggers a
+      full payload rebuild — so ``marker``'s value is cosmetic.
+    - ``stream(payload, key=None) -> Response`` registers a client keyed by
+      ``key``, returns a ``text/event-stream`` Response that emits ``payload()``
+      immediately, re-emits it on each wake (draining the backlog first), sends a
+      keepalive comment after a quiet ``keepalive_seconds`` timeout, and
+      deregisters in ``finally``.
+    - ``clients`` is the live registry list (``(key, queue)`` tuples), exposed so
+      tests can inject/clear entries; mutate it in place, never rebind.
+    """
+    clients: list[tuple[Any, queue.Queue[str]]] = []
+    lock = threading.Lock()
+
+    def notify(key: Any = None, marker: str = "update") -> None:
+        with lock:
+            for ckey, cq in clients:
+                if ckey != key:
+                    continue
+                try:
+                    cq.put_nowait(marker)
+                except queue.Full:
+                    try:
+                        cq.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        cq.put_nowait(marker)
+                    except queue.Full:
+                        pass
+
+    def stream(payload: Callable[[], str], key: Any = None) -> Response:
+        client_q: queue.Queue[str] = queue.Queue(maxsize=maxsize)
+        entry = (key, client_q)
+        with lock:
+            clients.append(entry)
+
+        def generate():  # type: ignore[no-untyped-def]
+            try:
+                yield payload()
+                while True:
+                    try:
+                        client_q.get(timeout=keepalive_seconds)
+                        # Drain any backlog (coalesce rapid updates) before emitting.
+                        while not client_q.empty():
+                            try:
+                                client_q.get_nowait()
+                            except queue.Empty:
+                                break
+                        yield payload()
+                    except queue.Empty:
+                        yield ": keepalive\n\n"
+            except GeneratorExit:
+                pass
+            finally:
+                with lock:
+                    try:
+                        clients.remove(entry)
+                    except ValueError:
+                        pass
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    return notify, stream, clients

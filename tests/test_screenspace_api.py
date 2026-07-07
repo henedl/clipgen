@@ -1,6 +1,7 @@
 """Tests for Screenspace server API endpoints."""
 
 import os
+from collections import OrderedDict
 
 import numpy as np
 import pytest
@@ -20,23 +21,34 @@ def client(tmp_path, monkeypatch):
     app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    screenspace_server._manifest = {
-        "regions": {},
-        "tasks": [],
-        "events": [],
-        "stashes": [],
-        "per_participant": {},
-        "pins": {},
-    }
-    screenspace_server._participants = [
-        {"id": "P01", "video_paths": ["/tmp/test_P01.mp4"], "has_video": False},
-        {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
-    ]
-    screenspace_server._output_dir = str(tmp_path)
-    screenspace_server._worker = screenspace.ScreenspaceWorker()
-    # Module-level calibration/preview caches persist across tests; reset them.
-    screenspace_server._decoded_frame_cache.clear()
-    screenspace_server._pin_ocr_cache.clear()
+    # Seed module globals via monkeypatch so they auto-restore on teardown —
+    # otherwise a later test that reads these globals without the fixture would
+    # inherit this test's state (matters under random ordering).
+    monkeypatch.setattr(
+        screenspace_server,
+        "_manifest",
+        {
+            "regions": {},
+            "tasks": [],
+            "events": [],
+            "stashes": [],
+            "per_participant": {},
+            "pins": {},
+        },
+    )
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [
+            {"id": "P01", "video_paths": ["/tmp/test_P01.mp4"], "has_video": False},
+            {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
+        ],
+    )
+    monkeypatch.setattr(screenspace_server, "_output_dir", str(tmp_path))
+    monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
+    # Fresh module-level calibration/preview caches per test (auto-restored).
+    monkeypatch.setattr(screenspace_server, "_decoded_frame_cache", OrderedDict())
+    monkeypatch.setattr(screenspace_server, "_pin_ocr_cache", OrderedDict())
 
     monkeypatch.setattr(
         screenspace,
@@ -48,6 +60,9 @@ def client(tmp_path, monkeypatch):
 
     with app.test_client() as c:
         yield c
+    # Cancel any debounced manifest write armed during the test so a stray Timer
+    # doesn't fire _do_persist into torn-down state after the fixture exits.
+    screenspace_server._cancel_pending_persist_timer()
 
 
 @pytest.fixture
@@ -2380,17 +2395,19 @@ def test_export_events_unsupported_format(client):
 
 
 def test_notify_sse_clients_coalesces_on_full_queue():
-    """A saturated client queue keeps a fresh 'update' marker instead of
-    silently dropping the change, so a slow SSE client still converges to
-    current task state once it catches up."""
+    """A saturated client queue keeps a fresh marker instead of silently
+    dropping the change, so a slow SSE client still converges to current task
+    state once it catches up."""
     import queue as queue_mod
 
     q: queue_mod.Queue = queue_mod.Queue(maxsize=4)
     for _ in range(4):
         q.put_nowait("stale")
 
+    # Registry entries are (key, queue) tuples; _notify_sse_clients broadcasts
+    # under the None key (see make_sse_channel).
     saved = list(screenspace_server._sse_clients)
-    screenspace_server._sse_clients[:] = [q]
+    screenspace_server._sse_clients[:] = [(None, q)]
     try:
         screenspace_server._notify_sse_clients("task_created")
     finally:
@@ -2400,7 +2417,9 @@ def test_notify_sse_clients_coalesces_on_full_queue():
     while not q.empty():
         drained.append(q.get_nowait())
     assert len(drained) == 4
-    assert "update" in drained
+    # One stale entry dropped and the fresh marker re-pushed (the streamer only
+    # uses it to trigger a full payload rebuild, so any non-stale token works).
+    assert "task_created" in drained
 
 
 def test_events_list_stable_under_concurrent_writes(client):
