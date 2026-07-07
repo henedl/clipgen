@@ -8,7 +8,9 @@
  *
  * Lazy thumbnails: clip cards request thumbnails as they scroll into view
  * via _thumbObserver / _thumbQueue, with results cached in _thumbCache for
- * the session. Filmstrip mode does the same with its own observer/queue.
+ * the session. Filmstrip mode does the same with its own observer/queue, and
+ * caches its multi-frame strips separately in _filmstripCache — the two image
+ * formats (320x180 poster vs N-frame strip) must never share a cache key.
  */
 (function () {
   "use strict";
@@ -30,11 +32,14 @@
   var THUMB_CONCURRENCY = 3;
   var _thumbObserver = null;
   var _thumbCache = {};
+  var _filmstripCache = {};
 
   window.addEventListener("pagehide", function () {
-    Object.keys(_thumbCache).forEach(function (id) {
-      try { URL.revokeObjectURL(_thumbCache[id]); } catch (_) {}
-      delete _thumbCache[id];
+    [_thumbCache, _filmstripCache].forEach(function (cache) {
+      Object.keys(cache).forEach(function (id) {
+        try { URL.revokeObjectURL(cache[id]); } catch (_) {}
+        delete cache[id];
+      });
     });
   });
 
@@ -456,8 +461,8 @@
         m.classList.add("filmstrip-thumb");
         if (hasSev) m.classList.add("filmstrip-sev-border");
       } else if (a.type === "clip") {
-        if (_thumbCache[a.id]) {
-          m.style.backgroundImage = "url(" + _thumbCache[a.id] + ")";
+        if (_filmstripCache[a.id]) {
+          m.style.backgroundImage = "url(" + _filmstripCache[a.id] + ")";
           m.classList.add("filmstrip-thumb");
           if (hasSev) m.classList.add("filmstrip-sev-border");
         } else {
@@ -564,10 +569,10 @@
           canvas.toBlob(function (blob) {
             if (!blob) { markerEl.classList.remove("filmstrip-loading"); finish(); return; }
             var url = URL.createObjectURL(blob);
-            if (_thumbCache[artifact.id]) {
-              try { URL.revokeObjectURL(_thumbCache[artifact.id]); } catch (_) {}
+            if (_filmstripCache[artifact.id]) {
+              try { URL.revokeObjectURL(_filmstripCache[artifact.id]); } catch (_) {}
             }
-            _thumbCache[artifact.id] = url;
+            _filmstripCache[artifact.id] = url;
             if (_filmstripEnabled && markerEl.classList.contains("filmstrip-loading")) {
               markerEl.style.backgroundImage = "url(" + url + ")";
               markerEl.classList.remove("filmstrip-loading");
@@ -598,9 +603,9 @@
   function processFilmstripThumbQueue() {
     while (_filmstripThumbActive < FILMSTRIP_CONCURRENCY && _filmstripThumbQueue.length) {
       var item = _filmstripThumbQueue.shift();
-      if (_thumbCache[item.artifact.id]) {
+      if (_filmstripCache[item.artifact.id]) {
         if (_filmstripEnabled && item.el.classList.contains("filmstrip-loading")) {
-          item.el.style.backgroundImage = "url(" + _thumbCache[item.artifact.id] + ")";
+          item.el.style.backgroundImage = "url(" + _filmstripCache[item.artifact.id] + ")";
           item.el.classList.remove("filmstrip-loading");
           item.el.classList.add("filmstrip-thumb");
         }
