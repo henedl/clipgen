@@ -1,6 +1,7 @@
 """Tests for Screenspace server API endpoints."""
 
 import os
+from collections import OrderedDict
 
 import numpy as np
 import pytest
@@ -20,23 +21,34 @@ def client(tmp_path, monkeypatch):
     app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
 
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    screenspace_server._manifest = {
-        "regions": {},
-        "tasks": [],
-        "events": [],
-        "stashes": [],
-        "per_participant": {},
-        "pins": {},
-    }
-    screenspace_server._participants = [
-        {"id": "P01", "video_paths": ["/tmp/test_P01.mp4"], "has_video": False},
-        {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
-    ]
-    screenspace_server._output_dir = str(tmp_path)
-    screenspace_server._worker = screenspace.ScreenspaceWorker()
-    # Module-level calibration/preview caches persist across tests; reset them.
-    screenspace_server._decoded_frame_cache.clear()
-    screenspace_server._pin_ocr_cache.clear()
+    # Seed module globals via monkeypatch so they auto-restore on teardown —
+    # otherwise a later test that reads these globals without the fixture would
+    # inherit this test's state (matters under random ordering).
+    monkeypatch.setattr(
+        screenspace_server,
+        "_manifest",
+        {
+            "regions": {},
+            "tasks": [],
+            "events": [],
+            "stashes": [],
+            "per_participant": {},
+            "pins": {},
+        },
+    )
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [
+            {"id": "P01", "video_paths": ["/tmp/test_P01.mp4"], "has_video": False},
+            {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
+        ],
+    )
+    monkeypatch.setattr(screenspace_server, "_output_dir", str(tmp_path))
+    monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
+    # Fresh module-level calibration/preview caches per test (auto-restored).
+    monkeypatch.setattr(screenspace_server, "_decoded_frame_cache", OrderedDict())
+    monkeypatch.setattr(screenspace_server, "_pin_ocr_cache", OrderedDict())
 
     monkeypatch.setattr(
         screenspace,
@@ -48,6 +60,9 @@ def client(tmp_path, monkeypatch):
 
     with app.test_client() as c:
         yield c
+    # Cancel any debounced manifest write armed during the test so a stray Timer
+    # doesn't fire _do_persist into torn-down state after the fixture exits.
+    screenspace_server._cancel_pending_persist_timer()
 
 
 @pytest.fixture
