@@ -37,10 +37,10 @@
   // ---- Screenspace Intake ----
 
   var INTAKE_DETECTOR_COLORS = DETECTOR_COLORS;
-  var INTAKE_DETECTORS = [
-    "multitool", "color", "change", "similarity", "text",
-    "numbers", "timelapse", "template", "flow", "scene", "inactivity",
-  ];
+  // Ordered detector list for the intake filter chips — copied from utils.js's
+  // canonical `_DETECTOR_TYPES` (includes `boundary`) so a new detector automatically
+  // gets a chip instead of being silently un-filterable.
+  var INTAKE_DETECTORS = _DETECTOR_TYPES.slice();
 
   function setTabDot(elId, on) {
     var el = document.getElementById(elId);
