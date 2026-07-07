@@ -810,6 +810,12 @@
     multitool: "Skips unchanged frames, widens interval"
   };
 
+  // A tool supports fast scan iff it has a fast-scan description. This is the
+  // single source of truth for the toggle's visibility and whether a submitted
+  // task carries scan_mode:"fast" — timelapse (media output) and boundary (runs
+  // its own coarse phash pass) are both absent above and so opt out.
+  function toolSupportsFastScan(type) { return !!FAST_SCAN_DESCRIPTIONS[type]; }
+
   var PARAM_DESCRIPTIONS = {
     _shared: {
       "Event label":      "Tag added to each detected event for filtering",
@@ -2859,18 +2865,21 @@
 
     if (type !== "timelapse") {
       addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
-      dfCb = document.createElement("input");
-      dfCb.type = "checkbox";
-      dfCb.id = "paramDetectFirst";
-      addParamRow(container, "Detect first", dfCb);
+      // Boundary marks period transitions, not discrete detections, so "Detect
+      // first" (stop after the first hit) doesn't apply — omit it.
+      if (type !== "boundary") {
+        var dfCb = document.createElement("input");
+        dfCb.type = "checkbox";
+        dfCb.id = "paramDetectFirst";
+        addParamRow(container, "Detect first", dfCb);
+      }
     }
 
     var scanPicker = qs("#runScanModePicker");
     // Timelapse produces media (no scan modes); boundary runs its own coarse
     // phash pass and opts out of fast scan, so hide the toggle for both.
     if (scanPicker) {
-      scanPicker.style.display =
-        type === "timelapse" || type === "boundary" ? "none" : "";
+      scanPicker.style.display = toolSupportsFastScan(type) ? "" : "none";
     }
     var scanBtn = scanPicker && scanPicker.querySelector(".scan-toggle-btn");
     if (scanBtn && scanBtn._updateScanState) scanBtn._updateScanState();
@@ -3043,7 +3052,7 @@
       if (participants.length === 0) return;
       var params = gatherWorkflowParams(type);
       if (params === null) return;
-      if (state.scanMode === "fast" && type !== "timelapse") params.scan_mode = "fast";
+      if (state.scanMode === "fast" && toolSupportsFastScan(type)) params.scan_mode = "fast";
 
       if (state.inMarker !== null) params.start_seconds = state.inMarker;
       if (state.outMarker !== null) params.end_seconds = state.outMarker;
