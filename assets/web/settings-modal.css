@@ -11,7 +11,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: var(--z-dropdown);
+  z-index: var(--z-modal);
   /* Backdrop blur + dark veil are animated via these custom props on the
    * overlay root; the ::before pseudo paints them. Mirrors start-overlay. */
   --host-blur: 0px;

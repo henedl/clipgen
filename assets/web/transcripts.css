@@ -128,36 +128,6 @@ body {
   opacity: 0.4;
 }
 
-#themeToggle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-alt);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
-  flex-shrink: 0;
-}
-
-#themeToggle:hover {
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
-}
-
-#themeToggle:active {
-  transform: scale(0.96);
-}
-
-#themeToggle:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
 /* Search bar */
 
 #headerSearch {
@@ -1416,7 +1386,7 @@ body {
   /* Floating-nav scroll-under: pinned to viewport, completing the
    * 148px chrome strip below the topnav (48) + subheader (44). */
   position: fixed;
-  top: 92px;
+  top: var(--chrome-height);
   left: 0;
   right: 0;
   z-index: calc(var(--z-dropdown) - 1);
@@ -1553,10 +1523,6 @@ body {
   border-color: color-mix(in srgb, var(--sev-critical) 45%, var(--color-border));
 }
 
-@keyframes pill-spin {
-  to { transform: rotate(360deg); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .pill-trigger--running .pill-trigger-icon--rest { animation: none; }
   .pill-progress { transition: none; }
@@ -1617,7 +1583,7 @@ body {
 .pill-trigger--idle { color: var(--color-text-dim); }
 
 .pill-trigger--running .pill-trigger-icon--rest {
-  animation: pill-spin 1.2s linear infinite;
+  animation: spin 1.2s linear infinite;
 }
 
 .pill-trigger--running:hover,

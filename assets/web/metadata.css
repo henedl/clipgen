@@ -5,7 +5,7 @@
   /* Inner blocks set their own var(--space-3) lateral padding to match
    * Convergence / Intake; no horizontal panel-level inset. The 92px top
    * inset comes from floating-nav scroll-under (TopNav + subheader fixed). */
-  padding: 92px 0 0;
+  padding: var(--chrome-height) 0 0;
 }
 
 /* ---- Header bar ---- */

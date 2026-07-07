@@ -70,36 +70,6 @@ body {
 
 /* Theme toggle (matches viewer.css) */
 
-#themeToggle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-alt);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
-  flex-shrink: 0;
-}
-
-#themeToggle:hover {
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
-}
-
-#themeToggle:active {
-  transform: scale(0.96);
-}
-
-#themeToggle:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
 #tooltipToggle {
   position: relative;
   width: 32px;
@@ -191,7 +161,7 @@ body {
 #trIntakePanel,
 #convergencePanel,
 #metadataPanel {
-  padding: 92px 0 var(--space-3);
+  padding: var(--chrome-height) 0 var(--space-3);
 }
 
 /* Sub-tab panels are flex children of #sheetMain. Without explicit
@@ -214,7 +184,7 @@ body {
   flex-direction: column;
   /* Floating-nav scroll-under: 92px top inset clears the fixed chrome strip
    * (TopNav + subheader). */
-  padding: calc(var(--space-3) + 92px) 0 var(--space-3);
+  padding: calc(var(--space-3) + var(--chrome-height)) 0 var(--space-3);
   background: var(--bg);
   border-right: 1px solid var(--hairline);
   overflow-x: hidden;
@@ -525,7 +495,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   flex: 1;
   overflow: hidden;
   /* Floating-nav scroll-under: 92px top inset clears the fixed chrome strip. */
-  padding: 92px var(--space-1) 0;
+  padding: var(--chrome-height) var(--space-1) 0;
   display: flex;
   flex-direction: column;
 }
@@ -632,7 +602,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
    * chrome's own `border-bottom` already supplies the separator, and the
    * extra 1 px shifted the thead's natural position past the sticky target,
    * creating a visible gap below chrome. */
-  padding-top: 92px;
+  padding-top: var(--chrome-height);
 }
 
 #sheetGrid table {
@@ -2401,86 +2371,42 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   animation: spin 0.7s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 /* ---- Dark mode ---- */
 
-/* OS preference — page-specific dark overrides (shared tokens in tokens.css) */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --color-cell-text: #1e3a5f;
-    --color-cell-valid: #1d4ed8;
-    --color-cell-selected: #334155;
-    --color-cell-hover: var(--color-accent-hover);
-    --color-heatmap: 192, 160, 235;
-  }
-}
-
-/* Manual toggle — page-specific dark overrides */
-html[data-theme="dark"] {
+/* Page-specific dark overrides (shared tokens live in tokens.css). Dark is the
+ * default theme, so a single selector that matches everything except an
+ * explicit light opt-in covers both system-dark and the manual toggle. */
+:root:not([data-theme="light"]) {
   --color-cell-text: #1e3a5f;
   --color-cell-valid: #1d4ed8;
   --color-cell-selected: #334155;
-  --color-heatmap: 192, 160, 235;
   --color-cell-hover: var(--color-accent-hover);
+  --color-heatmap: 192, 160, 235;
 }
 
-/* Dark element overrides (shared by both @media and data-theme via specificity) */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) #sheetGrid .col-participant.header-highlight,
-  :root:not([data-theme="light"]) #sheetGrid .col-row-num-clickable.header-highlight {
-    background-color: var(--color-accent-highlight);
-  }
-  :root:not([data-theme="light"]) .status-card,
-  :root:not([data-theme="light"]) .confirm-card {
-    background: var(--color-surface-alt);
-  }
-  :root:not([data-theme="light"]) .card-gen-overlay {
-    background: rgba(0, 0, 0, 0.45);
-  }
-  :root:not([data-theme="light"]) .queue-card-success {
-    border-color: #4ade80;
-    background: #052e16;
-  }
-  :root:not([data-theme="light"]) .queue-card-fail {
-    border-color: #f87171;
-    background: #451a1a;
-  }
-  :root:not([data-theme="light"]) .stash-card-name-input {
-    background: var(--color-surface-alt);
-  }
-  :root:not([data-theme="light"]) .settings-panel {
-    background: var(--color-surface-alt);
-  }
-}
-
-html[data-theme="dark"] #sheetGrid .col-participant.header-highlight,
-html[data-theme="dark"] #sheetGrid .col-row-num-clickable.header-highlight {
+:root:not([data-theme="light"]) #sheetGrid .col-participant.header-highlight,
+:root:not([data-theme="light"]) #sheetGrid .col-row-num-clickable.header-highlight {
   background-color: var(--color-accent-highlight);
 }
-
-html[data-theme="dark"] .status-card,
-html[data-theme="dark"] .confirm-card {
+:root:not([data-theme="light"]) .status-card,
+:root:not([data-theme="light"]) .confirm-card {
   background: var(--color-surface-alt);
 }
-
-html[data-theme="dark"] .card-gen-overlay {
+:root:not([data-theme="light"]) .card-gen-overlay {
   background: rgba(0, 0, 0, 0.45);
 }
-
-html[data-theme="dark"] .queue-card-success {
+:root:not([data-theme="light"]) .queue-card-success {
   border-color: #4ade80;
   background: #052e16;
 }
-
-html[data-theme="dark"] .queue-card-fail {
+:root:not([data-theme="light"]) .queue-card-fail {
   border-color: #f87171;
   background: #451a1a;
 }
-
-html[data-theme="dark"] .stash-card-name-input {
+:root:not([data-theme="light"]) .stash-card-name-input {
+  background: var(--color-surface-alt);
+}
+:root:not([data-theme="light"]) .settings-panel {
   background: var(--color-surface-alt);
 }
 
@@ -2493,7 +2419,7 @@ html[data-theme="dark"] .stash-card-name-input {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: var(--z-dropdown);
+  z-index: var(--z-modal);
 }
 
 #logOverlay.hidden {
