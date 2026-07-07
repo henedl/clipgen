@@ -101,8 +101,7 @@
   // ---- Nav links ----
 
   function checkNavLinks() {
-    // TODO: skips r.ok; silent on HTTP errors.
-    fetch("../api/status").then(function (r) { return r.json(); }).then(function (data) {
+    apiGet("../api/status").then(function (data) {
       if (data.screenspace || data.studio) {
         state.xrefEligible = true;
         startXrefPolling();
@@ -2140,8 +2139,7 @@
   function _trFetchModels() {
     if (_trModelsCache) return Promise.resolve(_trModelsCache);
     if (_trModelsCachePromise) return _trModelsCachePromise;
-    _trModelsCachePromise = fetch("/api/models")
-      .then(function (r) { return r.json(); })
+    _trModelsCachePromise = apiGet("/api/models")
       .then(function (data) {
         // Don't pin a result where Ollama wasn't reachable — otherwise the
         // agent gate and pickers stay blind to installed models for the whole

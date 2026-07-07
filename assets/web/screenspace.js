@@ -3679,8 +3679,7 @@
   }
 
   function fetchScreenspaceSettings() {
-    fetch("/api/settings")
-      .then(function (r) { return r.json(); })
+    apiGet("/api/settings")
       .then(function (data) {
         if (!data || !data.ok || !data.settings) return;
         applyScreenspaceSettingsSnapshot(null, data.settings);

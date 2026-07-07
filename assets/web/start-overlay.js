@@ -106,7 +106,10 @@
     var slot = document.querySelector("start-overlay-mount");
     if (!slot) return Promise.resolve();
     return fetch("start-overlay.html")
-      .then(function (r) { return r.text(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Server error " + r.status);
+        return r.text();
+      })
       .then(function (html) {
         var wrap = document.createElement("div");
         wrap.innerHTML = html;

@@ -57,8 +57,7 @@
   function _fetchModels() {
     if (_modelsCache) return Promise.resolve(_modelsCache);
     if (_modelsCachePromise) return _modelsCachePromise;
-    _modelsCachePromise = fetch(_getApiRoot() + "/models")
-      .then(function (r) { return r.json(); })
+    _modelsCachePromise = apiGet(_getApiRoot() + "/models")
       .then(function (data) {
         // Only pin a result that actually discovered Ollama. If the server
         // wasn't reachable yet, don't cache the empty list for the session —
@@ -225,8 +224,7 @@
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
     _cardsCache = null;
     _cardsCachePromise = null;
-    fetch(_getApiRoot() + "/settings")
-      .then(function (r) { return r.json(); })
+    apiGet(_getApiRoot() + "/settings")
       .then(function (data) {
         if (!data.ok) {
           _panelsEl.textContent = "Failed to load settings.";
@@ -271,16 +269,24 @@
     }
     if (_statusEl) _statusEl.textContent = "Saving\u2026";
 
+    // Manual fetch (not apiPut) so a server-supplied data.error on a non-2xx
+    // response still reaches the status line; capture r.ok alongside the body.
     fetch(_getApiRoot() + "/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ settings: payload }),
     })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (!data.ok) {
+      .then(function (r) {
+        return r.json().then(
+          function (j) { return { ok: r.ok, body: j }; },
+          function () { return { ok: r.ok, body: null }; }
+        );
+      })
+      .then(function (res) {
+        var data = res.body;
+        if (!res.ok || !data || !data.ok) {
           if (_statusEl) {
-            _statusEl.textContent = data.error ? "Save failed: " + data.error : "Save failed";
+            _statusEl.textContent = data && data.error ? "Save failed: " + data.error : "Save failed";
           }
           return;
         }
@@ -307,12 +313,7 @@
   }
 
   function _resetTab(tabName) {
-    fetch(_getApiRoot() + "/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reset: "tab:" + tabName }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPut(_getApiRoot() + "/settings", { reset: "tab:" + tabName })
       .then(function (data) {
         if (!data.ok) {
           if (_statusEl) _statusEl.textContent = "Reset failed";
@@ -330,12 +331,7 @@
   }
 
   function _resetAll() {
-    fetch(_getApiRoot() + "/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reset: "all" }),
-    })
-      .then(function (r) { return r.json(); })
+    apiPut(_getApiRoot() + "/settings", { reset: "all" })
       .then(function (data) {
         if (!data.ok) {
           if (_statusEl) _statusEl.textContent = "Reset failed";
@@ -353,8 +349,7 @@
   }
 
   function _reloadAfterReset(scope) {
-    fetch(_getApiRoot() + "/settings")
-      .then(function (r) { return r.json(); })
+    apiGet(_getApiRoot() + "/settings")
       .then(function (data) {
         if (!data.ok) return;
         _settings = data.settings;
@@ -658,8 +653,7 @@
     }
     if (_cardsCache) return Promise.resolve(_cardsCache);
     if (_cardsCachePromise) return _cardsCachePromise;
-    _cardsCachePromise = fetch(_getApiRoot() + "/titlecards")
-      .then(function (r) { return r.json(); })
+    _cardsCachePromise = apiGet(_getApiRoot() + "/titlecards")
       .then(function (data) {
         _cardsCachePromise = null;
         if (data && data.ok) _cardsCache = data;
@@ -834,10 +828,18 @@
     if (_statusEl) _statusEl.textContent = "Uploading…";
     var form = new FormData();
     form.append("file", file);
+    // Manual fetch (not apiPost) — it is a FormData upload and a server-supplied
+    // data.error on a non-2xx still surfaces; capture r.ok alongside the body.
     fetch(_getApiRoot() + "/titlecards/upload", { method: "POST", body: form })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (!data || !data.ok) {
+      .then(function (r) {
+        return r.json().then(
+          function (j) { return { ok: r.ok, body: j }; },
+          function () { return { ok: r.ok, body: null }; }
+        );
+      })
+      .then(function (res) {
+        var data = res.body;
+        if (!res.ok || !data || !data.ok) {
           if (_statusEl) {
             _statusEl.textContent = data && data.error ? data.error : "Upload failed";
           }
@@ -860,12 +862,20 @@
 
   function _deleteCard(name) {
     if (_statusEl) _statusEl.textContent = "Deleting…";
+    // Manual fetch (not apiDelete) so a server-supplied data.error on a non-2xx
+    // still surfaces in the status line; capture r.ok alongside the body.
     fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
       method: "DELETE",
     })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (!data || !data.ok) {
+      .then(function (r) {
+        return r.json().then(
+          function (j) { return { ok: r.ok, body: j }; },
+          function () { return { ok: r.ok, body: null }; }
+        );
+      })
+      .then(function (res) {
+        var data = res.body;
+        if (!res.ok || !data || !data.ok) {
           if (_statusEl) {
             _statusEl.textContent = data && data.error ? data.error : "Delete failed";
           }
