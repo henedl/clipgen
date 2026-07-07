@@ -482,6 +482,24 @@ def _probe_video_meta(video_path: str) -> tuple[float, float]:
     return (0.0, 0.0)
 
 
+def _resolve_scan_window(
+    video_path: str, start_seconds: float, end_seconds: float | None
+) -> tuple[float, float, float, float] | None:
+    """Probe fps/duration and clamp the scan window.
+
+    Returns ``(vid_fps, vid_duration, end_seconds, total_range)`` or ``None`` when
+    the video is unreadable (fps <= 0), so callers early-return ``[]``. Owns the
+    probe/clamp prologue shared by every scan workflow in screenspace_scans.
+    """
+    vid_fps, vid_duration = _probe_video_meta(video_path)
+    if vid_fps <= 0:
+        return None
+    if end_seconds is None or end_seconds > vid_duration:
+        end_seconds = vid_duration
+    total_range = end_seconds - start_seconds
+    return vid_fps, vid_duration, end_seconds, total_range
+
+
 # ---------------------------------------------------------------------------
 # Analysis workflows
 # ---------------------------------------------------------------------------
