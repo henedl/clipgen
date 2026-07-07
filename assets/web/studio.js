@@ -4353,10 +4353,8 @@
   // Same-named guarded wrappers so bare hub call sites stay unchanged; the real
   // implementations live in studio-intake.js, published onto window.ClipgenStudio.
   function initIntake() { return STUDIO.initIntake && STUDIO.initIntake.apply(null, arguments); }
-  function pollIntakeStatus() { return STUDIO.pollIntakeStatus && STUDIO.pollIntakeStatus.apply(null, arguments); }
-  function pollTrIntakeStatus() { return STUDIO.pollTrIntakeStatus && STUDIO.pollTrIntakeStatus.apply(null, arguments); }
-  function pollIntakeEvents() { return STUDIO.pollIntakeEvents && STUDIO.pollIntakeEvents.apply(null, arguments); }
-  function pollTranscriptIntakeMarks() { return STUDIO.pollTranscriptIntakeMarks && STUDIO.pollTranscriptIntakeMarks.apply(null, arguments); }
+  function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
+  function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
   function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
@@ -4458,14 +4456,16 @@
     initFrontendSwitcher();
     initTopNavActions();
     initIntake();
-    // Live counter polls — intake-status / tr-intake-status (5s) keep the
-    // start-overlay's status pill fresh; intake-events / tr-intake-marks
-    // (10s) keep the sub-tab counter badges live regardless of which
-    // sub-tab is currently visible. createPoller handles visibility-pause.
-    createPoller(pollIntakeStatus, 5000).start();
-    createPoller(pollTrIntakeStatus, 5000).start();
-    createPoller(pollIntakeEvents, 10000).start();
-    createPoller(pollTranscriptIntakeMarks, 10000).start();
+    // Live counter polls — two combined per-domain endpoints, each carrying its
+    // status dot + curation payload, keep the start-overlay pills and sub-tab
+    // badges fresh regardless of which sub-tab is visible. createPoller handles
+    // visibility-pause and (via maxIntervalMs) idle backoff: 5s while work is
+    // active/changing, easing to 30s when everything is quiet. Handles live on
+    // `state` so on-demand user actions can wake() them back to the fast cadence.
+    state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000 });
+    state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000 });
+    state.ssIntakePoller.start();
+    state.trIntakePoller.start();
     // One-shot job-status fetch on page load picks up any reel/generate
     // build that's still running in the background after the user navigated
     // away to a sibling frontend and back. The poll's own success handler

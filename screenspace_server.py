@@ -2203,23 +2203,49 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
 # ---- Events CRUD ----
 
 
-@screenspace_bp.route("/api/events")
-def api_events_list() -> FlaskResponse:
-    """List events with optional filtering."""
+def _filtered_events(args: Any) -> list[dict[str, Any]]:
+    """Deep-copy manifest events and apply the standard excluded/participant/
+    task_id query filters. Shared by /api/events and /api/intake-poll."""
     with _manifest_lock:
         events = copy.deepcopy(_manifest.get("events", []))
-    excluded_filter = request.args.get("excluded")
+    excluded_filter = args.get("excluded")
     if excluded_filter == "false":
         events = [e for e in events if not e.get("excluded")]
     elif excluded_filter == "true":
         events = [e for e in events if e.get("excluded")]
-    participant = request.args.get("participant")
+    participant = args.get("participant")
     if participant:
         events = [e for e in events if e.get("participant") == participant]
-    task_id = request.args.get("task_id")
+    task_id = args.get("task_id")
     if task_id:
         events = [e for e in events if e.get("task_id") == task_id]
-    return ok(events=utils.sanitize_floats(events))
+    return events
+
+
+@screenspace_bp.route("/api/events")
+def api_events_list() -> FlaskResponse:
+    """List events with optional filtering."""
+    return ok(events=utils.sanitize_floats(_filtered_events(request.args)))
+
+
+@screenspace_bp.route("/api/intake-poll")
+def api_intake_poll() -> FlaskResponse:
+    """Combined Studio-intake poll: task-status booleans + filtered events.
+
+    Collapses the Studio intake client's separate /api/tasks and /api/events
+    polls into a single request. Both reads are the same slim, in-memory ones
+    those routes do (no results, no disk I/O)."""
+    tasks = [
+        _clean_task(t)
+        for t in (_worker.get_all_tasks(include_results=False) if _worker else [])
+    ]
+    running = any(t.get("status") == "running" for t in tasks)
+    queued = any(t.get("status") == "queued" for t in tasks)
+    alive = _worker.is_alive if _worker else False
+    return ok(
+        status={"running": running, "worker_alive": alive, "queued": queued},
+        events=utils.sanitize_floats(_filtered_events(request.args)),
+    )
 
 
 @screenspace_bp.route("/api/export/events")

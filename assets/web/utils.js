@@ -877,36 +877,111 @@ var POLL_INTERVAL = 3000;
 //                                     catch up.
 //   runImmediately  (default true)  — run fn() once on start (and again on
 //                                     resume) before the next interval tick.
+//   maxIntervalMs   (default = intervalMs) — enable idle backoff. When set
+//                                     above intervalMs the loop self-reschedules
+//                                     with setTimeout instead of setInterval:
+//                                     fn's resolved value is an "active this
+//                                     tick" signal — truthy resets to the base
+//                                     interval, falsy backs the delay off toward
+//                                     maxIntervalMs after backoffAfter quiet
+//                                     ticks (e.g. 5s → 10 → 20 → 30, capped).
+//   backoffAfter    (default 3)     — consecutive quiet ticks before backing off.
+//
+// In backoff mode fn may return a value or a Promise; the loop waits for it
+// before scheduling the next tick (so slow polls never overlap). The returned
+// object also gains wake(): snap back to the base cadence and refresh now —
+// call it after a user action so polling both refreshes and speeds back up.
 //
 // fn exceptions are swallowed so a transient error does not kill the loop.
 var createPoller = function (fn, intervalMs, opts) {
   opts = opts || {};
   var pauseWhenHidden = opts.pauseWhenHidden !== false;
   var runImmediately = opts.runImmediately !== false;
+  var maxIntervalMs = opts.maxIntervalMs != null ? opts.maxIntervalMs : intervalMs;
+  var backoffAfter = opts.backoffAfter != null ? opts.backoffAfter : 3;
+  var adaptive = maxIntervalMs > intervalMs;
   var timer = null;
   var visListener = null;
   var wantRunning = false;
+  var currentDelay = intervalMs;
+  var quiet = 0;
+  var inFlight = false;
+  var pendingWake = false;
 
   function safeFn() {
     try { fn(); } catch (_) {}
   }
+  function hidden() {
+    return pauseWhenHidden && typeof document !== "undefined" && document.hidden;
+  }
+  // --- backoff (self-rescheduling) path ---
+  function applySignal(active) {
+    if (active) {
+      quiet = 0;
+      currentDelay = intervalMs;
+    } else {
+      quiet += 1;
+      if (quiet >= backoffAfter && currentDelay < maxIntervalMs) {
+        currentDelay = Math.min(currentDelay * 2, maxIntervalMs);
+      }
+    }
+  }
+  function schedule() {
+    timer = setTimeout(runAdaptive, currentDelay);
+  }
+  function runAdaptive() {
+    timer = null;
+    inFlight = true;
+    var result;
+    try { result = fn(); } catch (_) { result = false; }
+    Promise.resolve(result).then(
+      function (active) { applySignal(!!active); },
+      function () { applySignal(false); }
+    ).then(function () {
+      inFlight = false;
+      if (!wantRunning || hidden()) { pendingWake = false; return; }
+      // A wake() landed mid-flight: that response may predate the user's
+      // mutation, so run one fresh poll now instead of waiting a full tick.
+      if (pendingWake) {
+        pendingWake = false;
+        currentDelay = intervalMs;
+        quiet = 0;
+        runAdaptive();
+        return;
+      }
+      schedule();
+    });
+  }
   function arm() {
-    if (timer != null) return;
-    if (pauseWhenHidden && document.hidden) return;
-    if (runImmediately) safeFn();
-    timer = setInterval(safeFn, intervalMs);
+    if (timer != null || inFlight) return;
+    if (hidden()) return;
+    if (adaptive) {
+      if (runImmediately) runAdaptive(); else schedule();
+    } else {
+      if (runImmediately) safeFn();
+      timer = setInterval(safeFn, intervalMs);
+    }
   }
   function disarm() {
-    if (timer != null) { clearInterval(timer); timer = null; }
+    if (timer != null) {
+      if (adaptive) clearTimeout(timer); else clearInterval(timer);
+      timer = null;
+    }
   }
   function onVisibility() {
     if (!wantRunning) return;
-    if (document.hidden) disarm(); else arm();
+    if (document.hidden) {
+      disarm();
+    } else {
+      if (adaptive) { currentDelay = intervalMs; quiet = 0; }
+      arm();
+    }
   }
   return {
     start: function () {
       if (wantRunning) return;
       wantRunning = true;
+      if (adaptive) { currentDelay = intervalMs; quiet = 0; }
       arm();
       if (pauseWhenHidden && !visListener) {
         visListener = onVisibility;
@@ -919,6 +994,22 @@ var createPoller = function (fn, intervalMs, opts) {
       if (visListener) {
         document.removeEventListener("visibilitychange", visListener);
         visListener = null;
+      }
+    },
+    wake: function () {
+      if (!wantRunning || hidden()) return;
+      if (adaptive) {
+        currentDelay = intervalMs;
+        quiet = 0;
+        // A poll is already running but may predate this action's server-side
+        // effect — queue one fresh poll for when it completes.
+        if (inFlight) { pendingWake = true; return; }
+        disarm();
+        runAdaptive();
+      } else {
+        disarm();
+        safeFn();
+        timer = setInterval(safeFn, intervalMs);
       }
     },
   };

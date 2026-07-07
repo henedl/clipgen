@@ -1883,6 +1883,25 @@ def test_events_filter_by_task_id(client):
     assert data["events"][0]["task_id"] == "ss_a"
 
 
+def test_intake_poll_combines_status_and_events(client):
+    """/api/intake-poll returns task-status booleans + the same filtered events
+    slice the Studio intake client used to fetch from /api/tasks + /api/events."""
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    resp = client.get("/screenspace/api/intake-poll?excluded=false")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    # No queued/running tasks in a fresh worker.
+    assert data["status"]["running"] is False
+    assert data["status"]["queued"] is False
+    assert isinstance(data["status"]["worker_alive"], bool)
+    # excluded=false drops ev_2, same as /api/events.
+    assert [e["id"] for e in data["events"]] == ["ev_1"]
+
+
 def test_event_exclude(client):
     screenspace_server._manifest["events"] = [_sample_event("ev_1")]
     resp = client.put("/screenspace/api/events/ev_1/exclude")
