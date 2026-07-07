@@ -870,14 +870,11 @@ def _is_excel_spreadsheet_arg(spreadsheet_arg: str | None) -> bool:
     return raw == config.COMMAND_EXCEL or raw.endswith(".xlsx")
 
 
-def select_worksheet(
-    gspread_client: Any, doc_list: list[str], args: Any, cli_mode: bool
-) -> Any:
+def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
     """Select worksheet based on command-line arguments or interactive selection.
 
     Args:
         gspread_client: Google client connection
-        doc_list: List of available spreadsheet names
         args: Parsed command-line arguments
         cli_mode: Whether running in CLI mode
 
@@ -885,6 +882,16 @@ def select_worksheet(
         Worksheet object
     """
     import excel_io
+    import google_api
+
+    _doc_list_cache: list[list[str]] = []
+
+    def get_doc_list() -> list[str]:
+        # Fetch the (rate-limited) Drive listing at most once, and only when a
+        # code path actually needs it. URL / Excel opens skip it entirely.
+        if not _doc_list_cache:
+            _doc_list_cache.append(google_api.get_all_spreadsheets(gspread_client))
+        return _doc_list_cache[0]
 
     worksheet = None
     if args.spreadsheet:
@@ -924,11 +931,11 @@ def select_worksheet(
             )
         elif args.spreadsheet.isdigit():
             worksheet = clipgen.open_spreadsheet_by_index(
-                gspread_client, doc_list, int(args.spreadsheet)
+                gspread_client, get_doc_list(), int(args.spreadsheet)
             )
         else:
             worksheet = clipgen.open_spreadsheet_by_name(
-                gspread_client, doc_list, args.spreadsheet
+                gspread_client, get_doc_list(), args.spreadsheet
             )
 
         if not worksheet:
@@ -941,7 +948,7 @@ def select_worksheet(
         cwd_name = Path.cwd().name
         worksheet = clipgen.open_spreadsheet_by_name(
             gspread_client,
-            doc_list,
+            get_doc_list(),
             cwd_name,
             prompt_prefix=(
                 "Tried matching current working directory to existing spreadsheets, "
@@ -960,7 +967,7 @@ def select_worksheet(
             )
             sys.exit(1)
         else:
-            worksheet = clipgen.select_spreadsheet(gspread_client, doc_list)
+            worksheet = clipgen.select_spreadsheet(gspread_client, get_doc_list())
 
     if worksheet and config.DEBUGGING:
         config.debug_ic(worksheet.title)
@@ -3521,12 +3528,11 @@ def main() -> None:
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
         sys.exit(0)
 
-    # Authenticate with Google (once per run) – skip for local Excel files
+    # Authenticate with Google (once per run) – skip for local Excel files.
+    # The Drive listing (get_all_spreadsheets) is deferred to select_worksheet
+    # and fetched lazily only on paths that need it (URL opens skip it).
     gspread_client = None
-    doc_list: list[str] = []
     if not _is_excel_spreadsheet_arg(getattr(args, "spreadsheet", None)):
-        import google_api
-
         gspread_client = authenticate_google()
         if gspread_client is None:
             # Auth failed. CLI mode or an explicit -s argument can't recover
@@ -3541,8 +3547,6 @@ def main() -> None:
                 sys.exit(1)
             # Interactive mode: fall through with gspread_client=None; the
             # while loop below will prompt for an Excel file instead.
-        else:
-            doc_list = google_api.get_all_spreadsheets(gspread_client)
 
     # Outer loop so 'top' can return to spreadsheet selection
     while True:
@@ -3555,7 +3559,7 @@ def main() -> None:
                     sys.exit(0)
                 utils.standard_print("Using local Excel file.")
             else:
-                worksheet = select_worksheet(gspread_client, doc_list, args, cli_mode)
+                worksheet = select_worksheet(gspread_client, args, cli_mode)
 
             if getattr(args, "studio", False):
                 import server
