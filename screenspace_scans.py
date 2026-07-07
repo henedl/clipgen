@@ -957,16 +957,12 @@ def scan_scene(
         if cancel_flag and cancel_flag():
             return False
 
-        # Static-frame skip (same pattern as similarity scan)
-        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        if prev_skip_gray[0] is not None:
-            if (
-                abs(float(np.mean(curr_gray)) - float(np.mean(prev_skip_gray[0])))
-                < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
-            ):
-                if on_progress and total_range > 0:
-                    on_progress((ts - start_seconds) / total_range)
-                return None
+        # Static-frame skip
+        curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
+        if _frame_is_static(prev_skip_gray[0], curr_gray):
+            if on_progress and total_range > 0:
+                on_progress((ts - start_seconds) / total_range)
+            return None
         prev_skip_gray[0] = curr_gray
 
         fp = compute_scene_fingerprint(pixels)
