@@ -1152,6 +1152,7 @@ def _clean_timestamp_token(token: str) -> str:
     return token.strip().rstrip(",").rstrip("-").replace(".", ":")
 
 
+@functools.cache
 def get_ignored_timestamp_tokens() -> set[str]:
     """Return configured ignored non-timestamp tokens in normalized form."""
     configured_tokens = getattr(config, "IGNORED_TIMESTAMP_TOKENS", set())

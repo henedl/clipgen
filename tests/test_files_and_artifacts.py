@@ -62,6 +62,20 @@ def test_get_unique_filename_truncates_long_names(monkeypatch, tmp_path):
     assert result2 != result1
 
 
+def test_get_unique_filename_sequential_same_name_batch(monkeypatch, tmp_path):
+    """A batch of same-named reservations yields name, name-1, name-2, … with no
+    duplicates — and the per-template high-water counter keeps it O(n)."""
+    monkeypatch.setattr(files.config, "OUTPUT_DIR", str(tmp_path), raising=False)
+
+    results = [files.get_unique_filename("clip.mp4") for _ in range(5)]
+    names = [Path(p).name for p in results]
+
+    assert names == ["clip.mp4", "clip-1.mp4", "clip-2.mp4", "clip-3.mp4", "clip-4.mp4"]
+    assert len(set(results)) == len(results)
+    for path in results:
+        assert Path(path).is_file()  # each reserved as a placeholder
+
+
 def test_get_unique_filename_reserves_distinct_paths_under_threads(
     monkeypatch, tmp_path
 ):

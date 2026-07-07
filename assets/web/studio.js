@@ -2887,11 +2887,15 @@
       img.draggable = false;
       img.style.zIndex = String(picks.length - idx);
       img.style.transform = "translate(" + (idx * 2) + "px, " + (-idx * 2) + "px)";
-      img.src = ssThumbUrl(item.participant, item.start);
-      img.addEventListener("error", function () {
+      // Append before enqueuing: ssEnqueueThumbCustom runs synchronously into
+      // ssProcessQueue, which skips (and the error path no-ops on) any img that
+      // isn't in the DOM yet. Route through the throttled/cached thumb queue
+      // instead of loading all 3×N frames eagerly; drop the img on failure
+      // (hue-tinted backing shows). picks[] guarantees participant/start (see key).
+      icon.appendChild(img);
+      ssEnqueueThumbCustom(img, item.participant, item.start, function () {
         if (img.parentNode) img.parentNode.removeChild(img);
       });
-      icon.appendChild(img);
     });
 
     return icon;
@@ -4291,11 +4295,13 @@
           })
           .catch(function () {
             _ssThumbCache[entry.url] = "error";
-            if (entry.img.parentNode) {
-              entry.img.remove();
-              entry.thumbEl.appendChild(el("span", "", "\u2715"));
-              entry.cardEl.classList.add("queue-card-error");
-            }
+            if (!entry.img.parentNode) return;
+            // Entries may carry a custom error handler (e.g. the stash-folder
+            // icon just drops the img); otherwise fall back to the queue-card UI.
+            if (entry.onError) { entry.onError(entry); return; }
+            entry.img.remove();
+            entry.thumbEl.appendChild(el("span", "", "\u2715"));
+            entry.cardEl.classList.add("queue-card-error");
           })
           .then(function () {
             _ssThumbActive--;
@@ -4316,6 +4322,19 @@
       return;
     }
     _ssThumbQueue.push({ img: img, cardEl: cardEl, thumbEl: thumbEl, url: url });
+    ssProcessQueue();
+  }
+
+  // Enqueue a thumbnail with a custom error handler, for surfaces where the
+  // default .queue-card error UI (✕ badge + error class) doesn't apply — e.g.
+  // the stacked stash-folder icon, which just removes the failed img. Shares
+  // the same throttle (_SS_THUMB_MAX) and object-URL cache as ssEnqueueThumb.
+  function ssEnqueueThumbCustom(img, participant, timestamp, onError) {
+    var url = ssThumbUrl(participant, timestamp);
+    var cached = _ssThumbCache[url];
+    if (cached && cached !== "error") { img.src = cached; return; }
+    if (cached === "error") { if (onError) onError({ img: img }); return; }
+    _ssThumbQueue.push({ img: img, url: url, onError: onError });
     ssProcessQueue();
   }
 

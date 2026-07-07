@@ -16,12 +16,19 @@ def test_parse_timestamps_parses_multiple_separators_and_ignored_tokens(monkeypa
         {"x"},
         raising=False,
     )
-    value = "00:10-00:20, 00:30; 00:40 + x"
-    parsed = utils.parse_timestamps(value)
-    assert len(parsed) == 3
-    assert parsed[0] == ("00:10", "00:20")
-    assert parsed[1][0] == "00:30"
-    assert parsed[2][0] == "00:40"
+    # get_ignored_timestamp_tokens() is @functools.cache; clear it so the
+    # monkeypatched config value is read, and clear again at the end so the
+    # cached set can't leak to later tests.
+    utils.get_ignored_timestamp_tokens.cache_clear()
+    try:
+        value = "00:10-00:20, 00:30; 00:40 + x"
+        parsed = utils.parse_timestamps(value)
+        assert len(parsed) == 3
+        assert parsed[0] == ("00:10", "00:20")
+        assert parsed[1][0] == "00:30"
+        assert parsed[2][0] == "00:40"
+    finally:
+        utils.get_ignored_timestamp_tokens.cache_clear()
 
 
 def test_timestamp_to_seconds_valid_and_invalid():
