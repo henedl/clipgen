@@ -1232,6 +1232,68 @@ def _save_artifact_stashes(stashes: list[dict[str, Any]]) -> Path | None:
     return utils.save_json_manifest(config.ARTIFACT_STASHES_MANIFEST_FILENAME, stashes)
 
 
+def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None]:
+    """Coerce/validate one studio setting against its STUDIO_SETTINGS meta.
+
+    The single source of truth for the settings type ladder, shared by the load
+    path (_load_studio_settings) and the PUT path (_apply_settings_payload) so a
+    new setting type is added once, not twice. Returns (ok, coerced, error):
+
+      - ok=True                     -> ``coerced`` is the value to setattr on config.
+      - ok=False, error is not None -> hard validation failure (bad mark_categories /
+                                       card_picker / prompt / color). The PUT path surfaces
+                                       ``error``; the load path skips the key (keeps the
+                                       default), so a stale/tampered studio_settings.json can
+                                       never apply a value the PUT path would reject.
+      - ok=False, error is None     -> soft coercion failure (bad int/float cast). Both skip.
+
+    Callers must have already confirmed ``name in config.STUDIO_SETTINGS``.
+    """
+    meta = config.STUDIO_SETTINGS[name]
+    default = _settings_defaults.get(name)
+    stype = meta.get("type")
+
+    if stype == "mark_categories":
+        cleaned = _coerce_mark_categories(value)
+        if cleaned is None:
+            return False, None, f"Invalid {name} payload"
+        return True, cleaned, None
+    if stype == "card_picker":
+        cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
+        if cleaned is None:
+            return False, None, f"Invalid {name} payload"
+        return True, cleaned, None
+    if stype == "prompt":
+        text = str(value)
+        err = _validate_prompt(text, meta.get("placeholders") or [])
+        if err is not None:
+            return False, None, f"Invalid {name}: {err}"
+        return True, text, None
+    if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
+        color = str(value)
+        if not _HEX_COLOR_RE.match(color):
+            return False, None, f"Invalid {name}: expected a #rrggbb hex color"
+        return True, color, None
+
+    expected_type = type(default) if default is not None else str
+    try:
+        if expected_type is bool:
+            coerced: Any = (
+                value
+                if isinstance(value, bool)
+                else str(value).lower() in ("true", "1", "yes", "on")
+            )
+        elif expected_type is int:
+            coerced = int(value)
+        elif expected_type is float:
+            coerced = float(value)
+        else:
+            coerced = str(value)
+    except (ValueError, TypeError):
+        return False, None, None  # soft skip in both paths
+    return True, coerced, None
+
+
 def _load_studio_settings() -> dict[str, Any]:
     """Load studio_settings.json and apply non-default values to config module."""
     data = utils.load_json_manifest(config.STUDIO_SETTINGS_FILENAME, default={})
@@ -1240,47 +1302,8 @@ def _load_studio_settings() -> dict[str, Any]:
     for name, value in data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
-        meta = config.STUDIO_SETTINGS[name]
-        default = _settings_defaults.get(name)
-        if meta.get("type") == "mark_categories":
-            cleaned = _coerce_mark_categories(value)
-            if cleaned is None:
-                continue
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if meta.get("type") == "card_picker":
-            # Validate persisted selections too, so a stale studio_settings.json
-            # (traversal, a deleted upload, or __none__ on a titlecard) doesn't
-            # apply a value the PUT path would reject; leave config at its default.
-            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
-            if cleaned is None:
-                continue
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
-            color = str(value)
-            if not _HEX_COLOR_RE.match(color):
-                continue  # ignore a tampered/invalid value, keep the default
-            setattr(config, name, color)
-            applied[name] = color
-            continue
-        expected_type = type(default) if default is not None else str
-        try:
-            if expected_type is bool:
-                coerced = (
-                    value
-                    if isinstance(value, bool)
-                    else str(value).lower() in ("true", "1", "yes", "on")
-                )
-            elif expected_type is int:
-                coerced = int(value)
-            elif expected_type is float:
-                coerced = float(value)
-            else:
-                coerced = str(value)
-        except (ValueError, TypeError):
+        ok, coerced, _ = _coerce_studio_setting(name, value)
+        if not ok:
             continue
         setattr(config, name, coerced)
         applied[name] = coerced
@@ -2392,56 +2415,14 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
                 "(requires libfreetype). Install an ffmpeg build with libfreetype to enable titlecards."
             )
 
-    applied = {}
+    applied: dict[str, Any] = {}
     for name, value in settings_data.items():
         if name not in config.STUDIO_SETTINGS:
             continue
-        meta = config.STUDIO_SETTINGS[name]
-        default = _settings_defaults.get(name)
-        if meta.get("type") == "mark_categories":
-            cleaned = _coerce_mark_categories(value)
-            if cleaned is None:
-                return {}, f"Invalid {name} payload"
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if meta.get("type") == "card_picker":
-            cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
-            if cleaned is None:
-                return {}, f"Invalid {name} payload"
-            setattr(config, name, cleaned)
-            applied[name] = cleaned
-            continue
-        if meta.get("type") == "prompt":
-            text = str(value)
-            err = _validate_prompt(text, meta.get("placeholders") or [])
-            if err is not None:
-                return {}, f"Invalid {name}: {err}"
-            setattr(config, name, text)
-            applied[name] = text
-            continue
-        if name in ("TITLECARD_COLOR", "ENDCARD_COLOR"):
-            color = str(value)
-            if not _HEX_COLOR_RE.match(color):
-                return {}, f"Invalid {name}: expected a #rrggbb hex color"
-            setattr(config, name, color)
-            applied[name] = color
-            continue
-        expected_type = type(default) if default is not None else str
-        try:
-            if expected_type is bool:
-                coerced: Any = (
-                    value
-                    if isinstance(value, bool)
-                    else str(value).lower() in ("true", "1", "yes", "on")
-                )
-            elif expected_type is int:
-                coerced = int(value)
-            elif expected_type is float:
-                coerced = float(value)
-            else:
-                coerced = str(value)
-        except (ValueError, TypeError):
+        ok, coerced, error = _coerce_studio_setting(name, value)
+        if not ok:
+            if error is not None:
+                return {}, error
             continue
         setattr(config, name, coerced)
         applied[name] = coerced
