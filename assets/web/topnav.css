@@ -13,7 +13,7 @@
 .topnav {
   display: flex;
   align-items: center;
-  height: 48px;
+  height: var(--topnav-height);
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--bg) 72%, transparent);
@@ -185,6 +185,7 @@ body.dragging .topnav {
  * Page-level #themeToggle rules are scoped narrowly enough not to fight us.
  * (Standalone gallery/viewer don't load topnav.css and keep their own copies.) */
 .topnav-right #themeToggle {
+  position: relative;
   width: 30px;
   height: 30px;
   padding: 0;
@@ -196,11 +197,19 @@ body.dragging .topnav {
   border-radius: 5px;
   color: var(--fg-muted);
   cursor: pointer;
+  flex-shrink: 0;
   transition: background-color var(--duration-fast), color var(--duration-fast);
 }
 .topnav-right #themeToggle:hover {
   background: var(--bg-hover);
   color: var(--fg);
+}
+.topnav-right #themeToggle:active {
+  transform: scale(0.96);
+}
+.topnav-right #themeToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* Sun/moon icon visuals — shared by every TopNav page (consolidated from the
