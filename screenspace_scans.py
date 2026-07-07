@@ -40,7 +40,6 @@ from screenspace_ocr import (
     _OCR_NUMBER_ALLOWLIST,
     _VALID_OPERATORS,
     _effective_ocr_confidence_threshold,
-    _get_ocr_reader,
     _normalize_ocr_text,
     _ocr_readtext,
     _number_matches,
@@ -376,8 +375,6 @@ def scan_text(
     if languages is None:
         languages = ["en"]
 
-    reader = _get_ocr_reader(languages)
-
     vid_fps, vid_duration = _probe_video_meta(video_path)
     if vid_fps <= 0:
         return []
@@ -407,7 +404,7 @@ def scan_text(
         ):
             return None
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = _ocr_readtext(reader, ocr_input, detail=1)
+        ocr_results = _ocr_readtext(languages, ocr_input, detail=1)
         matched_rd: dict[str, Any] | None = None
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:
@@ -488,8 +485,6 @@ def scan_numbers(
     if languages is None:
         languages = ["en"]
 
-    reader = _get_ocr_reader(languages)
-
     vid_fps, vid_duration = _probe_video_meta(video_path)
     if vid_fps <= 0:
         return []
@@ -524,7 +519,7 @@ def scan_numbers(
         ):
             return None
         ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = _ocr_readtext(reader, ocr_input, **ocr_kwargs)
+        ocr_results = _ocr_readtext(languages, ocr_input, **ocr_kwargs)
         matched_rd: dict[str, Any] | None = None
         for _, text, conf in ocr_results:
             if conf < ocr_confidence_threshold:

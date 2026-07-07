@@ -6,11 +6,21 @@ import math
 import numpy as np
 import pytest
 
+import config
 import screenspace
 import screenspace_multitool
 import screenspace_ocr
 import screenspace_scans
 from _ss_helpers import _gray_with_red_patch, _make_icon, _make_icon_frame
+
+
+@pytest.fixture(autouse=True)
+def _reset_ocr_pool(monkeypatch):
+    """Pin the OCR reader pool to one slot and clear it between tests."""
+    monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 1)
+    screenspace_ocr._ocr_pools.clear()
+    yield
+    screenspace_ocr._ocr_pools.clear()
 
 
 class TestCheckFrameForTool:
@@ -175,7 +185,7 @@ class TestCheckFrameForTool:
                 return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
 
         monkeypatch.setattr(
-            screenspace_ocr, "_get_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
 
         passed, result = screenspace.check_frame_for_tool(

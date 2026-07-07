@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 """Screenspace OCR + numeric helpers.
 
-Cached EasyOCR readers, region preprocessing, glyph confusion-folding, the
+Pooled EasyOCR readers, region preprocessing, glyph confusion-folding, the
 numeric comparison helpers and allowlists, region reading/scoring, and the
 calibration OCR entry point. Imports region cropping from screenspace_primitives.
 """
 
 import difflib
 import math
+import queue
 import re
 import threading
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 import cv2
 import numpy as np
@@ -20,35 +22,82 @@ from screenspace_primitives import extract_region
 
 
 # ---------------------------------------------------------------------------
-# Module-level caches
+# Reader pool
 # ---------------------------------------------------------------------------
+#
+# EasyOCR/torch inference on a shared Reader is not thread-safe: with parallel
+# Screenspace workers (and the calibration route thread) hitting one Reader,
+# concurrent readtext calls can corrupt results or crash. Rather than serialize
+# every readtext behind a global lock (which capped OCR concurrency at 1 despite
+# SCREENSPACE_PARALLEL_WORKERS), keep a small bounded pool of Readers per
+# language set and hand a distinct Reader to each concurrent caller. A Reader is
+# only ever touched by one thread at a time, so no inference lock is needed and
+# up to pool-size OCR calls run truly in parallel. The pool is bounded (not a
+# per-thread reader) because the Flask calibration path spawns ephemeral request
+# threads, which would otherwise accumulate one model copy per thread.
 
-_ocr_readers: dict[tuple, Any] = {}
-_ocr_lock = threading.Lock()
-# serializes readtext on the shared (non-thread-safe) Reader
-_ocr_infer_lock = threading.Lock()
+_ocr_pools: dict[tuple, queue.Queue] = {}
+_ocr_pool_lock = threading.Lock()  # guards _ocr_pools creation
+_ocr_build_lock = threading.Lock()  # serializes first-time Reader construction
 
 
-def _get_ocr_reader(languages: list[str]) -> Any:
-    """Return a cached EasyOCR Reader for the given language set."""
+def _build_ocr_reader(languages: list[str]) -> Any:
+    """Construct one EasyOCR Reader (the sole reader-construction site)."""
     import easyocr
 
-    key = tuple(sorted(languages))
-    with _ocr_lock:
-        if key not in _ocr_readers:
-            _ocr_readers[key] = easyocr.Reader(list(key), verbose=False)
-        return _ocr_readers[key]
+    return easyocr.Reader(
+        list(languages), gpu=config.SCREENSPACE_OCR_GPU, verbose=False
+    )
 
 
-def _ocr_readtext(reader: Any, image: np.ndarray, **kwargs: Any) -> list[Any]:
-    """Run ``reader.readtext`` under a global lock.
+def _ocr_pool_size() -> int:
+    """Max concurrent Readers per language set (auto = parallel worker count)."""
+    size = config.SCREENSPACE_OCR_POOL_SIZE or config.SCREENSPACE_PARALLEL_WORKERS
+    return max(1, size)
 
-    EasyOCR/torch inference on a shared cached Reader is not thread-safe; with
-    parallel Screenspace workers (and the calibration route thread) hitting the
-    same Reader, concurrent readtext calls can corrupt results or crash. Reader
-    creation is already guarded by ``_ocr_lock``; this serializes inference.
+
+def _get_ocr_pool(languages: list[str]) -> queue.Queue:
+    """Return the (lazily created) Reader pool for the given language set.
+
+    The pool is seeded with ``_ocr_pool_size()`` ``None`` placeholder slots;
+    each slot's Reader is built on first checkout.
     """
-    with _ocr_infer_lock:
+    key = tuple(sorted(languages))
+    with _ocr_pool_lock:
+        pool = _ocr_pools.get(key)
+        if pool is None:
+            pool = queue.Queue()
+            for _ in range(_ocr_pool_size()):
+                pool.put(None)
+            _ocr_pools[key] = pool
+        return pool
+
+
+@contextmanager
+def _checkout_ocr_reader(languages: list[str]) -> Iterator[Any]:
+    """Borrow a Reader from the bounded per-language pool for the duration of a call.
+
+    ``pool.get()`` blocks when every Reader is busy, so concurrency is capped at
+    the pool size. A ``None`` slot is built on first use under ``_ocr_build_lock``
+    (serializing only construction, so the initial model-file download can't
+    race). The slot is always returned to the pool — ``None`` again if
+    construction raised — so the pool's slot count never shrinks.
+    """
+    key = tuple(sorted(languages))
+    pool = _get_ocr_pool(languages)
+    reader = pool.get()
+    try:
+        if reader is None:
+            with _ocr_build_lock:
+                reader = _build_ocr_reader(list(key))
+        yield reader
+    finally:
+        pool.put(reader)
+
+
+def _ocr_readtext(languages: list[str], image: np.ndarray, **kwargs: Any) -> list[Any]:
+    """Run ``readtext`` on a pooled Reader for the given language set."""
+    with _checkout_ocr_reader(languages) as reader:
         return reader.readtext(image, **kwargs)
 
 
@@ -183,12 +232,11 @@ def _ocr_region_readings(
     (the basis of the calibration OCR cache).
     """
     langs = languages or ["en"]
-    reader = _get_ocr_reader(langs)
     pixels = _preprocess_for_ocr(region_pixels) if preprocess else region_pixels
     kwargs: dict[str, Any] = {"detail": 1}
     if allowlist is not None:
         kwargs["allowlist"] = allowlist
-    return _ocr_readtext(reader, pixels, **kwargs)
+    return _ocr_readtext(langs, pixels, **kwargs)
 
 
 def _score_text_readings(
