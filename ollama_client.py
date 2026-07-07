@@ -20,7 +20,6 @@ Key functions:
 """
 
 import json
-import re
 import shutil
 import socket
 import subprocess
@@ -48,7 +47,6 @@ _START_TIMEOUT = 10  # seconds to wait for server to become available after star
 # starts; this bounds a stalled connection without aborting a healthy pull.
 _PULL_TIMEOUT = 300  # seconds
 _CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet stretches
-_THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
 
 # Serializes _start_server() calls so two threads hitting connection-refused at
 # the same time don't both spawn `ollama serve`.
@@ -356,9 +354,7 @@ def _do_generate(
 
     if cancel_event is not None and cancel_event.is_set():
         return None
-    text = "".join(parts)
-    # Strip <think>...</think> blocks produced by reasoning models (e.g. qwen3.5)
-    text = _THINK_RE.sub("", text).strip()
+    text = "".join(parts).strip()
     if not text:
         utils.warning_print(
             f"Ollama returned empty response (model: {body.get('model')})"

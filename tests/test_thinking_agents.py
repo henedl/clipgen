@@ -140,6 +140,29 @@ class TestSummarizeTranscript:
         assert result is None
 
     @patch("thinking_agents.ollama_client.generate")
+    def test_strips_think_block_from_result(self, mock_generate):
+        # Transport now returns raw text; the summary agent owns <think> stripping.
+        mock_generate.return_value = "<think>reasoning</think>\n\nActual summary."
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        result = thinking_agents.summarize_transcript(segments)
+        assert result == "Actual summary."
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_returns_none_when_only_think_block(self, mock_generate):
+        mock_generate.return_value = "<think>Thinking but producing nothing.</think>"
+        segments = [
+            {
+                "text": "A sufficiently long segment of text for the minimum length check."
+            },
+        ]
+        result = thinking_agents.summarize_transcript(segments)
+        assert result is None
+
+    @patch("thinking_agents.ollama_client.generate")
     def test_passes_model_override(self, mock_generate):
         mock_generate.return_value = "ok"
         segments = [

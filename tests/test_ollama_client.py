@@ -152,26 +152,17 @@ class TestGenerate:
         assert result == "Hello world"
 
     @patch("ollama_client.urllib.request.urlopen")
-    def test_strips_think_tags_from_concatenated_response(self, mock_urlopen):
+    def test_returns_think_tags_verbatim(self, mock_urlopen):
+        # Transport is pure: <think> stripping is a response-parsing concern that
+        # lives in thinking_agents, so generate() must pass reasoning blocks through
+        # untouched (only trims surrounding whitespace).
         lines = _ndjson_lines(
             {"response": "<think>Let me think...</think>", "done": False},
             {"response": "\n\nHere is the summary.", "done": True},
         )
         mock_urlopen.return_value = _make_streaming_resp(lines)
         result = ollama_client.generate("test prompt")
-        assert result == "Here is the summary."
-
-    @patch("ollama_client.urllib.request.urlopen")
-    def test_returns_none_when_only_think_tags(self, mock_urlopen):
-        lines = _ndjson_lines(
-            {
-                "response": "<think>Thinking but producing nothing.</think>",
-                "done": True,
-            },
-        )
-        mock_urlopen.return_value = _make_streaming_resp(lines)
-        result = ollama_client.generate("test prompt")
-        assert result is None
+        assert result == "<think>Let me think...</think>\n\nHere is the summary."
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_returns_none_on_empty_stream(self, mock_urlopen):
