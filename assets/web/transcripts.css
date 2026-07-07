@@ -1204,6 +1204,12 @@ body {
   border-left: 3px solid transparent;
   cursor: pointer;
   transition: background var(--duration-fast), border-color var(--duration-fast);
+  /* Let the browser skip layout/paint for offscreen rows. `auto` remembers each
+     row's real rendered height (rows vary with wrapped text) so the scrollbar and
+     scrollToSegment()'s getBoundingClientRect math stay accurate on re-scroll;
+     the 2.25rem fallback only applies before a row's first render. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.25rem;
 }
 
 .segment-row:hover {
