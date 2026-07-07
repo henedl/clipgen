@@ -2004,18 +2004,52 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
 # the block lives in one place. Exported viewers don't use it (self-contained).
 _HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
 
+# Rendered-index cache: str(index path) -> (index_mtime_ns, head_mtime_ns|None, rendered).
+# The `/` route re-renders on every GET; the assets never change while the server
+# runs, so memoize by mtime (a live dev edit still bumps mtime and refreshes).
+# head_mtime is None for pages without the marker (they never read _head.html).
+_index_html_cache: dict[str, tuple[int | None, int | None, str]] = {}
+_index_html_lock = threading.Lock()
+
 
 def render_index_html(assets_dir: Path, index_html: str) -> str:
     """Read an index page, expanding the shared ``<head>`` marker if present.
 
     Pages without the marker are returned unchanged, so this stays safe for any
-    current or future index page.
+    current or future index page. Results are memoized per index path and
+    invalidated when the page (or, for marker pages, ``_head.html``) mtime changes.
     """
-    html = (assets_dir / index_html).read_text(encoding="utf-8")
-    if _HEAD_MARKER in html:
-        head = (assets_dir / "_head.html").read_text(encoding="utf-8").rstrip("\n")
-        html = html.replace(_HEAD_MARKER, head)
-    return html
+    index_path = assets_dir / index_html
+    head_path = assets_dir / "_head.html"
+    try:
+        index_mtime: int | None = index_path.stat().st_mtime_ns
+    except OSError:
+        index_mtime = None
+
+    with _index_html_lock:
+        cached = _index_html_cache.get(str(index_path))
+        if cached is not None and cached[0] == index_mtime:
+            head_mtime_cached = cached[1]
+            if head_mtime_cached is None:
+                return cached[2]
+            try:
+                head_mtime: int | None = head_path.stat().st_mtime_ns
+            except OSError:
+                head_mtime = None
+            if head_mtime == head_mtime_cached:
+                return cached[2]
+
+        html = index_path.read_text(encoding="utf-8")
+        head_mtime_used: int | None = None
+        if _HEAD_MARKER in html:
+            head = head_path.read_text(encoding="utf-8").rstrip("\n")
+            html = html.replace(_HEAD_MARKER, head)
+            try:
+                head_mtime_used = head_path.stat().st_mtime_ns
+            except OSError:
+                head_mtime_used = None
+        _index_html_cache[str(index_path)] = (index_mtime, head_mtime_used, html)
+        return html
 
 
 def register_static_routes(
