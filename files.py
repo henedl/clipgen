@@ -22,7 +22,7 @@ _unique_high_water: dict[tuple[str, str, str], int] = {}
 _unique_high_water_lock = threading.Lock()
 
 
-def _safe_truncate(text: str, max_chars: int) -> str:
+def safe_truncate(text: str, max_chars: int) -> str:
     """Truncate to ``max_chars`` code points, then drop trailing combining marks.
 
     Plain ``text[:n]`` can split a grapheme cluster (e.g. emoji + skin-tone
@@ -73,13 +73,13 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
         base = name
     # Truncate base if needed (reserve space for extension)
     max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
-    base = _safe_truncate(base, max_base)
+    base = safe_truncate(base, max_base)
 
     def _candidate(counter: int) -> Path:
         if counter == 0:
             return directory / (base + file_extension)
         suffix = f"-{counter}"
-        truncated_base = _safe_truncate(base, max_base - len(suffix))
+        truncated_base = safe_truncate(base, max_base - len(suffix))
         return directory / (truncated_base + suffix + file_extension)
 
     key = (str(directory), base, file_extension)

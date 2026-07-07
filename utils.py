@@ -1350,13 +1350,14 @@ def parse_timestamps(
     raw_times = _split_timestamp_tokens(cell_value)
     if config.DEBUGGING:
         config.debug_ic(raw_times)
-    debug_print(f"raw_times content after split is {raw_times}")
-    debug_print(f"Timestamp list raw_times is {len(raw_times)} entries long")
+        debug_print(f"raw_times content after split is {raw_times}")
+        debug_print(f"Timestamp list raw_times is {len(raw_times)} entries long")
 
     # Clean each token (strip, normalize trailing punctuation, use colon for decimals) and parse
     raw_times = [_clean_timestamp_token(t) for t in raw_times]
     for token in raw_times:
-        debug_print(f"Cleaning timestamp {token}")
+        if config.DEBUGGING:
+            debug_print(f"Cleaning timestamp {token}")
         pair = _parse_single_timestamp_token(token)
         if pair is not None:
             if config.DEBUGGING and len(pair) == 2:

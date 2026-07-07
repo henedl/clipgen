@@ -93,10 +93,10 @@ jobs:
           python-version: "3.12"
 
       - name: Ruff check
-        run: uvx ruff check
+        run: uvx ruff@0.15.12 check
 
       - name: Ruff format check
-        run: uvx ruff format --check
+        run: uvx ruff@0.15.12 format --check
 
   typecheck:
     needs: [gate]
@@ -118,4 +118,4 @@ jobs:
           uv pip install ".[dev]" --torch-backend cpu
 
       - name: Type check
-        run: uvx ty check
+        run: uvx ty@0.0.33 check

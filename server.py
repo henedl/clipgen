@@ -2190,7 +2190,7 @@ def api_open_viewer() -> FlaskResponse:
 @studio_bp.route("/api/manifest", methods=["GET", "POST"])
 def api_manifest() -> FlaskResponse:
     if request.method == "GET":
-        artifacts, reels = viewer._load_manifest_both()
+        artifacts, reels = viewer.load_manifest_both()
         return ok(artifacts=artifacts, reels=reels)
 
     # Snapshot the shared lists so a worker thread extending mid-export
@@ -2227,7 +2227,7 @@ def api_manifest() -> FlaskResponse:
 @studio_bp.route("/api/regenerate", methods=["POST"])
 def api_regenerate() -> FlaskResponse:
     try:
-        artifacts, reels = viewer._load_manifest_both()
+        artifacts, reels = viewer.load_manifest_both()
         if not artifacts and not reels:
             return err("No manifest found on disk. Export a manifest first.")
 
@@ -3112,7 +3112,7 @@ def _init_studio_state(worksheet: Any) -> None:
     # Rebind the shared generated lists under their lock so a streaming
     # generate/intake append can't run against a half-swapped reference.
     with _generated_output_lock:
-        _generated_artifacts, _generated_reels = viewer._load_manifest_both()
+        _generated_artifacts, _generated_reels = viewer.load_manifest_both()
         _rebuild_artifact_index()
     _thumbnail_cache.clear()
     _sprite_cache.clear()

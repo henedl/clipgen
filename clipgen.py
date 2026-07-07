@@ -883,7 +883,7 @@ def _run_viewer_mode(worksheet: Any) -> None:
 
 def _run_regenerate_mode() -> None:
     """Regenerate all media artifacts and reels from saved manifest."""
-    existing_artifacts, existing_reels = viewer._load_manifest_both()
+    existing_artifacts, existing_reels = viewer.load_manifest_both()
     if not existing_artifacts and not existing_reels:
         utils.info_print(
             "No manifest file found.\nGenerate clips first with --manifest to save one."

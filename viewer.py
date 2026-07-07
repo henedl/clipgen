@@ -494,7 +494,7 @@ def _reset_manifest_cache() -> None:
         _manifest_cache["reels"] = []
 
 
-def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load artifact and reel records from the manifest in a single read.
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
@@ -539,13 +539,13 @@ def _load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
 
 def load_manifest_artifacts() -> list[dict[str, Any]]:
     """Load artifact records from the manifest file, or return [] if unavailable."""
-    artifacts, _ = _load_manifest_both()
+    artifacts, _ = load_manifest_both()
     return artifacts
 
 
 def load_manifest_reels() -> list[dict[str, Any]]:
     """Load reel records from the manifest file, or return [] if unavailable."""
-    _, reels = _load_manifest_both()
+    _, reels = load_manifest_both()
     return reels
 
 
@@ -570,7 +570,7 @@ def save_manifest(
     # otherwise both read the same old manifest and the second write drops the
     # first writer's records.
     with _MANIFEST_WRITE_LOCK:
-        existing, existing_reels = _load_manifest_both()
+        existing, existing_reels = load_manifest_both()
         merged = {a["id"]: a for a in existing}
         for a in new_artifacts:
             merged[a["id"]] = a
