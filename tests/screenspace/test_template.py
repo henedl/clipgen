@@ -184,6 +184,43 @@ class TestGenerateTemplateHeatmap:
         assert screenspace.generate_template_heatmap(results, 200, 200, out) is None
 
 
+class TestGenerateHeatmapGif:
+    def _matches(self, n):
+        return [
+            {
+                "timestamp": float(i),
+                "matches": [{"x": 10 + i, "y": 10, "w": 30, "h": 30, "score": 0.9}],
+            }
+            for i in range(n)
+        ]
+
+    def test_basic_gif(self, tmp_path):
+        out = str(tmp_path / "heatmap.gif")
+        path = screenspace.generate_heatmap_gif(self._matches(8), 200, 200, out)
+        assert path == out
+        assert (tmp_path / "heatmap.gif").stat().st_size > 0
+
+    def test_empty_returns_none(self, tmp_path):
+        out = str(tmp_path / "heatmap.gif")
+        assert screenspace.generate_heatmap_gif([], 200, 200, out) is None
+
+    def test_single_result_returns_none(self, tmp_path):
+        out = str(tmp_path / "heatmap.gif")
+        assert screenspace.generate_heatmap_gif(self._matches(1), 200, 200, out) is None
+
+    def test_change_type_gif(self, tmp_path):
+        results = [
+            {"timestamp": float(i), "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}]}
+            for i in range(8)
+        ]
+        out = str(tmp_path / "heatmap_change.gif")
+        path = screenspace.generate_heatmap_gif(
+            results, 200, 150, out, heatmap_type="change"
+        )
+        assert path == out
+        assert (tmp_path / "heatmap_change.gif").stat().st_size > 0
+
+
 class TestGenerateRollingHeatmapGif:
     def _matches(self, n):
         return [
