@@ -76,8 +76,6 @@ MODE_ALIASES = {
     "regenerate": "regenerate",
     "gv": "gallery",
     "gallery": "gallery",
-    "in": "insights",
-    "insights": "insights",
     "st": "studio",
     "studio": "studio",
     "ss": "screenspace",
@@ -1035,15 +1033,6 @@ def _dispatch_interactive_mode(
     if mode == "gallery":
         _run_gallery_mode_interactive()
         return None
-    if mode == "insights":
-        import server
-
-        server.start_combined_server(
-            worksheet=worksheet,
-            default_page="insights",
-            gspread_client=gspread_client,
-        )
-        return None
     if mode == "studio":
         import server
 
@@ -1169,7 +1158,7 @@ def run_interactive_mode(worksheet: Any, gspread_client: Any = None) -> None:
             input_mode = utils.read_user_input(
                 "\nEnter mode or input directly:\n"
                 "  Tools: (s)creen, (g)if, (re)el, (rl) reel-late, (rg) regenerate, (se)ttings \n"
-                "  Front: (st) studio, (in) insights, (ss) screenspace, (tr)anscripts, (br)owse \n"
+                "  Front: (st) studio, (ss) screenspace, (tr)anscripts, (br)owse \n"
                 "  Packs: (v)iewer, (tv) timeline-viewer, (gv) gallery, (ex)port \n"
                 "  Modes: (b)atch, (r)ange, (c)ategory, (l)ine, (ce)ll, (p)articipant, (k)eyword, (sv) severity \n"
                 '  Or enter mixed selectors directly: e.g. 5, P01.11, 13-16, "Observations"\n>> '
