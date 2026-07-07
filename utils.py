@@ -9,6 +9,7 @@ import math
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from numbers import Integral, Real
 from pathlib import Path
@@ -1910,6 +1911,16 @@ def participant_id_from_source_name(name: str) -> str | None:
     return pid
 
 
+# One participant-video scan per input-dir state, keyed dir -> (mtime_ns, result).
+# The directory mtime advances on add/remove/rename, invalidating on real change
+# (incl. the P6 watch-dir drop). Result is directory-only (study_name is unused),
+# so it is shared across all callers regardless of the study_name they pass, and
+# keying on the dir string (not a single slot) means a runtime input-dir switch
+# selects a different entry rather than needing explicit invalidation.
+_discover_videos_cache: dict[str, tuple[int | None, list[dict[str, Any]]]] = {}
+_discover_videos_lock = threading.Lock()
+
+
 def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
     """Scan the input directory and return one entry per participant.
 
@@ -1921,51 +1932,69 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
     :func:`numbered_parts_are_contiguous`). Only ids starting with a recognised
     prefix (``config.PARTICIPANT_PREFIXES``) are included.
 
+    Results are cached per input-dir state (keyed on the directory's ``mtime_ns``),
+    so the many hot callers — ``/api/status``, the Workflows video-source node,
+    the watch-dir daemon — reuse one glob/parse pass until the directory changes.
+
     Returns:
         List of ``{"id": str, "video_paths": list[str], "has_video": bool}``
         dicts, sorted by participant id.
     """
     input_dir = Path(get_effective_input_dir())
-    if not input_dir.is_dir():
-        return []
-    plain: dict[str, Path] = {}
-    numbered: dict[str, list[tuple[int, Path]]] = {}
-    for path in sorted(input_dir.glob(f"*{config.FILEFORMAT}")):
-        pid = participant_id_from_source_name(path.name)
-        if pid is None:
-            continue
-        head, sep, tail = path.stem.rpartition("-")
-        if sep and head and tail.isdigit():
-            numbered.setdefault(pid, []).append((int(tail), path))
-        else:
-            plain[pid] = path
-
-    participants: list[dict[str, Any]] = []
-    for pid in sorted(set(plain) | set(numbered)):
-        if pid in plain:
-            paths = [plain[pid]]
-        else:
-            parts = sorted(numbered[pid], key=lambda item: item[0])
-            indices = [n for n, _ in parts]
-            if not numbered_parts_are_contiguous(indices):
-                warning_print(
-                    f"Numbered source videos for participant '{pid}' are "
-                    f"non-contiguous (found parts {indices}); expected 1..N.",
-                    [
-                        "Skipping this participant; rename the parts to a gapless "
-                        "1..N sequence to enable concatenation.",
-                    ],
-                )
-                continue
-            paths = [p for _, p in parts]
-        participants.append(
-            {
-                "id": pid,
-                "video_paths": [str(p) for p in paths],
-                "has_video": paths[0].is_file(),
-            }
+    dir_str = str(input_dir)
+    try:
+        mtime_ns: int | None = (
+            input_dir.stat().st_mtime_ns if input_dir.is_dir() else None
         )
-    return participants
+    except OSError:
+        mtime_ns = None
+
+    with _discover_videos_lock:
+        cached = _discover_videos_cache.get(dir_str)
+        if cached is not None and cached[0] == mtime_ns:
+            return cached[1]
+
+        plain: dict[str, Path] = {}
+        numbered: dict[str, list[tuple[int, Path]]] = {}
+        if input_dir.is_dir():
+            for path in sorted(input_dir.glob(f"*{config.FILEFORMAT}")):
+                pid = participant_id_from_source_name(path.name)
+                if pid is None:
+                    continue
+                head, sep, tail = path.stem.rpartition("-")
+                if sep and head and tail.isdigit():
+                    numbered.setdefault(pid, []).append((int(tail), path))
+                else:
+                    plain[pid] = path
+
+        participants: list[dict[str, Any]] = []
+        for pid in sorted(set(plain) | set(numbered)):
+            if pid in plain:
+                paths = [plain[pid]]
+            else:
+                parts = sorted(numbered[pid], key=lambda item: item[0])
+                indices = [n for n, _ in parts]
+                if not numbered_parts_are_contiguous(indices):
+                    warning_print(
+                        f"Numbered source videos for participant '{pid}' are "
+                        f"non-contiguous (found parts {indices}); expected 1..N.",
+                        [
+                            "Skipping this participant; rename the parts to a "
+                            "gapless 1..N sequence to enable concatenation.",
+                        ],
+                    )
+                    continue
+                paths = [p for _, p in parts]
+            participants.append(
+                {
+                    "id": pid,
+                    "video_paths": [str(p) for p in paths],
+                    "has_video": paths[0].is_file(),
+                }
+            )
+
+        _discover_videos_cache[dir_str] = (mtime_ns, participants)
+        return participants
 
 
 # ---- Flask blueprint helpers ----
