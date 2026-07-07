@@ -450,6 +450,33 @@ def test_is_excel_spreadsheet_arg(value, expected):
     assert cli._is_excel_spreadsheet_arg(value) is expected
 
 
+def test_select_worksheet_url_skips_drive_listing(monkeypatch):
+    """A `-s <url>` open must not pay the rate-limited Drive listing round-trip:
+    get_all_spreadsheets is deferred and only fetched by paths that need it."""
+    import google_api
+
+    monkeypatch.setattr(
+        google_api,
+        "get_all_spreadsheets",
+        lambda _c: pytest.fail("Drive listing must be skipped for URL opens"),
+    )
+    sentinel = object()
+    seen = {}
+
+    def fake_open_by_url(_client, url, **_kw):
+        seen["url"] = url
+        return sentinel
+
+    monkeypatch.setattr(clipgen, "open_spreadsheet_by_url", fake_open_by_url)
+    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda _w: False)
+
+    args = _base_args(spreadsheet="http://example.com/sheet")
+    result = cli.select_worksheet(Mock(), args, cli_mode=True)
+
+    assert result is sentinel
+    assert seen["url"] == "http://example.com/sheet"
+
+
 # ---- --pre-transcribe flag parsing ----
 
 
