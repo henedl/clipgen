@@ -1172,7 +1172,7 @@ body {
   .artifact-marker.selected {
     box-shadow:
       0 0 0 2px var(--color-selected-ring),
-      0 0 0 5px rgba(56, 189, 248, 0.9),
+      0 0 0 5px var(--color-accent),
       0 0 18px rgba(0, 0, 0, 0.45);
   }
 
@@ -1187,30 +1187,8 @@ html[data-theme="light"] {
 }
 
 html[data-theme="dark"] {
-  --color-bg: #020617;
-  --color-surface: #020617;
-  --color-surface-alt: #0b1120;
-  --color-text: #e5e7eb;
-  --color-text-dim: #9ca3af;
-  --color-accent: #38bdf8;
-  --color-clip: #60a5fa;
-  --color-screen: #22d3ee;
-  --color-gif: #fb923c;
-  --color-border: #1f2933;
-  --color-selected: rgba(56, 189, 248, 0.2);
-  --color-panel-bg: rgba(15, 23, 42, 0.98);
-  --color-panel-border: rgba(148, 163, 184, 0.35);
-  --color-panel-shadow: rgba(0, 0, 0, 0.7);
   --color-selected-ring: #0b1120;
   --color-tooltip-shadow: rgba(0, 0, 0, 0.7);
-  --sev-critical: #ef4444;
-  --sev-high: #fb7185;
-  --sev-medium: #fdba74;
-  --sev-low: #fde047;
-  --sev-na: #67e8f9;
-  --sev-positive: #86efac;
-  --sev-very-positive: #22c55e;
-  --sev-unknown: #94a3b8;
 }
 
 html[data-theme="dark"] .artifact-marker:hover {
@@ -1224,7 +1202,7 @@ html[data-theme="dark"] .artifact-marker.filmstrip-thumb {
 html[data-theme="dark"] .artifact-marker.selected {
   box-shadow:
     0 0 0 2px var(--color-selected-ring),
-    0 0 0 5px rgba(56, 189, 248, 0.9),
+    0 0 0 5px var(--color-accent),
     0 0 18px rgba(0, 0, 0, 0.45);
 }
 
