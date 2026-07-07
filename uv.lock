@@ -222,16 +222,20 @@ name = "clipgen"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "av" },
     { name = "easyocr" },
     { name = "faster-whisper" },
     { name = "flask" },
     { name = "gspread" },
     { name = "icecream" },
     { name = "imagehash" },
+    { name = "numpy" },
     { name = "opencv-python-headless" },
     { name = "openpyxl" },
+    { name = "pillow" },
     { name = "rich" },
     { name = "scikit-image" },
+    { name = "werkzeug" },
 ]
 
 [package.optional-dependencies]
@@ -242,18 +246,22 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", specifier = ">=11.0.0" },
     { name = "easyocr", specifier = ">=1.7.0" },
     { name = "faster-whisper", specifier = ">=1.2.0" },
     { name = "flask", specifier = ">=3.0.0" },
     { name = "gspread", specifier = ">=3.7.0" },
     { name = "icecream", specifier = ">=2.1.10" },
     { name = "imagehash", specifier = ">=4.3.0" },
+    { name = "numpy", specifier = ">=1.26.0" },
     { name = "opencv-python-headless", specifier = ">=4.8.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
+    { name = "pillow", specifier = ">=10.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-randomly", marker = "extra == 'dev'" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "scikit-image", specifier = ">=0.22.0" },
+    { name = "werkzeug", specifier = ">=3.0.0" },
 ]
 provides-extras = ["dev"]
 
