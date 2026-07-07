@@ -627,6 +627,26 @@ class TestDiscoverParticipantVideos:
         result = utils.discover_participant_videos()
         assert result == []
 
+    def test_caches_scan_for_unchanged_dir(self, tmp_path, monkeypatch):
+        """A second call on an unchanged dir is served from the mtime cache."""
+        monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+        (tmp_path / "study_P01.mp4").touch()
+
+        calls = {"n": 0}
+        real_glob = Path.glob
+
+        def counting_glob(self, pattern):
+            calls["n"] += 1
+            return real_glob(self, pattern)
+
+        monkeypatch.setattr(Path, "glob", counting_glob)
+
+        first = utils.discover_participant_videos()
+        second = utils.discover_participant_videos()
+        assert [p["id"] for p in first] == ["P01"]
+        assert first == second
+        assert calls["n"] == 1  # second call did not re-glob
+
 
 # ---------------------------------------------------------------------------
 # TranscriptWorker and task creation
