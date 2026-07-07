@@ -48,9 +48,6 @@ from screenspace_primitives import (
     FULL_FRAME_REGION_NAME,
     ScanCallback,
     _ConsecutiveBuffer,
-    _frame_diff_mask,
-    _frame_is_static,
-    _is_static_skip,
     _merge_timestamp_spans,
     _morph_kernel,
     _prepare_template,
@@ -70,10 +67,6 @@ from screenspace_primitives import (
     resolve_region_request,
 )
 from screenspace_ocr import (
-    _build_ocr_reader,
-    _checkout_ocr_reader,
-    _ocr_pools,
-    _ocr_readtext,
     _preprocess_for_ocr,
     _score_numbers_readings,
     _score_text_readings,

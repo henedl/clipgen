@@ -2038,7 +2038,6 @@ def api_timeline_viewer() -> FlaskResponse:
             worksheet_title=getattr(_worksheet, "title", ""),
             is_excel=pipeline.is_excel_worksheet(_worksheet),
             mode="timeline-viewer",
-            output_format="clip",
             screenspace_events=ss_events or None,
         )
         viewer_path = viewer.generate_timeline_viewer(

@@ -108,7 +108,6 @@ def finalize_timeline_data(
     worksheet_title: str = "",
     is_excel: bool = False,
     mode: str = "",
-    output_format: str = "clip",
     screenspace_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Construct the full window.CLIPGEN_DATA structure for the timeline viewer."""
@@ -558,7 +557,6 @@ def save_manifest(
     worksheet_title: str = "",
     is_excel: bool = False,
     mode: str = "",
-    output_format: str = "clip",
 ) -> Path | None:
     """Merge new artifacts and reels into the manifest file and write it back.
 
@@ -589,7 +587,6 @@ def save_manifest(
             worksheet_title=worksheet_title,
             is_excel=is_excel,
             mode=mode,
-            output_format=output_format,
         )
 
         result = utils.save_json_manifest(

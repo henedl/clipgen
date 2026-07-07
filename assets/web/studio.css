@@ -1939,15 +1939,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   pointer-events: none;
 }
 
-.btn-cancel {
-  color: var(--sev-critical);
-  border-color: var(--sev-critical);
-}
-
-.btn-cancel:hover {
-  background: rgba(220, 38, 38, 0.1);
-}
-
 /* Highlights button group (inside reel header) */
 
 .highlights-group {

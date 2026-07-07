@@ -4515,7 +4515,6 @@
 
   window._studioState = state;
   window._studioParseClipTimestamps = parseClipTimestamps;
-  window._studioFormatDuration = formatDuration;
   window._studioFindOverlappingData = findOverlappingData;
   window._studioBuildXrefBadges = buildXrefBadges;
   window._studioRenderArtifactQueue = renderArtifactQueue;

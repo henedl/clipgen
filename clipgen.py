@@ -873,7 +873,6 @@ def _run_viewer_mode(worksheet: Any) -> None:
         else getattr(worksheet, "title", ""),
         is_excel=False if mode_label == "manifest" else _is_excel_worksheet(worksheet),
         mode=mode_label,
-        output_format="clip",
         screenspace_events=ss_events or None,
     )
     viewer_path = viewer.generate_timeline_viewer(data)
@@ -1093,7 +1092,6 @@ def _dispatch_interactive_mode(
                 worksheet_title=getattr(worksheet, "title", ""),
                 is_excel=_is_excel_worksheet(worksheet),
                 mode="timeline-viewer",
-                output_format="clip",
                 screenspace_events=ss_events or None,
             )
             viewer_path = viewer.generate_timeline_viewer(

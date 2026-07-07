@@ -209,7 +209,7 @@ def _split_summary_sentences(summary: str) -> list[str]:
     return sentences
 
 
-def _format_segment_chunk(segments: list[dict[str, Any]], offset: int) -> str:
+def _format_segment_chunk(segments: list[dict[str, Any]]) -> str:
     """Format a chunk of segments as ``[M:SS] text`` lines for the prompt."""
     lines: list[str] = []
     for seg in segments:
@@ -315,7 +315,7 @@ def find_citations(
 
     claims_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(sentences))
     transcript_text = _truncate_middle(
-        _format_segment_chunk(segments, 0), _MAX_CITATION_TRANSCRIPT_CHARS
+        _format_segment_chunk(segments), _MAX_CITATION_TRANSCRIPT_CHARS
     )
 
     utils.verbose_print(

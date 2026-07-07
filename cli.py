@@ -2497,7 +2497,6 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
             worksheet_title="",
             is_excel=False,
             mode="ss-clips",
-            output_format="clip",
         )
     utils.info_print(
         f"Generated {count} clip(s) from {len(filtered)} event(s) "
@@ -2584,7 +2583,6 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
             worksheet_title="",
             is_excel=False,
             mode="transcript-clips",
-            output_format="clip",
         )
     utils.info_print(
         f"Generated {count} clip(s) from {len(rows)} segment(s) "
@@ -2879,7 +2877,6 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
         worksheet_title=getattr(worksheet, "title", ""),
         is_excel=clipgen._is_excel_worksheet(worksheet),
         mode="timeline-viewer",
-        output_format="clip",
         screenspace_events=ss_events or None,
     )
     viewer_path = viewer.generate_timeline_viewer(
@@ -2897,7 +2894,6 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
             worksheet_title=getattr(worksheet, "title", ""),
             is_excel=clipgen._is_excel_worksheet(worksheet),
             mode="timeline-viewer",
-            output_format="clip",
         )
         if manifest_path:
             utils.info_print(f"Manifest updated: {manifest_path}")
@@ -2986,7 +2982,6 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
                 worksheet_title=ws_title,
                 is_excel=is_excel,
                 mode="reel" if is_reel and not artifacts else effective_mode,
-                output_format=output_format,
                 screenspace_events=ss_events or None,
             )
             viewer_path = viewer.generate_timeline_viewer(data)
@@ -3002,7 +2997,6 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
                 worksheet_title=ws_title,
                 is_excel=is_excel,
                 mode="reel" if is_reel and not artifacts else effective_mode,
-                output_format=output_format,
             )
             if manifest_path:
                 utils.info_print(f"Manifest updated: {manifest_path}")
