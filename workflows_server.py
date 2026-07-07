@@ -21,7 +21,6 @@ from __future__ import annotations
 import copy
 import json
 import os
-import queue
 import shutil
 import threading
 import uuid
@@ -34,7 +33,7 @@ from flask import Blueprint, Response, request
 import config
 import utils
 import workflows
-from server_utils import err, ok
+from server_utils import err, make_sse_channel, ok
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
@@ -50,8 +49,9 @@ _manifest_lock = threading.Lock()
 # the persisted history. SSE clients are (run_id, queue) pairs scoped to one run.
 _runs: dict[str, workflows.WorkflowRunner] = {}
 _runs_lock = threading.Lock()
-_sse_clients: list[tuple[str, queue.Queue[str]]] = []
-_sse_lock = threading.Lock()
+# SSE clients scoped to one run: notify with the run_id key. ``_sse_clients`` is
+# the channel's live registry (``(run_id, queue)`` tuples); see make_sse_channel.
+_notify_run_clients, _run_stream, _sse_clients = make_sse_channel()
 _MAX_RUN_HISTORY = 50  # cap persisted runs (small ephemeral tool; keep most recent)
 
 # ---- Batch state (P3: whole-study fan-out) ----
@@ -62,8 +62,8 @@ _MAX_RUN_HISTORY = 50  # cap persisted runs (small ephemeral tool; keep most rec
 # createdAt}``. A batch SSE client is a (batch_id, queue) pair.
 _batches: dict[str, dict[str, Any]] = {}
 _batches_lock = threading.Lock()
-_batch_sse_clients: list[tuple[str, queue.Queue[str]]] = []
-_batch_sse_lock = threading.Lock()
+# A batch SSE client is a (batch_id, queue) pair; notify with the batch_id key.
+_notify_batch_clients, _batch_stream, _batch_sse_clients = make_sse_channel()
 _RUN_TERMINAL = {
     workflows.RUN_STATUS_COMPLETED,
     workflows.RUN_STATUS_FAILED,
@@ -459,30 +459,6 @@ def _persist_run(snapshot: dict[str, Any] | None) -> None:
         _prune_run_sidecars(dropped)
 
 
-def _notify_run_clients(run_id: str) -> None:
-    """Wake the SSE clients watching ``run_id`` (coalesce on a full queue).
-
-    Mirrors ``screenspace_server._notify_sse_clients``: on overflow discard one
-    stale entry and leave a single ``update`` marker so the client still re-emits
-    fresh run state once it catches up.
-    """
-    with _sse_lock:
-        for rid, client_q in _sse_clients:
-            if rid != run_id:
-                continue
-            try:
-                client_q.put_nowait("update")
-            except queue.Full:
-                try:
-                    client_q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    client_q.put_nowait("update")
-                except queue.Full:
-                    pass
-
-
 def _sse_run_payload(run_id: str) -> str:
     """SSE ``data:`` line carrying the current run snapshot."""
     snap = _run_snapshot(run_id)
@@ -632,60 +608,10 @@ def api_run_cancel(run_id: str) -> Any:
 @workflows_bp.route("/api/runs/<run_id>/stream")
 def api_run_stream(run_id: str) -> Response:
     """SSE stream of one run's snapshot (mirrors screenspace_server.api_tasks_stream)."""
-    client_q: queue.Queue[str] = queue.Queue(maxsize=64)
-    with _sse_lock:
-        _sse_clients.append((run_id, client_q))
-
-    def generate():  # type: ignore[no-untyped-def]
-        try:
-            yield _sse_run_payload(run_id)
-            while True:
-                try:
-                    client_q.get(timeout=15)
-                    while not client_q.empty():
-                        try:
-                            client_q.get_nowait()
-                        except queue.Empty:
-                            break
-                    yield _sse_run_payload(run_id)
-                except queue.Empty:
-                    yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            with _sse_lock:
-                try:
-                    _sse_clients.remove((run_id, client_q))
-                except ValueError:
-                    pass
-
-    return Response(
-        generate(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _run_stream(lambda: _sse_run_payload(run_id), key=run_id)
 
 
 # ---- Batch lifecycle (P3: whole-study fan-out) ----
-
-
-def _notify_batch_clients(batch_id: str) -> None:
-    """Wake the SSE clients watching ``batch_id`` (coalesce on a full queue)."""
-    with _batch_sse_lock:
-        for bid, client_q in _batch_sse_clients:
-            if bid != batch_id:
-                continue
-            try:
-                client_q.put_nowait("update")
-            except queue.Full:
-                try:
-                    client_q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    client_q.put_nowait("update")
-                except queue.Full:
-                    pass
 
 
 def _aggregate_batch_status(child_statuses: list[str], cancelled: bool) -> str:
@@ -967,38 +893,7 @@ def api_batch_cancel(batch_id: str) -> Any:
 @workflows_bp.route("/api/batches/<batch_id>/stream")
 def api_batch_stream(batch_id: str) -> Response:
     """SSE stream of one batch's summary (mirrors :func:`api_run_stream`)."""
-    client_q: queue.Queue[str] = queue.Queue(maxsize=64)
-    with _batch_sse_lock:
-        _batch_sse_clients.append((batch_id, client_q))
-
-    def generate():  # type: ignore[no-untyped-def]
-        try:
-            yield _sse_batch_payload(batch_id)
-            while True:
-                try:
-                    client_q.get(timeout=15)
-                    while not client_q.empty():
-                        try:
-                            client_q.get_nowait()
-                        except queue.Empty:
-                            break
-                    yield _sse_batch_payload(batch_id)
-                except queue.Empty:
-                    yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            with _batch_sse_lock:
-                try:
-                    _batch_sse_clients.remove((batch_id, client_q))
-                except ValueError:
-                    pass
-
-    return Response(
-        generate(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _batch_stream(lambda: _sse_batch_payload(batch_id), key=batch_id)
 
 
 # ---- Watch-dir trigger watcher (P6) ----

@@ -36,9 +36,12 @@ def wf_client(tmp_path, monkeypatch):
     monkeypatch.setattr(workflows_server, "_worksheet", None)
     # Reset run state so runners/SSE clients never leak across tests.
     monkeypatch.setattr(workflows_server, "_runs", {})
-    monkeypatch.setattr(workflows_server, "_sse_clients", [])
     monkeypatch.setattr(workflows_server, "_batches", {})
-    monkeypatch.setattr(workflows_server, "_batch_sse_clients", [])
+    # The SSE registries are the channel's live lists (make_sse_channel) — clear
+    # them in place, never monkeypatch-rebind, or the notify/stream closures
+    # detach from the module name and the reset silently does nothing.
+    workflows_server._sse_clients.clear()
+    workflows_server._batch_sse_clients.clear()
     # Reset watch-dir trigger state (P6) so seen pids never leak across tests.
     monkeypatch.setattr(workflows_server, "_watch_seen", set())
     monkeypatch.setattr(workflows_server, "_watch_pending", {})

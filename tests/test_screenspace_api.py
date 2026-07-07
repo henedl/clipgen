@@ -2395,17 +2395,19 @@ def test_export_events_unsupported_format(client):
 
 
 def test_notify_sse_clients_coalesces_on_full_queue():
-    """A saturated client queue keeps a fresh 'update' marker instead of
-    silently dropping the change, so a slow SSE client still converges to
-    current task state once it catches up."""
+    """A saturated client queue keeps a fresh marker instead of silently
+    dropping the change, so a slow SSE client still converges to current task
+    state once it catches up."""
     import queue as queue_mod
 
     q: queue_mod.Queue = queue_mod.Queue(maxsize=4)
     for _ in range(4):
         q.put_nowait("stale")
 
+    # Registry entries are (key, queue) tuples; _notify_sse_clients broadcasts
+    # under the None key (see make_sse_channel).
     saved = list(screenspace_server._sse_clients)
-    screenspace_server._sse_clients[:] = [q]
+    screenspace_server._sse_clients[:] = [(None, q)]
     try:
         screenspace_server._notify_sse_clients("task_created")
     finally:
@@ -2415,7 +2417,9 @@ def test_notify_sse_clients_coalesces_on_full_queue():
     while not q.empty():
         drained.append(q.get_nowait())
     assert len(drained) == 4
-    assert "update" in drained
+    # One stale entry dropped and the fresh marker re-pushed (the streamer only
+    # uses it to trigger a full payload rebuild, so any non-stale token works).
+    assert "task_created" in drained
 
 
 def test_events_list_stable_under_concurrent_writes(client):

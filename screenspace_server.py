@@ -53,7 +53,6 @@ import binascii
 import copy
 import json
 import math
-import queue as queue_mod
 import threading
 import uuid
 from collections import OrderedDict
@@ -73,6 +72,7 @@ from server_utils import (
     err,
     json_endpoint,
     make_debounced_persist,
+    make_sse_channel,
     ok,
     parse_number_arg,
 )
@@ -177,33 +177,21 @@ _pin_ocr_cache_lock = threading.Lock()
 
 # ---- SSE (Server-Sent Events) client registry ----
 
-_sse_clients: list[queue_mod.Queue[str]] = []
-_sse_clients_lock = threading.Lock()
+# Broadcast channel (all task-stream clients registered under the None key);
+# ``_sse_clients`` is the channel's live registry list. See make_sse_channel.
+_sse_notify, _sse_stream, _sse_clients = make_sse_channel()
 _manifest_lock = threading.Lock()
 
 
 def _notify_sse_clients(event_type: str = "update") -> None:
-    """Push a notification to all connected SSE clients.
+    """Broadcast a task-state change to every connected SSE client.
 
-    A slow client's bounded queue can fill up. Rather than silently dropping
-    the change — which would leave that client stale until some unrelated
-    notification happened to fit — coalesce on overflow: discard one stale
-    entry and leave a single ``update`` marker, so the client still emits
-    fresh task state once it catches up.
+    Thin adapter over the shared channel's coalescing ``notify`` (see
+    make_sse_channel): on a full client queue it discards one stale entry and
+    re-pushes a marker, so a lagging client still re-emits fresh task state once
+    it catches up.
     """
-    with _sse_clients_lock:
-        for q in _sse_clients:
-            try:
-                q.put_nowait(event_type)
-            except queue_mod.Full:
-                try:
-                    q.get_nowait()
-                except queue_mod.Empty:
-                    pass
-                try:
-                    q.put_nowait("update")
-                except queue_mod.Full:
-                    pass
+    _sse_notify(marker=event_type)
 
 
 def _sse_task_payload() -> str:
@@ -1625,39 +1613,7 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
 @screenspace_bp.route("/api/tasks/stream")
 def api_tasks_stream() -> FlaskResponse:
     """SSE endpoint for live task updates (replaces polling)."""
-    client_q: queue_mod.Queue[str] = queue_mod.Queue(maxsize=64)
-    with _sse_clients_lock:
-        _sse_clients.append(client_q)
-
-    def generate():  # type: ignore[no-untyped-def]
-        try:
-            # Send current state immediately on connect
-            yield _sse_task_payload()
-            while True:
-                try:
-                    client_q.get(timeout=15)
-                    # Drain any queued notifications (coalesce rapid updates)
-                    while not client_q.empty():
-                        try:
-                            client_q.get_nowait()
-                        except queue_mod.Empty:
-                            break
-                    yield _sse_task_payload()
-                except queue_mod.Empty:
-                    # Keepalive comment to prevent connection timeout
-                    yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            with _sse_clients_lock:
-                if client_q in _sse_clients:
-                    _sse_clients.remove(client_q)
-
-    return Response(
-        generate(),
-        mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return _sse_stream(_sse_task_payload)
 
 
 @screenspace_bp.route("/api/tasks")
