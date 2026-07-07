@@ -44,6 +44,7 @@ def client(tmp_path, monkeypatch):
             {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
         ],
     )
+    monkeypatch.setattr(screenspace_server, "_events_version", 0)
     monkeypatch.setattr(screenspace_server, "_output_dir", str(tmp_path))
     monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
     # Fresh module-level calibration/preview caches per test (auto-restored).
@@ -1915,6 +1916,80 @@ def test_intake_poll_combines_status_and_events(client):
     assert isinstance(data["status"]["worker_alive"], bool)
     # excluded=false drops ev_2, same as /api/events.
     assert [e["id"] for e in data["events"]] == ["ev_1"]
+
+
+def test_events_poll_reports_version(client):
+    """Poll responses carry an events_version cursor for the client to echo."""
+    screenspace_server._manifest["events"] = [_sample_event("ev_1")]
+    for path in ("/screenspace/api/events", "/screenspace/api/intake-poll"):
+        data = client.get(path).get_json()
+        assert data["ok"] is True
+        assert isinstance(data["events_version"], int)
+        assert "events" in data
+
+
+def test_events_poll_short_circuits_unchanged(client):
+    """Re-polling with the current events_version skips the payload."""
+    screenspace_server._manifest["events"] = [_sample_event("ev_1")]
+    first = client.get("/screenspace/api/intake-poll?excluded=false").get_json()
+    version = first["events_version"]
+    assert "events" in first
+
+    second = client.get(
+        f"/screenspace/api/intake-poll?excluded=false&events_version={version}"
+    ).get_json()
+    assert second["ok"] is True
+    assert second["events_unchanged"] is True
+    assert "events" not in second
+    # Status is still reported on the unchanged tick.
+    assert "status" in second
+    assert second["events_version"] == version
+
+
+def test_events_poll_resends_after_exclude(client):
+    """Toggling an event bumps the version so the next poll re-sends events."""
+    screenspace_server._manifest["events"] = [_sample_event("ev_1")]
+    version = client.get("/screenspace/api/events").get_json()["events_version"]
+
+    assert client.put("/screenspace/api/events/ev_1/exclude").status_code == 200
+
+    data = client.get(f"/screenspace/api/events?events_version={version}").get_json()
+    assert data.get("events_unchanged") is not True
+    assert data["events_version"] != version
+    assert data["events"][0]["excluded"] is True
+
+
+def test_events_poll_resends_after_bulk_toggle(client):
+    """Bulk exclude/include also bumps the version off the client's cursor."""
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2"),
+    ]
+    version = client.get("/screenspace/api/events").get_json()["events_version"]
+    client.put("/screenspace/api/events/bulk-exclude", json={"ids": ["ev_1"]})
+    data = client.get(f"/screenspace/api/events?events_version={version}").get_json()
+    assert data.get("events_unchanged") is not True
+    assert data["events_version"] != version
+
+
+def test_events_list_without_version_returns_full(client):
+    """Omitting events_version always returns the full filtered list (back-compat)."""
+    screenspace_server._manifest["events"] = [
+        _sample_event("ev_1"),
+        _sample_event("ev_2", excluded=True),
+    ]
+    data = client.get("/screenspace/api/events").get_json()
+    assert "events_unchanged" not in data
+    assert len(data["events"]) == 2
+
+
+def test_events_poll_bad_version_returns_full(client):
+    """A non-integer events_version is ignored (treated as no cursor)."""
+    screenspace_server._manifest["events"] = [_sample_event("ev_1")]
+    data = client.get("/screenspace/api/events?events_version=bogus").get_json()
+    assert data["ok"] is True
+    assert "events" in data
+    assert "events_unchanged" not in data
 
 
 def test_event_exclude(client):

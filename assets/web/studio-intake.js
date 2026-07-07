@@ -67,7 +67,13 @@
   // ("active this tick") keeps createPoller at the fast cadence; falsy lets it back
   // off. Replaces the former pollIntakeStatus + pollIntakeEvents pair.
   function pollScreenspaceIntake() {
-    return apiGet("../screenspace/api/intake-poll?excluded=false")
+    // Echo the last-seen events version so the server can skip the events
+    // payload (deep-copy + sanitize + ship) when nothing changed this tick.
+    var url = "../screenspace/api/intake-poll?excluded=false";
+    if (state._intakeEventsVersion != null) {
+      url += "&events_version=" + state._intakeEventsVersion;
+    }
+    return apiGet(url)
       .then(function (data) {
         if (!data || !data.ok) {
           setIntakeDot(false);
@@ -76,7 +82,13 @@
         var status = data.status || {};
         var dotOn = !!status.running || (status.worker_alive && !!status.queued);
         setIntakeDot(dotOn);
-        var eventsChanged = applyIntakeEvents(data.events || []);
+        if (data.events_version != null) {
+          state._intakeEventsVersion = data.events_version;
+        }
+        // events omitted => unchanged since our cursor; keep current view.
+        var eventsChanged = data.events_unchanged
+          ? false
+          : applyIntakeEvents(data.events || []);
         return dotOn || eventsChanged;
       })
       .catch(function () {

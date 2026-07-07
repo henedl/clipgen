@@ -186,6 +186,17 @@ _pin_ocr_cache_lock = threading.Lock()
 _sse_notify, _sse_stream, _sse_clients = make_sse_channel()
 _manifest_lock = threading.Lock()
 
+# Monotonic counter bumped (under _manifest_lock) on every _manifest["events"]
+# mutation — append via drain and per-event exclude/include. The poll routes
+# echo it so an unchanged tick short-circuits the deep-copy + sanitize + ship.
+_events_version = 0
+
+
+def _bump_events_version() -> None:
+    """Mark manifest events changed. Caller must hold _manifest_lock."""
+    global _events_version
+    _events_version += 1
+
 
 def _notify_sse_clients(event_type: str = "update") -> None:
     """Broadcast a task-state change to every connected SSE client.
@@ -2154,11 +2165,10 @@ def api_tasks_results(task_id: str) -> FlaskResponse:
 # ---- Events CRUD ----
 
 
-def _filtered_events(args: Any) -> list[dict[str, Any]]:
-    """Deep-copy manifest events and apply the standard excluded/participant/
-    task_id query filters. Shared by /api/events and /api/intake-poll."""
-    with _manifest_lock:
-        events = copy.deepcopy(_manifest.get("events", []))
+def _apply_event_filters(
+    events: list[dict[str, Any]], args: Any
+) -> list[dict[str, Any]]:
+    """Apply the standard excluded/participant/task_id query filters (pure)."""
     excluded_filter = args.get("excluded")
     if excluded_filter == "false":
         events = [e for e in events if not e.get("excluded")]
@@ -2173,10 +2183,48 @@ def _filtered_events(args: Any) -> list[dict[str, Any]]:
     return events
 
 
+def _events_payload(
+    args: Any, client_version: int | None
+) -> tuple[int, list[dict[str, Any]] | None]:
+    """Version-aware events snapshot for the poll routes.
+
+    Reads the events-version and deep-copies under a single lock acquisition (so
+    a concurrent bump can't slip between the two). Returns ``(current_version,
+    events)``; ``events`` is ``None`` — meaning "unchanged, skip the payload" —
+    only when the caller passed a ``client_version`` equal to the current one.
+    """
+    with _manifest_lock:
+        current = _events_version
+        if client_version is not None and client_version == current:
+            return current, None
+        events = copy.deepcopy(_manifest.get("events", []))
+    return current, utils.sanitize_floats(_apply_event_filters(events, args))
+
+
+def _client_events_version(args: Any) -> int | None:
+    """Parse the optional ``events_version`` poll cursor; ``None`` if absent/bad."""
+    raw = args.get("events_version")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 @screenspace_bp.route("/api/events")
 def api_events_list() -> FlaskResponse:
-    """List events with optional filtering."""
-    return ok(events=utils.sanitize_floats(_filtered_events(request.args)))
+    """List events with optional filtering.
+
+    ``?events_version=N`` short-circuits: when N matches the current events
+    version, returns ``events_unchanged`` with no payload. Omit for the full list.
+    """
+    version, events = _events_payload(
+        request.args, _client_events_version(request.args)
+    )
+    if events is None:
+        return ok(events_version=version, events_unchanged=True)
+    return ok(events_version=version, events=events)
 
 
 @screenspace_bp.route("/api/intake-poll")
@@ -2185,7 +2233,8 @@ def api_intake_poll() -> FlaskResponse:
 
     Collapses the Studio intake client's separate /api/tasks and /api/events
     polls into a single request. Both reads are the same slim, in-memory ones
-    those routes do (no results, no disk I/O)."""
+    those routes do (no results, no disk I/O). ``?events_version=N`` skips the
+    events payload when nothing changed since the client's last tick."""
     tasks = [
         _clean_task(t)
         for t in (_worker.get_all_tasks(include_results=False) if _worker else [])
@@ -2193,10 +2242,13 @@ def api_intake_poll() -> FlaskResponse:
     running = any(t.get("status") == "running" for t in tasks)
     queued = any(t.get("status") == "queued" for t in tasks)
     alive = _worker.is_alive if _worker else False
-    return ok(
-        status={"running": running, "worker_alive": alive, "queued": queued},
-        events=utils.sanitize_floats(_filtered_events(request.args)),
+    status = {"running": running, "worker_alive": alive, "queued": queued}
+    version, events = _events_payload(
+        request.args, _client_events_version(request.args)
     )
+    if events is None:
+        return ok(status=status, events_version=version, events_unchanged=True)
+    return ok(status=status, events_version=version, events=events)
 
 
 @screenspace_bp.route("/api/export/events")
@@ -2256,6 +2308,7 @@ def api_event_exclude(event_id: str) -> FlaskResponse:
         for e in _manifest.get("events", []):
             if e["id"] == event_id:
                 e["excluded"] = True
+                _bump_events_version()
                 _do_persist(drain_events=False)
                 return ok()
     return err("Event not found", 404)
@@ -2268,6 +2321,7 @@ def api_event_include(event_id: str) -> FlaskResponse:
         for e in _manifest.get("events", []):
             if e["id"] == event_id:
                 e["excluded"] = False
+                _bump_events_version()
                 _do_persist(drain_events=False)
                 return ok()
     return err("Event not found", 404)
@@ -2286,6 +2340,8 @@ def api_events_bulk_exclude() -> FlaskResponse:
             if e["id"] in ids:
                 e["excluded"] = True
                 count += 1
+        if count:
+            _bump_events_version()
         _do_persist(drain_events=False)
     return ok(updated=count)
 
@@ -2303,6 +2359,8 @@ def api_events_bulk_include() -> FlaskResponse:
             if e["id"] in ids:
                 e["excluded"] = False
                 count += 1
+        if count:
+            _bump_events_version()
         _do_persist(drain_events=False)
     return ok(updated=count)
 
@@ -2601,6 +2659,7 @@ def _do_persist(*, drain_events: bool = True) -> None:
         new_events = _worker.drain_new_events()
         if new_events:
             _manifest.setdefault("events", []).extend(new_events)
+            _bump_events_version()
     tasks = _worker.get_all_tasks() if _worker else _manifest.get("tasks", [])
     _manifest["tasks"] = tasks
     screenspace.save_screenspace_manifest(
