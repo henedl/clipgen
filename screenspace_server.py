@@ -18,6 +18,7 @@ API endpoints (all under /screenspace/):
   PUT  /api/pins/<pin_id>                   – update a pin (polarity toggle / label edit)
   DELETE /api/pins/<pin_id>                 – remove a pin by id
   DELETE /api/pins/<participant>/all        – remove every pin for a participant
+  POST /api/calibrate                       – score a participant's pins vs a tool synchronously
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
   GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view (?layer=<id> for single-layer overlay)
   GET  /api/preview/layers                   – JSON catalog of overlay-eligible layers per tool
@@ -27,12 +28,14 @@ API endpoints (all under /screenspace/):
   POST /api/regions                         – create or update a region
   PUT  /api/regions/reorder                – reorder active regions by name
   DELETE /api/regions/<name>               – delete a region
+  DELETE /api/regions                      – delete every active region (stashes untouched)
   GET/POST /api/stashes                    – stash CRUD (save/restore named region sets)
   PUT  /api/stashes/<id>                   – update stash
   DELETE /api/stashes/<id>                 – delete stash
   POST /api/stashes/<id>/restore           – restore a stash
   POST /api/stashes/<id>/regions           – copy one active region into a stash
   GET  /api/tasks                          – list task queue
+  GET  /api/tasks/stream                   – SSE stream of live task updates (replaces polling)
   GET  /api/tasks/<task_id>               – get single task
   POST /api/tasks                          – create and enqueue a new task
   DELETE /api/tasks/<task_id>             – cancel/remove a task
@@ -41,6 +44,7 @@ API endpoints (all under /screenspace/):
   POST /api/tasks/resume                   – resume the worker
   GET  /api/tasks/<task_id>/results        – analysis results (timestamps, artifact paths)
   GET  /api/events                         – list result events across all tasks
+  GET  /api/intake-poll                     – Studio-intake poll: task-status booleans + filtered events
   GET  /api/export/events                  – export events as analysis-ready JSON (default) or CSV (?format=csv)
   PUT  /api/events/<event_id>/exclude      – mark an event excluded
   PUT  /api/events/<event_id>/include      – mark an event included

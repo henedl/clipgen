@@ -22,6 +22,7 @@ API endpoints (all under /transcripts/):
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
+  GET  /api/intake-poll                           - Studio-intake poll: running-state booleans + resolved marks
   GET  /api/marks                                 - list all marks with resolved segment data
   POST /api/marks                                 - create marks for segments
   PUT  /api/marks/<id>                            - update a mark's category or label
@@ -29,6 +30,7 @@ API endpoints (all under /transcripts/):
   GET  /api/search?q=<query>                      - keyword search across all participants
   POST /api/transcribe                            - enqueue participant(s) for transcription
   GET  /api/transcribe/status                     - poll transcription task status
+  GET  /api/transcribe/<task_id>/segments         - running task's partial-segment tail (?since=N, append-only)
   DELETE /api/transcribe/<task_id>                 - cancel or dismiss a transcription task
   POST /api/transcribe/warmup                     - background-load Whisper when prewarm is enabled (confirms before downloading a non-cached model; force=true to proceed)
   GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
