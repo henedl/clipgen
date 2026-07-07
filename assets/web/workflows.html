@@ -195,19 +195,19 @@
   <!-- Deps order: utils → chrome → settings → page hub → workflows-*.js satellites.
        Satellites load after the hub; -nodes before -canvas (the canvas reaches
        the nodes renderer via WF.* late-binding either way). -->
-  <script src="utils.js"></script>
-  <script src="export-actions.js"></script>
-  <script src="topnav.js"></script>
-  <script src="start-overlay.js"></script>
-  <script src="dev-token-tweak.js" data-dev-only></script>
-  <script src="color-picker.js"></script>
-  <script src="settings-modal.js"></script>
-  <script src="workflows.js"></script>
-  <script src="workflows-nodes.js"></script>
-  <script src="workflows-canvas.js"></script>
-  <script src="workflows-wires.js"></script>
-  <script src="workflows-runs.js"></script>
-  <script src="workflows-stashes.js"></script>
-  <script src="workflows-validate.js"></script>
+  <script src="utils.js" defer></script>
+  <script src="export-actions.js" defer></script>
+  <script src="topnav.js" defer></script>
+  <script src="start-overlay.js" defer></script>
+  <script src="dev-token-tweak.js" defer data-dev-only></script>
+  <script src="color-picker.js" defer></script>
+  <script src="settings-modal.js" defer></script>
+  <script src="workflows.js" defer></script>
+  <script src="workflows-nodes.js" defer></script>
+  <script src="workflows-canvas.js" defer></script>
+  <script src="workflows-wires.js" defer></script>
+  <script src="workflows-runs.js" defer></script>
+  <script src="workflows-stashes.js" defer></script>
+  <script src="workflows-validate.js" defer></script>
 </body>
 </html>
