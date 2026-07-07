@@ -1058,6 +1058,42 @@ def api_marks_list() -> FlaskResponse:
     )
 
 
+@transcripts_bp.route("/api/intake-poll")
+def api_intake_poll() -> FlaskResponse:
+    """Combined Studio-intake poll: running-state booleans + resolved marks.
+
+    Collapses the Studio intake client's four transcript polls (transcribe
+    status, model-status, participants, marks) into one request. ``agents_running``
+    is read straight from the orchestrator's in-memory in-flight tracking, so —
+    unlike /api/participants — this never stat()s or ffprobe()s a video file."""
+    tasks_running = False
+    if _worker:
+        for t in _worker.get_all_tasks(include_partials=False):
+            if t["status"] == transcripts.TASK_STATUS_RUNNING:
+                tasks_running = True
+                break
+    with _transcript_model_warming_lock:
+        model_warming = _transcript_model_warming
+    agents_running = any(
+        _orchestrator.is_generating(p["id"], "summary")
+        or _orchestrator.is_generating(p["id"], "citations")
+        for p in _participants
+    )
+    # Same resolve path as /api/marks (partial lookup outside _manifest_lock).
+    partial_lookup = _build_partial_lookup()
+    with _manifest_lock:
+        raw_marks = list(_manifest.get("marks", []))
+        resolved = [_resolve_mark(m, partial_lookup) for m in raw_marks]
+    return ok(
+        status={
+            "tasks_running": tasks_running,
+            "model_warming": model_warming,
+            "agents_running": agents_running,
+        },
+        marks={"marks": resolved, "categories": config.MARK_CATEGORIES},
+    )
+
+
 @transcripts_bp.route("/api/marks", methods=["POST"])
 def api_marks_add() -> FlaskResponse:
     """Create marks for one or more segments."""

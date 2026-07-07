@@ -1113,6 +1113,52 @@ def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
     assert saved["count"] == 1
 
 
+def test_intake_poll_combines_status_and_marks(tr_client, _agent_state_clean):
+    """/api/intake-poll returns running-state booleans + resolved marks, collapsing
+    the Studio intake client's four transcript polls into one request."""
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "hello"}],
+    }
+    transcripts_server._manifest["marks"] = [
+        {"id": "m1", "segment_id": "P01:0", "category": "friction", "label": None}
+    ]
+    resp = tr_client.get("/transcripts/api/intake-poll")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["status"] == {
+        "tasks_running": False,
+        "model_warming": False,
+        "agents_running": False,
+    }
+    assert data["marks"]["categories"] == config.MARK_CATEGORIES
+    resolved = data["marks"]["marks"]
+    assert len(resolved) == 1
+    assert resolved[0]["segment_id"] == "P01:0"
+    assert resolved[0]["valid"] is True
+
+
+def test_intake_poll_agents_running_without_stat(
+    tr_client, monkeypatch, _agent_state_clean
+):
+    """agents_running is read from the orchestrator's in-memory in-flight set, so the
+    route must never stat() a video file (the expensive part of /api/participants)."""
+    import pathlib
+
+    def _boom(*_a, **_k):
+        raise AssertionError("intake-poll must not stat video files")
+
+    monkeypatch.setattr(pathlib.Path, "stat", _boom)
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": ["/tmp/study_P01.mp4"], "has_video": True}
+    ]
+    transcripts_server._orchestrator._in_flight["summary"].add("P01")
+
+    resp = tr_client.get("/transcripts/api/intake-poll")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"]["agents_running"] is True
+
+
 def test_corrected_segments_cached_and_invalidated_on_correction(
     tr_client, monkeypatch
 ):

@@ -51,60 +51,73 @@
 
   // ---- Screenspace intake: poll Screenspace/Transcripts + cluster for Studio ----
 
-  function pollIntakeStatus() {
-    apiGet("../screenspace/api/tasks")
+  function setIntakeDot(on) {
+    if (state._intakeTabDotOn === on) return;
+    state._intakeTabDotOn = on;
+    setTabDot("intakeTabDot", on);
+  }
+
+  function setTrIntakeDot(on) {
+    if (state._trIntakeTabDotOn === on) return;
+    state._trIntakeTabDotOn = on;
+    setTabDot("trIntakeTabDot", on);
+  }
+
+  // Screenspace intake poll: one combined request (../screenspace/api/intake-poll)
+  // for the task-status dot + curation events. Returns a Promise<boolean> — truthy
+  // ("active this tick") keeps createPoller at the fast cadence; falsy lets it back
+  // off. Replaces the former pollIntakeStatus + pollIntakeEvents pair.
+  function pollScreenspaceIntake() {
+    return apiGet("../screenspace/api/intake-poll?excluded=false")
       .then(function (data) {
         if (!data || !data.ok) {
-          state._intakeTabDotOn = false;
-          setTabDot("intakeTabDot", false);
-          return;
+          setIntakeDot(false);
+          return false;
         }
-        var tasks = data.tasks || [];
-        var running = false;
-        var hasQueued = false;
-        for (var i = 0; i < tasks.length; i++) {
-          if (tasks[i].status === "running") { running = true; break; }
-          if (tasks[i].status === "queued") hasQueued = true;
-        }
-        var dotOn = running || (data.worker_alive && hasQueued);
-        if (state._intakeTabDotOn === dotOn) return;
-        state._intakeTabDotOn = dotOn;
-        setTabDot("intakeTabDot", dotOn);
+        var status = data.status || {};
+        var dotOn = !!status.running || (status.worker_alive && !!status.queued);
+        setIntakeDot(dotOn);
+        var eventsChanged = applyIntakeEvents(data.events || []);
+        return dotOn || eventsChanged;
       })
       .catch(function () {
-        state._intakeTabDotOn = false;
-        setTabDot("intakeTabDot", false);
+        setIntakeDot(false);
+        return false;
       });
   }
 
-  function pollTrIntakeStatus() {
-    var statusP = apiGet("../transcripts/api/transcribe/status").catch(function () { return null; });
-    var modelP = apiGet("../transcripts/api/transcribe/model-status").catch(function () { return null; });
-    var partsP = apiGet("../transcripts/api/participants").catch(function () { return null; });
-    Promise.all([statusP, modelP, partsP]).then(function (results) {
-      var status = results[0];
-      var model = results[1];
-      var parts = results[2];
-      var running = false;
-      if (status && status.ok && Array.isArray(status.tasks)) {
-        for (var i = 0; i < status.tasks.length; i++) {
-          if (status.tasks[i].status === "running") { running = true; break; }
+  // Transcript intake poll: one combined request (../transcripts/api/intake-poll)
+  // for the running-state dot + resolved marks. Returns a Promise<boolean> as above.
+  // Replaces the former pollTrIntakeStatus (3-request fan-out) + pollTranscriptIntakeMarks.
+  function pollTranscriptIntake() {
+    return apiGet("../transcripts/api/intake-poll")
+      .then(function (data) {
+        if (!data || !data.ok) {
+          setTrIntakeDot(false);
+          return false;
         }
-      }
-      if (!running && model && model.ok && model.warming) running = true;
-      if (!running && parts && parts.ok && Array.isArray(parts.participants)) {
-        for (var j = 0; j < parts.participants.length; j++) {
-          var agents = parts.participants[j].agents || {};
-          if (agents.summary === "running" || agents.citations === "running") {
-            running = true;
-            break;
-          }
-        }
-      }
-      if (state._trIntakeTabDotOn === running) return;
-      state._trIntakeTabDotOn = running;
-      setTabDot("trIntakeTabDot", running);
-    });
+        var status = data.status || {};
+        var running = !!status.tasks_running || !!status.model_warming || !!status.agents_running;
+        setTrIntakeDot(running);
+        var marksChanged = applyTranscriptMarks(data.marks || {});
+        return running || marksChanged;
+      })
+      .catch(function () {
+        setTrIntakeDot(false);
+        return false;
+      });
+  }
+
+  // On-demand refresh after a user action: wake the adaptive poller so it
+  // refetches now AND resets its idle backoff to the fast cadence. Falls back to
+  // a direct poll if the poller hasn't been created yet (pre-boot).
+  function refreshScreenspaceIntake() {
+    if (state.ssIntakePoller) state.ssIntakePoller.wake();
+    else pollScreenspaceIntake();
+  }
+  function refreshTranscriptIntake() {
+    if (state.trIntakePoller) state.trIntakePoller.wake();
+    else pollTranscriptIntake();
   }
 
   // Events fed into the intake clustering surface. Navigational (boundary)
@@ -124,7 +137,7 @@
 
   // One-click boundary detection: enqueue a full-frame boundary task per
   // participant that has a source video. Progress surfaces through the existing
-  // task poll (intake tab dot) and new boundary events arrive via pollIntakeEvents.
+  // task poll (intake tab dot) and new boundary events arrive via pollScreenspaceIntake.
   function intakeDetectBoundaries(btn) {
     var labelEl = btn ? btn.querySelector("span") : null;
     var origLabel = labelEl ? labelEl.textContent : "";
@@ -151,31 +164,27 @@
       .catch(restore);
   }
 
-  function pollIntakeEvents() {
-    apiGet("../screenspace/api/events?excluded=false")
-      .then(function (data) {
-        if (!data.ok) return;
-        var events = data.events || [];
-        var raw = JSON.stringify(events);
-        if (raw === state._intakeEventsPollRaw) return;
-        state._intakeEventsPollRaw = raw;
-        var hasNew = false;
-        events.forEach(function (ev) {
-          if (!state.intakeSeenIds[ev.id]) {
-            state.intakeSeenIds[ev.id] = "new";
-            hasNew = true;
-          }
-        });
-        state.intakeEvents = events;
-        var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
-        state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
-        renderIntake(hasNew);
-        checkConvergenceTabVisibility();
-        refreshMetadataIfActive();
-      })
-      .catch(function (err) {
-        console.warn("[Intake] poll failed:", err);
-      });
+  // Apply the events slice from a Screenspace intake poll. Dirty-checks against
+  // the last raw payload; returns true when it changed (and re-rendered), false
+  // when nothing changed (so the poller can back off).
+  function applyIntakeEvents(events) {
+    var raw = JSON.stringify(events);
+    if (raw === state._intakeEventsPollRaw) return false;
+    state._intakeEventsPollRaw = raw;
+    var hasNew = false;
+    events.forEach(function (ev) {
+      if (!state.intakeSeenIds[ev.id]) {
+        state.intakeSeenIds[ev.id] = "new";
+        hasNew = true;
+      }
+    });
+    state.intakeEvents = events;
+    var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
+    state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
+    renderIntake(hasNew);
+    checkConvergenceTabVisibility();
+    refreshMetadataIfActive();
+    return true;
   }
 
   function highlightIntakeCard(idx) {
@@ -447,7 +456,7 @@
     onDismiss: trIntakeDismissCluster,
     onThresholdChange: function () {
       // TR re-polls (the poll re-reads the threshold input itself); ignores arg.
-      pollTranscriptIntakeMarks();
+      refreshTranscriptIntake();
     },
     onCardHover: function (card, idx) {
       var cluster = filteredTranscriptIntakeClusters()[idx];
@@ -459,7 +468,7 @@
       showAllToggle.addEventListener("change", function () {
         state.trIntakeShowAll = this.checked;
         state._trIntakeMarksPollFp = null;
-        pollTranscriptIntakeMarks();
+        refreshTranscriptIntake();
       });
     },
   };
@@ -594,7 +603,7 @@
   function intakeDismissCluster(cluster) {
     var ids = cluster.events.map(function (e) { return e.id; });
     apiPut("../screenspace/api/events/bulk-exclude", { ids: ids })
-      .then(function () { pollIntakeEvents(); })
+      .then(function () { refreshScreenspaceIntake(); })
       .catch(function () {});
   }
 
@@ -784,70 +793,78 @@
     }
   }
 
-  function pollTranscriptIntakeMarks() {
-    apiGet("../transcripts/api/marks")
-      .then(function (data) {
-        if (!data.ok) return;
-        var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value, 10) || 10;
-        if (!state.trIntakeShowAll) {
-          var fp =
-            String(threshold) +
-            "\0" +
-            (data.categories ? JSON.stringify(data.categories) : "") +
-            "\0" +
-            JSON.stringify(data.marks || []);
-          if (fp === state._trIntakeMarksPollFp) return;
-          state._trIntakeMarksPollFp = fp;
-        }
-        if (data.categories) setMarkCategories(data.categories);
-        state.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
-        state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);
+  // Apply the marks block ({marks, categories}) from a transcript intake poll.
+  // In default mode a fingerprint dirty-check skips redundant re-renders and
+  // returns false so the poller can back off; returns true when it re-rendered.
+  // In "Show all" mode it always refreshes (via applyTranscriptShowAll, its own
+  // participants+transcripts fan-out) and returns false — backoff there is
+  // governed by the status flags, so the heavy fan-out slows when nothing runs.
+  function applyTranscriptMarks(block) {
+    var marks = block.marks || [];
+    var categories = block.categories;
+    var threshold = parseInt((qs("#trIntakeClusterThreshold") || {}).value, 10) || 10;
+    if (!state.trIntakeShowAll) {
+      var fp =
+        String(threshold) +
+        "\0" +
+        (categories ? JSON.stringify(categories) : "") +
+        "\0" +
+        JSON.stringify(marks);
+      if (fp === state._trIntakeMarksPollFp) return false;
+      state._trIntakeMarksPollFp = fp;
+    }
+    if (categories) setMarkCategories(categories);
+    state.trIntakeMarks = marks.filter(function (m) { return m.valid; });
+    state.trIntakeClusters = clusterTranscriptMarks(state.trIntakeMarks, threshold);
+    if (state.trIntakeShowAll) {
+      applyTranscriptShowAll(threshold);
+      return false;
+    }
+    renderTranscriptIntake();
+    checkConvergenceTabVisibility();
+    refreshMetadataIfActive();
+    return true;
+  }
 
-        // If "Show all" is enabled, also fetch all segments as unmark items
-        if (state.trIntakeShowAll) {
-          apiGet("../transcripts/api/participants")
-            .then(function (pData) {
-              if (!pData.ok) return;
-              var transcribed = pData.participants.filter(function (p) { return p.has_transcript; });
-              var promises = transcribed.map(function (p) {
-                return apiGet("../transcripts/api/transcript/" + p.id);
-              });
-              Promise.all(promises).then(function (results) {
-                var markedIds = {};
-                for (var i = 0; i < state.trIntakeMarks.length; i++) markedIds[state.trIntakeMarks[i].segment_id] = true;
-                var allItems = state.trIntakeMarks.slice();
-                for (var j = 0; j < results.length; j++) {
-                  if (!results[j].ok) continue;
-                  var pid = results[j].participant;
-                  var segs = results[j].segments;
-                  for (var k = 0; k < segs.length; k++) {
-                    if (!markedIds[segs[k].id]) {
-                      allItems.push({
-                        id: null,
-                        segment_id: segs[k].id,
-                        category: null,
-                        label: null,
-                        valid: true,
-                        participant: pid,
-                        start: segs[k].start,
-                        end: segs[k].end,
-                        text: segs[k].text,
-                      });
-                    }
-                  }
-                }
-                state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
-                renderTranscriptIntake();
-                checkConvergenceTabVisibility();
-                refreshMetadataIfActive();
-              });
-            })
-            .catch(function () {});
-        } else {
+  // "Show all": append every unmarked segment as a queue item. Its own fan-out
+  // (participants + one transcript fetch each) — user-toggled, not always-on.
+  function applyTranscriptShowAll(threshold) {
+    apiGet("../transcripts/api/participants")
+      .then(function (pData) {
+        if (!pData.ok) return;
+        var transcribed = pData.participants.filter(function (p) { return p.has_transcript; });
+        var promises = transcribed.map(function (p) {
+          return apiGet("../transcripts/api/transcript/" + p.id);
+        });
+        Promise.all(promises).then(function (results) {
+          var markedIds = {};
+          for (var i = 0; i < state.trIntakeMarks.length; i++) markedIds[state.trIntakeMarks[i].segment_id] = true;
+          var allItems = state.trIntakeMarks.slice();
+          for (var j = 0; j < results.length; j++) {
+            if (!results[j].ok) continue;
+            var pid = results[j].participant;
+            var segs = results[j].segments;
+            for (var k = 0; k < segs.length; k++) {
+              if (!markedIds[segs[k].id]) {
+                allItems.push({
+                  id: null,
+                  segment_id: segs[k].id,
+                  category: null,
+                  label: null,
+                  valid: true,
+                  participant: pid,
+                  start: segs[k].start,
+                  end: segs[k].end,
+                  text: segs[k].text,
+                });
+              }
+            }
+          }
+          state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
           renderTranscriptIntake();
           checkConvergenceTabVisibility();
           refreshMetadataIfActive();
-        }
+        });
       })
       .catch(function () {});
   }
@@ -962,7 +979,7 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: ids }),
     })
-      .then(function () { pollTranscriptIntakeMarks(); })
+      .then(function () { refreshTranscriptIntake(); })
       .catch(function () {});
   }
 
@@ -1002,10 +1019,8 @@
 
   // ---- Published to the hub (window.ClipgenStudio) ----
   STUDIO.initIntake = initIntake;
-  STUDIO.pollIntakeStatus = pollIntakeStatus;
-  STUDIO.pollTrIntakeStatus = pollTrIntakeStatus;
-  STUDIO.pollIntakeEvents = pollIntakeEvents;
-  STUDIO.pollTranscriptIntakeMarks = pollTranscriptIntakeMarks;
+  STUDIO.pollScreenspaceIntake = pollScreenspaceIntake;
+  STUDIO.pollTranscriptIntake = pollTranscriptIntake;
   STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;
   STUDIO.renderIntake = renderIntake;
