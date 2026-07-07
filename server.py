@@ -50,7 +50,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 from flask import (
     Blueprint,
@@ -94,20 +94,14 @@ _generated_artifacts: list[dict[str, Any]] = []
 _generated_artifacts_index: dict[tuple[int, int, str], list[dict[str, Any]]] = {}
 _generated_reels: list[dict[str, Any]] = []
 # Bounded LRU so long sessions don't grow unbounded; entries are JPEG bytes
-# (tens of KB each), so a few hundred is plenty.
+# (tens of KB each), so a few hundred is plenty. See _MediaCache below for the
+# single-flight semantics that keep concurrent identical misses from each
+# spawning ffmpeg (api_* routes are served by Flask's threaded dev server).
 _THUMBNAIL_CACHE_MAX = 256
-_thumbnail_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
-# Guards every thumbnail cache access (get / move_to_end / insert / evict);
-# api_thumbnail is served concurrently by Flask's threaded dev server.
-_thumbnail_cache_lock = threading.Lock()
 # Card-scrubber assets (opt-in hover preview). Sprite sheets are small JPEGs;
 # audio segments are PCM WAV (~1 MB per short clip), so cap audio far lower.
 _SPRITE_CACHE_MAX = 256
-_sprite_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
-_sprite_cache_lock = threading.Lock()
 _AUDIO_CACHE_MAX = 32
-_audio_cache: "OrderedDict[tuple, bytes]" = OrderedDict()
-_audio_cache_lock = threading.Lock()
 # A second concurrent /api/generate or /api/reel call would clobber the
 # shared cancel event; reject with 409 instead while one is in flight.
 _reel_cancel_event = threading.Event()
@@ -214,28 +208,64 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     return cleaned
 
 
-def _thumbnail_cache_put(key: tuple, value: bytes) -> None:
-    """Insert into the thumbnail cache with simple LRU eviction."""
-    with _thumbnail_cache_lock:
-        _thumbnail_cache[key] = value
-        while len(_thumbnail_cache) > _THUMBNAIL_CACHE_MAX:
-            _thumbnail_cache.popitem(last=False)
+class _MediaCache:
+    """Bounded-LRU byte cache with single-flight compute.
+
+    Fast path takes the main lock only for the dict get/reorder. On a miss, a
+    per-key lock serializes concurrent identical misses so the expensive
+    producer (ffmpeg) runs once, not once per waiting request — the others wake
+    to the freshly cached bytes. The producer runs holding no main lock.
+    """
+
+    def __init__(self, max_entries: int) -> None:
+        self._store: "OrderedDict[tuple, bytes]" = OrderedDict()
+        self._max = max_entries
+        self._lock = threading.Lock()
+        self._inflight: dict[tuple, threading.Lock] = {}
+
+    def get_or_compute(
+        self, key: tuple, compute: Callable[[], bytes | None]
+    ) -> bytes | None:
+        # Fast path: cache hit.
+        with self._lock:
+            cached = self._store.get(key)
+            if cached is not None:
+                self._store.move_to_end(key)
+                return cached
+            keylock = self._inflight.get(key)
+            if keylock is None:
+                keylock = threading.Lock()
+                self._inflight[key] = keylock
+
+        with keylock:
+            # Re-check: another thread may have produced it while we waited.
+            with self._lock:
+                cached = self._store.get(key)
+                if cached is not None:
+                    self._store.move_to_end(key)
+                    return cached
+
+            value = compute()  # expensive; no main lock held
+
+            with self._lock:
+                if value is not None:
+                    self._store[key] = value
+                    while len(self._store) > self._max:
+                        self._store.popitem(last=False)
+                # Drop our in-flight marker so the dict can't grow unbounded.
+                if self._inflight.get(key) is keylock:
+                    del self._inflight[key]
+            return value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+            self._inflight.clear()
 
 
-def _sprite_cache_put(key: tuple, value: bytes) -> None:
-    """Insert into the sprite-sheet cache with simple LRU eviction."""
-    with _sprite_cache_lock:
-        _sprite_cache[key] = value
-        while len(_sprite_cache) > _SPRITE_CACHE_MAX:
-            _sprite_cache.popitem(last=False)
-
-
-def _audio_cache_put(key: tuple, value: bytes) -> None:
-    """Insert into the clip-audio cache with simple LRU eviction."""
-    with _audio_cache_lock:
-        _audio_cache[key] = value
-        while len(_audio_cache) > _AUDIO_CACHE_MAX:
-            _audio_cache.popitem(last=False)
+_thumbnail_cache = _MediaCache(_THUMBNAIL_CACHE_MAX)
+_sprite_cache = _MediaCache(_SPRITE_CACHE_MAX)
+_audio_cache = _MediaCache(_AUDIO_CACHE_MAX)
 
 
 def _try_claim_busy(slot: str) -> bool:
@@ -531,24 +561,15 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         mtime = 0.0
     # Include mtime so replacing a source file on disk invalidates stale thumbnails.
     cache_key = (str(video_path), cut_sec, mtime)
-    with _thumbnail_cache_lock:
-        cached = _thumbnail_cache.get(cache_key)
-        if cached is not None:
-            _thumbnail_cache.move_to_end(cache_key)
-    if cached is not None:
-        return Response(
-            cached,
-            mimetype="image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
-    jpeg_bytes = video.extract_thumbnail_bytes(
-        str(video_path), cut_sec, width=config.STUDIO_THUMBNAIL_WIDTH
+    jpeg_bytes = _thumbnail_cache.get_or_compute(
+        cache_key,
+        lambda: video.extract_thumbnail_bytes(
+            str(video_path), cut_sec, width=config.STUDIO_THUMBNAIL_WIDTH
+        ),
     )
     if jpeg_bytes is None:
         return err("Thumbnail extraction failed", 404)
 
-    _thumbnail_cache_put(cache_key, jpeg_bytes)
     return Response(
         jpeg_bytes,
         mimetype="image/jpeg",
@@ -627,24 +648,15 @@ def api_sprite(participant: str) -> FlaskResponse:
         rows,
         mtime,
     )
-    with _sprite_cache_lock:
-        cached = _sprite_cache.get(cache_key)
-        if cached is not None:
-            _sprite_cache.move_to_end(cache_key)
-    if cached is not None:
-        return Response(
-            cached,
-            mimetype="image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
-    sprite_bytes = video.extract_sprite_sheet_bytes(
-        str(video_path), local_start, duration, cols, rows
+    sprite_bytes = _sprite_cache.get_or_compute(
+        cache_key,
+        lambda: video.extract_sprite_sheet_bytes(
+            str(video_path), local_start, duration, cols, rows
+        ),
     )
     if sprite_bytes is None:
         return err("Sprite extraction failed", 404)
 
-    _sprite_cache_put(cache_key, sprite_bytes)
     return Response(
         sprite_bytes,
         mimetype="image/jpeg",
@@ -677,24 +689,15 @@ def api_clip_audio(participant: str) -> FlaskResponse:
     except OSError:
         mtime = 0.0
     cache_key = (str(video_path), round(local_start, 3), round(duration, 3), mtime)
-    with _audio_cache_lock:
-        cached = _audio_cache.get(cache_key)
-        if cached is not None:
-            _audio_cache.move_to_end(cache_key)
-    if cached is not None:
-        return Response(
-            cached,
-            mimetype="audio/wav",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
-
-    wav_bytes = video.extract_audio_segment_bytes(
-        str(video_path), local_start, duration
+    wav_bytes = _audio_cache.get_or_compute(
+        cache_key,
+        lambda: video.extract_audio_segment_bytes(
+            str(video_path), local_start, duration
+        ),
     )
     if wav_bytes is None:
         return err("Audio extraction failed", 404)
 
-    _audio_cache_put(cache_key, wav_bytes)
     return Response(
         wav_bytes,
         mimetype="audio/wav",
@@ -3092,14 +3095,7 @@ def _init_studio_state(worksheet: Any) -> None:
     the HTML, but spreadsheet-dependent routes report ``sheet_loaded: false``
     until a sheet is opened via ``POST /api/spreadsheets/open``.
     """
-    global \
-        _worksheet, \
-        _sheet_context, \
-        _generated_artifacts, \
-        _generated_reels, \
-        _thumbnail_cache, \
-        _sprite_cache, \
-        _audio_cache
+    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
 
     _load_studio_settings()
     _worksheet = worksheet
@@ -3115,12 +3111,9 @@ def _init_studio_state(worksheet: Any) -> None:
     with _generated_output_lock:
         _generated_artifacts, _generated_reels = viewer._load_manifest_both()
         _rebuild_artifact_index()
-    with _thumbnail_cache_lock:
-        _thumbnail_cache = OrderedDict()
-    with _sprite_cache_lock:
-        _sprite_cache = OrderedDict()
-    with _audio_cache_lock:
-        _audio_cache = OrderedDict()
+    _thumbnail_cache.clear()
+    _sprite_cache.clear()
+    _audio_cache.clear()
 
 
 # ---- Entry point ----
