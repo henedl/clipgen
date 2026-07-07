@@ -364,6 +364,29 @@ def color_present(
     return matched, float(coverage)
 
 
+def _frame_diff_mask(
+    region_a: np.ndarray,
+    region_b: np.ndarray,
+    noise_threshold: int = 0,
+) -> np.ndarray:
+    """Blur, grayscale, absdiff, threshold and morph-open two same-sized BGR regions.
+
+    Returns the binary change mask; callers derive a change ratio from it or
+    downsample it to a grid (the Change heatmap). Single source of truth for the
+    frame-diff computation shared by ``compute_frame_diff``, ``ChangeTool`` and
+    ``scan_changes``.
+    """
+    if noise_threshold <= 0:
+        noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
+    k = config.SCREENSPACE_BLUR_KERNEL
+    a_gray = cv2.cvtColor(cv2.GaussianBlur(region_a, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    b_gray = cv2.cvtColor(cv2.GaussianBlur(region_b, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(a_gray, b_gray)
+    _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
+    kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
+    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+
 def compute_frame_diff(
     region_a: np.ndarray,
     region_b: np.ndarray,
@@ -376,17 +399,7 @@ def compute_frame_diff(
     Returns:
         Change ratio 0.0-1.0 (fraction of pixels that changed).
     """
-    if noise_threshold <= 0:
-        noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
-    k = config.SCREENSPACE_BLUR_KERNEL
-    a_blur = cv2.GaussianBlur(region_a, (k, k), 0)
-    b_blur = cv2.GaussianBlur(region_b, (k, k), 0)
-    a_gray = cv2.cvtColor(a_blur, cv2.COLOR_BGR2GRAY)
-    b_gray = cv2.cvtColor(b_blur, cv2.COLOR_BGR2GRAY)
-    diff = cv2.absdiff(a_gray, b_gray)
-    _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
-    kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = _frame_diff_mask(region_a, region_b, noise_threshold)
     if mask.size == 0:
         return 0.0
     return float(np.count_nonzero(mask)) / float(mask.size)

@@ -3,6 +3,7 @@
 import numpy as np
 
 import screenspace
+import screenspace_frames
 import screenspace_scans
 import screenspace_tools
 
@@ -25,7 +26,7 @@ class TestScanInactivity:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 5.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 5.0)
         )
 
         results = screenspace.scan_inactivity(
@@ -55,7 +56,7 @@ class TestScanInactivity:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 5.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 5.0)
         )
 
         results = screenspace.scan_inactivity(
@@ -80,7 +81,7 @@ class TestScanInactivity:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 20.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 20.0)
         )
 
         results = screenspace.scan_inactivity(
@@ -111,7 +112,7 @@ class TestScanInactivity:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 4.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 4.0)
         )
 
         results = screenspace.scan_inactivity(
@@ -142,7 +143,7 @@ class TestScanInactivity:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 3.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 3.0)
         )
 
         results = screenspace.scan_inactivity(
@@ -168,7 +169,7 @@ class TestScanInactivity:
 
         monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 5.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 5.0)
         )
 
         screenspace.scan_inactivity(

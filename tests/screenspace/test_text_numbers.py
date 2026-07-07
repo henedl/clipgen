@@ -7,6 +7,7 @@ import pytest
 
 import config
 import screenspace
+import screenspace_frames
 import screenspace_ocr
 import screenspace_primitives
 import screenspace_scans
@@ -84,7 +85,7 @@ class TestOcrPreprocess:
             screenspace_ocr, "_build_ocr_reader", lambda _l: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
         monkeypatch.setattr(
             screenspace_scans,
@@ -114,7 +115,7 @@ class TestOcrPreprocess:
             screenspace_ocr, "_build_ocr_reader", lambda _l: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
         monkeypatch.setattr(
             screenspace_scans,
@@ -144,7 +145,7 @@ class TestScanText:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -183,7 +184,7 @@ class TestScanText:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -223,7 +224,7 @@ class TestScanText:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -265,7 +266,7 @@ class TestScanText:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -313,7 +314,7 @@ class TestScanText:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -362,7 +363,7 @@ class TestScanText:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -535,7 +536,7 @@ class TestScanNumbers:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -583,7 +584,7 @@ class TestScanNumbers:
     @pytest.mark.parametrize("threshold", [-0.1, 1.1])
     def test_invalid_ocr_confidence_threshold_raises(self, monkeypatch, threshold):
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
         with pytest.raises(ValueError, match="ocr_confidence_threshold"):
             screenspace.scan_numbers(
@@ -609,7 +610,7 @@ class TestScanNumbers:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):
@@ -648,7 +649,7 @@ class TestScanNumbers:
             screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
         )
         monkeypatch.setattr(
-            screenspace_scans, "_probe_video_meta", lambda p: (30.0, 1.0)
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
         )
 
         def fake_scan(video_path, region, interval, callback, **kwargs):

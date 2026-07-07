@@ -7,7 +7,6 @@ template, flow, scene, inactivity, boundary). Scans never call each other.
 Imports primitives, OCR helpers, and frame extractors from sibling modules.
 """
 
-import difflib
 import subprocess
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -21,11 +20,11 @@ import config
 import utils
 from screenspace_primitives import (
     _ConsecutiveBuffer,
+    _frame_diff_mask,
     _frame_is_static,
     _is_static_skip,
     _match_template_prepared,
     _merge_timestamp_spans,
-    _morph_kernel,
     _prepare_template,
     _scale_template,
     color_matches,
@@ -36,18 +35,16 @@ from screenspace_primitives import (
     compute_scene_fingerprint,
 )
 from screenspace_ocr import (
-    _NUMBERS_RE,
-    _OCR_DIGITS_ONLY_ALLOWLIST,
-    _OCR_NUMBER_ALLOWLIST,
     _VALID_OPERATORS,
     _effective_ocr_confidence_threshold,
-    _normalize_ocr_text,
-    _ocr_readtext,
-    _number_matches,
-    _preprocess_for_ocr,
+    _numbers_ocr_allowlist,
+    _ocr_region_readings,
+    _score_numbers_readings,
+    _score_text_readings,
 )
 from screenspace_frames import (
     _probe_video_meta,
+    _resolve_scan_window,
     build_timelapse_command,
     scan_video_frames,
     scan_video_full_frames,
@@ -83,13 +80,10 @@ def scan_color(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     matches: list[float] = []
 
@@ -151,18 +145,13 @@ def scan_changes(
     if noise_threshold <= 0:
         noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    prev_gray: list[np.ndarray | None] = [None]
-    k = config.SCREENSPACE_BLUR_KERNEL
-    morph_kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
+    prev_pixels: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
     # change_grid feeds only the Change heatmap; skip the per-frame downsample
     # entirely when heatmaps are disabled (the data would just be discarded).
@@ -173,13 +162,8 @@ def scan_changes(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        curr_gray = cv2.cvtColor(
-            cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY
-        )
-        if prev_gray[0] is not None:
-            diff = cv2.absdiff(prev_gray[0], curr_gray)
-            _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, morph_kernel)
+        if prev_pixels[0] is not None:
+            mask = _frame_diff_mask(prev_pixels[0], pixels, noise_threshold)
             mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
             if mag >= threshold:
                 rd: dict[str, Any] = {"timestamp": ts, "magnitude": round(mag, 4)}
@@ -210,7 +194,7 @@ def scan_changes(
                         on_result(emitted)
             else:
                 buf.reset()
-        prev_gray[0] = curr_gray
+        prev_pixels[0] = pixels
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -258,13 +242,10 @@ def scan_similarity(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     ref_phash = compute_phash(reference_frame)
@@ -372,16 +353,18 @@ def scan_text(
     if languages is None:
         languages = ["en"]
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    search_cmp = _normalize_ocr_text(search_string, ocr_normalize)
+    text_params: dict[str, Any] = {
+        "search_string": search_string,
+        "fuzzy_threshold": fuzzy_threshold,
+        "ocr_confidence_threshold": ocr_confidence_threshold,
+        "ocr_normalize": ocr_normalize,
+    }
     prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
 
@@ -400,21 +383,11 @@ def scan_text(
             total_range,
         ):
             return None
-        ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = _ocr_readtext(languages, ocr_input, detail=1)
-        matched_rd: dict[str, Any] | None = None
-        for _, text, conf in ocr_results:
-            if conf < ocr_confidence_threshold:
-                continue
-            ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
-            ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
-            if ratio >= fuzzy_threshold:
-                matched_rd = {
-                    "timestamp": ts,
-                    "text_found": text,
-                    "confidence": round(conf, 4),
-                }
-                break
+        readings = _ocr_region_readings(
+            pixels, languages=languages, preprocess=ocr_preprocess
+        )
+        passed, detail = _score_text_readings(readings, text_params)
+        matched_rd = {"timestamp": ts, **detail} if passed else None
         if matched_rd is not None:
             emitted = buf.push(ts, matched_rd)
             if emitted is not None:
@@ -482,22 +455,22 @@ def scan_numbers(
     if languages is None:
         languages = ["en"]
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
+    numbers_params: dict[str, Any] = {
+        "operator": operator,
+        "target_value": target_value,
+        "range_min": range_min,
+        "range_max": range_max,
+        "ocr_confidence_threshold": ocr_confidence_threshold,
+    }
     # Hoisted out of the per-frame callback: constrain English OCR to digits.
-    ocr_kwargs: dict[str, Any] = {"detail": 1}
-    if languages == ["en"]:
-        ocr_kwargs["allowlist"] = (
-            _OCR_DIGITS_ONLY_ALLOWLIST if integers_only else _OCR_NUMBER_ALLOWLIST
-        )
+    numbers_allowlist = _numbers_ocr_allowlist(languages, integers_only)
     buf = _ConsecutiveBuffer(require_consecutive)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
@@ -515,24 +488,14 @@ def scan_numbers(
             total_range,
         ):
             return None
-        ocr_input = _preprocess_for_ocr(pixels) if ocr_preprocess else pixels
-        ocr_results = _ocr_readtext(languages, ocr_input, **ocr_kwargs)
-        matched_rd: dict[str, Any] | None = None
-        for _, text, conf in ocr_results:
-            if conf < ocr_confidence_threshold:
-                continue
-            cleaned = text.replace(",", "")
-            for match in _NUMBERS_RE.findall(cleaned):
-                num = float(match)
-                if _number_matches(num, operator, target_value, range_min, range_max):
-                    matched_rd = {
-                        "timestamp": ts,
-                        "number_found": num,
-                        "confidence": round(conf, 4),
-                    }
-                    break
-            if matched_rd is not None:
-                break
+        readings = _ocr_region_readings(
+            pixels,
+            languages=languages,
+            allowlist=numbers_allowlist,
+            preprocess=ocr_preprocess,
+        )
+        passed, detail = _score_numbers_readings(readings, numbers_params)
+        matched_rd = {"timestamp": ts, **detail} if passed else None
         if matched_rd is not None:
             emitted = buf.push(ts, matched_rd)
             if emitted is not None:
@@ -677,13 +640,10 @@ def scan_template(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
 
@@ -830,13 +790,10 @@ def scan_flow(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
@@ -942,13 +899,10 @@ def scan_scene(
     if not ref_fps:
         return []
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_skip_gray: list[np.ndarray | None] = [None]
@@ -1039,13 +993,10 @@ def scan_inactivity(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
     prev_hash: list["imagehash.ImageHash | None"] = [None]
@@ -1374,13 +1325,10 @@ def scan_boundaries(
     use_scene = metric in ("scene", "hybrid")
     is_hybrid = metric == "hybrid"
 
-    vid_fps, vid_duration = _probe_video_meta(video_path)
-    if vid_fps <= 0:
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
         return []
-
-    if end_seconds is None or end_seconds > vid_duration:
-        end_seconds = vid_duration
-    total_range = end_seconds - start_seconds
+    vid_fps, vid_duration, end_seconds, total_range = window
 
     # Downscale frames at the ffmpeg pipe. Scene/hybrid fingerprinting needs more
     # detail than the coarse phash dim (the HSV histogram is too sparse at 64 px).

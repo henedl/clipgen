@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 import screenspace
+import screenspace_frames
 import screenspace_primitives
 import screenspace_scans
 from _ss_helpers import _make_icon, _make_icon_frame
@@ -36,7 +37,7 @@ def _feed_region(monkeypatch, sequence):
                 break
 
     monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
-    monkeypatch.setattr(screenspace_scans, "_probe_video_meta", lambda p: (30.0, 10.0))
+    monkeypatch.setattr(screenspace_frames, "_probe_video_meta", lambda p: (30.0, 10.0))
 
 
 def _feed_full(monkeypatch, sequence):
@@ -48,7 +49,7 @@ def _feed_full(monkeypatch, sequence):
                 break
 
     monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
-    monkeypatch.setattr(screenspace_scans, "_probe_video_meta", lambda p: (30.0, 10.0))
+    monkeypatch.setattr(screenspace_frames, "_probe_video_meta", lambda p: (30.0, 10.0))
 
 
 class TestFlowStaticGate:

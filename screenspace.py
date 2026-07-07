@@ -48,6 +48,7 @@ from screenspace_primitives import (
     FULL_FRAME_REGION_NAME,
     ScanCallback,
     _ConsecutiveBuffer,
+    _frame_diff_mask,
     _frame_is_static,
     _is_static_skip,
     _merge_timestamp_spans,
@@ -85,6 +86,7 @@ from screenspace_ocr import (
 from screenspace_frames import (
     _ffmpeg_pipe_frames,
     _probe_video_meta,
+    _resolve_scan_window,
     _scan_via_ffmpeg_pipe,
     build_timelapse_command,
     scan_video_frames,
