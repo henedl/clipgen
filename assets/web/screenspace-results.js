@@ -644,6 +644,7 @@
       var filename = results.split("/").pop();
       if (ext === "gif") {
         var img = document.createElement("img");
+        img.decoding = "async";
         img.src = "media/" + filename;
         wrapper.appendChild(img);
       } else {
@@ -755,6 +756,7 @@
         var thumb = el("div", "heatmap-thumb");
         var media = el("div", "heatmap-thumb-media");
         var img = document.createElement("img");
+        img.decoding = "async";
         img.src = "media/" + view.src;
         img.alt = view.alt;
         media.appendChild(img);

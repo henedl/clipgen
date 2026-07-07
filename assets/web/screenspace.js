@@ -1257,6 +1257,7 @@
       item.setAttribute("data-pin-id", pin.id);
 
       var img = document.createElement("img");
+      img.decoding = "async";
       img.className = "pin-tray-thumb";
       img.alt = "";
       img.loading = "lazy";
@@ -2691,6 +2692,7 @@
       }
       var uploadInfo = el("span", "param-value template-upload-info");
       var uploadThumb = document.createElement("img");
+      uploadThumb.decoding = "async";
       uploadThumb.src = "data:image/png;base64," + state.uploadedTemplate.data;
       uploadThumb.alt = "Uploaded template";
       uploadThumb.title = state.uploadedTemplate.name;

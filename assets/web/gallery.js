@@ -116,6 +116,7 @@
         card.appendChild(createGalleryLoopVideo(src, altText));
       } else {
         var img = document.createElement("img");
+        img.decoding = "async";
         img.src = src;
         img.alt = altText;
         img.loading = "lazy";
@@ -185,6 +186,7 @@
       content.appendChild(createLoopVideo(src, altText));
     } else {
       var img = document.createElement("img");
+      img.decoding = "async";
       img.src = src;
       img.alt = altText;
       content.appendChild(img);

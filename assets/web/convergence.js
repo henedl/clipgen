@@ -94,6 +94,7 @@
     if (_cvFramePreviewEl) return _cvFramePreviewEl;
     var wrap = el("div", "cv-frame-preview hidden");
     var img = document.createElement("img");
+    img.decoding = "async";
     img.className = "cv-frame-preview-img";
     img.alt = "";
     wrap.appendChild(img);

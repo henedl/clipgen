@@ -121,6 +121,7 @@
         media.src = a.file;
       } else {
         media = document.createElement("img");
+        media.decoding = "async";
         media.src = a.file;
         media.alt = a.description || a.type;
         media.loading = "lazy";
@@ -234,6 +235,7 @@
           }
           _thumbCache[artifact.id] = url;
           var img = document.createElement("img");
+          img.decoding = "async";
           img.src = url;
           img.alt = artifact.description || "";
           mediaEl.classList.remove("thumb-pending");
@@ -384,6 +386,7 @@
       if (!media || media.querySelector("img")) return;
       if (_thumbCache[a.id]) {
         var img = document.createElement("img");
+        img.decoding = "async";
         img.src = _thumbCache[a.id];
         img.alt = a.description || "";
         media.classList.remove("thumb-pending");
@@ -1445,6 +1448,7 @@
       var media = el("div", "artifact-media");
       if (a.type === "screen" || a.type === "gif") {
         var img = document.createElement("img");
+        img.decoding = "async";
         img.src = a.file;
         img.alt = a.description || "";
         img.loading = "lazy";
@@ -1452,6 +1456,7 @@
       } else if (a.type === "clip") {
         if (_thumbCache[a.id]) {
           var cimg = document.createElement("img");
+          cimg.decoding = "async";
           cimg.src = _thumbCache[a.id];
           cimg.alt = a.description || "";
           media.classList.add("thumb-loaded");
@@ -1621,6 +1626,7 @@
 
     if (a.type === "screen") {
       var img = document.createElement("img");
+      img.decoding = "async";
       img.src = a.file;
       img.alt = a.description || "screenshot";
       preview.appendChild(img);
@@ -1629,6 +1635,7 @@
         preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
       } else {
         var gifImg = document.createElement("img");
+        gifImg.decoding = "async";
         gifImg.src = a.file;
         gifImg.alt = a.description || "gif";
         preview.appendChild(gifImg);
@@ -1696,6 +1703,7 @@
 
     if (a.type === "screen") {
       var img = document.createElement("img");
+      img.decoding = "async";
       img.src = a.file;
       img.alt = a.description || "screenshot";
       preview.appendChild(img);
@@ -1708,6 +1716,7 @@
         preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
       } else {
         var gifImg = document.createElement("img");
+        gifImg.decoding = "async";
         gifImg.src = a.file;
         gifImg.alt = a.description || "gif";
         preview.appendChild(gifImg);
@@ -2119,6 +2128,7 @@
 
     if (a.type === "screen") {
       var img = document.createElement("img");
+      img.decoding = "async";
       img.src = a.file;
       img.alt = a.description || "screenshot";
       preview.appendChild(img);
@@ -2127,6 +2137,7 @@
         preview.appendChild(createLoopVideo(a.file, a.description || "gif"));
       } else {
         var gifImg = document.createElement("img");
+        gifImg.decoding = "async";
         gifImg.src = a.file;
         gifImg.alt = a.description || "gif";
         preview.appendChild(gifImg);
