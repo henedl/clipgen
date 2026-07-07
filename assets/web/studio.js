@@ -2250,6 +2250,7 @@
     thumb.dataset.start = opts.start;
     thumb.dataset.end = Number(opts.start) + Number(opts.duration);
     var img = document.createElement("img");
+    img.decoding = "async";
     img.alt = "";
     img.draggable = false;
     thumb.appendChild(img);
@@ -2882,6 +2883,7 @@
 
     picks.forEach(function (item, idx) {
       var img = document.createElement("img");
+      img.decoding = "async";
       img.className = "stash-card-icon-img";
       img.alt = "";
       img.draggable = false;

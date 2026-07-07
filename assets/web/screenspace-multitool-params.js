@@ -270,6 +270,7 @@
       info.innerHTML = "";
       if (step._upload) {
         var thumb = document.createElement("img");
+        thumb.decoding = "async";
         thumb.src = "data:image/png;base64," + step._upload.data;
         thumb.alt = "Uploaded template";
         thumb.title = step._upload.name;

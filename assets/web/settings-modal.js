@@ -694,6 +694,7 @@
     var preview = el("div", "card-tile-preview card-tile-preview--" + item.kind);
     if (item.url) {
       var img = document.createElement("img");
+      img.decoding = "async";
       img.src = item.url;
       img.alt = item.label;
       img.loading = "lazy";
