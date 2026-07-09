@@ -1745,13 +1745,23 @@
       });
       return;
     }
-    // Loaded participant: fire the PUT, repaint the segment's severity dot in place.
-    apiPut("api/marks/" + markId, { severity: sev });
+    // Loaded participant: optimistically repaint the dot, restore on failure
+    // (mirrors updateMarkCategory).
     var found = _findSegmentByMarkId(markId);
-    if (found) {
-      found.mark.severity = sev;
-      _paintSegmentMark(found.idx, found.mark);
+    if (!found) {
+      apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
+        if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      });
+      return;
     }
+    var prevSeverity = found.mark.severity;
+    found.mark.severity = sev;
+    _paintSegmentMark(found.idx, found.mark);
+    apiPut("api/marks/" + markId, { severity: sev }).catch(function () {
+      found.mark.severity = prevSeverity;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
+    });
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
@@ -1817,9 +1827,10 @@
     }
     sevSelect.value = markObj.severity || "";
     sevSelect.onchange = function () {
-      var v = sevSelect.value;
-      markObj.severity = v || null;
-      updateMarkSeverity(markObj.id, v);
+      // updateMarkSeverity owns the mark-state mutation (like updateMarkCategory)
+      // so it can capture the previous value and roll back on failure. markObj is
+      // the live seg.marks[0]/streaming-cache ref, so it stays in sync.
+      updateMarkSeverity(markObj.id, sevSelect.value);
     };
 
     // Remove button
