@@ -156,6 +156,55 @@ def test_cluster_spans_preserves_member_indices_for_unsorted_input():
     assert out == [(0.0, 6.0, [1, 0])]
 
 
+def test_apply_span_padding_noop_by_default():
+    assert utils.apply_span_padding(10.0, 20.0) == (10.0, 20.0)
+
+
+def test_apply_span_padding_extends_both_ends():
+    assert utils.apply_span_padding(10.0, 20.0, pad_pre=3.0, pad_post=2.0) == (
+        7.0,
+        22.0,
+    )
+
+
+def test_apply_span_padding_negative_pads_trim_inward():
+    assert utils.apply_span_padding(10.0, 20.0, pad_pre=-2.0, pad_post=-3.0) == (
+        12.0,
+        17.0,
+    )
+
+
+def test_apply_span_padding_floors_start_at_zero():
+    assert utils.apply_span_padding(1.0, 5.0, pad_pre=5.0) == (0.0, 5.0)
+
+
+def test_apply_span_padding_enforces_minimum_one_second_span():
+    # Trimming the end below start+1 clamps the end back up.
+    assert utils.apply_span_padding(10.0, 10.4, pad_post=-1.0) == (10.0, 11.0)
+
+
+def test_apply_span_padding_caps_at_max_duration():
+    assert utils.apply_span_padding(10.0, 40.0, max_duration=10.0) == (10.0, 20.0)
+
+
+def test_apply_span_padding_max_duration_never_below_one_second():
+    # A sub-1s max_duration cap can't shrink the span below the 1-second floor.
+    assert utils.apply_span_padding(10.0, 20.0, max_duration=0.5) == (10.0, 11.0)
+
+
+def test_apply_span_padding_clamps_end_to_limit():
+    # A large pad_post past EOF is clamped to the limit, not left to be skipped.
+    assert utils.apply_span_padding(90.0, 100.0, pad_post=20.0, limit=105.0) == (
+        90.0,
+        105.0,
+    )
+
+
+def test_apply_span_padding_keeps_span_inside_tiny_limit():
+    # start is pulled back so at least a 1s span survives within the limit.
+    assert utils.apply_span_padding(50.0, 60.0, pad_post=10.0, limit=3.0) == (2.0, 3.0)
+
+
 def test_parse_cell_annotations_splits_segment_and_cell_annotations():
     # !key should annotate the preceding timestamp and also appear as a cell-level annotation.
     cleaned, segment_annotations, cell_annotations = utils.parse_cell_annotations(

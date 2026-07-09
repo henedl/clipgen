@@ -490,6 +490,9 @@ def _process_single_clip_segments(
     cancel_flag: Callable[[], bool] | None = None,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float = 0.0,
 ) -> tuple[int, list[tuple[str, int]]]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
 
@@ -509,6 +512,11 @@ def _process_single_clip_segments(
         cancel_flag: Optional callable; checked before each segment and forwarded to
             ffmpeg helpers so an in-flight encode can be terminated. Already-finished
             segments are kept; the partial output of the killed segment is unlinked.
+        pad_pre: Seconds to extend each clip's start earlier (negative trims inward).
+        pad_post: Seconds to extend each clip's end later (negative trims inward).
+            No effect on gifs/screenshots (they key off the start time only).
+        max_duration: When > 0, cap each (padded) clip's length to this many seconds
+            by pulling the end in; also caps gif duration.
 
     Returns:
         (number of segments successfully generated, list of (out_path, time_index) pairs
@@ -541,9 +549,35 @@ def _process_single_clip_segments(
     # path (unchanged behavior, no probing).
     timeline = clip.get("source_timeline")
 
+    # Padding / max-duration (Workflows artifact nodes). The default path is a
+    # no-op and never probes. We only need the EOF limit when *extending* the end
+    # (pad_post > 0), since run_ffmpeg silently skips a clip that runs past EOF;
+    # trimming or capping can never push the end out.
+    padding_active = pad_pre != 0.0 or pad_post != 0.0 or max_duration > 0.0
+    span_limit: float | None = None
+    if pad_post > 0.0:
+        if timeline:
+            span_limit = float(sum(seg[1] for seg in timeline))
+        else:
+            span_limit = video.get_file_duration(base_video)
+
     for time_idx, (start_time, end_time) in enumerate(clip["times"]):
         if cancel_flag and cancel_flag():
             break
+        # Screenshots are a single frame with no duration — leave them untouched.
+        if padding_active and output_format != "screen":
+            s0 = utils.timestamp_to_seconds(start_time) or 0.0
+            e0 = utils.timestamp_to_seconds(end_time) or 0.0
+            s0, e0 = utils.apply_span_padding(
+                s0,
+                e0,
+                pad_pre=pad_pre,
+                pad_post=pad_post,
+                max_duration=max_duration,
+                limit=span_limit,
+            )
+            start_time = utils.seconds_to_timestamp(s0, force_hours=True)
+            end_time = utils.seconds_to_timestamp(e0, force_hours=True)
         try:
             out_name = files.get_unique_filename(template, file_format=file_extension)
             if config.DEBUGGING:
@@ -631,9 +665,14 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             else:  # output_format == 'gif'
+                # pad_pre already shifted cut_ts (start) above; pad_post is moot
+                # for a fixed-length gif. max_duration caps the gif's length,
+                # floored at 1s so a fractional cap (< 1) never yields a 0s gif.
                 gif_duration = config.DEFAULT_GIF_DURATION_SECONDS
                 if remaining is not None:
                     gif_duration = min(gif_duration, remaining)
+                if max_duration > 0:
+                    gif_duration = max(1, min(gif_duration, int(max_duration)))
                 ok = video.extract_gif(
                     input_file=src_path,
                     output_file=out_name,
@@ -1004,6 +1043,9 @@ def process_clips(
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
     clear_titlecard_cache: bool = True,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float = 0.0,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process and generate outputs from the clips list.
 
@@ -1114,6 +1156,9 @@ def process_clips(
                 cancel_flag=cancel_flag,
                 titlecards_enabled=titlecards_enabled,
                 titlecard_duration_seconds=titlecard_duration_seconds,
+                pad_pre=pad_pre,
+                pad_post=pad_post,
+                max_duration=max_duration,
             )
 
         def _cut_error(idx: int, exc: Exception) -> tuple[int, list[tuple[str, int]]]:
@@ -1174,6 +1219,9 @@ def process_clips(
                         cancel_flag=cancel_flag,
                         titlecards_enabled=titlecards_enabled,
                         titlecard_duration_seconds=titlecard_duration_seconds,
+                        pad_pre=pad_pre,
+                        pad_post=pad_post,
+                        max_duration=max_duration,
                     )
                     progress.update(cut_task, advance=1)
         else:
@@ -1197,6 +1245,9 @@ def process_clips(
                     cancel_flag=cancel_flag,
                     titlecards_enabled=titlecards_enabled,
                     titlecard_duration_seconds=titlecard_duration_seconds,
+                    pad_pre=pad_pre,
+                    pad_post=pad_post,
+                    max_duration=max_duration,
                 )
 
     # -- Phase 3: Build artifacts and transcribe (sequential) ------------------
@@ -1388,6 +1439,9 @@ def process_reel(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float = 0.0,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Process clips for reel mode: generate individual clips, concatenate into one video, clean up.
 
@@ -1414,6 +1468,9 @@ def process_reel(
             progress_cb=progress_cb,
             titlecards_enabled=titlecards_enabled,
             titlecard_duration_seconds=titlecard_duration_seconds,
+            pad_pre=pad_pre,
+            pad_post=pad_post,
+            max_duration=max_duration,
         )
     finally:
         # Endcard temp files are cached per-process across every wrap call;
@@ -1430,6 +1487,9 @@ def _process_reel(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float = 0.0,
 ) -> tuple[int, list[dict[str, Any]]]:
     """Reel build implementation; see process_reel for the public contract."""
     if not clips_list:
@@ -1473,6 +1533,9 @@ def _process_reel(
             cancel_flag=cancel_flag,
             titlecards_enabled=titlecards_enabled,
             titlecard_duration_seconds=titlecard_duration_seconds,
+            pad_pre=pad_pre,
+            pad_post=pad_post,
+            max_duration=max_duration,
         )
         times = clip.get("times", [])
         clip_components = [

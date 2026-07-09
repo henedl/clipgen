@@ -1681,6 +1681,44 @@ def cluster_spans(
     return out
 
 
+def apply_span_padding(
+    start: float,
+    end: float,
+    *,
+    pad_pre: float = 0.0,
+    pad_post: float = 0.0,
+    max_duration: float = 0.0,
+    limit: float | None = None,
+) -> tuple[float, float]:
+    """Pad a single (start, end) second-span and clamp it to a single shorter span.
+
+    Unlike cluster_spans (which splits an over-long span into back-to-back
+    sub-clips), this shortens the end so the result stays one span — the
+    behavior the Workflows artifact nodes want.
+
+    - Pads are signed: positive extends outward, negative trims inward
+      (start += -pad_pre, end += pad_post).
+    - When ``limit`` is given (e.g. the source video's EOF in seconds), the end
+      is capped there and the start kept at most ``limit - 1`` so a valid span
+      survives — avoids run_ffmpeg skipping a clip padded past end-of-video.
+    - When ``max_duration > 0`` and the padded span still exceeds it, the end is
+      pulled in to ``start + max_duration``.
+    - start is floored at 0; end is floored at start + 1s (min 1-second span).
+      This is applied last, so it wins over a sub-1s ``max_duration`` cap — the
+      result is never shorter than a second.
+    """
+    s = max(0.0, start - pad_pre)
+    e = end + pad_post
+    if limit is not None:
+        e = min(e, limit)
+        s = min(s, max(0.0, limit - 1))
+    if max_duration > 0 and (e - s) > max_duration:
+        e = s + max_duration
+    if e < s + 1:
+        e = s + 1
+    return s, e
+
+
 # ---- Interactive control flow ----
 
 
