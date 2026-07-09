@@ -4082,18 +4082,51 @@
 
   // ---- Artifact log ----
 
+  // Backdrop veil animation, mirroring the shared Settings modal.
+  var LOG_BLUR_PX = 12;
+  var LOG_VEIL_ALPHA = 0.45;
+  var LOG_EXIT_MS = 360;
+  var _logCloseTimer = null;
+
   function openLog() {
     var overlay = qs("#logOverlay");
     var wasHidden = overlay.classList.contains("hidden");
+    if (_logCloseTimer) {
+      clearTimeout(_logCloseTimer);
+      _logCloseTimer = null;
+    }
+    overlay.style.setProperty("--host-blur", "0px");
+    overlay.style.setProperty("--veil-alpha", "0");
     overlay.classList.remove("hidden");
+    document.body.classList.add("modal-open");
     openModalTrap(overlay, closeLog);
+    // Next frame: build in the backdrop blur + dark veil.
+    requestAnimationFrame(function () {
+      overlay.style.setProperty("--host-blur", LOG_BLUR_PX + "px");
+      overlay.style.setProperty("--veil-alpha", String(LOG_VEIL_ALPHA));
+    });
     popOverlayCardIn(qs(".log-panel"), wasHidden);
     renderLog();
   }
 
   function closeLog() {
-    closeModalTrap(qs("#logOverlay"));
-    qs("#logOverlay").classList.add("hidden");
+    var overlay = qs("#logOverlay");
+    overlay.style.setProperty("--host-blur", "0px");
+    overlay.style.setProperty("--veil-alpha", "0");
+    // Animate the card out alongside the veil fade (pop exits in 150ms, well
+    // inside LOG_EXIT_MS); animateIn on the next open supersedes the held state.
+    var card = qs(".log-panel");
+    if (card && window.ClipgenMotion) ClipgenMotion.animateOut(card, "pop");
+    // Release the focus trap + topnav gate only once the overlay actually hides,
+    // so focus stays trapped in the dialog through the fade (not restored to the
+    // trigger while the veil is still visible). Matches Settings' timing.
+    if (_logCloseTimer) clearTimeout(_logCloseTimer);
+    _logCloseTimer = setTimeout(function () {
+      closeModalTrap(overlay);
+      overlay.classList.add("hidden");
+      document.body.classList.remove("modal-open");
+      _logCloseTimer = null;
+    }, LOG_EXIT_MS);
   }
 
   function renderLog() {

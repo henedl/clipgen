@@ -46,6 +46,16 @@ body.dragging .topnav {
   background: var(--bg);
 }
 
+/* While a full-screen modal veil is up (Settings, Artifact Log), drop the glass
+ * bar's own backdrop-filter so the overlay's veil composites over it — otherwise
+ * the topnav's own blur promotes it to a crisp glass layer that reads through
+ * the veil. Gate: body.modal-open, set by those modals' open/close. Keeps the
+ * translucent bg (unlike body.dragging) so the veil dims the bar. */
+body.modal-open .topnav {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .topnav-left,
 .topnav-right {
   flex: 1 1 0;
