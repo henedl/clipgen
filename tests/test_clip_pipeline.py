@@ -48,6 +48,77 @@ def test_process_clips_counts_generated_segments_for_all_formats(
     assert extract_gif.call_count == 2
 
 
+def _padding_test_setup(monkeypatch, make_clip, times):
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, times)
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(
+        clipgen.files,
+        "get_unique_filename",
+        lambda _t, file_format=None: f"out{file_format or '.mp4'}",
+    )
+    # Large EOF so pad_post never clamps in these assertions.
+    monkeypatch.setattr(clipgen.video, "get_file_duration", lambda _p: 10_000)
+    run_ffmpeg = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+    return raw_clip, run_ffmpeg
+
+
+def test_process_clips_pads_and_clamps_cut_timestamps(monkeypatch, make_clip):
+    raw_clip, run_ffmpeg = _padding_test_setup(
+        monkeypatch,
+        make_clip,
+        [("00:10", "01:10")],  # 60s span
+    )
+    # pad start 3s earlier, end 2s later → (7, 72); max_duration 10 caps end to 17.
+    clipgen.process_clips(
+        [raw_clip], output_format="clip", pad_pre=3.0, pad_post=2.0, max_duration=10.0
+    )
+    _, kwargs = run_ffmpeg.call_args
+    assert kwargs["start_pos"] == "0:00:07"
+    assert kwargs["end_pos"] == "0:00:17"
+
+
+def test_process_clips_no_padding_leaves_timestamps_untouched(monkeypatch, make_clip):
+    raw_clip, run_ffmpeg = _padding_test_setup(
+        monkeypatch, make_clip, [("00:10", "00:20")]
+    )
+    clipgen.process_clips([raw_clip], output_format="clip")
+    _, kwargs = run_ffmpeg.call_args
+    # Default (no-op) path passes the original strings straight through.
+    assert kwargs["start_pos"] == "00:10"
+    assert kwargs["end_pos"] == "00:20"
+
+
+def test_process_clips_gif_fractional_max_duration_floors_to_one(
+    monkeypatch, make_clip
+):
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(
+        clipgen.files,
+        "get_unique_filename",
+        lambda _t, file_format=None: f"out{file_format or '.gif'}",
+    )
+    extract_gif = Mock(return_value=True)
+    monkeypatch.setattr(clipgen.video, "extract_gif", extract_gif)
+    # A sub-1s cap must floor the gif to 1s, never truncate to a 0s (invalid) gif.
+    clipgen.process_clips([raw_clip], output_format="gif", max_duration=0.5)
+    _, kwargs = extract_gif.call_args
+    assert kwargs["duration_seconds"] == 1
+
+
 def test_prepare_clip_converts_clock_timestamps_to_relative(monkeypatch, make_clip):
     # Arrange a clip with a baseline and clock-style timestamps.
     raw_clip = make_clip(row=3, col=2)

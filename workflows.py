@@ -541,6 +541,22 @@ NODE_TYPES: dict[str, NodeType] = {
                 "max": 30,
                 "label": "Titlecard duration (s)",
             },
+            # Pad fields omit "min" so the number input accepts negatives
+            # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
+            {
+                "name": "pad_start",
+                "type": "number",
+                "default": 0,
+                "label": "Pad start (s)",
+            },
+            {"name": "pad_end", "type": "number", "default": 0, "label": "Pad end (s)"},
+            {
+                "name": "max_duration",
+                "type": "number",
+                "default": 0,
+                "min": 0,
+                "label": "Max duration (s, 0 = none)",
+            },
         ],
         "requires": ["videoDir"],
     },
@@ -599,6 +615,22 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "bool",
                 "default": False,
                 "label": "Chronological order",
+            },
+            # Pad fields omit "min" so the number input accepts negatives
+            # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
+            {
+                "name": "pad_start",
+                "type": "number",
+                "default": 0,
+                "label": "Pad start (s)",
+            },
+            {"name": "pad_end", "type": "number", "default": 0, "label": "Pad end (s)"},
+            {
+                "name": "max_duration",
+                "type": "number",
+                "default": 0,
+                "min": 0,
+                "label": "Max duration (s, 0 = none)",
             },
         ],
         "requires": ["videoDir"],
@@ -1952,6 +1984,23 @@ def _exec_highlights(
     return {"clips": {"records": selected, "study": study}}
 
 
+def _artifact_padding_params(params: dict[str, Any]) -> tuple[float, float, float]:
+    """Read the pad-start/pad-end/max-duration node params for the pipeline.
+
+    Returns ``(pad_pre, pad_post, max_duration)``; all default to a no-op (0.0).
+    Pads are signed (negative = trim inward). Shared by the Make Clips and Build
+    Reel executors.
+    """
+
+    def _num(key: str) -> float:
+        try:
+            return float(params.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return _num("pad_start"), _num("pad_end"), _num("max_duration")
+
+
 def _exec_make_clips(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1990,6 +2039,7 @@ def _exec_make_clips(
             "artifacts": {"artifacts": [], "study": study, "count": 0},
             "__note__": "No clips to render — wire clips, a time range, or a video",
         }
+    pad_pre, pad_post, max_duration = _artifact_padding_params(params)
     count, artifacts = pipeline.process_clips(
         records,
         output_format=output_format,
@@ -1997,6 +2047,9 @@ def _exec_make_clips(
         cancel_flag=ctx.cancel_flag,
         titlecards_enabled=titlecards,
         titlecard_duration_seconds=titlecard_duration,
+        pad_pre=pad_pre,
+        pad_post=pad_post,
+        max_duration=max_duration,
     )
     return {"artifacts": {"artifacts": artifacts, "study": study, "count": count}}
 
@@ -2239,8 +2292,14 @@ def _exec_build_reel(
     # treats a supplied output_file as a reservation and releases it on failure).
     name = utils.sanitize_filename(str(params.get("name", "") or "").strip()) or "reel"
     output_file = files.get_unique_filename(f"{name}{config.FILEFORMAT}")
+    pad_pre, pad_post, max_duration = _artifact_padding_params(params)
     count, reels = pipeline.process_reel(
-        records, output_file=output_file, cancel_flag=ctx.cancel_flag
+        records,
+        output_file=output_file,
+        cancel_flag=ctx.cancel_flag,
+        pad_pre=pad_pre,
+        pad_post=pad_post,
+        max_duration=max_duration,
     )
     return {
         "artifacts": {"artifacts": reels, "study": study, "count": count},

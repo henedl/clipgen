@@ -175,6 +175,27 @@ def test_catalog_serves_required_param_flag(wf_client):
     assert "required" not in _param("find_word", "pad")
 
 
+def test_catalog_serves_artifact_padding_params(wf_client):
+    # Make Clips and Build Reel expose pad-start/pad-end/max-duration number
+    # params. Pad fields omit "min" so the frontend accepts negatives (trim);
+    # max_duration keeps min 0 (0 = no cap).
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    for node_id in ("make_clips", "build_reel"):
+        for pad in ("pad_start", "pad_end"):
+            spec = _param(node_id, pad)
+            assert spec["type"] == "number"
+            assert spec["default"] == 0
+            assert "min" not in spec  # negatives allowed → trim inward
+        max_spec = _param(node_id, "max_duration")
+        assert max_spec["type"] == "number"
+        assert max_spec["min"] == 0
+
+
 def test_catalog_flags_multitool_step_detectors(wf_client):
     # The Multitool step editor derives its step types from the catalog's
     # multitoolStep flag (no hardcoded JS list): the six per-frame detectors carry

@@ -439,6 +439,62 @@ def test_build_reel_honors_name_param(tmp_path, monkeypatch):
     assert out["artifacts"]["count"] == 1
 
 
+def test_make_clips_forwards_padding_kwargs(tmp_path, monkeypatch):
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: seen.update(kw) or (len(records), []),
+    )
+    src = {
+        "participant": "P01",
+        "study": "study",
+        "source_filename": "study_P01.mp4",
+        "video_paths": ["study_P01.mp4"],
+    }
+    tr = {"ranges": [(10.0, 20.0)], "source": src}
+    _run(
+        "make_clips",
+        _ctx(tmp_path),
+        {"timeRange": tr},
+        {"pad_start": 3, "pad_end": -2, "max_duration": 15},
+    )
+    assert seen["pad_pre"] == 3.0
+    assert seen["pad_post"] == -2.0
+    assert seen["max_duration"] == 15.0
+
+
+def test_build_reel_forwards_padding_kwargs(tmp_path, monkeypatch):
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        files, "get_unique_filename", lambda template, **kw: str(tmp_path / template)
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "process_reel",
+        lambda records, output_file=None, cancel_flag=None, **kw: (
+            seen.update(kw) or (1, [{"id": "r"}])
+        ),
+    )
+    _run(
+        "build_reel",
+        _ctx(tmp_path),
+        {"clips": {"records": [{"x": 1}], "study": "study"}},
+        {"pad_start": 1, "pad_end": 2, "max_duration": 0},
+    )
+    assert seen["pad_pre"] == 1.0
+    assert seen["pad_post"] == 2.0
+    assert seen["max_duration"] == 0.0
+
+
+def test_artifact_padding_params_defaults_are_noop():
+    assert workflows._artifact_padding_params({}) == (0.0, 0.0, 0.0)
+
+
 def test_build_reel_chronological_sorts_records(tmp_path, monkeypatch):
     import pipeline
 
