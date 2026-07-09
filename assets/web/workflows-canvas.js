@@ -170,6 +170,10 @@
     // mousedown fall through to a gesture handler (startNodeDrag/startMarquee),
     // whose e.preventDefault() would swallow the button's click.
     if (t.closest("#wfWireDelete")) return;
+    // Likewise the floating minimap + its zoom controls: let them handle their
+    // own clicks (the minimap canvas also stops propagation) rather than starting
+    // a marquee that would clear the selection.
+    if (t.closest("#wfMinimapWrap")) return;
     // 1. Port dot → start a typed wire drag (wires satellite owns the gesture).
     var dot = t.closest(".wf-port-dot");
     if (dot) {
@@ -428,6 +432,26 @@
     // Re-pin (wx,wy) under the cursor: x = mx - wx*zoom.
     vp.x = mx - wx * vp.zoom;
     vp.y = my - wy * vp.zoom;
+    applyViewport();
+    WF.scheduleSave();
+  }
+
+  // Zoom by `factor` about the canvas centre (the minimap +/- buttons; mirrors
+  // onWheel's re-pin math but anchored to the viewport centre rather than the
+  // cursor). > 1 zooms in, < 1 out; clamped to [ZOOM_MIN, ZOOM_MAX].
+  function zoomAtCenter(factor) {
+    if (!state.ready) return;
+    var canvas = qs("#wfCanvas");
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var vp = state.viewport;
+    var cx = rect.width / 2;
+    var cy = rect.height / 2;
+    var wx = (cx - vp.x) / vp.zoom;
+    var wy = (cy - vp.y) / vp.zoom;
+    vp.zoom = clamp(vp.zoom * factor, ZOOM_MIN, ZOOM_MAX);
+    vp.x = cx - wx * vp.zoom;
+    vp.y = cy - wy * vp.zoom;
     applyViewport();
     WF.scheduleSave();
   }
@@ -701,52 +725,71 @@
 
   // ---- Minimap ----
 
-  // Draw a scaled-down live mirror of the canvas view into the corner canvas: the
-  // node contents scale/pan with the viewport (so they zoom with the canvas), and
-  // the viewport is a fixed centred frame. RAF-throttled (mirrors applyViewport's
-  // _vpRaf). Hidden when there are no nodes or the tab is backgrounded (canvas
-  // perf rule).
+  // Draw the corner minimap: a scaled-down, zoomed-out mirror of the canvas view.
+  // Node rects scale with vp.zoom (contents zoom with the canvas), but the minimap
+  // shows OVERVIEW_FACTOR× the visible area so nodes just outside the frame stay
+  // visible, and the view frame is free to drift toward the graph edges — the
+  // camera clamps to the graph bounds, so when the whole graph fits the frame
+  // roams freely and when zoomed in it follows the viewport with edge drift rather
+  // than staying pinned centre. RAF-throttled (mirrors applyViewport's _vpRaf).
+  // Hidden when there are no nodes or the tab is backgrounded (canvas perf rule).
+  var OVERVIEW_FACTOR = 2.5; // how many viewports the minimap spans (zoom-out)
+  var GRAPH_MARGIN = 60; // world px of breathing room kept around the graph
   function renderMinimap() {
     if (_minimapRaf) return;
     _minimapRaf = requestAnimationFrame(function () {
       _minimapRaf = 0;
       var mm = qs("#wfMinimap");
       if (!mm) return;
+      // The wrap (minimap + zoom controls) owns visibility; fall back to the
+      // minimap canvas if the wrap markup is absent.
+      var hideEl = qs("#wfMinimapWrap") || mm;
       var canvas = qs("#wfCanvas");
       var nodes = state.nodes || [];
-      if (!canvas || !nodes.length || document.hidden) {
-        mm.classList.add("hidden");
+      var box = nodesBoundingBox();
+      if (!canvas || !box || document.hidden) {
+        hideEl.classList.add("hidden");
         return;
       }
       var rect = canvas.getBoundingClientRect();
       if (!rect.width || !rect.height) {
-        mm.classList.add("hidden");
+        hideEl.classList.add("hidden");
         return;
       }
-      mm.classList.remove("hidden");
+      hideEl.classList.remove("hidden");
       var ctx = mm.getContext("2d");
       if (!ctx) return;
       var mmW = mm.width;
       var mmH = mm.height;
       ctx.clearRect(0, 0, mmW, mmH);
 
-      // Fit the whole canvas view (padded) into the minimap, centred, at a
-      // constant reduction m — then compose the world→screen viewport transform
-      // with it so the minimap mirrors exactly what the canvas shows. As the
-      // canvas zooms, node rects scale by vp.zoom * m (they zoom with it); as it
-      // pans, offX/offY follow vp.x/vp.y. The full canvas view maps to the fixed
-      // frame below, so nodes off-screen fall outside it (canvas auto-clips).
-      var pad = 8;
-      var m = Math.min((mmW - pad * 2) / rect.width, (mmH - pad * 2) / rect.height);
-      var frameW = rect.width * m;
-      var frameH = rect.height * m;
-      var frameX = (mmW - frameW) / 2;
-      var frameY = (mmH - frameH) / 2;
       var vp = state.viewport;
-      // world → minimap = (world * vp.zoom + vp.pan) * m + frameOrigin.
-      var scale = vp.zoom * m;
-      var offX = vp.x * m + frameX;
-      var offY = vp.y * m + frameY;
+      var pad = 8;
+      // world → minimap scale: mirror the canvas (∝ vp.zoom so node rects zoom
+      // with it), then divide by OVERVIEW_FACTOR to zoom the whole minimap out.
+      var mFit = Math.min((mmW - pad * 2) / rect.width, (mmH - pad * 2) / rect.height);
+      var scale = (vp.zoom * mFit) / OVERVIEW_FACTOR;
+
+      // Camera: follow the viewport centre, clamped in two passes.
+      // 1. Soft — keep the minimap window over the graph (+ margin) for context
+      //    and "play": clampCenter centres on the graph when the window is larger
+      //    than it (frame roams freely), else follows with drift near the edges.
+      // 2. Hard — keep the view frame fully inside the minimap: clampFrameInside
+      //    pans the camera so the frame never clips the minimap edge, overriding
+      //    the graph clamp at the outermost edges (showing a little empty space).
+      var halfWx = mmW / (2 * scale);
+      var halfWy = mmH / (2 * scale);
+      var viewCx = (rect.width / 2 - vp.x) / vp.zoom;
+      var viewCy = (rect.height / 2 - vp.y) / vp.zoom;
+      var frameWW = rect.width / vp.zoom; // view frame world size
+      var frameWH = rect.height / vp.zoom;
+      var framePad = pad / scale; // keep the frame `pad` minimap-px from the edge
+      var camX = clampCenter(viewCx, box.minX - GRAPH_MARGIN, box.maxX + GRAPH_MARGIN, halfWx);
+      var camY = clampCenter(viewCy, box.minY - GRAPH_MARGIN, box.maxY + GRAPH_MARGIN, halfWy);
+      camX = clampFrameInside(camX, viewCx, frameWW, halfWx, framePad);
+      camY = clampFrameInside(camY, viewCy, frameWH, halfWy, framePad);
+      var offX = mmW / 2 - camX * scale;
+      var offY = mmH / 2 - camY * scale;
       // Stash the transform so click/drag can invert it back to world coords.
       _mmTransform = { scale: scale, offX: offX, offY: offY };
 
@@ -766,11 +809,32 @@
         ctx.fillRect(nx, ny, Math.max(2, nw), Math.max(2, nh));
       }
 
-      // Fixed viewport frame: the full canvas view maps to this constant rect.
+      // View frame: the visible world rect mapped through the minimap transform.
+      // Kept fully on-screen (never clipping the edge) by the camera clamp above.
+      var wx = -vp.x / vp.zoom;
+      var wy = -vp.y / vp.zoom;
       ctx.strokeStyle = vpStroke;
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(frameX, frameY, frameW, frameH);
+      ctx.strokeRect(wx * scale + offX, wy * scale + offY, frameWW * scale, frameWH * scale);
     });
+  }
+
+  // Centre a minimap camera on `c`, clamped so a window of half-size `half` stays
+  // within [lo, hi]; if that window is wider than the span, centre on the span.
+  function clampCenter(c, lo, hi, half) {
+    if (hi - lo <= 2 * half) return (lo + hi) / 2;
+    return clamp(c, lo + half, hi - half);
+  }
+
+  // Constrain a minimap camera `cam` so the view frame ([viewC ± frameW/2], world)
+  // stays fully inside the window ([cam ± half], minus a `padW` world margin). If
+  // the frame is wider than the window, just centre it. This is the hard rule that
+  // prevents the view frame from drifting off the edge of the minimap.
+  function clampFrameInside(cam, viewC, frameW, half, padW) {
+    var lo = viewC + frameW / 2 - half + padW;
+    var hi = viewC - frameW / 2 + half - padW;
+    if (lo > hi) return viewC;
+    return clamp(cam, lo, hi);
   }
 
   // Recenter the viewport on the world point under a minimap click/drag.
@@ -846,6 +910,8 @@
   // Consumed by the hub toolbar (button + "F" shortcut) and the minimap sync
   // hook in the nodes satellite (renderAllNodes → structural changes).
   WF.fitToView = fitToView;
+  // Consumed by the hub's minimap zoom +/- buttons.
+  WF.zoomAtCenter = zoomAtCenter;
   WF.renderMinimap = renderMinimap;
   // Consumed by the wires satellite (cursor→world for the in-flight wire; node
   // lookup for port endpoints).

@@ -917,6 +917,25 @@
         if (WF.fitToView) WF.fitToView();
       });
     }
+    // Minimap zoom controls (in/out about the canvas centre + fit-to-content).
+    var zoomInBtn = qs("#wfZoomIn");
+    if (zoomInBtn) {
+      zoomInBtn.addEventListener("click", function () {
+        if (WF.zoomAtCenter) WF.zoomAtCenter(1.25);
+      });
+    }
+    var zoomOutBtn = qs("#wfZoomOut");
+    if (zoomOutBtn) {
+      zoomOutBtn.addEventListener("click", function () {
+        if (WF.zoomAtCenter) WF.zoomAtCenter(1 / 1.25);
+      });
+    }
+    var minimapFitBtn = qs("#wfMinimapFit");
+    if (minimapFitBtn) {
+      minimapFitBtn.addEventListener("click", function () {
+        if (WF.fitToView) WF.fitToView();
+      });
+    }
     var runBtn = qs("#wfRunBtn");
     if (runBtn) {
       runBtn.addEventListener("click", function () {
