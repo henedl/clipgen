@@ -192,6 +192,7 @@
     _root.style.setProperty("--veil-alpha", "0");
 
     _root.classList.remove("hidden");
+    document.body.classList.add("modal-open");
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
     requestAnimationFrame(function () {
@@ -213,6 +214,9 @@
     if (_closeTimer) clearTimeout(_closeTimer);
     _closeTimer = setTimeout(function () {
       if (_root) _root.classList.add("hidden");
+      // Clear the topnav gate only once the veil is gone, so the bar stays
+      // covered through the fade-out.
+      document.body.classList.remove("modal-open");
       _closeTimer = null;
     }, EXIT_MS);
   }

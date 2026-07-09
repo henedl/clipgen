@@ -2406,18 +2406,44 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 #logOverlay {
   position: fixed;
   inset: 0;
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
+  /* Animated backdrop blur + dark veil, driven by these custom props from
+   * openLog/closeLog. Mirrors .settings-overlay / .start-overlay. */
+  --host-blur: 0px;
+  --veil-alpha: 0;
+}
+
+#logOverlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 11, var(--veil-alpha));
+  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  transition:
+    background 460ms cubic-bezier(.22, 1, .36, 1),
+    backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1),
+    -webkit-backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1);
+  pointer-events: none;
 }
 
 #logOverlay.hidden {
   display: none;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  #logOverlay::before {
+    transition: none;
+  }
+}
+
 .log-panel {
+  /* Positioned so it paints above the absolutely-positioned #logOverlay::before
+   * veil (mirrors .settings-panel); otherwise the veil dims/blurs the dialog. */
+  position: relative;
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-panel-border);
