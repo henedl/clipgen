@@ -870,6 +870,26 @@ def _is_excel_spreadsheet_arg(spreadsheet_arg: str | None) -> bool:
     return raw == config.COMMAND_EXCEL or raw.endswith(".xlsx")
 
 
+def _single_xlsx_fallback_path(reason: str) -> str | None:
+    """Path of the sole .xlsx in the working directory, or None.
+
+    CLI mode can't prompt, so when Google Sheets is unavailable and exactly
+    one local Excel file is present, fall back to it (with a notice) instead
+    of dead-ending. Ambiguous directories (zero or several .xlsx) return None
+    and leave the caller's error path in charge.
+    """
+    import excel_io
+
+    paths = excel_io.list_excel_in_cwd()
+    if len(paths) != 1:
+        return None
+    utils.info_print(
+        f"{reason}; falling back to local Excel file {Path(paths[0]).name}. "
+        "Pass -s to choose a source explicitly."
+    )
+    return paths[0]
+
+
 def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
     """Select worksheet based on command-line arguments or interactive selection.
 
@@ -961,11 +981,20 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
             )
         elif cli_mode:
             # CLI mode requires a spreadsheet - can't prompt interactively
-            utils.error_print(
-                "No spreadsheet found matching working directory name.",
-                ["Use -s to specify a spreadsheet name, URL, or index."],
+            fallback = _single_xlsx_fallback_path(
+                "No spreadsheet found matching working directory name"
             )
-            sys.exit(1)
+            if fallback:
+                worksheet = excel_io.open_excel_workbook(fallback)
+            if not worksheet:
+                utils.error_print(
+                    "No spreadsheet found matching working directory name.",
+                    [
+                        "Use -s to specify a spreadsheet name, URL, or index.",
+                        "Or use -s excel / -s path/to/file.xlsx for a local Excel file.",
+                    ],
+                )
+                sys.exit(1)
         else:
             worksheet = clipgen.select_spreadsheet(gspread_client, get_doc_list())
 
@@ -3536,15 +3565,26 @@ def main() -> None:
         gspread_client = authenticate_google()
         if gspread_client is None:
             # Auth failed. CLI mode or an explicit -s argument can't recover
-            # interactively — point the user at the Excel option and exit.
+            # interactively — fall back to a sole local .xlsx when possible,
+            # else point the user at the Excel option and exit.
             if cli_mode or getattr(args, "spreadsheet", None):
-                utils.error_print(
-                    "Google authentication failed.",
-                    [
-                        "Use -s path/to/file.xlsx to work with a local Excel file instead.",
-                    ],
-                )
-                sys.exit(1)
+                fallback = None
+                if cli_mode and not getattr(args, "spreadsheet", None):
+                    fallback = _single_xlsx_fallback_path(
+                        "Google authentication failed"
+                    )
+                if fallback:
+                    # select_worksheet routes .xlsx args through excel_io
+                    # without touching the (absent) gspread client.
+                    args.spreadsheet = fallback
+                else:
+                    utils.error_print(
+                        "Google authentication failed.",
+                        [
+                            "Use -s path/to/file.xlsx to work with a local Excel file instead.",
+                        ],
+                    )
+                    sys.exit(1)
             # Interactive mode: fall through with gspread_client=None; the
             # while loop below will prompt for an Excel file instead.
 
