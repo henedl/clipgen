@@ -208,9 +208,36 @@
       }
     }
 
+    // Build a pending shaped region from simplified polygon points, or null
+    // when the shape fails the size guards (mirrors finishDrawingRegion's
+    // >5x5 minimum, plus a shoelace-area floor so a scribble along a line
+    // can't produce a degenerate mask). The bbox is the CONTAINING integer
+    // box (floor/ceil, not round) so normalizing the absolute points against
+    // it — the preview mask= param, the modal readout — always lands in
+    // [0, 1]; the server recomputes the bbox from the points on save anyway.
+    function pendingShapedRegion(points, shape) {
+      if (points.length < 3) return null;
+      var bounds = polygonBounds(points);
+      var x = Math.floor(bounds.x);
+      var y = Math.floor(bounds.y);
+      var w = Math.ceil(bounds.x + bounds.w) - x;
+      var h = Math.ceil(bounds.y + bounds.h) - y;
+      if (w <= 5 || h <= 5 || polygonArea(points) < 64) return null;
+      return { x: x, y: y, w: w, h: h, points: points, shape: shape };
+    }
+
+    // Simplify a raw point trail toward <=100 vertices with growing epsilon.
+    function simplifyForRegion(pts, s) {
+      var simplified = simplifyPolygon(pts, 2 * s);
+      var epsilon = 2 * s;
+      while (simplified.length > 100) {
+        epsilon *= 1.5;
+        simplified = simplifyPolygon(simplified, epsilon);
+      }
+      return simplified;
+    }
+
     // Close and simplify the freehand trail into a pending polygon region.
-    // Guards mirror finishDrawingRegion's >5x5 minimum, plus a shoelace-area
-    // floor so a scribble along a line can't produce a degenerate mask.
     function finishDrawingLasso() {
       if (!state.drawingLasso) return false;
       var pts = state.drawingLasso.points;
@@ -218,19 +245,9 @@
       _cachedOverlayRect = null;
       var displayW = overlay.getBoundingClientRect().width || overlay.width;
       var s = overlay.width / displayW;
-      var simplified = simplifyPolygon(pts, 2 * s);
-      var epsilon = 2 * s;
-      while (simplified.length > 100) {
-        epsilon *= 1.5;
-        simplified = simplifyPolygon(simplified, epsilon);
-      }
-      var bounds = simplified.length >= 3 ? polygonBounds(simplified) : null;
-      if (bounds && bounds.w > 5 && bounds.h > 5 && polygonArea(simplified) >= 64) {
-        state.pendingRegion = {
-          x: Math.round(bounds.x), y: Math.round(bounds.y),
-          w: Math.round(bounds.w), h: Math.round(bounds.h),
-          points: simplified, shape: "lasso",
-        };
+      var pending = pendingShapedRegion(simplifyForRegion(pts, s), "lasso");
+      if (pending) {
+        state.pendingRegion = pending;
       } else if (pts.length > 2) {
         showToast("Shape too small — draw a larger area");
       }
@@ -251,22 +268,12 @@
       var mask = floodFillMask(data, w, h, pos.x, pos.y, state.wandTolerance);
       if (!mask) return;
       var contour = traceMaskContour(mask, w, h);
-      var simplified = simplifyPolygon(contour, 2 * s);
-      var epsilon = 2 * s;
-      while (simplified.length > 100) {
-        epsilon *= 1.5;
-        simplified = simplifyPolygon(simplified, epsilon);
-      }
-      var bounds = simplified.length >= 3 ? polygonBounds(simplified) : null;
-      if (!bounds || bounds.w <= 5 || bounds.h <= 5 || polygonArea(simplified) < 64) {
+      var pending = pendingShapedRegion(simplifyForRegion(contour, s), "wand");
+      if (!pending) {
         showToast("No contiguous area found — adjust tolerance and try again");
         return;
       }
-      state.pendingRegion = {
-        x: Math.round(bounds.x), y: Math.round(bounds.y),
-        w: Math.round(bounds.w), h: Math.round(bounds.h),
-        points: simplified, shape: "wand",
-      };
+      state.pendingRegion = pending;
       flushOverlayRender();
       updateRegionButtons();
     }

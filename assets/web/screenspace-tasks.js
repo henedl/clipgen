@@ -545,6 +545,9 @@
     if (task.region_ref) {
       var restoredRef = normalizeRegionRef(task.region_ref);
       state.runRegions = restoredRef ? [restoredRef] : [];
+      // Restoring a task is an explicit region choice — pin it so the
+      // implicit chip-follow seed doesn't replace it (see renderRunRegionPicker).
+      state.runRegionsSeeded = false;
       state.pendingRegion = null;
       if (restoredRef && restoredRef.source === "active" && state.regions[restoredRef.name]) {
         state.activeRegion = restoredRef.name;
@@ -559,6 +562,7 @@
       state.activeRegion = task.region;
       state.pendingRegion = null;
       state.runRegions = [activeRegionRef(task.region)];
+      state.runRegionsSeeded = false;
       renderRegionChips();
       renderRunRegionPicker();
       renderOverlay();
