@@ -259,13 +259,21 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Run the citation thinking agent over participants that already have a summary. "
         "No IDs = all eligible. Existing citations are kept unless --no-input is passed.",
     )
+    transcription.add_argument(
+        "--friction",
+        nargs="*",
+        metavar="ID",
+        default=None,
+        help="Run the friction thinking agent over participants that already have a summary. "
+        "No IDs = all eligible. Existing friction results are kept unless --no-input is passed.",
+    )
 
     ai_opts = parser.add_argument_group("AI models")
     ai_opts.add_argument(
         "--ollama-model",
         type=str,
         metavar="MODEL",
-        help="Ollama model for transcript summaries and citations (e.g. gemma3:4b)",
+        help="Ollama model for transcript summaries, citations, and friction (e.g. gemma3:4b)",
     )
 
     paths = parser.add_argument_group("spreadsheet & directories")
@@ -2774,8 +2782,9 @@ def _select_transcript_targets(
 ) -> list[str]:
     """Resolve a requested participant list against transcripted participants.
 
-    ``requested`` is the value of ``args.summarize`` or ``args.citations`` —
-    None should never reach here, but ``[]`` means "all transcripted".
+    ``requested`` is the value of ``args.summarize``, ``args.citations``, or
+    ``args.friction`` — None should never reach here, but ``[]`` means "all
+    transcripted".
     Unknown IDs print a warning and are dropped.
     """
     if not requested:
@@ -2888,6 +2897,64 @@ def _run_citations(args: argparse.Namespace) -> None:
         cited += 1
 
     utils.info_print(f"Citations complete: {cited} processed, {skipped} skipped.")
+
+
+def _run_friction_agent(args: argparse.Namespace) -> None:
+    """Run the friction thinking agent over participants with summaries."""
+    import thinking_agents
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest["source_transcripts"]
+    corrections = manifest["corrections"]
+    marks = manifest.get("marks")
+
+    targets = _select_transcript_targets(args.friction, source_transcripts)
+    if not targets:
+        utils.error_print("No transcribed participants for friction analysis.")
+        return
+
+    agent = thinking_agents.get_agent("friction")
+    assert agent is not None  # registered in thinking_agents.AGENTS
+
+    processed = 0
+    skipped = 0
+    for pid in targets:
+        entry = source_transcripts.get(pid)
+        if not entry:
+            utils.warning_print(f"{pid}: no transcript entry; skipping.")
+            skipped += 1
+            continue
+        if not entry.get("summary"):
+            utils.warning_print(f"{pid}: no summary yet; run --summarize first.")
+            skipped += 1
+            continue
+        if entry.get("friction") and not args.no_input:
+            utils.info_print(
+                f"{pid}: friction already present; skip (--no-input to overwrite)."
+            )
+            skipped += 1
+            continue
+        utils.info_print(f"Scoring friction for {pid}...")
+        result = agent["run"](entry, None)
+        if not result:
+            utils.warning_print(
+                f"{pid}: friction not produced (missing transcript or summary)."
+            )
+            skipped += 1
+            continue
+        entry["friction"] = result
+        transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
+        moment_count = len(result.get("moments") or [])
+        if result.get("llm_ok"):
+            utils.info_print(f"  {pid}: {moment_count} friction moment(s) stored.")
+        else:
+            utils.warning_print(
+                f"  {pid}: programmatic scores stored, but LLM moment detection "
+                "failed (Ollama unavailable?)."
+            )
+        processed += 1
+
+    utils.info_print(f"Friction complete: {processed} processed, {skipped} skipped.")
 
 
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
@@ -3194,6 +3261,14 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         implies_cli_mode=True,
     ),
     _ModeSpec(
+        key="friction",
+        truthy=lambda a: getattr(a, "friction", None) is not None,
+        error="--friction cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --friction with -i/-o (directories), -v (verbose), and --ollama-model.",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        implies_cli_mode=True,
+    ),
+    _ModeSpec(
         key="ss_clips",
         truthy=lambda a: bool(getattr(a, "ss_clips", False)),
         error="--ss-clips cannot be combined with mode, format, or other standalone flags.",
@@ -3399,6 +3474,9 @@ def _dispatch_standalone_mode(
         return True
     if getattr(args, "citations", None) is not None:
         _run_citations(args)
+        return True
+    if getattr(args, "friction", None) is not None:
+        _run_friction_agent(args)
         return True
 
     # Standalone web frontend (no spreadsheet) — Studio, Screenspace, or Transcripts.

@@ -1,4 +1,4 @@
-"""Tests for the thinking-agent CLI flags (--summarize, --citations)."""
+"""Tests for the thinking-agent CLI flags (--summarize, --citations, --friction)."""
 
 from argparse import Namespace
 
@@ -47,6 +47,7 @@ def _agent_args(**overrides):
         "ollama_model": None,
         "summarize": None,
         "citations": None,
+        "friction": None,
         "ss_task": None,
         "ss_list_regions": False,
         "ss_list_stashes": False,
@@ -298,3 +299,123 @@ def test_citations_writes_refs(monkeypatch):
     cli._run_citations(args)
 
     assert saved[-1]["P01"]["citations"] == fake_citations
+
+
+# ---- _run_friction_agent ----
+
+
+def _fake_friction_agent(monkeypatch, result):
+    """Stub the friction registry entry with a run() returning `result`."""
+    import thinking_agents
+
+    calls = []
+
+    def fake_run(entry, cancel_event, on_token=None):
+        calls.append(entry)
+        return result
+
+    monkeypatch.setattr(
+        thinking_agents, "get_agent", lambda key: {"key": key, "run": fake_run}
+    )
+    return calls
+
+
+@pytest.mark.parametrize(
+    "argv_extra,expected",
+    [
+        ([], []),
+        (["P01", "P03"], ["P01", "P03"]),
+    ],
+)
+def test_parse_friction(monkeypatch, argv_extra, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--friction", *argv_extra])
+    args = cli.parse_arguments()
+    assert args.friction == expected
+
+
+def test_friction_and_summarize_conflict():
+    args = _agent_args(friction=[], summarize=[])
+    with pytest.raises(SystemExit):
+        cli._validate_mode_conflicts(args)
+
+
+def test_friction_requires_summary(monkeypatch, capsys):
+    manifest = _make_manifest(
+        P01={"segments": [{"start": 0, "end": 1, "text": "hi"}]},
+    )
+    monkeypatch.setattr(cli.transcripts, "load_transcripts_manifest", lambda: manifest)
+    monkeypatch.setattr(
+        cli.transcripts, "save_transcripts_manifest", lambda *a, **kw: None
+    )
+    calls = _fake_friction_agent(monkeypatch, {"moments": [], "llm_ok": True})
+
+    args = _agent_args(friction=["P01"])
+    cli._run_friction_agent(args)
+
+    out = capsys.readouterr().out
+    assert "P01" in out and "summary" in out
+    assert calls == []
+    assert "friction" not in manifest["source_transcripts"]["P01"]
+
+
+def test_friction_skips_existing_without_no_input(monkeypatch, capsys):
+    manifest = _make_manifest(
+        P01={
+            "segments": [{"start": 0, "end": 1, "text": "hi"}],
+            "summary": "S",
+            "friction": {"moments": [], "llm_ok": True},
+        },
+    )
+    monkeypatch.setattr(cli.transcripts, "load_transcripts_manifest", lambda: manifest)
+    monkeypatch.setattr(
+        cli.transcripts, "save_transcripts_manifest", lambda *a, **kw: None
+    )
+    calls = _fake_friction_agent(monkeypatch, {"moments": [], "llm_ok": True})
+
+    args = _agent_args(friction=["P01"], no_input=False)
+    cli._run_friction_agent(args)
+
+    assert "already present" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_friction_writes_result_with_no_input(monkeypatch):
+    saved = []
+
+    def fake_save(source_transcripts, corrections, marks=None):
+        saved.append({k: dict(v) for k, v in source_transcripts.items()})
+
+    manifest = _make_manifest(
+        P01={
+            "segments": [{"start": 0, "end": 1, "text": "hi"}],
+            "summary": "S",
+            "friction": {"moments": [], "llm_ok": False},
+        },
+    )
+    monkeypatch.setattr(cli.transcripts, "load_transcripts_manifest", lambda: manifest)
+    monkeypatch.setattr(cli.transcripts, "save_transcripts_manifest", fake_save)
+    fake_result = {"moments": [{"reason": "r"}], "llm_ok": True}
+    _fake_friction_agent(monkeypatch, fake_result)
+
+    args = _agent_args(friction=["P01"], no_input=True)
+    cli._run_friction_agent(args)
+
+    assert saved[-1]["P01"]["friction"] == fake_result
+
+
+def test_friction_warns_when_llm_failed(monkeypatch, capsys):
+    manifest = _make_manifest(
+        P01={"segments": [{"start": 0, "end": 1, "text": "hi"}], "summary": "S"},
+    )
+    monkeypatch.setattr(cli.transcripts, "load_transcripts_manifest", lambda: manifest)
+    monkeypatch.setattr(
+        cli.transcripts, "save_transcripts_manifest", lambda *a, **kw: None
+    )
+    _fake_friction_agent(monkeypatch, {"moments": [], "llm_ok": False})
+
+    args = _agent_args(friction=["P01"])
+    cli._run_friction_agent(args)
+
+    out = capsys.readouterr().out
+    assert "programmatic scores stored" in out
+    assert manifest["source_transcripts"]["P01"]["friction"]["llm_ok"] is False
