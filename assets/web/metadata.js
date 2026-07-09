@@ -570,6 +570,9 @@
       transcriptCategoryStats: computeTranscriptCategoryStats(marks, activeP),
       observationStats: computeObservationStats(rows, activeP),
       severityDist: computeSeverityDistribution(rows),
+      // Marks carry the same `.severity` string field as sheet rows, so the sheet
+      // distribution helper works unchanged for transcript-mark severities.
+      trSeverityDist: computeSeverityDistribution(marks),
       categoryBreakdown: computeCategoryBreakdown(rows, activeP),
       sessionSummary: computeSessionSummary(activeP, rows, events, marks, boundaryCounts),
       histogramData: computeHistogramData(activeP, rows, events, marks),
@@ -620,7 +623,7 @@
     title.textContent = "Show details";
     head.appendChild(title);
     var count = el("span", "md-details-count cg-mono");
-    count.textContent = "(7 sections)";
+    count.textContent = "(8 sections)";
     head.appendChild(count);
     wrap.appendChild(head);
 
@@ -634,9 +637,12 @@
     body.appendChild(renderSection("observations", "Per Observation \u2014 Spreadsheet",
       cache.observationStats.length + " observations", renderObservationBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
-    body.appendChild(renderSection("severity", "Severity Distribution",
+    body.appendChild(renderSection("severity", "Severity Distribution \u2014 Spreadsheet",
       null, renderSeverityBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
+    body.appendChild(renderSection("tr-severity", "Severity Distribution \u2014 Transcript",
+      null, renderTranscriptSeverityBody, cache, !cache.hasTranscript,
+      "No transcript marks available."));
     body.appendChild(renderSection("cat-breakdown", "Category Breakdown \u2014 Spreadsheet",
       null, renderCategoryBreakdownBody, cache, !cache.hasSheet,
       "No spreadsheet data available."));
@@ -1243,8 +1249,8 @@
     return bar;
   }
 
-  function renderSeverityBody(body, cache) {
-    var bar = renderSeverityBar(cache.severityDist, false);
+  function renderSeverityDistBody(body, dist) {
+    var bar = renderSeverityBar(dist, false);
     if (bar) {
       body.appendChild(bar);
     } else {
@@ -1256,7 +1262,7 @@
     var legend = el("div", "md-severity-legend");
     for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
       var label = CLIPGEN_CONFIG.severity[i].label;
-      var count = cache.severityDist[label] || 0;
+      var count = dist[label] || 0;
       if (count === 0) continue;
       var item = el("span", "md-severity-legend-item");
       var dot = el("span", "md-sev-dot");
@@ -1267,6 +1273,14 @@
       legend.appendChild(item);
     }
     body.appendChild(legend);
+  }
+
+  function renderSeverityBody(body, cache) {
+    renderSeverityDistBody(body, cache.severityDist);
+  }
+
+  function renderTranscriptSeverityBody(body, cache) {
+    renderSeverityDistBody(body, cache.trSeverityDist);
   }
 
   // --- Section 6: Category Breakdown ---

@@ -884,11 +884,13 @@
     var clusters = state.trIntakeClusters;
     var cat = state.trIntakeFilterCategory;
     var parts = state.trIntakeFilterParticipants;
+    var sevs = state.trIntakeFilterSeverities;
     var text = state.trIntakeFilterText.toLowerCase();
-    if (!cat && !parts.length && !text) return clusters;
+    if (!cat && !parts.length && !sevs.length && !text) return clusters;
     return clusters.filter(function (c) {
       if (parts.length && parts.indexOf(c.participant) === -1) return false;
       if (cat && c.category !== cat) return false;
+      if (sevs.length && sevs.indexOf(c.severity) === -1) return false;
       if (text && (c.text || "").toLowerCase().indexOf(text) === -1
           && (c.label || "").toLowerCase().indexOf(text) === -1
           && (c.participant || "").toLowerCase().indexOf(text) === -1) return false;
@@ -917,6 +919,7 @@
     if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
 
     buildTrIntakeCategoryPills();
+    buildTrIntakeSeverityPills();
     buildIntakeParticipantPills(TR_INTAKE);
     buildIntakeDensityTimeline(TR_INTAKE, filtered);
 
@@ -952,6 +955,40 @@
       });
       container.appendChild(chip);
     });
+  }
+
+  // Severity filter chips — multi-select (mirrors the Sheet-grid severity
+  // filter): each chip toggles its label in/out of state.trIntakeFilterSeverities;
+  // only severities present in the data render. Cluster severity is the most-
+  // severe of its marks (hoisted in clusterTranscriptMarks).
+  function buildTrIntakeSeverityPills() {
+    var container = qs("#trIntakeSeverityPills");
+    if (!container) return;
+    var counts = {};
+    state.trIntakeClusters.forEach(function (c) {
+      if (c.severity) counts[c.severity] = (counts[c.severity] || 0) + 1;
+    });
+    container.innerHTML = "";
+    for (var i = 0; i < CLIPGEN_CONFIG.severity.length; i++) {
+      (function (label) {
+        if (!counts[label]) return;
+        var chip = ClipgenPrimitives.createFilterChip({
+          label: label,
+          active: state.trIntakeFilterSeverities.indexOf(label) >= 0,
+          count: counts[label],
+          color: "var(--" + severityClass(label) + ")",
+          onClick: function () {
+            var arr = state.trIntakeFilterSeverities.slice();
+            var idx = arr.indexOf(label);
+            if (idx >= 0) arr.splice(idx, 1);
+            else arr.push(label);
+            state.trIntakeFilterSeverities = arr;
+            renderTranscriptIntake();
+          },
+        });
+        container.appendChild(chip);
+      })(CLIPGEN_CONFIG.severity[i].label);
+    }
   }
 
   function transcriptClusterToItem(cluster) {

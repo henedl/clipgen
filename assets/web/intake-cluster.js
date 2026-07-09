@@ -99,12 +99,19 @@
           category: m.category || "bookmark",
           label: m.label || "",
           text: m.text || "",
+          severity: m.severity || "",
         };
       } else {
         cur.end = Math.max(cur.end, m.end);
         cur.marks.push(m);
         if (m.text) cur.text += " " + m.text;
         if (m.label && !cur.label) cur.label = m.label;
+        // Hoist the most-severe severity across the cluster (lower rank = worse).
+        if (m.severity) {
+          var curRank = severityRank(cur.severity);
+          var mRank = severityRank(m.severity);
+          if (mRank != null && (curRank == null || mRank < curRank)) cur.severity = m.severity;
+        }
       }
     }
     if (cur) clusters.push(cur);
