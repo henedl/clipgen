@@ -29,7 +29,8 @@ uv run clipgen.py
 clipgen can also be launched noninteractively, meaning you can script it as part of your workflows. For example:
 
 ```shell
-uv run clipgen.py -R -H                       # Highlight reel of the most severe issues
+uv run clipgen.py -H --no-input               # Highlight reel of the most severe issues
+uv run clipgen.py -R "11, 13-16, P01" --no-input  # Custom reel from mixed selectors
 uv run clipgen.py -b --no-input               # Batch: all clips in study
 uv run clipgen.py -l 5+7+12 --no-input        # Lines: rows 5, 7, 12
 uv run clipgen.py -r 5-12 --no-input          # Range: rows 5–12
@@ -89,6 +90,16 @@ Available analysis tools:
 ### Transcripts - generate transcripts using local models
 
 clipgen features local **Transcripts**, generated via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
+
+### Workflows - chain analyses on a node canvas
+
+clipgen includes **Workflows**, a node-based canvas for scripting clipgen's capabilities without writing code. Drag blueprint cards — each wrapping one backend action (clip generation, Screenspace scans, transcription, thinking agents) — onto a canvas and wire typed outputs into typed inputs to build a pipeline. clipgen executes the resulting graph in dependency order, with per-node status and inspectable results stored under `workflow_runs/` in the output directory. Built-in recipes ship as read-only stashes to start from.
+
+A blueprint can run once, fan out across every participant in a study, or be armed to auto-run whenever a new session video lands in the input directory.
+
+```shell
+uv run clipgen.py --workflows -i ./videos -o ./out
+```
 
 ## Building from source
 
