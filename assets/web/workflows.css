@@ -390,8 +390,9 @@ body[data-frontend="workflows"] {
   cursor: grabbing;
 }
 
-/* Corner minimap: a fixed overview of the graph + viewport rectangle, drawn by
-   the canvas satellite. Floats over the canvas; click/drag to recenter. */
+/* Corner minimap: a scaled-down live mirror of the canvas view + fixed viewport
+   frame, drawn by the canvas satellite (contents zoom/pan with the viewport).
+   Floats over the canvas; click/drag to recenter. */
 .wf-minimap {
   position: absolute;
   right: var(--space-3);

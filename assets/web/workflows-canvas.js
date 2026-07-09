@@ -701,9 +701,11 @@
 
   // ---- Minimap ----
 
-  // Draw a scaled overview of the graph plus the current viewport rectangle into
-  // the corner canvas. RAF-throttled (mirrors applyViewport's _vpRaf). Hidden
-  // when there are no nodes or the tab is backgrounded (canvas perf rule).
+  // Draw a scaled-down live mirror of the canvas view into the corner canvas: the
+  // node contents scale/pan with the viewport (so they zoom with the canvas), and
+  // the viewport is a fixed centred frame. RAF-throttled (mirrors applyViewport's
+  // _vpRaf). Hidden when there are no nodes or the tab is backgrounded (canvas
+  // perf rule).
   function renderMinimap() {
     if (_minimapRaf) return;
     _minimapRaf = requestAnimationFrame(function () {
@@ -711,8 +713,13 @@
       var mm = qs("#wfMinimap");
       if (!mm) return;
       var canvas = qs("#wfCanvas");
-      var box = nodesBoundingBox();
-      if (!canvas || !box || document.hidden) {
+      var nodes = state.nodes || [];
+      if (!canvas || !nodes.length || document.hidden) {
+        mm.classList.add("hidden");
+        return;
+      }
+      var rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
         mm.classList.add("hidden");
         return;
       }
@@ -723,13 +730,23 @@
       var mmH = mm.height;
       ctx.clearRect(0, 0, mmW, mmH);
 
-      // Fit the world box (padded) into the minimap, centred.
+      // Fit the whole canvas view (padded) into the minimap, centred, at a
+      // constant reduction m — then compose the world→screen viewport transform
+      // with it so the minimap mirrors exactly what the canvas shows. As the
+      // canvas zooms, node rects scale by vp.zoom * m (they zoom with it); as it
+      // pans, offX/offY follow vp.x/vp.y. The full canvas view maps to the fixed
+      // frame below, so nodes off-screen fall outside it (canvas auto-clips).
       var pad = 8;
-      var bw = box.w || 1;
-      var bh = box.h || 1;
-      var scale = Math.min((mmW - pad * 2) / bw, (mmH - pad * 2) / bh);
-      var offX = (mmW - bw * scale) / 2 - box.minX * scale;
-      var offY = (mmH - bh * scale) / 2 - box.minY * scale;
+      var m = Math.min((mmW - pad * 2) / rect.width, (mmH - pad * 2) / rect.height);
+      var frameW = rect.width * m;
+      var frameH = rect.height * m;
+      var frameX = (mmW - frameW) / 2;
+      var frameY = (mmH - frameH) / 2;
+      var vp = state.viewport;
+      // world → minimap = (world * vp.zoom + vp.pan) * m + frameOrigin.
+      var scale = vp.zoom * m;
+      var offX = vp.x * m + frameX;
+      var offY = vp.y * m + frameY;
       // Stash the transform so click/drag can invert it back to world coords.
       _mmTransform = { scale: scale, offX: offX, offY: offY };
 
@@ -737,9 +754,8 @@
       var nodeFill = (styles.getPropertyValue("--color-text-muted") || "#888").trim();
       var vpStroke = (styles.getPropertyValue("--color-accent") || "#4a9").trim();
 
-      // Node rects.
+      // Node rects (any falling outside the minimap are clipped by the canvas).
       ctx.fillStyle = nodeFill;
-      var nodes = state.nodes || [];
       for (var i = 0; i < nodes.length; i++) {
         var n = nodes[i];
         var nx = ((n.position && n.position.x) || 0) * scale + offX;
@@ -750,17 +766,10 @@
         ctx.fillRect(nx, ny, Math.max(2, nw), Math.max(2, nh));
       }
 
-      // Visible-viewport rectangle: invert the world transform to the world rect
-      // currently shown, then map it through the minimap transform.
-      var rect = canvas.getBoundingClientRect();
-      var vp = state.viewport;
-      var wx = -vp.x / vp.zoom;
-      var wy = -vp.y / vp.zoom;
-      var ww = rect.width / vp.zoom;
-      var wh = rect.height / vp.zoom;
+      // Fixed viewport frame: the full canvas view maps to this constant rect.
       ctx.strokeStyle = vpStroke;
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(wx * scale + offX, wy * scale + offY, ww * scale, wh * scale);
+      ctx.strokeRect(frameX, frameY, frameW, frameH);
     });
   }
 
