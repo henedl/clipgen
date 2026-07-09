@@ -53,7 +53,8 @@ body[data-frontend="workflows"] {
 #wfShell {
   display: flex;
   height: 100vh;
-  padding-top: var(--topnav-height);
+  /* Clears both the fixed TopNav and the fixed full-width #wfToolbar subheader. */
+  padding-top: var(--chrome-height);
   box-sizing: border-box;
 }
 
@@ -131,14 +132,11 @@ body[data-frontend="workflows"] {
   flex-direction: column;
 }
 
+/* Full-width glassy subheader chrome (position/background/blur/height/padding)
+   comes from the shared subheader group in tokens.css; only the gap differs —
+   tighter than the shared --space-4 because the toolbar packs many controls. */
 #wfToolbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
 }
 
 .wf-toolbar-label {
