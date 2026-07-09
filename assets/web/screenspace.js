@@ -1093,7 +1093,7 @@
         if (data.categories) setMarkCategories(data.categories);
         renderInfoMarks(data.marks || []);
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load marks"));
 
     apiGet("api/pins/" + encodeURIComponent(pid))
       .then(function (data) {
@@ -1107,7 +1107,7 @@
         updateCalibrationVisibility();
         refreshCalibration();
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load pins"));
   }
 
   // ---- Calibration pins ----
@@ -3828,7 +3828,7 @@
           renderOverlay();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load regions"));
 
     apiGet("api/stashes")
       .then(function (data) {
@@ -3838,7 +3838,7 @@
           renderRunRegionPicker();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load stashes"));
 
     apiGet("api/tasks")
       .then(function (data) {
@@ -3856,7 +3856,7 @@
           }
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load tasks"));
   });
 
   // ---- Satellite interface (window.ClipgenScreenspace) ----

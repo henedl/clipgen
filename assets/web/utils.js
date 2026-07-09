@@ -887,6 +887,16 @@ var apiPostBlob = function (path, body) {
   });
 };
 
+// Returns a .catch handler that surfaces the failure as a toast. For
+// user-initiated loads and mutations whose silent failure would leave the
+// UI wrong; background polling/preloading keeps its silent catches.
+// Usage: apiGet("api/regions").then(...).catch(toastError("Failed to load regions"));
+var toastError = function (prefix) {
+  return function (err) {
+    showToast(prefix + (err && err.message ? ": " + err.message : ""));
+  };
+};
+
 // ---- Polling ----
 
 var POLL_INTERVAL = 3000;

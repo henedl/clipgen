@@ -2833,7 +2833,7 @@
           renderStashedReels();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load stashes"));
   }
 
   function renderStashes(cfg) {
@@ -3018,7 +3018,7 @@
           renderFn();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to delete stash"));
   }
 
   function startStashRename(stash, nameNode, endpoint) {
@@ -3040,7 +3040,7 @@
       });
       parent.replaceChild(span, input);
 
-      apiPost(endpoint, { action: "update", id: stash.id, name: newName }).catch(function () {});
+      apiPost(endpoint, { action: "update", id: stash.id, name: newName }).catch(toastError("Failed to rename stash"));
     }
 
     input.addEventListener("blur", commit);
@@ -3061,7 +3061,7 @@
       .then(function (data) {
         if (data.ok) onSuccess(data.stash);
       })
-      .catch(function () {});
+      .catch(toastError("Failed to save stash"));
   }
 
   // ---- Stashed artifacts ----
@@ -3074,7 +3074,7 @@
           renderStashedArtifacts();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load stashes"));
   }
 
   function renderStashedArtifacts() {
@@ -3401,7 +3401,7 @@
 
   function onCancelReel() {
     qs("#cancelReelBtn").classList.add("hidden");
-    apiPost("api/reel/cancel").catch(function () {});
+    apiPost("api/reel/cancel").catch(toastError("Cancel failed"));
   }
 
   // ---- API: reel + standalone viewers (timeline / HTML viewer) ----
@@ -3704,7 +3704,7 @@
 
   function onCancelTimelineViewer() {
     state.timelineViewerCancelledByUser = true;
-    apiPost("api/timeline-viewer/cancel").catch(function () {});
+    apiPost("api/timeline-viewer/cancel").catch(toastError("Cancel failed"));
   }
 
   var _highlightsBtnOrigHTML = "";
@@ -3868,7 +3868,7 @@
 
   function onCancelGallery() {
     state.galleryCancelledByUser = true;
-    apiPost("api/gallery/cancel").catch(function () {});
+    apiPost("api/gallery/cancel").catch(toastError("Cancel failed"));
   }
 
   function bindGalleryDialog() {
