@@ -692,6 +692,12 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         action="store_true",
         help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
     )
+    run_opts.add_argument(
+        "--settings",
+        action="store_true",
+        help="Open the interactive settings editor before running "
+        "(changes apply to this run only; incompatible with --no-input)",
+    )
 
     titlecards_grp = parser.add_argument_group("title cards (choose at most one)")
     titlecard_group = titlecards_grp.add_mutually_exclusive_group()
@@ -3589,6 +3595,17 @@ def main() -> None:
 
     # Sanity-check input/output directories before proceeding
     utils.validate_runtime_directories()
+
+    if getattr(args, "settings", False):
+        if args.no_input:
+            utils.error_print(
+                "--settings requires interactive input and cannot be combined with --no-input."
+            )
+            sys.exit(1)
+        # Reopen the grid after each change so several settings can be
+        # adjusted in one sitting; empty input exits the loop.
+        while utils.set_program_settings():
+            pass
 
     if not video.check_ffmpeg_tools_available():
         sys.exit(1)

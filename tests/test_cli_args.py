@@ -545,6 +545,42 @@ def test_pre_transcribe_flag(monkeypatch, argv_extra, expected):
     assert args.pre_transcribe == expected
 
 
+# ---- --settings flag ----
+
+
+@pytest.mark.parametrize(
+    "argv_extra,expected",
+    [
+        ([], False),
+        (["--settings"], True),
+    ],
+)
+def test_settings_flag_parses(monkeypatch, argv_extra, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
+    args = cli.parse_arguments()
+    assert args.settings is expected
+
+
+def test_settings_rejected_with_no_input(monkeypatch, capsys):
+    import os
+
+    import utils
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--settings", "--no-input"])
+    monkeypatch.setattr(os, "chdir", lambda _p: None)
+    monkeypatch.setattr(utils, "validate_runtime_directories", lambda: None)
+    monkeypatch.setattr(
+        utils,
+        "set_program_settings",
+        lambda: pytest.fail("settings editor must not open under --no-input"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "--settings" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     "flag,attr,value",
     [
