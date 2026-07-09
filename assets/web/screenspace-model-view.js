@@ -489,17 +489,11 @@
         oi.src = ou;
       }
       if (useTemplatePost) {
-        fetch(layerUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ template_image_data: state.uploadedTemplate.data }),
-        })
-          .then(function (r) { if (!r.ok) throw new Error("layer http " + r.status); return r.blob(); })
+        apiPostBlob(layerUrl, { template_image_data: state.uploadedTemplate.data })
           .then(fetchAsImage)
           .catch(function () { /* leave previous overlay image */ });
       } else {
-        fetch(layerUrl)
-          .then(function (r) { if (!r.ok) throw new Error("layer http " + r.status); return r.blob(); })
+        apiGetBlob(layerUrl)
           .then(fetchAsImage)
           .catch(function () { /* leave previous overlay image */ });
       }
@@ -507,16 +501,7 @@
 
     var useTemplatePost = tool === "template" && state.uploadedTemplate && state.uploadedTemplate.data;
     if (useTemplatePost) {
-      // TODO: utils.apiPost returns JSON; needs an apiPostBlob helper to migrate.
-      fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ template_image_data: state.uploadedTemplate.data }),
-      })
-        .then(function (r) {
-          if (!r.ok) throw new Error("preview http " + r.status);
-          return r.blob();
-        })
+      apiPostBlob(url, { template_image_data: state.uploadedTemplate.data })
         .then(function (blob) {
           if (gen !== _modelViewGen) return;
           applyPreviewOkFromBlob(blob);

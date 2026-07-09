@@ -235,8 +235,8 @@
         if (tcDur) genBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
       }
 
-      // TODO: streaming NDJSON response — not a JSON body. apiPost doesn't apply;
-      // manual fetch is required to get a reader and parse line-delimited progress events.
+      // Streaming NDJSON response — needs the raw Response (reader + AbortSignal),
+      // so this intentionally stays a manual fetch rather than an api* helper.
       fetch("api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

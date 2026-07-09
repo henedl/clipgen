@@ -4280,12 +4280,7 @@
       if (!item.img.parentNode) continue;
       _ssThumbActive++;
       (function (entry) {
-        // TODO: returns a blob (image), not JSON. apiGet doesn't cover blob responses.
-        fetch(entry.url)
-          .then(function (r) {
-            if (!r.ok) throw new Error("status " + r.status);
-            return r.blob();
-          })
+        apiGetBlob(entry.url)
           .then(function (blob) {
             var objUrl = URL.createObjectURL(blob);
             var prev = _ssThumbCache[entry.url];

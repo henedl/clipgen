@@ -868,6 +868,25 @@ var apiDelete = function (path) {
   });
 };
 
+// Blob variants for image/media routes (frame thumbnails, preview renders).
+var apiGetBlob = function (path) {
+  return fetch(path).then(function (r) {
+    if (!r.ok) throw new Error("Server error " + r.status);
+    return r.blob();
+  });
+};
+
+var apiPostBlob = function (path, body) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(function (r) {
+    if (!r.ok) throw new Error("Server error " + r.status);
+    return r.blob();
+  });
+};
+
 // ---- Polling ----
 
 var POLL_INTERVAL = 3000;
