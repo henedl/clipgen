@@ -37,7 +37,7 @@ _LABEL_HEIGHT = 16
 def build_preview(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     tool: str,
     params: dict[str, Any],
 ) -> "np.ndarray":
@@ -114,7 +114,7 @@ def overlay_layer_scope(tool: str, layer: str) -> str | None:
 def build_overlay_layer(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     tool: str,
     layer: str,
     params: dict[str, Any],
@@ -190,7 +190,7 @@ def build_overlay_layer(
 def _overlay_change(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     layer: str,
     params: dict[str, Any],
 ) -> "np.ndarray | None":
@@ -214,6 +214,14 @@ def _overlay_change(
         _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
         mk = config.SCREENSPACE_MORPH_KERNEL
         mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
+        # Shaped region: mirror the scan by suppressing changes outside the
+        # polygon exactly (the dimmed crop alone only attenuates them).
+        if region is not None:
+            region_mask = screenspace_primitives.region_mask_for(
+                region, *mask_clean.shape[:2]
+            )
+            if region_mask is not None:
+                mask_clean = cv2.bitwise_and(mask_clean, region_mask)
         # Render mask as cyan-on-black so it reads against varying frame content
         # when alpha-blended onto the live frame canvas.
         out = np.zeros((mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8)
@@ -280,7 +288,7 @@ def _draw_flow_arrows(
 def _overlay_flow(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],  # noqa: ARG001 — magnitude param affects threshold display only
 ) -> "np.ndarray | None":
     if prev_frame is None:
@@ -456,13 +464,20 @@ def _hstack_panels(panels: list["np.ndarray"]) -> "np.ndarray":
 
 
 def _clip_region_pixels(
-    frame: "np.ndarray", region: dict[str, int] | None
+    frame: "np.ndarray", region: dict[str, Any] | None
 ) -> "np.ndarray | None":
     if region is None:
         return None
     pixels = screenspace_primitives.extract_region(frame, region)
     if pixels.size == 0:
         return None
+    # Shaped region: dim everything outside the polygon so every per-tool
+    # preview panel and region-scoped overlay layer shows what the masked
+    # analysis actually weighs (preview mirrors the real scan's preprocessing).
+    mask = screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
+    if mask is not None:
+        pixels = pixels.copy()
+        pixels[mask == 0] //= 4
     return pixels
 
 
@@ -473,7 +488,7 @@ def _clip_region_pixels(
 
 def _preview_color(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -488,7 +503,14 @@ def _preview_color(
         )
     else:
         down = pixels.copy()
-    mean_hsv = screenspace_primitives.average_color_hsv(pixels)
+    # Shaped region: the mean must match the scan's masked math (inside-mask
+    # pixels are undimmed, so stats over the dimmed crop are identical).
+    region_mask = (
+        screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
+        if region is not None
+        else None
+    )
+    mean_hsv = screenspace_primitives.average_color_hsv(pixels, mask=region_mask)
 
     # Target swatch from params (falls back to computed mean)
     tgt_h = float(params.get("h", mean_hsv["h"]))
@@ -524,7 +546,7 @@ def _preview_color(
 def _preview_change(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -552,11 +574,19 @@ def _preview_change(
     mk = config.SCREENSPACE_MORPH_KERNEL
     mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
 
-    ratio = (
-        float(np.count_nonzero(mask_clean)) / float(mask_clean.size)
-        if mask_clean.size
-        else 0.0
+    # Shaped region: mirror scan_changes — count and normalize only inside
+    # the polygon (dimming alone merely attenuates outside changes).
+    region_mask = (
+        screenspace_primitives.region_mask_for(region, *mask_clean.shape[:2])
+        if region is not None
+        else None
     )
+    if region_mask is not None:
+        mask_clean = cv2.bitwise_and(mask_clean, region_mask)
+        denom = float(np.count_nonzero(region_mask))
+    else:
+        denom = float(mask_clean.size)
+    ratio = float(np.count_nonzero(mask_clean)) / denom if denom else 0.0
 
     return _hstack_panels(
         [
@@ -569,7 +599,7 @@ def _preview_change(
 
 def _preview_similarity(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -614,7 +644,7 @@ def _preview_similarity(
 
 def _preview_text_numbers(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -630,7 +660,7 @@ def _preview_text_numbers(
 
 def _preview_timelapse(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:
@@ -675,7 +705,7 @@ def _preview_template(
 def _preview_flow(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -714,7 +744,17 @@ def _preview_flow(
         config.SCREENSPACE_FLOW_GRID_MIN_MAG,
     )
 
-    mean_mag = float(np.mean(mag))
+    # Shaped region: mirror compute_optical_flow's masked mean — flow runs
+    # over the full rect, statistics are restricted to polygon pixels.
+    region_mask = (
+        screenspace_primitives.region_mask_for(region, *mag.shape[:2])
+        if region is not None
+        else None
+    )
+    if region_mask is not None and np.any(region_mask):
+        mean_mag = float(np.mean(mag[region_mask > 0]))
+    else:
+        mean_mag = float(np.mean(mag))
     thresh = float(
         params.get("magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD)
     )
@@ -731,7 +771,7 @@ def _preview_flow(
 
 def _preview_scene(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],  # noqa: ARG001 — reserved for future scene-ref overlays
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -756,9 +796,21 @@ def _preview_scene(
     # the same edges that drive scene scoring.
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 100, 200)
-    edge_density = (
-        float(np.count_nonzero(edges)) / float(edges.size) if edges.size else 0.0
+    # Shaped region: mirror compute_scene_fingerprint's masked edge density
+    # and histogram — only polygon pixels drive scene scoring.
+    region_mask = (
+        screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
+        if region is not None
+        else None
     )
+    if region_mask is not None and np.any(region_mask):
+        edge_density = float(np.count_nonzero(cv2.bitwise_and(edges, region_mask))) / (
+            float(np.count_nonzero(region_mask))
+        )
+    else:
+        edge_density = (
+            float(np.count_nonzero(edges)) / float(edges.size) if edges.size else 0.0
+        )
     if edges.shape[:2] != pixels_small.shape[:2]:
         edges = cv2.resize(
             edges,
@@ -768,7 +820,12 @@ def _preview_scene(
 
     # 8-bin hue histogram strip
     hsv = cv2.cvtColor(pixels_small, cv2.COLOR_BGR2HSV)
-    hist = cv2.calcHist([hsv], [0], None, [8], [0, 180]).flatten()
+    small_mask = (
+        screenspace_primitives.region_mask_for(region, *pixels_small.shape[:2])
+        if region is not None
+        else None
+    )
+    hist = cv2.calcHist([hsv], [0], small_mask, [8], [0, 180]).flatten()
     hist = hist / (hist.max() + 1e-6)
     bar_w, bar_h = 24, 80
     strip = np.full((bar_h, bar_w * len(hist), 3), 20, dtype=np.uint8)
@@ -797,7 +854,7 @@ def _preview_scene(
 
 def _preview_inactivity(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:

@@ -752,6 +752,14 @@ class ScreenspaceWorker:
         if tool is None:
             raise ValueError(f"Unknown task type: {task_type}")
 
+        if task_type in config.SCREENSPACE_MASK_FALLBACK_TOOLS and task.get(
+            "region_coords", {}
+        ).get("mask_points"):
+            utils.warning_print(
+                f"{task_type}: shaped region — analyzing its bounding rect "
+                "(this tool cannot honor a polygon mask)"
+            )
+
         # Shallow copy so fast-scan interval scaling is not persisted on the
         # task dict (pause/resume re-dispatches the same parameters).
         params = dict(task.get("parameters", {}))

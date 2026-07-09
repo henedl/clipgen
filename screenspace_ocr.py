@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 
 import config
-from screenspace_primitives import extract_region
+from screenspace_primitives import extract_region, point_in_mask_points
 
 
 # ---------------------------------------------------------------------------
@@ -224,19 +224,39 @@ def _ocr_region_readings(
     languages: list[str] | None = None,
     allowlist: str | None = None,
     preprocess: bool = False,
+    mask_points: list[Any] | None = None,
 ) -> list[Any]:
     """Run EasyOCR over a region crop and return raw ``(bbox, text, conf)`` tuples.
 
     Pure transport over the cached reader — no fuzzy/threshold logic — so the
     same readings can be re-scored under different fuzzy/confidence settings
     (the basis of the calibration OCR cache).
+
+    For shaped regions, *mask_points* (bbox-relative polygon) drops readings
+    whose bbox center falls outside the polygon. OCR always sees the full rect
+    (masking glyph pixels would corrupt recognition); only the readings are
+    filtered. Centers are normalized by the *post-preprocess* image shape so
+    the test is unaffected by the OCR upscale.
     """
     langs = languages or ["en"]
     pixels = _preprocess_for_ocr(region_pixels) if preprocess else region_pixels
     kwargs: dict[str, Any] = {"detail": 1}
     if allowlist is not None:
         kwargs["allowlist"] = allowlist
-    return _ocr_readtext(langs, pixels, **kwargs)
+    readings = _ocr_readtext(langs, pixels, **kwargs)
+    if mask_points and len(mask_points) >= 3:
+        img_h, img_w = pixels.shape[:2]
+        if img_h > 0 and img_w > 0:
+            readings = [
+                r
+                for r in readings
+                if point_in_mask_points(
+                    sum(float(p[0]) for p in r[0]) / (len(r[0]) * img_w),
+                    sum(float(p[1]) for p in r[0]) / (len(r[0]) * img_h),
+                    mask_points,
+                )
+            ]
+    return readings
 
 
 def _score_text_readings(
@@ -313,7 +333,7 @@ def _score_numbers_readings(
 
 def run_calibration_ocr(
     frame: np.ndarray,
-    region: dict[str, int],
+    region: dict[str, Any],
     tool_type: str,
     params: dict[str, Any],
 ) -> list[Any]:
@@ -335,4 +355,5 @@ def run_calibration_ocr(
         languages=languages,
         allowlist=allowlist,
         preprocess=params.get("ocr_preprocess", False),
+        mask_points=region.get("mask_points"),
     )

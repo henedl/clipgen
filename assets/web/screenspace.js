@@ -200,6 +200,13 @@
     regions: {},
     activeRegion: null,
     drawingRegion: null,
+    // Shaped-region drawing: the active selector ("rect" | "lasso" | "wand"),
+    // the in-progress freehand point trail, and the wand's flood-fill RGB
+    // tolerance. On state (not satellite vars) — the hub Escape handler and
+    // the overlay painter both read them across file boundaries.
+    regionTool: "rect",
+    drawingLasso: null,
+    wandTolerance: 32,
     pendingRegion: null,
     draggingRegion: null,
     resizingRegion: null,
@@ -247,6 +254,9 @@
     pipetteActive: false,
     runParticipants: [],
     runRegions: [],
+    // True while runRegions holds only the implicit active-chip seed (no
+    // explicit run-picker choice yet) — see renderRunRegionPicker.
+    runRegionsSeeded: false,
     scanMode: "normal",
     taskEvents: {},
     showExcluded: true,
@@ -585,11 +595,14 @@
 
   function addRunRegion(ref) {
     if (!hasRunRegion(ref)) state.runRegions.push(normalizeRegionRef(ref));
+    // An explicit picker choice pins the selection — stop following the chip.
+    state.runRegionsSeeded = false;
   }
 
   function removeRunRegion(ref) {
     var key = regionRefKey(ref);
     state.runRegions = state.runRegions.filter(function (r) { return regionRefKey(r) !== key; });
+    state.runRegionsSeeded = false;
   }
 
   function allAvailableRegionRefs() {
@@ -632,9 +645,28 @@
     state.runRegions = state.runRegions
       .map(normalizeRegionRef)
       .filter(function (r) { return r && availableKeys[regionRefKey(r)]; });
-    // Auto-select the active region when no explicit selection has been made
-    if (state.runRegions.length === 0 && state.activeRegion && names.indexOf(state.activeRegion) >= 0) {
-      state.runRegions = [activeRegionRef(state.activeRegion)];
+    // Auto-select the active region when no explicit selection has been made.
+    // The seed is implicit (runRegionsSeeded): it keeps FOLLOWING the
+    // highlighted chip on later renders until the user touches the picker
+    // (addRunRegion/removeRunRegion clear the flag). Without the follow-up
+    // re-seed, the first created region stayed pinned and the model preview
+    // ignored chip selection.
+    var seedRef = state.activeRegion && names.indexOf(state.activeRegion) >= 0
+      ? activeRegionRef(state.activeRegion)
+      : null;
+    if (state.runRegions.length === 0) {
+      if (seedRef) {
+        state.runRegions = [seedRef];
+        state.runRegionsSeeded = true;
+      }
+    } else if (
+      state.runRegionsSeeded &&
+      seedRef &&
+      state.runRegions.length === 1 &&
+      state.runRegions[0].source === "active" &&
+      regionRefKey(state.runRegions[0]) !== regionRefKey(seedRef)
+    ) {
+      state.runRegions = [seedRef];
     }
 
     var btn = el("button", "run-picker-btn");
@@ -3449,8 +3481,9 @@
           document.body.style.cursor = "";
           document.body.style.userSelect = "";
           renderOverlay();
-        } else if (state.drawingRegion) {
+        } else if (state.drawingRegion || state.drawingLasso) {
           state.drawingRegion = null;
+          state.drawingLasso = null;
           invalidateOverlayRect();
           renderOverlay();
           updateRegionButtons();

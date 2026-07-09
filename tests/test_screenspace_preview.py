@@ -146,6 +146,41 @@ def test_build_overlay_layer_shape_matches_scope(
         assert img.shape[:2] == synthetic_frame.shape[:2]
 
 
+def test_clip_region_pixels_dims_outside_shaped_mask(
+    synthetic_frame: np.ndarray,
+) -> None:
+    """Shaped regions dim pixels outside the polygon; rects are untouched."""
+    rect = {"x": 60, "y": 40, "w": 120, "h": 80}
+    plain = screenspace_preview._clip_region_pixels(synthetic_frame, rect)
+    shaped = dict(rect, mask_points=[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])
+    dimmed = screenspace_preview._clip_region_pixels(synthetic_frame, shaped)
+    assert plain is not None and dimmed is not None
+    # Inside the left-half polygon: identical. Outside: quartered.
+    assert np.array_equal(dimmed[:, :55], plain[:, :55])
+    outside_plain = plain[:, 70:]
+    outside_dimmed = dimmed[:, 70:]
+    assert np.array_equal(outside_dimmed, outside_plain // 4)
+
+
+def test_overlay_change_mask_layer_suppressed_outside_polygon(
+    synthetic_frame: np.ndarray, prev_frame: np.ndarray
+) -> None:
+    """The change overlay's binary mask is ANDed with the region polygon."""
+    rect = {"x": 60, "y": 40, "w": 120, "h": 80}
+    shaped = dict(rect, mask_points=[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])
+    full = screenspace_preview.build_overlay_layer(
+        synthetic_frame, prev_frame, rect, "change", "mask", {}
+    )
+    masked = screenspace_preview.build_overlay_layer(
+        synthetic_frame, prev_frame, shaped, "change", "mask", {}
+    )
+    assert full is not None and masked is not None
+    # The gradient shift changes every pixel, so the full-rect mask lights up
+    # on the right half while the shaped mask stays black there.
+    assert np.count_nonzero(full[:, 70:]) > 0
+    assert np.count_nonzero(masked[:, 70:]) == 0
+
+
 def test_overlay_layer_excluded_tools_have_no_entry() -> None:
     """timelapse and inactivity are intentionally not overlay-eligible."""
     assert "timelapse" not in screenspace_preview.OVERLAY_LAYERS

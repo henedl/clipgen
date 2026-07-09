@@ -29,6 +29,17 @@
     taskTypeColor = SS.taskTypeColor,
     _overlayEligibleForActiveTool = SS._overlayEligibleForActiveTool;
 
+  // Build the canvas path for a shaped region's polygon: points are
+  // bbox-relative (0-1 of the region's own rect), r is the pixel bbox.
+  function traceRegionPolygonPath(ctx, points, r) {
+    ctx.beginPath();
+    ctx.moveTo(r.x + points[0][0] * r.w, r.y + points[0][1] * r.h);
+    for (var i = 1; i < points.length; i++) {
+      ctx.lineTo(r.x + points[i][0] * r.w, r.y + points[i][1] * r.h);
+    }
+    ctx.closePath();
+  }
+
   function renderOverlay() {
     var canvas = qs("#overlayCanvas");
     if (!canvas.width || !canvas.height) return;
@@ -45,7 +56,8 @@
     if (state.showRegionOverlays) {
       var names = Object.keys(drawRegions);
       names.forEach(function (name, i) {
-        var r = regionToPixels(drawRegions[name]);
+        var region = drawRegions[name];
+        var r = regionToPixels(region);
         var color = regionColorForIndex(i);
         var isActive = (name === state.activeRegion);
         var isHovered = state.hoveredRegion && state.hoveredRegion.name === name;
@@ -53,10 +65,22 @@
         ctx.strokeStyle = color;
         ctx.lineWidth = (isActive ? 2 : 1) * s;
         ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
-        ctx.strokeRect(r.x, r.y, r.w, r.h);
-        if (isActive) {
-          ctx.fillStyle = hexToRgba(color, 0.12);
-          ctx.fillRect(r.x, r.y, r.w, r.h);
+        var shaped = region.points && region.points.length >= 3;
+        if (shaped) {
+          // Shaped region: stroke/fill the polygon (points are bbox-relative);
+          // label bar and resize handle keep rendering at the bbox below.
+          traceRegionPolygonPath(ctx, region.points, r);
+          ctx.stroke();
+          if (isActive) {
+            ctx.fillStyle = hexToRgba(color, 0.12);
+            ctx.fill();
+          }
+        } else {
+          ctx.strokeRect(r.x, r.y, r.w, r.h);
+          if (isActive) {
+            ctx.fillStyle = hexToRgba(color, 0.12);
+            ctx.fillRect(r.x, r.y, r.w, r.h);
+          }
         }
         ctx.setLineDash([]);
 
@@ -99,6 +123,24 @@
       });
     }
 
+    // Freehand lasso in progress: solid trail + dashed closing segment.
+    if (state.drawingLasso && state.drawingLasso.points.length > 1) {
+      var lp = state.drawingLasso.points;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.5 * s;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(lp[0][0], lp[0][1]);
+      for (var li = 1; li < lp.length; li++) ctx.lineTo(lp[li][0], lp[li][1]);
+      ctx.stroke();
+      ctx.setLineDash([4 * s, 3 * s]);
+      ctx.beginPath();
+      ctx.moveTo(lp[lp.length - 1][0], lp[lp.length - 1][1]);
+      ctx.lineTo(lp[0][0], lp[0][1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     // Drawing in progress
     if (state.drawingRegion) {
       var d = state.drawingRegion;
@@ -123,9 +165,21 @@
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 1.5 * s;
       ctx.setLineDash([]);
-      ctx.strokeRect(p.x, p.y, p.w, p.h);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-      ctx.fillRect(p.x, p.y, p.w, p.h);
+      if (p.points && p.points.length >= 3) {
+        // Pending shaped region: points are canvas-pixel absolute (not yet
+        // normalized by the server).
+        ctx.beginPath();
+        ctx.moveTo(p.points[0][0], p.points[0][1]);
+        for (var pi = 1; pi < p.points.length; pi++) ctx.lineTo(p.points[pi][0], p.points[pi][1]);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+        ctx.fill();
+      } else {
+        ctx.strokeRect(p.x, p.y, p.w, p.h);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+      }
       ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
       ctx.fillText(p.w + "\u00d7" + p.h + " px", p.x + Math.round(4 * s), p.y + p.h + Math.round(14 * s));

@@ -740,6 +740,30 @@ body {
   flex-shrink: 0;
 }
 
+/* Magic-wand flood-fill tolerance: a compact slider + value readout shown
+   only while the wand tool is selected. */
+.wand-tolerance {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.wand-tolerance input[type="range"] {
+  width: 72px;
+}
+
+#wandToleranceValue {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  min-width: 2ch;
+  text-align: right;
+}
+
+.wand-tolerance.hidden {
+  display: none;
+}
+
 /* Calibration pins: polarity colors are page-local (positive = green,
    negative = red), aliased to the shared severity palette. */
 body[data-frontend="screenspace"] {

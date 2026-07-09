@@ -81,6 +81,14 @@
       <div id="regionBar">
         <div id="regionChipsScroll"><div id="regionChips"></div></div>
         <div id="regionActions">
+          <button id="toolRectBtn" class="region-toggle-btn active" title="Rectangle — drag to select"></button>
+          <button id="toolLassoBtn" class="region-toggle-btn" title="Lasso — draw a freehand shape"></button>
+          <button id="toolWandBtn" class="region-toggle-btn" title="Magic wand — click a similar-colored area"></button>
+          <span id="wandToleranceWrap" class="wand-tolerance hidden">
+            <input id="wandToleranceInput" type="range" min="4" max="120" step="1" value="32" title="Wand color tolerance">
+            <span id="wandToleranceValue">32</span>
+          </span>
+          <span class="region-actions-sep"></span>
           <button id="saveRegionBtn" class="btn btn-small hidden">Save Region</button>
           <button id="clearSelectionBtn" class="btn btn-small hidden">Clear</button>
           <button id="deleteRegionBtn" class="btn btn-small hidden">Delete</button>

@@ -172,25 +172,126 @@ def extract_region(frame: np.ndarray, region: dict[str, int]) -> np.ndarray:
     return frame[y:y2, x:x2]
 
 
+def region_mask_for(region: dict[str, Any], h: int, w: int) -> np.ndarray | None:
+    """Rasterize a shaped region's polygon to a uint8 0/255 mask of shape (h, w).
+
+    ``region["mask_points"]`` holds bbox-relative vertices (0-1 fractions of the
+    region's own bounding rect), so the mask can be rasterized directly at
+    whatever size the cropped pixels actually arrive at — after ffmpeg's
+    ``cv_scale``/``max_dim`` rescales or a tool's internal downscale — with no
+    resize chain. Returns ``None`` for rectangular regions (no ``mask_points``),
+    letting callers keep their unmasked fast path.
+    """
+    points = region.get("mask_points")
+    if not points or h <= 0 or w <= 0:
+        return None
+    poly = np.array([[u * w, v * h] for u, v in points], dtype=np.float64)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.fillPoly(mask, [np.round(poly).astype(np.int32)], 255)
+    return mask
+
+
+def filter_matches_by_region_mask(
+    matches: list[dict[str, Any]], region: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Drop template matches whose center falls outside a shaped region.
+
+    *matches* carry frame-pixel ``x/y/w/h`` boxes; *region* is the pixel
+    ``region_coords`` dict. Rect regions (no ``mask_points``) and degenerate
+    bboxes pass through unchanged — template search is full-frame for rects,
+    so only the polygon adds a restriction.
+    """
+    points = region.get("mask_points")
+    rw, rh = region.get("w", 0), region.get("h", 0)
+    if not points or rw <= 0 or rh <= 0:
+        return matches
+    rx, ry = region.get("x", 0), region.get("y", 0)
+    return [
+        m
+        for m in matches
+        if point_in_mask_points(
+            (m["x"] + m["w"] / 2.0 - rx) / rw,
+            (m["y"] + m["h"] / 2.0 - ry) / rh,
+            points,
+        )
+    ]
+
+
+def region_masker(
+    region: dict[str, Any],
+) -> Callable[[np.ndarray], np.ndarray | None]:
+    """Return ``fn(pixels) -> mask|None`` caching the rasterized mask per shape.
+
+    Scans receive crops at a constant (but not statically known) size — after
+    ffmpeg's ``cv_scale``/``max_dim`` rescales — so the mask is rasterized on
+    first use and reused for every subsequent frame. Rect regions cost one dict
+    lookup per frame (the cached value is ``None``).
+    """
+    cache: dict[tuple[int, int], np.ndarray | None] = {}
+
+    def _mask_for(pixels: np.ndarray) -> np.ndarray | None:
+        key = pixels.shape[:2]
+        if key not in cache:
+            cache[key] = region_mask_for(region, key[0], key[1])
+        return cache[key]
+
+    return _mask_for
+
+
+def point_in_mask_points(u: float, v: float, points: list[Any]) -> bool:
+    """Ray-cast point-in-polygon test in bbox-relative (0-1) space.
+
+    Scale-free companion to :func:`region_mask_for` for consumers that test
+    individual centers (OCR readings, template match boxes) rather than
+    rasterizing a full mask. The polygon is implicitly closed.
+    """
+    n = len(points)
+    if n < 3:
+        return False
+    inside = False
+    j = n - 1
+    for i in range(n):
+        ui, vi = float(points[i][0]), float(points[i][1])
+        uj, vj = float(points[j][0]), float(points[j][1])
+        if (vi > v) != (vj > v):
+            cross_u = (uj - ui) * (v - vi) / (vj - vi) + ui
+            if u < cross_u:
+                inside = not inside
+        j = i
+    return inside
+
+
 def denormalize_region(
     region: dict[str, Any], target_w: int, target_h: int
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Convert a normalized region (0–1 floats) to pixel coordinates.
 
     Args:
-        region: Dict with normalized ``x``, ``y``, ``w``, ``h`` keys.
+        region: Dict with normalized ``x``, ``y``, ``w``, ``h`` keys and,
+            for shaped regions, bbox-relative ``points`` + ``shape``.
         target_w: Target frame width in pixels.
         target_h: Target frame height in pixels.
 
     Returns:
-        Dict with integer pixel ``x``, ``y``, ``w``, ``h`` keys.
+        Dict with integer pixel ``x``, ``y``, ``w``, ``h`` keys, plus
+        ``mask_points``/``shape`` passed through for shaped regions.
     """
-    return {
+    out: dict[str, Any] = {
         "x": int(round(region["x"] * target_w)),
         "y": int(round(region["y"] * target_h)),
         "w": int(round(region["w"] * target_w)),
         "h": int(round(region["h"] * target_h)),
     }
+    # Shaped regions: polygon vertices are bbox-relative (0-1 of the region's
+    # own rect), so they pass through denormalization verbatim. Copying them
+    # here threads the mask into every region_coords consumer (task snapshots,
+    # multitool steps, workflows, calibration) without further plumbing.
+    points = region.get("points")
+    if points:
+        out["mask_points"] = points
+        if region.get("shape"):
+            out["shape"] = region["shape"]
+    return out
 
 
 FULL_FRAME_REGION_NAME = "full_frame"
@@ -268,22 +369,32 @@ def resolve_region_request(
     raise ValueError("region_ref.source must be 'active', 'stash', or 'full_frame'")
 
 
-def average_color_hsv(region_pixels: np.ndarray) -> dict[str, float]:
+def average_color_hsv(
+    region_pixels: np.ndarray, mask: np.ndarray | None = None
+) -> dict[str, float]:
     """Compute mean HSV color of a region.
 
     Args:
         region_pixels: BGR image region as numpy array.
+        mask: Optional uint8 shaped-region mask (same shape as the crop);
+            when given, the mean is computed over mask pixels only.
 
     Returns:
         Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
     """
     h, w = region_pixels.shape[:2]
     if h > 64 or w > 64:
+        new_w, new_h = min(w, 64), min(h, 64)
         region_pixels = cv2.resize(
-            region_pixels, (min(w, 64), min(h, 64)), interpolation=cv2.INTER_AREA
+            region_pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
         )
+        if mask is not None:
+            mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    mean = np.mean(hsv, axis=(0, 1))
+    if mask is not None and np.any(mask):
+        mean = hsv[mask > 0].mean(axis=0)
+    else:
+        mean = np.mean(hsv, axis=(0, 1))
     return {"h": float(mean[0]), "s": float(mean[1]), "v": float(mean[2])}
 
 
@@ -291,6 +402,7 @@ def color_matches(
     region_pixels: np.ndarray,
     target_color: dict[str, float],
     tolerance: dict[str, float],
+    mask: np.ndarray | None = None,
 ) -> tuple[bool, float]:
     """Check if region's average HSV color is within tolerance of target.
 
@@ -299,7 +411,7 @@ def color_matches(
     Returns:
         Tuple of (matches, confidence) where confidence is 0.0–1.0.
     """
-    avg = average_color_hsv(region_pixels)
+    avg = average_color_hsv(region_pixels, mask=mask)
     hue_diff = abs(avg["h"] - target_color["h"])
     hue_dist = min(hue_diff, 180.0 - hue_diff)
     s_dist = abs(avg["s"] - target_color["s"])
@@ -326,6 +438,7 @@ def color_present(
     target_color: dict[str, float],
     tolerance: dict[str, float],
     min_coverage: float = 0.0,
+    mask: np.ndarray | None = None,
 ) -> tuple[bool, float]:
     """Check whether the target color appears *anywhere* in the region.
 
@@ -353,13 +466,22 @@ def color_present(
     v = hsv[..., 2].astype(np.float32)
     hue_diff = np.abs(h - float(target_color["h"]))
     hue_dist = np.minimum(hue_diff, 180.0 - hue_diff)
-    mask = (
+    match = (
         (hue_dist <= tolerance["h"])
         & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
         & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
     )
-    count = int(np.count_nonzero(mask))
-    coverage = count / mask.size if mask.size else 0.0
+    # Shaped regions: only pixels inside the polygon count, both in the match
+    # numerator and the coverage denominator. A mask emptied by extreme
+    # downscale falls back to the full rect (matching average_color_hsv).
+    if mask is not None and not np.any(mask):
+        mask = None
+    denom = match.size
+    if mask is not None:
+        match &= mask > 0
+        denom = int(np.count_nonzero(mask))
+    count = int(np.count_nonzero(match))
+    coverage = count / denom if denom else 0.0
     matched = count > 0 if min_coverage <= 0 else coverage >= min_coverage
     return matched, float(coverage)
 
@@ -391,18 +513,24 @@ def compute_frame_diff(
     region_a: np.ndarray,
     region_b: np.ndarray,
     noise_threshold: int = 0,
+    mask: np.ndarray | None = None,
 ) -> float:
     """Compute pixel difference ratio between two same-sized regions.
 
     Applies Gaussian blur, thresholds noise, and morphological opening.
+    For shaped regions, *mask* (uint8, crop-sized) restricts both the counted
+    changes and the denominator to polygon pixels.
 
     Returns:
         Change ratio 0.0-1.0 (fraction of pixels that changed).
     """
-    mask = _frame_diff_mask(region_a, region_b, noise_threshold)
-    if mask.size == 0:
+    diff = _frame_diff_mask(region_a, region_b, noise_threshold)
+    if diff.size == 0:
         return 0.0
-    return float(np.count_nonzero(mask)) / float(mask.size)
+    if mask is not None and np.any(mask):
+        diff = cv2.bitwise_and(diff, mask)
+        return float(np.count_nonzero(diff)) / float(np.count_nonzero(mask))
+    return float(np.count_nonzero(diff)) / float(diff.size)
 
 
 def regions_are_similar(
@@ -654,8 +782,15 @@ def compute_optical_flow(
     curr_gray: np.ndarray,
     pyr_scale: float = 0.0,
     return_grid: bool = False,
+    mask: np.ndarray | None = None,
 ) -> dict[str, Any]:
     """Compute dense optical flow between two grayscale frames.
+
+    Farneback has no mask parameter, so for shaped regions the flow is computed
+    over the full rect and *mask* (uint8, crop-sized) restricts the statistics:
+    mean magnitude, the circular-mean angle, and which ``flow_grid`` cells are
+    emitted. Vectors within ~one window of the polygon edge still see outside
+    pixels — acceptable contamination for motion detection.
 
     Returns:
         Dict with ``magnitude`` (mean flow vector length),
@@ -673,20 +808,28 @@ def compute_optical_flow(
         new_w, new_h = int(w * scale), int(h * scale)
         prev_gray = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
         curr_gray = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        if mask is not None:
+            mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    if mask is not None and not np.any(mask):
+        mask = None
 
     flow_out = np.zeros((*prev_gray.shape[:2], 2), dtype=np.float32)
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
     )
     mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
-    mean_mag = float(np.mean(mag))
+    inside = mask > 0 if mask is not None else None
+    mean_mag = (
+        float(np.mean(mag[inside])) if inside is not None else float(np.mean(mag))
+    )
 
     # Dominant angle: weighted mean by magnitude
     if mean_mag > 0:
         # Use circular mean to avoid wraparound issues
         rad = np.deg2rad(ang)
-        sin_sum = float(np.sum(mag * np.sin(rad)))
-        cos_sum = float(np.sum(mag * np.cos(rad)))
+        weights = mag if inside is None else mag * inside
+        sin_sum = float(np.sum(weights * np.sin(rad)))
+        cos_sum = float(np.sum(weights * np.cos(rad)))
         dominant_angle = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
     else:
         dominant_angle = 0.0
@@ -705,6 +848,13 @@ def compute_optical_flow(
         grid: list[dict[str, float]] = []
         for gy in range(0, gh, step_y):
             for gx in range(0, gw, step_x):
+                if (
+                    inside is not None
+                    and not inside[
+                        min(gy + step_y // 2, gh - 1), min(gx + step_x // 2, gw - 1)
+                    ]
+                ):
+                    continue
                 cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
                 if cell_mag < min_mag:
                     continue
@@ -722,11 +872,19 @@ def compute_optical_flow(
     return result
 
 
-def compute_scene_fingerprint(region_pixels: np.ndarray) -> dict[str, Any]:
+def compute_scene_fingerprint(
+    region_pixels: np.ndarray, mask: np.ndarray | None = None
+) -> dict[str, Any]:
     """Compute a feature-based fingerprint for scene classification.
 
     Combines HSV histogram, edge density, and color statistics into a
     fingerprint suitable for comparison via :func:`compare_scene_fingerprints`.
+
+    For shaped regions, *mask* (uint8, crop-sized) restricts every component to
+    polygon pixels. Fingerprints are only comparable when computed with the
+    same mask, so callers must mask their reference fingerprints too —
+    rasterized at each crop's own size (reference crops are source-resolution,
+    scan crops may be rescaled).
     """
     # Resize to standardize
     max_dim = 128
@@ -738,6 +896,12 @@ def compute_scene_fingerprint(region_pixels: np.ndarray) -> dict[str, Any]:
             (int(w * scale), int(h * scale)),
             interpolation=cv2.INTER_AREA,
         )
+        if mask is not None:
+            mask = cv2.resize(
+                mask, region_pixels.shape[1::-1], interpolation=cv2.INTER_NEAREST
+            )
+    if mask is not None and not np.any(mask):
+        mask = None
 
     bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
@@ -745,7 +909,7 @@ def compute_scene_fingerprint(region_pixels: np.ndarray) -> dict[str, Any]:
     hist = cv2.calcHist(
         [hsv],
         [0, 1, 2],
-        None,
+        mask,
         [bins, bins, bins],
         [0, 180, 0, 256, 0, 256],
     )
@@ -754,14 +918,24 @@ def compute_scene_fingerprint(region_pixels: np.ndarray) -> dict[str, Any]:
     # Edge density
     gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 100, 200)
-    edge_density = (
-        float(np.count_nonzero(edges)) / float(edges.size) if edges.size > 0 else 0.0
-    )
+    if mask is not None:
+        masked_edges = cv2.bitwise_and(edges, mask)
+        denom = float(np.count_nonzero(mask))
+        edge_density = float(np.count_nonzero(masked_edges)) / denom if denom else 0.0
+    else:
+        edge_density = (
+            float(np.count_nonzero(edges)) / float(edges.size)
+            if edges.size > 0
+            else 0.0
+        )
 
     # Color stats per channel
+    inside = mask > 0 if mask is not None else None
     color_stats: list[float] = []
     for ch in range(3):
         channel = region_pixels[:, :, ch].astype(np.float64)
+        if inside is not None:
+            channel = channel[inside]
         color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
 
     return {

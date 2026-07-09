@@ -62,7 +62,11 @@ from screenspace_primitives import (
     compute_scene_fingerprint,
     denormalize_region,
     extract_region,
+    filter_matches_by_region_mask,
     match_template,
+    point_in_mask_points,
+    region_mask_for,
+    region_masker,
     regions_are_similar,
     resolve_region_request,
 )

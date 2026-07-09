@@ -597,7 +597,7 @@ def _decoded_video_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | No
 
 def _make_pin_ocr_reader(
     video_path: str, mtime_ns: int, ts: float, frame: "Any"
-) -> "Callable[[str, dict[str, int], dict[str, Any]], list[Any]]":
+) -> "Callable[[str, dict[str, Any], dict[str, Any]], list[Any]]":
     """Build the cached OCR reader passed to the score functions for one pin.
 
     Memoizes raw EasyOCR readings per (video, mtime, ts, region, tool, langs,
@@ -606,7 +606,7 @@ def _make_pin_ocr_reader(
     """
 
     def _reader(
-        tool_type: str, region_coords: dict[str, int], params: dict[str, Any]
+        tool_type: str, region_coords: dict[str, Any], params: dict[str, Any]
     ) -> list[Any]:
         langs = tuple(params.get("languages") or ["en"])
         key = (
@@ -618,6 +618,9 @@ def _make_pin_ocr_reader(
                 region_coords.get("y"),
                 region_coords.get("w"),
                 region_coords.get("h"),
+                # Shaped regions with the same bbox but different polygons
+                # must not share cached readings.
+                tuple(map(tuple, region_coords.get("mask_points") or ())),
             ),
             tool_type,
             langs,
@@ -1080,7 +1083,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         return err("Could not read frame")
     frame_h, frame_w = frame.shape[:2]
 
-    region_coords: dict[str, int] | None = None
+    region_coords: dict[str, Any] | None = None
     region_str = request.args.get("region", "").strip()
     if region_str:
         parts = region_str.split(",")
@@ -1095,6 +1098,20 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 "w": int(round(rw * frame_w)),
                 "h": int(round(rh * frame_h)),
             }
+            # Optional shaped-region polygon: "u1,v1;u2,v2;..." bbox-relative
+            # fractions. Malformed values are ignored (preview falls back to
+            # the plain rect) rather than failing the whole preview.
+            mask_str = request.args.get("mask", "").strip()
+            if mask_str:
+                try:
+                    mask_points = [
+                        [float(u), float(v)]
+                        for u, v in (pair.split(",") for pair in mask_str.split(";"))
+                    ]
+                except ValueError:
+                    mask_points = []
+                if len(mask_points) >= 3:
+                    region_coords["mask_points"] = mask_points
 
     # Prev frame for tools that consume a temporal pair
     prev_frame = None
@@ -1359,9 +1376,22 @@ def _normalize_region(
     h: float,
     frame_w: int,
     frame_h: int,
+    points: list[list[float]] | None = None,
+    shape: str | None = None,
 ) -> dict[str, Any]:
-    """Convert pixel coordinates to normalized 0-1 fractions."""
-    return {
+    """Convert pixel coordinates to normalized 0-1 fractions.
+
+    For shaped regions, *points* are canvas-pixel polygon vertices; the bbox is
+    recomputed from them (the caller's x/y/w/h are ignored) so bbox and points
+    can never disagree, and the stored ``points`` are bbox-relative 0-1
+    fractions so move/resize only ever touch the bbox.
+    """
+    if points:
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        x, y = min(xs), min(ys)
+        w, h = max(xs) - x, max(ys) - y
+    region: dict[str, Any] = {
         "x": x / frame_w,
         "y": y / frame_h,
         "w": w / frame_w,
@@ -1369,6 +1399,55 @@ def _normalize_region(
         "source_width": frame_w,
         "source_height": frame_h,
     }
+    if points:
+        region["points"] = [
+            [round((px - x) / w, 4), round((py - y) / h, 4)] for px, py in points
+        ]
+        region["shape"] = shape
+    return region
+
+
+_REGION_SHAPES = ("lasso", "wand")
+_REGION_MAX_POINTS = 200
+_REGION_MIN_BBOX_PX = 5
+_REGION_MIN_AREA_PX = 64
+
+
+def _validate_region_points(
+    points: Any, shape: Any, canvas_w: float, canvas_h: float
+) -> str | None:
+    """Validate a shaped-region create payload; return an error string or None.
+
+    Points arrive as canvas-pixel ``[x, y]`` pairs. The bbox and shoelace-area
+    guards reject polygons too small to rasterize meaningfully (the mask
+    counterpart of the client's >5x5 rect minimum — rects keep their
+    client-side check, so this is the only min-area gate in the system).
+    """
+    if shape not in _REGION_SHAPES:
+        return f"'shape' must be one of {', '.join(_REGION_SHAPES)}"
+    if not isinstance(points, list) or not (3 <= len(points) <= _REGION_MAX_POINTS):
+        return f"'points' must be a list of 3-{_REGION_MAX_POINTS} [x, y] pairs"
+    for p in points:
+        if (
+            not isinstance(p, (list, tuple))
+            or len(p) != 2
+            or not all(isinstance(v, (int, float)) for v in p)
+        ):
+            return "'points' must be a list of 3-200 [x, y] number pairs"
+    xs = [min(max(float(p[0]), 0.0), float(canvas_w)) for p in points]
+    ys = [min(max(float(p[1]), 0.0), float(canvas_h)) for p in points]
+    if (
+        max(xs) - min(xs) <= _REGION_MIN_BBOX_PX
+        or max(ys) - min(ys) <= _REGION_MIN_BBOX_PX
+    ):
+        return "Region shape is too small"
+    area = 0.0
+    for i in range(len(xs)):
+        j = (i + 1) % len(xs)
+        area += xs[i] * ys[j] - xs[j] * ys[i]
+    if abs(area) / 2.0 < _REGION_MIN_AREA_PX:
+        return "Region shape is too small"
+    return None
 
 
 def _combined_region_lookup() -> dict[str, Any]:
@@ -1442,8 +1521,29 @@ def api_regions_create() -> FlaskResponse:
     ):
         return err("'canvas_width' and 'canvas_height' must be positive numbers")
 
+    points = data.get("points")
+    shape = data.get("shape")
+    if points is not None or shape is not None:
+        error = _validate_region_points(points, shape, canvas_w, canvas_h)
+        if error:
+            return err(error)
+        points = [
+            [
+                min(max(float(p[0]), 0.0), float(canvas_w)),
+                min(max(float(p[1]), 0.0), float(canvas_h)),
+            ]
+            for p in points
+        ]
+
     region = _normalize_region(
-        data["x"], data["y"], data["w"], data["h"], int(canvas_w), int(canvas_h)
+        data["x"],
+        data["y"],
+        data["w"],
+        data["h"],
+        int(canvas_w),
+        int(canvas_h),
+        points=points,
+        shape=shape,
     )
     if "description" in data:
         region["description"] = str(data["description"])
@@ -1938,7 +2038,13 @@ def _region_coords_resolver(
         rd = region_data if region_data is not None else all_known_regions[name]
         if props and props.get("width") and props.get("height"):
             return screenspace.denormalize_region(rd, props["width"], props["height"])
-        return {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+        coords = {k: rd[k] for k in ("x", "y", "w", "h") if k in rd}
+        # Bbox-relative polygon points survive without denormalization.
+        if rd.get("points"):
+            coords["mask_points"] = rd["points"]
+            if rd.get("shape"):
+                coords["shape"] = rd["shape"]
+        return coords
 
     return _resolve
 
