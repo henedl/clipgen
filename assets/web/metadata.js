@@ -29,6 +29,12 @@
     collisionWindow: 5,
   };
 
+  // Screenspace clustering window for the Metadata tab's headline counts.
+  // Matches the 5s used by the tab's own Cross-Stream Collisions clustering
+  // (and the ±5s point-cluster padding in intake-cluster.js), so the "N
+  // clusters" KPI and the collision section refer to the same clustering.
+  var SS_CLUSTER_THRESHOLD_SEC = 5;
+
   // --- Helpers ---
 
   function getStudyName() {
@@ -99,6 +105,26 @@
   }
 
   // --- Computation engine ---
+
+  // Map intake clusters to the event-like shape the compute functions consume,
+  // so cluster counts flow through unchanged: count -> cluster count,
+  // mean_duration -> cluster span, mean_confidence -> confidence_avg. Lets the
+  // clustered-vs-raw toggle swap the input list without branching each loop.
+  function clustersToEventLike(clusters) {
+    var out = [];
+    for (var i = 0; i < clusters.length; i++) {
+      var c = clusters[i];
+      out.push({
+        participant: c.participant,
+        event_type: c.event_type,
+        detector: c.detector,
+        time_in: c.start,
+        time_out: c.end,
+        confidence: c.confidence_avg,
+      });
+    }
+    return out;
+  }
 
   function computeCoverage(participants, rows, events, marks) {
     var cov = {};
@@ -443,9 +469,9 @@
   function computeCollisions(participants, rows, events, marks, windowSec) {
     // Build per-participant interval lists for each stream
     // Screenspace: use clusters (5s threshold) to avoid double-counting
-    var ssClusters = clusterIntakeEvents(events, 5);
+    var ssClusters = clusterIntakeEvents(events, SS_CLUSTER_THRESHOLD_SEC);
     // Transcript: use clusters (5s threshold)
-    var trClusters = clusterTranscriptMarks(marks, 5);
+    var trClusters = clusterTranscriptMarks(marks, SS_CLUSTER_THRESHOLD_SEC);
 
     // Group by participant
     var ssByP = {}, trByP = {}, shByP = {};
@@ -559,20 +585,30 @@
       if (!isRowEmpty(allRows[i], activeP)) rows.push(allRows[i]);
     }
 
+    // Clustered mode (default ON): collapse dense Screenspace runs into
+    // time-adjacent blocks so their counts don't overshadow the sheet/transcript
+    // streams. Normalized clusters flow through the count functions unchanged;
+    // collisions keep raw events (they cluster internally already).
+    var clusterMode = state.metadataClusterScreenspace !== false;
+    var ssStatEvents = clusterMode
+      ? clustersToEventLike(clusterIntakeEvents(events, SS_CLUSTER_THRESHOLD_SEC))
+      : events;
+
     return {
       participants: activeP,
       allParticipants: allP,
       hasSheet: !!(state.sheetData && state.sheetData.rows && state.sheetData.rows.length),
       hasScreenspace: state.intakeEvents.length > 0,
       hasTranscript: state.trIntakeMarks.length > 0,
-      coverage: computeCoverage(activeP, rows, events, marks),
-      eventTypeStats: computeEventTypeStats(events, activeP),
+      clusterMode: clusterMode,
+      coverage: computeCoverage(activeP, rows, ssStatEvents, marks),
+      eventTypeStats: computeEventTypeStats(ssStatEvents, activeP),
       transcriptCategoryStats: computeTranscriptCategoryStats(marks, activeP),
       observationStats: computeObservationStats(rows, activeP),
       severityDist: computeSeverityDistribution(rows),
       categoryBreakdown: computeCategoryBreakdown(rows, activeP),
-      sessionSummary: computeSessionSummary(activeP, rows, events, marks, boundaryCounts),
-      histogramData: computeHistogramData(activeP, rows, events, marks),
+      sessionSummary: computeSessionSummary(activeP, rows, ssStatEvents, marks, boundaryCounts),
+      histogramData: computeHistogramData(activeP, rows, ssStatEvents, marks),
       collisionStats: computeCollisions(activeP, rows, events, marks, mdState.collisionWindow),
     };
   }
@@ -818,9 +854,10 @@
       spark: P.createSparkBars({ data: sheetSeries, hue: 280 }),
     }));
     strip.appendChild(P.createKpiCard({
-      label: "Screenspace events", value: totalSS,
+      label: cache.clusterMode ? "Screenspace clusters" : "Screenspace events",
+      value: totalSS,
       sub: cache.hasScreenspace
-        ? cache.eventTypeStats.length + " types"
+        ? cache.eventTypeStats.length + " types" + (cache.clusterMode ? " · clustered" : "")
         : "no data",
       accent: "oklch(0.65 0.16 220)",
       spark: P.createSparkBars({ data: ssSeries, hue: 220 }),
@@ -959,7 +996,7 @@
     var cols = [
       { key: "event_type", label: "Event Type" },
       { key: "detector", label: "Detector" },
-      { key: "total_count", label: "Count" },
+      { key: "total_count", label: cache.clusterMode ? "Clusters" : "Count" },
       { key: "participant_coverage", label: "Participants" },
       { key: "first_sec", label: "First" },
       { key: "last_sec", label: "Last" },
@@ -1407,9 +1444,9 @@
       row.appendChild(nameEl);
 
       var bars = el("div", "md-sm-bars");
-      bars.appendChild(makeSmBar("sheet", d.sheet_timestamps, maxVal, d.outlier_flags));
-      bars.appendChild(makeSmBar("screenspace", d.ss_events, maxVal, d.outlier_flags));
-      bars.appendChild(makeSmBar("transcript", d.tr_marks, maxVal, d.outlier_flags));
+      bars.appendChild(makeSmBar("sheet", d.sheet_timestamps, maxVal, d.outlier_flags, cache.clusterMode));
+      bars.appendChild(makeSmBar("screenspace", d.ss_events, maxVal, d.outlier_flags, cache.clusterMode));
+      bars.appendChild(makeSmBar("transcript", d.tr_marks, maxVal, d.outlier_flags, cache.clusterMode));
       row.appendChild(bars);
 
       if (!compact) {
@@ -1419,7 +1456,9 @@
         // across rows so participants line up when any have boundaries.
         if (hasBoundaries) countsText += "  ⚑" + d.boundaries;
         var counts = el("span", "md-sm-counts", countsText);
-        counts.title = "sheet / screenspace / transcript"
+        counts.title = (cache.clusterMode
+          ? "sheet / screenspace clusters / transcript"
+          : "sheet / screenspace / transcript")
           + (hasBoundaries ? " · ⚑ scene boundaries" : "");
         row.appendChild(counts);
       }
@@ -1441,10 +1480,11 @@
     return container;
   }
 
-  function makeSmBar(stream, value, maxVal, outlierFlags) {
+  function makeSmBar(stream, value, maxVal, outlierFlags, clusterMode) {
     var bar = el("div", "md-sm-bar md-stream-" + stream);
     bar.style.width = (maxVal > 0 ? (value / maxVal) * 100 : 0) + "%";
-    bar.title = stream + ": " + value;
+    var streamLabel = (clusterMode && stream === "screenspace") ? "screenspace clusters" : stream;
+    bar.title = streamLabel + ": " + value;
     var fieldMap = { sheet: "sheet_timestamps", screenspace: "ss_events", transcript: "tr_marks" };
     if (outlierFlags.indexOf(fieldMap[stream]) >= 0) {
       bar.classList.add("md-sm-bar-outlier");
@@ -1499,6 +1539,7 @@
       study: getStudyName(),
       exported_at: new Date().toISOString(),
       participants: cache.participants,
+      screenspace_clustered: !!cache.clusterMode,
       coverage_matrix: cache.coverage,
       event_type_stats: cache.eventTypeStats,
       transcript_category_stats: cache.transcriptCategoryStats,
@@ -1559,7 +1600,8 @@
 
     // 1. Events CSV
     if (cache.eventTypeStats.length) {
-      var evLines = [csvRow(["event_type", "detector", "total_count", "participant_coverage",
+      var evLines = [csvRow(["event_type", "detector",
+        cache.clusterMode ? "cluster_count" : "total_count", "participant_coverage",
         "participant_total", "first_occurrence_sec", "last_occurrence_sec",
         "mean_time_sec", "mean_confidence", "mean_duration_sec"])];
       for (var i = 0; i < cache.eventTypeStats.length; i++) {
@@ -1576,7 +1618,8 @@
     if (cache.sessionSummary.length) {
       var cats = ["pain_point", "delight", "quote", "insight", "task", "bookmark"];
       var sesHeader = ["participant", "spreadsheet_valid_cells", "spreadsheet_timestamps",
-        "screenspace_events", "screenspace_event_types", "screenspace_boundaries", "transcript_marks"];
+        cache.clusterMode ? "screenspace_clusters" : "screenspace_events",
+        "screenspace_event_types", "screenspace_boundaries", "transcript_marks"];
       for (var c = 0; c < cats.length; c++) sesHeader.push("transcript_" + cats[c] + "s");
       sesHeader.push("outlier");
       var sesLines = [csvRow(sesHeader)];

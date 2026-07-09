@@ -65,6 +65,7 @@
     sortDir: "asc", // "asc" | "desc"
     cellExpandHover: true,
     cardScrubberEnabled: false,
+    metadataClusterScreenspace: true,
     filters: {
       categories: [],
       severities: [],
@@ -1163,6 +1164,9 @@
         }
         if (data.cardScrubberEnabled !== undefined) {
           state.cardScrubberEnabled = data.cardScrubberEnabled;
+        }
+        if (data.metadataClusterScreenspace !== undefined) {
+          state.metadataClusterScreenspace = data.metadataClusterScreenspace;
         }
         var tcGroup = qs("#titlecardGroup");
         if (tcGroup && qs("#artifactFormat").value === "clip") {
@@ -4229,6 +4233,14 @@
         renderArtifactQueue();
         renderReelQueue();
         renderIntake(false);
+      }
+    }
+    var mdCluster = _findSetting("STUDIO_METADATA_CLUSTER_SCREENSPACE");
+    if (mdCluster) {
+      var wasClustered = state.metadataClusterScreenspace;
+      state.metadataClusterScreenspace = !!mdCluster.value;
+      if (wasClustered !== state.metadataClusterScreenspace) {
+        refreshMetadataIfActive();
       }
     }
   }

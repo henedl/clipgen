@@ -180,6 +180,13 @@ STUDIO_CARD_SCRUBBER: bool = False
 STUDIO_SCRUBBER_SPRITE_COLS: int = 5
 STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
 
+# Metadata tab: count Screenspace as time-adjacent clusters instead of raw
+# events, so a dense scan (e.g. 10k events) reads as a handful of blocks and
+# doesn't overshadow the sheet/transcript streams in the tab's tables/charts.
+# Boot-embedded into /api/sheet (like STUDIO_CARD_SCRUBBER); not mirrored via
+# get_frontend_config.
+STUDIO_METADATA_CLUSTER_SCREENSPACE: bool = True
+
 # ── Screenspace ──────────────────────────────────────────────────────
 SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
 TRANSCRIPTS_MANIFEST_FILENAME: str = "transcripts_manifest.json"
@@ -542,6 +549,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
     "STUDIO_CARD_SCRUBBER": "Hover a queue card's thumbnail to scrub through frames, hear the clip's audio, and see a waveform overlay.",
+    "STUDIO_METADATA_CLUSTER_SCREENSPACE": "In the Metadata tab, count Screenspace data as time-adjacent clusters instead of raw events, so a dense scan doesn't overshadow the spreadsheet and transcript streams. On by default.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
@@ -591,6 +599,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "STUDIO_CARD_SCRUBBER": {
         "tab": "General",
         "group": "Sheet Preview",
+        "type": "bool",
+    },
+    "STUDIO_METADATA_CLUSTER_SCREENSPACE": {
+        "tab": "General",
+        "group": "Metadata Overview",
         "type": "bool",
     },
     "SCREENSHOT_FORMAT": {

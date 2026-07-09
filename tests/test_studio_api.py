@@ -4376,6 +4376,23 @@ def test_card_scrubber_flag_in_sheet_payload(client):
     assert data["cardScrubberEnabled"] is False
 
 
+def test_metadata_cluster_flag_in_sheet_payload(client):
+    """/api/sheet exposes the Metadata clustering flag (default on)."""
+    data = client.get("/studio/api/sheet").get_json()
+    assert data["metadataClusterScreenspace"] is True
+
+
+def test_api_settings_includes_metadata_cluster_toggle(client):
+    """GET /api/settings exposes the Metadata clustering toggle (General tab)."""
+    data = client.get("/studio/api/settings").get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    s = by_name["STUDIO_METADATA_CLUSTER_SCREENSPACE"]
+    assert s["tab"] == "General"
+    assert s["group"] == "Metadata Overview"
+    assert s["type"] == "bool"
+    assert s["default"] is True
+
+
 @pytest.mark.parametrize(
     "path", ["/studio/api/sprite/P01", "/studio/api/clip-audio/P01"]
 )
