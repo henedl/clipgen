@@ -432,6 +432,11 @@ var estimateRemainingSec = function (elapsedSec, progress) {
 // elapsedSec only — remainingSec stays null. Returns a plain object (not a class,
 // per project convention) closing over the start timestamp and an EMA of the raw
 // estimate to damp jitter.
+//
+// pause()/resume() are opt-in: elapsed freezes while paused and continues afterward,
+// with the paused span excluded from elapsed. Callers that never call pause() see the
+// original continuous wall-clock behavior (so e.g. the Transcripts timers are
+// unaffected).
 var createEtaTracker = function (opts) {
   opts = opts || {};
   var emaAlpha = opts.emaAlpha != null ? opts.emaAlpha : 0.3;
@@ -439,17 +444,34 @@ var createEtaTracker = function (opts) {
   var minElapsed = opts.minElapsed != null ? opts.minElapsed : 3;
   var startMs = null;
   var ema = null;
+  var pausedMs = 0; // total ms spent paused across completed pause spans
+  var pausedAt = null; // epoch (ms) the current pause began, else null
   return {
     // Idempotent: repeated calls keep the original start so elapsed never resets.
     // Pass an explicit epoch (ms) to seed from a known start (e.g. reattach).
     start: function (nowMs) {
       if (startMs == null) startMs = nowMs != null ? nowMs : Date.now();
     },
+    // Freeze elapsed at the pause instant. Idempotent — safe to call every tick.
+    pause: function (nowMs) {
+      if (pausedAt == null) pausedAt = nowMs != null ? nowMs : Date.now();
+    },
+    // Resume ticking, folding the just-ended pause span into pausedMs. No-op when
+    // not paused.
+    resume: function (nowMs) {
+      if (pausedAt != null) {
+        pausedMs += (nowMs != null ? nowMs : Date.now()) - pausedAt;
+        pausedAt = null;
+      }
+    },
     // Returns { elapsedSec, remainingSec } — remainingSec is null until the
     // progress/elapsed gates open, then an EMA-smoothed, rounded estimate.
     update: function (progress) {
       if (startMs == null) startMs = Date.now();
-      var elapsedSec = (Date.now() - startMs) / 1000;
+      // While paused, "now" holds at pausedAt (the current pause isn't in pausedMs
+      // yet), so elapsed freezes; after resume() it continues seamlessly.
+      var now = pausedAt != null ? pausedAt : Date.now();
+      var elapsedSec = (now - startMs - pausedMs) / 1000;
       var raw = estimateRemainingSec(elapsedSec, progress);
       var remainingSec = null;
       if (raw != null && progress >= minProgress && elapsedSec >= minElapsed) {
@@ -462,6 +484,8 @@ var createEtaTracker = function (opts) {
     reset: function () {
       startMs = null;
       ema = null;
+      pausedMs = 0;
+      pausedAt = null;
     },
   };
 };
