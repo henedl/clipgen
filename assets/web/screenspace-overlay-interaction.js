@@ -599,12 +599,15 @@
 
     // Region selector tools: rectangle (default), freehand lasso, magic wand.
     var toolBtns = { rect: qs("#toolRectBtn"), lasso: qs("#toolLassoBtn"), wand: qs("#toolWandBtn") };
-    toolBtns.rect.appendChild(iconSpan("stop"));
+    toolBtns.rect.appendChild(iconSpan("squares-2x2"));
     toolBtns.lasso.appendChild(iconSpan("pencil"));
     toolBtns.wand.appendChild(iconSpan("sparkles"));
     function setRegionTool(tool) {
       state.regionTool = tool;
+      // Abandon any in-progress draw from the previous tool, else mouseup
+      // could still commit it while the new tool appears selected.
       state.drawingLasso = null;
+      state.drawingRegion = null;
       Object.keys(toolBtns).forEach(function (key) {
         toolBtns[key].classList.toggle("active", key === tool);
       });
