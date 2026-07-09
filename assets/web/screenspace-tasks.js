@@ -947,6 +947,14 @@
     return task.status === "running" || task.status === "paused";
   }
 
+  function taskIsTerminal(task) {
+    return (
+      task.status === "completed" ||
+      task.status === "failed" ||
+      task.status === "cancelled"
+    );
+  }
+
   // The task-card status line. Progress is NOT part of renderTaskList's rebuild
   // gate (that would rebuild the whole list ~2/s to move a bar); instead this
   // text + the progress fill are refreshed in place by tickTaskProgress. Kept
@@ -1001,6 +1009,9 @@
       t.start(isNaN(seed) ? undefined : seed);
       _etaTrackers[task.id] = t;
     }
+    // Freeze the elapsed clock while paused; resume folds the paused span out.
+    if (task.status === "paused") t.pause();
+    else t.resume();
     var prog = task.status === "paused" ? 0 : task.progress;
     var e = t.update(prog);
     var label = formatDuration(e.elapsedSec);
@@ -1010,13 +1021,16 @@
   }
 
   function tickEtas() {
-    // Prune trackers for tasks that are gone or no longer active.
-    var activeIds = {};
+    // Prune trackers only for tasks that are gone or terminal. A resumed task
+    // dips through "queued" (not active) on its way back to running; keeping the
+    // tracker across that gap preserves its paused-time accumulator so elapsed
+    // doesn't re-count the paused span after resume.
+    var keepIds = {};
     state.tasks.forEach(function (t) {
-      if (taskIsActive(t)) activeIds[t.id] = true;
+      if (!taskIsTerminal(t)) keepIds[t.id] = true;
     });
     Object.keys(_etaTrackers).forEach(function (id) {
-      if (!activeIds[id]) delete _etaTrackers[id];
+      if (!keepIds[id]) delete _etaTrackers[id];
     });
     // Refresh the visible eta spans in place (no list re-render).
     var spans = document.querySelectorAll("#taskList [data-task-eta]");
