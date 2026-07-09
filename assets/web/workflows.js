@@ -970,9 +970,13 @@
   // outside-click/Escape toggle the run + shortcuts menus use).
   WF.bindMenuToggle = bindMenuToggle;
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
-  }
+  // Every workflows script loads with `defer` (see workflows.html), so this hub
+  // runs at readyState "interactive" — after DOM parse but BEFORE DOMContentLoaded
+  // and BEFORE the workflows-*.js satellites execute. boot() invokes the
+  // satellites' WF.initCanvas/initWires/initRuns/initStashes, so it must wait for
+  // DOMContentLoaded (dispatched only once every deferred script has run).
+  // Booting synchronously here would silently skip those init fns (still
+  // undefined) and leave the canvas with no pan/zoom/drag handlers. Mirrors the
+  // sibling hubs (studio/screenspace/transcripts).
+  document.addEventListener("DOMContentLoaded", boot);
 })();
