@@ -477,6 +477,57 @@ def test_select_worksheet_url_skips_drive_listing(monkeypatch):
     assert seen["url"] == "http://example.com/sheet"
 
 
+# ---- Single-xlsx fallback in CLI mode ----
+
+
+def test_single_xlsx_fallback_path_requires_exactly_one(monkeypatch):
+    import excel_io
+
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: [])
+    assert cli._single_xlsx_fallback_path("reason") is None
+
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["a.xlsx", "b.xlsx"])
+    assert cli._single_xlsx_fallback_path("reason") is None
+
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["only.xlsx"])
+    assert cli._single_xlsx_fallback_path("reason") == "only.xlsx"
+
+
+def test_select_worksheet_cli_falls_back_to_single_xlsx(monkeypatch):
+    """No -s and no Drive match in CLI mode uses the sole local .xlsx."""
+    import excel_io
+    import google_api
+
+    monkeypatch.setattr(google_api, "get_all_spreadsheets", lambda _c: [])
+    monkeypatch.setattr(clipgen, "open_spreadsheet_by_name", lambda *_a, **_kw: None)
+    sentinel = object()
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["only.xlsx"])
+    monkeypatch.setattr(excel_io, "open_excel_workbook", lambda _path: sentinel)
+    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda _w: True)
+
+    result = cli.select_worksheet(Mock(), _base_args(), cli_mode=True)
+    assert result is sentinel
+
+
+def test_select_worksheet_cli_ambiguous_xlsx_still_exits(monkeypatch, capsys):
+    """Zero or several local .xlsx files keep the hard error (now mentioning -s excel)."""
+    import excel_io
+    import google_api
+
+    monkeypatch.setattr(google_api, "get_all_spreadsheets", lambda _c: [])
+    monkeypatch.setattr(clipgen, "open_spreadsheet_by_name", lambda *_a, **_kw: None)
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["a.xlsx", "b.xlsx"])
+    monkeypatch.setattr(
+        excel_io,
+        "open_excel_workbook",
+        lambda _path: pytest.fail("must not open an ambiguous Excel file"),
+    )
+
+    with pytest.raises(SystemExit):
+        cli.select_worksheet(Mock(), _base_args(), cli_mode=True)
+    assert "-s excel" in capsys.readouterr().out
+
+
 # ---- --pre-transcribe flag parsing ----
 
 
@@ -492,6 +543,42 @@ def test_pre_transcribe_flag(monkeypatch, argv_extra, expected):
     monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
     args = cli.parse_arguments()
     assert args.pre_transcribe == expected
+
+
+# ---- --settings flag ----
+
+
+@pytest.mark.parametrize(
+    "argv_extra,expected",
+    [
+        ([], False),
+        (["--settings"], True),
+    ],
+)
+def test_settings_flag_parses(monkeypatch, argv_extra, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
+    args = cli.parse_arguments()
+    assert args.settings is expected
+
+
+def test_settings_rejected_with_no_input(monkeypatch, capsys):
+    import os
+
+    import utils
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--settings", "--no-input"])
+    monkeypatch.setattr(os, "chdir", lambda _p: None)
+    monkeypatch.setattr(utils, "validate_runtime_directories", lambda: None)
+    monkeypatch.setattr(
+        utils,
+        "set_program_settings",
+        lambda: pytest.fail("settings editor must not open under --no-input"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    assert "--settings" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

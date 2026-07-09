@@ -868,6 +868,35 @@ var apiDelete = function (path) {
   });
 };
 
+// Blob variants for image/media routes (frame thumbnails, preview renders).
+var apiGetBlob = function (path) {
+  return fetch(path).then(function (r) {
+    if (!r.ok) throw new Error("Server error " + r.status);
+    return r.blob();
+  });
+};
+
+var apiPostBlob = function (path, body) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(function (r) {
+    if (!r.ok) throw new Error("Server error " + r.status);
+    return r.blob();
+  });
+};
+
+// Returns a .catch handler that surfaces the failure as a toast. For
+// user-initiated loads and mutations whose silent failure would leave the
+// UI wrong; background polling/preloading keeps its silent catches.
+// Usage: apiGet("api/regions").then(...).catch(toastError("Failed to load regions"));
+var toastError = function (prefix) {
+  return function (err) {
+    showToast(prefix + (err && err.message ? ": " + err.message : ""));
+  };
+};
+
 // ---- Polling ----
 
 var POLL_INTERVAL = 3000;

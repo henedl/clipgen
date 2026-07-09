@@ -1,3 +1,5 @@
+import pytest
+
 import spreadsheet
 from spreadsheet import SheetContext
 from types import SimpleNamespace
@@ -72,6 +74,35 @@ def test_parse_reel_input_highlights_with_selectors():
     assert parsed["highlights"] is True
     assert parsed["participants"] == ["P01"]
     assert parsed["lines"] == [11]
+
+
+def test_parse_cell_specifications_parses_multiple_cells():
+    assert spreadsheet.parse_cell_specifications("P01.11 + P03.9") == [
+        ("P01", 11),
+        ("P03", 9),
+    ]
+
+
+def test_parse_cell_specifications_rejects_non_numeric_row():
+    with pytest.raises(ValueError, match=r'Invalid row number "abc"'):
+        spreadsheet.parse_cell_specifications("P01.abc")
+
+
+def test_parse_cell_specifications_rejects_non_positive_row():
+    with pytest.raises(ValueError, match="Row number must be positive"):
+        spreadsheet.parse_cell_specifications("P01.0")
+    with pytest.raises(ValueError, match="Row number must be positive"):
+        spreadsheet.parse_cell_specifications("P01.-3")
+
+
+def test_parse_cell_specifications_rejects_missing_dot():
+    with pytest.raises(ValueError, match="Invalid cell specification"):
+        spreadsheet.parse_cell_specifications("P0111")
+
+
+def test_parse_cell_specifications_rejects_bad_participant_prefix():
+    with pytest.raises(ValueError, match="Invalid participant ID"):
+        spreadsheet.parse_cell_specifications("X01.5")
 
 
 def test_detect_mode_from_input_rejects_mixed_types():

@@ -340,14 +340,12 @@ def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
         # Validate row number
         try:
             row_number = int(row_str)
-            if row_number < 1:
-                raise ValueError(f"Row number must be positive. Got: {row_number}")
-        except ValueError as e:
-            if "invalid literal" in str(e):
-                raise ValueError(
-                    f'Invalid row number "{row_str}". Must be a positive integer.'
-                )
-            raise
+        except ValueError:
+            raise ValueError(
+                f'Invalid row number "{row_str}". Must be a positive integer.'
+            )
+        if row_number < 1:
+            raise ValueError(f"Row number must be positive. Got: {row_number}")
 
         specs.append((participant_id, row_number))
 

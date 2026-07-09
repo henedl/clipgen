@@ -1093,7 +1093,7 @@
         if (data.categories) setMarkCategories(data.categories);
         renderInfoMarks(data.marks || []);
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load marks"));
 
     apiGet("api/pins/" + encodeURIComponent(pid))
       .then(function (data) {
@@ -1107,7 +1107,7 @@
         updateCalibrationVisibility();
         refreshCalibration();
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load pins"));
   }
 
   // ---- Calibration pins ----
@@ -3779,9 +3779,8 @@
         // Preload frame 0 for all participants (instant first-frame display)
         state.participants.forEach(function (p) {
           var url = frameUrl(p.id, 0);
-          // TODO: fire-and-forget blob preload; needs apiGetBlob helper to migrate.
-          fetch(url)
-            .then(function (r) { return r.blob(); })
+          // Fire-and-forget preload; failures just skip the cache warm.
+          apiGetBlob(url)
             .then(function (blob) {
               if (_preloadedFrames[p.id]) {
                 try { URL.revokeObjectURL(_preloadedFrames[p.id]); } catch (_) {}
@@ -3829,7 +3828,7 @@
           renderOverlay();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load regions"));
 
     apiGet("api/stashes")
       .then(function (data) {
@@ -3839,7 +3838,7 @@
           renderRunRegionPicker();
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load stashes"));
 
     apiGet("api/tasks")
       .then(function (data) {
@@ -3857,7 +3856,7 @@
           }
         }
       })
-      .catch(function () {});
+      .catch(toastError("Failed to load tasks"));
   });
 
   // ---- Satellite interface (window.ClipgenScreenspace) ----

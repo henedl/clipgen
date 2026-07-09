@@ -259,13 +259,21 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Run the citation thinking agent over participants that already have a summary. "
         "No IDs = all eligible. Existing citations are kept unless --no-input is passed.",
     )
+    transcription.add_argument(
+        "--friction",
+        nargs="*",
+        metavar="ID",
+        default=None,
+        help="Run the friction thinking agent over participants that already have a summary. "
+        "No IDs = all eligible. Existing friction results are kept unless --no-input is passed.",
+    )
 
     ai_opts = parser.add_argument_group("AI models")
     ai_opts.add_argument(
         "--ollama-model",
         type=str,
         metavar="MODEL",
-        help="Ollama model for transcript summaries and citations (e.g. gemma3:4b)",
+        help="Ollama model for transcript summaries, citations, and friction (e.g. gemma3:4b)",
     )
 
     paths = parser.add_argument_group("spreadsheet & directories")
@@ -684,6 +692,12 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         action="store_true",
         help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
     )
+    run_opts.add_argument(
+        "--settings",
+        action="store_true",
+        help="Open the interactive settings editor before running "
+        "(changes apply to this run only; incompatible with --no-input)",
+    )
 
     titlecards_grp = parser.add_argument_group("title cards (choose at most one)")
     titlecard_group = titlecards_grp.add_mutually_exclusive_group()
@@ -870,6 +884,26 @@ def _is_excel_spreadsheet_arg(spreadsheet_arg: str | None) -> bool:
     return raw == config.COMMAND_EXCEL or raw.endswith(".xlsx")
 
 
+def _single_xlsx_fallback_path(reason: str) -> str | None:
+    """Path of the sole .xlsx in the working directory, or None.
+
+    CLI mode can't prompt, so when Google Sheets is unavailable and exactly
+    one local Excel file is present, fall back to it (with a notice) instead
+    of dead-ending. Ambiguous directories (zero or several .xlsx) return None
+    and leave the caller's error path in charge.
+    """
+    import excel_io
+
+    paths = excel_io.list_excel_in_cwd()
+    if len(paths) != 1:
+        return None
+    utils.info_print(
+        f"{reason}; falling back to local Excel file {Path(paths[0]).name}. "
+        "Pass -s to choose a source explicitly."
+    )
+    return paths[0]
+
+
 def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
     """Select worksheet based on command-line arguments or interactive selection.
 
@@ -961,11 +995,20 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
             )
         elif cli_mode:
             # CLI mode requires a spreadsheet - can't prompt interactively
-            utils.error_print(
-                "No spreadsheet found matching working directory name.",
-                ["Use -s to specify a spreadsheet name, URL, or index."],
+            fallback = _single_xlsx_fallback_path(
+                "No spreadsheet found matching working directory name"
             )
-            sys.exit(1)
+            if fallback:
+                worksheet = excel_io.open_excel_workbook(fallback)
+            if not worksheet:
+                utils.error_print(
+                    "No spreadsheet found matching working directory name.",
+                    [
+                        "Use -s to specify a spreadsheet name, URL, or index.",
+                        "Or use -s excel / -s path/to/file.xlsx for a local Excel file.",
+                    ],
+                )
+                sys.exit(1)
         else:
             worksheet = clipgen.select_spreadsheet(gspread_client, get_doc_list())
 
@@ -2745,8 +2788,9 @@ def _select_transcript_targets(
 ) -> list[str]:
     """Resolve a requested participant list against transcripted participants.
 
-    ``requested`` is the value of ``args.summarize`` or ``args.citations`` —
-    None should never reach here, but ``[]`` means "all transcripted".
+    ``requested`` is the value of ``args.summarize``, ``args.citations``, or
+    ``args.friction`` — None should never reach here, but ``[]`` means "all
+    transcripted".
     Unknown IDs print a warning and are dropped.
     """
     if not requested:
@@ -2859,6 +2903,64 @@ def _run_citations(args: argparse.Namespace) -> None:
         cited += 1
 
     utils.info_print(f"Citations complete: {cited} processed, {skipped} skipped.")
+
+
+def _run_friction_agent(args: argparse.Namespace) -> None:
+    """Run the friction thinking agent over participants with summaries."""
+    import thinking_agents
+
+    manifest = transcripts.load_transcripts_manifest()
+    source_transcripts = manifest["source_transcripts"]
+    corrections = manifest["corrections"]
+    marks = manifest.get("marks")
+
+    targets = _select_transcript_targets(args.friction, source_transcripts)
+    if not targets:
+        utils.error_print("No transcribed participants for friction analysis.")
+        return
+
+    agent = thinking_agents.get_agent("friction")
+    assert agent is not None  # registered in thinking_agents.AGENTS
+
+    processed = 0
+    skipped = 0
+    for pid in targets:
+        entry = source_transcripts.get(pid)
+        if not entry:
+            utils.warning_print(f"{pid}: no transcript entry; skipping.")
+            skipped += 1
+            continue
+        if not entry.get("summary"):
+            utils.warning_print(f"{pid}: no summary yet; run --summarize first.")
+            skipped += 1
+            continue
+        if entry.get("friction") and not args.no_input:
+            utils.info_print(
+                f"{pid}: friction already present; skip (--no-input to overwrite)."
+            )
+            skipped += 1
+            continue
+        utils.info_print(f"Scoring friction for {pid}...")
+        result = agent["run"](entry, None)
+        if not result:
+            utils.warning_print(
+                f"{pid}: friction not produced (missing transcript or summary)."
+            )
+            skipped += 1
+            continue
+        entry["friction"] = result
+        transcripts.save_transcripts_manifest(source_transcripts, corrections, marks)
+        moment_count = len(result.get("moments") or [])
+        if result.get("llm_ok"):
+            utils.info_print(f"  {pid}: {moment_count} friction moment(s) stored.")
+        else:
+            utils.warning_print(
+                f"  {pid}: programmatic scores stored, but LLM moment detection "
+                "failed (Ollama unavailable?)."
+            )
+        processed += 1
+
+    utils.info_print(f"Friction complete: {processed} processed, {skipped} skipped.")
 
 
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
@@ -3165,6 +3267,14 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         implies_cli_mode=True,
     ),
     _ModeSpec(
+        key="friction",
+        truthy=lambda a: getattr(a, "friction", None) is not None,
+        error="--friction cannot be combined with mode, format, or other standalone flags.",
+        hint="Use --friction with -i/-o (directories), -v (verbose), and --ollama-model.",
+        selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
+        implies_cli_mode=True,
+    ),
+    _ModeSpec(
         key="ss_clips",
         truthy=lambda a: bool(getattr(a, "ss_clips", False)),
         error="--ss-clips cannot be combined with mode, format, or other standalone flags.",
@@ -3371,6 +3481,9 @@ def _dispatch_standalone_mode(
     if getattr(args, "citations", None) is not None:
         _run_citations(args)
         return True
+    if getattr(args, "friction", None) is not None:
+        _run_friction_agent(args)
+        return True
 
     # Standalone web frontend (no spreadsheet) — Studio, Screenspace, or Transcripts.
     # The Start overlay lets the user pick a spreadsheet from the browser.
@@ -3483,6 +3596,17 @@ def main() -> None:
     # Sanity-check input/output directories before proceeding
     utils.validate_runtime_directories()
 
+    if getattr(args, "settings", False):
+        if args.no_input:
+            utils.error_print(
+                "--settings requires interactive input and cannot be combined with --no-input."
+            )
+            sys.exit(1)
+        # Reopen the grid after each change so several settings can be
+        # adjusted in one sitting; empty input exits the loop.
+        while utils.set_program_settings():
+            pass
+
     if not video.check_ffmpeg_tools_available():
         sys.exit(1)
 
@@ -3536,15 +3660,26 @@ def main() -> None:
         gspread_client = authenticate_google()
         if gspread_client is None:
             # Auth failed. CLI mode or an explicit -s argument can't recover
-            # interactively — point the user at the Excel option and exit.
+            # interactively — fall back to a sole local .xlsx when possible,
+            # else point the user at the Excel option and exit.
             if cli_mode or getattr(args, "spreadsheet", None):
-                utils.error_print(
-                    "Google authentication failed.",
-                    [
-                        "Use -s path/to/file.xlsx to work with a local Excel file instead.",
-                    ],
-                )
-                sys.exit(1)
+                fallback = None
+                if cli_mode and not getattr(args, "spreadsheet", None):
+                    fallback = _single_xlsx_fallback_path(
+                        "Google authentication failed"
+                    )
+                if fallback:
+                    # select_worksheet routes .xlsx args through excel_io
+                    # without touching the (absent) gspread client.
+                    args.spreadsheet = fallback
+                else:
+                    utils.error_print(
+                        "Google authentication failed.",
+                        [
+                            "Use -s path/to/file.xlsx to work with a local Excel file instead.",
+                        ],
+                    )
+                    sys.exit(1)
             # Interactive mode: fall through with gspread_client=None; the
             # while loop below will prompt for an Excel file instead.
 
