@@ -673,7 +673,8 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 .subheader,
 #studioSubheader,
 #ssSubheader,
-#trSubheader {
+#trSubheader,
+#wfToolbar {
   display: flex;
   align-items: center;
   height: var(--subheader-height);
@@ -700,7 +701,8 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
   .subheader,
   #studioSubheader,
   #ssSubheader,
-  #trSubheader { background: var(--bg); }
+  #trSubheader,
+  #wfToolbar { background: var(--bg); }
 }
 
 /* See body.dragging .topnav in topnav.css — same rationale: backdrop-filter
@@ -709,7 +711,8 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 body.dragging .subheader,
 body.dragging #studioSubheader,
 body.dragging #ssSubheader,
-body.dragging #trSubheader {
+body.dragging #trSubheader,
+body.dragging #wfToolbar {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   background: var(--bg);

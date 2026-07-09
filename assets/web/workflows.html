@@ -22,6 +22,89 @@
        blueprint switcher; M2 adds typed-port wires + param editors; M4 adds the
        Run button + the live run/results panel (workflows-runs.js). See
        plans/WORKFLOWS-PLAN.md. -->
+  <!-- Full-width glassy subheader: the blueprint switcher + canvas actions. Fixed
+       under the TopNav (shared subheader chrome in tokens.css) so it spans the
+       whole window above the three-pane shell, not just the canvas column. -->
+  <header id="wfToolbar">
+    <label class="wf-toolbar-label" for="wfBlueprintSelect">Blueprint</label>
+    <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled></select>
+    <input id="wfBlueprintName" type="text" autocomplete="off"
+           aria-label="Blueprint name" placeholder="Untitled" disabled />
+    <!-- Debounced-autosave status: "Saving…" while the timer is armed, "Saved"
+         once the PUT resolves, "Save failed" on error (hub setSaveStatus). -->
+    <span id="wfSaveStatus" class="wf-save-status" aria-live="polite"></span>
+    <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
+    <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
+    <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
+         this hidden input is triggered by the "Import blueprint JSON" item. -->
+    <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
+    <!-- Undo / redo: the keyboard stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
+         state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
+    <button id="wfUndo" class="btn btn-small wf-icon-btn" type="button" disabled
+            aria-label="Undo" title="Undo (⌘Z)">
+      <span class="wf-btn-icon wf-undo-icon" aria-hidden="true"></span>
+    </button>
+    <button id="wfRedo" class="btn btn-small wf-icon-btn" type="button" disabled
+            aria-label="Redo" title="Redo (⌘⇧Z)">
+      <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
+    </button>
+    <button id="wfCleanUp" class="btn btn-small" type="button" disabled
+            title="Auto-arrange the nodes">Clean up</button>
+    <button id="wfFitView" class="btn btn-small wf-icon-btn" type="button" disabled
+            aria-label="Fit to view" title="Fit all nodes in view (F)">
+      <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
+    </button>
+    <button id="wfSaveStash" class="btn btn-small" type="button" disabled
+            title="Save the selected nodes as a reusable stash">Stash selection</button>
+    <div class="wf-run-split">
+      <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
+              title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
+      <button id="wfRunMenuBtn" class="btn btn-small btn-primary wf-run-caret"
+              type="button" disabled aria-haspopup="menu" aria-expanded="false"
+              aria-label="More run options" title="More run options">
+        <span class="wf-run-caret-icon" aria-hidden="true"></span>
+      </button>
+      <div id="wfRunMenu" class="wf-run-menu cg-menu hidden" role="menu">
+        <button id="wfRunToItem" class="wf-run-menu-item" type="button" role="menuitem"
+                disabled
+                title="Run only the selected node and the nodes it depends on">
+          Run to here
+        </button>
+      </div>
+    </div>
+    <button id="wfStopBtn" class="btn btn-small hidden" type="button"
+            title="Cancel the running workflow">Stop</button>
+    <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
+            aria-pressed="false"
+            title="Auto-run this blueprint when a new video lands in the input folder">
+      <span class="wf-trigger-icon" aria-hidden="true"></span>
+      <span class="wf-trigger-label">Auto-run on new video</span>
+    </button>
+    <!-- Persistent cue that some blueprint is armed for auto-run, even one
+         that isn't the active canvas (the button only reflects the active). -->
+    <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
+    <!-- Keyboard/mouse shortcuts legend: a far-right ? popover (reuses the
+         run-menu toggle pattern). Static content — usable even before load. -->
+    <div class="wf-shortcuts-wrap">
+      <button id="wfShortcutsBtn" class="btn btn-small wf-icon-btn" type="button"
+              aria-haspopup="menu" aria-expanded="false"
+              aria-label="Keyboard shortcuts" title="Keyboard &amp; mouse shortcuts">
+        <span class="wf-btn-icon wf-shortcuts-icon" aria-hidden="true"></span>
+      </button>
+      <div id="wfShortcutsMenu" class="wf-shortcuts-menu cg-menu hidden" role="menu">
+        <div class="wf-shortcuts-title">Keyboard &amp; mouse</div>
+        <dl class="wf-shortcuts-list">
+          <div><dt>Undo / Redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
+          <div><dt>Copy / Paste / Duplicate</dt><dd><kbd>⌘C</kbd> <kbd>⌘V</kbd> <kbd>⌘D</kbd></dd></div>
+          <div><dt>Delete selection</dt><dd><kbd>Delete</kbd></dd></div>
+          <div><dt>Fit to view</dt><dd><kbd>F</kbd></dd></div>
+          <div><dt>Pan canvas</dt><dd>middle-drag</dd></div>
+          <div><dt>Zoom</dt><dd>scroll</dd></div>
+          <div><dt>Select</dt><dd>drag / shift-click</dd></div>
+        </dl>
+      </div>
+    </div>
+  </header>
   <main id="wfShell">
     <aside id="wfSidebar" aria-label="Node palette">
       <div class="wf-sidebar-header">Nodes</div>
@@ -49,86 +132,6 @@
     </aside>
 
     <section id="wfCanvasWrap" aria-label="Workflow canvas">
-      <header id="wfToolbar">
-        <label class="wf-toolbar-label" for="wfBlueprintSelect">Blueprint</label>
-        <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled></select>
-        <input id="wfBlueprintName" type="text" autocomplete="off"
-               aria-label="Blueprint name" placeholder="Untitled" disabled />
-        <!-- Debounced-autosave status: "Saving…" while the timer is armed, "Saved"
-             once the PUT resolves, "Save failed" on error (hub setSaveStatus). -->
-        <span id="wfSaveStatus" class="wf-save-status" aria-live="polite"></span>
-        <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
-        <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
-        <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
-             this hidden input is triggered by the "Import blueprint JSON" item. -->
-        <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
-        <!-- Undo / redo: the keyboard stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
-             state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
-        <button id="wfUndo" class="btn btn-small wf-icon-btn" type="button" disabled
-                aria-label="Undo" title="Undo (⌘Z)">
-          <span class="wf-btn-icon wf-undo-icon" aria-hidden="true"></span>
-        </button>
-        <button id="wfRedo" class="btn btn-small wf-icon-btn" type="button" disabled
-                aria-label="Redo" title="Redo (⌘⇧Z)">
-          <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
-        </button>
-        <button id="wfCleanUp" class="btn btn-small" type="button" disabled
-                title="Auto-arrange the nodes">Clean up</button>
-        <button id="wfFitView" class="btn btn-small wf-icon-btn" type="button" disabled
-                aria-label="Fit to view" title="Fit all nodes in view (F)">
-          <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
-        </button>
-        <button id="wfSaveStash" class="btn btn-small" type="button" disabled
-                title="Save the selected nodes as a reusable stash">Stash selection</button>
-        <div class="wf-run-split">
-          <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
-                  title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
-          <button id="wfRunMenuBtn" class="btn btn-small btn-primary wf-run-caret"
-                  type="button" disabled aria-haspopup="menu" aria-expanded="false"
-                  aria-label="More run options" title="More run options">
-            <span class="wf-run-caret-icon" aria-hidden="true"></span>
-          </button>
-          <div id="wfRunMenu" class="wf-run-menu cg-menu hidden" role="menu">
-            <button id="wfRunToItem" class="wf-run-menu-item" type="button" role="menuitem"
-                    disabled
-                    title="Run only the selected node and the nodes it depends on">
-              Run to here
-            </button>
-          </div>
-        </div>
-        <button id="wfStopBtn" class="btn btn-small hidden" type="button"
-                title="Cancel the running workflow">Stop</button>
-        <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
-                aria-pressed="false"
-                title="Auto-run this blueprint when a new video lands in the input folder">
-          <span class="wf-trigger-icon" aria-hidden="true"></span>
-          <span class="wf-trigger-label">Auto-run on new video</span>
-        </button>
-        <!-- Persistent cue that some blueprint is armed for auto-run, even one
-             that isn't the active canvas (the button only reflects the active). -->
-        <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
-        <!-- Keyboard/mouse shortcuts legend: a far-right ? popover (reuses the
-             run-menu toggle pattern). Static content — usable even before load. -->
-        <div class="wf-shortcuts-wrap">
-          <button id="wfShortcutsBtn" class="btn btn-small wf-icon-btn" type="button"
-                  aria-haspopup="menu" aria-expanded="false"
-                  aria-label="Keyboard shortcuts" title="Keyboard &amp; mouse shortcuts">
-            <span class="wf-btn-icon wf-shortcuts-icon" aria-hidden="true"></span>
-          </button>
-          <div id="wfShortcutsMenu" class="wf-shortcuts-menu cg-menu hidden" role="menu">
-            <div class="wf-shortcuts-title">Keyboard &amp; mouse</div>
-            <dl class="wf-shortcuts-list">
-              <div><dt>Undo / Redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
-              <div><dt>Copy / Paste / Duplicate</dt><dd><kbd>⌘C</kbd> <kbd>⌘V</kbd> <kbd>⌘D</kbd></dd></div>
-              <div><dt>Delete selection</dt><dd><kbd>Delete</kbd></dd></div>
-              <div><dt>Fit to view</dt><dd><kbd>F</kbd></dd></div>
-              <div><dt>Pan canvas</dt><dd>middle-drag</dd></div>
-              <div><dt>Zoom</dt><dd>scroll</dd></div>
-              <div><dt>Select</dt><dd>drag / shift-click</dd></div>
-            </dl>
-          </div>
-        </div>
-      </header>
       <div id="wfCanvas" class="wf-canvas">
         <!-- Wire layer lives INSIDE #wfWorld so it shares the cards' (transformed)
              stacking context: this lets wires sit above the card frames (z-index 1)
