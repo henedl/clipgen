@@ -277,6 +277,41 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/arrows-pointing-out.svg");
 }
 
+/* Leading glyph for text toolbar buttons (icon + label), sm-sized like the
+   trigger so it reads lighter than the md-sized icon-only buttons above. */
+.wf-label-icon {
+  display: inline-block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+}
+
+.wf-new-icon {
+  mask-image: url("icons/plus.svg");
+  -webkit-mask-image: url("icons/plus.svg");
+}
+
+.wf-delete-icon {
+  mask-image: url("icons/trash.svg");
+  -webkit-mask-image: url("icons/trash.svg");
+}
+
+.wf-cleanup-icon {
+  mask-image: url("icons/rectangle-group.svg");
+  -webkit-mask-image: url("icons/rectangle-group.svg");
+}
+
+.wf-stash-icon {
+  mask-image: url("icons/archive-box-arrow-down.svg");
+  -webkit-mask-image: url("icons/archive-box-arrow-down.svg");
+}
+
 /* ---- Save-status indicator ---- */
 
 .wf-save-status {

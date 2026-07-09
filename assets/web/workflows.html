@@ -33,8 +33,12 @@
     <!-- Debounced-autosave status: "Saving…" while the timer is armed, "Saved"
          once the PUT resolves, "Save failed" on error (hub setSaveStatus). -->
     <span id="wfSaveStatus" class="wf-save-status" aria-live="polite"></span>
-    <button id="wfNewBlueprint" class="btn btn-small" type="button" disabled>New</button>
-    <button id="wfDeleteBlueprint" class="btn btn-small" type="button" disabled>Delete</button>
+    <button id="wfNewBlueprint" class="btn btn-small btn-icon" type="button" disabled>
+      <span class="wf-label-icon wf-new-icon" aria-hidden="true"></span>New
+    </button>
+    <button id="wfDeleteBlueprint" class="btn btn-small btn-icon" type="button" disabled>
+      <span class="wf-label-icon wf-delete-icon" aria-hidden="true"></span>Delete
+    </button>
     <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
          this hidden input is triggered by the "Import blueprint JSON" item. -->
     <input id="wfImportFile" type="file" accept="application/json,.json" hidden />
@@ -48,14 +52,18 @@
             aria-label="Redo" title="Redo (⌘⇧Z)">
       <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
     </button>
-    <button id="wfCleanUp" class="btn btn-small" type="button" disabled
-            title="Auto-arrange the nodes">Clean up</button>
+    <button id="wfCleanUp" class="btn btn-small btn-icon" type="button" disabled
+            title="Auto-arrange the nodes">
+      <span class="wf-label-icon wf-cleanup-icon" aria-hidden="true"></span>Clean up
+    </button>
     <button id="wfFitView" class="btn btn-small wf-icon-btn" type="button" disabled
             aria-label="Fit to view" title="Fit all nodes in view (F)">
       <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
     </button>
-    <button id="wfSaveStash" class="btn btn-small" type="button" disabled
-            title="Save the selected nodes as a reusable stash">Stash selection</button>
+    <button id="wfSaveStash" class="btn btn-small btn-icon" type="button" disabled
+            title="Save the selected nodes as a reusable stash">
+      <span class="wf-label-icon wf-stash-icon" aria-hidden="true"></span>Stash selection
+    </button>
     <div class="wf-run-split">
       <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
               title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
