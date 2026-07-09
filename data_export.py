@@ -70,6 +70,7 @@ _TRANSCRIPT_SEGMENT_BASE_COLS = (
     "transcribed_at",
     "mark_categories",
     "mark_labels",
+    "mark_severities",
 )
 
 _FRICTION_MOMENT_COLS = (
@@ -270,6 +271,7 @@ def build_transcript_segments(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     "transcribed_at": transcribed_at,
                     "mark_categories": [m.get("category", "") for m in seg_marks],
                     "mark_labels": [m.get("label", "") for m in seg_marks],
+                    "mark_severities": [m.get("severity", "") for m in seg_marks],
                 }
             )
     return records

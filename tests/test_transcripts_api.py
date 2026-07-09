@@ -1133,6 +1133,43 @@ def test_marks_add_debounces_persist_until_flush(tr_client, monkeypatch):
     assert saved["count"] == 1
 
 
+def test_marks_update_sets_severity(tr_client):
+    """A mark's optional severity is settable via PUT and flows through to the
+    resolved GET response. New marks start with no severity; an empty value clears it."""
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+    }
+    add = tr_client.post(
+        "/transcripts/api/marks",
+        json={"segment_ids": ["P01:0"], "category": "friction"},
+    )
+    assert add.status_code == 200
+    mark_id = add.get_json()["marks"][0]["id"]
+    # A freshly created mark carries no severity.
+    assert transcripts_server._manifest["marks"][0].get("severity") is None
+
+    upd = tr_client.put(
+        f"/transcripts/api/marks/{mark_id}",
+        json={"severity": "High"},
+    )
+    assert upd.status_code == 200
+    assert upd.get_json()["mark"]["severity"] == "High"
+    assert transcripts_server._manifest["marks"][0]["severity"] == "High"
+
+    # _resolve_mark spreads **mark, so GET carries the new field through.
+    listed = tr_client.get("/transcripts/api/marks")
+    assert listed.status_code == 200
+    assert listed.get_json()["marks"][0]["severity"] == "High"
+
+    # An empty severity clears the value back to None.
+    cleared = tr_client.put(
+        f"/transcripts/api/marks/{mark_id}",
+        json={"severity": ""},
+    )
+    assert cleared.status_code == 200
+    assert transcripts_server._manifest["marks"][0]["severity"] is None
+
+
 def test_intake_poll_combines_status_and_marks(tr_client, _agent_state_clean):
     """/api/intake-poll returns running-state booleans + resolved marks, collapsing
     the Studio intake client's four transcript polls into one request."""

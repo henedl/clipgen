@@ -1109,6 +1109,27 @@ body {
   color: var(--anno-badge-fg, currentColor);
 }
 
+/* Severity indicator on a flagged segment row — a small dot tucked beside the
+   mark dot, colored by the shared --sev-* tokens. Rendered only when the mark
+   carries a severity. */
+.segment-sev-dot {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  margin-top: var(--space-2);
+  margin-left: calc(var(--space-1-5) - var(--space-3));
+  background: var(--sev-unknown);
+}
+
+.segment-sev-dot.sev-critical { background: var(--sev-critical); }
+.segment-sev-dot.sev-high { background: var(--sev-high); }
+.segment-sev-dot.sev-medium { background: var(--sev-medium); }
+.segment-sev-dot.sev-low { background: var(--sev-low); }
+.segment-sev-dot.sev-na { background: var(--sev-na); }
+.segment-sev-dot.sev-positive { background: var(--sev-positive); }
+.segment-sev-dot.sev-very-positive { background: var(--sev-very-positive); }
+
 /* Mark popover — mirrors the redesign's AnnoPopover anatomy
    (180 px wide, 10 px padding, 18 px circular swatches with white border on
    active, 26 px label input, bottom-right Remove button). Categories and
@@ -1176,6 +1197,27 @@ body {
 }
 
 .mark-popover-label:focus {
+  border-color: var(--color-accent);
+}
+
+/* Optional severity selector — mirrors the label input's shell. Options are
+   filled from CLIPGEN_CONFIG.severity; a blank first option means "no severity". */
+.mark-popover-severity {
+  width: 100%;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.mark-popover-severity:focus {
   border-color: var(--color-accent);
 }
 
