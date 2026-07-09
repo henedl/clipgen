@@ -755,6 +755,11 @@
       renderTimeline();
       clearAnalysisPanel();
     }
+
+    // Reflect the newly-selected participant's transcription progress on the
+    // timeline immediately (draws the band if it's mid-transcription, clears it
+    // otherwise) rather than waiting up to a full poll interval.
+    updateTranscribeFill();
   }
 
   function renderEmptyState() {
@@ -764,6 +769,7 @@
     qs("#transcriptEmpty").classList.remove("hidden");
     clearAnalysisPanel();
     clearTimelineMarkers();
+    updateTranscribeFill(); // clear any lingering transcribe band
     renderTimeline();
   }
 
@@ -1329,6 +1335,7 @@
   function initVideoSync() { return TS.initVideoSync && TS.initVideoSync(); }
   function initPlayerKeyboard() { return TS.initPlayerKeyboard && TS.initPlayerKeyboard(); }
   function renderTimeline() { return TS.renderTimeline && TS.renderTimeline(); }
+  function updateTranscribeFill() { return TS.updateTranscribeFill && TS.updateTranscribeFill(); }
   function seekVideo() { return TS.seekVideo && TS.seekVideo.apply(null, arguments); }
   function scrollToSegment() { return TS.scrollToSegment && TS.scrollToSegment.apply(null, arguments); }
   function applyCaptionMode() { return TS.applyCaptionMode && TS.applyCaptionMode(); }
@@ -1972,6 +1979,10 @@
       if (!data.ok) return;
       state.tasks = data.tasks;
       if (_anyTxEtaActive()) _txEtaTicker.ensure();
+
+      // Fill the timeline in sync with the selected participant's transcription
+      // progress (starts/updates/clears the band purely from state.tasks).
+      updateTranscribeFill();
 
       // Snapshot before _finalizeStreamingIfComplete can clear streamingParticipant
       // in its async /api/transcript callback; the newlyCompleted refresh must not

@@ -29,6 +29,17 @@
   var _lastTimelineHit = null;
   var _timelineResizeObs = null;
 
+  // Transcribe-progress band: while the selected participant has a running
+  // transcription task, the timeline fills left→right in sync with progress
+  // (a fraction of the video's duration processed). The eased display value is
+  // driven toward its polled target by a small RAF loop; renderTimeline() only
+  // *draws* it (never mutates the target/RAF) so it can't re-enter the ease.
+  var _txFillTarget = 0;      // 0..1 target progress (latest poll)
+  var _txFillDisplay = 0;     // 0..1 eased value currently drawn
+  var _txFillRaf = 0;         // RAF handle for the ease loop
+  var _txFillActive = false;  // a running transcription task drives the band
+  var _txFillPid = null;      // participant the display belongs to (reset on switch)
+
   function setIconClass(span, klass) {
     if (!span) return;
     span.className = "player-btn-icon " + klass;
@@ -196,6 +207,115 @@
     }
   }
 
+  // The selected participant's running-transcription progress (0..1), or null
+  // when it has no running task. Progress is media-time processed / duration,
+  // so it maps directly onto the timeline's x-axis.
+  function _selectedTranscribeProgress() {
+    var pid = state.selectedParticipant;
+    if (!pid || !state.tasks) return null;
+    var prog = null;
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.participant === pid && t.status === "running") {
+        prog = Math.max(0, Math.min(1, t.progress || 0));
+      }
+    }
+    return prog;
+  }
+
+  function _prefersReducedMotion() {
+    return (
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  // Controller: recompute the band's target from the latest tasks and start (or
+  // stop) the eased fill. Called every poll by the hub, and on participant
+  // switch. Self-correcting — it turns the band on/off purely from state.
+  function updateTranscribeFill() {
+    var target = _selectedTranscribeProgress();
+    if (target === null) {
+      if (!_txFillActive && _txFillPid === null) return;
+      _txFillActive = false;
+      _txFillPid = null;
+      if (_txFillRaf) {
+        cancelAnimationFrame(_txFillRaf);
+        _txFillRaf = 0;
+      }
+      renderTimeline(); // clear the band
+      return;
+    }
+    if (_txFillPid !== state.selectedParticipant) {
+      // New participant → reveal its band from empty.
+      _txFillPid = state.selectedParticipant;
+      _txFillDisplay = 0;
+    }
+    _txFillActive = true;
+    _txFillTarget = target;
+    if (_prefersReducedMotion()) {
+      _txFillDisplay = target;
+      renderTimeline();
+      return;
+    }
+    _startTranscribeEase();
+  }
+
+  function _startTranscribeEase() {
+    if (_txFillRaf) return;
+    _txFillRaf = requestAnimationFrame(_stepTranscribeEase);
+  }
+
+  function _stepTranscribeEase() {
+    _txFillRaf = 0;
+    if (!_txFillActive) return;
+    var diff = _txFillTarget - _txFillDisplay;
+    if (Math.abs(diff) < 0.002) {
+      _txFillDisplay = _txFillTarget;
+      renderTimeline();
+      return;
+    }
+    _txFillDisplay += diff * 0.18;
+    renderTimeline();
+    _startTranscribeEase();
+  }
+
+  // Grid pitch (px) of the dot texture, and its peak opacity at the very bottom
+  // of the timeline. The pattern fades to nothing toward the top (see the
+  // per-row globalAlpha below), so it reads as a faint speckle concentrated
+  // along the bottom edge. Tune these two to taste.
+  var _TX_DOT_STEP = 6;
+  var _TX_DOT_PEAK_ALPHA = 0.4;
+
+  // Paint the faint "unfilled" dot texture across the *untranscribed* remainder
+  // of the timeline (full height, right of the fill front). The transcribed
+  // region is left untouched so it stays the plain surfaceAlt background — the
+  // dots simply look wiped away left→right as transcription advances. The dots
+  // fade out toward the top via a per-row alpha ramp (strongest at the bottom).
+  // Pure draw: reads _txFillActive/_txFillDisplay set by the controller.
+  function _drawTranscribeBand(ctx, cssW, cssH, progress, theme) {
+    var fillW = Math.round(Math.max(0, Math.min(1, progress)) * cssW);
+    if (fillW >= cssW) return; // fully swept — nothing left to pattern
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(fillW, 0, cssW - fillW, cssH); // untranscribed remainder only
+    ctx.clip();
+    ctx.fillStyle = theme.textDim;
+    var step = _TX_DOT_STEP;
+    for (var y = step / 2; y < cssH; y += step) {
+      // Vertical gradient: ~invisible at the top, strongest at the bottom.
+      var f = y / cssH;
+      ctx.globalAlpha = _TX_DOT_PEAK_ALPHA * f * f;
+      for (var x = step / 2; x < cssW; x += step) {
+        ctx.beginPath();
+        ctx.arc(x, y, 1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   function renderTimeline() {
     var canvas = qs("#timelineCanvas");
     if (!canvas) return;
@@ -210,13 +330,25 @@
     ctx.fillStyle = theme.surfaceAlt;
     ctx.fillRect(0, 0, cssW, cssH);
 
+    // Transcribe-progress dot texture (full height, behind the ruler + marks).
+    // Drawn before the dur<=0 early return so it also shows during the
+    // pre-metadata window.
+    if (_txFillActive) {
+      _drawTranscribeBand(ctx, cssW, cssH, _txFillDisplay, theme);
+    }
+
     var dur = videoDisplayDuration();
     if (dur <= 0) {
       _markerHitRects = [];
       ctx.fillStyle = theme.textDim;
       ctx.font = "11px -apple-system, sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(state.selectedParticipant ? "Loading…" : "No video", cssW / 2, cssH / 2 + 4);
+      var placeholder = _txFillActive
+        ? "Transcribing… " + Math.round(_txFillDisplay * 100) + "%"
+        : state.selectedParticipant
+          ? "Loading…"
+          : "No video";
+      ctx.fillText(placeholder, cssW / 2, cssH / 2 + 4);
       ctx.textAlign = "start";
       renderPlayhead();
       return;
@@ -980,13 +1112,15 @@
   // Boot wires the init*; selectParticipant uses _partForGlobal/_partMediaUrl/
   // applyCaptionMode/cancelPendingSeek; renderEmptyState uses clearTimelineMarkers;
   // the segment list, loadTranscript, search, and the agents panel use seekVideo/
-  // renderTimeline/scrollToSegment; the friction tooltip uses hasTimelineHover.
+  // renderTimeline/scrollToSegment; the friction tooltip uses hasTimelineHover;
+  // the task poller + selectParticipant use updateTranscribeFill.
   TS.initVideoPlayer = initVideoPlayer;
   TS.initTimelineCanvas = initTimelineCanvas;
   TS.initPipScroll = initPipScroll;
   TS.initVideoSync = initVideoSync;
   TS.initPlayerKeyboard = initPlayerKeyboard;
   TS.renderTimeline = renderTimeline;
+  TS.updateTranscribeFill = updateTranscribeFill;
   TS.seekVideo = seekVideo;
   TS.scrollToSegment = scrollToSegment;
   TS.applyCaptionMode = applyCaptionMode;
