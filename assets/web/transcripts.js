@@ -850,6 +850,10 @@
         var badgeStyle = "--anno-badge-fg:" + markColor + ";--anno-badge-bg:" + bgMix + ";--anno-badge-border:" + borderMix;
         annoBadgeHtml = '<span class="segment-anno-badge" style="' + badgeStyle + '">' + escapeHtml(markObj.label) + '</span>';
       }
+      var sevDotHtml = "";
+      if (markObj && markObj.severity) {
+        sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" title="' + escapeHtml(markObj.severity) + '"></span>';
+      }
 
       var frictionClass = "";
       var frictionStyle = "";
@@ -863,6 +867,7 @@
       }
       html += '<div class="segment-row' + activeClass + correctedClass + frictionClass + '" data-index="' + i + '" data-start="' + seg.start + '"' + frictionStyle + '>';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
+      html += sevDotHtml;
       html += '<span class="segment-timestamp">' + formatTime(seg.start);
       // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
       if (state.tooltipsEnabled) {
@@ -967,8 +972,13 @@
     var cachedColor = cachedMark ? cachedMark.color : null;
     var markClass = "segment-mark" + (cachedColor ? " marked" : "");
     var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
+    var sevDotHtml = "";
+    if (cachedMark && cachedMark.severity) {
+      sevDotHtml = '<span class="segment-sev-dot ' + severityClass(cachedMark.severity) + '" title="' + escapeHtml(cachedMark.severity) + '"></span>';
+    }
     var html = '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
     html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
+    html += sevDotHtml;
     html += '<span class="segment-timestamp">' + formatTime(seg.start) + '</span>';
     html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
     html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
@@ -1280,8 +1290,8 @@
   }
 
   // Cache marks made during streaming so they survive DOM rebuilds.
-  // Each entry: { color, id, category, label }. `version` is bumped on any
-  // write to invalidate renderPartialSegments' append-only fast path.
+  // Each entry: { color, id, category, label, severity }. `version` is bumped on
+  // any write to invalidate renderPartialSegments' append-only fast path.
   var _streamingMarks = {};
   var _streamingMarksVersion = 0;
   var _streamingMarksLoaded = false;
@@ -1307,6 +1317,7 @@
           id: m.id,
           category: m.category,
           label: m.label || "",
+          severity: m.severity || "",
         };
         added = true;
       });
@@ -1531,11 +1542,19 @@
     var textEl = row.querySelector(".segment-text");
     var oldBadge = textEl ? textEl.querySelector(".segment-anno-badge") : null;
     if (oldBadge) oldBadge.remove();
+    var oldSevDot = row.querySelector(".segment-sev-dot");
+    if (oldSevDot) oldSevDot.remove();
     if (!dot) return;
     if (markObj) {
       var cat = MARK_CATEGORIES[markObj.category] || MARK_CATEGORIES.bookmark;
       dot.classList.add("marked");
       dot.style.background = cat.color;
+      if (markObj.severity) {
+        var sevDot = document.createElement("span");
+        sevDot.className = "segment-sev-dot " + severityClass(markObj.severity);
+        sevDot.title = markObj.severity;
+        dot.insertAdjacentElement("afterend", sevDot);
+      }
       if (markObj.label) {
         dot.title = markObj.label;
         if (textEl) {
@@ -1607,6 +1626,7 @@
           id: m.id,
           category: m.category,
           label: m.label || "",
+          severity: m.severity || "",
         };
         _bumpStreamingMarksVersion();
       }
@@ -1711,6 +1731,46 @@
     }
   }
 
+  function updateMarkSeverity(markId, severity) {
+    var sev = severity || null;
+    // Streaming participant: mirror updateMarkCategory — update the cache and
+    // re-render on confirmed success. Severity changes the visible segment dot,
+    // so a version bump alone isn't enough; pollTaskStatus re-renders the list
+    // now instead of leaving a stale dot until the next scheduled poll.
+    if (state.streamingParticipant) {
+      apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
+        if (data.ok) {
+          for (var key in _streamingMarks) {
+            if (_streamingMarks[key].id === markId) {
+              _streamingMarks[key].severity = severity || "";
+              _bumpStreamingMarksVersion();
+              break;
+            }
+          }
+          pollTaskStatus();
+        }
+      });
+      return;
+    }
+    // Loaded participant: optimistically repaint the dot, restore on failure
+    // (mirrors updateMarkCategory).
+    var found = _findSegmentByMarkId(markId);
+    if (!found) {
+      apiPut("api/marks/" + markId, { severity: sev }).then(function (data) {
+        if (data.ok && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+      });
+      return;
+    }
+    var prevSeverity = found.mark.severity;
+    found.mark.severity = sev;
+    _paintSegmentMark(found.idx, found.mark);
+    apiPut("api/marks/" + markId, { severity: sev }).catch(function () {
+      found.mark.severity = prevSeverity;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
+    });
+  }
+
   function showMarkPopover(anchorEl, segmentId, markObj) {
     var popover = qs("#markPopover");
     hideMarkPopover();
@@ -1755,6 +1815,31 @@
       if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); }
     };
 
+    // Severity dropdown (optional). Options come from CLIPGEN_CONFIG.severity
+    // (mirrored from config.py SEVERITY_NUMERIC_TO_LABEL); a blank first option
+    // means "no severity".
+    var sevSelect = popover.querySelector(".mark-popover-severity");
+    if (!sevSelect.options.length) {
+      var blankOpt = document.createElement("option");
+      blankOpt.value = "";
+      blankOpt.textContent = "No severity";
+      sevSelect.appendChild(blankOpt);
+      var levels = CLIPGEN_CONFIG.severity || [];
+      for (var s = 0; s < levels.length; s++) {
+        var opt = document.createElement("option");
+        opt.value = levels[s].label;
+        opt.textContent = levels[s].label;
+        sevSelect.appendChild(opt);
+      }
+    }
+    sevSelect.value = markObj.severity || "";
+    sevSelect.onchange = function () {
+      // updateMarkSeverity owns the mark-state mutation (like updateMarkCategory)
+      // so it can capture the previous value and roll back on failure. markObj is
+      // the live seg.marks[0]/streaming-cache ref, so it stays in sync.
+      updateMarkSeverity(markObj.id, sevSelect.value);
+    };
+
     // Remove button
     var removeBtn = popover.querySelector(".mark-popover-remove");
     removeBtn.onclick = function (e) {
@@ -1767,7 +1852,7 @@
     // keeps its own Enter/Esc handling and is skipped for arrow roving.
     popover.onkeydown = function (e) {
       if (e.key === "Escape") { e.preventDefault(); hideMarkPopover(); return; }
-      if (document.activeElement === labelInput) return;
+      if (document.activeElement === labelInput || document.activeElement === sevSelect) return;
       var idx = pills.indexOf(document.activeElement);
       if (e.key === "ArrowRight" || e.key === "ArrowDown") {
         e.preventDefault();

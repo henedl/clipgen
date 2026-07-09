@@ -102,6 +102,7 @@ def transcripts_manifest():
                 "segment_id": "P01:1",
                 "category": "pain_point",
                 "label": "confused",
+                "severity": "High",
                 "created": "2026-04-01T12:00:00+00:00",
             }
         ],
@@ -244,7 +245,9 @@ def test_build_transcript_segments(transcripts_manifest):
 
     assert by_id["P01:1"]["mark_categories"] == ["pain_point"]
     assert by_id["P01:1"]["mark_labels"] == ["confused"]
+    assert by_id["P01:1"]["mark_severities"] == ["High"]
     assert by_id["P01:0"]["mark_categories"] == []
+    assert by_id["P01:0"]["mark_severities"] == []
 
     assert by_id["P01:0"]["duration"] == pytest.approx(5.0, abs=1e-6)
     assert by_id["P02:0"]["duration"] == pytest.approx(4.5, abs=1e-6)

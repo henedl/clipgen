@@ -1047,6 +1047,7 @@ def api_marks_add() -> FlaskResponse:
 
     category = data.get("category") or None
     label = data.get("label") or None
+    severity = data.get("severity") or None
     now = datetime.now(timezone.utc).isoformat()
 
     created = []
@@ -1062,6 +1063,8 @@ def api_marks_add() -> FlaskResponse:
                     m["category"] = category
                 if label is not None:
                     m["label"] = label
+                if severity is not None:
+                    m["severity"] = severity
                 created.append(m)
             else:
                 m = {
@@ -1069,6 +1072,7 @@ def api_marks_add() -> FlaskResponse:
                     "segment_id": sid,
                     "category": category,
                     "label": label,
+                    "severity": severity,
                     "created": now,
                 }
                 marks.append(m)
@@ -1100,6 +1104,8 @@ def api_marks_update(mark_id: str) -> FlaskResponse:
             target["category"] = data["category"] or None
         if "label" in data:
             target["label"] = data["label"] or None
+        if "severity" in data:
+            target["severity"] = data["severity"] or None
 
     _schedule_persist()
     return ok(mark=target)

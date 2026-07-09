@@ -87,6 +87,7 @@
     trIntakeClusters: [],
     trIntakeFilterCategory: "",
     trIntakeFilterParticipants: [],
+    trIntakeFilterSeverities: [],
     trIntakeFilterText: "",
     trIntakeShowAll: false,
     trIntakeHoveredIdx: -1,
