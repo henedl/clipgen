@@ -200,6 +200,13 @@
     regions: {},
     activeRegion: null,
     drawingRegion: null,
+    // Shaped-region drawing: the active selector ("rect" | "lasso" | "wand"),
+    // the in-progress freehand point trail, and the wand's flood-fill RGB
+    // tolerance. On state (not satellite vars) — the hub Escape handler and
+    // the overlay painter both read them across file boundaries.
+    regionTool: "rect",
+    drawingLasso: null,
+    wandTolerance: 32,
     pendingRegion: null,
     draggingRegion: null,
     resizingRegion: null,
@@ -3449,8 +3456,9 @@
           document.body.style.cursor = "";
           document.body.style.userSelect = "";
           renderOverlay();
-        } else if (state.drawingRegion) {
+        } else if (state.drawingRegion || state.drawingLasso) {
           state.drawingRegion = null;
+          state.drawingLasso = null;
           invalidateOverlayRect();
           renderOverlay();
           updateRegionButtons();

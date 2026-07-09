@@ -3,9 +3,12 @@
  * Carved out of screenspace.js (the hub) following the hub+satellite convention
  * (see screenspace-overlay/timeline/model-view/...). Owns the region-editor's
  * pointer interaction: the overlay-canvas mousedown/move/up state machine (new-
- * region draw, region move/resize, template drag, pipette sampling), the region
- * chips + toolbar buttons, the region-name modal, saveRegionUpdate, and the
- * overlay-rect cache + render RAF.
+ * region draw via rect / freehand lasso / magic-wand flood fill, region
+ * move/resize, template drag, pipette sampling), the region tool toggle, the
+ * region chips + toolbar buttons, the region-name modal, saveRegionUpdate, and
+ * the overlay-rect cache + render RAF. Shaped regions carry bbox-relative
+ * `points` (+ `shape`); geometry helpers (simplifyPolygon, floodFillMask,
+ * traceMaskContour, polygonBounds/Area) are screenspace-utils.js globals.
  *
  * Reads the hub's shared `state` and a set of hub + model-view helpers through
  * window.ClipgenScreenspace (SS), all published before this file loads (the hub
@@ -127,6 +130,14 @@
     var canvas = qs("#overlayCanvas");
     var px = regionToPixels(region);
     var body = { name: name, x: px.x, y: px.y, w: px.w, h: px.h, canvas_width: canvas.width, canvas_height: canvas.height };
+    if (region.points && region.points.length >= 3) {
+      // Stored points are bbox-relative; the API takes canvas-pixel absolutes
+      // (and recomputes the bbox from them server-side).
+      body.points = region.points.map(function (p) {
+        return [px.x + p[0] * px.w, px.y + p[1] * px.h];
+      });
+      body.shape = region.shape || "lasso";
+    }
     if (region.description) body.description = region.description;
     apiPost("api/regions", body)
       .then(function (data) {
@@ -181,6 +192,83 @@
       flushOverlayRender();
       updateRegionButtons();
       return true;
+    }
+
+    // Append a freehand point when the cursor moved far enough from the last
+    // one (~3 display px) — keeps the raw trail dense but bounded.
+    function appendLassoPoint(pos, s) {
+      var pts = state.drawingLasso.points;
+      var last = pts[pts.length - 1];
+      var x = clamp(pos.x, 0, overlay.width);
+      var y = clamp(pos.y, 0, overlay.height);
+      var dx = x - last[0], dy = y - last[1];
+      if (dx * dx + dy * dy >= 9 * s * s) {
+        pts.push([x, y]);
+        scheduleOverlayRender();
+      }
+    }
+
+    // Close and simplify the freehand trail into a pending polygon region.
+    // Guards mirror finishDrawingRegion's >5x5 minimum, plus a shoelace-area
+    // floor so a scribble along a line can't produce a degenerate mask.
+    function finishDrawingLasso() {
+      if (!state.drawingLasso) return false;
+      var pts = state.drawingLasso.points;
+      state.drawingLasso = null;
+      _cachedOverlayRect = null;
+      var displayW = overlay.getBoundingClientRect().width || overlay.width;
+      var s = overlay.width / displayW;
+      var simplified = simplifyPolygon(pts, 2 * s);
+      var epsilon = 2 * s;
+      while (simplified.length > 100) {
+        epsilon *= 1.5;
+        simplified = simplifyPolygon(simplified, epsilon);
+      }
+      var bounds = simplified.length >= 3 ? polygonBounds(simplified) : null;
+      if (bounds && bounds.w > 5 && bounds.h > 5 && polygonArea(simplified) >= 64) {
+        state.pendingRegion = {
+          x: Math.round(bounds.x), y: Math.round(bounds.y),
+          w: Math.round(bounds.w), h: Math.round(bounds.h),
+          points: simplified, shape: "lasso",
+        };
+      } else if (pts.length > 2) {
+        showToast("Shape too small — draw a larger area");
+      }
+      flushOverlayRender();
+      updateRegionButtons();
+      return true;
+    }
+
+    // Magic wand: flood-fill the frame from the clicked pixel (RGB tolerance),
+    // trace the filled area's outer contour, and simplify it into a polygon.
+    // Reads #frameCanvas pixels like the pipette — the frame and overlay
+    // canvases share dimensions.
+    function performWandSelection(pos, s) {
+      var frameCanvas = qs("#frameCanvas");
+      if (!frameCanvas || !frameCanvas.width) return;
+      var w = frameCanvas.width, h = frameCanvas.height;
+      var data = frameCanvas.getContext("2d").getImageData(0, 0, w, h).data;
+      var mask = floodFillMask(data, w, h, pos.x, pos.y, state.wandTolerance);
+      if (!mask) return;
+      var contour = traceMaskContour(mask, w, h);
+      var simplified = simplifyPolygon(contour, 2 * s);
+      var epsilon = 2 * s;
+      while (simplified.length > 100) {
+        epsilon *= 1.5;
+        simplified = simplifyPolygon(simplified, epsilon);
+      }
+      var bounds = simplified.length >= 3 ? polygonBounds(simplified) : null;
+      if (!bounds || bounds.w <= 5 || bounds.h <= 5 || polygonArea(simplified) < 64) {
+        showToast("No contiguous area found — adjust tolerance and try again");
+        return;
+      }
+      state.pendingRegion = {
+        x: Math.round(bounds.x), y: Math.round(bounds.y),
+        w: Math.round(bounds.w), h: Math.round(bounds.h),
+        points: simplified, shape: "wand",
+      };
+      flushOverlayRender();
+      updateRegionButtons();
     }
 
     overlay.addEventListener("mousedown", function (e) {
@@ -258,9 +346,18 @@
         updateRegionButtons();
         return;
       }
-      state.drawingRegion = { startX: pos.x, startY: pos.y, endX: pos.x, endY: pos.y };
       state.pendingRegion = null;
       state.activeRegion = null;
+      if (state.regionTool === "wand") {
+        _cachedOverlayRect = null;
+        performWandSelection(pos, s);
+        return;
+      }
+      if (state.regionTool === "lasso") {
+        state.drawingLasso = { points: [[pos.x, pos.y]] };
+      } else {
+        state.drawingRegion = { startX: pos.x, startY: pos.y, endX: pos.x, endY: pos.y };
+      }
       updateRegionButtons();
     });
 
@@ -297,6 +394,10 @@
         var newY = clamp(pos.y - d.offsetY, 0, overlay.height - dPx.h);
         state.regions[d.name] = Object.assign({}, state.regions[d.name], { x: newX / overlay.width, y: newY / overlay.height });
         scheduleOverlayRender();
+        return;
+      }
+      if (state.drawingLasso) {
+        appendLassoPoint(pos, s);
         return;
       }
       if (state.drawingRegion) {
@@ -352,11 +453,18 @@
         updateRegionButtons();
         return;
       }
+      if (finishDrawingLasso()) return;
       finishDrawingRegion(e);
     });
 
     // Document-level listeners so drag/resize continues outside the canvas
     document.addEventListener("mousemove", function (e) {
+      if (state.drawingLasso) {
+        var lassoRect = _cachedOverlayRect || overlay.getBoundingClientRect();
+        var lassoPos = canvasCoords(overlay, e, lassoRect);
+        appendLassoPoint(lassoPos, overlay.width / (lassoRect.width || overlay.width));
+        return;
+      }
       if (!state.resizingRegion && !state.draggingRegion && !state.draggingTemplate) return;
       var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
       var pos = canvasCoords(overlay, e, rect);
@@ -391,6 +499,7 @@
     });
 
     document.addEventListener("mouseup", function (e) {
+      if (finishDrawingLasso()) return;
       if (finishDrawingRegion(e)) return;
       if (state.draggingTemplate) {
         _cachedOverlayRect = null;
@@ -481,6 +590,29 @@
         .catch(function () { showToast("Failed to delete regions"); });
     });
 
+    // Region selector tools: rectangle (default), freehand lasso, magic wand.
+    var toolBtns = { rect: qs("#toolRectBtn"), lasso: qs("#toolLassoBtn"), wand: qs("#toolWandBtn") };
+    toolBtns.rect.appendChild(iconSpan("stop"));
+    toolBtns.lasso.appendChild(iconSpan("pencil"));
+    toolBtns.wand.appendChild(iconSpan("sparkles"));
+    function setRegionTool(tool) {
+      state.regionTool = tool;
+      state.drawingLasso = null;
+      Object.keys(toolBtns).forEach(function (key) {
+        toolBtns[key].classList.toggle("active", key === tool);
+      });
+      qs("#wandToleranceWrap").classList.toggle("hidden", tool !== "wand");
+    }
+    Object.keys(toolBtns).forEach(function (key) {
+      toolBtns[key].addEventListener("click", function () { setRegionTool(key); });
+    });
+    var wandToleranceInput = qs("#wandToleranceInput");
+    wandToleranceInput.value = String(state.wandTolerance);
+    wandToleranceInput.addEventListener("input", function () {
+      state.wandTolerance = parseInt(wandToleranceInput.value, 10) || 32;
+      qs("#wandToleranceValue").textContent = String(state.wandTolerance);
+    });
+
     // Toggle region labels
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
     toggleLabelsBtn.appendChild(iconSpan("tag"));
@@ -524,6 +656,10 @@
       var r = state.pendingRegion;
       var canvas = qs("#overlayCanvas");
       var body = { name: name, x: r.x, y: r.y, w: r.w, h: r.h, canvas_width: canvas.width, canvas_height: canvas.height };
+      if (r.points && r.points.length >= 3) {
+        body.points = r.points; // already canvas-pixel absolute for a pending draw
+        body.shape = r.shape;
+      }
       if (desc) body.description = desc;
       apiPost("api/regions", body)
         .then(function (data) {
@@ -569,7 +705,11 @@
     _regionNameModalPrevFocus = document.activeElement;
     qs("#regionNameInput").value = "";
     qs("#regionDescInput").value = "";
-    qs("#regionCoords").textContent = r ? (r.x + ", " + r.y + " \u2014 " + r.w + "\u00d7" + r.h + " px") : "";
+    var coordsText = r ? (r.x + ", " + r.y + " \u2014 " + r.w + "\u00d7" + r.h + " px") : "";
+    if (r && r.points && r.points.length >= 3) {
+      coordsText += " \u00b7 " + r.points.length + " pts (" + (r.shape || "lasso") + ")";
+    }
+    qs("#regionCoords").textContent = coordsText;
     qs("#regionNameModal").classList.remove("hidden");
     qs("#regionNameInput").focus();
   }

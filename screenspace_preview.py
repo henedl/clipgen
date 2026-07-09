@@ -37,7 +37,7 @@ _LABEL_HEIGHT = 16
 def build_preview(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     tool: str,
     params: dict[str, Any],
 ) -> "np.ndarray":
@@ -114,7 +114,7 @@ def overlay_layer_scope(tool: str, layer: str) -> str | None:
 def build_overlay_layer(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     tool: str,
     layer: str,
     params: dict[str, Any],
@@ -190,7 +190,7 @@ def build_overlay_layer(
 def _overlay_change(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     layer: str,
     params: dict[str, Any],
 ) -> "np.ndarray | None":
@@ -214,6 +214,14 @@ def _overlay_change(
         _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
         mk = config.SCREENSPACE_MORPH_KERNEL
         mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
+        # Shaped region: mirror the scan by suppressing changes outside the
+        # polygon exactly (the dimmed crop alone only attenuates them).
+        if region is not None:
+            region_mask = screenspace_primitives.region_mask_for(
+                region, *mask_clean.shape[:2]
+            )
+            if region_mask is not None:
+                mask_clean = cv2.bitwise_and(mask_clean, region_mask)
         # Render mask as cyan-on-black so it reads against varying frame content
         # when alpha-blended onto the live frame canvas.
         out = np.zeros((mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8)
@@ -280,7 +288,7 @@ def _draw_flow_arrows(
 def _overlay_flow(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],  # noqa: ARG001 — magnitude param affects threshold display only
 ) -> "np.ndarray | None":
     if prev_frame is None:
@@ -456,13 +464,20 @@ def _hstack_panels(panels: list["np.ndarray"]) -> "np.ndarray":
 
 
 def _clip_region_pixels(
-    frame: "np.ndarray", region: dict[str, int] | None
+    frame: "np.ndarray", region: dict[str, Any] | None
 ) -> "np.ndarray | None":
     if region is None:
         return None
     pixels = screenspace_primitives.extract_region(frame, region)
     if pixels.size == 0:
         return None
+    # Shaped region: dim everything outside the polygon so every per-tool
+    # preview panel and region-scoped overlay layer shows what the masked
+    # analysis actually weighs (preview mirrors the real scan's preprocessing).
+    mask = screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
+    if mask is not None:
+        pixels = pixels.copy()
+        pixels[mask == 0] //= 4
     return pixels
 
 
@@ -473,7 +488,7 @@ def _clip_region_pixels(
 
 def _preview_color(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -524,7 +539,7 @@ def _preview_color(
 def _preview_change(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -569,7 +584,7 @@ def _preview_change(
 
 def _preview_similarity(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -614,7 +629,7 @@ def _preview_similarity(
 
 def _preview_text_numbers(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -630,7 +645,7 @@ def _preview_text_numbers(
 
 def _preview_timelapse(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:
@@ -675,7 +690,7 @@ def _preview_template(
 def _preview_flow(
     frame: "np.ndarray",
     prev_frame: "np.ndarray | None",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -731,7 +746,7 @@ def _preview_flow(
 
 def _preview_scene(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
     params: dict[str, Any],  # noqa: ARG001 — reserved for future scene-ref overlays
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
@@ -797,7 +812,7 @@ def _preview_scene(
 
 def _preview_inactivity(
     frame: "np.ndarray",
-    region: dict[str, int] | None,
+    region: dict[str, Any] | None,
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:

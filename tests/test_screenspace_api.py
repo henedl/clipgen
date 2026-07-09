@@ -501,6 +501,82 @@ def test_create_region_with_description(client):
     assert regions["score"]["description"] == "Score display"
 
 
+def _shaped_payload(**overrides):
+    payload = {
+        "name": "panel",
+        "x": 0,
+        "y": 0,
+        "w": 0,
+        "h": 0,
+        "canvas_width": 1920,
+        "canvas_height": 1080,
+        "shape": "lasso",
+        "points": [[100, 100], [500, 100], [500, 400], [100, 400]],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_shaped_region_recomputes_bbox_and_normalizes_points(client):
+    resp = client.post(
+        "/screenspace/api/regions",
+        json=_shaped_payload(points=[[100, 100], [500, 100], [300, 400]]),
+    )
+    assert resp.status_code == 200
+    r = resp.get_json()["region"]
+    # Bbox recomputed from the points (client x/y/w/h of 0 ignored).
+    assert abs(r["x"] - 100 / 1920) < 1e-9
+    assert abs(r["y"] - 100 / 1080) < 1e-9
+    assert abs(r["w"] - 400 / 1920) < 1e-9
+    assert abs(r["h"] - 300 / 1080) < 1e-9
+    assert r["shape"] == "lasso"
+    # Points stored bbox-relative.
+    assert r["points"][0] == [0.0, 0.0]
+    assert r["points"][1] == [1.0, 0.0]
+    assert r["points"][2] == [0.5, 1.0]
+
+    regions = client.get("/screenspace/api/regions").get_json()["regions"]
+    assert regions["panel"]["points"] == r["points"]
+
+
+def test_create_shaped_region_clamps_out_of_canvas_points(client):
+    resp = client.post(
+        "/screenspace/api/regions",
+        json=_shaped_payload(points=[[-50, 100], [500, -20], [500, 400], [-50, 400]]),
+    )
+    assert resp.status_code == 200
+    r = resp.get_json()["region"]
+    assert r["x"] == 0.0
+    assert r["y"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "overrides,expected_err",
+    [
+        ({"shape": "hexagon"}, "shape"),
+        ({"shape": None}, "shape"),
+        ({"points": [[0, 0], [10, 10]]}, "points"),
+        ({"points": "abc"}, "points"),
+        ({"points": [[0, 0], [10, "x"], [10, 10]]}, "points"),
+        ({"points": [[0, 0], [3, 0], [3, 3]]}, "too small"),
+        ({"points": [[0, 0], [400, 400], [800, 800]]}, "too small"),
+    ],
+    ids=[
+        "bad_shape",
+        "points_without_shape",
+        "too_few_points",
+        "points_not_list",
+        "non_numeric_point",
+        "tiny_bbox",
+        "collinear_zero_area",
+    ],
+)
+def test_create_shaped_region_400_for_invalid_polygon(client, overrides, expected_err):
+    resp = client.post("/screenspace/api/regions", json=_shaped_payload(**overrides))
+    assert resp.status_code == 400
+    assert expected_err.lower() in resp.get_json()["error"].lower()
+
+
 @pytest.mark.parametrize(
     "payload,expected_err",
     [
@@ -1150,6 +1226,40 @@ def test_api_preview_layer_returns_native_resolution_png(client, monkeypatch) ->
     assert img is not None
     # Native size matches the requested region in pixels.
     assert img.shape[:2] == (60, 100)
+
+
+def test_api_preview_layer_mask_param_dims_outside_polygon(client, monkeypatch) -> None:
+    """A mask= query of bbox-relative points dims pixels outside the polygon."""
+    import cv2
+    import numpy as np
+    import video
+
+    _enable_video_task_setup(monkeypatch, "P01")
+    monkeypatch.setattr(
+        video,
+        "extract_frame_at_timestamp",
+        lambda _path, _ts: np.full((240, 320, 3), 200, dtype=np.uint8),
+    )
+
+    region = "0.25,0.2083333333,0.3125,0.25"  # ~ 100x60 px
+    mask = "0,0;0.5,0;0.5,1;0,1"  # left half of the bbox
+    resp = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=color&region={region}&layer=region&mask={mask}"
+    )
+    assert resp.status_code == 200
+    img = cv2.imdecode(np.frombuffer(resp.data, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None
+    # Left half keeps the source brightness; right half is dimmed to 1/4.
+    assert int(img[30, 20, 0]) == 200
+    assert int(img[30, 80, 0]) == 50
+
+    # Malformed mask values are ignored: full-brightness rect preview.
+    resp = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=color&region={region}&layer=region&mask=bogus"
+    )
+    assert resp.status_code == 200
+    img = cv2.imdecode(np.frombuffer(resp.data, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None and int(img[30, 80, 0]) == 200
 
 
 def test_api_preview_layer_invalid_returns_400(client, monkeypatch) -> None:

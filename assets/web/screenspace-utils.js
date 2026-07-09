@@ -145,3 +145,149 @@ function _formatMinAreaReadout(pct, area) {
   }
   return txt;
 }
+
+// ---- Shaped-region (lasso / magic wand) geometry ----
+// Points are [x, y] pairs. Pure math over arrays — no state, no DOM.
+
+// Axis-aligned bounding box of a point list.
+function polygonBounds(points) {
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (var i = 0; i < points.length; i++) {
+    var p = points[i];
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+// Absolute shoelace area of a closed polygon.
+function polygonArea(points) {
+  var area = 0;
+  for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
+    area += points[j][0] * points[i][1] - points[i][0] * points[j][1];
+  }
+  return Math.abs(area) / 2;
+}
+
+// Ray-cast point-in-polygon (implicitly closed). Mirrors the Python
+// point_in_mask_points in screenspace_primitives.py.
+function pointInPolygon(x, y, points) {
+  var inside = false;
+  for (var i = 0, j = points.length - 1; i < points.length; j = i++) {
+    var yi = points[i][1], yj = points[j][1];
+    if ((yi > y) !== (yj > y)) {
+      var crossX = (points[j][0] - points[i][0]) * (y - yi) / (yj - yi) + points[i][0];
+      if (x < crossX) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Douglas-Peucker polyline simplification (iterative, stack-based).
+// Keeps endpoints; drops points whose perpendicular distance to the local
+// chord is below epsilon. Used to keep lasso/wand polygons compact.
+function simplifyPolygon(points, epsilon) {
+  if (points.length < 3 || epsilon <= 0) return points.slice();
+  var keep = new Array(points.length);
+  keep[0] = keep[points.length - 1] = true;
+  var stack = [[0, points.length - 1]];
+  while (stack.length) {
+    var range = stack.pop();
+    var a = points[range[0]], b = points[range[1]];
+    var dx = b[0] - a[0], dy = b[1] - a[1];
+    var chordLen = Math.sqrt(dx * dx + dy * dy) || 1e-9;
+    var maxDist = 0, maxIdx = -1;
+    for (var i = range[0] + 1; i < range[1]; i++) {
+      var p = points[i];
+      var dist = Math.abs(dy * p[0] - dx * p[1] + b[0] * a[1] - b[1] * a[0]) / chordLen;
+      if (dist > maxDist) { maxDist = dist; maxIdx = i; }
+    }
+    if (maxDist > epsilon && maxIdx > 0) {
+      keep[maxIdx] = true;
+      stack.push([range[0], maxIdx], [maxIdx, range[1]]);
+    }
+  }
+  var out = [];
+  for (var k = 0; k < points.length; k++) if (keep[k]) out.push(points[k]);
+  return out;
+}
+
+// Scanline flood fill over ImageData bytes from a seed pixel, bounded by a
+// per-channel RGB tolerance against the seed color. Returns a Uint8Array
+// (1 = filled) of length w*h, or null when the seed is out of bounds.
+function floodFillMask(data, w, h, sx, sy, tolerance) {
+  sx = Math.round(sx); sy = Math.round(sy);
+  if (sx < 0 || sy < 0 || sx >= w || sy >= h) return null;
+  var seedIdx = (sy * w + sx) * 4;
+  var sr = data[seedIdx], sg = data[seedIdx + 1], sb = data[seedIdx + 2];
+  var mask = new Uint8Array(w * h);
+  var stack = [sx, sy];
+  var matches = function (px, py) {
+    var i = (py * w + px) * 4;
+    return Math.abs(data[i] - sr) <= tolerance &&
+           Math.abs(data[i + 1] - sg) <= tolerance &&
+           Math.abs(data[i + 2] - sb) <= tolerance;
+  };
+  while (stack.length) {
+    var y = stack.pop();
+    var x = stack.pop();
+    // Walk to the left edge of this run.
+    while (x > 0 && !mask[y * w + x - 1] && matches(x - 1, y)) x--;
+    var spanUp = false, spanDown = false;
+    while (x < w && !mask[y * w + x] && matches(x, y)) {
+      mask[y * w + x] = 1;
+      if (y > 0) {
+        var up = !mask[(y - 1) * w + x] && matches(x, y - 1);
+        if (up && !spanUp) { stack.push(x, y - 1); spanUp = true; }
+        else if (!up) spanUp = false;
+      }
+      if (y < h - 1) {
+        var down = !mask[(y + 1) * w + x] && matches(x, y + 1);
+        if (down && !spanDown) { stack.push(x, y + 1); spanDown = true; }
+        else if (!down) spanDown = false;
+      }
+      x++;
+    }
+  }
+  return mask;
+}
+
+// Moore-neighbor boundary trace of a binary mask (Uint8Array, 1 = filled).
+// Returns the outer contour as [x, y] pairs (interior holes are ignored —
+// the polygon fill closes them, which is acceptable for region masks).
+function traceMaskContour(mask, w, h) {
+  var startX = -1, startY = -1;
+  for (var i = 0; i < mask.length; i++) {
+    if (mask[i]) { startX = i % w; startY = (i / w) | 0; break; }
+  }
+  if (startX < 0) return [];
+  // Moore neighborhood in clockwise order starting from west.
+  var DIRS = [[-1, 0], [-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1]];
+  var filled = function (x, y) {
+    return x >= 0 && y >= 0 && x < w && y < h && mask[y * w + x] === 1;
+  };
+  var contour = [[startX, startY]];
+  var cx = startX, cy = startY;
+  var backtrack = 0; // direction index pointing at the previous (empty) cell
+  var maxSteps = w * h * 4;
+  for (var step = 0; step < maxSteps; step++) {
+    var found = false;
+    for (var d = 0; d < 8; d++) {
+      var dirIdx = (backtrack + d) % 8;
+      var nx = cx + DIRS[dirIdx][0], ny = cy + DIRS[dirIdx][1];
+      if (filled(nx, ny)) {
+        // Next backtrack: the direction just before the one that hit.
+        backtrack = (dirIdx + 6) % 8;
+        cx = nx; cy = ny;
+        found = true;
+        break;
+      }
+    }
+    if (!found) break; // isolated pixel
+    if (cx === startX && cy === startY) break;
+    contour.push([cx, cy]);
+  }
+  return contour;
+}

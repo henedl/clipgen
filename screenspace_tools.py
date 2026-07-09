@@ -30,7 +30,9 @@ from screenspace_primitives import (
     compute_phash,
     compute_scene_fingerprint,
     extract_region,
+    filter_matches_by_region_mask,
     match_template,
+    region_mask_for,
     regions_are_similar,
 )
 from screenspace_ocr import (
@@ -104,9 +106,20 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
 _MISSING = object()
 
 
-def _region_key(prefix: str, region: dict[str, int]) -> tuple[Any, ...]:
-    """Cache key scoped to a region's pixel rect (steps may use distinct regions)."""
-    return (prefix, region.get("x"), region.get("y"), region.get("w"), region.get("h"))
+def _region_key(prefix: str, region: dict[str, Any]) -> tuple[Any, ...]:
+    """Cache key scoped to a region's pixel rect (steps may use distinct regions).
+
+    Includes the shaped-region polygon so two steps sharing a bbox but not a
+    shape never collide on masked values (mask, fingerprint, OCR readings).
+    """
+    return (
+        prefix,
+        region.get("x"),
+        region.get("y"),
+        region.get("w"),
+        region.get("h"),
+        tuple(map(tuple, region.get("mask_points") or ())),
+    )
 
 
 def _memo(
@@ -128,6 +141,21 @@ def _cached_crop(
     """Region crop of *frame*, memoized on *cache* (shared across chain steps)."""
     return _memo(
         cache, _region_key("crop", region), lambda: extract_region(frame, region)
+    )
+
+
+def _cached_mask(
+    cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, Any]
+) -> np.ndarray | None:
+    """Shaped-region mask at the cached crop's size, memoized on *cache*.
+
+    ``None`` for rect regions, so masked tools can pass the value straight to
+    the primitives' optional ``mask`` params.
+    """
+    return _memo(
+        cache,
+        _region_key("mask", region),
+        lambda: region_mask_for(region, *_cached_crop(cache, frame, region).shape[:2]),
     )
 
 
@@ -156,7 +184,7 @@ def _cached_phash(
 def _cached_ocr(
     cache: dict[Any, Any] | None,
     frame: np.ndarray,
-    region: dict[str, int],
+    region: dict[str, Any],
     *,
     languages: list[str],
     allowlist: str | None,
@@ -178,6 +206,7 @@ def _cached_ocr(
             languages=list(langs),
             allowlist=allowlist,
             preprocess=preprocess,
+            mask_points=region.get("mask_points"),
         ),
     )
 
@@ -364,14 +393,15 @@ class ColorTool(AnalysisTool):
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
         pixels = _cached_crop(cache, frame, region)
+        mask = _cached_mask(cache, frame, region)
         target = params.get("target_color", {"h": 0, "s": 0, "v": 0})
         tol = params.get("tolerance", {"h": 10, "s": 50, "v": 50})
         if params.get("color_mode") == "presence":
             matched, conf = color_present(
-                pixels, target, tol, params.get("min_coverage", 0.0)
+                pixels, target, tol, params.get("min_coverage", 0.0), mask=mask
             )
         else:
-            matched, conf = color_matches(pixels, target, tol)
+            matched, conf = color_matches(pixels, target, tol, mask=mask)
         return matched, {"_confidence": conf}
 
     def scan(
@@ -425,7 +455,12 @@ class ChangeTool(AnalysisTool):
         noise_threshold = params.get(
             "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
         )
-        mag = compute_frame_diff(prev_pixels, pixels, noise_threshold)
+        mag = compute_frame_diff(
+            prev_pixels,
+            pixels,
+            noise_threshold,
+            mask=_cached_mask(cache, frame, region),
+        )
         return mag >= threshold, {"magnitude": round(mag, 4)}
 
     def scan(
@@ -667,6 +702,13 @@ class TemplateTool(AnalysisTool):
             mask=scaled_mask,
             prepared=prepared,
         )
+        # Shaped region: the match still runs full-frame (template ignores the
+        # rect for rect regions too), but the polygon acts as a detection
+        # filter — passing requires at least one surviving match. best_score
+        # stays the frame peak (the threshold-independent calibration scalar).
+        matches = filter_matches_by_region_mask(matches, region)
+        if region.get("mask_points") and not matches:
+            return False, {"best_score": round(peak, 4), "match_count": 0}
         return True, {"best_score": round(peak, 4), "match_count": len(matches)}
 
     def scan(
@@ -732,7 +774,9 @@ class FlowTool(AnalysisTool):
         magnitude_threshold = params.get(
             "magnitude_threshold", config.SCREENSPACE_FLOW_MAGNITUDE_THRESHOLD
         )
-        flow_result = compute_optical_flow(prev_gray_f, curr_gray)
+        flow_result = compute_optical_flow(
+            prev_gray_f, curr_gray, mask=_cached_mask(cache, frame, region)
+        )
         return flow_result["magnitude"] >= magnitude_threshold, {
             "magnitude": flow_result["magnitude"],
             "angle": flow_result["angle"],
@@ -783,16 +827,27 @@ class SceneTool(AnalysisTool):
         fp = _memo(
             cache,
             _region_key("fingerprint", region),
-            lambda: compute_scene_fingerprint(_cached_crop(cache, frame, region)),
+            lambda: compute_scene_fingerprint(
+                _cached_crop(cache, frame, region),
+                mask=_cached_mask(cache, frame, region),
+            ),
         )
+        # Fingerprints are only comparable under the same mask, so the per-ref
+        # cache is keyed by the region's polygon (refs are cached on the ref
+        # dict, which multitool steps with different regions could share).
+        mask_key = tuple(map(tuple, region.get("mask_points") or ()))
         best_name = ""
         best_score = 0.0
         for ref in ref_scenes:
             # Cache fingerprint on the reference dict to avoid recomputing per frame
             ref_fp = ref.get("_cached_fingerprint")
-            if ref_fp is None:
-                ref_fp = compute_scene_fingerprint(ref["frame"])
+            if ref_fp is None or ref.get("_cached_fingerprint_mask") != mask_key:
+                ref_fp = compute_scene_fingerprint(
+                    ref["frame"],
+                    mask=region_mask_for(region, *ref["frame"].shape[:2]),
+                )
                 ref["_cached_fingerprint"] = ref_fp
+                ref["_cached_fingerprint_mask"] = mask_key
             score = compare_scene_fingerprints(fp, ref_fp)
             if score > best_score:
                 best_score = score

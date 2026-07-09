@@ -292,6 +292,42 @@
     return !!(ref && ref.source !== "full_frame");
   }
 
+  // Bbox-relative polygon of the previewed region as "u1,v1;u2,v2;…" for the
+  // preview endpoint's optional mask= param, or null for rect regions. A
+  // pending shaped draw carries canvas-pixel absolute points — convert them
+  // against its own bbox; saved regions already store bbox-relative points.
+  function _regionMaskString() {
+    var points = null;
+    if (state.pendingRegion) {
+      var p = state.pendingRegion;
+      if (p.points && p.points.length >= 3 && p.w > 0 && p.h > 0) {
+        points = p.points.map(function (pt) {
+          return [(pt[0] - p.x) / p.w, (pt[1] - p.y) / p.h];
+        });
+      }
+    } else {
+      var data = _regionObjectForRef(_previewRegionRef());
+      if (data && data.points && data.points.length >= 3) points = data.points;
+    }
+    if (!points) return null;
+    return points
+      .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
+      .join(";");
+  }
+
+  // True when the previewed region is shaped but the active tool can only
+  // analyze its bounding rect (config-mirrored list).
+  function _maskFallbackActive() {
+    if (CLIPGEN_CONFIG.screenspaceMaskFallbackTools.indexOf(state.activeWorkflow) === -1) {
+      return false;
+    }
+    if (state.pendingRegion) {
+      return !!(state.pendingRegion.points && state.pendingRegion.points.length >= 3);
+    }
+    var data = _regionObjectForRef(_previewRegionRef());
+    return !!(data && data.points && data.points.length >= 3);
+  }
+
   // Resolve a region ref to its stored {x,y,w,h} object (fractions of the
   // frame). Returns null for full-frame / unresolved refs.
   function _regionObjectForRef(ref) {
@@ -406,6 +442,8 @@
     var params = _collectPreviewParams(tool);
     var qsParts = ["tool=" + encodeURIComponent(tool)];
     if (regionStr) qsParts.push("region=" + regionStr);
+    var maskStr = _regionMaskString();
+    if (regionStr && maskStr) qsParts.push("mask=" + encodeURIComponent(maskStr));
     if (tool === "change" || tool === "flow") {
       var prevTs = Math.max(0, (state.currentTimestamp || 0) - 1);
       qsParts.push("prev=" + prevTs.toFixed(3));
@@ -449,6 +487,9 @@
       var metaText = MODEL_VIEW_META[tool] || "";
       if (!hasRegion) {
         metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
+      } else if (_maskFallbackActive()) {
+        metaText = (metaText ? metaText + " " : "")
+          + "(Shaped region: this tool analyzes the bounding box.)";
       }
       meta.textContent = metaText;
     }

@@ -1425,6 +1425,32 @@ class TestScoreMultitoolFrame:
 # ---------------------------------------------------------------------------
 
 
+class TestRegionKeyMaskIdentity:
+    """Same bbox + different polygon must not collide in the per-frame cache."""
+
+    def test_mask_points_distinguish_cache_keys(self):
+        import screenspace_tools
+
+        rect = {"x": 0, "y": 0, "w": 40, "h": 40}
+        tri = dict(rect, mask_points=[[0, 0], [1, 0], [1, 1]])
+        tri2 = dict(rect, mask_points=[[0, 0], [0, 1], [1, 1]])
+        keys = {screenspace_tools._region_key("crop", r) for r in (rect, tri, tri2)}
+        assert len(keys) == 3
+
+    def test_cached_mask_memoizes_and_distinguishes(self):
+        import screenspace_tools
+
+        frame = np.zeros((80, 80, 3), dtype=np.uint8)
+        cache: dict = {}
+        rect = {"x": 0, "y": 0, "w": 40, "h": 40}
+        tri = dict(rect, mask_points=[[0, 0], [1, 0], [1, 1]])
+        assert screenspace_tools._cached_mask(cache, frame, rect) is None
+        m1 = screenspace_tools._cached_mask(cache, frame, tri)
+        m2 = screenspace_tools._cached_mask(cache, frame, tri)
+        assert m1 is m2
+        assert m1 is not None and m1.shape == (40, 40)
+
+
 class TestMultitoolMemoization:
     """The per-frame cache must not change detections vs the uncached path."""
 
@@ -1491,7 +1517,14 @@ class TestMultitoolMemoization:
 
         calls = {"n": 0}
 
-        def fake_readings(pixels, *, languages=None, allowlist=None, preprocess=False):
+        def fake_readings(
+            pixels,
+            *,
+            languages=None,
+            allowlist=None,
+            preprocess=False,
+            mask_points=None,
+        ):
             calls["n"] += 1
             return [([[0, 0], [10, 0], [10, 10], [0, 10]], "hello", 0.99)]
 

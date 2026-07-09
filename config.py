@@ -206,6 +206,12 @@ SCREENSPACE_OCR_GPU: bool | str = (
     True  # EasyOCR device: True = CUDA-if-available else CPU (preserves EasyOCR's default); False = force CPU; or a device string ("cuda:0", "mps")
 )
 SCREENSPACE_OCR_POOL_SIZE: int = 0  # max concurrent EasyOCR Readers per language set (0 = auto = SCREENSPACE_PARALLEL_WORKERS). Each Reader holds its own model copy, so raising this multiplies OCR RAM/VRAM
+SCREENSPACE_MASK_FALLBACK_TOOLS: tuple[str, ...] = (
+    "similarity",
+    "inactivity",
+    "boundary",
+    "timelapse",
+)  # tools that analyze a shaped region's bounding rect instead of its polygon (SSIM/phash are global, boundary is full-frame by design, timelapse is a pure ffmpeg crop)
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD: float = 2.0  # mean-abs-diff cutoff for skipping near-identical frames (Similarity/Text/Numbers/Scene scans)
 SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70

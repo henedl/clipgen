@@ -33,6 +33,8 @@ from screenspace_primitives import (
     compute_optical_flow,
     compute_phash,
     compute_scene_fingerprint,
+    filter_matches_by_region_mask,
+    region_masker,
 )
 from screenspace_ocr import (
     _VALID_OPERATORS,
@@ -86,14 +88,18 @@ def scan_color(
     vid_fps, vid_duration, end_seconds, total_range = window
 
     matches: list[float] = []
+    mask_for = region_masker(region)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
+        mask = mask_for(pixels)
         if color_mode == "presence":
-            matched, conf = color_present(pixels, target_color, tolerance, min_coverage)
+            matched, conf = color_present(
+                pixels, target_color, tolerance, min_coverage, mask=mask
+            )
         else:
-            matched, conf = color_matches(pixels, target_color, tolerance)
+            matched, conf = color_matches(pixels, target_color, tolerance, mask=mask)
         if matched:
             matches.append(ts)
             if on_result:
@@ -159,12 +165,24 @@ def scan_changes(
     grid = config.SCREENSPACE_CHANGE_HEATMAP_GRID
     min_frac = config.SCREENSPACE_CHANGE_HEATMAP_MIN_FRAC
 
+    mask_for = region_masker(region)
+
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
         if prev_pixels[0] is not None:
             mask = _frame_diff_mask(prev_pixels[0], pixels, noise_threshold)
-            mag = float(np.count_nonzero(mask)) / float(mask.size) if mask.size else 0.0
+            region_mask = mask_for(pixels)
+            if region_mask is not None:
+                # Shaped region: only changes inside the polygon count, and the
+                # magnitude is relative to the polygon's area. The ANDed mask
+                # also feeds change_grid below, so heatmap cells outside the
+                # polygon are suppressed for free.
+                mask = cv2.bitwise_and(mask, region_mask)
+                denom = float(np.count_nonzero(region_mask))
+            else:
+                denom = float(mask.size)
+            mag = float(np.count_nonzero(mask)) / denom if denom else 0.0
             if mag >= threshold:
                 rd: dict[str, Any] = {"timestamp": ts, "magnitude": round(mag, 4)}
                 if build_grid:
@@ -322,7 +340,7 @@ def scan_similarity(
 
 def scan_text(
     video_path: str,
-    region: dict[str, int],
+    region: dict[str, Any],
     search_string: str,
     interval_seconds: float = 2.0,
     *,
@@ -367,6 +385,7 @@ def scan_text(
     }
     prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
+    mask_points = region.get("mask_points")
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -384,7 +403,10 @@ def scan_text(
         ):
             return None
         readings = _ocr_region_readings(
-            pixels, languages=languages, preprocess=ocr_preprocess
+            pixels,
+            languages=languages,
+            preprocess=ocr_preprocess,
+            mask_points=mask_points,
         )
         passed, detail = _score_text_readings(readings, text_params)
         matched_rd = {"timestamp": ts, **detail} if passed else None
@@ -419,7 +441,7 @@ def scan_text(
 
 def scan_numbers(
     video_path: str,
-    region: dict[str, int],
+    region: dict[str, Any],
     operator: str,
     target_value: float = 0,
     interval_seconds: float = 2.0,
@@ -472,6 +494,7 @@ def scan_numbers(
     # Hoisted out of the per-frame callback: constrain English OCR to digits.
     numbers_allowlist = _numbers_ocr_allowlist(languages, integers_only)
     buf = _ConsecutiveBuffer(require_consecutive)
+    mask_points = region.get("mask_points")
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -493,6 +516,7 @@ def scan_numbers(
             languages=languages,
             allowlist=numbers_allowlist,
             preprocess=ocr_preprocess,
+            mask_points=mask_points,
         )
         passed, detail = _score_numbers_readings(readings, numbers_params)
         matched_rd = {"timestamp": ts, **detail} if passed else None
@@ -726,6 +750,14 @@ def scan_template(
                     m["y"] = int(round(m["y"] * inv))
                     m["w"] = int(round(m["w"] * inv))
                     m["h"] = int(round(m["h"] * inv))
+            # Shaped region: the match itself runs full-frame (as for rects,
+            # which don't restrict template search either), but detections
+            # whose center falls outside the polygon are dropped. Runs before
+            # the static-frame carry caches last_rd, so carried rows are
+            # already filtered. This mask is the *region's* shape — distinct
+            # from template_mask, the template's own alpha channel.
+            matches = filter_matches_by_region_mask(matches, region)
+        if matches:
             best = max(m["score"] for m in matches)
             rd = {
                 "timestamp": ts,
@@ -798,6 +830,7 @@ def scan_flow(
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
+    mask_for = region_masker(region)
 
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
@@ -815,7 +848,7 @@ def scan_flow(
             return None
         if prev_gray[0] is not None:
             flow_result = compute_optical_flow(
-                prev_gray[0], curr_gray, return_grid=True
+                prev_gray[0], curr_gray, return_grid=True, mask=mask_for(pixels)
             )
             if flow_result["magnitude"] >= magnitude_threshold:
                 rd: dict[str, Any] = {
@@ -889,10 +922,14 @@ def scan_scene(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    # Pre-compute fingerprints for reference scenes (with per-scene thresholds)
+    # Pre-compute fingerprints for reference scenes (with per-scene thresholds).
+    # Shaped regions: fingerprints are only comparable when both sides use the
+    # mask, so each reference crop gets the mask rasterized at its own size
+    # (references are source-resolution; scan crops may be rescaled).
+    mask_for = region_masker(region)
     ref_fps: list[tuple[str, dict[str, Any], float]] = []
     for ref in reference_scenes:
-        fp = compute_scene_fingerprint(ref["frame"])
+        fp = compute_scene_fingerprint(ref["frame"], mask=mask_for(ref["frame"]))
         ref_thresh = float(ref.get("threshold", default_threshold))
         ref_fps.append((ref["name"], fp, ref_thresh))
 
@@ -919,7 +956,7 @@ def scan_scene(
             return None
         prev_skip_gray[0] = curr_gray
 
-        fp = compute_scene_fingerprint(pixels)
+        fp = compute_scene_fingerprint(pixels, mask=mask_for(pixels))
         best_name = ""
         best_score = 0.0
         best_thresh = default_threshold
