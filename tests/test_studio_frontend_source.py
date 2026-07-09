@@ -241,3 +241,23 @@ def test_studio_card_scrubber_gates_on_thumbnail_and_prefetches():
     assert "function processSpritePrefetch()" in src
     assert "function loadCardSprite(thumb, done)" in src
     assert "SPRITE_PREFETCH_CONCURRENCY" in src
+
+
+def test_studio_metadata_cluster_wiring():
+    """Metadata clustering toggle: state flag, boot read, settings re-read."""
+    src = _studio_js()
+    assert "metadataClusterScreenspace: true" in src
+    assert "data.metadataClusterScreenspace" in src
+    assert '_findSetting("STUDIO_METADATA_CLUSTER_SCREENSPACE")' in src
+
+
+def test_metadata_screenspace_clustering():
+    """metadata.js counts Screenspace as clusters (default on) when clustering."""
+    # The studio*.js glob excludes metadata.js, so read it directly.
+    src = (_WEB / "metadata.js").read_text(encoding="utf-8")
+    assert "SS_CLUSTER_THRESHOLD_SEC" in src
+    assert "function clustersToEventLike(clusters)" in src
+    assert "state.metadataClusterScreenspace !== false" in src
+    assert '"Screenspace clusters"' in src
+    # Collisions keep raw events (they cluster internally already).
+    assert "computeCollisions(activeP, rows, events, marks" in src
