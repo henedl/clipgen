@@ -202,16 +202,50 @@
       .catch(function () { showToast("Failed to update region"); });
   }
 
-  // Boolean-edit the active region with a freshly drawn shape (shift = add,
-  // alt = subtract, shift+alt = intersect — the selection modifiers users
-  // know from Photoshop). `shape` is {rect} or {contours} in canvas pixels.
+  // Build a pending shaped region from a simplified contour list, or null
+  // when the shape fails the size guards (mirrors finishDrawingRegion's
+  // >5x5 minimum, plus a shoelace-area floor so a scribble along a line
+  // can't produce a degenerate mask). The bbox is the CONTAINING integer
+  // box (floor/ceil, not round) so normalizing the absolute points against
+  // it — the preview mask= param, the modal readout — always lands in
+  // [0, 1]; the server recomputes the bbox from the points on save anyway.
+  function pendingShapedRegion(contours, shape) {
+    contours = contours.filter(function (c) { return c.length >= 3; });
+    if (!contours.length) return null;
+    var bounds = contoursBounds(contours);
+    var x = Math.floor(bounds.x);
+    var y = Math.floor(bounds.y);
+    var w = Math.ceil(bounds.x + bounds.w) - x;
+    var h = Math.ceil(bounds.y + bounds.h) - y;
+    if (w <= 5 || h <= 5 || contoursArea(contours) < 64) return null;
+    return { x: x, y: y, w: w, h: h, points: contours, shape: shape };
+  }
+
+  // Boolean-edit the active region — or, when none is saved-and-active, the
+  // unsaved pending region — with a freshly drawn shape (shift = add, alt =
+  // subtract, shift+alt = intersect — the selection modifiers users know from
+  // Photoshop). `shape` is {rect} or {contours} in canvas pixels. A saved
+  // region round-trips through the server; a pending region is edited in place
+  // and stays unsaved until it's named via the modal.
   function applyRegionCombine(op, shape) {
-    var name = state.activeRegion;
-    var region = name ? state.regions[name] : null;
     var overlay = qs("#overlayCanvas");
-    if (!region || !overlay.width || !overlay.height) return;
+    if (!overlay.width || !overlay.height) return;
+    var name = state.activeRegion;
+    var savedRegion = name && state.regions[name] ? state.regions[name] : null;
+    var pending = savedRegion ? null : state.pendingRegion;
+    var baseShape = null;
+    if (savedRegion) {
+      baseShape = regionShapeAbs(savedRegion);
+    } else if (pending) {
+      // Pending contours are already canvas-pixel absolute (unlike a saved
+      // region's bbox-relative points, which regionShapeAbs() denormalizes).
+      baseShape = pending.points && pending.points.length > 0
+        ? { contours: pending.points }
+        : { rect: { x: pending.x, y: pending.y, w: pending.w, h: pending.h } };
+    }
+    if (!baseShape) return;
     var w = overlay.width, h = overlay.height;
-    var mask = rasterizeShapesMask([regionShapeAbs(region)], w, h);
+    var mask = rasterizeShapesMask([baseShape], w, h);
     combineShapeMasks(mask, rasterizeShapesMask([shape], w, h), op);
     var displayW = overlay.getBoundingClientRect().width || w;
     var s = w / displayW;
@@ -219,10 +253,29 @@
     var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * s, 400);
     var verb = { add: "Added to", subtract: "Subtracted from", intersect: "Intersected" }[op];
     if (!contours.length || contoursArea(contours) < 64) {
-      showToast("Nothing would remain of '" + name + "' — not applied");
+      showToast(savedRegion
+        ? "Nothing would remain of '" + name + "' — not applied"
+        : "Nothing would remain — not applied");
       return;
     }
-    saveRegionShape(name, contours, verb + " region '" + name + "'");
+    if (savedRegion) {
+      saveRegionShape(name, contours, verb + " region '" + name + "'");
+      return;
+    }
+    // Pending region: update in place, no server round-trip. Collapse to a
+    // plain rect when the result is axis-aligned (parity with saveRegionShape).
+    var rect = contoursToAxisRect(contours, 2);
+    var updated = rect
+      ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+      : pendingShapedRegion(contours, "combo");
+    if (!updated) {
+      showToast("Nothing would remain — not applied");
+      return;
+    }
+    state.pendingRegion = updated;
+    renderOverlay();
+    updateRegionButtons();
+    showToast(verb + " region");
   }
 
   // ---- Overlay interaction state machine ----
@@ -281,25 +334,6 @@
         pts.push([x, y]);
         scheduleOverlayRender();
       }
-    }
-
-    // Build a pending shaped region from a simplified contour list, or null
-    // when the shape fails the size guards (mirrors finishDrawingRegion's
-    // >5x5 minimum, plus a shoelace-area floor so a scribble along a line
-    // can't produce a degenerate mask). The bbox is the CONTAINING integer
-    // box (floor/ceil, not round) so normalizing the absolute points against
-    // it — the preview mask= param, the modal readout — always lands in
-    // [0, 1]; the server recomputes the bbox from the points on save anyway.
-    function pendingShapedRegion(contours, shape) {
-      contours = contours.filter(function (c) { return c.length >= 3; });
-      if (!contours.length) return null;
-      var bounds = contoursBounds(contours);
-      var x = Math.floor(bounds.x);
-      var y = Math.floor(bounds.y);
-      var w = Math.ceil(bounds.x + bounds.w) - x;
-      var h = Math.ceil(bounds.y + bounds.h) - y;
-      if (w <= 5 || h <= 5 || contoursArea(contours) < 64) return null;
-      return { x: x, y: y, w: w, h: h, points: contours, shape: shape };
     }
 
     // Simplify a raw point trail toward <=100 vertices with growing epsilon.
@@ -419,14 +453,23 @@
       if (!displayW || !overlay.width) return;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
-      // Shift/alt with a selected region: boolean-edit its shape instead of
+      // Shift/alt with a target region: boolean-edit its shape instead of
       // dragging or drawing a new region (shift = add, alt = subtract,
-      // shift+alt = intersect). Bypasses the template/label/handle hit tests
-      // so the edit can start on top of the region itself, and keeps the
-      // region active — this only applies while a region is selected.
-      if ((e.shiftKey || e.altKey) && state.activeRegion && state.regions[state.activeRegion]) {
+      // shift+alt = intersect). The target is the selected saved region, or —
+      // when none is active — the unsaved pending region, so a freshly drawn
+      // shape can be refined before it's named. Bypasses the template/label/
+      // handle hit tests so the edit can start on top of the region itself.
+      var combineBase =
+        state.activeRegion && state.regions[state.activeRegion]
+          ? "active"
+          : state.pendingRegion
+            ? "pending"
+            : null;
+      if ((e.shiftKey || e.altKey) && combineBase) {
         var combineOp = e.shiftKey && e.altKey ? "intersect" : (e.altKey ? "subtract" : "add");
-        state.pendingRegion = null;
+        // Keep the pending region when it's the edit target; drop it only when
+        // editing a saved region (the two are mutually exclusive anyway).
+        if (combineBase === "active") state.pendingRegion = null;
         if (state.regionTool === "wand") {
           _cachedOverlayRect = null;
           performWandSelection(pos, s, combineOp);
@@ -534,10 +577,12 @@
         scheduleOverlayRender();
         return;
       }
-      // While a combine modifier is held over a selected region, the next
-      // mousedown boolean-edits it — advertise draw mode instead of the
+      // While a combine modifier is held with a target region (the selected
+      // saved region, or the unsaved pending region when none is active), the
+      // next mousedown boolean-edits it — advertise draw mode instead of the
       // move/resize affordances ("copy" shows a + cursor for shift-add).
-      if ((e.shiftKey || e.altKey) && state.activeRegion && state.regions[state.activeRegion]) {
+      if ((e.shiftKey || e.altKey) &&
+          ((state.activeRegion && state.regions[state.activeRegion]) || state.pendingRegion)) {
         state.hoveredRegion = null;
         overlay.style.cursor = e.shiftKey && !e.altKey ? "copy" : "crosshair";
         scheduleOverlayRender();
