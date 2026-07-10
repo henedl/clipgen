@@ -58,6 +58,9 @@ var CLIPGEN_CONFIG = {
   convergenceSources: ["sheet", "screenspace", "transcript"],
   cardScrubberSpriteCols: 5,
   cardScrubberSpriteRows: 5,
+  clipFormat: ".mp4",
+  screenshotFormat: ".png",
+  gifFormat: ".gif",
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -103,6 +106,15 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.cardScrubberSpriteRows === "number") {
     CLIPGEN_CONFIG.cardScrubberSpriteRows = payload.cardScrubberSpriteRows;
+  }
+  if (typeof payload.clipFormat === "string") {
+    CLIPGEN_CONFIG.clipFormat = payload.clipFormat;
+  }
+  if (typeof payload.screenshotFormat === "string") {
+    CLIPGEN_CONFIG.screenshotFormat = payload.screenshotFormat;
+  }
+  if (typeof payload.gifFormat === "string") {
+    CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
   }
 };
 

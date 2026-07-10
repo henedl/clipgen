@@ -1120,12 +1120,14 @@
             loading.appendChild(caption);
           }
           clipgenApplyConfig(data.config);
+          updateArtifactFormatLabels();
           state.sheetData = data;
           refreshMetadataIfActive();
           return;
         }
         state.sheetData = data;
         clipgenApplyConfig(data.config);
+        updateArtifactFormatLabels();
         // Restore persisted sidebar filter selections before the first render so
         // the grid and sidebar paint already-filtered (activeFunction first so
         // the fn range stays enabled).
@@ -4200,7 +4202,36 @@
     return null;
   }
 
+  // Rewrite the #artifactFormat option labels so the "(.ext)" suffix reflects
+  // the current output-format settings (FILEFORMAT/SCREENSHOT_FORMAT/GIF_FORMAT).
+  // Prefers state.settingsData (fresh after a save) and falls back to
+  // CLIPGEN_CONFIG (initial load, before the settings modal has been opened).
+  // The option `value`s (clip/screen/gif) are stable and untouched.
+  function _formatExt(name, fallback) {
+    var s = _findSetting(name);
+    return s && s.value ? s.value : fallback;
+  }
+
+  function updateArtifactFormatLabels() {
+    var sel = qs("#artifactFormat");
+    if (!sel) return;
+    var bases = { clip: "Clip", screen: "Screenshot", gif: "GIF" };
+    var exts = {
+      clip: _formatExt("FILEFORMAT", CLIPGEN_CONFIG.clipFormat),
+      screen: _formatExt("SCREENSHOT_FORMAT", CLIPGEN_CONFIG.screenshotFormat),
+      gif: _formatExt("GIF_FORMAT", CLIPGEN_CONFIG.gifFormat),
+    };
+    for (var i = 0; i < sel.options.length; i++) {
+      var opt = sel.options[i];
+      var base = bases[opt.value];
+      if (base && exts[opt.value]) {
+        opt.textContent = base + " (" + exts[opt.value] + ")";
+      }
+    }
+  }
+
   function syncInlineControls() {
+    updateArtifactFormatLabels();
     if (!state.settingsData) return;
     var tcEnabled = _findSetting("TITLECARDS_ENABLED");
     var tcDuration = _findSetting("TITLECARD_DURATION_SECONDS");
