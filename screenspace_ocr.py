@@ -232,11 +232,11 @@ def _ocr_region_readings(
     same readings can be re-scored under different fuzzy/confidence settings
     (the basis of the calibration OCR cache).
 
-    For shaped regions, *mask_points* (bbox-relative polygon) drops readings
-    whose bbox center falls outside the polygon. OCR always sees the full rect
-    (masking glyph pixels would corrupt recognition); only the readings are
-    filtered. Centers are normalized by the *post-preprocess* image shape so
-    the test is unaffected by the OCR upscale.
+    For shaped regions, *mask_points* (bbox-relative contour list) drops
+    readings whose bbox center falls outside every contour. OCR always sees the
+    full rect (masking glyph pixels would corrupt recognition); only the
+    readings are filtered. Centers are normalized by the *post-preprocess*
+    image shape so the test is unaffected by the OCR upscale.
     """
     langs = languages or ["en"]
     pixels = _preprocess_for_ocr(region_pixels) if preprocess else region_pixels
@@ -244,7 +244,7 @@ def _ocr_region_readings(
     if allowlist is not None:
         kwargs["allowlist"] = allowlist
     readings = _ocr_readtext(langs, pixels, **kwargs)
-    if mask_points and len(mask_points) >= 3:
+    if mask_points:
         img_h, img_w = pixels.shape[:2]
         if img_h > 0 and img_w > 0:
             readings = [

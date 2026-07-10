@@ -511,7 +511,7 @@ def _shaped_payload(**overrides):
         "canvas_width": 1920,
         "canvas_height": 1080,
         "shape": "lasso",
-        "points": [[100, 100], [500, 100], [500, 400], [100, 400]],
+        "points": [[[100, 100], [500, 100], [500, 400], [100, 400]]],
     }
     payload.update(overrides)
     return payload
@@ -520,7 +520,7 @@ def _shaped_payload(**overrides):
 def test_create_shaped_region_recomputes_bbox_and_normalizes_points(client):
     resp = client.post(
         "/screenspace/api/regions",
-        json=_shaped_payload(points=[[100, 100], [500, 100], [300, 400]]),
+        json=_shaped_payload(points=[[[100, 100], [500, 100], [300, 400]]]),
     )
     assert resp.status_code == 200
     r = resp.get_json()["region"]
@@ -530,19 +530,46 @@ def test_create_shaped_region_recomputes_bbox_and_normalizes_points(client):
     assert abs(r["w"] - 400 / 1920) < 1e-9
     assert abs(r["h"] - 300 / 1080) < 1e-9
     assert r["shape"] == "lasso"
-    # Points stored bbox-relative.
-    assert r["points"][0] == [0.0, 0.0]
-    assert r["points"][1] == [1.0, 0.0]
-    assert r["points"][2] == [0.5, 1.0]
+    # Points stored bbox-relative, one list per contour.
+    assert r["points"][0][0] == [0.0, 0.0]
+    assert r["points"][0][1] == [1.0, 0.0]
+    assert r["points"][0][2] == [0.5, 1.0]
 
     regions = client.get("/screenspace/api/regions").get_json()["regions"]
     assert regions["panel"]["points"] == r["points"]
 
 
+def test_create_multi_contour_region_bbox_spans_all_contours(client):
+    """A merged / boolean-edited shape: two disjoint contours, one region."""
+    resp = client.post(
+        "/screenspace/api/regions",
+        json=_shaped_payload(
+            shape="combo",
+            points=[
+                [[100, 100], [300, 100], [300, 300], [100, 300]],
+                [[600, 500], [900, 500], [900, 800], [600, 800]],
+            ],
+        ),
+    )
+    assert resp.status_code == 200
+    r = resp.get_json()["region"]
+    assert r["shape"] == "combo"
+    # Bbox contains both contours.
+    assert abs(r["x"] - 100 / 1920) < 1e-9
+    assert abs(r["y"] - 100 / 1080) < 1e-9
+    assert abs(r["w"] - 800 / 1920) < 1e-9
+    assert abs(r["h"] - 700 / 1080) < 1e-9
+    # Each contour normalized against the shared bbox.
+    assert r["points"][0][0] == [0.0, 0.0]
+    assert r["points"][0][2] == [0.25, round(200 / 700, 4)]
+    assert r["points"][1][1] == [1.0, round(400 / 700, 4)]
+    assert r["points"][1][2] == [1.0, 1.0]
+
+
 def test_create_shaped_region_clamps_out_of_canvas_points(client):
     resp = client.post(
         "/screenspace/api/regions",
-        json=_shaped_payload(points=[[-50, 100], [500, -20], [500, 400], [-50, 400]]),
+        json=_shaped_payload(points=[[[-50, 100], [500, -20], [500, 400], [-50, 400]]]),
     )
     assert resp.status_code == 200
     r = resp.get_json()["region"]
@@ -555,20 +582,32 @@ def test_create_shaped_region_clamps_out_of_canvas_points(client):
     [
         ({"shape": "hexagon"}, "shape"),
         ({"shape": None}, "shape"),
-        ({"points": [[0, 0], [10, 10]]}, "points"),
+        ({"points": [[[0, 0], [10, 10]]]}, "points"),
         ({"points": "abc"}, "points"),
-        ({"points": [[0, 0], [10, "x"], [10, 10]]}, "points"),
-        ({"points": [[0, 0], [3, 0], [3, 3]]}, "too small"),
-        ({"points": [[0, 0], [400, 400], [800, 800]]}, "too small"),
+        ({"points": [[0, 0], [10, 0], [10, 10]]}, "points"),
+        ({"points": [[[0, 0], [10, "x"], [10, 10]]]}, "points"),
+        ({"points": [[[0, 0], [3, 0], [3, 3]]]}, "too small"),
+        ({"points": [[[0, 0], [400, 400], [800, 800]]]}, "too small"),
+        (
+            {
+                "points": [
+                    [[0, 0], [4, 0], [4, 4]],
+                    [[10, 10], [14, 10], [14, 14]],
+                ]
+            },
+            "too small",
+        ),
     ],
     ids=[
         "bad_shape",
         "points_without_shape",
-        "too_few_points",
+        "too_few_points_in_contour",
         "points_not_list",
+        "flat_point_list_not_contours",
         "non_numeric_point",
         "tiny_bbox",
         "collinear_zero_area",
+        "multi_contour_sum_below_min_area",
     ],
 )
 def test_create_shaped_region_400_for_invalid_polygon(client, overrides, expected_err):
@@ -1252,6 +1291,19 @@ def test_api_preview_layer_mask_param_dims_outside_polygon(client, monkeypatch) 
     # Left half keeps the source brightness; right half is dimmed to 1/4.
     assert int(img[30, 20, 0]) == 200
     assert int(img[30, 80, 0]) == 50
+
+    # Multi-contour masks join contours with "|": left and right quarters
+    # keep the source brightness, the middle is dimmed.
+    mask = "0,0;0.25,0;0.25,1;0,1|0.75,0;1,0;1,1;0.75,1"
+    resp = client.get(
+        f"/screenspace/api/preview/P01/0.500?tool=color&region={region}&layer=region&mask={mask}"
+    )
+    assert resp.status_code == 200
+    img = cv2.imdecode(np.frombuffer(resp.data, np.uint8), cv2.IMREAD_COLOR)
+    assert img is not None
+    assert int(img[30, 10, 0]) == 200
+    assert int(img[30, 50, 0]) == 50
+    assert int(img[30, 90, 0]) == 200
 
     # Malformed mask values are ignored: full-brightness rect preview.
     resp = client.get(

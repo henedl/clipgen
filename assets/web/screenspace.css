@@ -675,6 +675,13 @@ body {
   background: rgba(0, 0, 0, 0.04);
 }
 
+/* Shift-clicked into the merge set (the active chip is the merge target):
+   a second ring in the chip's own color marks the multi-selection. */
+.region-chip.merge-selected {
+  opacity: 1;
+  box-shadow: 0 0 0 2px currentColor inset;
+}
+
 /* Region chip drag-and-drop (reorder within the list + copy into a stash) */
 .region-chip[draggable="true"] {
   cursor: grab;

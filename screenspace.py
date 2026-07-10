@@ -63,6 +63,7 @@ from screenspace_primitives import (
     denormalize_region,
     extract_region,
     filter_matches_by_region_mask,
+    mask_points_key,
     match_template,
     point_in_mask_points,
     region_mask_for,
