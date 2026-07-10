@@ -106,6 +106,9 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["convergenceSources"] == py_config["convergenceSources"]
     assert js_config["cardScrubberSpriteCols"] == py_config["cardScrubberSpriteCols"]
     assert js_config["cardScrubberSpriteRows"] == py_config["cardScrubberSpriteRows"]
+    assert js_config["clipFormat"] == py_config["clipFormat"]
+    assert js_config["screenshotFormat"] == py_config["screenshotFormat"]
+    assert js_config["gifFormat"] == py_config["gifFormat"]
 
 
 def test_get_frontend_config_shape():
@@ -126,6 +129,9 @@ def test_get_frontend_config_shape():
         "convergenceSources",
         "cardScrubberSpriteCols",
         "cardScrubberSpriteRows",
+        "clipFormat",
+        "screenshotFormat",
+        "gifFormat",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -166,6 +172,9 @@ def test_get_frontend_config_shape():
     assert cfg["convergenceSources"] == list(config.CONVERGENCE_SOURCES)
     assert cfg["cardScrubberSpriteCols"] == config.STUDIO_SCRUBBER_SPRITE_COLS
     assert cfg["cardScrubberSpriteRows"] == config.STUDIO_SCRUBBER_SPRITE_ROWS
+    assert cfg["clipFormat"] == config.FILEFORMAT
+    assert cfg["screenshotFormat"] == config.SCREENSHOT_FORMAT
+    assert cfg["gifFormat"] == config.GIF_FORMAT
 
 
 def test_severity_css_class_mapping():
