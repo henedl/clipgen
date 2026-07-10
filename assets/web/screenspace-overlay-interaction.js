@@ -60,6 +60,13 @@
   var _overlayRaf = 0;
   var _cachedOverlayRect = null;
 
+  // Magic-wand press-drag-release scrub: the clicked frame's ImageData (read
+  // once at press so the per-frame flood re-uses it), a coalescing RAF, and the
+  // drag→tolerance sensitivity. Horizontal drag right widens, left narrows.
+  var _wandRaf = 0;
+  var _wandFrame = null;
+  var WAND_SCRUB_SENSITIVITY = 0.4; // tolerance units per horizontal px
+
   function invalidateOverlayRect() {
     _cachedOverlayRect = null;
   }
@@ -379,35 +386,112 @@
       return true;
     }
 
-    // Magic wand: flood-fill the frame from the clicked pixel (RGB tolerance),
-    // trace the filled area's outer contour, and simplify it into a polygon —
-    // pending as a new region, or boolean-applied to the active region for a
-    // shift/alt combine click. Reads #frameCanvas pixels like the pipette —
-    // the frame and overlay canvases share dimensions.
-    function performWandSelection(pos, s, combine) {
+    // Magic wand: a press-drag-release scrub. Press caches the clicked frame's
+    // pixels + seed; dragging horizontally scrubs the flood-fill tolerance while
+    // the contour previews live (state.wandDragging.previewPoints); release
+    // commits — a new pending region, or a boolean edit of the active/pending
+    // region for a shift/alt combine (applied on release, like a combine draw).
+    // Reads #frameCanvas pixels like the pipette — the frame and overlay
+    // canvases share dimensions, so seed pos maps 1:1.
+
+    // Flood the cached frame at the current scrub tolerance and stash the
+    // simplified outer contour for the painter (null when nothing contiguous).
+    function computeWandPreview() {
+      var f = _wandFrame;
+      if (!f || !state.wandDragging) return;
+      var mask = floodFillMask(f.data, f.w, f.h, f.seedX, f.seedY, state.wandDragging.tolerance);
+      var pts = mask ? simplifyForRegion(traceMaskContour(mask, f.w, f.h), f.s) : [];
+      state.wandDragging.previewPoints = pts.length >= 3 ? [pts] : null;
+    }
+
+    // Re-flood at most once per frame (floodFillMask is O(w*h)); a scrub can
+    // fire many mousemoves per frame, so coalesce them onto the RAF.
+    function scheduleWandRecompute() {
+      if (_wandRaf) return;
+      _wandRaf = requestAnimationFrame(function () {
+        _wandRaf = 0;
+        if (!state.wandDragging) { _wandFrame = null; return; }
+        computeWandPreview();
+        renderOverlay();
+      });
+    }
+
+    function beginWandDrag(e, pos, s, combine) {
       var frameCanvas = qs("#frameCanvas");
       if (!frameCanvas || !frameCanvas.width) return;
       var w = frameCanvas.width, h = frameCanvas.height;
-      var data = frameCanvas.getContext("2d").getImageData(0, 0, w, h).data;
-      var mask = floodFillMask(data, w, h, pos.x, pos.y, state.wandTolerance);
-      if (!mask) return;
-      var simplified = simplifyForRegion(traceMaskContour(mask, w, h), s);
+      _wandFrame = {
+        data: frameCanvas.getContext("2d").getImageData(0, 0, w, h).data,
+        w: w, h: h, seedX: pos.x, seedY: pos.y, s: s,
+      };
+      state.wandDragging = {
+        startClientX: e.clientX,
+        startTolerance: state.wandTolerance,
+        tolerance: state.wandTolerance,
+        combine: combine || null,
+        previewPoints: null,
+      };
+      document.body.style.cursor = "ew-resize";
+      document.body.style.userSelect = "none";
+      computeWandPreview();
+      flushOverlayRender();
+      updateRegionButtons();
+    }
+
+    function updateWandDragFromEvent(e) {
+      if (!state.wandDragging) return;
+      var inp = qs("#wandToleranceInput");
+      var lo = parseInt(inp.min, 10) || 4;
+      var hi = parseInt(inp.max, 10) || 120;
+      var delta = e.clientX - state.wandDragging.startClientX;
+      var tol = clamp(Math.round(state.wandDragging.startTolerance + delta * WAND_SCRUB_SENSITIVITY), lo, hi);
+      state.wandDragging.tolerance = tol;
+      state.wandTolerance = tol;
+      inp.value = String(tol);
+      qs("#wandToleranceValue").textContent = String(tol);
+      scheduleWandRecompute();
+    }
+
+    function endWandDrag() {
+      if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      _wandFrame = null;
+      _cachedOverlayRect = null;
+    }
+
+    function commitWandDrag() {
+      var wd = state.wandDragging;
+      if (!wd) return;
+      // A quick release can beat the coalesced recompute RAF, leaving
+      // previewPoints one tolerance behind the slider/readout. Cancel the
+      // pending frame and re-flood synchronously at the latest tolerance
+      // (while _wandFrame is still valid) so the committed contour matches.
+      if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
+      computeWandPreview();
+      var contour = wd.previewPoints && wd.previewPoints[0];
+      var combine = wd.combine;
+      endWandDrag();
+      state.wandDragging = null;
       if (combine) {
-        if (simplified.length >= 3 && polygonArea(simplified) >= 8) {
-          applyRegionCombine(combine, { contours: [simplified] });
+        if (contour && contour.length >= 3 && polygonArea(contour) >= 8) {
+          applyRegionCombine(combine, { contours: [contour] });
         } else {
           showToast("No contiguous area found — adjust tolerance and try again");
         }
-        flushOverlayRender();
-        updateRegionButtons();
-        return;
+      } else {
+        var pending = contour ? pendingShapedRegion([contour], "wand") : null;
+        if (pending) state.pendingRegion = pending;
+        else showToast("No contiguous area found — adjust tolerance and try again");
       }
-      var pending = pendingShapedRegion([simplified], "wand");
-      if (!pending) {
-        showToast("No contiguous area found — adjust tolerance and try again");
-        return;
-      }
-      state.pendingRegion = pending;
+      flushOverlayRender();
+      updateRegionButtons();
+    }
+
+    function cancelWandDrag() {
+      if (!state.wandDragging) return;
+      endWandDrag();
+      state.wandDragging = null;
       flushOverlayRender();
       updateRegionButtons();
     }
@@ -471,8 +555,7 @@
         // editing a saved region (the two are mutually exclusive anyway).
         if (combineBase === "active") state.pendingRegion = null;
         if (state.regionTool === "wand") {
-          _cachedOverlayRect = null;
-          performWandSelection(pos, s, combineOp);
+          beginWandDrag(e, pos, s, combineOp);
           return;
         }
         if (state.regionTool === "lasso") {
@@ -520,8 +603,7 @@
       state.pendingRegion = null;
       state.activeRegion = null;
       if (state.regionTool === "wand") {
-        _cachedOverlayRect = null;
-        performWandSelection(pos, s);
+        beginWandDrag(e, pos, s, null);
         return;
       }
       if (state.regionTool === "lasso") {
@@ -534,6 +616,7 @@
 
     overlay.addEventListener("mousemove", function (e) {
       if (state.pipetteActive) return;
+      if (state.wandDragging) { updateWandDragFromEvent(e); return; }
       var rect = _cachedOverlayRect || overlay.getBoundingClientRect();
       var pos = canvasCoords(overlay, e, rect);
       var displayW = rect.width || overlay.width;
@@ -605,6 +688,7 @@
 
     overlay.addEventListener("mouseup", function (e) {
       if (state.pipetteActive) return;
+      if (state.wandDragging) { commitWandDrag(); return; }
       if (state.draggingTemplate) {
         _cachedOverlayRect = null;
         state.draggingTemplate = null;
@@ -641,6 +725,7 @@
 
     // Document-level listeners so drag/resize continues outside the canvas
     document.addEventListener("mousemove", function (e) {
+      if (state.wandDragging) { updateWandDragFromEvent(e); return; }
       if (state.drawingLasso) {
         var lassoRect = _cachedOverlayRect || overlay.getBoundingClientRect();
         var lassoPos = canvasCoords(overlay, e, lassoRect);
@@ -681,6 +766,7 @@
     });
 
     document.addEventListener("mouseup", function (e) {
+      if (state.wandDragging) { commitWandDrag(); return; }
       if (finishDrawingLasso()) return;
       if (finishDrawingRegion(e)) return;
       if (state.draggingTemplate) {
@@ -783,6 +869,7 @@
       state.regionTool = tool;
       // Abandon any in-progress draw from the previous tool, else mouseup
       // could still commit it while the new tool appears selected.
+      if (state.wandDragging) cancelWandDrag();
       state.drawingLasso = null;
       state.drawingRegion = null;
       Object.keys(toolBtns).forEach(function (key) {

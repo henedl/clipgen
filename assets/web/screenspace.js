@@ -201,12 +201,14 @@
     activeRegion: null,
     drawingRegion: null,
     // Shaped-region drawing: the active selector ("rect" | "lasso" | "wand"),
-    // the in-progress freehand point trail, and the wand's flood-fill RGB
-    // tolerance. On state (not satellite vars) — the hub Escape handler and
-    // the overlay painter both read them across file boundaries.
+    // the in-progress freehand point trail, the wand's flood-fill RGB
+    // tolerance, and the wand's press-drag-release scrub state (seed + live
+    // preview contour). On state (not satellite vars) — the hub Escape handler
+    // and the overlay painter both read them across file boundaries.
     regionTool: "rect",
     drawingLasso: null,
     wandTolerance: 32,
+    wandDragging: null,
     pendingRegion: null,
     draggingRegion: null,
     resizingRegion: null,
@@ -3482,6 +3484,16 @@
           document.body.style.cursor = "";
           document.body.style.userSelect = "";
           renderOverlay();
+        } else if (state.wandDragging) {
+          // Abort an in-progress wand scrub. It never sets pendingRegion until
+          // release, so nulling the state is a complete cancel; the satellite's
+          // cached frame ImageData is only read while wandDragging is truthy.
+          state.wandDragging = null;
+          invalidateOverlayRect();
+          document.body.style.cursor = "";
+          document.body.style.userSelect = "";
+          renderOverlay();
+          updateRegionButtons();
         } else if (state.drawingRegion || state.drawingLasso) {
           state.drawingRegion = null;
           state.drawingLasso = null;
