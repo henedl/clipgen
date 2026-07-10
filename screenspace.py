@@ -141,6 +141,7 @@ from screenspace_manifest import (
     _offset_result_times,
     create_event,
     create_task,
+    describe_task,
     generate_events_from_results,
     load_screenspace_manifest,
     save_screenspace_manifest,

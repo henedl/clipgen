@@ -29,6 +29,128 @@ TASK_STATUS_PAUSED = "paused"
 
 _SENTINEL = object()
 
+# OpenCV-style HSV hue buckets (h in 0-179, wraparound at 180) for color-task
+# names. Each entry is (upper_bound_exclusive, name); red owns both ends.
+_HUE_BUCKETS = [
+    (10, "red"),
+    (22, "orange"),
+    (35, "yellow"),
+    (78, "green"),
+    (100, "cyan"),
+    (128, "blue"),
+    (145, "purple"),
+    (160, "pink"),
+    (180, "red"),
+]
+
+
+def _hue_bucket_name(color: dict[str, Any]) -> str:
+    """Human color word for an OpenCV HSV dict (h 0-179, s/v 0-255)."""
+    h = float(color.get("h", 0))
+    s = float(color.get("s", 0))
+    v = float(color.get("v", 0))
+    if v < 46:
+        return "black"
+    if s < 40:
+        return "white" if v > 200 else "gray"
+    for upper, name in _HUE_BUCKETS:
+        if h < upper:
+            return name
+    return "red"
+
+
+def _fmt_num(value: Any) -> str:
+    """Format a number without a trailing .0 (100.0 -> '100', 0.5 -> '0.5')."""
+    return f"{float(value):g}"
+
+
+def _describe(task_type: str, params: dict[str, Any]) -> str:
+    """Tool label + distinguishing parameter, without the region suffix."""
+    label = task_type.capitalize()
+    if task_type == "color":
+        target = params.get("target_color")
+        if isinstance(target, dict):
+            return f"{label}: {_hue_bucket_name(target)}"
+    elif task_type == "change":
+        if "threshold" in params:
+            return f"{label} ≥{_fmt_num(round(float(params['threshold']) * 100, 1))}%"
+    elif task_type == "similarity":
+        if params.get("reference_timestamp") is not None:
+            ts = utils.seconds_to_timestamp(float(params["reference_timestamp"]))
+            return f"{label} to {ts}"
+    elif task_type == "text":
+        search = str(params.get("search_string", "")).strip()
+        if search:
+            if len(search) > 24:
+                search = search[:24] + "…"
+            return f'{label} "{search}"'
+    elif task_type == "numbers":
+        op = params.get("operator", "")
+        if op == "range":
+            if (
+                params.get("range_min") is not None
+                and params.get("range_max") is not None
+            ):
+                return f"{label} {_fmt_num(params['range_min'])}–{_fmt_num(params['range_max'])}"
+        elif (
+            op in ("eq", "gt", "lt", "gte", "lte")
+            and params.get("target_value") is not None
+        ):
+            sym = {"eq": "=", "gt": ">", "lt": "<", "gte": "≥", "lte": "≤"}[op]
+            return f"{label} {sym} {_fmt_num(params['target_value'])}"
+    elif task_type == "template":
+        if params.get("template_name"):
+            return f"{label}: {params['template_name']}"
+        if params.get("reference_timestamp") is not None:
+            ts = utils.seconds_to_timestamp(float(params["reference_timestamp"]))
+            return f"{label} @ {ts}"
+    elif task_type == "flow":
+        if "magnitude_threshold" in params:
+            return f"{label} ≥{_fmt_num(params['magnitude_threshold'])}"
+    elif task_type == "scene":
+        names = [
+            str(ref.get("name", "")).strip()
+            for ref in params.get("scene_references", [])
+            if isinstance(ref, dict) and str(ref.get("name", "")).strip()
+        ]
+        if names:
+            shown = ", ".join(names[:2])
+            extra = f" +{len(names) - 2}" if len(names) > 2 else ""
+            return f"{label}: {shown}{extra}"
+    elif task_type == "inactivity":
+        if "min_duration" in params:
+            return f"{label} ≥{_fmt_num(params['min_duration'])}s"
+    elif task_type == "timelapse":
+        speedup = params.get("speedup_factor")
+        if speedup is not None:
+            fmt = str(params.get("output_format", "mp4")).upper()
+            return f"{label} {_fmt_num(speedup)}× {fmt}"
+    elif task_type == "multitool":
+        step_labels = [
+            str(step.get("type", "")).capitalize()
+            for step in params.get("steps", [])
+            if isinstance(step, dict) and step.get("type")
+        ]
+        if step_labels:
+            return f"{label}: {' + '.join(step_labels)}"
+    return label
+
+
+def describe_task(task_type: str, region_name: str, parameters: dict[str, Any]) -> str:
+    """Build a descriptive display name from a task's distinguishing params.
+
+    e.g. 'Text "checkout" · header', 'Color: blue · HUD', 'Numbers > 100'.
+    Total: malformed params degrade to the capitalized tool label, never raise.
+    The user-supplied event_label still overrides this everywhere it is shown.
+    """
+    try:
+        name = _describe(task_type, parameters)
+    except Exception:
+        name = task_type.capitalize()
+    if region_name and region_name not in ("full_frame", "per_step"):
+        name += f" · {region_name}"
+    return name
+
 
 def create_task(
     task_type: str,
@@ -49,6 +171,7 @@ def create_task(
     return {
         "id": f"ss_{uuid.uuid4().hex[:8]}",
         "type": task_type,
+        "name": describe_task(task_type, region_name, parameters or {}),
         "participant": participant,
         "source_video": source_video,
         "video_paths": video_paths,
@@ -255,7 +378,7 @@ def create_event(
     """Create a ScreenspaceEvent from a task result entry."""
     event_label = task.get("parameters", {}).get("event_label", "")
     if not event_label:
-        event_label = task["type"] + ": " + task.get("region", "")
+        event_label = task.get("name") or task["type"] + ": " + task.get("region", "")
     return {
         "id": f"ev_{uuid.uuid4().hex[:8]}",
         "source_video": task.get("source_video", ""),

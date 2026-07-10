@@ -625,7 +625,8 @@
       icon.style.flexShrink = "0";
       header.appendChild(icon);
     }
-    var label = hit.task.type.charAt(0).toUpperCase() + hit.task.type.slice(1);
+    var label = (hit.task.parameters || {}).event_label || hit.task.name ||
+      hit.task.type.charAt(0).toUpperCase() + hit.task.type.slice(1);
     header.appendChild(el("strong", "", label));
     tip.appendChild(header);
 

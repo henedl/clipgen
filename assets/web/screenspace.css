@@ -3165,6 +3165,10 @@ body.panel-dragging #bottomPanel {
   font-family: var(--font-mono);
 }
 
+.task-card-meta--title {
+  color: var(--color-text);
+}
+
 .task-card-progress {
   height: 3px;
   background: var(--color-border);
