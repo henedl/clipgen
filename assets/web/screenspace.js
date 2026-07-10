@@ -3357,6 +3357,7 @@
     } else if (type === "template") {
       if (state.uploadedTemplate) {
         params.template_image_data = state.uploadedTemplate.data;
+        if (state.uploadedTemplate.name) params.template_name = state.uploadedTemplate.name;
       } else if (state.referenceTimestamp !== null) {
         params.reference_timestamp = state.referenceTimestamp;
       } else {

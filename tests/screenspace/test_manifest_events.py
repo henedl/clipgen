@@ -234,6 +234,159 @@ class TestCreateEvent:
         ev = screenspace.create_event(task, 10.0, 0.5)
         assert ev["metadata"] == {}
 
+    def test_task_name_beats_legacy_fallback(self):
+        task = self._make_task(name="Change ≥30% · healthbar")
+        ev = screenspace.create_event(task, 10.0, 0.5)
+        assert ev["event_type"] == "Change ≥30% · healthbar"
+
+    def test_event_label_beats_task_name(self):
+        task = self._make_task(
+            name="Change ≥30% · healthbar", parameters={"event_label": "low_health"}
+        )
+        ev = screenspace.create_event(task, 10.0, 0.5)
+        assert ev["event_type"] == "low_health"
+
+
+class TestDescribeTask:
+    def test_create_task_stores_name(self):
+        task = screenspace.create_task(
+            "text",
+            "P01",
+            "study_P01.mp4",
+            ["study_P01.mp4"],
+            "header",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            {"search_string": "checkout"},
+        )
+        assert task["name"] == 'Text "checkout" · header'
+
+    def test_color_hue_buckets(self):
+        cases = [
+            (5, "red"),
+            (15, "orange"),
+            (28, "yellow"),
+            (60, "green"),
+            (90, "cyan"),
+            (110, "blue"),
+            (135, "purple"),
+            (150, "pink"),
+            (175, "red"),
+        ]
+        for hue, expected in cases:
+            params = {"target_color": {"h": hue, "s": 200, "v": 200}}
+            assert screenspace.describe_task("color", "HUD", params) == (
+                f"Color: {expected} · HUD"
+            )
+
+    def test_color_achromatic(self):
+        def name_for(s, v):
+            return screenspace.describe_task(
+                "color", "", {"target_color": {"h": 0, "s": s, "v": v}}
+            )
+
+        assert name_for(10, 30) == "Color: black"
+        assert name_for(10, 240) == "Color: white"
+        assert name_for(10, 128) == "Color: gray"
+
+    def test_change_threshold_percent(self):
+        assert (
+            screenspace.describe_task("change", "sidebar", {"threshold": 0.3})
+            == "Change ≥30% · sidebar"
+        )
+
+    def test_similarity_reference_timestamp(self):
+        assert (
+            screenspace.describe_task(
+                "similarity", "full_frame", {"reference_timestamp": 83.0}
+            )
+            == "Similarity to 1:23"
+        )
+
+    def test_text_truncates_long_search(self):
+        name = screenspace.describe_task("text", "", {"search_string": "a" * 30})
+        assert name == f'Text "{"a" * 24}…"'
+
+    def test_numbers_operator_and_range(self):
+        assert (
+            screenspace.describe_task(
+                "numbers", "score", {"operator": "gt", "target_value": 100.0}
+            )
+            == "Numbers > 100 · score"
+        )
+        assert (
+            screenspace.describe_task(
+                "numbers", "", {"operator": "range", "range_min": 10, "range_max": 20.5}
+            )
+            == "Numbers 10–20.5"
+        )
+
+    def test_template_name_then_timestamp(self):
+        assert (
+            screenspace.describe_task("template", "", {"template_name": "logo.png"})
+            == "Template: logo.png"
+        )
+        assert (
+            screenspace.describe_task("template", "", {"reference_timestamp": 5})
+            == "Template @ 0:05"
+        )
+        assert screenspace.describe_task("template", "", {}) == "Template"
+
+    def test_flow_magnitude(self):
+        assert (
+            screenspace.describe_task("flow", "", {"magnitude_threshold": 2.5})
+            == "Flow ≥2.5"
+        )
+
+    def test_scene_reference_names_capped(self):
+        refs = [
+            {"name": "menu", "timestamp": 1.0},
+            {"name": "level", "timestamp": 2.0},
+            {"name": "shop", "timestamp": 3.0},
+        ]
+        assert (
+            screenspace.describe_task("scene", "", {"scene_references": refs})
+            == "Scene: menu, level +1"
+        )
+
+    def test_inactivity_min_duration(self):
+        assert (
+            screenspace.describe_task("inactivity", "", {"min_duration": 2.0})
+            == "Inactivity ≥2s"
+        )
+
+    def test_boundary_plain_label(self):
+        assert (
+            screenspace.describe_task("boundary", "", {"threshold": 14}) == "Boundary"
+        )
+
+    def test_timelapse_speedup_and_format(self):
+        assert (
+            screenspace.describe_task(
+                "timelapse", "", {"speedup_factor": 10, "output_format": "gif"}
+            )
+            == "Timelapse 10× GIF"
+        )
+
+    def test_multitool_step_chain(self):
+        params = {"steps": [{"type": "text"}, {"type": "color"}]}
+        assert (
+            screenspace.describe_task("multitool", "per_step", params)
+            == "Multitool: Text + Color"
+        )
+
+    def test_uninformative_regions_omitted(self):
+        assert screenspace.describe_task(
+            "change", "full_frame", {"threshold": 0.3}
+        ) == ("Change ≥30%")
+
+    def test_missing_and_malformed_params_degrade_to_label(self):
+        assert screenspace.describe_task("color", "full_frame", {}) == "Color"
+        assert (
+            screenspace.describe_task("color", "", {"target_color": "nope"}) == "Color"
+        )
+        assert screenspace.describe_task("change", "", {"threshold": "abc"}) == "Change"
+        assert screenspace.describe_task("mystery", "hud", {}) == "Mystery · hud"
+
 
 class TestGenerateEventsFromResults:
     def _make_worker_and_task(self, task_type, **params):

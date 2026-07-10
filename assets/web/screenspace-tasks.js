@@ -128,19 +128,23 @@
       crumbEl.style.color = "";
       return;
     }
-    var sameType = state.tasks
-      .filter(function (t) {
-        return t.type === task.type &&
-          (t.status === "completed" || t.status === "paused" || t.status === "running");
-      });
-    var idx = -1;
-    for (var i = 0; i < sameType.length; i++) {
-      if (sameType[i].id === task.id) { idx = i; break; }
+    var label = (task.parameters || {}).event_label || task.name;
+    if (!label) {
+      // Old manifests: tasks persisted before names existed get the legacy
+      // "Color 3" tool + live ordinal form.
+      var sameType = state.tasks
+        .filter(function (t) {
+          return t.type === task.type &&
+            (t.status === "completed" || t.status === "paused" || t.status === "running");
+        });
+      var idx = -1;
+      for (var i = 0; i < sameType.length; i++) {
+        if (sameType[i].id === task.id) { idx = i; break; }
+      }
+      label = (TOOL_LABELS[task.type] || task.type) + " " + (idx >= 0 ? idx + 1 : 1);
     }
-    var label = TOOL_LABELS[task.type] || task.type;
-    var ordinal = idx >= 0 ? idx + 1 : 1;
     var participant = task.participant || "";
-    crumbEl.textContent = ": " + label + " " + ordinal + (participant ? " \u00b7 " + participant : "");
+    crumbEl.textContent = ": " + label + (participant ? " \u00b7 " + participant : "");
     crumbEl.style.color = taskTypeColor(task.type);
   }
 
@@ -162,7 +166,7 @@
         var badge = el("span", "rp-switcher-item-badge");
         badge.style.background = taskTypeColor(t.type);
         item.appendChild(badge);
-        var label = TOOL_LABELS[t.type] || t.type;
+        var label = (t.parameters || {}).event_label || t.name || TOOL_LABELS[t.type] || t.type;
         var primary = el("span", null, label + " \u00b7 " + (t.participant || ""));
         item.appendChild(primary);
         if (t.region) {
@@ -876,12 +880,18 @@
       var info = el("div", "task-card-info");
       var meta = el("span", "task-card-meta");
       var eventLabel = (task.parameters || {}).event_label;
-      if (eventLabel) {
-        meta.textContent = eventLabel;
+      var title = eventLabel || task.name;
+      if (title) {
+        meta.classList.add("task-card-meta--title");
+        meta.textContent = title;
+        info.appendChild(meta);
+        var sub = el("span", "task-card-meta");
+        sub.textContent = task.participant + " \u00b7 " + (task.region || "");
+        info.appendChild(sub);
       } else {
         meta.textContent = task.participant + " \u00b7 " + (task.region || "");
+        info.appendChild(meta);
       }
-      info.appendChild(meta);
 
       if (task.status === "running" || task.status === "paused") {
         var prog = el("div", "task-card-progress");
