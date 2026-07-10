@@ -172,6 +172,31 @@
       }
     }
 
+    // Live magic-wand scrub preview: the current flood contour, stroked white
+    // for a new region or in the modifier color for a shift/alt combine, with a
+    // running tolerance readout. Drawn only while the press-drag is active;
+    // release swaps it for a pending region or a boolean edit.
+    if (state.wandDragging && state.wandDragging.previewPoints) {
+      var wcol = drawStrokeColor(state.wandDragging.combine);
+      ctx.strokeStyle = wcol;
+      ctx.lineWidth = 1.5 * s;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      state.wandDragging.previewPoints.forEach(function (contour) {
+        if (contour.length < 3) return;
+        ctx.moveTo(contour[0][0], contour[0][1]);
+        for (var wi = 1; wi < contour.length; wi++) ctx.lineTo(contour[wi][0], contour[wi][1]);
+        ctx.closePath();
+      });
+      ctx.stroke();
+      ctx.fillStyle = hexToRgba(wcol, 0.12);
+      ctx.fill();
+      var wb = contoursBounds(state.wandDragging.previewPoints);
+      ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fillText("tol " + state.wandDragging.tolerance, wb.x + Math.round(4 * s), wb.y + Math.round(14 * s));
+    }
+
     // Pending (unsaved) region
     if (state.pendingRegion) {
       var p = state.pendingRegion;
