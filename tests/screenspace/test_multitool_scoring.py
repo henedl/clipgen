@@ -1432,8 +1432,8 @@ class TestRegionKeyMaskIdentity:
         import screenspace_tools
 
         rect = {"x": 0, "y": 0, "w": 40, "h": 40}
-        tri = dict(rect, mask_points=[[0, 0], [1, 0], [1, 1]])
-        tri2 = dict(rect, mask_points=[[0, 0], [0, 1], [1, 1]])
+        tri = dict(rect, mask_points=[[[0, 0], [1, 0], [1, 1]]])
+        tri2 = dict(rect, mask_points=[[[0, 0], [0, 1], [1, 1]]])
         keys = {screenspace_tools._region_key("crop", r) for r in (rect, tri, tri2)}
         assert len(keys) == 3
 
@@ -1443,7 +1443,7 @@ class TestRegionKeyMaskIdentity:
         frame = np.zeros((80, 80, 3), dtype=np.uint8)
         cache: dict = {}
         rect = {"x": 0, "y": 0, "w": 40, "h": 40}
-        tri = dict(rect, mask_points=[[0, 0], [1, 0], [1, 1]])
+        tri = dict(rect, mask_points=[[[0, 0], [1, 0], [1, 1]]])
         assert screenspace_tools._cached_mask(cache, frame, rect) is None
         m1 = screenspace_tools._cached_mask(cache, frame, tri)
         m2 = screenspace_tools._cached_mask(cache, frame, tri)

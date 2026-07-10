@@ -29,15 +29,28 @@
     taskTypeColor = SS.taskTypeColor,
     _overlayEligibleForActiveTool = SS._overlayEligibleForActiveTool;
 
-  // Build the canvas path for a shaped region's polygon: points are
-  // bbox-relative (0-1 of the region's own rect), r is the pixel bbox.
-  function traceRegionPolygonPath(ctx, points, r) {
+  // Build the canvas path for a shaped region's contours (one closed subpath
+  // per contour): points are bbox-relative (0-1 of the region's own rect),
+  // r is the pixel bbox. Contours are disjoint, so plain nonzero fill works.
+  function traceRegionPolygonPath(ctx, contours, r) {
     ctx.beginPath();
-    ctx.moveTo(r.x + points[0][0] * r.w, r.y + points[0][1] * r.h);
-    for (var i = 1; i < points.length; i++) {
-      ctx.lineTo(r.x + points[i][0] * r.w, r.y + points[i][1] * r.h);
-    }
-    ctx.closePath();
+    contours.forEach(function (points) {
+      if (points.length < 3) return;
+      ctx.moveTo(r.x + points[0][0] * r.w, r.y + points[0][1] * r.h);
+      for (var i = 1; i < points.length; i++) {
+        ctx.lineTo(r.x + points[i][0] * r.w, r.y + points[i][1] * r.h);
+      }
+      ctx.closePath();
+    });
+  }
+
+  // In-progress draw stroke: white for a plain new-region draw, green/red/
+  // amber while a shift-add / alt-subtract / shift+alt-intersect edit of the
+  // active region is being drawn (Photoshop selection-modifier semantics).
+  var COMBINE_STROKES = { add: "#34d399", subtract: "#f87171", intersect: "#fbbf24" };
+
+  function drawStrokeColor(combine) {
+    return COMBINE_STROKES[combine] || "#ffffff";
   }
 
   function renderOverlay() {
@@ -65,7 +78,7 @@
         ctx.strokeStyle = color;
         ctx.lineWidth = (isActive ? 2 : 1) * s;
         ctx.setLineDash(isActive ? [] : [6 * s, 3 * s]);
-        var shaped = region.points && region.points.length >= 3;
+        var shaped = region.points && region.points.length > 0;
         if (shaped) {
           // Shaped region: stroke/fill the polygon (points are bbox-relative);
           // label bar and resize handle keep rendering at the bbox below.
@@ -126,7 +139,7 @@
     // Freehand lasso in progress: solid trail + dashed closing segment.
     if (state.drawingLasso && state.drawingLasso.points.length > 1) {
       var lp = state.drawingLasso.points;
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = drawStrokeColor(state.drawingLasso.combine);
       ctx.lineWidth = 1.5 * s;
       ctx.setLineDash([]);
       ctx.beginPath();
@@ -144,7 +157,7 @@
     // Drawing in progress
     if (state.drawingRegion) {
       var d = state.drawingRegion;
-      ctx.strokeStyle = "#ffffff";
+      ctx.strokeStyle = drawStrokeColor(state.drawingRegion.combine);
       ctx.lineWidth = 1.5 * s;
       ctx.setLineDash([4 * s, 3 * s]);
       ctx.strokeRect(d.startX, d.startY, d.endX - d.startX, d.endY - d.startY);
@@ -165,13 +178,16 @@
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 1.5 * s;
       ctx.setLineDash([]);
-      if (p.points && p.points.length >= 3) {
-        // Pending shaped region: points are canvas-pixel absolute (not yet
+      if (p.points && p.points.length > 0) {
+        // Pending shaped region: contours are canvas-pixel absolute (not yet
         // normalized by the server).
         ctx.beginPath();
-        ctx.moveTo(p.points[0][0], p.points[0][1]);
-        for (var pi = 1; pi < p.points.length; pi++) ctx.lineTo(p.points[pi][0], p.points[pi][1]);
-        ctx.closePath();
+        p.points.forEach(function (contour) {
+          if (contour.length < 3) return;
+          ctx.moveTo(contour[0][0], contour[0][1]);
+          for (var pi = 1; pi < contour.length; pi++) ctx.lineTo(contour[pi][0], contour[pi][1]);
+          ctx.closePath();
+        });
         ctx.stroke();
         ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
         ctx.fill();

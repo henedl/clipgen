@@ -152,7 +152,7 @@ def test_clip_region_pixels_dims_outside_shaped_mask(
     """Shaped regions dim pixels outside the polygon; rects are untouched."""
     rect = {"x": 60, "y": 40, "w": 120, "h": 80}
     plain = screenspace_preview._clip_region_pixels(synthetic_frame, rect)
-    shaped = dict(rect, mask_points=[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])
+    shaped = dict(rect, mask_points=[[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]]])
     dimmed = screenspace_preview._clip_region_pixels(synthetic_frame, shaped)
     assert plain is not None and dimmed is not None
     # Inside the left-half polygon: identical. Outside: quartered.
@@ -167,7 +167,7 @@ def test_overlay_change_mask_layer_suppressed_outside_polygon(
 ) -> None:
     """The change overlay's binary mask is ANDed with the region polygon."""
     rect = {"x": 60, "y": 40, "w": 120, "h": 80}
-    shaped = dict(rect, mask_points=[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]])
+    shaped = dict(rect, mask_points=[[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]]])
     full = screenspace_preview.build_overlay_layer(
         synthetic_frame, prev_frame, rect, "change", "mask", {}
     )

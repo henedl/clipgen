@@ -618,9 +618,9 @@ def _make_pin_ocr_reader(
                 region_coords.get("y"),
                 region_coords.get("w"),
                 region_coords.get("h"),
-                # Shaped regions with the same bbox but different polygons
+                # Shaped regions with the same bbox but different contours
                 # must not share cached readings.
-                tuple(map(tuple, region_coords.get("mask_points") or ())),
+                screenspace.mask_points_key(region_coords.get("mask_points")),
             ),
             tool_type,
             langs,
@@ -1098,19 +1098,25 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 "w": int(round(rw * frame_w)),
                 "h": int(round(rh * frame_h)),
             }
-            # Optional shaped-region polygon: "u1,v1;u2,v2;..." bbox-relative
-            # fractions. Malformed values are ignored (preview falls back to
-            # the plain rect) rather than failing the whole preview.
+            # Optional shaped-region contours: "u1,v1;u2,v2;..." bbox-relative
+            # fractions, multiple contours joined with "|". Malformed values
+            # are ignored (preview falls back to the plain rect) rather than
+            # failing the whole preview.
             mask_str = request.args.get("mask", "").strip()
             if mask_str:
                 try:
                     mask_points = [
-                        [float(u), float(v)]
-                        for u, v in (pair.split(",") for pair in mask_str.split(";"))
+                        [
+                            [float(u), float(v)]
+                            for u, v in (pair.split(",") for pair in part.split(";"))
+                        ]
+                        for part in mask_str.split("|")
+                        if part
                     ]
                 except ValueError:
                     mask_points = []
-                if len(mask_points) >= 3:
+                mask_points = [c for c in mask_points if len(c) >= 3]
+                if mask_points:
                     region_coords["mask_points"] = mask_points
 
     # Prev frame for tools that consume a temporal pair
@@ -1376,19 +1382,20 @@ def _normalize_region(
     h: float,
     frame_w: int,
     frame_h: int,
-    points: list[list[float]] | None = None,
+    points: list[list[list[float]]] | None = None,
     shape: str | None = None,
 ) -> dict[str, Any]:
     """Convert pixel coordinates to normalized 0-1 fractions.
 
-    For shaped regions, *points* are canvas-pixel polygon vertices; the bbox is
-    recomputed from them (the caller's x/y/w/h are ignored) so bbox and points
-    can never disagree, and the stored ``points`` are bbox-relative 0-1
-    fractions so move/resize only ever touch the bbox.
+    For shaped regions, *points* is a list of polygon contours whose vertices
+    are canvas-pixel ``[x, y]`` pairs; the bbox is recomputed from them (the
+    caller's x/y/w/h are ignored) so bbox and points can never disagree, and
+    the stored ``points`` contours are bbox-relative 0-1 fractions so
+    move/resize only ever touch the bbox.
     """
     if points:
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
+        xs = [p[0] for contour in points for p in contour]
+        ys = [p[1] for contour in points for p in contour]
         x, y = min(xs), min(ys)
         w, h = max(xs) - x, max(ys) - y
     region: dict[str, Any] = {
@@ -1401,14 +1408,18 @@ def _normalize_region(
     }
     if points:
         region["points"] = [
-            [round((px - x) / w, 4), round((py - y) / h, 4)] for px, py in points
+            [[round((px - x) / w, 4), round((py - y) / h, 4)] for px, py in contour]
+            for contour in points
         ]
         region["shape"] = shape
     return region
 
 
-_REGION_SHAPES = ("lasso", "wand")
-_REGION_MAX_POINTS = 200
+# "combo" marks shapes produced by boolean region edits (shift-add /
+# alt-subtract / merge) rather than a single drawing tool.
+_REGION_SHAPES = ("lasso", "wand", "combo")
+_REGION_MAX_POINTS = 400  # total vertices across all contours
+_REGION_MAX_CONTOURS = 32
 _REGION_MIN_BBOX_PX = 5
 _REGION_MIN_AREA_PX = 64
 
@@ -1418,34 +1429,55 @@ def _validate_region_points(
 ) -> str | None:
     """Validate a shaped-region create payload; return an error string or None.
 
-    Points arrive as canvas-pixel ``[x, y]`` pairs. The bbox and shoelace-area
-    guards reject polygons too small to rasterize meaningfully (the mask
-    counterpart of the client's >5x5 rect minimum — rects keep their
-    client-side check, so this is the only min-area gate in the system).
+    Points arrive as a list of contours, each a list of canvas-pixel ``[x, y]``
+    pairs. The bbox and shoelace-area guards reject shapes too small to
+    rasterize meaningfully (the mask counterpart of the client's >5x5 rect
+    minimum — rects keep their client-side check, so this is the only min-area
+    gate in the system). The area guard sums per-contour areas: contours are
+    disjoint by construction (client-side mask tracing), so the sum is the
+    shape's true area.
     """
     if shape not in _REGION_SHAPES:
         return f"'shape' must be one of {', '.join(_REGION_SHAPES)}"
-    if not isinstance(points, list) or not (3 <= len(points) <= _REGION_MAX_POINTS):
-        return f"'points' must be a list of 3-{_REGION_MAX_POINTS} [x, y] pairs"
-    for p in points:
-        if (
-            not isinstance(p, (list, tuple))
-            or len(p) != 2
-            or not all(isinstance(v, (int, float)) for v in p)
-        ):
-            return "'points' must be a list of 3-200 [x, y] number pairs"
-    xs = [min(max(float(p[0]), 0.0), float(canvas_w)) for p in points]
-    ys = [min(max(float(p[1]), 0.0), float(canvas_h)) for p in points]
+    contours_err = (
+        f"'points' must be a list of 1-{_REGION_MAX_CONTOURS} contours, "
+        f"each a list of 3+ [x, y] number pairs ({_REGION_MAX_POINTS} points total)"
+    )
+    if not isinstance(points, list) or not (1 <= len(points) <= _REGION_MAX_CONTOURS):
+        return contours_err
+    total = 0
+    for contour in points:
+        if not isinstance(contour, list) or len(contour) < 3:
+            return contours_err
+        total += len(contour)
+        for p in contour:
+            if (
+                not isinstance(p, (list, tuple))
+                or len(p) != 2
+                or not all(isinstance(v, (int, float)) for v in p)
+            ):
+                return contours_err
+    if total > _REGION_MAX_POINTS:
+        return contours_err
+    all_xs: list[float] = []
+    all_ys: list[float] = []
+    area = 0.0
+    for contour in points:
+        xs = [min(max(float(p[0]), 0.0), float(canvas_w)) for p in contour]
+        ys = [min(max(float(p[1]), 0.0), float(canvas_h)) for p in contour]
+        all_xs.extend(xs)
+        all_ys.extend(ys)
+        contour_area = 0.0
+        for i in range(len(xs)):
+            j = (i + 1) % len(xs)
+            contour_area += xs[i] * ys[j] - xs[j] * ys[i]
+        area += abs(contour_area) / 2.0
     if (
-        max(xs) - min(xs) <= _REGION_MIN_BBOX_PX
-        or max(ys) - min(ys) <= _REGION_MIN_BBOX_PX
+        max(all_xs) - min(all_xs) <= _REGION_MIN_BBOX_PX
+        or max(all_ys) - min(all_ys) <= _REGION_MIN_BBOX_PX
     ):
         return "Region shape is too small"
-    area = 0.0
-    for i in range(len(xs)):
-        j = (i + 1) % len(xs)
-        area += xs[i] * ys[j] - xs[j] * ys[i]
-    if abs(area) / 2.0 < _REGION_MIN_AREA_PX:
+    if area < _REGION_MIN_AREA_PX:
         return "Region shape is too small"
     return None
 
@@ -1529,10 +1561,13 @@ def api_regions_create() -> FlaskResponse:
             return err(error)
         points = [
             [
-                min(max(float(p[0]), 0.0), float(canvas_w)),
-                min(max(float(p[1]), 0.0), float(canvas_h)),
+                [
+                    min(max(float(p[0]), 0.0), float(canvas_w)),
+                    min(max(float(p[1]), 0.0), float(canvas_h)),
+                ]
+                for p in contour
             ]
-            for p in points
+            for contour in points
         ]
 
     region = _normalize_region(

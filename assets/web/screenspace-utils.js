@@ -254,6 +254,144 @@ function floodFillMask(data, w, h, sx, sy, tolerance) {
   return mask;
 }
 
+// Bounds / area / total-vertex-count over a LIST of contours ([[x, y], …][]).
+// Saved shaped regions store their points this way (one list per contour) so
+// multi-part shapes — merge and shift-add results — stay a single region.
+function contoursBounds(contours) {
+  var all = [];
+  for (var i = 0; i < contours.length; i++) all = all.concat(contours[i]);
+  return polygonBounds(all);
+}
+
+function contoursArea(contours) {
+  var area = 0;
+  for (var i = 0; i < contours.length; i++) area += polygonArea(contours[i]);
+  return area;
+}
+
+function contoursTotalPoints(contours) {
+  var n = 0;
+  for (var i = 0; i < contours.length; i++) n += contours[i].length;
+  return n;
+}
+
+// Rasterize absolute canvas-pixel shapes into a Uint8Array (1 = filled) of
+// length w*h via an offscreen canvas. Each shape is {rect: {x,y,w,h}} or
+// {contours: [[x, y], …][]}. Contours are filled one path at a time (union
+// semantics, mirroring the per-contour cv2.fillPoly in Python).
+function rasterizeShapesMask(shapes, w, h) {
+  var cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  var ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff";
+  shapes.forEach(function (shape) {
+    if (shape.contours) {
+      shape.contours.forEach(function (c) {
+        if (c.length < 3) return;
+        ctx.beginPath();
+        ctx.moveTo(c[0][0], c[0][1]);
+        for (var i = 1; i < c.length; i++) ctx.lineTo(c[i][0], c[i][1]);
+        ctx.closePath();
+        ctx.fill();
+      });
+    } else if (shape.rect) {
+      ctx.fillRect(shape.rect.x, shape.rect.y, shape.rect.w, shape.rect.h);
+    }
+  });
+  var data = ctx.getImageData(0, 0, w, h).data;
+  var mask = new Uint8Array(w * h);
+  // Canvas fills antialias — threshold the alpha channel at half coverage.
+  for (var p = 0, a = 3; p < mask.length; p++, a += 4) {
+    if (data[a] >= 128) mask[p] = 1;
+  }
+  return mask;
+}
+
+// Boolean-combine two same-sized masks in place on `base` (Photoshop
+// selection semantics: shift = add, alt = subtract, shift+alt = intersect).
+function combineShapeMasks(base, other, op) {
+  for (var i = 0; i < base.length; i++) {
+    if (op === "add") {
+      if (other[i]) base[i] = 1;
+    } else if (op === "subtract") {
+      if (other[i]) base[i] = 0;
+    } else if (op === "intersect") {
+      if (!other[i]) base[i] = 0;
+    }
+  }
+  return base;
+}
+
+// Extract the outer contour of every connected component in a binary mask
+// (4-connected labeling + Moore trace per component). Components whose
+// polygon area falls below minArea are dropped as rasterization specks.
+// Interior holes stay ignored — same precedent as traceMaskContour.
+function maskToContours(mask, w, h, minArea) {
+  var visited = new Uint8Array(w * h);
+  var contours = [];
+  var comp = new Uint8Array(w * h);
+  for (var start = 0; start < mask.length; start++) {
+    if (!mask[start] || visited[start]) continue;
+    // Flood this component into `comp` (cleared per component).
+    comp.fill(0);
+    var stack = [start];
+    visited[start] = 1;
+    while (stack.length) {
+      var idx = stack.pop();
+      comp[idx] = 1;
+      var x = idx % w, y = (idx / w) | 0;
+      if (x > 0 && mask[idx - 1] && !visited[idx - 1]) { visited[idx - 1] = 1; stack.push(idx - 1); }
+      if (x < w - 1 && mask[idx + 1] && !visited[idx + 1]) { visited[idx + 1] = 1; stack.push(idx + 1); }
+      if (y > 0 && mask[idx - w] && !visited[idx - w]) { visited[idx - w] = 1; stack.push(idx - w); }
+      if (y < h - 1 && mask[idx + w] && !visited[idx + w]) { visited[idx + w] = 1; stack.push(idx + w); }
+    }
+    var contour = traceMaskContour(comp, w, h);
+    if (contour.length >= 3 && polygonArea(contour) >= (minArea || 0)) {
+      contours.push(contour);
+    }
+    if (contours.length >= 32) break; // matches the server's contour cap
+  }
+  return contours;
+}
+
+// Simplify each contour with Douglas-Peucker, growing epsilon until the
+// total vertex count fits maxTotal (server cap is 400). Contours that
+// degenerate below 3 points are dropped.
+function simplifyContours(contours, epsilon, maxTotal) {
+  var out = contours.map(function (c) { return simplifyPolygon(c, epsilon); });
+  var eps = epsilon;
+  while (contoursTotalPoints(out) > maxTotal) {
+    eps *= 1.5;
+    out = out.map(function (c) { return simplifyPolygon(c, eps); });
+  }
+  return out.filter(function (c) { return c.length >= 3; });
+}
+
+// If the contour list is a single axis-aligned quad (within `tol` px), return
+// its {x,y,w,h} rect so boolean edits that end rectangular save as plain
+// rects. Collinear vertices are collapsed first (a traced rect edge can keep
+// its mid-edge start point). Returns null for genuinely shaped results.
+function contoursToAxisRect(contours, tol) {
+  if (contours.length !== 1) return null;
+  var pts = contours[0];
+  // Collapse collinear runs (cross product ≈ 0 with both neighbors).
+  var kept = [];
+  for (var i = 0; i < pts.length; i++) {
+    var prev = pts[(i + pts.length - 1) % pts.length];
+    var next = pts[(i + 1) % pts.length];
+    var cross = (pts[i][0] - prev[0]) * (next[1] - prev[1]) - (pts[i][1] - prev[1]) * (next[0] - prev[0]);
+    if (Math.abs(cross) > tol) kept.push(pts[i]);
+  }
+  if (kept.length !== 4) return null;
+  for (var k = 0; k < 4; k++) {
+    var a = kept[k], b = kept[(k + 1) % 4];
+    if (Math.abs(a[0] - b[0]) > tol && Math.abs(a[1] - b[1]) > tol) return null;
+  }
+  var bounds = polygonBounds(kept);
+  return { x: Math.round(bounds.x), y: Math.round(bounds.y), w: Math.round(bounds.w), h: Math.round(bounds.h) };
+}
+
 // Moore-neighbor boundary trace of a binary mask (Uint8Array, 1 = filled).
 // Returns the outer contour as [x, y] pairs (interior holes are ignored —
 // the polygon fill closes them, which is acceptable for region masks).

@@ -292,27 +292,34 @@
     return !!(ref && ref.source !== "full_frame");
   }
 
-  // Bbox-relative polygon of the previewed region as "u1,v1;u2,v2;…" for the
-  // preview endpoint's optional mask= param, or null for rect regions. A
-  // pending shaped draw carries canvas-pixel absolute points — convert them
-  // against its own bbox; saved regions already store bbox-relative points.
+  // Bbox-relative contours of the previewed region as "u1,v1;u2,v2;…" (one
+  // segment per contour, joined with "|") for the preview endpoint's optional
+  // mask= param, or null for rect regions. A pending shaped draw carries
+  // canvas-pixel absolute contours — convert them against its own bbox; saved
+  // regions already store bbox-relative contours.
   function _regionMaskString() {
-    var points = null;
+    var contours = null;
     if (state.pendingRegion) {
       var p = state.pendingRegion;
-      if (p.points && p.points.length >= 3 && p.w > 0 && p.h > 0) {
-        points = p.points.map(function (pt) {
-          return [(pt[0] - p.x) / p.w, (pt[1] - p.y) / p.h];
+      if (p.points && p.points.length > 0 && p.w > 0 && p.h > 0) {
+        contours = p.points.map(function (contour) {
+          return contour.map(function (pt) {
+            return [(pt[0] - p.x) / p.w, (pt[1] - p.y) / p.h];
+          });
         });
       }
     } else {
       var data = _regionObjectForRef(_previewRegionRef());
-      if (data && data.points && data.points.length >= 3) points = data.points;
+      if (data && data.points && data.points.length > 0) contours = data.points;
     }
-    if (!points) return null;
-    return points
-      .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
-      .join(";");
+    if (!contours) return null;
+    return contours
+      .map(function (contour) {
+        return contour
+          .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
+          .join(";");
+      })
+      .join("|");
   }
 
   // True when the previewed region is shaped but the active tool can only
@@ -322,10 +329,10 @@
       return false;
     }
     if (state.pendingRegion) {
-      return !!(state.pendingRegion.points && state.pendingRegion.points.length >= 3);
+      return !!(state.pendingRegion.points && state.pendingRegion.points.length > 0);
     }
     var data = _regionObjectForRef(_previewRegionRef());
-    return !!(data && data.points && data.points.length >= 3);
+    return !!(data && data.points && data.points.length > 0);
   }
 
   // Resolve a region ref to its stored {x,y,w,h} object (fractions of the

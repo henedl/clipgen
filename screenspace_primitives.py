@@ -173,22 +173,37 @@ def extract_region(frame: np.ndarray, region: dict[str, int]) -> np.ndarray:
 
 
 def region_mask_for(region: dict[str, Any], h: int, w: int) -> np.ndarray | None:
-    """Rasterize a shaped region's polygon to a uint8 0/255 mask of shape (h, w).
+    """Rasterize a shaped region's contours to a uint8 0/255 mask of shape (h, w).
 
-    ``region["mask_points"]`` holds bbox-relative vertices (0-1 fractions of the
-    region's own bounding rect), so the mask can be rasterized directly at
-    whatever size the cropped pixels actually arrive at — after ffmpeg's
-    ``cv_scale``/``max_dim`` rescales or a tool's internal downscale — with no
-    resize chain. Returns ``None`` for rectangular regions (no ``mask_points``),
+    ``region["mask_points"]`` holds a list of polygon contours whose vertices
+    are bbox-relative (0-1 fractions of the region's own bounding rect), so the
+    mask can be rasterized directly at whatever size the cropped pixels actually
+    arrive at — after ffmpeg's ``cv_scale``/``max_dim`` rescales or a tool's
+    internal downscale — with no resize chain. Contours are filled one at a time
+    (union semantics — a multi-part region masks every part; overlaps never
+    XOR out). Returns ``None`` for rectangular regions (no ``mask_points``),
     letting callers keep their unmasked fast path.
     """
-    points = region.get("mask_points")
-    if not points or h <= 0 or w <= 0:
+    contours = region.get("mask_points")
+    if not contours or h <= 0 or w <= 0:
         return None
-    poly = np.array([[u * w, v * h] for u, v in points], dtype=np.float64)
     mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillPoly(mask, [np.round(poly).astype(np.int32)], 255)
+    for contour in contours:
+        if len(contour) < 3:
+            continue
+        poly = np.array([[u * w, v * h] for u, v in contour], dtype=np.float64)
+        cv2.fillPoly(mask, [np.round(poly).astype(np.int32)], 255)
     return mask
+
+
+def mask_points_key(contours: Any) -> tuple[Any, ...]:
+    """Hashable key for a region's ``mask_points`` contour list (or None/[]).
+
+    Cache keys (per-frame memos, pin-OCR readings) must distinguish same-bbox/
+    different-shape regions; nested lists aren't hashable, so every keyed cache
+    routes through this helper instead of hand-rolled ``tuple(map(tuple, …))``.
+    """
+    return tuple(tuple(tuple(p) for p in contour) for contour in contours or ())
 
 
 def filter_matches_by_region_mask(
@@ -238,13 +253,19 @@ def region_masker(
     return _mask_for
 
 
-def point_in_mask_points(u: float, v: float, points: list[Any]) -> bool:
-    """Ray-cast point-in-polygon test in bbox-relative (0-1) space.
+def point_in_mask_points(u: float, v: float, contours: list[Any] | None) -> bool:
+    """Test a point against a shaped region's contour list in bbox-relative space.
 
     Scale-free companion to :func:`region_mask_for` for consumers that test
     individual centers (OCR readings, template match boxes) rather than
-    rasterizing a full mask. The polygon is implicitly closed.
+    rasterizing a full mask. True when the point falls inside ANY contour
+    (union semantics, matching the per-contour fill in ``region_mask_for``).
     """
+    return any(_point_in_polygon(u, v, contour) for contour in contours or ())
+
+
+def _point_in_polygon(u: float, v: float, points: list[Any]) -> bool:
+    """Ray-cast point-in-polygon test for one implicitly-closed contour."""
     n = len(points)
     if n < 3:
         return False
@@ -282,7 +303,7 @@ def denormalize_region(
         "w": int(round(region["w"] * target_w)),
         "h": int(round(region["h"] * target_h)),
     }
-    # Shaped regions: polygon vertices are bbox-relative (0-1 of the region's
+    # Shaped regions: contour vertices are bbox-relative (0-1 of the region's
     # own rect), so they pass through denormalization verbatim. Copying them
     # here threads the mask into every region_coords consumer (task snapshots,
     # multitool steps, workflows, calibration) without further plumbing.

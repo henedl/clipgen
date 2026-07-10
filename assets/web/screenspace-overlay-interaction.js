@@ -124,18 +124,33 @@
     return null;
   }
 
+  // A saved region's shape in absolute canvas pixels, for mask rasterization:
+  // {contours: …} for shaped regions (stored contours are bbox-relative),
+  // {rect: …} for plain rectangles.
+  function regionShapeAbs(region) {
+    var px = regionToPixels(region);
+    if (region.points && region.points.length > 0) {
+      return {
+        contours: region.points.map(function (contour) {
+          return contour.map(function (p) {
+            return [px.x + p[0] * px.w, px.y + p[1] * px.h];
+          });
+        }),
+      };
+    }
+    return { rect: px };
+  }
+
   function saveRegionUpdate(name) {
     var region = state.regions[name];
     if (!region) return;
     var canvas = qs("#overlayCanvas");
     var px = regionToPixels(region);
     var body = { name: name, x: px.x, y: px.y, w: px.w, h: px.h, canvas_width: canvas.width, canvas_height: canvas.height };
-    if (region.points && region.points.length >= 3) {
-      // Stored points are bbox-relative; the API takes canvas-pixel absolutes
-      // (and recomputes the bbox from them server-side).
-      body.points = region.points.map(function (p) {
-        return [px.x + p[0] * px.w, px.y + p[1] * px.h];
-      });
+    if (region.points && region.points.length > 0) {
+      // Stored contours are bbox-relative; the API takes canvas-pixel
+      // absolutes (and recomputes the bbox from them server-side).
+      body.points = regionShapeAbs(region).contours;
       body.shape = region.shape || "lasso";
     }
     if (region.description) body.description = region.description;
@@ -150,6 +165,64 @@
         }
       })
       .catch(function () { showToast("Failed to update region"); });
+  }
+
+  // Overwrite an existing region with a boolean-edit / merge result: absolute
+  // canvas-pixel contours, saved as shape "combo" — or as a plain rect when
+  // the result collapses to a single axis-aligned box (e.g. merging two
+  // overlapping rectangles), keeping the region on the unmasked fast path.
+  function saveRegionShape(name, contours, successToast, onDone) {
+    var canvas = qs("#overlayCanvas");
+    var region = state.regions[name] || {};
+    var rect = contoursToAxisRect(contours, 2);
+    var body = rect
+      ? { name: name, x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+      : (function () {
+          var b = contoursBounds(contours);
+          return { name: name, x: b.x, y: b.y, w: b.w, h: b.h, points: contours, shape: "combo" };
+        })();
+    body.canvas_width = canvas.width;
+    body.canvas_height = canvas.height;
+    if (region.description) body.description = region.description;
+    apiPost("api/regions", body)
+      .then(function (data) {
+        if (!data.ok) {
+          showToast(data.error || "Failed to update region");
+          return;
+        }
+        var saved = data.region;
+        if (region.description) saved.description = region.description;
+        state.regions[name] = saved;
+        renderOverlay();
+        refreshModelView({ debounce: true });
+        refreshCalibration({ debounce: true });
+        if (successToast) showToast(successToast);
+        if (onDone) onDone();
+      })
+      .catch(function () { showToast("Failed to update region"); });
+  }
+
+  // Boolean-edit the active region with a freshly drawn shape (shift = add,
+  // alt = subtract, shift+alt = intersect — the selection modifiers users
+  // know from Photoshop). `shape` is {rect} or {contours} in canvas pixels.
+  function applyRegionCombine(op, shape) {
+    var name = state.activeRegion;
+    var region = name ? state.regions[name] : null;
+    var overlay = qs("#overlayCanvas");
+    if (!region || !overlay.width || !overlay.height) return;
+    var w = overlay.width, h = overlay.height;
+    var mask = rasterizeShapesMask([regionShapeAbs(region)], w, h);
+    combineShapeMasks(mask, rasterizeShapesMask([shape], w, h), op);
+    var displayW = overlay.getBoundingClientRect().width || w;
+    var s = w / displayW;
+    // Drop <8px² specks, then simplify toward the server's 400-vertex cap.
+    var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * s, 400);
+    var verb = { add: "Added to", subtract: "Subtracted from", intersect: "Intersected" }[op];
+    if (!contours.length || contoursArea(contours) < 64) {
+      showToast("Nothing would remain of '" + name + "' — not applied");
+      return;
+    }
+    saveRegionShape(name, contours, verb + " region '" + name + "'");
   }
 
   // ---- Overlay interaction state machine ----
@@ -175,6 +248,7 @@
       pos.y = clamp(pos.y, 0, overlay.height);
       state.drawingRegion.endX = pos.x;
       state.drawingRegion.endY = pos.y;
+      var combine = state.drawingRegion.combine;
       var r = normalizeRect(
         state.drawingRegion.startX, state.drawingRegion.startY,
         state.drawingRegion.endX, state.drawingRegion.endY
@@ -182,7 +256,8 @@
       state.drawingRegion = null;
       _cachedOverlayRect = null;
       if (r.w > 5 && r.h > 5) {
-        state.pendingRegion = r;
+        if (combine) applyRegionCombine(combine, { rect: r });
+        else state.pendingRegion = r;
       } else if (r.w > 0 || r.h > 0) {
         // Drop the draw silently for click-without-drag (zero size), but
         // surface a hint when the user actually dragged a too-small box —
@@ -208,22 +283,23 @@
       }
     }
 
-    // Build a pending shaped region from simplified polygon points, or null
+    // Build a pending shaped region from a simplified contour list, or null
     // when the shape fails the size guards (mirrors finishDrawingRegion's
     // >5x5 minimum, plus a shoelace-area floor so a scribble along a line
     // can't produce a degenerate mask). The bbox is the CONTAINING integer
     // box (floor/ceil, not round) so normalizing the absolute points against
     // it — the preview mask= param, the modal readout — always lands in
     // [0, 1]; the server recomputes the bbox from the points on save anyway.
-    function pendingShapedRegion(points, shape) {
-      if (points.length < 3) return null;
-      var bounds = polygonBounds(points);
+    function pendingShapedRegion(contours, shape) {
+      contours = contours.filter(function (c) { return c.length >= 3; });
+      if (!contours.length) return null;
+      var bounds = contoursBounds(contours);
       var x = Math.floor(bounds.x);
       var y = Math.floor(bounds.y);
       var w = Math.ceil(bounds.x + bounds.w) - x;
       var h = Math.ceil(bounds.y + bounds.h) - y;
-      if (w <= 5 || h <= 5 || polygonArea(points) < 64) return null;
-      return { x: x, y: y, w: w, h: h, points: points, shape: shape };
+      if (w <= 5 || h <= 5 || contoursArea(contours) < 64) return null;
+      return { x: x, y: y, w: w, h: h, points: contours, shape: shape };
     }
 
     // Simplify a raw point trail toward <=100 vertices with growing epsilon.
@@ -237,15 +313,28 @@
       return simplified;
     }
 
-    // Close and simplify the freehand trail into a pending polygon region.
+    // Close and simplify the freehand trail into a pending polygon region —
+    // or, for a shift/alt combine draw, boolean-apply it to the active region.
     function finishDrawingLasso() {
       if (!state.drawingLasso) return false;
       var pts = state.drawingLasso.points;
+      var combine = state.drawingLasso.combine;
       state.drawingLasso = null;
       _cachedOverlayRect = null;
       var displayW = overlay.getBoundingClientRect().width || overlay.width;
       var s = overlay.width / displayW;
-      var pending = pendingShapedRegion(simplifyForRegion(pts, s), "lasso");
+      var simplified = simplifyForRegion(pts, s);
+      if (combine) {
+        if (simplified.length >= 3 && polygonArea(simplified) >= 8) {
+          applyRegionCombine(combine, { contours: [simplified] });
+        } else if (pts.length > 2) {
+          showToast("Shape too small — draw a larger area");
+        }
+        flushOverlayRender();
+        updateRegionButtons();
+        return true;
+      }
+      var pending = pendingShapedRegion([simplified], "lasso");
       if (pending) {
         state.pendingRegion = pending;
       } else if (pts.length > 2) {
@@ -257,18 +346,29 @@
     }
 
     // Magic wand: flood-fill the frame from the clicked pixel (RGB tolerance),
-    // trace the filled area's outer contour, and simplify it into a polygon.
-    // Reads #frameCanvas pixels like the pipette — the frame and overlay
-    // canvases share dimensions.
-    function performWandSelection(pos, s) {
+    // trace the filled area's outer contour, and simplify it into a polygon —
+    // pending as a new region, or boolean-applied to the active region for a
+    // shift/alt combine click. Reads #frameCanvas pixels like the pipette —
+    // the frame and overlay canvases share dimensions.
+    function performWandSelection(pos, s, combine) {
       var frameCanvas = qs("#frameCanvas");
       if (!frameCanvas || !frameCanvas.width) return;
       var w = frameCanvas.width, h = frameCanvas.height;
       var data = frameCanvas.getContext("2d").getImageData(0, 0, w, h).data;
       var mask = floodFillMask(data, w, h, pos.x, pos.y, state.wandTolerance);
       if (!mask) return;
-      var contour = traceMaskContour(mask, w, h);
-      var pending = pendingShapedRegion(simplifyForRegion(contour, s), "wand");
+      var simplified = simplifyForRegion(traceMaskContour(mask, w, h), s);
+      if (combine) {
+        if (simplified.length >= 3 && polygonArea(simplified) >= 8) {
+          applyRegionCombine(combine, { contours: [simplified] });
+        } else {
+          showToast("No contiguous area found — adjust tolerance and try again");
+        }
+        flushOverlayRender();
+        updateRegionButtons();
+        return;
+      }
+      var pending = pendingShapedRegion([simplified], "wand");
       if (!pending) {
         showToast("No contiguous area found — adjust tolerance and try again");
         return;
@@ -319,6 +419,27 @@
       if (!displayW || !overlay.width) return;
       var s = overlay.width / displayW;
       var ctx = overlay.getContext("2d");
+      // Shift/alt with a selected region: boolean-edit its shape instead of
+      // dragging or drawing a new region (shift = add, alt = subtract,
+      // shift+alt = intersect). Bypasses the template/label/handle hit tests
+      // so the edit can start on top of the region itself, and keeps the
+      // region active — this only applies while a region is selected.
+      if ((e.shiftKey || e.altKey) && state.activeRegion && state.regions[state.activeRegion]) {
+        var combineOp = e.shiftKey && e.altKey ? "intersect" : (e.altKey ? "subtract" : "add");
+        state.pendingRegion = null;
+        if (state.regionTool === "wand") {
+          _cachedOverlayRect = null;
+          performWandSelection(pos, s, combineOp);
+          return;
+        }
+        if (state.regionTool === "lasso") {
+          state.drawingLasso = { points: [[pos.x, pos.y]], combine: combineOp };
+        } else {
+          state.drawingRegion = { startX: pos.x, startY: pos.y, endX: pos.x, endY: pos.y, combine: combineOp };
+        }
+        updateRegionButtons();
+        return;
+      }
       var tHit = templateOverlayBounds();
       if (tHit
           && pos.x >= tHit.x && pos.x <= tHit.x + tHit.w
@@ -410,6 +531,15 @@
       if (state.drawingRegion) {
         state.drawingRegion.endX = pos.x;
         state.drawingRegion.endY = pos.y;
+        scheduleOverlayRender();
+        return;
+      }
+      // While a combine modifier is held over a selected region, the next
+      // mousedown boolean-edits it — advertise draw mode instead of the
+      // move/resize affordances ("copy" shows a + cursor for shift-add).
+      if ((e.shiftKey || e.altKey) && state.activeRegion && state.regions[state.activeRegion]) {
+        state.hoveredRegion = null;
+        overlay.style.cursor = e.shiftKey && !e.altKey ? "copy" : "crosshair";
         scheduleOverlayRender();
         return;
       }
@@ -551,6 +681,8 @@
       updateRegionButtons();
     });
 
+    qs("#mergeRegionsBtn").addEventListener("click", mergeSelectedRegions);
+
     qs("#deleteRegionBtn").addEventListener("click", function () {
       if (!state.activeRegion) return;
       var name = state.activeRegion;
@@ -666,8 +798,8 @@
       var r = state.pendingRegion;
       var canvas = qs("#overlayCanvas");
       var body = { name: name, x: r.x, y: r.y, w: r.w, h: r.h, canvas_width: canvas.width, canvas_height: canvas.height };
-      if (r.points && r.points.length >= 3) {
-        body.points = r.points; // already canvas-pixel absolute for a pending draw
+      if (r.points && r.points.length > 0) {
+        body.points = r.points; // contours already canvas-pixel absolute for a pending draw
         body.shape = r.shape;
       }
       if (desc) body.description = desc;
@@ -716,8 +848,8 @@
     qs("#regionNameInput").value = "";
     qs("#regionDescInput").value = "";
     var coordsText = r ? (r.x + ", " + r.y + " \u2014 " + r.w + "\u00d7" + r.h + " px") : "";
-    if (r && r.points && r.points.length >= 3) {
-      coordsText += " \u00b7 " + r.points.length + " pts (" + (r.shape || "lasso") + ")";
+    if (r && r.points && r.points.length > 0) {
+      coordsText += " \u00b7 " + contoursTotalPoints(r.points) + " pts (" + (r.shape || "lasso") + ")";
     }
     qs("#regionCoords").textContent = coordsText;
     qs("#regionNameModal").classList.remove("hidden");
@@ -732,6 +864,43 @@
     _regionNameModalPrevFocus = null;
   }
 
+  // Regions shift-clicked into the merge set (layer-style multi-select; the
+  // active region is the merge target). Satellite-local: every reader —
+  // chips, buttons, the merge action — lives in this file, and
+  // renderRegionChips prunes names that stop existing or become active.
+  var _mergeSelection = [];
+
+  // Union the active region with every shift-selected one, save the result
+  // into the active region, and delete the rest — Photoshop's "merge layers"
+  // for regions. Disjoint shapes become one multi-contour region.
+  function mergeSelectedRegions() {
+    var target = state.activeRegion;
+    var others = _mergeSelection.filter(function (n) { return state.regions[n] && n !== target; });
+    var overlay = qs("#overlayCanvas");
+    if (!target || !state.regions[target] || !others.length || !overlay.width) return;
+    var w = overlay.width, h = overlay.height;
+    var shapes = [target].concat(others).map(function (n) { return regionShapeAbs(state.regions[n]); });
+    var mask = rasterizeShapesMask(shapes, w, h);
+    var displayW = overlay.getBoundingClientRect().width || w;
+    var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * (w / displayW), 400);
+    if (!contours.length) return;
+    saveRegionShape(target, contours, null, function () {
+      Promise.all(others.map(function (n) {
+        return apiDelete("api/regions/" + encodeURIComponent(n));
+      }))
+        .then(function () {
+          others.forEach(function (n) { delete state.regions[n]; });
+          _mergeSelection = [];
+          renderRegionChips();
+          renderOverlay();
+          updateRegionButtons();
+          updateRunButton();
+          showToast("Merged " + (others.length + 1) + " regions into '" + target + "'");
+        })
+        .catch(function () { showToast("Merged shapes, but failed to delete a source region"); });
+    });
+  }
+
   function updateRegionButtons() {
     var hasPending = !!state.pendingRegion;
     var hasActive = !!state.activeRegion;
@@ -739,6 +908,7 @@
     qs("#saveRegionBtn").classList.toggle("hidden", !hasPending);
     qs("#clearSelectionBtn").classList.toggle("hidden", !hasPending && !hasActive);
     qs("#deleteRegionBtn").classList.toggle("hidden", !hasActive);
+    qs("#mergeRegionsBtn").classList.toggle("hidden", !hasActive || _mergeSelection.length === 0);
     qs("#deleteAllRegionsBtn").classList.toggle("hidden", !hasRegions);
 
     var toggleLabelsBtn = qs("#toggleLabelsBtn");
@@ -762,6 +932,11 @@
     var container = qs("#regionChips");
     container.innerHTML = "";
     var names = Object.keys(state.regions);
+    // Drop merge-set entries that vanished (deleted, stashed, merged away)
+    // or became the active region itself.
+    _mergeSelection = _mergeSelection.filter(function (n) {
+      return state.regions[n] && n !== state.activeRegion;
+    });
     if (names.length === 0) {
       _prevRegionNames = {};
       var hint = el("span", "region-hint", "Click and drag on the video to create a region");
@@ -776,7 +951,12 @@
     var newPrev = {};
     names.forEach(function (name, i) {
       var color = regionColorForIndex(i);
-      var chip = el("div", "region-chip" + (name === state.activeRegion ? " active" : ""));
+      var chip = el(
+        "div",
+        "region-chip"
+          + (name === state.activeRegion ? " active" : "")
+          + (_mergeSelection.indexOf(name) >= 0 ? " merge-selected" : "")
+      );
       chip.style.color = color;
       chip.setAttribute("draggable", "true");
       chip.dataset.regionName = name;
@@ -792,6 +972,17 @@
           e.stopPropagation();
           return;
         }
+        // Shift-click with another region active: toggle this chip in the
+        // merge set (layer-style multi-select) instead of re-activating.
+        if (e.shiftKey && state.activeRegion && state.activeRegion !== name) {
+          var idx = _mergeSelection.indexOf(name);
+          if (idx >= 0) _mergeSelection.splice(idx, 1);
+          else _mergeSelection.push(name);
+          renderRegionChips();
+          updateRegionButtons();
+          return;
+        }
+        _mergeSelection = [];
         if (state.activeRegion === name) {
           state.activeRegion = null;
         } else {

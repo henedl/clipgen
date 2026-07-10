@@ -31,6 +31,7 @@ from screenspace_primitives import (
     compute_scene_fingerprint,
     extract_region,
     filter_matches_by_region_mask,
+    mask_points_key,
     match_template,
     region_mask_for,
     regions_are_similar,
@@ -118,7 +119,7 @@ def _region_key(prefix: str, region: dict[str, Any]) -> tuple[Any, ...]:
         region.get("y"),
         region.get("w"),
         region.get("h"),
-        tuple(map(tuple, region.get("mask_points") or ())),
+        mask_points_key(region.get("mask_points")),
     )
 
 
@@ -835,7 +836,7 @@ class SceneTool(AnalysisTool):
         # Fingerprints are only comparable under the same mask, so the per-ref
         # cache is keyed by the region's polygon (refs are cached on the ref
         # dict, which multitool steps with different regions could share).
-        mask_key = tuple(map(tuple, region.get("mask_points") or ()))
+        mask_key = mask_points_key(region.get("mask_points"))
         best_name = ""
         best_score = 0.0
         for ref in ref_scenes:
