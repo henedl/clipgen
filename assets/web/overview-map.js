@@ -645,6 +645,152 @@
     three.moments.mesh.geometry.attributes.position.needsUpdate = true;
   }
 
+  // ---- Session replay --------------------------------------------------------
+  //
+  // The mindwalk idea: sweep a playhead over normalized session time (each
+  // participant normalized by their own session length) and let the map glow
+  // where activity clusters — dots brighten and pulse by how many of their
+  // items sit near the playhead, and the all-moments cloud (when on) dims
+  // everything except the moments around it. Playback free-runs a rAF loop
+  // (this is an animation; the render loop stays on-demand otherwise).
+
+  var REPLAY_WINDOW = 0.05;        // kernel half-width, normalized time
+  var REPLAY_DURATION_MS = 30000;  // full session sweep duration
+
+  var replay = {
+    playing: false,
+    t: 0,
+    norms: null, // [participant idx] -> array of normalized item start times
+    lastTs: 0,
+  };
+
+  function ensureReplayData() {
+    if (replay.norms) return Promise.resolve();
+    return window.ClipgenOverview.ensureData().then(function () {
+      if (replay.norms) return;
+      var norms = [];
+      for (var i = 0; i < state.data.participants.length; i++) {
+        var items = buildParticipantItems(state.data.participants[i]);
+        var maxEnd = 0;
+        var k;
+        for (k = 0; k < items.length; k++) maxEnd = Math.max(maxEnd, items[k].end);
+        var arr = [];
+        for (k = 0; k < items.length; k++) {
+          arr.push(maxEnd > 0 ? items[k].start / maxEnd : 0);
+        }
+        norms.push(arr);
+      }
+      replay.norms = norms;
+    });
+  }
+
+  function replayIntensity(i, t) {
+    var arr = (replay.norms && replay.norms[i]) || [];
+    var count = 0;
+    for (var k = 0; k < arr.length; k++) {
+      if (Math.abs(arr[k] - t) <= REPLAY_WINDOW) count++;
+    }
+    return Math.min(count / 3, 1);
+  }
+
+  var _replayWhite = null;
+
+  function applyReplayGlow() {
+    if (!replay.norms || !three.renderer) return;
+    if (!_replayWhite) _replayWhite = new THREE.Color("#ffffff");
+    var t = replay.t;
+    var maxScore = 0;
+    var i;
+    for (i = 0; i < state.scores.length; i++) {
+      maxScore = Math.max(maxScore, state.scores[i]);
+    }
+    for (i = 0; i < three.dots.length; i++) {
+      var tScore = maxScore > 0 ? state.scores[i] / maxScore : 0;
+      var glow = replayIntensity(i, t);
+      var c = three.dots[i].material.color;
+      c.copy(three.colors.base).lerp(three.colors.hot, tScore);
+      if (glow > 0) c.lerp(_replayWhite, glow * 0.7);
+      var scale = (i === state.selected ? 1.4 : 1) *
+        (0.85 + tScore * 0.5) * (1 + glow * 0.4);
+      three.dots[i].scale.setScalar(scale);
+    }
+    if (three.moments && state.showAllMoments) {
+      var colors = three.moments.mesh.geometry.attributes.color.array;
+      var base = three.moments.baseColors;
+      for (var k = 0; k < three.moments.norms.length; k++) {
+        var f = Math.abs(three.moments.norms[k] - t) <= REPLAY_WINDOW ? 1 : 0.2;
+        colors[k * 3] = base[k * 3] * f;
+        colors[k * 3 + 1] = base[k * 3 + 1] * f;
+        colors[k * 3 + 2] = base[k * 3 + 2] * f;
+      }
+      three.moments.mesh.geometry.attributes.color.needsUpdate = true;
+    }
+    if (!lerp.active) positionDots(state.coords); // re-sync halo scale
+    requestRender();
+  }
+
+  // Back to the idle look: outlier ramp colors, no pulse, full-bright cloud.
+  function clearReplayGlow() {
+    styleDots();
+    if (three.moments) {
+      three.moments.mesh.geometry.attributes.color.array.set(three.moments.baseColors);
+      three.moments.mesh.geometry.attributes.color.needsUpdate = true;
+    }
+    if (!lerp.active && state.coords) positionDots(state.coords);
+    requestRender();
+  }
+
+  function syncReplayUI() {
+    if (els.replayScrub) els.replayScrub.value = String(replay.t);
+    if (els.replayPos) els.replayPos.textContent = Math.round(replay.t * 100) + "%";
+    if (els.replayPlay) els.replayPlay.textContent = replay.playing ? "Pause" : "Play";
+  }
+
+  function replayStep(ts) {
+    if (!replay.playing) return;
+    if (!replay.lastTs) replay.lastTs = ts;
+    replay.t = Math.min(replay.t + (ts - replay.lastTs) / REPLAY_DURATION_MS, 1);
+    replay.lastTs = ts;
+    syncReplayUI();
+    applyReplayGlow();
+    if (replay.t >= 1) {
+      setReplayPlaying(false);
+      return;
+    }
+    requestAnimationFrame(replayStep);
+  }
+
+  function setReplayPlaying(playing) {
+    replay.playing = playing;
+    replay.lastTs = 0;
+    syncReplayUI();
+    if (!playing) return;
+    if (replay.t >= 1) replay.t = 0; // replay from the top after a full sweep
+    ensureReplayData().then(function () {
+      if (replay.playing) requestAnimationFrame(replayStep);
+    });
+  }
+
+  function initReplayControls() {
+    els.replayPlay = document.getElementById("mapReplayPlay");
+    els.replayScrub = document.getElementById("mapReplayScrub");
+    els.replayPos = document.getElementById("mapReplayPos");
+    if (!els.replayPlay) return;
+    els.replayPlay.addEventListener("click", function () {
+      setReplayPlaying(!replay.playing);
+    });
+    els.replayScrub.addEventListener("input", function () {
+      replay.playing = false;
+      replay.t = parseFloat(els.replayScrub.value) || 0;
+      syncReplayUI();
+      if (replay.t <= 0) {
+        clearReplayGlow();
+        return;
+      }
+      ensureReplayData().then(applyReplayGlow);
+    });
+  }
+
   // ---- Participant drill-down: items, satellite burst, timeline drawer -----
   //
   // The underlying timestamps and notes come from the Overview hub's state —
@@ -926,6 +1072,7 @@
     buildDots();
     renderWeights();
     renderLayerToggles();
+    initReplayControls();
     recompute();
   }
 
