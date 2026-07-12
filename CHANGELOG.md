@@ -2,6 +2,58 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.13.60 — 2026-07-10 — Screenspace
+**Live magic-wand tolerance scrub**
+Press-drag-release on the magic wand: horizontal drag scrubs flood-fill tolerance with a live contour preview on the canvas; release commits a new region or applies Shift/Alt boolean combine; Escape cancels mid-scrub.
+
+## v0.13.59 — 2026-07-10 — Screenspace
+**Boolean edits on unsaved canvas regions**
+Shift/Alt/Shift+Alt add, subtract, and intersect now target the pending region drawn on the video before it is saved — refine a rough shape in place with no server round-trip.
+
+## v0.13.59 — 2026-07-10 — Screenspace
+**Auto-generated task and event names**
+New tasks get descriptive names from their params (e.g. `Text "checkout" · header`, `Color: blue · HUD`) instead of generic `type: region` labels; task cards, run pill, results switcher, and timeline tooltip show the stored name.
+
+## v0.13.58 — 2026-07-10 — Screenspace
+**Boolean region editing**
+Combine shaped regions with Photoshop-style modifiers — Shift add, Alt subtract, Shift+Alt intersect — or merge shift-selected regions; multi-contour combo shapes persist when the result is not axis-aligned.
+
+## v0.13.57 — 2026-07-09 — Transcripts
+**Optional severity on flagged segments**
+Marks gain a severity dropdown in the pop-over, a colored dot on segment rows, and a `mark_severities` export column; Studio intake filters by severity; Metadata adds a transcript severity distribution chart.
+
+## v0.13.57 — 2026-07-09 — Transcripts
+**Transcription progress on the timeline**
+While a participant is being transcribed, a faint dot texture covers the un-transcribed portion of the video timeline and wipes away left-to-right in sync with decode progress.
+
+## v0.13.57 — 2026-07-09 — Studio
+**Screenspace clusters in Metadata**
+The Metadata tab counts time-adjacent Screenspace event clusters instead of raw per-second events so dense scans do not dominate tables and charts; toggle in settings with live re-render and clustered export field names.
+
+## v0.13.56 — 2026-07-09 — Workflows
+**Clip padding and max duration on artifact nodes**
+Make Clips and Build Reel nodes expose pad start, pad end, and max duration params — nudge clip boundaries inward or outward or cap segment length without new queue cards.
+
+## v0.13.55 — 2026-07-09 — Screenspace
+**Lasso and magic-wand region selectors**
+Draw freehand lasso or flood-fill magic-wand regions alongside rectangles; shaped polygons rasterize to masks for color, change, flow, OCR, template, and scene tools, with dimmed model-view previews outside the polygon.
+
+## v0.13.55 — 2026-07-09 — Workflows
+**Live minimap and zoom controls**
+The corner minimap mirrors the canvas view in real time with an edge-safe view frame; floating zoom-in, zoom-out, and fit-to-content buttons; restores canvas drag and wheel-zoom after deferred script loading.
+
+## v0.13.54 — 2026-07-09 — Core
+**CLI friction agent and --settings**
+Run the friction thinking agent from the command line with `--friction`; open the interactive settings editor with `--settings` before a run; improved fallback to a local Excel file when Google auth fails.
+
+## v0.13.53 — 2026-07-06 — Transcripts
+**Streaming AI summaries**
+Summary generation streams tokens into the Transcripts panel as the model produces them instead of showing a spinner for the whole run.
+
+## v0.13.52 — 2026-07-06 — Transcripts
+**Faster Whisper transcription**
+VAD on by default skips silence without clipping quiet speech; beam size 2 and configurable CPU threads speed decode on many-core machines — all tunable in Studio → Transcription settings.
+
 ## v0.13.51 — 2026-07-04 — Core
 **Unified motion for toasts and Studio overlays**
 Toast and Studio overlay cards animate through the shared ClipgenMotion engine with fade/pop entrances; duplicate CSS keyframes retired, and overlays no longer snap in when revealed from hidden.
