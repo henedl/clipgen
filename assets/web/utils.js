@@ -1255,6 +1255,7 @@ var XREF_BADGES = {
   screenspace: { icon: "squares-2x2", color: "color-mix(in srgb, var(--stream-screenspace) 85%, transparent)" },
   transcript:  { icon: "chat-bubble-bottom-center-text", color: "color-mix(in srgb, var(--stream-transcript) 85%, transparent)" },
   sheet:       { icon: "table-cells", color: "color-mix(in srgb, var(--stream-sheet) 85%, transparent)" },
+  composer:    { icon: "scissors", color: "color-mix(in srgb, var(--color-accent) 85%, transparent)" },
 };
 
 // ---- Filter helpers (artifact grids in viewer) ----

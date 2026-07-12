@@ -1042,6 +1042,172 @@
     }
   }
 
+  // ---- Composer Intake ----
+  //
+  // The simplest of the three panels: Composer cuts are already curated
+  // in/out pairs (no clustering, no dismiss — cuts are managed on the
+  // Composer page), so this is a fingerprint-polled list of cards sharing
+  // the generic panel machinery via a CO_INTAKE config.
+
+  var _coIntakeDensityEl = null;
+
+  function composerCutToItem(cut) {
+    return {
+      participant: cut.participant,
+      start: cut.start,
+      end: cut.end,
+      desc: cut.label || "composer",
+      source: "composer",
+      event_type: cut.label || "composer",
+      event_ids: [cut.id],
+    };
+  }
+
+  function coIntakeAddToArtifacts(cut) {
+    intakeAddItem(state.artifactQueue, composerCutToItem(cut), renderArtifactQueue);
+  }
+
+  function coIntakeToggleArtifacts(cut) {
+    intakeToggleItem(state.artifactQueue, composerCutToItem(cut), renderArtifactQueue);
+  }
+
+  function coIntakeAddToReel(cut) {
+    intakeAddItem(state.reelQueue, composerCutToItem(cut), renderReelQueue);
+  }
+
+  function coIntakeToggleReel(cut) {
+    intakeToggleItem(state.reelQueue, composerCutToItem(cut), renderReelQueue);
+  }
+
+  function filteredComposerIntakeCuts() {
+    var cuts = state.coIntakeCuts;
+    var parts = state.coIntakeFilterParticipants;
+    var text = state.coIntakeFilterText.toLowerCase();
+    if (!parts.length && !text) return cuts;
+    return cuts.filter(function (c) {
+      if (parts.length && parts.indexOf(c.participant) === -1) return false;
+      if (text && (c.label || "").toLowerCase().indexOf(text) === -1
+          && (c.participant || "").toLowerCase().indexOf(text) === -1) return false;
+      return true;
+    });
+  }
+
+  function highlightCoIntakeCard(idx) {
+    var cards = qsa(".co-intake-queue-card");
+    for (var i = 0; i < cards.length; i++) {
+      if (i === idx) cards[i].classList.add("intake-highlight");
+      else cards[i].classList.remove("intake-highlight");
+    }
+  }
+
+  var CO_INTAKE = {
+    cardsSel: "#coIntakeCards",
+    cardSel: ".co-intake-queue-card",
+    cardClass: "co-intake-queue-card",
+    idxAttr: "coIntakeIdx",
+    selfSource: "composer",
+    setTranscriptContext: false,
+    snippet: function (c) { return c.label || ""; },
+    clusterToItem: composerCutToItem,
+    cardHue: function (c) {
+      return categoryColor(c.label || "composer");
+    },
+    typeText: function (c) {
+      return c.label || "composer cut";
+    },
+    selfBadge: function (c) {
+      return {
+        icon: XREF_BADGES.composer.icon,
+        color: XREF_BADGES.composer.color,
+        title: c.label || "Composer cut",
+      };
+    },
+    // --- participant pills + density timeline ---
+    participantsSel: "#coIntakeFilterParticipants",
+    timelineSel: "#coIntakeTimeline",
+    clustersKey: "coIntakeCuts",
+    filterParticipantsKey: "coIntakeFilterParticipants",
+    hoveredIdxKey: "coIntakeHoveredIdx",
+    filterTextKey: "coIntakeFilterText",
+    filtered: filteredComposerIntakeCuts,
+    highlightCard: highlightCoIntakeCard,
+    rerender: renderComposerIntake,
+    getDensityEl: function () { return _coIntakeDensityEl; },
+    setDensityEl: function (dt) { _coIntakeDensityEl = dt; },
+    barCount: function () { return 1; },
+    barColor: function (c) {
+      return { hue: categoryHue(c.label || "composer") };
+    },
+    // --- init / delegated listeners ---
+    addAllBtnSel: "#coIntakeAddAllBtn",
+    reelAllBtnSel: "#coIntakeReelAllBtn",
+    thresholdSel: "#coIntakeClusterThreshold", // absent — cuts never cluster
+    searchSel: "#coIntakeFilterSearch",
+    toggleArtifacts: coIntakeToggleArtifacts,
+    toggleReel: coIntakeToggleReel,
+    addToArtifacts: coIntakeAddToArtifacts,
+    addToReel: coIntakeAddToReel,
+    onDismiss: function () {}, // cuts are deleted on the Composer page, not here
+    onThresholdChange: function () {},
+    onCardHover: function (card, idx) {
+      var cut = filteredComposerIntakeCuts()[idx];
+      return cut ? (cut.label || "") : "";
+    },
+    extraControl: function () {},
+  };
+
+  // Composer intake poll: the cuts list is tiny, so fetch the whole composer
+  // manifest and fingerprint the cut spans — re-render only on change.
+  function pollComposerIntake() {
+    return apiGet("../composer/api/manifest")
+      .then(function (data) {
+        if (!data || !data.ok || !data.manifest) return false;
+        var cuts = data.manifest.cuts || [];
+        var fp = JSON.stringify(cuts.map(function (c) {
+          return [c.id, c.participant, c.start, c.end, c.label];
+        }));
+        if (fp === state._coIntakeFp) return false;
+        state._coIntakeFp = fp;
+        state.coIntakeCuts = cuts;
+        renderComposerIntake();
+        checkConvergenceTabVisibility();
+        return true;
+      })
+      .catch(function () { return false; });
+  }
+
+  function renderComposerIntake() {
+    ssClearPending();
+    var container = qs("#coIntakeCards");
+    if (!container) return;
+    var filtered = filteredComposerIntakeCuts();
+    var addAllBtn = qs("#coIntakeAddAllBtn");
+    var reelAllBtn = qs("#coIntakeReelAllBtn");
+    var badge = qs("#coIntakeTabBadge");
+
+    if (badge) {
+      if (state.coIntakeCuts.length > 0) {
+        badge.textContent = state.coIntakeCuts.length;
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+    }
+
+    if (addAllBtn) addAllBtn.disabled = filtered.length === 0;
+    if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
+
+    buildIntakeParticipantPills(CO_INTAKE);
+    buildIntakeDensityTimeline(CO_INTAKE, filtered);
+
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="drop-target-empty">Composer cuts will appear here — set in/out pairs on the Composer page</div>';
+      return;
+    }
+
+    renderIntakeCards(CO_INTAKE, filtered);
+  }
+
   function initTooltipToggle() {
     state.trIntakeTooltipsEnabled = getStoredTooltipPref();
     var btn = qs("#tooltipToggle");
@@ -1058,17 +1224,19 @@
     });
   }
 
-  // Init both intake panels. Folded from the two hub-boot initIntakePanel calls
-  // so the SS_INTAKE/TR_INTAKE configs never need to leave this file.
+  // Init the intake panels. Folded from the hub-boot initIntakePanel calls
+  // so the SS_INTAKE/TR_INTAKE/CO_INTAKE configs never need to leave this file.
   function initIntake() {
     initIntakePanel(SS_INTAKE);
     initIntakePanel(TR_INTAKE);
+    initIntakePanel(CO_INTAKE);
   }
 
   // ---- Published to the hub (window.ClipgenStudio) ----
   STUDIO.initIntake = initIntake;
   STUDIO.pollScreenspaceIntake = pollScreenspaceIntake;
   STUDIO.pollTranscriptIntake = pollTranscriptIntake;
+  STUDIO.pollComposerIntake = pollComposerIntake;
   STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;
   STUDIO.renderIntake = renderIntake;
