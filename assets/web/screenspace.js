@@ -3909,7 +3909,7 @@
   // Published for the screenspace-*.js satellite files (multitool params,
   // color, calibration) that load after this script. They read the hub's
   // shared state + helpers through this object and attach their own published
-  // functions back onto it — mirrors studio.js / window._studioState. Assigned
+  // functions back onto it — mirrors window.ClipgenStudio. Assigned
   // synchronously here (during the hub script's load) so the object is fully
   // populated before any satellite IIFE runs; the DOMContentLoaded init above
   // and all user-event handlers fire later still, by which point satellites
