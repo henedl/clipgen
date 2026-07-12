@@ -51,6 +51,7 @@
     hovered: -1,
     showSimEdges: true,   // similarity-link layer toggle
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
+    mutedFeatures: {},    // column key -> true; muted = weight 0 everywhere
   };
 
   var three = {
@@ -128,10 +129,18 @@
   }
 
   function columnWeight(col) {
+    if (state.mutedFeatures[col.key]) return 0;
     var w = state.weights[col.group];
     if (w == null) w = 1;
     var size = state.groupSizes[col.group] || 1;
     return w / Math.sqrt(size);
+  }
+
+  function setFeatureMuted(key, muted) {
+    if (muted) state.mutedFeatures[key] = true;
+    else delete state.mutedFeatures[key];
+    renderMutedChips();
+    recompute();
   }
 
   function applyWeights(zRaw, columns) {
@@ -419,6 +428,7 @@
     for (var j = 0; j < data.columns.length; j++) {
       var key = data.columns[j].key;
       if (key.indexOf("obs_cat_") !== 0 && key.indexOf("ss_rate_") !== 0) continue;
+      if (state.mutedFeatures[key]) continue; // muted features earn no anchor
       var exhibitors = 0;
       for (var i = 0; i < data.matrix.length; i++) {
         var v = data.matrix[i][j];
@@ -1313,6 +1323,32 @@
     host.appendChild(frag);
   }
 
+  // Chips for individually muted features; click restores. Lives in the
+  // sidebar because muted features drop out of the explain panel's ranking
+  // (their weighted z is 0), so the panel can't offer the unmute itself.
+  function renderMutedChips() {
+    var section = document.getElementById("mapMutedSection");
+    var host = document.getElementById("mapMuted");
+    if (!section || !host) return;
+    var keys = Object.keys(state.mutedFeatures);
+    section.classList.toggle("hidden", keys.length === 0);
+    host.innerHTML = "";
+    if (!keys.length) return;
+    var byKey = {};
+    state.data.columns.forEach(function (col) { byKey[col.key] = col; });
+    var frag = document.createDocumentFragment();
+    keys.sort().forEach(function (key) {
+      var chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "map-muted-chip";
+      chip.title = "Restore this feature";
+      chip.textContent = (byKey[key] ? byKey[key].label : key) + " ✕";
+      chip.addEventListener("click", function () { setFeatureMuted(key, false); });
+      frag.appendChild(chip);
+    });
+    host.appendChild(frag);
+  }
+
   function renderOutliers() {
     var frag = document.createDocumentFragment();
     var suppress = state.data.participants.length < 3;
@@ -1473,8 +1509,18 @@
       zEl.className = "map-feature-z";
       zEl.textContent = (item.z >= 0 ? "+" : "−") +
         Math.abs(item.z).toFixed(1) + "σ";
+      var muteBtn = document.createElement("button");
+      muteBtn.type = "button";
+      muteBtn.className = "map-feature-mute";
+      muteBtn.textContent = "✕";
+      muteBtn.title = "Mute this feature — exclude it from similarity, " +
+        "outlier scores, and the layout (restore from the sidebar)";
+      muteBtn.addEventListener("click", (function (key) {
+        return function () { setFeatureMuted(key, true); };
+      })(col.key));
       label.appendChild(name);
       label.appendChild(zEl);
+      label.appendChild(muteBtn);
 
       var detail = document.createElement("div");
       detail.className = "map-feature-detail";

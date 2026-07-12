@@ -55,6 +55,13 @@
       <div class="map-sidebar-header">Layers</div>
       <div id="mapLayers" class="map-layers"></div>
 
+      <!-- Individually muted features (chips restore them); populated by
+           overview-map.js when a feature is muted from the explain panel. -->
+      <div id="mapMutedSection" class="hidden">
+        <div class="map-sidebar-header">Muted features</div>
+        <div id="mapMuted" class="map-muted"></div>
+      </div>
+
       <div class="map-sidebar-header">Most unusual</div>
       <p class="map-hint">Distance from the cohort centroid across all
         weighted signals — not just the visible projection.</p>

@@ -210,6 +210,44 @@ body {
 
 .map-layer-row input[type="checkbox"] { accent-color: var(--accent); }
 
+/* ---- Muted-feature chips ---- */
+
+.map-muted {
+  padding: 0 var(--space-4) var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.map-muted-chip {
+  font-size: var(--text-2xs);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.8;
+}
+
+.map-muted-chip:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.map-feature-mute {
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-1);
+  line-height: 1;
+}
+
+.map-feature-mute:hover { color: var(--severity-high); }
+
 /* ---- Outlier list ---- */
 
 .map-outlier-list {
