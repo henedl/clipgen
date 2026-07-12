@@ -16,10 +16,8 @@
   var state = CO.state;
 
   var RULER_H = 18;
-  var LANE_TOP = 22;
-  var LANE_H = 14;      // one marker sub-row
+  var CUT_TRACK_H = 26; // the single cuts track, directly under the ruler
   var LANE_GAP = 3;
-  var LANE_ROWS = 2;    // sub-rows per source lane (overflow collapses onto the last)
   var EDGE_SLOP = 5;    // px hit zone around a cut edge
   var MIN_CUT_SECONDS = 0.2;
   var SOURCES = ["sheet", "screenspace", "transcript"];
@@ -39,19 +37,34 @@
     return _laneColors;
   }
 
-  function laneHeight() {
-    return LANE_ROWS * LANE_H + (LANE_ROWS - 1) * 1;
-  }
-
-  function laneY(sourceIndex) {
-    return LANE_TOP + sourceIndex * (laneHeight() + LANE_GAP);
-  }
-
-  function cutsBandY() {
-    return laneY(SOURCES.length) + 2;
-  }
-
   function canvasEl() { return qs("#coTimelineCanvas"); }
+
+  // Vertical layout, computed from the live canvas height so the cuts track
+  // and all three marker lanes always fit whatever height the strip gets:
+  // ruler → cuts track (the user's working track) → one lane per source.
+  function layout() {
+    var h = canvasEl().height;
+    var cutY = RULER_H + 2;
+    var lanesTop = cutY + CUT_TRACK_H + 4;
+    var laneAreaH = Math.max(h - lanesTop - 2, SOURCES.length * 8);
+    var laneH = Math.floor(
+      (laneAreaH - (SOURCES.length - 1) * LANE_GAP) / SOURCES.length
+    );
+    var rows = laneH >= 26 ? 2 : 1; // marker sub-rows per lane
+    var rowH = Math.floor((laneH - (rows - 1)) / rows);
+    return {
+      cutY: cutY,
+      cutH: CUT_TRACK_H,
+      lanesTop: lanesTop,
+      laneH: laneH,
+      rows: rows,
+      rowH: rowH,
+    };
+  }
+
+  function laneY(L, sourceIndex) {
+    return L.lanesTop + sourceIndex * (L.laneH + LANE_GAP);
+  }
 
   function getRect() {
     if (!_cachedRect) _cachedRect = canvasEl().getBoundingClientRect();
@@ -96,13 +109,13 @@
   // ---- Rendering ----
 
   // Greedy sub-row packing inside one source lane: overlapping markers go to
-  // the first free sub-row; overflow past LANE_ROWS collapses onto the last.
-  function assignRows(markers) {
+  // the first free sub-row; overflow past maxRows collapses onto the last.
+  function assignRows(markers, maxRows) {
     var sorted = markers.slice().sort(function (a, b) { return a.start - b.start; });
     var rowEnds = [];
     sorted.forEach(function (m) {
       var placed = false;
-      for (var r = 0; r < rowEnds.length && r < LANE_ROWS; r++) {
+      for (var r = 0; r < rowEnds.length && r < maxRows; r++) {
         if (rowEnds[r] <= m.start) {
           m._row = r;
           rowEnds[r] = m.end;
@@ -111,12 +124,12 @@
         }
       }
       if (!placed) {
-        if (rowEnds.length < LANE_ROWS) {
+        if (rowEnds.length < maxRows) {
           m._row = rowEnds.length;
           rowEnds.push(m.end);
         } else {
-          m._row = LANE_ROWS - 1;
-          rowEnds[LANE_ROWS - 1] = Math.max(rowEnds[LANE_ROWS - 1], m.end);
+          m._row = maxRows - 1;
+          rowEnds[maxRows - 1] = Math.max(rowEnds[maxRows - 1], m.end);
         }
       }
     });
@@ -160,32 +173,13 @@
       format: formatDuration,
     });
 
-    // Marker lanes
-    var colors = laneColors();
-    SOURCES.forEach(function (source, si) {
-      var y0 = laneY(si);
-      if (!state.sourceToggles[source]) return;
-      var markers = state.markers[source] || [];
-      if (!markers.length) return;
-      var color = colors[source];
-      assignRows(markers).forEach(function (m) {
-        if (m.end < vis.start || m.start > vis.end) return;
-        var x1 = tx(m.start);
-        var x2 = tx(Math.max(m.end, m.start));
-        var rw = Math.max(x2 - x1, 2);
-        var y = y0 + m._row * (LANE_H + 1);
-        ctx.fillStyle = hexToRgba(color, 0.55);
-        ctx.fillRect(x1, y, rw, LANE_H - 2);
-        _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: LANE_H - 2, marker: m });
-      });
-    });
+    var L = layout();
 
-    // Cuts band
-    var cy = cutsBandY();
-    var ch = Math.max(h - cy - 4, 12);
+    // Cuts track — the single working track for all in/out pairs, directly
+    // under the ruler so committed cuts land visibly on the timeline.
     ctx.strokeStyle = tc.border;
     ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, cy - 0.5, w - 1, ch + 1);
+    ctx.strokeRect(0.5, L.cutY - 0.5, w - 1, L.cutH + 1);
     CO.participantCuts().forEach(function (cut) {
       if (cut.end < vis.start || cut.start > vis.end) return;
       var x1 = tx(cut.start);
@@ -193,16 +187,37 @@
       var rw = Math.max(x2 - x1, 2);
       var selected = cut.id === state.selectedCutId;
       ctx.fillStyle = hexToRgba(tc.accent, selected ? 0.45 : 0.25);
-      ctx.fillRect(x1, cy, rw, ch);
+      ctx.fillRect(x1, L.cutY, rw, L.cutH);
       // Edge handles
       ctx.fillStyle = selected ? tc.accent : hexToRgba(tc.accent, 0.8);
-      ctx.fillRect(x1 - 1, cy, 3, ch);
-      ctx.fillRect(x2 - 2, cy, 3, ch);
+      ctx.fillRect(x1 - 1, L.cutY, 3, L.cutH);
+      ctx.fillRect(x2 - 2, L.cutY, 3, L.cutH);
       if (selected) {
         ctx.strokeStyle = tc.accent;
-        ctx.strokeRect(x1 + 0.5, cy + 0.5, rw - 1, ch - 1);
+        ctx.strokeRect(x1 + 0.5, L.cutY + 0.5, rw - 1, L.cutH - 1);
       }
-      _hitRects.push({ x1: x1, x2: x2, y: cy, h: ch, cut: cut });
+      _hitRects.push({ x1: x1, x2: x2, y: L.cutY, h: L.cutH, cut: cut });
+    });
+
+    // Marker lanes (one per source, below the cuts track)
+    var colors = laneColors();
+    SOURCES.forEach(function (source, si) {
+      if (!state.sourceToggles[source]) return;
+      var markers = state.markers[source] || [];
+      if (!markers.length) return;
+      var y0 = laneY(L, si);
+      var color = colors[source];
+      var barH = Math.max(L.rowH - 1, 4);
+      assignRows(markers, L.rows).forEach(function (m) {
+        if (m.end < vis.start || m.start > vis.end) return;
+        var x1 = tx(m.start);
+        var x2 = tx(Math.max(m.end, m.start));
+        var rw = Math.max(x2 - x1, 2);
+        var y = y0 + m._row * (L.rowH + 1);
+        ctx.fillStyle = hexToRgba(color, 0.55);
+        ctx.fillRect(x1, y, rw, barH);
+        _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: barH, marker: m });
+      });
     });
 
     renderPlayhead();
@@ -270,9 +285,8 @@
     var mx = clientX - rect.left;
     var my = clientY - rect.top;
     var w = canvasEl().width;
-    var cy = cutsBandY();
-    var ch = Math.max(canvasEl().height - cy - 4, 12);
-    if (my < cy || my > cy + ch) return null;
+    var L = layout();
+    if (my < L.cutY || my > L.cutY + L.cutH) return null;
     var cuts = CO.participantCuts();
     var best = null;
     var bestDist = EDGE_SLOP + 1;
@@ -506,4 +520,6 @@
   CO.initTimeline = initTimeline;
   CO.renderTimeline = renderTimeline;
   CO.renderPlayhead = renderPlayhead;
+  // Theme flips resample the --stream-* lane colors on the next render.
+  CO.invalidateLaneColors = function () { _laneColors = null; };
 })();

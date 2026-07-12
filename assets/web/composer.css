@@ -15,12 +15,23 @@
   display: none !important;
 }
 
-html, body {
+html {
+  /* Root rem anchor — must stay a concrete px so rem-based tokens (--text-*,
+     --space-*) resolve identically to the other frontends (see workflows.css). */
+  font-size: 16px;
+  height: 100%;
+}
+
+body[data-frontend="composer"] {
   margin: 0;
   padding: 0;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
   height: 100%;
   overflow: hidden;
 }

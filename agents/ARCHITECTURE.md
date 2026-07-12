@@ -63,7 +63,7 @@ Opt-in via `--workflows`; no spreadsheet required. Served at `/workflows/` by th
 
 ## Composer ([composer_server.py](composer_server.py))
 
-Opt-in via `--composer`; no spreadsheet required. Served at `/composer/` by the combined server. A full-source-video cutting timeline per participant: multiple in/out cut pairs (hotkeys `i`/`o`, draggable edges on the canvas timeline), three toggleable read-only marker lanes (Sheet timestamps / Screenspace events / Transcript marks — fetched cross-blueprint like `convergence.js` and aligned via the Convergence per-lane offsets), and clip generation through Studio's streaming `/api/generate-intake`. All state persists to `composer_manifest.json`; the spreadsheet is never written. Planned follow-ups: non-destructive trims of existing source markers (P2) and a visual annotation layer (text + freehand) with screenshot/GIF/burned-video export (P3).
+Opt-in via `--composer`; no spreadsheet required. Served at `/composer/` by the combined server. A full-source-video cutting timeline per participant: multiple in/out cut pairs (hotkeys `i`/`o`, draggable edges on the canvas timeline), three toggleable read-only marker lanes (Sheet timestamps / Screenspace events / Transcript marks — fetched cross-blueprint like `convergence.js` and aligned via the Convergence per-lane offsets), and clip generation through Studio's streaming `/api/generate-intake`. All state persists to `composer_manifest.json`; the spreadsheet is never written. Planned follow-ups: non-destructive trims of existing source markers plus a Composer intake tab in Studio (P2), and a visual annotation layer (text + freehand) with screenshot/GIF/burned-video export (P3).
 
 ## Artifact Manifest ([viewer.py](viewer.py))
 

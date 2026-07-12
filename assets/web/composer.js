@@ -635,6 +635,23 @@
   // ---- Boot ----
 
   function boot() {
+    // TopNav renders the theme toggle (#themeToggle) and Settings (#settingsBtn)
+    // buttons synchronously before this hub loads, so wire them here as the
+    // other surfaces do. Theme flips repaint the canvases (their colors are
+    // sampled from CSS variables at draw time).
+    if (typeof initThemeToggle === "function") {
+      initThemeToggle(function () {
+        if (CO.invalidateLaneColors) CO.invalidateLaneColors();
+        renderTimeline();
+      });
+    }
+    var settingsBtn = qs("#settingsBtn");
+    if (settingsBtn && typeof window.openSettingsModal === "function") {
+      settingsBtn.addEventListener("click", function () {
+        window.openSettingsModal({});
+      });
+    }
+
     initParticipantSelect();
     initVideo();
     initKeyboard();
