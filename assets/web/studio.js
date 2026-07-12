@@ -94,6 +94,7 @@
     trIntakeTooltipsEnabled: true,
     coIntakeItems: [],
     coTrims: {},
+    coTrimCardKeys: {},
     coIntakeFilterParticipants: [],
     coIntakeFilterText: "",
     coIntakeHoveredIdx: -1,
@@ -2679,10 +2680,12 @@
   // keys — segIdx follows the same parseClipSegmentsForCell pair order);
   // intake items key on their event/mark ids.
   function queueItemTrimKey(item) {
-    var trims = state.coTrims || {};
+    // Gate on the carded-key set (not raw trims) so the badge only appears
+    // when the deep-link has a Composer Intake card to land on.
+    var cardKeys = state.coTrimCardKeys || {};
     if (!isIntakeSource(item.source) && item.row) {
       var key = "sheet:" + item.row + ":" + item.participant + ":" + (item.segIdx || 0);
-      return trims[key] ? key : null;
+      return cardKeys[key] ? key : null;
     }
     var ids = item.source === "screenspace" ? item.event_ids
       : item.source === "transcript" ? item.mark_ids
@@ -2690,7 +2693,7 @@
     if (!ids) return null;
     var prefix = item.source === "screenspace" ? "screenspace:" : "transcript-mark:";
     for (var i = 0; i < ids.length; i++) {
-      if (ids[i] && trims[prefix + ids[i]]) return prefix + ids[i];
+      if (ids[i] && cardKeys[prefix + ids[i]]) return prefix + ids[i];
     }
     return null;
   }

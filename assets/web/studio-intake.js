@@ -390,11 +390,11 @@
     onCardHover: function (card) {
       return card.dataset.transcriptContext || "";
     },
-    // Composer-trim cross-link: first event in the cluster with a trim override.
+    // Composer-trim cross-link: first event in the cluster with a carded trim.
     trimBadgeKey: function (c) {
       var events = c.events || [];
       for (var i = 0; i < events.length; i++) {
-        if (state.coTrims["screenspace:" + events[i].id]) {
+        if (state.coTrimCardKeys["screenspace:" + events[i].id]) {
           return "screenspace:" + events[i].id;
         }
       }
@@ -483,11 +483,11 @@
       var cluster = filteredTranscriptIntakeClusters()[idx];
       return cluster ? (cluster.text || cluster.label || "") : "";
     },
-    // Composer-trim cross-link: first mark in the cluster with a trim override.
+    // Composer-trim cross-link: first mark in the cluster with a carded trim.
     trimBadgeKey: function (c) {
       var marks = c.marks || [];
       for (var i = 0; i < marks.length; i++) {
-        if (marks[i].id && state.coTrims["transcript-mark:" + marks[i].id]) {
+        if (marks[i].id && state.coTrimCardKeys["transcript-mark:" + marks[i].id]) {
           return "transcript-mark:" + marks[i].id;
         }
       }
@@ -1207,18 +1207,32 @@
         var cuts = data.manifest.cuts || [];
         var trims = data.manifest.trims || {};
         var items = cuts.slice();
+        // Keys that actually produce a card below — the asterisk badges on
+        // sheet/SS/TR/queue cards gate on this so a deep-link never lands on
+        // an empty panel.
+        var cardKeys = {};
         Object.keys(trims).forEach(function (key) {
           var t = trims[key];
-          // Metadata-less trims (edge case: written by an older Composer
-          // session) can't be carded — skip until the next re-trim.
-          if (!t || !t.participant) return;
+          if (!t) return;
+          var participant = t.participant || "";
+          var label = t.label || "";
+          if (!participant && key.indexOf("sheet:") === 0) {
+            // Sheet keys embed the row + participant ("sheet:<row>:<pid>:<seg>"),
+            // so metadata-less trims (written before trims carried metadata)
+            // can still be carded.
+            var bits = key.split(":");
+            participant = bits[2] || "";
+            if (!label && bits[1]) label = participant + "." + bits[1];
+          }
+          if (!participant) return; // uncardable (stale SS/TR trim) — no badge either
+          cardKeys[key] = true;
           items.push({
             id: key,
             key: key,
-            participant: t.participant,
+            participant: participant,
             start: t.start,
             end: t.end,
-            label: t.label || "",
+            label: label,
             isTrim: true,
           });
         });
@@ -1229,6 +1243,7 @@
         state._coIntakeFp = fp;
         state.coIntakeItems = items;
         state.coTrims = trims;
+        state.coTrimCardKeys = cardKeys;
         renderComposerIntake();
         renderIntake(false);
         renderTranscriptIntake();
