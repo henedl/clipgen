@@ -24,16 +24,13 @@
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
   // Pure intake clustering lives in intake-cluster.js (loaded first) so the
-  // Metadata sub-tab and the Overview page can share it without reaching
-  // into Studio.
+  // Overview page can share it without reaching into Studio.
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
   // Hub namespace for feature satellites (currently studio-intake.js). The hub
   // publishes `state` + the helpers a satellite needs onto this at load (tail);
   // satellites publish their entry points back, reached via the delegators above.
-  // (Separate from the legacy window._studio* globals that metadata.js /
-  // convergence.js still read — those stay as-is.)
   var STUDIO = (window.ClipgenStudio = window.ClipgenStudio || {});
 
   // Build a mask-image icon span as an HTML string. Sizing comes from a
@@ -66,7 +63,6 @@
     sortDir: "asc", // "asc" | "desc"
     cellExpandHover: true,
     cardScrubberEnabled: false,
-    metadataClusterScreenspace: true,
     filters: {
       categories: [],
       severities: [],
@@ -1009,19 +1005,12 @@
     var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
-    var metadataPanel = qs("#metadataPanel");
 
     // Hide everything first
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
-    if (metadataPanel) metadataPanel.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
-
-    // Intake poll timers are started at DOMContentLoaded and kept running
-    // across all tabs so the sub-tab counter badges stay live; switching away
-    // from an intake tab no longer tears them down.
-    if (window.metadataDeactivate) window.metadataDeactivate();
 
     var activePanel = null;
     if (state.activePreviewTab === "sheet") {
@@ -1034,10 +1023,6 @@
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
       activePanel = trIntakePanel;
-    } else if (state.activePreviewTab === "metadata") {
-      if (metadataPanel) metadataPanel.classList.remove("hidden");
-      activePanel = metadataPanel;
-      if (window.metadataActivate) window.metadataActivate();
     }
     if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");
@@ -1047,11 +1032,6 @@
         });
       });
     }
-  }
-
-  function refreshMetadataIfActive() {
-    if (state.activePreviewTab !== "metadata") return;
-    if (window.metadataRefreshIfActive) window.metadataRefreshIfActive();
   }
 
   // ---- Queue persistence (sessionStorage) ----
@@ -1116,7 +1096,6 @@
           clipgenApplyConfig(data.config);
           updateArtifactFormatLabels();
           state.sheetData = data;
-          refreshMetadataIfActive();
           return;
         }
         state.sheetData = data;
@@ -1137,11 +1116,9 @@
           .then(function (bdata) {
             state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
             if (Object.keys(state.convergenceBaselines).length > 0) renderGrid();
-            refreshMetadataIfActive();
           })
           .catch(function () {
             state.convergenceBaselines = {};
-            refreshMetadataIfActive();
           });
         populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
@@ -1162,9 +1139,6 @@
         if (data.cardScrubberEnabled !== undefined) {
           state.cardScrubberEnabled = data.cardScrubberEnabled;
         }
-        if (data.metadataClusterScreenspace !== undefined) {
-          state.metadataClusterScreenspace = data.metadataClusterScreenspace;
-        }
         var tcGroup = qs("#titlecardGroup");
         if (tcGroup && qs("#artifactFormat").value === "clip") {
           tcGroup.classList.remove("hidden");
@@ -1176,7 +1150,6 @@
           updateCellClasses();
         }
         loadManifestState();
-        refreshMetadataIfActive();
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
@@ -4260,14 +4233,6 @@
         renderIntake(false);
       }
     }
-    var mdCluster = _findSetting("STUDIO_METADATA_CLUSTER_SCREENSPACE");
-    if (mdCluster) {
-      var wasClustered = state.metadataClusterScreenspace;
-      state.metadataClusterScreenspace = !!mdCluster.value;
-      if (wasClustered !== state.metadataClusterScreenspace) {
-        refreshMetadataIfActive();
-      }
-    }
   }
 
   function persistTitlecardSettings() {
@@ -4504,10 +4469,6 @@
         if (isAnyStudioJobRunning()) _studioEtaTicker.ensure();
       }
     });
-    window.addEventListener("resize", function () {
-      if (window.metadataResize) window.metadataResize();
-    });
-
     document.addEventListener("dragstart", function (ev) {
       if (!ev.target.closest(".stash-card")) return;
       requestAnimationFrame(revealEmptyStashAreas);
@@ -4516,13 +4477,6 @@
       hideEmptyStashAreas();
     });
   });
-
-  // Legacy globals read by metadata.js (Convergence moved to the Overview
-  // page and reads window.ClipgenOverview instead).
-  window._studioState = state;
-  window._studioParseClipTimestamps = parseClipTimestamps;
-  window._studioROW_FUNCTIONS = ROW_FUNCTIONS;
-  window._studioSyncPreviewTab = syncPreviewTab;
 
   // Hub → studio-intake.js: state + the hub helpers the intake satellite calls.
   // (Pure utils.js globals reach the satellite via the scope chain; only
@@ -4535,7 +4489,6 @@
   STUDIO.intakeAddItem = intakeAddItem;
   STUDIO.intakeToggleItem = intakeToggleItem;
   STUDIO.isIntakeSource = isIntakeSource;
-  STUDIO.refreshMetadataIfActive = refreshMetadataIfActive;
   STUDIO.renderArtifactQueue = renderArtifactQueue;
   STUDIO.renderReelQueue = renderReelQueue;
   STUDIO.saveQueues = saveQueues;

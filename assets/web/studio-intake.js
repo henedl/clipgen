@@ -24,7 +24,6 @@
     findOverlappingData = STUDIO.findOverlappingData,
     intakeAddItem = STUDIO.intakeAddItem,
     intakeToggleItem = STUDIO.intakeToggleItem,
-    refreshMetadataIfActive = STUDIO.refreshMetadataIfActive,
     renderArtifactQueue = STUDIO.renderArtifactQueue,
     renderReelQueue = STUDIO.renderReelQueue,
     setCardDragImage = STUDIO.setCardDragImage,
@@ -192,7 +191,6 @@
     var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
     state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
     renderIntake(hasNew);
-    refreshMetadataIfActive();
     return true;
   }
 
@@ -830,7 +828,6 @@
       return false;
     }
     renderTranscriptIntake();
-    refreshMetadataIfActive();
     return true;
   }
 
@@ -870,7 +867,6 @@
           }
           state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
           renderTranscriptIntake();
-          refreshMetadataIfActive();
         });
       })
       .catch(function () {});

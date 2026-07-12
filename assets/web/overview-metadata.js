@@ -1,10 +1,13 @@
-/* Metadata Overview — Tab 5
+/* Metadata — a tab of the Overview page (overview.html).
  *
  * Read-only aggregate statistics across all loaded sessions and streams.
- * Computation + display only — all data comes from window._studioState.
+ * Computation + display only — all data comes from the overview.js hub's
+ * state via the window.ClipgenOverview (OV) namespace (lazy reads inside
+ * activate(), never top-level destructures).
  *
- * Lifecycle: window.metadataActivate / metadataDeactivate / metadataResize
- * Pattern follows convergence.js (IIFE, window exports, state via _studioState).
+ * Lifecycle: OV.metadataActivate / metadataDeactivate / metadataResize.
+ * Row/event drill-downs link to /studio/ (the intake tabs live there; the
+ * former filter carry-over was dropped in the move — no deep-link support).
  */
 (function () {
   "use strict";
@@ -1516,32 +1519,24 @@
   }
 
   // --- Drill-down helpers ---
+  //
+  // On Studio these jumped to the intake tabs with filters pre-applied; those
+  // tabs stayed in Studio, so drill-downs are now plain navigation (no filter
+  // carry-over — Studio has no deep-link support yet).
 
   function drillDownEventType(eventType) {
-    state.intakeFilterText = eventType;
-    var searchInput = qs("#intakeFilterSearch");
-    if (searchInput) searchInput.value = eventType;
-    switchToTab("intake");
+    void eventType;
+    window.location.href = "/studio/";
   }
 
   function drillDownTranscriptCategory(category) {
-    state.trIntakeFilterCategory = category;
-    switchToTab("transcript-intake");
+    void category;
+    window.location.href = "/studio/";
   }
 
   function drillDownParticipant(participant) {
-    state.intakeFilterParticipants = [participant];
-    switchToTab("intake");
-  }
-
-  function switchToTab(tabName) {
-    state.activePreviewTab = tabName;
-    var allTabs = qsa(".preview-tab");
-    for (var i = 0; i < allTabs.length; i++) {
-      allTabs[i].classList.remove("active");
-      if (allTabs[i].dataset.tab === tabName) allTabs[i].classList.add("active");
-    }
-    if (window._studioSyncPreviewTab) window._studioSyncPreviewTab(true);
+    void participant;
+    window.location.href = "/studio/";
   }
 
   // --- JSON Export ---
@@ -1743,32 +1738,26 @@
   function activate() {
     mdState.active = true;
     if (!state) {
-      state = window._studioState;
-      parseClipTimestamps = window._studioParseClipTimestamps;
+      var OV = window.ClipgenOverview;
+      state = OV.state;
+      parseClipTimestamps = OV.parseClipTimestamps;
       clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
       clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
-      ROW_FUNCTIONS = window._studioROW_FUNCTIONS;
+      ROW_FUNCTIONS = OV.ROW_FUNCTIONS;
     }
     if (mdState._snapshot) {
       checkStaleness();
     }
     if (mdState.baselines === null) {
-      // First activation: fetch baselines for clock-time correction
-      apiGet("api/sheet/baseline").then(function (data) {
-        mdState.baselines = (data.ok && data.baselines) ? data.baselines : {};
-        refresh();
-      }).catch(function () {
-        mdState.baselines = {};
+      // First activation: the hub's memoized ensureData() supplies all
+      // streams + the baselines used for clock-time correction.
+      window.ClipgenOverview.ensureData().then(function () {
+        mdState.baselines = state.convergenceBaselines || {};
         refresh();
       });
     } else {
       refresh();
     }
-  }
-
-  function refreshIfActive() {
-    if (!mdState.active) return;
-    refresh();
   }
 
   function deactivate() {
@@ -1789,9 +1778,8 @@
     }
   });
 
-  // --- Window exports ---
-  window.metadataActivate = activate;
-  window.metadataDeactivate = deactivate;
-  window.metadataRefreshIfActive = refreshIfActive;
-  window.metadataResize = debounce(resize, 200);
+  // --- Hub exports (OV namespace) ---
+  window.ClipgenOverview.metadataActivate = activate;
+  window.ClipgenOverview.metadataDeactivate = deactivate;
+  window.ClipgenOverview.metadataResize = debounce(resize, 200);
 })();
