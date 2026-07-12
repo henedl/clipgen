@@ -350,6 +350,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Workflows node-canvas for chaining clip, Screenspace, and transcript actions",
     )
     viewer_manifest.add_argument(
+        "--overview",
+        action="store_true",
+        help="Launch the Overview frontend (Metadata, Convergence, and the 3D similarity Map)",
+    )
+    viewer_manifest.add_argument(
         "--gallery",
         type=str,
         nargs="?",
@@ -3183,6 +3188,12 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --workflows.",
     ),
     _ModeSpec(
+        key="overview",
+        truthy=lambda a: bool(getattr(a, "overview", False)),
+        error="--overview cannot be combined with mode, format, or other web/CLI mode flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --overview.",
+    ),
+    _ModeSpec(
         key="gallery",
         # `gallery` carries an optional VIDEO arg, so use `is not None` to detect it.
         truthy=lambda a: getattr(a, "gallery", None) is not None,
@@ -3496,6 +3507,8 @@ def _dispatch_standalone_mode(
         if getattr(args, "transcripts", False)
         else "workflows"
         if getattr(args, "workflows", False)
+        else "overview"
+        if getattr(args, "overview", False)
         else None
     )
     if web_mode is not None and not args.spreadsheet:
@@ -3732,6 +3745,16 @@ def main() -> None:
                 server.start_combined_server(
                     worksheet=worksheet,
                     default_page="workflows",
+                    gspread_client=gspread_client,
+                )
+                sys.exit(0)
+
+            if getattr(args, "overview", False):
+                import server
+
+                server.start_combined_server(
+                    worksheet=worksheet,
+                    default_page="overview",
                     gspread_client=gspread_client,
                 )
                 sys.exit(0)

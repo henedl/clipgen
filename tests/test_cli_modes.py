@@ -32,6 +32,7 @@ def _args(**overrides):
         screenspace=False,
         transcripts=False,
         workflows=False,
+        overview=False,
     )
     base.update(overrides)
     return Namespace(**base)
@@ -54,6 +55,25 @@ def test_workflows_mode_conflicts_with_selection_flags():
     """--workflows accepts only -s/-i/-o/-v, not selection/format modes."""
     with pytest.raises(SystemExit):
         cli._validate_mode_conflicts(_args(workflows=True, batch=True))
+
+
+def test_overview_mode_accepted_alone():
+    """--overview alone validates and is reported active by mode detection."""
+    modes = cli._validate_mode_conflicts(_args(overview=True))
+    assert modes["overview"] is True
+
+
+def test_overview_mode_conflicts_with_other_web_modes():
+    """--overview is mutually exclusive with the other web frontends."""
+    for other in ("studio", "screenspace", "transcripts", "workflows"):
+        with pytest.raises(SystemExit):
+            cli._validate_mode_conflicts(_args(overview=True, **{other: True}))
+
+
+def test_overview_mode_conflicts_with_selection_flags():
+    """--overview accepts only -s/-i/-o/-v, not selection/format modes."""
+    with pytest.raises(SystemExit):
+        cli._validate_mode_conflicts(_args(overview=True, batch=True))
 
 
 def test_run_cli_mode_rejects_chronologic_in_mixed_mode(monkeypatch):

@@ -105,11 +105,15 @@ uv run clipgen.py --workflows -i ./videos -o ./out
 
 The **Overview** frontend (reachable from the top navigation on any served page, at `/overview/`) gathers the cohort-level lenses in one place, as three tabs:
 
-- **Map** renders every participant as a dot in 3D space, positioned so that spatial distance reflects behavioral similarity — computed from spreadsheet observation categories/severities, Screenspace event rates, transcript friction signals, and session pacing. Clusters and outliers pop out at a glance; clicking a dot explains which signals set that participant apart from the cohort, and per-group weight sliders shift the lens. The layout is deterministic: the same data always produces the same map.
+- **Map** renders every participant as a dot in 3D space, positioned so that spatial distance reflects behavioral similarity — computed from the timestamps in the spreadsheet (no clip generation needed), researcher marks and friction signals from Transcripts, Screenspace event rates, and session pacing. Clusters and outliers pop out at a glance; clicking a dot explains which signals set that participant apart (with deep links into Transcripts/Screenspace) and unfolds their actual moments as an in-scene burst plus a session timeline. Toggleable layers add similarity links between peers, shared category/detector anchors, and an all-moments point cloud; a session-replay control sweeps a playhead over the study and lets activity glow, mindwalk-style. Individual features can be muted from the lens, and the layout stays deterministic: the same data always produces the same map.
 - **Convergence** aligns all participants' events on a shared timeline and highlights the moments where many participants do the same thing, with per-participant alignment offsets for misaligned recordings.
 - **Metadata** shows aggregate statistics across every loaded session and stream.
 
 Overview works in any launch mode — panels that need a spreadsheet show what still works without one.
+
+```shell
+uv run clipgen.py --overview -i ./videos -o ./out
+```
 
 ## Third-party code
 
