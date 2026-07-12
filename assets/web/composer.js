@@ -23,6 +23,7 @@
     playhead: 0,            // global seconds (kept current by timeupdate)
     playing: false,
     cuts: [],               // all cuts from the composer manifest (all participants)
+    trims: {},              // marker key → {start, end} span overrides
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
     markers: { sheet: [], screenspace: [], transcript: [] },
@@ -382,6 +383,58 @@
     showToast(err && err.message ? err.message : "Cut update failed");
   }
 
+  // Find a loaded marker by key across the three lanes (markers are rebuilt on
+  // participant switch, so a trim op can outlive its marker — that's fine, the
+  // manifest still updates and the next lane load reflects it).
+  function findMarker(key) {
+    var sources = Object.keys(state.markers);
+    for (var s = 0; s < sources.length; s++) {
+      var lane = state.markers[sources[s]];
+      for (var i = 0; i < lane.length; i++) {
+        if (lane[i].key === key) return lane[i];
+      }
+    }
+    return null;
+  }
+
+  function refreshMarkerViews() {
+    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    renderTimeline();
+    renderSidebar();
+  }
+
+  // Raw trim applier: *values* = {start, end} sets the override, null resets
+  // it. Updates the manifest, the local trims map, and the loaded marker.
+  function applyTrim(key, values) {
+    var call = values
+      ? apiSend("PUT", "api/trims/" + encodeURIComponent(key), values)
+      : apiSend("DELETE", "api/trims/" + encodeURIComponent(key));
+    return call.then(function (data) {
+      if (!data.ok) throw new Error(data.error || "Could not save trim");
+      var marker = findMarker(key);
+      if (values) {
+        state.trims[key] = { start: data.trim.start, end: data.trim.end };
+        if (marker) {
+          if (!marker.trimmed) {
+            marker.origStart = marker.start;
+            marker.origEnd = marker.end;
+          }
+          marker.trimmed = true;
+          marker.start = data.trim.start;
+          marker.end = data.trim.end;
+        }
+      } else {
+        delete state.trims[key];
+        if (marker && marker.trimmed) {
+          marker.start = marker.origStart;
+          marker.end = marker.origEnd;
+          marker.trimmed = false;
+        }
+      }
+      refreshMarkerViews();
+    });
+  }
+
   // ---- Undo / redo (cut create / delete / edit) ----
 
   var _undoStack = [];
@@ -413,6 +466,9 @@
       return isUndo
         ? applyCreate(op.cut).then(function (cut) { op.cut = cut; })
         : applyDelete(op.cut.id);
+    }
+    if (op.type === "trim") {
+      return applyTrim(op.key, isUndo ? op.before : op.after);
     }
     // edit
     return applyTimes(op.id, isUndo ? op.before : op.after);
@@ -496,6 +552,49 @@
     renderTimeline();
   }
   CO.selectCut = selectCut;
+
+  // ---- Marker trims (user actions; non-destructive span overrides) ----
+
+  // Persist a marker's dragged span. The timeline mutated the marker live;
+  // *before* is the trim that was in force pre-drag (null = untrimmed).
+  function commitMarkerTrim(marker, before) {
+    var after = { start: marker.start, end: marker.end };
+    applyTrim(marker.key, after).then(function () {
+      recordOp({ type: "trim", key: marker.key, before: before, after: after });
+    }).catch(opFailed);
+  }
+  CO.commitMarkerTrim = commitMarkerTrim;
+
+  function resetTrim(marker) {
+    var before = state.trims[marker.key];
+    if (!before) return;
+    applyTrim(marker.key, null).then(function () {
+      recordOp({
+        type: "trim",
+        key: marker.key,
+        before: { start: before.start, end: before.end },
+        after: null,
+      });
+    }).catch(opFailed);
+  }
+  CO.resetTrim = resetTrim;
+
+  // Promote a marker's (possibly trimmed) span to a Composer cut so it feeds
+  // generation without new plumbing.
+  function copyMarkerToCut(marker) {
+    applyCreate({
+      participant: state.participant,
+      start: marker.start,
+      end: marker.end,
+      label: marker.label || marker.eventType || "",
+    }).then(function (cut) {
+      recordOp({ type: "create", cut: cut });
+      state.selectedCutId = cut.id;
+      showToast("Copied to cuts");
+      refreshCutViews();
+    }).catch(opFailed);
+  }
+  CO.copyMarkerToCut = copyMarkerToCut;
 
   function nudgeSelectedCut(deltaSeconds) {
     var cut = state.selectedCutId && findCut(state.selectedCutId);
@@ -606,6 +705,16 @@
       labelRow.appendChild(dot);
       labelRow.appendChild(el("span", "co-marker-label",
         m.label || m.eventType || source));
+      var copyBtn = el("button", "co-cut-delete");
+      copyBtn.type = "button";
+      copyBtn.title = "Copy to cuts";
+      copyBtn.setAttribute("aria-label", "Copy to cuts");
+      copyBtn.appendChild(el("span", "co-btn-icon co-icon-scissors"));
+      copyBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        copyMarkerToCut(m);
+      });
+      labelRow.appendChild(copyBtn);
       item.appendChild(labelRow);
 
       var timeRow = el("div", "co-cut-row");
@@ -614,6 +723,22 @@
         (m.end > m.start ? " – " + formatTime(m.end, { decimals: 1 }) : "")));
       if (m.end > m.start) {
         timeRow.appendChild(el("span", "co-cut-dur", formatDuration(m.end - m.start)));
+      }
+      if (m.trimmed) {
+        var trimBadge = el("span", "co-trim-badge", "trimmed");
+        trimBadge.title = "Original: " + formatTime(m.origStart, { decimals: 1 }) +
+          " – " + formatTime(m.origEnd, { decimals: 1 });
+        timeRow.appendChild(trimBadge);
+        var resetBtn = el("button", "co-cut-delete");
+        resetBtn.type = "button";
+        resetBtn.title = "Reset trim to the source span";
+        resetBtn.setAttribute("aria-label", "Reset trim");
+        resetBtn.appendChild(el("span", "co-btn-icon co-icon-undo"));
+        resetBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          resetTrim(m);
+        });
+        timeRow.appendChild(resetBtn);
       }
       item.appendChild(timeRow);
 
@@ -998,6 +1123,7 @@
     apiGet("api/manifest").then(function (data) {
       if (!data.ok || !data.manifest) return;
       state.cuts = data.manifest.cuts || [];
+      state.trims = data.manifest.trims || {};
       var ui = data.manifest.ui || {};
       if (ui.markerSources) {
         Object.keys(state.sourceToggles).forEach(function (src) {

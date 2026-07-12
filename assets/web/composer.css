@@ -313,6 +313,18 @@ body[data-frontend="composer"] {
 }
 
 /* Marker list items (source tabs) reuse the cut-item card. */
+.co-trim-badge {
+  flex: 0 0 auto;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
 .co-marker-dot {
   flex: 0 0 auto;
   width: 8px;

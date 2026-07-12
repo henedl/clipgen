@@ -4,8 +4,13 @@ Registered at ``/composer`` by ``server.build_combined_app`` (mutually exclusive
 launch with the other web modes, but all blueprints are always mounted). Phase 1
 ships the static page routes, participant/video discovery, and the composer
 manifest CRUD: in/out **cut pairs** plus persisted UI state (marker-lane
-toggles). Trims of existing source markers (P2) and visual annotations with
-burn-in export (P3) extend this module later.
+toggles + fold states). Phase 2 adds **trims** — non-destructive per-marker
+span overrides keyed by the frontend's marker key (``"sheet:12:P01:0"``,
+``"screenspace:<event_id>"``, ``"transcript-mark:<mark_id>"``), stored in
+video-global seconds *after* the Convergence per-lane offset (the trim is
+against the video, so a later offset change doesn't move it). The source
+manifests (sheet / Screenspace / Transcripts) are never mutated. Visual
+annotations with burn-in export (P3) extend this module later.
 
 All Composer state lives in ``composer_manifest.json`` in the output dir
 (load-on-startup, save-after-mutations). Composer never writes to the
@@ -237,6 +242,36 @@ def api_cut_delete(cut_id: str) -> Any:
         if len(remaining) == len(cuts):
             return err(f"No cut {cut_id}", 404)
         _manifest["cuts"] = remaining
+        _persist_locked()
+    return ok()
+
+
+@composer_bp.route("/api/trims/<path:key>", methods=["PUT"])
+def api_trim_put(key: str) -> Any:
+    """Set a non-destructive span override for one source marker."""
+    data = request.get_json(silent=True) or {}
+    try:
+        start = float(data["start"])
+        end = float(data["end"])
+    except (KeyError, TypeError, ValueError):
+        return err("start and end are required numbers")
+    if end < start + MIN_CUT_SECONDS:
+        return err("end must be after start")
+    trim = {"start": round(max(0.0, start), 3), "end": round(end, 3)}
+    with _manifest_lock:
+        _manifest.setdefault("trims", {})[key] = trim
+        _persist_locked()
+    return ok(key=key, trim=trim)
+
+
+@composer_bp.route("/api/trims/<path:key>", methods=["DELETE"])
+def api_trim_delete(key: str) -> Any:
+    """Reset a marker to its source span by dropping its override."""
+    with _manifest_lock:
+        trims = _manifest.get("trims", {})
+        if key not in trims:
+            return err(f"No trim for {key}", 404)
+        del trims[key]
         _persist_locked()
     return ok()
 

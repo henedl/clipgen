@@ -47,6 +47,17 @@
 
   function commitLane(pid, version, source, markers) {
     if (version !== _loadVersion || pid !== state.participant) return;
+    // Overlay persisted trims: the marker shows its trimmed span, keeping the
+    // source span on origStart/origEnd for the tooltip and reset.
+    markers.forEach(function (m) {
+      var trim = state.trims[m.key];
+      if (!trim) return;
+      m.origStart = m.start;
+      m.origEnd = m.end;
+      m.start = trim.start;
+      m.end = trim.end;
+      m.trimmed = true;
+    });
     state.markers[source] = markers;
     if (CO.updateTimelineHeight) CO.updateTimelineHeight();
     if (CO.renderTimeline) CO.renderTimeline();

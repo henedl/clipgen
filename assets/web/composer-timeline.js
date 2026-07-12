@@ -252,6 +252,12 @@
         var y = lane.y + m._row * ROW_H;
         ctx.fillStyle = hexToRgba(color, 0.55);
         ctx.fillRect(x1, y, rw, ROW_H - 1);
+        // Trimmed affordance: a solid underline in the lane color marks a
+        // marker whose span deviates from its source (right-click resets).
+        if (m.trimmed) {
+          ctx.fillStyle = color;
+          ctx.fillRect(x1, y + ROW_H - 3, rw, 2);
+        }
         _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: ROW_H - 1, marker: m });
       });
     });
@@ -376,6 +382,34 @@
     return hit && hit.cut ? hit.cut : null;
   }
 
+  // Marker-edge hit: like cut edges, but against the marker hit rects (their
+  // vertical band is per-row). Returns {marker, edge} or null.
+  function hitTestMarkerEdge(clientX, clientY) {
+    var rect = getRect();
+    var mx = clientX - rect.left;
+    var my = clientY - rect.top;
+    var best = null;
+    var bestDist = EDGE_SLOP + 1;
+    for (var i = _hitRects.length - 1; i >= 0; i--) {
+      var hr = _hitRects[i];
+      if (!hr.marker) continue;
+      if (my < hr.y || my > hr.y + hr.h) continue;
+      // Point markers (start === end) have no meaningful edges to trim.
+      if (hr.marker.end <= hr.marker.start) continue;
+      var startDist = Math.abs(mx - hr.x1);
+      var endDist = Math.abs(mx - hr.x2);
+      if (startDist <= EDGE_SLOP && startDist < bestDist) {
+        best = { marker: hr.marker, edge: "start" };
+        bestDist = startDist;
+      }
+      if (endDist <= EDGE_SLOP && endDist < bestDist) {
+        best = { marker: hr.marker, edge: "end" };
+        bestDist = endDist;
+      }
+    }
+    return best;
+  }
+
   // ---- Tooltip ----
 
   function showTooltip(hit, clientX, clientY) {
@@ -390,6 +424,12 @@
       tip.appendChild(el("span", "co-tooltip-time",
         formatTime(m.start, { decimals: 1 }) +
         (m.end > m.start ? " – " + formatTime(m.end, { decimals: 1 }) : "")));
+      if (m.trimmed) {
+        tip.appendChild(el("span", "co-tooltip-time",
+          "trimmed from " + formatTime(m.origStart, { decimals: 1 }) +
+          " – " + formatTime(m.origEnd, { decimals: 1 }) +
+          " · right-click to reset"));
+      }
       if (m.label) tip.appendChild(el("span", "co-tooltip-label", m.label));
     } else if (hit.cut) {
       var tc = getCanvasThemeColors();
@@ -464,6 +504,7 @@
       if (!state.duration) return;
       hideTooltip();
       var edgeHit = hitTestCutEdge(e.clientX, e.clientY);
+      var markerEdgeHit = edgeHit ? null : hitTestMarkerEdge(e.clientX, e.clientY);
       if (edgeHit) {
         drag = {
           type: "edge",
@@ -474,6 +515,26 @@
           moved: false,
         };
         CO.selectCut(edgeHit.cut.id);
+        canvas.classList.add("co-drag-edge");
+      } else if (markerEdgeHit) {
+        // Marker trim drag: same gesture as a cut edge, committed as a
+        // non-destructive trim override on pointer-up.
+        drag = {
+          type: "marker-edge",
+          marker: markerEdgeHit.marker,
+          edge: markerEdgeHit.edge,
+          origStart: markerEdgeHit.marker.start,
+          origEnd: markerEdgeHit.marker.end,
+          // The trim in force before this drag (null = untrimmed) — the undo
+          // payload, captured before the drag mutates anything.
+          beforeTrim: state.trims[markerEdgeHit.marker.key]
+            ? {
+                start: state.trims[markerEdgeHit.marker.key].start,
+                end: state.trims[markerEdgeHit.marker.key].end,
+              }
+            : null,
+          moved: false,
+        };
         canvas.classList.add("co-drag-edge");
       } else {
         var bodyCut = hitTestCutBody(e.clientX, e.clientY);
@@ -507,7 +568,8 @@
       if (!drag) {
         // Hover: edge cursor affordance + tooltip.
         if (!state.duration) return;
-        var edge = hitTestCutEdge(e.clientX, e.clientY);
+        var edge = hitTestCutEdge(e.clientX, e.clientY) ||
+          hitTestMarkerEdge(e.clientX, e.clientY);
         canvas.classList.toggle("co-drag-edge", !!edge);
         var hit = edge ? null : hitTest(e.clientX, e.clientY);
         if (hit) showTooltip(hit, e.clientX, e.clientY);
@@ -524,6 +586,17 @@
           cut.start = clamp(ts, 0, cut.end - MIN_CUT_SECONDS);
         } else {
           cut.end = clamp(ts, cut.start + MIN_CUT_SECONDS, state.duration);
+        }
+        scheduleRender();
+      } else if (drag.type === "marker-edge") {
+        ts = xToTime(e.clientX);
+        if (ts === null) return;
+        drag.moved = true;
+        var marker = drag.marker;
+        if (drag.edge === "start") {
+          marker.start = clamp(ts, 0, marker.end - MIN_CUT_SECONDS);
+        } else {
+          marker.end = clamp(ts, marker.start + MIN_CUT_SECONDS, state.duration);
         }
         scheduleRender();
       } else if (drag.type === "body") {
@@ -566,6 +639,12 @@
       }
       if ((d.type === "edge" || d.type === "body") && d.moved) {
         CO.commitCutTimes(d.cut, { start: d.origStart, end: d.origEnd });
+      } else if (d.type === "marker-edge" && d.moved) {
+        CO.commitMarkerTrim(d.marker, d.beforeTrim);
+      } else if (d.type === "marker-edge" && !d.moved) {
+        // A no-move edge grab restores the pre-drag values (nothing changed).
+        d.marker.start = d.origStart;
+        d.marker.end = d.origEnd;
       } else if (d.type === "body" && !d.moved) {
         CO.seekVideo(d.cut.start);
       } else if (d.type === "marker" && !d.moved) {
@@ -574,6 +653,16 @@
     }
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", endDrag);
+
+    // Right-click a trimmed marker to reset its trim (tooltip advertises this).
+    canvas.addEventListener("contextmenu", function (e) {
+      var hit = hitTest(e.clientX, e.clientY);
+      if (hit && hit.marker && hit.marker.trimmed) {
+        e.preventDefault();
+        hideTooltip();
+        CO.resetTrim(hit.marker);
+      }
+    });
 
     canvas.addEventListener("mouseleave", hideTooltip);
 

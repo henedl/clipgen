@@ -161,6 +161,32 @@ def test_ui_requires_some_payload(co_client):
     assert resp.status_code == 400
 
 
+def test_trims_round_trip_and_reset(co_client, tmp_path):
+    key = "sheet:12:P01:0"
+    resp = co_client.put(
+        f"/composer/api/trims/{key}", json={"start": 61.0, "end": 70.5}
+    ).get_json()
+    assert resp["ok"] is True
+    assert resp["trim"] == {"start": 61.0, "end": 70.5}
+    assert _manifest_on_disk(tmp_path)["trims"][key] == {"start": 61.0, "end": 70.5}
+
+    deleted = co_client.delete(f"/composer/api/trims/{key}").get_json()
+    assert deleted["ok"] is True
+    assert _manifest_on_disk(tmp_path)["trims"] == {}
+
+
+def test_trim_delete_unknown_404(co_client):
+    resp = co_client.delete("/composer/api/trims/screenspace:ev_nope")
+    assert resp.status_code == 404
+
+
+def test_trim_put_rejects_inverted_span(co_client):
+    resp = co_client.put(
+        "/composer/api/trims/transcript-mark:m1", json={"start": 5.0, "end": 5.0}
+    )
+    assert resp.status_code == 400
+
+
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
     import server
     import start_settings
