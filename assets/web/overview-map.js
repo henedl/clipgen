@@ -48,6 +48,7 @@
     selected: -1,
     hovered: -1,
     showSimEdges: true,   // similarity-link layer toggle
+    showAnchors: false,   // shared-anchor layer toggle (busier; default off)
   };
 
   var three = {
@@ -60,6 +61,7 @@
     labels: [],     // one overlay div per participant
     colors: null,   // {base, hot} THREE.Color from tokens
     simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
+    anchors: null,  // {features, meshes, labels, links} shared-anchor layer
   };
 
   // Spherical orbit: hand-rolled (rotate + dolly is all a 30-dot scatter
@@ -339,6 +341,7 @@
   // fire this rapidly, so old geometries/materials are disposed each time.
   function rebuildLayers() {
     rebuildSimEdges();
+    rebuildAnchors();
   }
 
   function rebuildSimEdges() {
@@ -389,6 +392,161 @@
       arr[e * 6 + 5] = pb.z;
     }
     three.simEdges.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // ---- Shared-anchor layer --------------------------------------------------
+  //
+  // Small anchor nodes for the interpretable dynamic features (observation
+  // categories + detector rates), each placed at the value-weighted centroid
+  // of the participants exhibiting it, with faint participant->anchor lines.
+  // Anchors follow the layout deterministically and answer WHY dots cluster
+  // ("these three sit together because they share the nav category"). A
+  // feature needs >= 2 exhibitors to earn an anchor — a one-exhibitor anchor
+  // would just shadow that participant's dot.
+
+  function anchorShortName(col) {
+    return col.label
+      .replace(" share of observations", "")
+      .replace(" events/min", "");
+  }
+
+  function anchorFeatures() {
+    var data = state.data;
+    var out = [];
+    for (var j = 0; j < data.columns.length; j++) {
+      var key = data.columns[j].key;
+      if (key.indexOf("obs_cat_") !== 0 && key.indexOf("ss_rate_") !== 0) continue;
+      var exhibitors = 0;
+      for (var i = 0; i < data.matrix.length; i++) {
+        var v = data.matrix[i][j];
+        if (v != null && v > 0) exhibitors++;
+      }
+      if (exhibitors >= 2) {
+        out.push({
+          j: j,
+          group: data.columns[j].group,
+          name: anchorShortName(data.columns[j]),
+        });
+      }
+    }
+    return out;
+  }
+
+  function disposeAnchors() {
+    if (!three.anchors) return;
+    var a = three.anchors;
+    var i;
+    for (i = 0; i < a.meshes.length; i++) {
+      three.scene.remove(a.meshes[i]);
+      a.meshes[i].geometry.dispose();
+      a.meshes[i].material.dispose();
+    }
+    disposeLayer(a.links);
+    for (i = 0; i < a.labels.length; i++) {
+      if (a.labels[i].parentNode) a.labels[i].parentNode.removeChild(a.labels[i]);
+    }
+    three.anchors = null;
+  }
+
+  function rebuildAnchors() {
+    disposeAnchors();
+    var features = anchorFeatures();
+    if (!features.length) return;
+    var data = state.data;
+    var visible = !!state.showAnchors;
+
+    var meshes = [];
+    var labels = [];
+    var pairs = [];
+    var labelFrag = document.createDocumentFragment();
+    var geo = new THREE.OctahedronGeometry(0.22);
+    var f, i;
+    for (f = 0; f < features.length; f++) {
+      var color = features[f].group === "observations"
+        ? three.colors.obsAnchor : three.colors.ssAnchor;
+      var mesh = new THREE.Mesh(
+        geo, new THREE.MeshBasicMaterial({ color: color })
+      );
+      mesh.visible = visible;
+      three.scene.add(mesh);
+      meshes.push(mesh);
+
+      var label = document.createElement("div");
+      label.className = "map-label map-anchor-label";
+      label.textContent = features[f].name;
+      labelFrag.appendChild(label);
+      labels.push(label);
+
+      for (i = 0; i < data.matrix.length; i++) {
+        var v = data.matrix[i][features[f].j];
+        if (v != null && v > 0) pairs.push({ p: i, a: f });
+      }
+    }
+    els.labels.appendChild(labelFrag);
+
+    var linkGeo = new THREE.BufferGeometry();
+    linkGeo.setAttribute(
+      "position", new THREE.BufferAttribute(new Float32Array(pairs.length * 6), 3)
+    );
+    var linkMesh = new THREE.LineSegments(
+      linkGeo,
+      new THREE.LineBasicMaterial({
+        color: three.colors.axis, transparent: true, opacity: 0.35,
+      })
+    );
+    linkMesh.visible = visible;
+    three.scene.add(linkMesh);
+
+    three.anchors = {
+      features: features, meshes: meshes, labels: labels,
+      links: { mesh: linkMesh, pairs: pairs },
+    };
+    placeAnchors();
+  }
+
+  // Anchor position = value-weighted centroid of its exhibitors' CURRENT dot
+  // positions — recomputed per frame so anchors travel with the lerp. Cheap:
+  // <= ~25 anchors x ~30 participants.
+  function placeAnchors() {
+    if (!three.anchors) return;
+    var a = three.anchors;
+    var data = state.data;
+    var f, i;
+    for (f = 0; f < a.features.length; f++) {
+      var j = a.features[f].j;
+      var sx = 0, sy = 0, sz = 0, sw = 0;
+      for (i = 0; i < data.matrix.length; i++) {
+        var v = data.matrix[i][j];
+        if (v == null || v <= 0) continue;
+        var p = three.dots[i].position;
+        sx += v * p.x;
+        sy += v * p.y;
+        sz += v * p.z;
+        sw += v;
+      }
+      if (sw > 0) a.meshes[f].position.set(sx / sw, sy / sw, sz / sw);
+    }
+
+    var arr = a.links.mesh.geometry.attributes.position.array;
+    for (i = 0; i < a.links.pairs.length; i++) {
+      var pp = three.dots[a.links.pairs[i].p].position;
+      var pa = a.meshes[a.links.pairs[i].a].position;
+      arr[i * 6] = pp.x;
+      arr[i * 6 + 1] = pp.y;
+      arr[i * 6 + 2] = pp.z;
+      arr[i * 6 + 3] = pa.x;
+      arr[i * 6 + 4] = pa.y;
+      arr[i * 6 + 5] = pa.z;
+    }
+    a.links.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
+  function setAnchorsVisible(on) {
+    if (!three.anchors) return;
+    var a = three.anchors;
+    for (var i = 0; i < a.meshes.length; i++) a.meshes[i].visible = on;
+    a.links.mesh.visible = on;
+    // Label visibility is applied by updateLabels() on the next render.
   }
 
   // ---- Data load ----------------------------------------------------------
@@ -455,6 +613,8 @@
       hot: tokenColor("--severity-high", "#f87171"),
       axis: tokenColor("--border-strong", "#2e3138"),
       bg: tokenColor("--bg", "#0a0a0b"),
+      obsAnchor: tokenColor("--severity-positive", "#4ade80"),
+      ssAnchor: tokenColor("--cell-data-bright", "#2bc8c8"),
     };
 
     three.scene = new THREE.Scene();
@@ -562,6 +722,7 @@
       }
     }
     syncEdgePositions();
+    placeAnchors();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -721,20 +882,35 @@
     });
   }
 
+  function projectLabel(label, position, v, w, h) {
+    v.copy(position).project(three.camera);
+    if (v.z > 1) {
+      label.style.display = "none";
+      return;
+    }
+    label.style.display = "";
+    label.style.left = ((v.x + 1) / 2 * w) + "px";
+    label.style.top = ((1 - (v.y + 1) / 2) * h) + "px";
+  }
+
   function updateLabels() {
     var w = els.canvasWrap.clientWidth;
     var h = els.canvasWrap.clientHeight;
     var v = new THREE.Vector3();
     var i;
     for (i = 0; i < three.dots.length; i++) {
-      v.copy(three.dots[i].position).project(three.camera);
-      if (v.z > 1) {
-        three.labels[i].style.display = "none";
-        continue;
+      projectLabel(three.labels[i], three.dots[i].position, v, w, h);
+    }
+    if (three.anchors) {
+      for (i = 0; i < three.anchors.labels.length; i++) {
+        if (!state.showAnchors) {
+          three.anchors.labels[i].style.display = "none";
+          continue;
+        }
+        projectLabel(
+          three.anchors.labels[i], three.anchors.meshes[i].position, v, w, h
+        );
       }
-      three.labels[i].style.display = "";
-      three.labels[i].style.left = ((v.x + 1) / 2 * w) + "px";
-      three.labels[i].style.top = ((1 - (v.y + 1) / 2) * h) + "px";
     }
   }
 
@@ -799,15 +975,23 @@
     els.weights.appendChild(frag);
   }
 
-  // Scene-layer toggles. Each entry maps a state flag to a mesh accessor so
-  // toggling only flips visibility (no recompute) once the layer is built.
+  // Scene-layer toggles. Layers stay built; toggling only flips visibility
+  // (no recompute) via each def's apply(on).
   function layerToggleDefs() {
     return [
       {
         key: "showSimEdges",
         label: "Similarity links",
         hint: "Each participant links to its " + SIM_EDGE_K + " most-similar peers; brighter = more alike",
-        entry: function () { return three.simEdges; },
+        apply: function (on) {
+          if (three.simEdges) three.simEdges.mesh.visible = on;
+        },
+      },
+      {
+        key: "showAnchors",
+        label: "Shared anchors",
+        hint: "Observation categories and detectors as anchor nodes, placed amid the participants exhibiting them — shows why dots cluster",
+        apply: setAnchorsVisible,
       },
     ];
   }
@@ -825,12 +1009,7 @@
       box.checked = !!state[def.key];
       box.addEventListener("change", function () {
         state[def.key] = box.checked;
-        var entry = def.entry();
-        if (entry && entry.mesh) {
-          entry.mesh.visible = box.checked;
-        } else if (box.checked) {
-          rebuildLayers();
-        }
+        def.apply(box.checked);
         requestRender();
       });
       var text = document.createElement("span");

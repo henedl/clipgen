@@ -298,6 +298,13 @@ body {
 .map-label.is-partial { color: var(--fg-faint); font-style: italic; }
 .map-label.is-selected { color: var(--fg); font-weight: 600; }
 
+.map-anchor-label {
+  font-size: var(--text-2xs);
+  color: var(--fg-faint);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
 .map-tooltip {
   position: absolute;
   z-index: var(--z-float);
