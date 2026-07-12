@@ -73,22 +73,28 @@
   }
 
   // Vertical layout, driven by fold state: ruler → cuts track (the user's
-  // working track) → one lane per visible source, each sized to its row
-  // count → the annotations lane (only when annotations exist). The strip's
-  // height follows via updateTimelineHeight(), not vice versa.
+  // working track) → the annotations lane right under it (both are Composer-
+  // owned, editable content; only present when annotations exist) → one lane
+  // per visible read-only source. Every lane folds to a single row and
+  // unfolds to its minimal packed row count. The strip's height follows via
+  // updateTimelineHeight(), not vice versa.
   function layout() {
     var cutY = RULER_H + 2;
     var y = cutY + CUT_TRACK_H + 4;
+    var spans = annotationSpans();
+    var annRows = !spans.length
+      ? 0
+      : state.laneFolds.annotations
+        ? 1
+        : neededRows(spans);
+    var annotationsLane = { y: y, rows: annRows, h: annRows * ROW_H };
+    if (annRows) y += annRows * ROW_H + LANE_GAP;
     var lanes = {};
     SOURCES.forEach(function (source) {
       var rows = laneRows(source);
       lanes[source] = { y: y, rows: rows, h: rows * ROW_H };
       if (rows) y += rows * ROW_H + LANE_GAP;
     });
-    var spans = annotationSpans();
-    var annRows = spans.length ? neededRows(spans) : 0;
-    var annotationsLane = { y: y, rows: annRows, h: annRows * ROW_H };
-    if (annRows) y += annRows * ROW_H + LANE_GAP;
     return {
       cutY: cutY,
       cutH: CUT_TRACK_H,
@@ -311,23 +317,22 @@
   }
 
   // Per-lane fold buttons in the DOM rail (rebuilt on every render, like
-  // screenspace's boundary flags). Hidden lanes get no button.
+  // screenspace's boundary flags). Hidden/empty lanes get no button.
   function renderLaneRail(L) {
     var rail = qs("#coLaneRail");
     if (!rail) return;
     rail.innerHTML = "";
     if (!state.duration) return;
     var frag = document.createDocumentFragment();
-    SOURCES.forEach(function (source) {
-      var lane = L.lanes[source];
-      if (!lane.rows) return;
+
+    function foldButton(source, laneY) {
       var folded = !!state.laneFolds[source];
       var btn = el("button", "co-lane-fold");
       btn.type = "button";
       btn.setAttribute("data-source", source);
       btn.title = (folded ? "Unfold " : "Fold ") + source + " lane";
       btn.setAttribute("aria-label", btn.title);
-      btn.style.top = lane.y + "px";
+      btn.style.top = laneY + "px";
       btn.appendChild(el("span",
         "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open")));
       btn.addEventListener("click", function (e) {
@@ -337,8 +342,17 @@
         updateTimelineHeight();
         renderTimeline();
       });
-      frag.appendChild(btn);
+      return btn;
+    }
+
+    SOURCES.forEach(function (source) {
+      var lane = L.lanes[source];
+      if (!lane.rows) return;
+      frag.appendChild(foldButton(source, lane.y));
     });
+    if (L.annotationsLane.rows) {
+      frag.appendChild(foldButton("annotations", L.annotationsLane.y));
+    }
     rail.appendChild(frag);
   }
 

@@ -149,6 +149,7 @@ def test_ui_lane_folds_round_trip(co_client, tmp_path):
         "sheet": True,
         "screenspace": False,
         "transcript": True,
+        "annotations": True,
     }
     disk = _manifest_on_disk(tmp_path)["ui"]
     assert disk["laneFolds"]["screenspace"] is False

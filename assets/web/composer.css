@@ -552,6 +552,7 @@ body[data-frontend="composer"] {
 .co-lane-fold[data-source="sheet"] { --co-lane-color: var(--stream-sheet); }
 .co-lane-fold[data-source="screenspace"] { --co-lane-color: var(--stream-screenspace); }
 .co-lane-fold[data-source="transcript"] { --co-lane-color: var(--stream-transcript); }
+.co-lane-fold[data-source="annotations"] { --co-lane-color: var(--accent); }
 
 #coTimelineCanvas {
   cursor: crosshair;

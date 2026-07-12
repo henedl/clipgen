@@ -32,7 +32,7 @@
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
     markers: { sheet: [], screenspace: [], transcript: [] },
     sourceToggles: { sheet: true, screenspace: true, transcript: true },
-    laneFolds: { sheet: true, screenspace: true, transcript: true },
+    laneFolds: { sheet: true, screenspace: true, transcript: true, annotations: true },
     sidebarTab: "cuts",     // "cuts" | "sheet" | "screenspace" | "transcript"
     zoom: 1,
     offset: 0,              // timeline pan offset (global seconds)

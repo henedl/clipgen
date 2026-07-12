@@ -322,9 +322,8 @@ def api_ui_update() -> Any:
             }
             response["markerSources"] = ui["markerSources"]
         if isinstance(folds, dict):
-            ui["laneFolds"] = {
-                src: bool(folds.get(src, True)) for src in config.CONVERGENCE_SOURCES
-            }
+            fold_lanes = (*config.CONVERGENCE_SOURCES, "annotations")
+            ui["laneFolds"] = {lane: bool(folds.get(lane, True)) for lane in fold_lanes}
             response["laneFolds"] = ui["laneFolds"]
         _persist_locked()
     return ok(**response)
