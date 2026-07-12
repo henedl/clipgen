@@ -48,7 +48,9 @@
   function commitLane(pid, version, source, markers) {
     if (version !== _loadVersion || pid !== state.participant) return;
     state.markers[source] = markers;
-    CO.renderTimeline && CO.renderTimeline();
+    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    if (CO.renderTimeline) CO.renderTimeline();
+    if (CO.renderSidebar) CO.renderSidebar();
   }
 
   // Sheet: one marker per timestamp pair in the participant's column, converted
@@ -151,17 +153,24 @@
     });
   }
 
-  function persistToggles() {
-    CO.apiSend("PUT", "api/ui", { markerSources: state.sourceToggles })
-      .catch(function () {});
+  function persistUi() {
+    CO.apiSend("PUT", "api/ui", {
+      markerSources: state.sourceToggles,
+      laneFolds: state.laneFolds,
+    }).catch(function () {});
+  }
+
+  function rerenderLanes() {
+    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    if (CO.renderTimeline) CO.renderTimeline();
   }
 
   function toggleSource(source) {
     if (!(source in state.sourceToggles)) return;
     state.sourceToggles[source] = !state.sourceToggles[source];
     syncSourcePills();
-    persistToggles();
-    CO.renderTimeline && CO.renderTimeline();
+    persistUi();
+    rerenderLanes();
   }
 
   function toggleAllSources() {
@@ -169,8 +178,8 @@
     var anyOn = SOURCES.some(function (src) { return state.sourceToggles[src]; });
     SOURCES.forEach(function (src) { state.sourceToggles[src] = !anyOn; });
     syncSourcePills();
-    persistToggles();
-    CO.renderTimeline && CO.renderTimeline();
+    persistUi();
+    rerenderLanes();
   }
 
   function initMarkerToggles() {
@@ -186,4 +195,5 @@
   CO.toggleSource = toggleSource;
   CO.toggleAllSources = toggleAllSources;
   CO.syncSourcePills = syncSourcePills;
+  CO.persistLaneUi = persistUi;
 })();

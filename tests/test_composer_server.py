@@ -139,6 +139,28 @@ def test_ui_toggles_round_trip(co_client, tmp_path):
     assert _manifest_on_disk(tmp_path)["ui"]["markerSources"]["sheet"] is False
 
 
+def test_ui_lane_folds_round_trip(co_client, tmp_path):
+    resp = co_client.put(
+        "/composer/api/ui",
+        json={"laneFolds": {"screenspace": False}},
+    ).get_json()
+    assert resp["ok"] is True
+    assert resp["laneFolds"] == {
+        "sheet": True,
+        "screenspace": False,
+        "transcript": True,
+    }
+    disk = _manifest_on_disk(tmp_path)["ui"]
+    assert disk["laneFolds"]["screenspace"] is False
+    # A folds-only PUT must not clobber previously saved lane toggles.
+    assert "markerSources" not in disk or isinstance(disk.get("markerSources"), dict)
+
+
+def test_ui_requires_some_payload(co_client):
+    resp = co_client.put("/composer/api/ui", json={})
+    assert resp.status_code == 400
+
+
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
     import server
     import start_settings

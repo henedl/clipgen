@@ -243,16 +243,31 @@ def api_cut_delete(cut_id: str) -> Any:
 
 @composer_bp.route("/api/ui", methods=["PUT"])
 def api_ui_update() -> Any:
-    """Persist UI state (marker-lane toggles) so it survives a restart."""
+    """Persist UI state (lane toggles + fold states) so it survives a restart.
+
+    Body may carry ``markerSources`` (lane visibility) and/or ``laneFolds``
+    (True = the lane renders as one compact row); at least one is required.
+    """
     data = request.get_json(silent=True) or {}
     sources = data.get("markerSources")
-    if not isinstance(sources, dict):
-        return err("markerSources object is required")
-    toggles = {src: bool(sources.get(src, True)) for src in config.CONVERGENCE_SOURCES}
+    folds = data.get("laneFolds")
+    if not isinstance(sources, dict) and not isinstance(folds, dict):
+        return err("markerSources or laneFolds object is required")
+    response: dict[str, Any] = {}
     with _manifest_lock:
-        _manifest.setdefault("ui", {})["markerSources"] = toggles
+        ui = _manifest.setdefault("ui", {})
+        if isinstance(sources, dict):
+            ui["markerSources"] = {
+                src: bool(sources.get(src, True)) for src in config.CONVERGENCE_SOURCES
+            }
+            response["markerSources"] = ui["markerSources"]
+        if isinstance(folds, dict):
+            ui["laneFolds"] = {
+                src: bool(folds.get(src, True)) for src in config.CONVERGENCE_SOURCES
+            }
+            response["laneFolds"] = ui["laneFolds"]
         _persist_locked()
-    return ok(markerSources=toggles)
+    return ok(**response)
 
 
 # ---- State init ----

@@ -104,6 +104,8 @@ body[data-frontend="composer"] {
 .co-icon-help { --co-icon: url("icons/question-mark-circle.svg"); }
 .co-icon-undo { --co-icon: url("icons/arrow-uturn-left.svg"); }
 .co-icon-redo { --co-icon: url("icons/arrow-uturn-right.svg"); }
+.co-icon-fold-open { --co-icon: url("icons/chevron-down.svg"); }
+.co-icon-fold-closed { --co-icon: url("icons/chevron-right.svg"); }
 .co-icon-zoom-in { --co-icon: url("icons/magnifying-glass-plus.svg"); }
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-trash { --co-icon: url("icons/trash.svg"); }
@@ -221,20 +223,45 @@ body[data-frontend="composer"] {
   flex-direction: column;
 }
 
-.co-panel-header {
-  font-size: var(--text-xs);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--fg-muted);
-  padding: var(--space-3) var(--space-3) var(--space-2);
+.co-panel-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
 }
+
+.co-panel-tab {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.co-panel-tab:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.co-panel-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.co-panel-tab[data-tab="sheet"].active { border-bottom-color: var(--stream-sheet); }
+.co-panel-tab[data-tab="screenspace"].active { border-bottom-color: var(--stream-screenspace); }
+.co-panel-tab[data-tab="transcript"].active { border-bottom-color: var(--stream-transcript); }
 
 .co-cut-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: 0 var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-3);
 }
 
 .co-empty-hint {
@@ -245,8 +272,8 @@ body[data-frontend="composer"] {
 
 .co-cut-item {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
   padding: var(--space-1-5) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -254,6 +281,51 @@ body[data-frontend="composer"] {
   cursor: pointer;
   font-size: var(--text-xs);
   transition: border-color var(--duration-fast), background var(--duration-fast);
+}
+
+.co-cut-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.co-cut-name {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-1);
+  font-size: var(--text-xs);
+  font-family: inherit;
+}
+
+.co-cut-name:hover {
+  border-color: var(--border);
+}
+
+.co-cut-name:focus {
+  border-color: var(--accent);
+  background: var(--bg-input);
+  outline: none;
+}
+
+/* Marker list items (source tabs) reuse the cut-item card. */
+.co-marker-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.co-marker-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .co-cut-item:hover {
@@ -337,6 +409,44 @@ body[data-frontend="composer"] {
   pointer-events: none;
 }
 
+/* Per-lane fold buttons over the canvas's left edge. The rail itself ignores
+   pointer events so timeline drags pass through; each button opts back in. */
+#coLaneRail {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.co-lane-fold {
+  position: absolute;
+  left: var(--space-1);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklab, var(--bg) 65%, transparent);
+  color: var(--co-lane-color, var(--fg-muted));
+  cursor: pointer;
+}
+
+.co-lane-fold:hover {
+  background: var(--bg-hover);
+}
+
+.co-lane-fold .co-btn-icon {
+  width: 10px;
+  height: 10px;
+}
+
+.co-lane-fold[data-source="sheet"] { --co-lane-color: var(--stream-sheet); }
+.co-lane-fold[data-source="screenspace"] { --co-lane-color: var(--stream-screenspace); }
+.co-lane-fold[data-source="transcript"] { --co-lane-color: var(--stream-transcript); }
+
 #coTimelineCanvas {
   cursor: crosshair;
 }
@@ -400,55 +510,157 @@ body[data-frontend="composer"] {
   -webkit-box-orient: vertical;
 }
 
-/* ---- Artifact log popover (TopNav #logBtn) ---- */
+/* ---- Artifact log modal (TopNav #logBtn) ----
+ * Same structure + styling as Studio's log (studio.css .log-*), minus the
+ * modal-trap/motion plumbing; the hub drives --host-blur/--veil-alpha. */
 
-.co-log-panel {
+#logOverlay {
   position: fixed;
-  top: calc(var(--topnav-height) + var(--space-2));
-  right: var(--space-4);
-  z-index: var(--z-dropdown);
-  width: 340px;
-  max-height: 60vh;
-  overflow-y: auto;
-  background: var(--color-panel-bg, var(--bg-elevated));
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
-  padding-bottom: var(--space-2);
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+  --host-blur: 0px;
+  --veil-alpha: 0;
 }
 
-.co-log-content {
+#logOverlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 11, var(--veil-alpha));
+  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  transition:
+    background 460ms cubic-bezier(.22, 1, .36, 1),
+    backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1),
+    -webkit-backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1);
+  pointer-events: none;
+}
+
+#logOverlay.hidden {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #logOverlay::before {
+    transition: none;
+  }
+}
+
+.log-panel {
+  position: relative; /* paints above the ::before veil */
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-panel-border);
+  box-shadow: var(--shadow-xl);
+  width: 520px;
+  max-width: 92vw;
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: 0 var(--space-2);
 }
 
-.co-log-item {
+html[data-theme="dark"] .log-panel {
+  background: var(--color-surface-alt);
+}
+
+.log-header {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-1-5) var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-size: var(--text-xs);
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
 }
 
-.co-log-item.fail {
-  border-color: color-mix(in oklab, var(--sev-critical) 45%, var(--border));
-}
-
-.co-log-item .co-log-file {
+.log-header h3 {
+  font-size: var(--text-md);
   font-weight: 600;
+  margin: 0;
+}
+
+#logContent {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-5);
+}
+
+.log-footer {
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.log-footer span {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.log-empty {
+  text-align: center;
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  padding: var(--space-6) 0;
+}
+
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.log-entry:last-child {
+  border-bottom: none;
+}
+
+.log-type-badge {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius);
+  background: var(--color-border);
+  color: var(--color-text-dim);
+}
+
+.log-type-badge[data-type="clip"] {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+html[data-theme="dark"] .log-type-badge[data-type="clip"] {
+  background: #1e3a5f;
+  color: #93c5fd;
+}
+
+/* Composer-only: failed generations stay in the log with a red badge. */
+.log-type-badge[data-type="fail"] {
+  background: color-mix(in oklab, var(--sev-critical) 18%, transparent);
+  color: var(--sev-critical);
+}
+
+.log-entry-file {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
-.co-log-item .co-log-meta {
-  font-family: var(--font-mono);
-  color: var(--fg-muted);
+.log-entry-meta {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
 }
 
 /* ---- Shortcuts popover (workflows pattern) ---- */

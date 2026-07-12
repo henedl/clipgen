@@ -76,9 +76,20 @@
       </div>
     </section>
 
-    <aside id="coCutPanel" aria-label="Cuts">
-      <div class="co-panel-header">Cuts</div>
-      <div id="coCutList" class="co-cut-list">
+    <aside id="coCutPanel" aria-label="Timelines">
+      <!-- One tab per timeline: the Composer cuts plus the three read-only
+           marker sources. Every list item seeks the playhead to its in point. -->
+      <div class="co-panel-tabs" role="tablist" aria-label="Timeline lists">
+        <button class="co-panel-tab active" type="button" role="tab"
+                aria-selected="true" data-tab="cuts">Cuts</button>
+        <button class="co-panel-tab" type="button" role="tab"
+                aria-selected="false" data-tab="sheet">Sheet</button>
+        <button class="co-panel-tab" type="button" role="tab"
+                aria-selected="false" data-tab="screenspace" title="Screenspace">Screen</button>
+        <button class="co-panel-tab" type="button" role="tab"
+                aria-selected="false" data-tab="transcript" title="Transcript">Script</button>
+      </div>
+      <div id="coCutList" class="co-cut-list" role="tabpanel">
         <p class="co-empty-hint">Press <kbd>I</kbd> then <kbd>O</kbd> to add a cut.</p>
       </div>
     </aside>
@@ -88,6 +99,10 @@
     <div id="coTimelineWrapper">
       <canvas id="coTimelineCanvas"></canvas>
       <canvas id="coPlayheadCanvas"></canvas>
+      <!-- Per-lane fold buttons, absolutely positioned over the canvas's left
+           edge (screenspace boundaryFlagRail pattern: rail ignores pointer
+           events, each button owns its own). -->
+      <div id="coLaneRail"></div>
     </div>
     <div id="coTimelineControls">
       <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
@@ -136,11 +151,17 @@
   <div id="toast" class="toast hidden"></div>
 
   <!-- Artifact log: session record of generated clips, toggled by the TopNav
-       #logBtn (a lightweight popover, not Studio's full modal). -->
-  <div id="coLogPanel" class="co-log-panel hidden" role="dialog" aria-label="Artifact log">
-    <div class="co-panel-header">Artifact log</div>
-    <div id="coLogContent" class="co-log-content">
-      <p class="co-empty-hint">Clips generated this session appear here.</p>
+       #logBtn. Same modal structure and .log-* styling as Studio's log. -->
+  <div id="logOverlay" class="hidden">
+    <div class="log-panel" role="dialog" aria-modal="true" aria-labelledby="logTitle">
+      <div class="log-header">
+        <h3 id="logTitle">Artifact Log</h3>
+        <button id="logClose" class="btn btn-small" type="button">Close</button>
+      </div>
+      <div id="logContent"></div>
+      <div class="log-footer">
+        <span id="logCount"></span>
+      </div>
     </div>
   </div>
 

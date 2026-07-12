@@ -18,6 +18,8 @@
   var RULER_H = 18;
   var CUT_TRACK_H = 26; // the single cuts track, directly under the ruler
   var LANE_GAP = 3;
+  var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
+  var MAX_LANE_ROWS = 8; // unfold ceiling; denser overlaps collapse onto the last row
   var EDGE_SLOP = 5;    // px hit zone around a cut edge
   var MIN_CUT_SECONDS = 0.2;
   var SOURCES = ["sheet", "screenspace", "transcript"];
@@ -39,31 +41,66 @@
 
   function canvasEl() { return qs("#coTimelineCanvas"); }
 
-  // Vertical layout, computed from the live canvas height so the cuts track
-  // and all three marker lanes always fit whatever height the strip gets:
-  // ruler → cuts track (the user's working track) → one lane per source.
-  function layout() {
-    var h = canvasEl().height;
-    var cutY = RULER_H + 2;
-    var lanesTop = cutY + CUT_TRACK_H + 4;
-    var laneAreaH = Math.max(h - lanesTop - 2, SOURCES.length * 8);
-    var laneH = Math.floor(
-      (laneAreaH - (SOURCES.length - 1) * LANE_GAP) / SOURCES.length
-    );
-    var rows = laneH >= 26 ? 2 : 1; // marker sub-rows per lane
-    var rowH = Math.floor((laneH - (rows - 1)) / rows);
-    return {
-      cutY: cutY,
-      cutH: CUT_TRACK_H,
-      lanesTop: lanesTop,
-      laneH: laneH,
-      rows: rows,
-      rowH: rowH,
-    };
+  // Minimal sub-row count for a lane's markers: greedy interval packing over
+  // markers sorted by start yields the optimal (lowest) row count.
+  function neededRows(markers) {
+    var sorted = markers.slice().sort(function (a, b) { return a.start - b.start; });
+    var rowEnds = [];
+    sorted.forEach(function (m) {
+      for (var r = 0; r < rowEnds.length; r++) {
+        if (rowEnds[r] <= m.start) {
+          rowEnds[r] = m.end;
+          return;
+        }
+      }
+      rowEnds.push(m.end);
+    });
+    return Math.min(Math.max(rowEnds.length, 1), MAX_LANE_ROWS);
   }
 
-  function laneY(L, sourceIndex) {
-    return L.lanesTop + sourceIndex * (L.laneH + LANE_GAP);
+  function laneRows(source) {
+    if (!state.sourceToggles[source]) return 0; // hidden lane occupies no space
+    if (state.laneFolds[source]) return 1;
+    return neededRows(state.markers[source] || []);
+  }
+
+  // Vertical layout, driven by fold state: ruler → cuts track (the user's
+  // working track) → one lane per visible source, each sized to its row count.
+  // The strip's height follows via updateTimelineHeight(), not vice versa.
+  function layout() {
+    var cutY = RULER_H + 2;
+    var y = cutY + CUT_TRACK_H + 4;
+    var lanes = {};
+    SOURCES.forEach(function (source) {
+      var rows = laneRows(source);
+      lanes[source] = { y: y, rows: rows, h: rows * ROW_H };
+      if (rows) y += rows * ROW_H + LANE_GAP;
+    });
+    return { cutY: cutY, cutH: CUT_TRACK_H, lanes: lanes, canvasH: y + 2 };
+  }
+
+  // Grow/shrink the whole timeline strip to fit the current fold state by
+  // writing the shared --co-timeline-height var (both the shell and the strip
+  // are sized from it); the wrapper's ResizeObserver then re-renders.
+  var _sectionExtra = null;
+
+  function updateTimelineHeight() {
+    var section = qs("#coTimelineSection");
+    var wrapper = qs("#coTimelineWrapper");
+    if (_sectionExtra === null) {
+      _sectionExtra = Math.max(section.offsetHeight - wrapper.offsetHeight, 24);
+    }
+    var target = layout().canvasH + _sectionExtra;
+    var current = parseFloat(
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--co-timeline-height")
+    );
+    if (Math.abs(target - current) < 1) return;
+    document.documentElement.style.setProperty(
+      "--co-timeline-height", target + "px"
+    );
+    // Fallback when no ResizeObserver is wired (old engines): resize directly.
+    if (typeof ResizeObserver !== "function") sizeCanvases();
   }
 
   function getRect() {
@@ -199,28 +236,60 @@
       _hitRects.push({ x1: x1, x2: x2, y: L.cutY, h: L.cutH, cut: cut });
     });
 
-    // Marker lanes (one per source, below the cuts track)
+    // Marker lanes (one per visible source, below the cuts track)
     var colors = laneColors();
-    SOURCES.forEach(function (source, si) {
-      if (!state.sourceToggles[source]) return;
+    SOURCES.forEach(function (source) {
+      var lane = L.lanes[source];
+      if (!lane.rows) return;
       var markers = state.markers[source] || [];
       if (!markers.length) return;
-      var y0 = laneY(L, si);
       var color = colors[source];
-      var barH = Math.max(L.rowH - 1, 4);
-      assignRows(markers, L.rows).forEach(function (m) {
+      assignRows(markers, lane.rows).forEach(function (m) {
         if (m.end < vis.start || m.start > vis.end) return;
         var x1 = tx(m.start);
         var x2 = tx(Math.max(m.end, m.start));
         var rw = Math.max(x2 - x1, 2);
-        var y = y0 + m._row * (L.rowH + 1);
+        var y = lane.y + m._row * ROW_H;
         ctx.fillStyle = hexToRgba(color, 0.55);
-        ctx.fillRect(x1, y, rw, barH);
-        _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: barH, marker: m });
+        ctx.fillRect(x1, y, rw, ROW_H - 1);
+        _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: ROW_H - 1, marker: m });
       });
     });
 
+    renderLaneRail(L);
     renderPlayhead();
+  }
+
+  // Per-lane fold buttons in the DOM rail (rebuilt on every render, like
+  // screenspace's boundary flags). Hidden lanes get no button.
+  function renderLaneRail(L) {
+    var rail = qs("#coLaneRail");
+    if (!rail) return;
+    rail.innerHTML = "";
+    if (!state.duration) return;
+    var frag = document.createDocumentFragment();
+    SOURCES.forEach(function (source) {
+      var lane = L.lanes[source];
+      if (!lane.rows) return;
+      var folded = !!state.laneFolds[source];
+      var btn = el("button", "co-lane-fold");
+      btn.type = "button";
+      btn.setAttribute("data-source", source);
+      btn.title = (folded ? "Unfold " : "Fold ") + source + " lane";
+      btn.setAttribute("aria-label", btn.title);
+      btn.style.top = lane.y + "px";
+      btn.appendChild(el("span",
+        "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open")));
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        state.laneFolds[source] = !state.laneFolds[source];
+        if (CO.persistLaneUi) CO.persistLaneUi();
+        updateTimelineHeight();
+        renderTimeline();
+      });
+      frag.appendChild(btn);
+    });
+    rail.appendChild(frag);
   }
 
   function renderPlayhead() {
@@ -408,6 +477,7 @@
         canvas.classList.add("co-drag-edge");
       } else {
         var bodyCut = hitTestCutBody(e.clientX, e.clientY);
+        var markerHit = bodyCut ? null : hitTest(e.clientX, e.clientY);
         if (bodyCut) {
           drag = {
             type: "body",
@@ -418,6 +488,9 @@
             moved: false,
           };
           CO.selectCut(bodyCut.id);
+        } else if (markerHit && markerHit.marker) {
+          // Click a marker → seek to its in point (same as the cut track).
+          drag = { type: "marker", marker: markerHit.marker, startX: e.clientX, moved: false };
         } else if (state.zoom > 1) {
           drag = { type: "pan", startX: e.clientX, startOffset: state.offset, moved: false };
         } else {
@@ -473,6 +546,8 @@
         state.offset = clamp(drag.startOffset - (dx / rect2.width) * visLen2,
           0, Math.max(0, state.duration - visLen2));
         scheduleRender();
+      } else if (drag.type === "marker") {
+        if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
       } else if (drag.type === "scrub") {
         drag.moved = true;
         ts = xToTime(e.clientX);
@@ -493,6 +568,8 @@
         CO.commitCutTimes(d.cut, { start: d.origStart, end: d.origEnd });
       } else if (d.type === "body" && !d.moved) {
         CO.seekVideo(d.cut.start);
+      } else if (d.type === "marker" && !d.moved) {
+        CO.seekVideo(d.marker.start);
       }
     }
     canvas.addEventListener("pointerup", endDrag);
@@ -522,6 +599,7 @@
   CO.initTimeline = initTimeline;
   CO.renderTimeline = renderTimeline;
   CO.renderPlayhead = renderPlayhead;
+  CO.updateTimelineHeight = updateTimelineHeight;
   // Theme flips resample the --stream-* lane colors on the next render.
   CO.invalidateLaneColors = function () { _laneColors = null; };
 })();

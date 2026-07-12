@@ -27,6 +27,8 @@
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
     markers: { sheet: [], screenspace: [], transcript: [] },
     sourceToggles: { sheet: true, screenspace: true, transcript: true },
+    laneFolds: { sheet: true, screenspace: true, transcript: true },
+    sidebarTab: "cuts",     // "cuts" | "sheet" | "screenspace" | "transcript"
     zoom: 1,
     offset: 0,              // timeline pan offset (global seconds)
     dragging: false,        // timeline satellite sets during pan/edge drags
@@ -271,7 +273,8 @@
     updatePlayButton();
     updateTimeLabel();
     updateGenerateButton();
-    renderCutList();
+    renderSidebar();
+    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
     renderTimeline();
     loadMarkers(pid);
   }
@@ -504,7 +507,18 @@
     commitCutTimes(cut, before);
   }
 
+  function commitCutLabel(cut, label) {
+    if (label === (cut.label || "")) return;
+    apiSend("PATCH", "api/cuts/" + encodeURIComponent(cut.id), { label: label })
+      .then(function (data) {
+        if (!data.ok) throw new Error(data.error || "Could not save name");
+        cut.label = data.cut.label;
+      })
+      .catch(opFailed);
+  }
+
   function renderCutList() {
+    if (state.sidebarTab !== "cuts") return;
     var list = qs("#coCutList");
     list.innerHTML = "";
     var cuts = participantCuts();
@@ -517,11 +531,27 @@
     var frag = document.createDocumentFragment();
     cuts.forEach(function (cut) {
       var item = el("div", "co-cut-item" + (cut.id === state.selectedCutId ? " selected" : ""));
-      item.appendChild(el("span", "co-cut-times",
-        formatTime(cut.start, { decimals: 1 }) + " – " + formatTime(cut.end, { decimals: 1 })));
-      item.appendChild(el("span", "co-cut-dur", formatDuration(cut.end - cut.start)));
+
+      // Row 1: editable name (carried into generated clips as the event type;
+      // will also feed the Studio Composer-intake tab in P2) + delete button.
+      var nameRow = el("div", "co-cut-row");
+      var name = el("input", "co-cut-name");
+      name.type = "text";
+      name.autocomplete = "off";
+      name.placeholder = "Name this cut…";
+      name.value = cut.label || "";
+      name.setAttribute("aria-label", "Cut name");
+      name.addEventListener("click", function (e) { e.stopPropagation(); });
+      name.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") name.blur();
+        e.stopPropagation();
+      });
+      name.addEventListener("blur", function () {
+        commitCutLabel(cut, name.value.trim());
+      });
+      nameRow.appendChild(name);
       if (cut._genStatus) {
-        item.appendChild(el("span", "co-cut-status " + cut._genStatus,
+        nameRow.appendChild(el("span", "co-cut-status " + cut._genStatus,
           cut._genStatus === "ok" ? "✓" : "✗"));
       }
       var del = el("button", "co-cut-delete");
@@ -533,7 +563,16 @@
         e.stopPropagation();
         deleteCut(cut.id);
       });
-      item.appendChild(del);
+      nameRow.appendChild(del);
+      item.appendChild(nameRow);
+
+      // Row 2: span + duration.
+      var timeRow = el("div", "co-cut-row");
+      timeRow.appendChild(el("span", "co-cut-times",
+        formatTime(cut.start, { decimals: 1 }) + " – " + formatTime(cut.end, { decimals: 1 })));
+      timeRow.appendChild(el("span", "co-cut-dur", formatDuration(cut.end - cut.start)));
+      item.appendChild(timeRow);
+
       item.addEventListener("click", function () {
         selectCut(cut.id);
         seekVideo(cut.start);
@@ -543,6 +582,70 @@
     list.appendChild(frag);
   }
   CO.renderCutList = renderCutList;
+
+  // ---- Sidebar tabs (cuts + one list per marker source) ----
+
+  function renderMarkerList(source) {
+    var list = qs("#coCutList");
+    list.innerHTML = "";
+    var markers = (state.markers[source] || []).slice()
+      .sort(function (a, b) { return a.start - b.start; });
+    if (!markers.length) {
+      list.appendChild(el("p", "co-empty-hint",
+        "No " + source + " markers for this participant."));
+      return;
+    }
+    var color = getCSSVar("--stream-" + source, "#888");
+    var frag = document.createDocumentFragment();
+    markers.forEach(function (m) {
+      var item = el("div", "co-cut-item");
+
+      var labelRow = el("div", "co-cut-row");
+      var dot = el("span", "co-marker-dot");
+      dot.style.background = color;
+      labelRow.appendChild(dot);
+      labelRow.appendChild(el("span", "co-marker-label",
+        m.label || m.eventType || source));
+      item.appendChild(labelRow);
+
+      var timeRow = el("div", "co-cut-row");
+      timeRow.appendChild(el("span", "co-cut-times",
+        formatTime(m.start, { decimals: 1 }) +
+        (m.end > m.start ? " – " + formatTime(m.end, { decimals: 1 }) : "")));
+      if (m.end > m.start) {
+        timeRow.appendChild(el("span", "co-cut-dur", formatDuration(m.end - m.start)));
+      }
+      item.appendChild(timeRow);
+
+      item.title = m.label || "";
+      item.addEventListener("click", function () {
+        seekVideo(m.start);
+      });
+      frag.appendChild(item);
+    });
+    list.appendChild(frag);
+  }
+
+  function renderSidebar() {
+    if (state.sidebarTab === "cuts") renderCutList();
+    else renderMarkerList(state.sidebarTab);
+  }
+  CO.renderSidebar = renderSidebar;
+
+  function initSidebarTabs() {
+    var tabs = qsa(".co-panel-tab");
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        state.sidebarTab = tab.getAttribute("data-tab");
+        tabs.forEach(function (t) {
+          var active = t === tab;
+          t.classList.toggle("active", active);
+          t.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        renderSidebar();
+      });
+    });
+  }
 
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
 
@@ -650,7 +753,10 @@
     if (_generateAbort) _generateAbort.abort();
   }
 
-  // ---- Artifact log (TopNav #logBtn popover) ----
+  // ---- Artifact log (TopNav #logBtn; Studio-style modal) ----
+
+  var LOG_BLUR_PX = 6;
+  var LOG_VEIL_ALPHA = 0.35;
 
   function logArtifactResult(data, cut) {
     var artifact = data.artifact || {};
@@ -663,38 +769,67 @@
       error: data.error || "",
       at: new Date(),
     });
-    if (!qs("#coLogPanel").classList.contains("hidden")) renderLogPanel();
+    if (!qs("#logOverlay").classList.contains("hidden")) renderLog();
   }
 
-  function renderLogPanel() {
-    var content = qs("#coLogContent");
+  function renderLog() {
+    var content = qs("#logContent");
+    var countEl = qs("#logCount");
     content.innerHTML = "";
     if (!state.artifactLog.length) {
-      content.appendChild(el("p", "co-empty-hint",
-        "Clips generated this session appear here."));
+      content.appendChild(el("div", "log-empty", "No clips generated yet."));
+      countEl.textContent = "";
       return;
     }
     var frag = document.createDocumentFragment();
     for (var i = state.artifactLog.length - 1; i >= 0; i--) {
       var entry = state.artifactLog[i];
-      var item = el("div", "co-log-item" + (entry.ok ? "" : " fail"));
-      item.appendChild(el("span", "co-log-file",
-        entry.ok ? (entry.file || "clip") : "Failed: " + (entry.error || "unknown error")));
-      var meta = entry.participant + " · " +
+      var row = el("div", "log-entry");
+      var badge = el("span", "log-type-badge", entry.ok ? "clip" : "fail");
+      badge.setAttribute("data-type", entry.ok ? "clip" : "fail");
+      row.appendChild(badge);
+      row.appendChild(el("span", "log-entry-file",
+        entry.ok ? (entry.file || "clip") : (entry.error || "unknown error")));
+      row.appendChild(el("span", "log-entry-meta",
+        entry.participant + " · " +
         formatTime(entry.start, { decimals: 1 }) + " – " +
         formatTime(entry.end, { decimals: 1 }) + " · " +
-        entry.at.toLocaleTimeString();
-      item.appendChild(el("span", "co-log-meta", meta));
-      frag.appendChild(item);
+        entry.at.toLocaleTimeString()));
+      frag.appendChild(row);
     }
     content.appendChild(frag);
+    var okCount = state.artifactLog.filter(function (e) { return e.ok; }).length;
+    countEl.textContent = okCount + " clip(s) generated this session";
+  }
+
+  function logOverlayVisible() {
+    return !qs("#logOverlay").classList.contains("hidden");
+  }
+
+  function openLog() {
+    var overlay = qs("#logOverlay");
+    overlay.style.setProperty("--host-blur", "0px");
+    overlay.style.setProperty("--veil-alpha", "0");
+    overlay.classList.remove("hidden");
+    // Next frame: build in the backdrop blur + dark veil (Studio's pattern).
+    requestAnimationFrame(function () {
+      overlay.style.setProperty("--host-blur", LOG_BLUR_PX + "px");
+      overlay.style.setProperty("--veil-alpha", String(LOG_VEIL_ALPHA));
+    });
+    renderLog();
+  }
+
+  function closeLog() {
+    var overlay = qs("#logOverlay");
+    overlay.style.setProperty("--host-blur", "0px");
+    overlay.style.setProperty("--veil-alpha", "0");
+    overlay.classList.add("hidden");
   }
 
   function toggleLogPanel(force) {
-    var panel = qs("#coLogPanel");
-    var show = force !== undefined ? force : panel.classList.contains("hidden");
-    panel.classList.toggle("hidden", !show);
-    if (show) renderLogPanel();
+    var show = force !== undefined ? force : !logOverlayVisible();
+    if (show) openLog();
+    else closeLog();
   }
 
   // ---- Keyboard (transcripts input-guard pattern) ----
@@ -761,7 +896,7 @@
         break;
       case "Escape":
         if (!shortcutsMenu().classList.contains("hidden")) toggleShortcuts(false);
-        else if (!qs("#coLogPanel").classList.contains("hidden")) toggleLogPanel(false);
+        else if (logOverlayVisible()) closeLog();
         else if (state.pendingIn !== null) {
           state.pendingIn = null;
           updatePendingInfo();
@@ -835,19 +970,17 @@
     qs("#coRedoBtn").addEventListener("click", redo);
     var logBtn = qs("#logBtn");
     if (logBtn) logBtn.addEventListener("click", function () { toggleLogPanel(); });
+    qs("#logClose").addEventListener("click", closeLog);
+    qs("#logOverlay").addEventListener("click", function (e) {
+      if (e.target === qs("#logOverlay")) closeLog();
+    });
+    initSidebarTabs();
     qs("#coShortcutsBtn").addEventListener("click", function () { toggleShortcuts(); });
     document.addEventListener("click", function (e) {
       var menu = shortcutsMenu();
       if (!menu.classList.contains("hidden") &&
           !menu.contains(e.target) && !qs("#coShortcutsBtn").contains(e.target)) {
         toggleShortcuts(false);
-      }
-      var logPanel = qs("#coLogPanel");
-      var logToggle = qs("#logBtn");
-      if (!logPanel.classList.contains("hidden") &&
-          !logPanel.contains(e.target) &&
-          !(logToggle && logToggle.contains(e.target))) {
-        toggleLogPanel(false);
       }
     });
 
@@ -874,8 +1007,16 @@
         });
         CO.syncSourcePills && CO.syncSourcePills();
       }
+      if (ui.laneFolds) {
+        Object.keys(state.laneFolds).forEach(function (src) {
+          if (ui.laneFolds[src] !== undefined) {
+            state.laneFolds[src] = !!ui.laneFolds[src];
+          }
+        });
+      }
       updateGenerateButton();
       renderCutList();
+      if (CO.updateTimelineHeight) CO.updateTimelineHeight();
       renderTimeline();
     }).catch(function () {});
   }
