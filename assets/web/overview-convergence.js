@@ -12,8 +12,8 @@
  * only the per-participant alignment offsets are fetched/persisted here
  * (GET/PUT api/convergence/offsets on the overview blueprint).
  *
- * `cvState._snapshot` records the last (ss, tr, sh) input lengths the view
- * was built against, so we can detect when upstream data changed and the
+ * `cvState._snapshot` records the hub data version the view was built
+ * against, so we can detect when a refetch brought new upstream data and the
  * view needs to be rebuilt.
  */
 
@@ -333,11 +333,9 @@
 
     cvState.events = events;
 
-    cvState._snapshot = {
-      ss: state.intakeEvents.length,
-      tr: state.trIntakeMarks.length,
-      sh: state.sheetData ? state.sheetData.rows.length : 0,
-    };
+    // Staleness snapshot: the hub's data version, which only advances when
+    // OV.refreshData() actually refetched (see checkStaleness).
+    cvState._snapshot = { version: state.dataVersion };
   }
 
   // --- Convergence Algorithm ---
@@ -882,10 +880,7 @@
 
   function checkStaleness() {
     if (!cvState._snapshot || !cvState.active) return;
-    var state = getState();
-    var stale = (state.intakeEvents.length !== cvState._snapshot.ss) ||
-      (state.trIntakeMarks.length !== cvState._snapshot.tr) ||
-      ((state.sheetData ? state.sheetData.rows.length : 0) !== cvState._snapshot.sh);
+    var stale = cvState._snapshot.version !== getState().dataVersion;
 
     var btn = qs("#cvRefreshBtn");
     if (btn) {

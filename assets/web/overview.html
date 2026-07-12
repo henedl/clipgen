@@ -27,9 +27,11 @@
       <span id="ovStudyName" class="ov-study-name"></span>
     </div>
     <nav class="subheader-tabs" role="tablist" aria-label="Overview tabs">
-      <button class="preview-tab active" type="button" role="tab" data-tab="map">Map</button>
+      <button class="preview-tab active" type="button" role="tab" data-tab="metadata">Metadata</button>
       <button class="preview-tab" type="button" role="tab" data-tab="convergence">Convergence</button>
-      <button class="preview-tab" type="button" role="tab" data-tab="metadata">Metadata</button>
+      <button class="preview-tab" type="button" role="tab" data-tab="map">Map
+        <span class="ov-beta-badge" title="The similarity map is new — expect rough edges">Beta</span>
+      </button>
     </nav>
     <div class="subheader-actions">
       <button id="ovRefresh" class="btn btn-small" type="button"
@@ -42,7 +44,7 @@
        by PCA over weighted, z-scored feature vectors so distance reads as
        "how alike". All math runs client-side (overview-map.js); the server
        only ships the raw feature matrix from /overview/api/data. -->
-  <div id="mapPanel">
+  <div id="mapPanel" class="hidden">
   <main id="mapShell">
     <aside id="mapSidebar" aria-label="Similarity lens and outliers">
       <div class="map-sidebar-header">Similarity lens</div>
@@ -112,8 +114,9 @@
     <div id="convergenceTimeline" class="convergence-timeline-container"></div>
   </div>
 
-  <!-- Metadata tab (overview-metadata.js renders into it wholesale) -->
-  <div id="metadataPanel" class="hidden"></div>
+  <!-- Metadata tab (overview-metadata.js renders into it wholesale; the
+       default tab, so it starts visible) -->
+  <div id="metadataPanel"></div>
 
   <!-- Deps order is a contract: utils → primitives → chrome → settings →
        intake-cluster (hub clustering) → vendored Three.js (global THREE,

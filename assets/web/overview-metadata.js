@@ -768,20 +768,19 @@
     banner.innerHTML = '<span class="md-icon md-icon-warning"></span> Screenspace analysis is still running \u2014 statistics may be incomplete. <button class="btn btn-small md-banner-refresh">Refresh</button>';
     var refreshBtn = banner.querySelector(".md-banner-refresh");
     if (refreshBtn) {
-      refreshBtn.addEventListener("click", function () {
-        mdState._snapshot = null;
-        refresh();
-      });
+      refreshBtn.addEventListener("click", refetchAndRefresh);
     }
     panel.appendChild(banner);
 
-    // Check task status
+    // Check task status. Only queued/running mean work is in flight \u2014
+    // finished-but-unhappy states (failed / cancelled / paused) linger in the
+    // manifest and must not claim an analysis is still running.
     apiGet("../screenspace/api/tasks").then(function (data) {
       var running = false;
       if (data.tasks) {
         for (var i = 0; i < data.tasks.length; i++) {
           var s = data.tasks[i].status;
-          if (s !== "completed" && s !== "error") { running = true; break; }
+          if (s === "queued" || s === "running") { running = true; break; }
         }
       }
       if (running) banner.classList.remove("hidden");
@@ -793,10 +792,7 @@
     staleBanner.innerHTML = '<span class="md-icon md-icon-info"></span> Data has changed \u2014 <button class="btn btn-small md-banner-refresh">Refresh to update statistics</button>';
     var staleRefresh = staleBanner.querySelector(".md-banner-refresh");
     if (staleRefresh) {
-      staleRefresh.addEventListener("click", function () {
-        mdState._snapshot = null;
-        refresh();
-      });
+      staleRefresh.addEventListener("click", refetchAndRefresh);
     }
     panel.appendChild(staleBanner);
   }
@@ -1674,20 +1670,16 @@
 
   // --- Staleness detection ---
 
+  // Staleness compares against the hub's data version, which only advances
+  // when OV.refreshData() actually refetched — so "data has changed" can
+  // never be a length-heuristic false positive.
   function takeSnapshot() {
-    mdState._snapshot = {
-      ss: state.intakeEvents.length,
-      tr: state.trIntakeMarks.length,
-      sh: state.sheetData ? state.sheetData.rows.length : 0,
-    };
+    mdState._snapshot = { version: state.dataVersion };
   }
 
   function checkStaleness() {
     if (!mdState._snapshot || !mdState.active) return;
-    var stale =
-      (state.intakeEvents.length !== mdState._snapshot.ss) ||
-      (state.trIntakeMarks.length !== mdState._snapshot.tr) ||
-      ((state.sheetData ? state.sheetData.rows.length : 0) !== mdState._snapshot.sh);
+    var stale = mdState._snapshot.version !== state.dataVersion;
     var banner = qs("#mdStaleBanner");
     if (banner) {
       if (stale) {
@@ -1696,6 +1688,16 @@
         banner.classList.add("hidden");
       }
     }
+  }
+
+  // Shared handler for both banners' Refresh buttons: on this page the data
+  // never changes without a hub refetch, so recomputing alone would be a
+  // no-op — pull fresh data first, then rebuild.
+  function refetchAndRefresh() {
+    window.ClipgenOverview.refreshData().then(function () {
+      mdState._snapshot = null;
+      refresh();
+    });
   }
 
   // --- Core lifecycle ---

@@ -42,6 +42,40 @@ def test_script_order_three_before_map_hub_before_satellites():
     assert scripts.index("intake-cluster.js") < hub
 
 
+def test_tab_order_and_beta_badge():
+    """Tabs read Metadata | Convergence | Map; the Map tab carries the Beta
+    pill (the similarity map is the newest surface)."""
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    tabs = re.findall(r'data-tab="(\w+)"', html)
+    assert tabs == ["metadata", "convergence", "map"]
+    map_tab = html[html.index('data-tab="map"') :]
+    map_tab = map_tab[: map_tab.index("</button>")]
+    assert "ov-beta-badge" in map_tab
+
+
+def test_staleness_is_version_based_and_running_check_is_strict():
+    """The 'data has changed' banners compare the hub dataVersion (no length
+    heuristics), and only queued/running task statuses count as running —
+    failed/cancelled/paused tasks must not claim an analysis is in flight."""
+    hub = (_WEB / "overview.js").read_text(encoding="utf-8")
+    assert "state.dataVersion++" in hub
+    md = (_WEB / "overview-metadata.js").read_text(encoding="utf-8")
+    assert "mdState._snapshot = { version: state.dataVersion }" in md
+    assert 's === "queued" || s === "running"' in md
+    cv = (_WEB / "overview-convergence.js").read_text(encoding="utf-8")
+    assert "cvState._snapshot = { version: state.dataVersion }" in cv
+    for src in (md, cv):
+        assert "_snapshot.ss" not in src  # old length-compare heuristic
+
+
+def test_hub_wires_shared_chrome_buttons():
+    """Theme toggle + Settings must be wired on this page (TopNav only renders
+    the buttons; each surface wires them — a missed call means dead chrome)."""
+    hub = (_WEB / "overview.js").read_text(encoding="utf-8")
+    assert "initThemeToggle()" in hub
+    assert "openSettingsModal" in hub
+
+
 def test_hub_reads_metadata_cluster_setting_from_sheet_payload():
     """The STUDIO_METADATA_CLUSTER_SCREENSPACE setting reaches Overview via the
     ../studio/api/sheet payload (server.py includes it in both branches)."""

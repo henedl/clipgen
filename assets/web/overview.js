@@ -35,7 +35,11 @@
     intakeClusters: [],       // clustered, non-navigational
     trIntakeMarks: [],        // valid transcript marks
     trIntakeClusters: [],
-    activeTab: "map",
+    activeTab: "metadata",
+    // Bumped after every completed loadAll(). The tabs' staleness snapshots
+    // compare against this — data can only "change" via an actual refetch,
+    // never via length-heuristic false positives.
+    dataVersion: 0,
   };
   OV.state = state;
 
@@ -157,6 +161,7 @@
 
     return Promise.all([sheetP, baselineP, eventsP, marksP]).then(function () {
       buildClusters();
+      state.dataVersion++;
       return state;
     });
   }
@@ -253,6 +258,17 @@
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
+    // TopNav renders #themeToggle / #settingsBtn synchronously before this
+    // hub loads; wire them here as the other surfaces do (utils.js owns the
+    // theme logic, settings-modal.js the shared modal).
+    initThemeToggle();
+    var settingsBtn = qs("#settingsBtn");
+    if (settingsBtn && typeof window.openSettingsModal === "function") {
+      settingsBtn.addEventListener("click", function () {
+        window.openSettingsModal({});
+      });
+    }
+
     var refreshBtn = qs("#ovRefresh");
     if (refreshBtn) {
       refreshBtn.addEventListener("click", function () {

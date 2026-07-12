@@ -132,18 +132,22 @@
     startBtn.appendChild(startIcon);
     right.appendChild(startBtn);
 
-    // Log button — keeps existing #logBtn id so studio.js wires to it.
-    var logBtn = document.createElement("button");
-    logBtn.type = "button";
-    logBtn.id = "logBtn";
-    logBtn.className = "topnav-icon-btn";
-    logBtn.title = "Artifact Log";
-    logBtn.setAttribute("aria-label", "Artifact Log");
-    var logIcon = document.createElement("span");
-    logIcon.className = "topnav-icon";
-    logIcon.style.cssText = iconMaskStyle("list-bullet");
-    logBtn.appendChild(logIcon);
-    right.appendChild(logBtn);
+    // Log button — Studio-only: the artifact log overlay (#logOverlay) and
+    // its wiring live in studio.html/studio.js, so on every other surface the
+    // button would be dead chrome.
+    if (state.activeFrontend === "studio") {
+      var logBtn = document.createElement("button");
+      logBtn.type = "button";
+      logBtn.id = "logBtn";
+      logBtn.className = "topnav-icon-btn";
+      logBtn.title = "Artifact Log";
+      logBtn.setAttribute("aria-label", "Artifact Log");
+      var logIcon = document.createElement("span");
+      logIcon.className = "topnav-icon";
+      logIcon.style.cssText = iconMaskStyle("list-bullet");
+      logBtn.appendChild(logIcon);
+      right.appendChild(logBtn);
+    }
 
     // Settings button — keeps existing #settingsBtn id.
     var settingsBtn = document.createElement("button");
