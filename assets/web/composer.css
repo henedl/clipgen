@@ -109,6 +109,7 @@ body[data-frontend="composer"] {
 .co-icon-cursor { --co-icon: url("icons/cursor-arrow-rays.svg"); }
 .co-icon-text { --co-icon: url("icons/language.svg"); }
 .co-icon-draw { --co-icon: url("icons/pencil.svg"); }
+.co-icon-erase { --co-icon: url("icons/backspace.svg"); }
 .co-icon-zoom-in { --co-icon: url("icons/magnifying-glass-plus.svg"); }
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-trash { --co-icon: url("icons/trash.svg"); }
@@ -254,6 +255,7 @@ body[data-frontend="composer"] {
 
 #coAnnotateCanvas.co-tool-text { cursor: text; }
 #coAnnotateCanvas.co-tool-draw { cursor: crosshair; }
+#coAnnotateCanvas.co-tool-erase { cursor: cell; }
 
 #coAnnotateText {
   position: absolute;

@@ -27,6 +27,7 @@
   var _drawing = null; // {points: [[nx, ny], ...]} while a stroke is captured
   var _dragging = null; // {ann, startNx, startNy, origGeometry, moved}
   var _pendingText = null; // {x, y} normalized, while the text input is open
+  var _erasing = null; // ids already deleted this eraser gesture (dedupe)
 
   function canvasEl() { return qs("#coAnnotateCanvas"); }
 
@@ -168,6 +169,16 @@
     }
   }
 
+  // Delete whatever sits under the eraser, once per annotation per gesture
+  // (the hit boxes rebuild async after each delete; the dedupe map keeps a
+  // slow response from double-deleting → 404 toasts).
+  function eraseAt(pos) {
+    var ann = hitTestAnnotation(pos.x, pos.y);
+    if (!ann || _erasing[ann.id]) return;
+    _erasing[ann.id] = true;
+    CO.deleteAnnotation(ann.id);
+  }
+
   function hitTestAnnotation(nx, ny) {
     var canvas = canvasEl();
     var px = nx * canvas.width;
@@ -197,6 +208,7 @@
     var canvas = canvasEl();
     canvas.classList.toggle("co-tool-text", tool === "text");
     canvas.classList.toggle("co-tool-draw", tool === "draw");
+    canvas.classList.toggle("co-tool-erase", tool === "erase");
     qsa(".co-tool-btn").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tool") === tool);
     });
@@ -213,7 +225,9 @@
     input.style.top = (canvas.offsetTop + pos.y * canvas.height) + "px";
     input.value = "";
     input.classList.remove("hidden");
-    input.focus();
+    // Focus on the next frame — belt-and-braces with the caller's
+    // preventDefault against the default mousedown focus steal.
+    requestAnimationFrame(function () { input.focus(); });
   }
 
   function hideTextInput() {
@@ -295,7 +309,7 @@
     });
     input.addEventListener("blur", commitTextInput);
 
-    // Pointer gestures: draw a stroke, place text, or select/move.
+    // Pointer gestures: draw a stroke, place text, erase, or select/move.
     canvas.addEventListener("pointerdown", function (e) {
       if (!state.participant) return;
       var pos = eventToNormalized(e);
@@ -304,7 +318,15 @@
         _drawing = { points: [[pos.x, pos.y]] };
         canvas.setPointerCapture(e.pointerId);
       } else if (state.annTool === "text") {
+        // preventDefault: the browser's default mousedown action would move
+        // focus off the just-focused input, blur-committing it empty before
+        // the user can type.
+        e.preventDefault();
         showTextInput(pos);
+      } else if (state.annTool === "erase") {
+        _erasing = {};
+        canvas.setPointerCapture(e.pointerId);
+        eraseAt(pos);
       } else {
         var ann = hitTestAnnotation(pos.x, pos.y);
         CO.selectAnnotation(ann ? ann.id : null);
@@ -331,6 +353,8 @@
           _drawing.points.push([pos.x, pos.y]);
           renderAnnotations();
         }
+      } else if (_erasing) {
+        eraseAt(pos);
       } else if (_dragging) {
         var dx = pos.x - _dragging.startX;
         var dy = pos.y - _dragging.startY;
@@ -353,6 +377,10 @@
     function endGesture(e) {
       if (canvas.hasPointerCapture && canvas.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
+      }
+      if (_erasing) {
+        _erasing = null;
+        return;
       }
       if (_drawing) {
         var points = _drawing.points;

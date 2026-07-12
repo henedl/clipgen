@@ -55,7 +55,7 @@
           <div><dt>Nudge selected edge</dt><dd><kbd>[</kbd> <kbd>]</kbd> (<kbd>⇧</kbd> = 1 s)</dd></div>
           <div><dt>Delete selected cut</dt><dd><kbd>X</kbd> <kbd>⌫</kbd></dd></div>
           <div><dt>Undo / redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
-          <div><dt>Annotate: select / text / draw</dt><dd><kbd>V</kbd> <kbd>T</kbd> <kbd>D</kbd></dd></div>
+          <div><dt>Annotate: select / text / draw / erase</dt><dd><kbd>V</kbd> <kbd>T</kbd> <kbd>D</kbd> <kbd>E</kbd></dd></div>
           <div><dt>Toggle marker lanes</dt><dd><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>`</kbd></dd></div>
           <div><dt>Generate clips</dt><dd><kbd>G</kbd></dd></div>
           <div><dt>Cancel pending / deselect</dt><dd><kbd>Esc</kbd></dd></div>
@@ -81,6 +81,10 @@
         <button id="coToolDraw" class="co-tool-btn" type="button"
                 data-tool="draw" title="Freehand draw (D)">
           <span class="co-btn-icon co-icon-draw" aria-hidden="true"></span>
+        </button>
+        <button id="coToolErase" class="co-tool-btn" type="button"
+                data-tool="erase" title="Eraser (E) — click or drag over annotations">
+          <span class="co-btn-icon co-icon-erase" aria-hidden="true"></span>
         </button>
         <span class="co-toolbar-sep"></span>
         <div id="coAnnotateColors" class="co-annotate-colors" role="group"
