@@ -1232,6 +1232,9 @@
         renderComposerIntake();
         renderIntake(false);
         renderTranscriptIntake();
+        // Queue cards carry trim-asterisk badges too — repaint on change.
+        renderArtifactQueue();
+        renderReelQueue();
         checkConvergenceTabVisibility();
         return true;
       })
@@ -1330,6 +1333,7 @@
   STUDIO.pollScreenspaceIntake = pollScreenspaceIntake;
   STUDIO.pollTranscriptIntake = pollTranscriptIntake;
   STUDIO.pollComposerIntake = pollComposerIntake;
+  STUDIO.focusComposerIntakeItem = focusComposerIntakeItem;
   STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;
   STUDIO.renderIntake = renderIntake;

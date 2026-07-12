@@ -102,21 +102,39 @@
     });
   }
 
+  // Merge gap for Screenspace events, mirroring Studio's intake default
+  // (#intakeClusterThreshold). Clustering — via the shared
+  // ClipgenIntakeCluster — turns bursts of point events into one grabbable
+  // block (point clusters are padded ±5 s by the shared helper), so lane
+  // spans are wide enough to trim; raw single-frame events were impossible
+  // to grab by the edge.
+  var SS_CLUSTER_SECONDS = 10;
+
   function loadScreenspaceMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "screenspace");
     fetchJson("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
       .then(function (data) {
-        var events = (data && data.events) || [];
-        var markers = events.map(function (ev) {
-          var start = ev.time_in || 0;
-          var end = ev.time_out !== undefined && ev.time_out !== null ? ev.time_out : start;
+        var events = ((data && data.events) || []).filter(function (ev) {
+          // Boundaries are orientation scaffolding, not clip candidates —
+          // same default as Studio's intake (intakeClusterSource).
+          return !ev.navigational;
+        });
+        var clusters = window.ClipgenIntakeCluster.clusterIntakeEvents(
+          events, SS_CLUSTER_SECONDS);
+        var markers = clusters.map(function (cl) {
+          var n = cl.events.length;
+          var type = cl.event_type || cl.detector || "";
           return {
-            key: "screenspace:" + ev.id,
+            // Keyed on the cluster's earliest event so trims survive reloads
+            // while the event set is stable (clusterIntakeEvents sorts by time).
+            key: "screenspace:" + cl.events[0].id,
             source: "screenspace",
-            start: start + off,
-            end: Math.max(end, start) + off,
-            label: (ev.event_type || ev.detector || "") + (ev.region ? " · " + ev.region : ""),
-            eventType: ev.event_type || ev.detector || "",
+            start: cl.start + off,
+            end: Math.max(cl.end, cl.start) + off,
+            label: type + (n > 1 ? " · " + n + " events" : "")
+              + (cl.region ? " · " + cl.region : ""),
+            eventType: type,
+            eventIds: cl.events.map(function (e) { return e.id; }),
           };
         });
         commitLane(pid, version, "screenspace", markers);

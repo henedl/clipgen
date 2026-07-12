@@ -2673,6 +2673,27 @@
     durationSel: "#reelDuration",
   };
 
+  // Composer-trim key for a queue item, or null. Sheet items key on
+  // row/participant/segment (matching composer-markers.js's sheet marker
+  // keys — segIdx follows the same parseClipSegmentsForCell pair order);
+  // intake items key on their event/mark ids.
+  function queueItemTrimKey(item) {
+    var trims = state.coTrims || {};
+    if (!isIntakeSource(item.source) && item.row) {
+      var key = "sheet:" + item.row + ":" + item.participant + ":" + (item.segIdx || 0);
+      return trims[key] ? key : null;
+    }
+    var ids = item.source === "screenspace" ? item.event_ids
+      : item.source === "transcript" ? item.mark_ids
+      : null;
+    if (!ids) return null;
+    var prefix = item.source === "screenspace" ? "screenspace:" : "transcript-mark:";
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] && trims[prefix + ids[i]]) return prefix + ids[i];
+    }
+    return null;
+  }
+
   function buildQueueCard(item, idx, cfg, ctx) {
     var isIntake = isIntakeSource(item.source);
     var segTotal = item.segTotal || 1;
@@ -2725,6 +2746,22 @@
       renderFn: ctx.render,
     });
     if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
+
+    // Asterisk badge: this item's underlying timestamp has a Composer trim —
+    // the user may want to swap this card for the trimmed version. Click jumps
+    // to the Composer Intake tab and highlights it.
+    var trimKey = queueItemTrimKey(item);
+    if (trimKey) {
+      var trimBadge = el("button", "intake-trim-badge", "✱");
+      trimBadge.type = "button";
+      trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
+      trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
+      trimBadge.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        focusComposerIntakeItem(trimKey);
+      });
+      thumb.appendChild(trimBadge);
+    }
 
     var meta = el("div", "queue-card-meta");
     var refText;
@@ -4468,6 +4505,7 @@
   function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
   function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
   function pollComposerIntake() { return STUDIO.pollComposerIntake && STUDIO.pollComposerIntake.apply(null, arguments); }
+  function focusComposerIntakeItem() { return STUDIO.focusComposerIntakeItem && STUDIO.focusComposerIntakeItem.apply(null, arguments); }
   function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
