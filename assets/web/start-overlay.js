@@ -44,7 +44,8 @@
     var isVideoTool =
       path.indexOf("/screenspace/") === 0 ||
       path.indexOf("/transcripts/") === 0 ||
-      path.indexOf("/workflows/") === 0;
+      path.indexOf("/workflows/") === 0 ||
+      path.indexOf("/composer/") === 0;
     if (isVideoTool && status && (status.videos_in_input || 0) > 0) return false;
     return true;
   }

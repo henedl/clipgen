@@ -1,0 +1,189 @@
+/* clipgen Composer — markers satellite.
+ *
+ * Fetches and merges the three read-only marker sources for the active
+ * participant — Sheet timestamps, Screenspace events, Transcript segments +
+ * marks — into CO.state.markers, applying the persisted Convergence per-lane
+ * offsets so lanes line up with the video the same way the Convergence Browser
+ * does. Each fetch fails soft (empty lane) so Composer works without a
+ * spreadsheet or the other tools' manifests. Also owns the lane toggle pills
+ * and their `PUT api/ui` persistence.
+ *
+ * Cross-blueprint fetches (../studio/, ../screenspace/, ../transcripts/) are
+ * the established convergence.js pattern. parseClipSegmentsForCell /
+ * CLIPGEN_CONFIG / qs are ambient utils.js globals.
+ */
+(function () {
+  "use strict";
+
+  var CO = window.ClipgenComposer;
+  var state = CO.state;
+
+  var SOURCES = ["sheet", "screenspace", "transcript"];
+
+  // Stale-response guard: participant switches mid-fetch drop the old payload.
+  var _loadVersion = 0;
+
+  function offsetFor(offsets, pid, source) {
+    var perPid = offsets && offsets[pid];
+    var off = perPid && perPid[source];
+    return typeof off === "number" && isFinite(off) ? off : 0;
+  }
+
+  function fetchJson(path) {
+    return fetch(path).then(function (r) { return r.json(); });
+  }
+
+  function loadMarkers(pid) {
+    var version = ++_loadVersion;
+    fetchJson("../studio/api/convergence/offsets")
+      .catch(function () { return {}; })
+      .then(function (offData) {
+        var offsets = (offData && offData.offsets) || {};
+        loadSheetMarkers(pid, version, offsets);
+        loadScreenspaceMarkers(pid, version, offsets);
+        loadTranscriptMarkers(pid, version, offsets);
+      });
+  }
+
+  function commitLane(pid, version, source, markers) {
+    if (version !== _loadVersion || pid !== state.participant) return;
+    state.markers[source] = markers;
+    CO.renderTimeline && CO.renderTimeline();
+  }
+
+  // Sheet: one marker per timestamp pair in the participant's column, converted
+  // through the baseline (wall-clock sheets) exactly like Studio/Convergence.
+  function loadSheetMarkers(pid, version, offsets) {
+    var off = offsetFor(offsets, pid, "sheet");
+    Promise.all([
+      fetchJson("../studio/api/sheet"),
+      fetchJson("../studio/api/sheet/baseline"),
+    ]).then(function (results) {
+      var sheet = results[0] || {};
+      var baselines = (results[1] && results[1].baselines) || {};
+      if (!sheet.rows || !sheet.rows.length) {
+        commitLane(pid, version, "sheet", []);
+        return;
+      }
+      var baselineOffset = baselines[pid] || 0;
+      var markers = [];
+      sheet.rows.forEach(function (row) {
+        var cell = row.cells && row.cells[pid];
+        if (!cell || !cell.valid) return;
+        var segs = parseClipSegmentsForCell(
+          cell.value, baselineOffset, CLIPGEN_CONFIG.defaultDuration);
+        segs.forEach(function (seg, idx) {
+          markers.push({
+            key: "sheet:" + row.rowNum + ":" + pid + ":" + idx,
+            source: "sheet",
+            start: seg.startSeconds + off,
+            end: seg.startSeconds + seg.duration + off,
+            label: row.observation || "",
+            eventType: row.category || "uncategorized",
+          });
+        });
+      });
+      commitLane(pid, version, "sheet", markers);
+    }).catch(function () {
+      commitLane(pid, version, "sheet", []);
+    });
+  }
+
+  function loadScreenspaceMarkers(pid, version, offsets) {
+    var off = offsetFor(offsets, pid, "screenspace");
+    fetchJson("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
+      .then(function (data) {
+        var events = (data && data.events) || [];
+        var markers = events.map(function (ev) {
+          var start = ev.time_in || 0;
+          var end = ev.time_out !== undefined && ev.time_out !== null ? ev.time_out : start;
+          return {
+            key: "screenspace:" + ev.id,
+            source: "screenspace",
+            start: start + off,
+            end: Math.max(end, start) + off,
+            label: (ev.event_type || ev.detector || "") + (ev.region ? " · " + ev.region : ""),
+            eventType: ev.event_type || ev.detector || "",
+          };
+        });
+        commitLane(pid, version, "screenspace", markers);
+      })
+      .catch(function () {
+        commitLane(pid, version, "screenspace", []);
+      });
+  }
+
+  // Transcript: marked segments become labeled markers; unmarked segments are
+  // skipped (a full transcript would carpet the lane edge-to-edge).
+  function loadTranscriptMarkers(pid, version, offsets) {
+    var off = offsetFor(offsets, pid, "transcript");
+    fetchJson("../transcripts/api/transcript/" + encodeURIComponent(pid))
+      .then(function (data) {
+        var segments = (data && data.segments) || [];
+        var markers = [];
+        segments.forEach(function (seg) {
+          var marks = seg.marks || [];
+          if (!marks.length) return;
+          marks.forEach(function (mark) {
+            markers.push({
+              key: "transcript-mark:" + (mark.id || pid + ":" + seg.id),
+              source: "transcript",
+              start: seg.start + off,
+              end: seg.end + off,
+              label: mark.label || seg.text || "",
+              eventType: mark.category || "bookmark",
+            });
+          });
+        });
+        commitLane(pid, version, "transcript", markers);
+      })
+      .catch(function () {
+        commitLane(pid, version, "transcript", []);
+      });
+  }
+
+  // ---- Lane toggles ----
+
+  function syncSourcePills() {
+    SOURCES.forEach(function (src) {
+      var pill = qs('.co-lane-pill[data-source="' + src + '"]');
+      if (pill) pill.setAttribute("aria-pressed", state.sourceToggles[src] ? "true" : "false");
+    });
+  }
+
+  function persistToggles() {
+    CO.apiSend("PUT", "api/ui", { markerSources: state.sourceToggles })
+      .catch(function () {});
+  }
+
+  function toggleSource(source) {
+    if (!(source in state.sourceToggles)) return;
+    state.sourceToggles[source] = !state.sourceToggles[source];
+    syncSourcePills();
+    persistToggles();
+    CO.renderTimeline && CO.renderTimeline();
+  }
+
+  function toggleAllSources() {
+    // Any lane visible → hide all; all hidden → show all.
+    var anyOn = SOURCES.some(function (src) { return state.sourceToggles[src]; });
+    SOURCES.forEach(function (src) { state.sourceToggles[src] = !anyOn; });
+    syncSourcePills();
+    persistToggles();
+    CO.renderTimeline && CO.renderTimeline();
+  }
+
+  function initMarkerToggles() {
+    SOURCES.forEach(function (src) {
+      var pill = qs('.co-lane-pill[data-source="' + src + '"]');
+      if (pill) pill.addEventListener("click", function () { toggleSource(src); });
+    });
+    syncSourcePills();
+  }
+
+  CO.loadMarkers = loadMarkers;
+  CO.initMarkerToggles = initMarkerToggles;
+  CO.toggleSource = toggleSource;
+  CO.toggleAllSources = toggleAllSources;
+  CO.syncSourcePills = syncSourcePills;
+})();

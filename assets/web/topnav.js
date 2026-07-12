@@ -22,6 +22,7 @@
     { id: "screenspace", label: "Screenspace", href: "/screenspace/" },
     { id: "transcripts", label: "Transcripts", href: "/transcripts/" },
     { id: "workflows", label: "Workflows", href: "/workflows/" },
+    { id: "composer", label: "Composer", href: "/composer/" },
   ];
 
   var state = {

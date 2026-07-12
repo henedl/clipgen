@@ -163,6 +163,9 @@ TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
 # Server-only — never mirrored to the frontend.
 WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
 CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
+COMPOSER_MANIFEST_FILENAME: str = (
+    "composer_manifest.json"  # Composer cut pairs, trims, annotations, UI state
+)
 # Data-source lanes shown (in order) per participant in the Convergence Browser.
 # Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
 # layout and per-lane offset keys stay in sync; do not hardcode this list in JS.

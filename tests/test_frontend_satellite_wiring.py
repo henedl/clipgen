@@ -43,6 +43,7 @@ _GROUPS = {
     "transcripts": "transcripts*.js",
     "studio": "studio*.js",
     "workflows": "workflows*.js",
+    "composer": "composer*.js",
 }
 
 _KEYWORDS = {
