@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Study Map</title>
+  <!-- CLIPGEN_HEAD_HERE -->
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="topnav.css">
+  <link rel="stylesheet" href="map.css">
+  <link rel="stylesheet" href="settings-modal.css">
+  <link rel="stylesheet" href="color-picker.css">
+  <link rel="stylesheet" href="start-overlay.css">
+</head>
+<body data-frontend="map">
+  <!-- Shared chrome: TopNav + start overlay -->
+  <topnav-mount data-frontend="map"></topnav-mount>
+  <start-overlay-mount></start-overlay-mount>
+
+  <!-- Three-pane scaffold: lens/outlier sidebar · 3D canvas · explain panel.
+       The scene is a similarity space — participants positioned by PCA over
+       weighted, z-scored feature vectors so distance reads as "how alike".
+       All math runs client-side (map.js); the server only ships the raw
+       feature matrix from /map/api/data. -->
+  <main id="mapShell">
+    <aside id="mapSidebar" aria-label="Similarity lens and outliers">
+      <div class="map-sidebar-header">Similarity lens</div>
+      <p class="map-hint">Weight what “similar” means. Sliders re-layout the
+        space instantly.</p>
+      <div id="mapWeights" class="map-weights"></div>
+
+      <div class="map-sidebar-header">Most unusual</div>
+      <p class="map-hint">Distance from the cohort centroid across all
+        weighted signals — not just the visible projection.</p>
+      <ol id="mapOutliers" class="map-outlier-list"></ol>
+
+      <details class="map-axis-legend">
+        <summary>What the axes mean</summary>
+        <div id="mapAxisList" class="map-axis-list"></div>
+      </details>
+
+      <p id="mapNotice" class="map-notice hidden"></p>
+    </aside>
+
+    <section id="mapCanvasWrap" aria-label="Similarity space">
+      <div id="mapCanvas"></div>
+      <!-- HTML overlay labels: real DOM (hover/click targets, tokens.css
+           typography) projected to screen space each render. -->
+      <div id="mapLabels" aria-hidden="true"></div>
+      <div id="mapTooltip" class="map-tooltip hidden"></div>
+      <div id="mapEmpty" class="map-empty hidden">
+        <h1>Study Map</h1>
+        <p>No study data yet. The map draws on the manifests other tools
+          write:</p>
+        <p class="map-empty-sub">generate clips in <a href="/studio/">Studio</a>,
+          run detectors in <a href="/screenspace/">Screenspace</a>, or
+          transcribe sessions in <a href="/transcripts/">Transcripts</a> —
+          then come back.</p>
+      </div>
+    </section>
+
+    <aside id="mapExplain" class="hidden" aria-label="Participant details">
+      <div class="map-explain-header">
+        <span id="mapExplainTitle"></span>
+        <button id="mapExplainClose" class="btn btn-small btn-icon" type="button"
+                aria-label="Close details">✕</button>
+      </div>
+      <div id="mapExplainBody"></div>
+    </aside>
+  </main>
+
+  <!-- Deps order: utils → chrome → settings → vendored Three.js (global THREE,
+       r147 UMD — see vendor/README.md) → page hub. -->
+  <script src="utils.js" defer></script>
+  <script src="topnav.js" defer></script>
+  <script src="start-overlay.js" defer></script>
+  <script src="dev-token-tweak.js" defer data-dev-only></script>
+  <script src="color-picker.js" defer></script>
+  <script src="settings-modal.js" defer></script>
+  <script src="vendor/three.min.js" defer></script>
+  <script src="map.js" defer></script>
+</body>
+</html>

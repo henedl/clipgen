@@ -3314,6 +3314,10 @@ def build_combined_app(
     )
     combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
 
+    import study_map
+
+    combined.register_blueprint(study_map.map_bp, url_prefix="/map")
+
     combined.after_request(_set_cache_headers)
 
     @combined.route("/")
@@ -3329,6 +3333,7 @@ def build_combined_app(
                 "screenspace": True,
                 "transcripts": True,
                 "workflows": True,
+                "map": True,
                 "sheet_loaded": _worksheet is not None,
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
