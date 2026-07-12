@@ -24,6 +24,10 @@
     playing: false,
     cuts: [],               // all cuts from the composer manifest (all participants)
     trims: {},              // marker key → {start, end} span overrides
+    annotations: [],        // all annotation records (all participants)
+    selectedAnnotationId: null,
+    annTool: "select",      // "select" | "text" | "draw"
+    annColor: "",           // filled from CLIPGEN_CONFIG at boot
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
     markers: { sheet: [], screenspace: [], transcript: [] },
@@ -47,6 +51,9 @@
   function initTimeline() { return CO.initTimeline && CO.initTimeline.apply(null, arguments); }
   function initMarkerToggles() { return CO.initMarkerToggles && CO.initMarkerToggles.apply(null, arguments); }
   function loadMarkers() { return CO.loadMarkers && CO.loadMarkers.apply(null, arguments); }
+  function initAnnotate() { return CO.initAnnotate && CO.initAnnotate.apply(null, arguments); }
+  function renderAnnotations() { return CO.renderAnnotations && CO.renderAnnotations.apply(null, arguments); }
+  function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
 
   // ---- API client ----
 
@@ -112,6 +119,7 @@
       seekLocal(local);
     }
     renderPlayhead();
+    renderAnnotations();
     updateTimeLabel();
   }
   CO.seekVideo = seekVideo;
@@ -211,6 +219,7 @@
       _playheadRaf = requestAnimationFrame(function () {
         _playheadRaf = 0;
         renderPlayhead();
+        renderAnnotations(); // spans gate visibility against the playhead
       });
     });
     // Single-part participants may have no probed duration (server couldn't
@@ -248,6 +257,7 @@
     state.playing = false;
     state.pendingIn = null;
     state.selectedCutId = null;
+    state.selectedAnnotationId = null;
     state.zoom = 1;
     state.offset = 0;
     state.markers = { sheet: [], screenspace: [], transcript: [] };
@@ -271,6 +281,9 @@
     ["#coPlayBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
       qs(sel).disabled = false;
     });
+    qs("#coAnnotateBar").classList.remove("hidden");
+    state.annTool = "select";
+    setAnnotateTool("select"); // also closes a pending text input
     updatePendingInfo();
     updatePlayButton();
     updateTimeLabel();
@@ -278,6 +291,7 @@
     renderSidebar();
     if (CO.updateTimelineHeight) CO.updateTimelineHeight();
     renderTimeline();
+    renderAnnotations();
     loadMarkers(pid);
   }
 
@@ -481,6 +495,21 @@
     if (op.type === "trim") {
       return applyTrim(op.key, isUndo ? op.before : op.after);
     }
+    if (op.type === "ann-create") {
+      return isUndo
+        ? applyAnnDelete(op.annotation.id)
+        : applyAnnCreate(op.annotation).then(function (ann) { op.annotation = ann; });
+    }
+    if (op.type === "ann-delete") {
+      return isUndo
+        ? applyAnnCreate(op.annotation).then(function (ann) { op.annotation = ann; })
+        : applyAnnDelete(op.annotation.id);
+    }
+    if (op.type === "ann-edit") {
+      var payload = {};
+      payload[op.field] = isUndo ? op.before : op.after;
+      return applyAnnPatch(op.id, payload);
+    }
     // edit
     return applyTimes(op.id, isUndo ? op.before : op.after);
   }
@@ -563,6 +592,157 @@
     renderTimeline();
   }
   CO.selectCut = selectCut;
+
+  // ---- Annotations (raw appliers + recorded actions) ----
+
+  function participantAnnotations() {
+    return state.annotations.filter(function (a) {
+      return a.participant === state.participant;
+    });
+  }
+  CO.participantAnnotations = participantAnnotations;
+
+  function findAnnotation(id) {
+    for (var i = 0; i < state.annotations.length; i++) {
+      if (state.annotations[i].id === id) return state.annotations[i];
+    }
+    return null;
+  }
+  CO.findAnnotation = findAnnotation;
+
+  function refreshAnnotationViews() {
+    if (CO.updateTimelineHeight) CO.updateTimelineHeight();
+    renderTimeline();
+    renderAnnotations();
+  }
+  CO.refreshAnnotationViews = refreshAnnotationViews;
+
+  function applyAnnCreate(record) {
+    return apiSend("POST", "api/annotations", record).then(function (data) {
+      if (!data.ok) throw new Error(data.error || "Could not save annotation");
+      state.annotations.push(data.annotation);
+      refreshAnnotationViews();
+      return data.annotation;
+    });
+  }
+
+  function applyAnnDelete(id) {
+    return apiSend("DELETE", "api/annotations/" + encodeURIComponent(id))
+      .then(function (data) {
+        if (!data.ok) throw new Error(data.error || "Could not delete annotation");
+        state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
+        if (state.selectedAnnotationId === id) state.selectedAnnotationId = null;
+        refreshAnnotationViews();
+      });
+  }
+
+  function applyAnnPatch(id, fields) {
+    return apiSend("PATCH", "api/annotations/" + encodeURIComponent(id), fields)
+      .then(function (data) {
+        if (!data.ok) throw new Error(data.error || "Could not save annotation");
+        var idx = state.annotations.findIndex(function (a) { return a.id === id; });
+        if (idx >= 0) state.annotations[idx] = data.annotation;
+        refreshAnnotationViews();
+        return data.annotation;
+      });
+  }
+
+  // Recorded user actions (undo/redo integrated like cuts/trims).
+
+  function createAnnotation(record) {
+    return applyAnnCreate(record).then(function (ann) {
+      recordOp({ type: "ann-create", annotation: ann });
+      state.selectedAnnotationId = ann.id;
+      renderAnnotations();
+      return ann;
+    }).catch(opFailed);
+  }
+  CO.createAnnotation = createAnnotation;
+
+  function deleteAnnotation(id) {
+    var ann = findAnnotation(id);
+    if (!ann) return;
+    var snapshot = JSON.parse(JSON.stringify(ann));
+    applyAnnDelete(id).then(function () {
+      recordOp({ type: "ann-delete", annotation: snapshot });
+    }).catch(opFailed);
+  }
+  CO.deleteAnnotation = deleteAnnotation;
+
+  // Persist an edited field ("span" or "geometry"); *before* is the pre-edit
+  // value for undo. The record was already mutated locally by the caller.
+  function commitAnnotationField(ann, field, before) {
+    var payload = {};
+    payload[field] = ann[field];
+    applyAnnPatch(ann.id, payload).then(function (saved) {
+      recordOp({
+        type: "ann-edit",
+        id: ann.id,
+        field: field,
+        before: before,
+        after: JSON.parse(JSON.stringify(saved[field])),
+      });
+    }).catch(opFailed);
+  }
+  CO.commitAnnotationField = commitAnnotationField;
+
+  function selectAnnotation(id) {
+    state.selectedAnnotationId = id;
+    renderTimeline();
+    renderAnnotations();
+  }
+  CO.selectAnnotation = selectAnnotation;
+
+  // ---- Annotated exports (server PIL + ffmpeg overlay) ----
+
+  var _exporting = false;
+
+  function exportSpan() {
+    // Burn/GIF need a span: the selected cut wins, else the selected
+    // annotation's own visibility span.
+    var cut = state.selectedCutId && findCut(state.selectedCutId);
+    if (cut) return { start: cut.start, end: cut.end };
+    var ann = state.selectedAnnotationId && findAnnotation(state.selectedAnnotationId);
+    if (ann) return { start: ann.span.start, end: ann.span.end };
+    return null;
+  }
+
+  function runExport(path, body, busyLabel) {
+    if (_exporting) { showToast("An export is already running"); return; }
+    _exporting = true;
+    showToast(busyLabel + "…");
+    apiSend("POST", path, body).then(function (data) {
+      _exporting = false;
+      if (!data.ok) { showToast(data.error || "Export failed"); return; }
+      logArtifactResult({ ok: true, artifact: data.artifact }, null);
+      showToast("Exported " + (data.artifact.file || ""));
+    }).catch(function () {
+      _exporting = false;
+      showToast("Export failed");
+    });
+  }
+
+  function exportScreenshot() {
+    if (!state.participant) return;
+    runExport("api/export/screenshot", {
+      participant: state.participant,
+      time: state.playhead,
+    }, "Exporting screenshot");
+  }
+
+  function exportBurn(gif) {
+    if (!state.participant) return;
+    var span = exportSpan();
+    if (!span) {
+      showToast("Select a cut (or an annotation) to define the export span");
+      return;
+    }
+    runExport(gif ? "api/export/gif" : "api/export/burn", {
+      participant: state.participant,
+      start: span.start,
+      end: span.end,
+    }, gif ? "Exporting GIF" : "Burning clip");
+  }
 
   // ---- Marker trims (user actions; non-destructive span overrides) ----
 
@@ -1014,7 +1194,17 @@
         break;
       case "x":
       case "Backspace":
-        if (state.selectedCutId) deleteCut(state.selectedCutId);
+        if (state.selectedAnnotationId) deleteAnnotation(state.selectedAnnotationId);
+        else if (state.selectedCutId) deleteCut(state.selectedCutId);
+        break;
+      case "v":
+        setAnnotateTool("select");
+        break;
+      case "t":
+        setAnnotateTool("text");
+        break;
+      case "d":
+        setAnnotateTool("draw");
         break;
       case "1":
       case "2":
@@ -1037,6 +1227,10 @@
           state.pendingIn = null;
           updatePendingInfo();
           renderPlayhead();
+        } else if (state.annTool !== "select") {
+          setAnnotateTool("select");
+        } else if (state.selectedAnnotationId) {
+          selectAnnotation(null);
         } else if (state.selectedCutId) {
           selectCut(null);
         }
@@ -1092,11 +1286,16 @@
       });
     }
 
+    state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
     initParticipantSelect();
     initVideo();
     initKeyboard();
     initTimeline();
     initMarkerToggles();
+    initAnnotate();
+    qs("#coExportShotBtn").addEventListener("click", exportScreenshot);
+    qs("#coExportGifBtn").addEventListener("click", function () { exportBurn(true); });
+    qs("#coExportBurnBtn").addEventListener("click", function () { exportBurn(false); });
 
     qs("#coSetInBtn").addEventListener("click", setInPoint);
     qs("#coSetOutBtn").addEventListener("click", setOutPoint);
@@ -1141,6 +1340,7 @@
       if (!data.ok || !data.manifest) return;
       state.cuts = data.manifest.cuts || [];
       state.trims = data.manifest.trims || {};
+      state.annotations = data.manifest.annotations || [];
       var ui = data.manifest.ui || {};
       if (ui.markerSources) {
         Object.keys(state.sourceToggles).forEach(function (src) {

@@ -55,6 +55,7 @@
           <div><dt>Nudge selected edge</dt><dd><kbd>[</kbd> <kbd>]</kbd> (<kbd>⇧</kbd> = 1 s)</dd></div>
           <div><dt>Delete selected cut</dt><dd><kbd>X</kbd> <kbd>⌫</kbd></dd></div>
           <div><dt>Undo / redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
+          <div><dt>Annotate: select / text / draw</dt><dd><kbd>V</kbd> <kbd>T</kbd> <kbd>D</kbd></dd></div>
           <div><dt>Toggle marker lanes</dt><dd><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>`</kbd></dd></div>
           <div><dt>Generate clips</dt><dd><kbd>G</kbd></dd></div>
           <div><dt>Cancel pending / deselect</dt><dd><kbd>Esc</kbd></dd></div>
@@ -66,8 +67,40 @@
 
   <main id="coShell">
     <section id="coStage" aria-label="Video">
+      <!-- Annotation toolbar: tools (V/T/D), color swatches, span-gated
+           exports. Floats over the stage's top-left. -->
+      <div id="coAnnotateBar" class="hidden" role="toolbar" aria-label="Annotate">
+        <button id="coToolSelect" class="co-tool-btn active" type="button"
+                data-tool="select" title="Select / move annotations (V)">
+          <span class="co-btn-icon co-icon-cursor" aria-hidden="true"></span>
+        </button>
+        <button id="coToolText" class="co-tool-btn" type="button"
+                data-tool="text" title="Add text (T) — click the video to place">
+          <span class="co-btn-icon co-icon-text" aria-hidden="true"></span>
+        </button>
+        <button id="coToolDraw" class="co-tool-btn" type="button"
+                data-tool="draw" title="Freehand draw (D)">
+          <span class="co-btn-icon co-icon-draw" aria-hidden="true"></span>
+        </button>
+        <span class="co-toolbar-sep"></span>
+        <div id="coAnnotateColors" class="co-annotate-colors" role="group"
+             aria-label="Annotation color"></div>
+        <span class="co-toolbar-sep"></span>
+        <button id="coExportShotBtn" class="btn btn-small" type="button"
+                title="Export an annotated screenshot at the playhead">Shot</button>
+        <button id="coExportGifBtn" class="btn btn-small" type="button"
+                title="Export an annotated GIF of the selected cut's span">GIF</button>
+        <button id="coExportBurnBtn" class="btn btn-small" type="button"
+                title="Burn annotations into a clip of the selected cut's span">Burn</button>
+      </div>
       <div id="coVideoFrame">
         <video id="coVideo" preload="metadata" playsinline></video>
+        <!-- Annotation overlay: positioned over the video's content box
+             (letterbox-aware) by composer-annotate.js; normalized 0..1
+             geometry maps 1:1 onto this canvas. -->
+        <canvas id="coAnnotateCanvas"></canvas>
+        <input id="coAnnotateText" type="text" class="hidden" autocomplete="off"
+               placeholder="Type, then Enter" aria-label="Annotation text">
         <div id="coVideoEmpty" class="co-video-empty">
           <p>Select a participant to load their source video</p>
           <p class="co-empty-sub">Set in/out pairs on the timeline below, toggle
@@ -179,5 +212,6 @@
   <script src="composer.js" defer></script>
   <script src="composer-markers.js" defer></script>
   <script src="composer-timeline.js" defer></script>
+  <script src="composer-annotate.js" defer></script>
 </body>
 </html>

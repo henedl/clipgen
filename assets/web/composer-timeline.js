@@ -64,9 +64,18 @@
     return neededRows(state.markers[source] || []);
   }
 
+  // Annotation spans as packable {start, end, ann} entries for the lane.
+  function annotationSpans() {
+    var annotations = CO.participantAnnotations ? CO.participantAnnotations() : [];
+    return annotations.map(function (ann) {
+      return { start: ann.span.start, end: ann.span.end, ann: ann };
+    });
+  }
+
   // Vertical layout, driven by fold state: ruler → cuts track (the user's
-  // working track) → one lane per visible source, each sized to its row count.
-  // The strip's height follows via updateTimelineHeight(), not vice versa.
+  // working track) → one lane per visible source, each sized to its row
+  // count → the annotations lane (only when annotations exist). The strip's
+  // height follows via updateTimelineHeight(), not vice versa.
   function layout() {
     var cutY = RULER_H + 2;
     var y = cutY + CUT_TRACK_H + 4;
@@ -76,7 +85,17 @@
       lanes[source] = { y: y, rows: rows, h: rows * ROW_H };
       if (rows) y += rows * ROW_H + LANE_GAP;
     });
-    return { cutY: cutY, cutH: CUT_TRACK_H, lanes: lanes, canvasH: y + 2 };
+    var spans = annotationSpans();
+    var annRows = spans.length ? neededRows(spans) : 0;
+    var annotationsLane = { y: y, rows: annRows, h: annRows * ROW_H };
+    if (annRows) y += annRows * ROW_H + LANE_GAP;
+    return {
+      cutY: cutY,
+      cutH: CUT_TRACK_H,
+      lanes: lanes,
+      annotationsLane: annotationsLane,
+      canvasH: y + 2,
+    };
   }
 
   // Grow/shrink the whole timeline strip to fit the current fold state by
@@ -262,6 +281,31 @@
       });
     });
 
+    // Annotations lane (accent-colored spans; selection matches the overlay)
+    var annLane = L.annotationsLane;
+    if (annLane.rows) {
+      assignRows(annotationSpans(), annLane.rows).forEach(function (entry) {
+        if (entry.end < vis.start || entry.start > vis.end) return;
+        var ax1 = tx(entry.start);
+        var ax2 = tx(entry.end);
+        var arw = Math.max(ax2 - ax1, 2);
+        var ay = annLane.y + entry._row * ROW_H;
+        var annSelected = entry.ann.id === state.selectedAnnotationId;
+        var annColor = (entry.ann.style && entry.ann.style.color) || tc.accent;
+        ctx.fillStyle = hexToRgba(annColor, annSelected ? 0.8 : 0.5);
+        ctx.fillRect(ax1, ay, arw, ROW_H - 1);
+        if (annSelected) {
+          ctx.strokeStyle = annColor;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(ax1 + 0.5, ay + 0.5, arw - 1, ROW_H - 2);
+        }
+        _hitRects.push({
+          x1: ax1, x2: ax1 + arw, y: ay, h: ROW_H - 1,
+          annotation: entry.ann, start: entry.start, end: entry.end,
+        });
+      });
+    }
+
     renderLaneRail(L);
     renderPlayhead();
   }
@@ -382,9 +426,10 @@
     return hit && hit.cut ? hit.cut : null;
   }
 
-  // Marker-edge hit: like cut edges, but against the marker hit rects (their
-  // vertical band is per-row). Returns {marker, edge} or null.
-  function hitTestMarkerEdge(clientX, clientY) {
+  // Lane-edge hit: like cut edges, but against the marker/annotation hit
+  // rects (their vertical band is per-row). Returns {marker?, annotation?,
+  // edge} or null.
+  function hitTestLaneEdge(clientX, clientY) {
     var rect = getRect();
     var mx = clientX - rect.left;
     var my = clientY - rect.top;
@@ -392,18 +437,18 @@
     var bestDist = EDGE_SLOP + 1;
     for (var i = _hitRects.length - 1; i >= 0; i--) {
       var hr = _hitRects[i];
-      if (!hr.marker) continue;
+      if (!hr.marker && !hr.annotation) continue;
       if (my < hr.y || my > hr.y + hr.h) continue;
       // Point markers (start === end) have no meaningful edges to trim.
-      if (hr.marker.end <= hr.marker.start) continue;
+      if (hr.marker && hr.marker.end <= hr.marker.start) continue;
       var startDist = Math.abs(mx - hr.x1);
       var endDist = Math.abs(mx - hr.x2);
       if (startDist <= EDGE_SLOP && startDist < bestDist) {
-        best = { marker: hr.marker, edge: "start" };
+        best = { marker: hr.marker, annotation: hr.annotation, edge: "start" };
         bestDist = startDist;
       }
       if (endDist <= EDGE_SLOP && endDist < bestDist) {
-        best = { marker: hr.marker, edge: "end" };
+        best = { marker: hr.marker, annotation: hr.annotation, edge: "end" };
         bestDist = endDist;
       }
     }
@@ -439,6 +484,18 @@
         formatTime(hit.cut.start, { decimals: 1 }) + " – " +
         formatTime(hit.cut.end, { decimals: 1 }) +
         " (" + formatDuration(hit.cut.end - hit.cut.start) + ")"));
+    } else if (hit.annotation) {
+      var ann = hit.annotation;
+      var annColor = (ann.style && ann.style.color) ||
+        getCanvasThemeColors().accent;
+      tip.style.borderLeft = "3px solid " + annColor;
+      tip.appendChild(el("span", "co-tooltip-source", "annotation · " + ann.type));
+      tip.appendChild(el("span", "co-tooltip-time",
+        formatTime(ann.span.start, { decimals: 1 }) + " – " +
+        formatTime(ann.span.end, { decimals: 1 })));
+      if (ann.type === "text" && ann.geometry.text) {
+        tip.appendChild(el("span", "co-tooltip-label", ann.geometry.text));
+      }
     }
     tip.classList.remove("hidden");
     var x = clientX + 12;
@@ -504,7 +561,7 @@
       if (!state.duration) return;
       hideTooltip();
       var edgeHit = hitTestCutEdge(e.clientX, e.clientY);
-      var markerEdgeHit = edgeHit ? null : hitTestMarkerEdge(e.clientX, e.clientY);
+      var laneEdgeHit = edgeHit ? null : hitTestLaneEdge(e.clientX, e.clientY);
       if (edgeHit) {
         drag = {
           type: "edge",
@@ -516,29 +573,45 @@
         };
         CO.selectCut(edgeHit.cut.id);
         canvas.classList.add("co-drag-edge");
-      } else if (markerEdgeHit) {
+      } else if (laneEdgeHit && laneEdgeHit.marker) {
         // Marker trim drag: same gesture as a cut edge, committed as a
         // non-destructive trim override on pointer-up.
         drag = {
           type: "marker-edge",
-          marker: markerEdgeHit.marker,
-          edge: markerEdgeHit.edge,
-          origStart: markerEdgeHit.marker.start,
-          origEnd: markerEdgeHit.marker.end,
+          marker: laneEdgeHit.marker,
+          edge: laneEdgeHit.edge,
+          origStart: laneEdgeHit.marker.start,
+          origEnd: laneEdgeHit.marker.end,
           // The trim in force before this drag (null = untrimmed) — the undo
           // payload, captured before the drag mutates anything.
-          beforeTrim: state.trims[markerEdgeHit.marker.key]
+          beforeTrim: state.trims[laneEdgeHit.marker.key]
             ? {
-                start: state.trims[markerEdgeHit.marker.key].start,
-                end: state.trims[markerEdgeHit.marker.key].end,
+                start: state.trims[laneEdgeHit.marker.key].start,
+                end: state.trims[laneEdgeHit.marker.key].end,
               }
             : null,
           moved: false,
         };
         canvas.classList.add("co-drag-edge");
+      } else if (laneEdgeHit && laneEdgeHit.annotation) {
+        // Annotation span drag: adjusts when the annotation is visible.
+        drag = {
+          type: "ann-edge",
+          ann: laneEdgeHit.annotation,
+          edge: laneEdgeHit.edge,
+          beforeSpan: {
+            start: laneEdgeHit.annotation.span.start,
+            end: laneEdgeHit.annotation.span.end,
+          },
+          moved: false,
+        };
+        CO.selectAnnotation(laneEdgeHit.annotation.id);
+        canvas.classList.add("co-drag-edge");
       } else {
         var bodyCut = hitTestCutBody(e.clientX, e.clientY);
-        var markerHit = bodyCut ? null : hitTest(e.clientX, e.clientY);
+        var laneHit = bodyCut ? null : hitTest(e.clientX, e.clientY);
+        var markerHit = laneHit && laneHit.marker ? laneHit : null;
+        var annHit = laneHit && laneHit.annotation ? laneHit : null;
         if (bodyCut) {
           drag = {
             type: "body",
@@ -549,9 +622,11 @@
             moved: false,
           };
           CO.selectCut(bodyCut.id);
-        } else if (markerHit && markerHit.marker) {
+        } else if (markerHit) {
           // Click a marker → seek to its in point (same as the cut track).
           drag = { type: "marker", marker: markerHit.marker, startX: e.clientX, moved: false };
+        } else if (annHit) {
+          drag = { type: "annotation", ann: annHit.annotation, startX: e.clientX, moved: false };
         } else if (state.zoom > 1) {
           drag = { type: "pan", startX: e.clientX, startOffset: state.offset, moved: false };
         } else {
@@ -569,7 +644,7 @@
         // Hover: edge cursor affordance + tooltip.
         if (!state.duration) return;
         var edge = hitTestCutEdge(e.clientX, e.clientY) ||
-          hitTestMarkerEdge(e.clientX, e.clientY);
+          hitTestLaneEdge(e.clientX, e.clientY);
         canvas.classList.toggle("co-drag-edge", !!edge);
         var hit = edge ? null : hitTest(e.clientX, e.clientY);
         if (hit) showTooltip(hit, e.clientX, e.clientY);
@@ -599,6 +674,17 @@
           marker.end = clamp(ts, marker.start + MIN_CUT_SECONDS, state.duration);
         }
         scheduleRender();
+      } else if (drag.type === "ann-edge") {
+        ts = xToTime(e.clientX);
+        if (ts === null) return;
+        drag.moved = true;
+        var span = drag.ann.span;
+        if (drag.edge === "start") {
+          span.start = clamp(ts, 0, span.end - MIN_CUT_SECONDS);
+        } else {
+          span.end = clamp(ts, span.start + MIN_CUT_SECONDS, state.duration);
+        }
+        scheduleRender();
       } else if (drag.type === "body") {
         var visLen = state.duration / state.zoom;
         var rect = getRect();
@@ -619,7 +705,7 @@
         state.offset = clamp(drag.startOffset - (dx / rect2.width) * visLen2,
           0, Math.max(0, state.duration - visLen2));
         scheduleRender();
-      } else if (drag.type === "marker") {
+      } else if (drag.type === "marker" || drag.type === "annotation") {
         if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
       } else if (drag.type === "scrub") {
         drag.moved = true;
@@ -645,10 +731,18 @@
         // A no-move edge grab restores the pre-drag values (nothing changed).
         d.marker.start = d.origStart;
         d.marker.end = d.origEnd;
+      } else if (d.type === "ann-edge" && d.moved) {
+        CO.commitAnnotationField(d.ann, "span", d.beforeSpan);
+      } else if (d.type === "ann-edge" && !d.moved) {
+        d.ann.span.start = d.beforeSpan.start;
+        d.ann.span.end = d.beforeSpan.end;
       } else if (d.type === "body" && !d.moved) {
         CO.seekVideo(d.cut.start);
       } else if (d.type === "marker" && !d.moved) {
         CO.seekVideo(d.marker.start);
+      } else if (d.type === "annotation" && !d.moved) {
+        CO.selectAnnotation(d.ann.id);
+        CO.seekVideo(d.ann.span.start);
       }
     }
     canvas.addEventListener("pointerup", endDrag);

@@ -106,6 +106,9 @@ body[data-frontend="composer"] {
 .co-icon-redo { --co-icon: url("icons/arrow-uturn-right.svg"); }
 .co-icon-fold-open { --co-icon: url("icons/chevron-down.svg"); }
 .co-icon-fold-closed { --co-icon: url("icons/chevron-right.svg"); }
+.co-icon-cursor { --co-icon: url("icons/cursor-arrow-rays.svg"); }
+.co-icon-text { --co-icon: url("icons/language.svg"); }
+.co-icon-draw { --co-icon: url("icons/pencil.svg"); }
 .co-icon-zoom-in { --co-icon: url("icons/magnifying-glass-plus.svg"); }
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-trash { --co-icon: url("icons/trash.svg"); }
@@ -165,6 +168,7 @@ body[data-frontend="composer"] {
 }
 
 #coStage {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -172,6 +176,96 @@ body[data-frontend="composer"] {
   justify-content: center;
   background: var(--bg);
   padding: var(--space-4);
+}
+
+/* ---- Annotate toolbar + overlay ---- */
+
+#coAnnotateBar {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-float);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-1-5);
+  background: color-mix(in oklab, var(--bg) 82%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.co-tool-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.co-tool-btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.co-tool-btn.active {
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  color: var(--fg);
+}
+
+.co-annotate-colors {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.co-color-swatch {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  background: var(--co-swatch-color, var(--accent));
+}
+
+.co-color-swatch.active {
+  border-color: var(--fg);
+}
+
+#coAnnotateCanvas {
+  position: absolute;
+  z-index: 1;
+  /* Sized/positioned over the video's content box by composer-annotate.js. */
+  display: none;
+}
+
+#coVideoFrame.has-video #coAnnotateCanvas {
+  display: block;
+}
+
+#coAnnotateCanvas.co-tool-text { cursor: text; }
+#coAnnotateCanvas.co-tool-draw { cursor: crosshair; }
+
+#coAnnotateText {
+  position: absolute;
+  z-index: 2;
+  background: color-mix(in oklab, var(--bg) 85%, transparent);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-1-5);
+  font-size: var(--text-sm);
+  font-family: inherit;
+  min-width: 10rem;
 }
 
 #coVideoFrame {
