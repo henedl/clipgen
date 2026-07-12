@@ -208,6 +208,170 @@ def test_trim_put_rejects_inverted_span(co_client):
     assert resp.status_code == 400
 
 
+# ---- Annotations (P3) ----
+
+
+def _make_annotation(co_client, **overrides):
+    body = {
+        "participant": "P01",
+        "type": "text",
+        "span": {"start": 60.0, "end": 180.0},
+        "geometry": {"x": 0.42, "y": 0.18, "text": "misses the CTA"},
+    }
+    body.update(overrides)
+    return co_client.post("/composer/api/annotations", json=body).get_json()
+
+
+def test_annotation_crud_round_trip(co_client, tmp_path):
+    created = _make_annotation(co_client)
+    assert created["ok"] is True
+    ann = created["annotation"]
+    assert ann["id"].startswith("ann_")
+    assert ann["style"]["color"] == config.COMPOSER_ANNOTATION_COLOR
+    assert _manifest_on_disk(tmp_path)["annotations"][0]["id"] == ann["id"]
+
+    patched = co_client.patch(
+        f"/composer/api/annotations/{ann['id']}",
+        json={"span": {"start": 65.0, "end": 170.0}},
+    ).get_json()
+    assert patched["annotation"]["span"] == {"start": 65.0, "end": 170.0}
+    # Geometry/style untouched by a span-only patch.
+    assert patched["annotation"]["geometry"]["text"] == "misses the CTA"
+
+    deleted = co_client.delete(f"/composer/api/annotations/{ann['id']}").get_json()
+    assert deleted["ok"] is True
+    assert _manifest_on_disk(tmp_path)["annotations"] == []
+
+
+def test_annotation_freehand_and_validation(co_client):
+    stroke = _make_annotation(
+        co_client,
+        type="freehand",
+        geometry={"points": [[0.1, 0.2], [0.15, 0.25], [1.7, -0.5]]},
+    )
+    assert stroke["ok"] is True
+    # Out-of-range points clamp to the frame.
+    assert stroke["annotation"]["geometry"]["points"][2] == [1.0, 0.0]
+
+    assert (
+        co_client.post(
+            "/composer/api/annotations",
+            json={
+                "participant": "P01",
+                "type": "text",
+                "span": {"start": 1, "end": 5},
+                "geometry": {"x": 0.5, "y": 0.5, "text": "   "},
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        co_client.post(
+            "/composer/api/annotations",
+            json={
+                "participant": "P01",
+                "type": "wiggle",
+                "span": {"start": 1, "end": 5},
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        co_client.patch("/composer/api/annotations/ann_nope", json={}).status_code
+        == 404
+    )
+
+
+def test_render_annotation_overlay_draws_pixels():
+    overlay = composer_server._render_annotation_overlay(
+        [
+            {
+                "type": "freehand",
+                "geometry": {"points": [[0.1, 0.5], [0.9, 0.5]]},
+                "style": {"color": "#ff0000", "strokeWidth": 0.01},
+            },
+            {
+                "type": "text",
+                "geometry": {"x": 0.1, "y": 0.1, "text": "hello"},
+                "style": {"color": "#00ff00", "fontSize": 0.05},
+            },
+        ],
+        640,
+        360,
+    )
+    assert overlay.mode == "RGBA"
+    assert overlay.size == (640, 360)
+    # Stroke pixel at mid-height is opaque red.
+    assert overlay.getpixel((320, 180))[3] > 0
+    # Something was drawn in the text region (backing box or glyphs).
+    region = overlay.crop((0, 0, 200, 80))
+    assert region.getchannel("A").getextrema()[1] > 0
+
+
+def test_annotation_windows_split_by_visibility():
+    anns = [
+        {"span": {"start": 0.0, "end": 10.0}, "id": "a"},
+        {"span": {"start": 5.0, "end": 20.0}, "id": "b"},
+    ]
+    windows = composer_server._annotation_windows(anns, 0.0, 30.0)
+    spans = [(w["start"], w["end"], len(w["annotations"])) for w in windows]
+    assert spans == [(0.0, 5.0, 1), (5.0, 10.0, 2), (10.0, 20.0, 1)]
+
+
+def test_build_overlay_command_seeks_first_and_uses_relative_enable():
+    cmd = composer_server._build_overlay_command(
+        "/vids/study_P01.mp4",
+        30.0,
+        12.0,
+        [("/tmp/o1.png", 0.0, 5.0), ("/tmp/o2.png", 5.0, 12.0)],
+        "/out/annotated.mp4",
+        gif=False,
+    )
+    # Seek precedes the main input (span-only decode).
+    assert cmd.index("-ss") < cmd.index("-i")
+    assert cmd[cmd.index("-ss") + 1] == "30.000"
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "between(t,0.000,5.000)" in graph
+    assert "between(t,5.000,12.000)" in graph
+    assert cmd[cmd.index("-t") + 1] == "12.000"
+    assert "-c:a" in cmd  # audio carried over for video burns
+
+
+def test_build_overlay_command_gif_chain():
+    cmd = composer_server._build_overlay_command(
+        "/vids/study_P01.mp4",
+        0.0,
+        4.0,
+        [("/tmp/o1.png", 0.0, 4.0)],
+        "/out/annotated.gif",
+        gif=True,
+    )
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert f"fps={config.GIF_FPS}" in graph
+    assert "-c:a" not in cmd
+
+
+def test_export_screenshot_composites_and_records(co_client, tmp_path, monkeypatch):
+    _make_annotation(co_client, span={"start": 1.0, "end": 9.0})
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)  # stub frame
+    saved = {}
+    monkeypatch.setattr(
+        composer_server,
+        "_save_export_artifact",
+        lambda artifact, participant: saved.update(artifact),
+    )
+    resp = co_client.post(
+        "/composer/api/export/screenshot", json={"participant": "P01", "time": 5.0}
+    ).get_json()
+    assert resp["ok"] is True
+    art = resp["artifact"]
+    assert art["type"] == "screen"
+    assert art["participant"] == "P01"
+    assert saved["id"] == art["id"]
+    out = tmp_path / art["file"]
+    assert out.is_file() and out.stat().st_size > 0
+
+
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
     import server
     import start_settings

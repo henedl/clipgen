@@ -166,6 +166,14 @@ CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
 COMPOSER_MANIFEST_FILENAME: str = (
     "composer_manifest.json"  # Composer cut pairs, trims, annotations, UI state
 )
+# Composer annotation defaults. Geometry is normalized to the video frame
+# (stroke width to frame width, font size to frame height) so the browser
+# preview and the PIL/ffmpeg burn-in agree at any resolution. Mirrored to the
+# frontend via utils.get_frontend_config() — do not hardcode these in JS.
+COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
+COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
+COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height
+COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
 # Data-source lanes shown (in order) per participant in the Convergence Browser.
 # Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
 # layout and per-lane offset keys stay in sync; do not hardcode this list in JS.

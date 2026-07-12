@@ -61,6 +61,10 @@ var CLIPGEN_CONFIG = {
   clipFormat: ".mp4",
   screenshotFormat: ".png",
   gifFormat: ".gif",
+  composerAnnotationColor: "#f05a3c",
+  composerAnnotationStrokeWidth: 0.004,
+  composerAnnotationFontSize: 0.035,
+  composerAnnotationSpanSeconds: 10.0,
 };
 
 var clipgenApplyConfig = function (payload) {

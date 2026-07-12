@@ -9,8 +9,15 @@ span overrides keyed by the frontend's marker key (``"sheet:12:P01:0"``,
 ``"screenspace:<event_id>"``, ``"transcript-mark:<mark_id>"``), stored in
 video-global seconds *after* the Convergence per-lane offset (the trim is
 against the video, so a later offset change doesn't move it). The source
-manifests (sheet / Screenspace / Transcripts) are never mutated. Visual
-annotations with burn-in export (P3) extend this module later.
+manifests (sheet / Screenspace / Transcripts) are never mutated. Phase 3 adds
+**annotations** — text labels and freehand strokes with a visibility span,
+geometry normalized 0..1 to the video frame (x/points/strokeWidth to width,
+y/fontSize to height) — plus export endpoints that render annotations with
+PIL (transparent RGBA overlay; no ffmpeg ``drawtext``, sidestepping the
+Homebrew libfreetype gotcha) and burn them into a screenshot, GIF, or video
+span via the ffmpeg ``overlay`` filter with span-relative
+``enable='between(t,...)'`` windows. Exported artifacts land in the regular
+``clipgen_manifest.json`` via ``viewer.save_manifest``.
 
 All Composer state lives in ``composer_manifest.json`` in the output dir
 (load-on-startup, save-after-mutations). Composer never writes to the
@@ -31,6 +38,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -40,6 +48,7 @@ from typing import Any
 from flask import Blueprint, request
 
 import config
+import files
 import utils
 import video
 from server_utils import err, ok
@@ -319,6 +328,600 @@ def api_ui_update() -> Any:
             response["laneFolds"] = ui["laneFolds"]
         _persist_locked()
     return ok(**response)
+
+
+# ---- Annotations CRUD ----
+
+ANNOTATION_TYPES = ("text", "freehand")
+
+
+def _clamp01(value: Any) -> float:
+    return min(1.0, max(0.0, float(value)))
+
+
+def _sanitize_annotation_geometry(
+    ann_type: str, geometry: Any
+) -> dict[str, Any] | None:
+    """Validate + normalize geometry for one annotation; None = invalid."""
+    if not isinstance(geometry, dict):
+        return None
+    try:
+        if ann_type == "text":
+            text = str(geometry.get("text") or "").strip()
+            if not text:
+                return None
+            return {
+                "x": round(_clamp01(geometry.get("x", 0)), 4),
+                "y": round(_clamp01(geometry.get("y", 0)), 4),
+                "text": text,
+            }
+        points = geometry.get("points")
+        if not isinstance(points, list) or not points:
+            return None
+        cleaned = [
+            [round(_clamp01(p[0]), 4), round(_clamp01(p[1]), 4)]
+            for p in points
+            if isinstance(p, (list, tuple)) and len(p) >= 2
+        ]
+        return {"points": cleaned} if cleaned else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _sanitize_annotation_style(style: Any) -> dict[str, Any]:
+    """Fill missing style fields from the config defaults."""
+    style = style if isinstance(style, dict) else {}
+
+    def _num(key: str, default: float) -> float:
+        try:
+            value = float(style.get(key, default))
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
+    return {
+        "color": str(style.get("color") or config.COMPOSER_ANNOTATION_COLOR),
+        "strokeWidth": _num("strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH),
+        "fontSize": _num("fontSize", config.COMPOSER_ANNOTATION_FONT_SIZE),
+    }
+
+
+def _parse_annotation_span(span: Any) -> tuple[float, float] | None:
+    if not isinstance(span, dict):
+        return None
+    try:
+        start = max(0.0, float(span["start"]))
+        end = float(span["end"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if end < start + MIN_CUT_SECONDS:
+        return None
+    return round(start, 3), round(end, 3)
+
+
+@composer_bp.route("/api/annotations", methods=["POST"])
+def api_annotation_create() -> Any:
+    data = request.get_json(silent=True) or {}
+    participant = str(data.get("participant", "")).strip()
+    if not participant:
+        return err("participant is required")
+    ann_type = str(data.get("type", ""))
+    if ann_type not in ANNOTATION_TYPES:
+        return err(f"type must be one of {', '.join(ANNOTATION_TYPES)}")
+    span = _parse_annotation_span(data.get("span"))
+    if span is None:
+        return err("span with start < end is required")
+    geometry = _sanitize_annotation_geometry(ann_type, data.get("geometry"))
+    if geometry is None:
+        return err("invalid geometry for type " + ann_type)
+    annotation: dict[str, Any] = {
+        "id": "ann_" + uuid.uuid4().hex[:8],
+        "participant": participant,
+        "type": ann_type,
+        "span": {"start": span[0], "end": span[1]},
+        "geometry": geometry,
+        "style": _sanitize_annotation_style(data.get("style")),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    with _manifest_lock:
+        _manifest.setdefault("annotations", []).append(annotation)
+        _persist_locked()
+    return ok(annotation=annotation)
+
+
+@composer_bp.route("/api/annotations/<ann_id>", methods=["PATCH"])
+def api_annotation_update(ann_id: str) -> Any:
+    data = request.get_json(silent=True) or {}
+    with _manifest_lock:
+        ann = next(
+            (a for a in _manifest.get("annotations", []) if a.get("id") == ann_id),
+            None,
+        )
+        if ann is None:
+            return err(f"No annotation {ann_id}", 404)
+        if data.get("span") is not None:
+            span = _parse_annotation_span(data["span"])
+            if span is None:
+                return err("span with start < end is required")
+            ann["span"] = {"start": span[0], "end": span[1]}
+        if data.get("geometry") is not None:
+            geometry = _sanitize_annotation_geometry(ann["type"], data["geometry"])
+            if geometry is None:
+                return err("invalid geometry for type " + str(ann["type"]))
+            ann["geometry"] = geometry
+        if data.get("style") is not None:
+            ann["style"] = _sanitize_annotation_style(data["style"])
+        _persist_locked()
+        return ok(annotation=copy.deepcopy(ann))
+
+
+@composer_bp.route("/api/annotations/<ann_id>", methods=["DELETE"])
+def api_annotation_delete(ann_id: str) -> Any:
+    with _manifest_lock:
+        annotations = _manifest.get("annotations", [])
+        remaining = [a for a in annotations if a.get("id") != ann_id]
+        if len(remaining) == len(annotations):
+            return err(f"No annotation {ann_id}", 404)
+        _manifest["annotations"] = remaining
+        _persist_locked()
+    return ok()
+
+
+# ---- Annotation rendering (PIL; no ffmpeg drawtext) ----
+
+# Common system font locations, probed in order. load_default() is the
+# fixed-size last resort (visibly cruder, but never fails).
+_ANNOTATION_FONT_PATHS = (
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/Library/Fonts/Arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+)
+_annotation_font_cache: dict[int, Any] = {}
+
+
+def _annotation_font(size: int) -> Any:
+    if size in _annotation_font_cache:
+        return _annotation_font_cache[size]
+    from PIL import ImageFont
+
+    font: Any = None
+    for path in _ANNOTATION_FONT_PATHS:
+        if Path(path).is_file():
+            try:
+                font = ImageFont.truetype(path, size)
+                break
+            except OSError:
+                continue
+    if font is None:
+        font = ImageFont.load_default()
+    _annotation_font_cache[size] = font
+    return font
+
+
+def _parse_hex_color(value: str) -> tuple[int, int, int, int]:
+    raw = str(value or "").lstrip("#")
+    try:
+        if len(raw) == 3:
+            raw = "".join(ch * 2 for ch in raw)
+        r, g, b = (int(raw[i : i + 2], 16) for i in (0, 2, 4))
+        return (r, g, b, 255)
+    except (ValueError, IndexError):
+        return (240, 90, 60, 255)  # config default's RGB
+
+
+def _render_annotation_overlay(
+    annotations: list[dict[str, Any]], width: int, height: int
+) -> Any:
+    """Render annotations onto a transparent RGBA PIL image of the frame size.
+
+    Geometry is normalized 0..1 (x/points/strokeWidth to width, y/fontSize to
+    height) — the same convention the browser preview canvas uses, so burn-in
+    matches the live view at any resolution.
+    """
+    from PIL import Image, ImageDraw
+
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    for ann in annotations:
+        style = ann.get("style") or {}
+        color = _parse_hex_color(style.get("color", ""))
+        geometry = ann.get("geometry") or {}
+        if ann.get("type") == "freehand":
+            points = [
+                (float(p[0]) * width, float(p[1]) * height)
+                for p in geometry.get("points", [])
+            ]
+            stroke = max(
+                1,
+                round(
+                    float(
+                        style.get(
+                            "strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH
+                        )
+                    )
+                    * width
+                ),
+            )
+            if len(points) == 1:
+                x, y = points[0]
+                r = max(stroke, 2)
+                draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
+            elif points:
+                draw.line(points, fill=color, width=stroke, joint="curve")
+        elif ann.get("type") == "text":
+            text = str(geometry.get("text") or "")
+            if not text:
+                continue
+            size = max(
+                8,
+                round(
+                    float(style.get("fontSize", config.COMPOSER_ANNOTATION_FONT_SIZE))
+                    * height
+                ),
+            )
+            font = _annotation_font(size)
+            x = float(geometry.get("x", 0)) * width
+            y = float(geometry.get("y", 0)) * height
+            # Soft dark backing box keeps text legible over any footage.
+            bbox = draw.textbbox((x, y), text, font=font)
+            pad = max(2, round(size * 0.25))
+            draw.rectangle(
+                [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad],
+                fill=(0, 0, 0, 110),
+            )
+            draw.text((x, y), text, fill=color, font=font)
+    return img
+
+
+# ---- Exports (annotated screenshot / burned video / GIF) ----
+
+# One export at a time is plenty for a single-user tool; the cancel event
+# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag.
+_export_cancel = threading.Event()
+
+# Bound on the ffmpeg filter graph: one overlay input per visibility window.
+MAX_OVERLAY_WINDOWS = 20
+
+
+def _find_participant_parts(participant: str) -> list[dict[str, Any]] | None:
+    """Ordered ``{name, path, duration, offset}`` parts, or None."""
+    for p in utils.discover_participant_videos():
+        if p["id"] == participant and p.get("has_video"):
+            parts = _participant_parts(p["video_paths"])
+            if parts is None:
+                return None
+            for part, vp in zip(parts, p["video_paths"]):
+                part["path"] = str(vp)
+            return parts
+    return None
+
+
+def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
+    for part in parts:
+        if part["offset"] <= t < part["offset"] + part["duration"]:
+            return part
+    return parts[-1]
+
+
+def _annotations_in_span(
+    participant: str, start: float, end: float
+) -> list[dict[str, Any]]:
+    with _manifest_lock:
+        annotations = copy.deepcopy(_manifest.get("annotations", []))
+    return [
+        a
+        for a in annotations
+        if a.get("participant") == participant
+        and a["span"]["start"] < end
+        and a["span"]["end"] > start
+    ]
+
+
+def _annotation_windows(
+    annotations: list[dict[str, Any]], start: float, end: float
+) -> list[dict[str, Any]]:
+    """Split [start, end] into visibility windows with a constant annotation set.
+
+    Window boundaries are the annotation span edges clipped to the export
+    range; windows with no visible annotation are dropped. Each window is
+    flattened into ONE overlay PNG downstream, so the ffmpeg filter graph is
+    bounded by the number of distinct windows, not the annotation count.
+    """
+    bounds = {start, end}
+    for a in annotations:
+        bounds.add(min(end, max(start, a["span"]["start"])))
+        bounds.add(min(end, max(start, a["span"]["end"])))
+    ordered = sorted(bounds)
+    windows: list[dict[str, Any]] = []
+    for w_start, w_end in zip(ordered, ordered[1:]):
+        if w_end - w_start < 0.01:
+            continue
+        visible = [
+            a
+            for a in annotations
+            if a["span"]["start"] < w_end and a["span"]["end"] > w_start
+        ]
+        if visible:
+            windows.append({"start": w_start, "end": w_end, "annotations": visible})
+    return windows
+
+
+def _build_overlay_command(
+    input_path: str,
+    local_start: float,
+    duration: float,
+    overlay_specs: list[tuple[str, float, float]],
+    out_path: str,
+    *,
+    gif: bool,
+) -> list[str]:
+    """ffmpeg argv burning overlay PNGs into a span of *input_path*.
+
+    *overlay_specs* is ``[(png_path, rel_start, rel_end), ...]`` with times
+    relative to the span start — input seeking (``-ss`` before ``-i``) resets
+    the filter clock to 0, so ``enable='between(t,...)'`` uses span-relative
+    times. Only the requested span is decoded/encoded, never the whole file.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-loglevel",
+        config.FFMPEG_LOGLEVEL,
+        "-ss",
+        f"{max(0.0, local_start):.3f}",
+        "-i",
+        input_path,
+    ]
+    for png_path, _, _ in overlay_specs:
+        cmd += ["-loop", "1", "-i", png_path]
+    chain = []
+    prev = "[0:v]"
+    for i, (_, rel_start, rel_end) in enumerate(overlay_specs):
+        label = f"[v{i + 1}]"
+        chain.append(
+            f"{prev}[{i + 1}:v]overlay=0:0:"
+            f"enable='between(t,{rel_start:.3f},{rel_end:.3f})'{label}"
+        )
+        prev = label
+    if gif:
+        chain.append(
+            f"{prev}fps={config.GIF_FPS},"
+            f"scale={config.GIF_SCALE_WIDTH}:-1:flags=lanczos[vout]"
+        )
+        prev = "[vout]"
+    cmd += ["-filter_complex", ";".join(chain), "-map", prev]
+    if gif:
+        cmd += ["-t", f"{duration:.3f}", out_path]
+    else:
+        cmd += [
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            # veryfast: spans are short and re-encoded once; quality over speed
+            # tuning is not worth a config knob here.
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            "-t",
+            f"{duration:.3f}",
+            out_path,
+        ]
+    return cmd
+
+
+def _composer_artifact(
+    participant: str,
+    artifact_type: str,
+    out_path: str,
+    start: float,
+    end: float,
+    description: str,
+    source_video: str,
+) -> dict[str, Any]:
+    """Artifact record for the clipgen manifest (intake-record shape)."""
+    import hashlib
+
+    id_hash = hashlib.md5(
+        f"composer|{participant}|{start}|{end}|{Path(out_path).name}".encode()
+    ).hexdigest()[:8]
+    return {
+        "id": f"composer_{id_hash}_s0",
+        "type": artifact_type,
+        "file": Path(out_path).name,
+        "start": round(start, 3),
+        "end": round(end, 3),
+        "thumbnail": "",
+        "study": "",
+        "participant": participant,
+        "category": "",
+        "severity": "",
+        "description": description,
+        "cellRow": None,
+        "cellCol": None,
+        "cellA1": "",
+        "annotations": [],
+        "source": "composer",
+        "sourceVideo": source_video,
+        "localStart": round(start, 3),
+        "localEnd": round(end, 3),
+    }
+
+
+def _save_export_artifact(artifact: dict[str, Any], participant: str) -> None:
+    import viewer
+
+    viewer.save_manifest([artifact], participant=participant)
+
+
+@composer_bp.route("/api/export/cancel", methods=["POST"])
+def api_export_cancel() -> Any:
+    _export_cancel.set()
+    return ok()
+
+
+@composer_bp.route("/api/export/screenshot", methods=["POST"])
+def api_export_screenshot() -> Any:
+    """Annotated screenshot at one timestamp (PIL composite; no ffmpeg filter)."""
+    data = request.get_json(silent=True) or {}
+    participant = str(data.get("participant", "")).strip()
+    try:
+        at_time = float(data.get("time", 0))
+    except (TypeError, ValueError):
+        return err("time must be a number")
+    parts = _find_participant_parts(participant)
+    if not parts:
+        return err(f"No video for {participant}", 404)
+    part = _part_for_time(parts, at_time)
+    frame = video.extract_frame_at_timestamp(part["path"], at_time - part["offset"])
+    if frame is None:
+        return err("Could not extract a frame at that time", 500)
+
+    annotations = _annotations_in_span(participant, at_time, at_time + 0.001)
+    from PIL import Image
+
+    base = Image.fromarray(frame[:, :, ::-1]).convert("RGBA")  # BGR → RGB
+    overlay = _render_annotation_overlay(annotations, base.width, base.height)
+    composed = Image.alpha_composite(base, overlay).convert("RGB")
+
+    time_tag = utils.seconds_to_timestamp(int(at_time)).replace(":", ".")
+    out_path = files.get_unique_filename(
+        f"{participant} annotated {time_tag}{config.SCREENSHOT_FORMAT}",
+        config.SCREENSHOT_FORMAT,
+    )
+    try:
+        composed.save(out_path)
+    except OSError as exc:
+        files.release_reservation(out_path)
+        return err(f"Could not write screenshot: {exc}", 500)
+
+    artifact = _composer_artifact(
+        participant,
+        "screen",
+        out_path,
+        at_time,
+        at_time,
+        f"Annotated screenshot ({len(annotations)} annotation(s))",
+        Path(part["path"]).name,
+    )
+    _save_export_artifact(artifact, participant)
+    return ok(artifact=artifact)
+
+
+def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
+    """Shared burn/GIF export: validate span, render windows, run ffmpeg."""
+    participant = str(data.get("participant", "")).strip()
+    try:
+        start = float(data.get("start", 0))
+        end = float(data.get("end", 0))
+    except (TypeError, ValueError):
+        return err("start/end must be numbers")
+    if end <= start:
+        return err("end must be after start")
+    parts = _find_participant_parts(participant)
+    if not parts:
+        return err(f"No video for {participant}", 404)
+    start_part = _part_for_time(parts, start)
+    end_part = _part_for_time(parts, max(start, end - 0.001))
+    if start_part is not end_part:
+        return err(
+            "The span crosses a recording-part boundary; export each part separately."
+        )
+    annotations = _annotations_in_span(participant, start, end)
+    if not annotations:
+        return err("No annotations in this span — use Generate for plain clips.")
+    windows = _annotation_windows(annotations, start, end)
+    if len(windows) > MAX_OVERLAY_WINDOWS:
+        return err(
+            f"Too many distinct annotation windows ({len(windows)}); "
+            f"the limit is {MAX_OVERLAY_WINDOWS}."
+        )
+    props = video.probe_video_properties(start_part["path"])
+    if not props or not props.get("width") or not props.get("height"):
+        return err("Could not probe the video resolution", 500)
+
+    import tempfile
+
+    out_dir = str(utils.get_effective_output_dir())
+    fmt = config.GIF_FORMAT if gif else config.FILEFORMAT
+    kind = "gif" if gif else "clip"
+    time_tag = utils.seconds_to_timestamp(int(start)).replace(":", ".")
+    out_path = files.get_unique_filename(
+        f"{participant} annotated {kind} {time_tag}{fmt}", fmt
+    )
+    overlay_specs: list[tuple[str, float, float]] = []
+    _export_cancel.clear()
+    try:
+        for window in windows:
+            overlay = _render_annotation_overlay(
+                window["annotations"], props["width"], props["height"]
+            )
+            fd, png_path = tempfile.mkstemp(
+                prefix=config.TEMP_ARTIFACT_PREFIX, suffix=".png", dir=out_dir
+            )
+            os.close(fd)
+            overlay.save(png_path)
+            overlay_specs.append(
+                (png_path, window["start"] - start, window["end"] - start)
+            )
+        cmd = _build_overlay_command(
+            start_part["path"],
+            start - start_part["offset"],
+            end - start,
+            overlay_specs,
+            out_path,
+            gif=gif,
+        )
+        result = video.run_ffmpeg_process(
+            cmd,
+            input_file=start_part["path"],
+            output_file=out_path,
+            os_error_message="Annotated export failed.",
+            cancel_flag=_export_cancel.is_set,
+        )
+    finally:
+        for png_path, _, _ in overlay_specs:
+            try:
+                os.unlink(png_path)
+            except OSError:
+                pass
+    if result is None:
+        files.release_reservation(out_path)
+        return err("Export cancelled" if _export_cancel.is_set() else "ffmpeg failed")
+    if result.returncode != 0:
+        files.release_reservation(out_path)
+        return err("ffmpeg failed: " + (result.stderr or "")[-400:], 500)
+
+    artifact = _composer_artifact(
+        participant,
+        kind,
+        out_path,
+        start,
+        end,
+        f"Annotated {kind} ({len(annotations)} annotation(s))",
+        Path(start_part["path"]).name,
+    )
+    _save_export_artifact(artifact, participant)
+    return ok(artifact=artifact)
+
+
+@composer_bp.route("/api/export/burn", methods=["POST"])
+def api_export_burn() -> Any:
+    """Burn annotations into a video span (seek-first; span-only encode)."""
+    return _run_overlay_export(request.get_json(silent=True) or {}, gif=False)
+
+
+@composer_bp.route("/api/export/gif", methods=["POST"])
+def api_export_gif() -> Any:
+    """Burn annotations into an animated GIF of the span."""
+    return _run_overlay_export(request.get_json(silent=True) or {}, gif=True)
 
 
 # ---- State init ----
