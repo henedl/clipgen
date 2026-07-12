@@ -740,7 +740,8 @@
       if ((d.type === "edge" || d.type === "body") && d.moved) {
         CO.commitCutTimes(d.cut, { start: d.origStart, end: d.origEnd });
       } else if (d.type === "marker-edge" && d.moved) {
-        CO.commitMarkerTrim(d.marker, d.beforeTrim);
+        CO.commitMarkerTrim(d.marker, d.beforeTrim,
+          { start: d.origStart, end: d.origEnd });
       } else if (d.type === "marker-edge" && !d.moved) {
         // A no-move edge grab restores the pre-drag values (nothing changed).
         d.marker.start = d.origStart;

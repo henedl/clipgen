@@ -514,25 +514,29 @@
     return applyTimes(op.id, isUndo ? op.before : op.after);
   }
 
-  function undo() {
-    var op = _undoStack.pop();
-    syncUndoButtons();
+  // Peek-apply-pop: the op moves between stacks only once the server has
+  // accepted it, so a failed request keeps the op available for retry (the
+  // raw appliers never mutate local state on failure). The busy flag stops a
+  // rapid second ⌘Z from re-applying the still-peeked op.
+  var _historyBusy = false;
+
+  function shiftHistory(fromStack, toStack, isUndo) {
+    if (_historyBusy) return;
+    var op = fromStack[fromStack.length - 1];
     if (!op) return;
-    applyOp(op, true).then(function () {
-      _redoStack.push(op);
+    _historyBusy = true;
+    applyOp(op, isUndo).then(function () {
+      fromStack.pop();
+      toStack.push(op);
+    }, opFailed).then(function () {
+      _historyBusy = false;
       syncUndoButtons();
-    }).catch(opFailed);
+    });
   }
 
-  function redo() {
-    var op = _redoStack.pop();
-    syncUndoButtons();
-    if (!op) return;
-    applyOp(op, false).then(function () {
-      _undoStack.push(op);
-      syncUndoButtons();
-    }).catch(opFailed);
-  }
+  function undo() { shiftHistory(_undoStack, _redoStack, true); }
+
+  function redo() { shiftHistory(_redoStack, _undoStack, false); }
 
   // ---- User-facing cut actions (record undo ops) ----
 
@@ -570,7 +574,8 @@
   CO.deleteCut = deleteCut;
 
   // Persist a cut's edited span (timeline edge/body drags land here on drag
-  // end, with *before* = the pre-drag times so the edit is undoable).
+  // end, with *before* = the pre-drag times so the edit is undoable). On
+  // failure the optimistic drag is rolled back so the view matches the server.
   function commitCutTimes(cut, before) {
     var changed = !before || before.start !== cut.start || before.end !== cut.end;
     applyTimes(cut.id, { start: cut.start, end: cut.end }).then(function (saved) {
@@ -582,7 +587,14 @@
           after: { start: saved.start, end: saved.end },
         });
       }
-    }).catch(opFailed);
+    }).catch(function (error) {
+      if (before) {
+        cut.start = before.start;
+        cut.end = before.end;
+        refreshCutViews();
+      }
+      opFailed(error);
+    });
   }
   CO.commitCutTimes = commitCutTimes;
 
@@ -670,7 +682,8 @@
   CO.deleteAnnotation = deleteAnnotation;
 
   // Persist an edited field ("span" or "geometry"); *before* is the pre-edit
-  // value for undo. The record was already mutated locally by the caller.
+  // value for undo. The record was already mutated locally by the caller —
+  // rolled back to *before* if the server rejects the edit.
   function commitAnnotationField(ann, field, before) {
     var payload = {};
     payload[field] = ann[field];
@@ -682,7 +695,13 @@
         before: before,
         after: JSON.parse(JSON.stringify(saved[field])),
       });
-    }).catch(opFailed);
+    }).catch(function (error) {
+      if (before) {
+        ann[field] = JSON.parse(JSON.stringify(before));
+        refreshAnnotationViews();
+      }
+      opFailed(error);
+    });
   }
   CO.commitAnnotationField = commitAnnotationField;
 
@@ -747,12 +766,20 @@
   // ---- Marker trims (user actions; non-destructive span overrides) ----
 
   // Persist a marker's dragged span. The timeline mutated the marker live;
-  // *before* is the trim that was in force pre-drag (null = untrimmed).
-  function commitMarkerTrim(marker, before) {
+  // *before* is the trim that was in force pre-drag (null = untrimmed) and
+  // *origSpan* the marker's pre-drag visual span (for failure rollback).
+  function commitMarkerTrim(marker, before, origSpan) {
     var after = { start: marker.start, end: marker.end };
     applyTrim(marker.key, after).then(function () {
       recordOp({ type: "trim", key: marker.key, before: before, after: after });
-    }).catch(opFailed);
+    }).catch(function (error) {
+      if (origSpan) {
+        marker.start = origSpan.start;
+        marker.end = origSpan.end;
+        renderTimeline();
+      }
+      opFailed(error);
+    });
   }
   CO.commitMarkerTrim = commitMarkerTrim;
 
@@ -1322,24 +1349,11 @@
       }
     });
 
-    apiGet("api/participants").then(function (data) {
-      if (!data.ok) return;
-      if (data.config) clipgenApplyConfig(data.config);
-      state.participants = data.participants || [];
-      populateParticipantSelect();
-      // Restore the last-worked-on participant; fall back to auto-select
-      // when there is only one.
-      var stored = getStoredUIState("composer").participant;
-      var initial = stored && findParticipant(stored)
-        ? stored
-        : state.participants.length === 1 ? state.participants[0].id : null;
-      if (initial) {
-        qs("#coParticipantSelect").value = initial;
-        selectParticipant(initial);
-      }
-    }).catch(function () { showToast("Could not load participants"); });
-
-    apiGet("api/manifest").then(function (data) {
+    // The two boot fetches run in parallel, but participant auto-select MUST
+    // wait for the manifest: selectParticipant → loadMarkers → commitLane
+    // overlays trims from state.trims, which is empty until the manifest
+    // lands — racing them showed saved trims at their source spans.
+    var manifestLoaded = apiGet("api/manifest").then(function (data) {
       if (!data.ok || !data.manifest) return;
       state.cuts = data.manifest.cuts || [];
       state.trims = data.manifest.trims || {};
@@ -1364,7 +1378,27 @@
       renderCutList();
       if (CO.updateTimelineHeight) CO.updateTimelineHeight();
       renderTimeline();
+      renderAnnotations();
     }).catch(function () {});
+
+    apiGet("api/participants").then(function (data) {
+      if (!data.ok) return;
+      if (data.config) clipgenApplyConfig(data.config);
+      state.participants = data.participants || [];
+      populateParticipantSelect();
+      return manifestLoaded.then(function () {
+        // Restore the last-worked-on participant; fall back to auto-select
+        // when there is only one.
+        var stored = getStoredUIState("composer").participant;
+        var initial = stored && findParticipant(stored)
+          ? stored
+          : state.participants.length === 1 ? state.participants[0].id : null;
+        if (initial) {
+          qs("#coParticipantSelect").value = initial;
+          selectParticipant(initial);
+        }
+      });
+    }).catch(function () { showToast("Could not load participants"); });
   }
 
   document.addEventListener("DOMContentLoaded", boot);
