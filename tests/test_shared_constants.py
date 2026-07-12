@@ -109,6 +109,19 @@ def test_clipgen_config_defaults_match_python():
     assert js_config["clipFormat"] == py_config["clipFormat"]
     assert js_config["screenshotFormat"] == py_config["screenshotFormat"]
     assert js_config["gifFormat"] == py_config["gifFormat"]
+    assert js_config["composerAnnotationColor"] == py_config["composerAnnotationColor"]
+    assert (
+        js_config["composerAnnotationStrokeWidth"]
+        == py_config["composerAnnotationStrokeWidth"]
+    )
+    assert (
+        js_config["composerAnnotationFontSize"]
+        == py_config["composerAnnotationFontSize"]
+    )
+    assert (
+        js_config["composerAnnotationSpanSeconds"]
+        == py_config["composerAnnotationSpanSeconds"]
+    )
 
 
 def test_get_frontend_config_shape():
@@ -132,6 +145,10 @@ def test_get_frontend_config_shape():
         "clipFormat",
         "screenshotFormat",
         "gifFormat",
+        "composerAnnotationColor",
+        "composerAnnotationStrokeWidth",
+        "composerAnnotationFontSize",
+        "composerAnnotationSpanSeconds",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS

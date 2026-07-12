@@ -21,6 +21,7 @@ uv run ruff format --check && uv run ruff check --fix && uv run ty check  # pre-
 uv run clipgen.py --studio                                  # spreadsheet UI (requires -s)
 uv run clipgen.py --screenspace -i INPUT_DIR -o OUTPUT_DIR  # http://127.0.0.1:8089/screenspace/
 uv run clipgen.py --transcripts -i INPUT_DIR -o OUTPUT_DIR  # http://127.0.0.1:8089/transcripts/
+uv run clipgen.py --composer -i INPUT_DIR -o OUTPUT_DIR     # http://127.0.0.1:8089/composer/
 ```
 
 Always use `uv run` instead of `python`. Use `uv add` to add dependencies.

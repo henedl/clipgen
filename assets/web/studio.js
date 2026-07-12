@@ -92,6 +92,13 @@
     trIntakeShowAll: false,
     trIntakeHoveredIdx: -1,
     trIntakeTooltipsEnabled: true,
+    coIntakeItems: [],
+    coTrims: {},
+    coTrimCardKeys: {},
+    coIntakeFilterParticipants: [],
+    coIntakeFilterText: "",
+    coIntakeHoveredIdx: -1,
+    _coIntakeFp: null,
     convergenceBaselines: {},
     convergenceDataVersion: 0,
     convergenceStale: false,
@@ -102,7 +109,7 @@
   };
 
   function isIntakeSource(source) {
-    return source === "screenspace" || source === "transcript";
+    return source === "screenspace" || source === "transcript" || source === "composer";
   }
 
   var ROW_FUNCTIONS = {
@@ -159,7 +166,7 @@
   function intakeIds(item) {
     if (!item) return [];
     var raw =
-      item.source === "screenspace"
+      item.source === "screenspace" || item.source === "composer"
         ? item.event_ids
         : item.source === "transcript"
           ? item.mark_ids
@@ -1008,6 +1015,7 @@
     var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
+    var coIntakePanel = qs("#coIntakePanel");
     var convergencePanel = qs("#convergencePanel");
     var metadataPanel = qs("#metadataPanel");
 
@@ -1015,6 +1023,7 @@
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
+    if (coIntakePanel) coIntakePanel.classList.add("hidden");
     if (convergencePanel) convergencePanel.classList.add("hidden");
     if (metadataPanel) metadataPanel.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
@@ -1036,6 +1045,9 @@
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
       activePanel = trIntakePanel;
+    } else if (state.activePreviewTab === "composer-intake") {
+      if (coIntakePanel) coIntakePanel.classList.remove("hidden");
+      activePanel = coIntakePanel;
     } else if (state.activePreviewTab === "convergence") {
       if (convergencePanel) convergencePanel.classList.remove("hidden");
       activePanel = convergencePanel;
@@ -2290,10 +2302,15 @@
     return STUDIO.resetScrubberPrefetch && STUDIO.resetScrubberPrefetch.apply(null, arguments);
   }
 
-  // Source-origin badge (Screenspace vs. Transcript) layered over an intake thumb.
+  // Source-origin badge (Screenspace / Transcript / Composer) layered over an
+  // intake thumb.
   function buildSourceBadge(source) {
-    var badge = el("span", "queue-card-source-badge");
-    badge.innerHTML = iconHTML(source === "transcript" ? "bars-3" : "squares-2x2");
+    var badge = el("span", "queue-card-source-badge" +
+      (source === "composer" ? " source-composer" : ""));
+    var icon = source === "transcript" ? "bars-3"
+      : source === "composer" ? "scissors"
+      : "squares-2x2";
+    badge.innerHTML = iconHTML(icon);
     return badge;
   }
 
@@ -2658,6 +2675,29 @@
     durationSel: "#reelDuration",
   };
 
+  // Composer-trim key for a queue item, or null. Sheet items key on
+  // row/participant/segment (matching composer-markers.js's sheet marker
+  // keys — segIdx follows the same parseClipSegmentsForCell pair order);
+  // intake items key on their event/mark ids.
+  function queueItemTrimKey(item) {
+    // Gate on the carded-key set (not raw trims) so the badge only appears
+    // when the deep-link has a Composer Intake card to land on.
+    var cardKeys = state.coTrimCardKeys || {};
+    if (!isIntakeSource(item.source) && item.row) {
+      var key = "sheet:" + item.row + ":" + item.participant + ":" + (item.segIdx || 0);
+      return cardKeys[key] ? key : null;
+    }
+    var ids = item.source === "screenspace" ? item.event_ids
+      : item.source === "transcript" ? item.mark_ids
+      : null;
+    if (!ids) return null;
+    var prefix = item.source === "screenspace" ? "screenspace:" : "transcript-mark:";
+    for (var i = 0; i < ids.length; i++) {
+      if (ids[i] && cardKeys[prefix + ids[i]]) return prefix + ids[i];
+    }
+    return null;
+  }
+
   function buildQueueCard(item, idx, cfg, ctx) {
     var isIntake = isIntakeSource(item.source);
     var segTotal = item.segTotal || 1;
@@ -2710,6 +2750,22 @@
       renderFn: ctx.render,
     });
     if (isIntake) thumb.appendChild(buildSourceBadge(item.source));
+
+    // Asterisk badge: this item's underlying timestamp has a Composer trim —
+    // the user may want to swap this card for the trimmed version. Click jumps
+    // to the Composer Intake tab and highlights it.
+    var trimKey = queueItemTrimKey(item);
+    if (trimKey) {
+      var trimBadge = el("button", "intake-trim-badge", "✱");
+      trimBadge.type = "button";
+      trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
+      trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
+      trimBadge.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        focusComposerIntakeItem(trimKey);
+      });
+      thumb.appendChild(trimBadge);
+    }
 
     var meta = el("div", "queue-card-meta");
     var refText;
@@ -4331,6 +4387,10 @@
           var trIntakeTab = qs('.preview-tab[data-tab="transcript-intake"]');
           if (trIntakeTab) trIntakeTab.classList.remove("hidden");
         }
+        if (data.composer) {
+          var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
+          if (coIntakeTab) coIntakeTab.classList.remove("hidden");
+        }
         restoreStoredPreviewTab();
       })
       .catch(function () {});
@@ -4448,6 +4508,8 @@
   function initIntake() { return STUDIO.initIntake && STUDIO.initIntake.apply(null, arguments); }
   function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
   function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
+  function pollComposerIntake() { return STUDIO.pollComposerIntake && STUDIO.pollComposerIntake.apply(null, arguments); }
+  function focusComposerIntakeItem() { return STUDIO.focusComposerIntakeItem && STUDIO.focusComposerIntakeItem.apply(null, arguments); }
   function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
@@ -4557,8 +4619,10 @@
     // `state` so on-demand user actions can wake() them back to the fast cadence.
     state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000 });
     state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000 });
+    state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000 });
     state.ssIntakePoller.start();
     state.trIntakePoller.start();
+    state.coIntakePoller.start();
     // One-shot job-status fetch on page load picks up any reel/generate
     // build that's still running in the background after the user navigated
     // away to a sibling frontend and back. The poll's own success handler

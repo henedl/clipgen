@@ -3263,6 +3263,7 @@ def build_combined_app(
     ``app.run`` so tests (and any embedding caller) can hold the live
     ``Flask`` instance and exercise routes via ``app.test_client()``.
     """
+    import composer_server
     import screenspace_server
     import start_settings
     import transcripts_server
@@ -3314,6 +3315,12 @@ def build_combined_app(
     )
     combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
 
+    composer_server._init_composer_state(
+        sheet_context=_sheet_context,
+        participant_list=_resolve_participants(),
+    )
+    combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
+
     combined.after_request(_set_cache_headers)
 
     @combined.route("/")
@@ -3329,6 +3336,7 @@ def build_combined_app(
                 "screenspace": True,
                 "transcripts": True,
                 "workflows": True,
+                "composer": True,
                 "sheet_loaded": _worksheet is not None,
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
