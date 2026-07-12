@@ -40,6 +40,7 @@ html {
 .cg-icon--check       { mask-image: url(icons/check.svg);       -webkit-mask-image: url(icons/check.svg); }
 .cg-icon--bars-3      { mask-image: url(icons/bars-3.svg);      -webkit-mask-image: url(icons/bars-3.svg); }
 .cg-icon--squares-2x2 { mask-image: url(icons/squares-2x2.svg); -webkit-mask-image: url(icons/squares-2x2.svg); }
+.cg-icon--scissors    { mask-image: url(icons/scissors.svg);    -webkit-mask-image: url(icons/scissors.svg); }
 .cg-icon--chevron-up-down { mask-image: url(icons/chevron-up-down.svg); -webkit-mask-image: url(icons/chevron-up-down.svg); }
 .cg-icon--bars-arrow-up   { mask-image: url(icons/bars-arrow-up.svg);   -webkit-mask-image: url(icons/bars-arrow-up.svg); }
 .cg-icon--bars-arrow-down { mask-image: url(icons/bars-arrow-down.svg); -webkit-mask-image: url(icons/bars-arrow-down.svg); }
@@ -2759,13 +2760,17 @@ html[data-theme="dark"] .log-panel {
   display: block;
 }
 
-/* Asterisk chip on an SS/TR intake card whose event/mark has a Composer trim
- * override — clicking jumps to the Composer Intake tab (bottom-right corner,
- * mirroring the bottom-left source badge). */
+.queue-card-source-badge.source-composer {
+  background: color-mix(in oklch, var(--color-accent) 85%, transparent);
+}
+
+/* Asterisk chip on a card whose timestamp has a Composer trim override —
+ * clicking jumps to the Composer Intake tab. Top-left corner: bottom corners
+ * hold the source badge and the duration badge. */
 .intake-trim-badge {
   position: absolute;
-  bottom: 4px;
-  right: 4px;
+  top: 4px;
+  left: 4px;
   padding: 1px 5px;
   border: none;
   border-radius: var(--radius-sm);

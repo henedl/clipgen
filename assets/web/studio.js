@@ -2304,7 +2304,8 @@
   // Source-origin badge (Screenspace / Transcript / Composer) layered over an
   // intake thumb.
   function buildSourceBadge(source) {
-    var badge = el("span", "queue-card-source-badge");
+    var badge = el("span", "queue-card-source-badge" +
+      (source === "composer" ? " source-composer" : ""));
     var icon = source === "transcript" ? "bars-3"
       : source === "composer" ? "scissors"
       : "squares-2x2";
