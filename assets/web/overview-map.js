@@ -66,6 +66,7 @@
     simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
     anchors: null,  // {features, meshes, labels, links} shared-anchor layer
     burst: null,    // {owner, meshes, items, offsets} drill-down satellites
+    axisLabels: [], // [{el, pos}] X/Y/Z tip labels tied to the axis legend
   };
 
   // Spherical orbit: hand-rolled (rotate + dolly is all a 30-dot scatter
@@ -896,6 +897,21 @@
     axisGeo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
     three.scene.add(new THREE.LineSegments(axisGeo, axisMat));
 
+    // X/Y/Z tip labels — same names the sidebar axis legend explains.
+    var axisNames = ["X", "Y", "Z"];
+    var axisTips = [
+      new THREE.Vector3(r, 0, 0),
+      new THREE.Vector3(0, r, 0),
+      new THREE.Vector3(0, 0, r),
+    ];
+    for (var ai = 0; ai < 3; ai++) {
+      var axLabel = document.createElement("div");
+      axLabel.className = "map-label map-axis-tip";
+      axLabel.textContent = axisNames[ai];
+      els.labels.appendChild(axLabel);
+      three.axisLabels.push({ el: axLabel, pos: axisTips[ai] });
+    }
+
     bindOrbit();
     window.addEventListener("resize", onResize);
     applyCamera();
@@ -1183,24 +1199,32 @@
     });
   }
 
-  function projectLabel(label, position, v, w, h) {
-    v.copy(position).project(three.camera);
-    if (v.z > 1) {
-      label.style.display = "none";
-      return;
-    }
-    label.style.display = "";
-    label.style.left = ((v.x + 1) / 2 * w) + "px";
-    label.style.top = ((1 - (v.y + 1) / 2) * h) + "px";
+  // Labels are projected each render, then decluttered in screen space:
+  // higher priority first (selected > participants > anchors > axis tips),
+  // nearer-to-camera breaking ties; a label whose estimated rect overlaps an
+  // already-placed one is hidden. Width is estimated from text length —
+  // measuring real rects per frame (getBoundingClientRect) is a hot-loop
+  // cost the render loop must not pay.
+  var LABEL_EST_CHAR_PX = 6.5;
+  var LABEL_EST_HEIGHT_PX = 15;
+
+  function labelsOverlap(a, b) {
+    return a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
   }
 
   function updateLabels() {
     var w = els.canvasWrap.clientWidth;
     var h = els.canvasWrap.clientHeight;
     var v = new THREE.Vector3();
+    var entries = [];
     var i;
+
     for (i = 0; i < three.dots.length; i++) {
-      projectLabel(three.labels[i], three.dots[i].position, v, w, h);
+      entries.push({
+        el: three.labels[i],
+        pos: three.dots[i].position,
+        priority: i === state.selected ? 0 : 1,
+      });
     }
     if (three.anchors) {
       for (i = 0; i < three.anchors.labels.length; i++) {
@@ -1208,10 +1232,60 @@
           three.anchors.labels[i].style.display = "none";
           continue;
         }
-        projectLabel(
-          three.anchors.labels[i], three.anchors.meshes[i].position, v, w, h
-        );
+        entries.push({
+          el: three.anchors.labels[i],
+          pos: three.anchors.meshes[i].position,
+          priority: 2,
+        });
       }
+    }
+    for (i = 0; i < three.axisLabels.length; i++) {
+      entries.push({
+        el: three.axisLabels[i].el,
+        pos: three.axisLabels[i].pos,
+        priority: 3,
+      });
+    }
+
+    for (i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      v.copy(e.pos).project(three.camera);
+      e.visible = v.z <= 1;
+      e.x = (v.x + 1) / 2 * w;
+      e.y = (1 - (v.y + 1) / 2) * h;
+      e.depth = v.z;
+    }
+
+    var order = entries.slice().sort(function (a, b) {
+      return a.priority - b.priority || a.depth - b.depth;
+    });
+    var placed = [];
+    for (i = 0; i < order.length; i++) {
+      var it = order[i];
+      if (!it.visible) continue;
+      // Rect mirrors the CSS transform: centered on x, sitting ~8px above y.
+      var halfW = ((it.el.textContent || "").length * LABEL_EST_CHAR_PX + 8) / 2;
+      var rect = {
+        x1: it.x - halfW,
+        x2: it.x + halfW,
+        y1: it.y - LABEL_EST_HEIGHT_PX - 8,
+        y2: it.y - 8,
+      };
+      for (var p = 0; p < placed.length; p++) {
+        if (labelsOverlap(rect, placed[p])) { it.visible = false; break; }
+      }
+      if (it.visible) placed.push(rect);
+    }
+
+    for (i = 0; i < entries.length; i++) {
+      var out = entries[i];
+      if (!out.visible) {
+        out.el.style.display = "none";
+        continue;
+      }
+      out.el.style.display = "";
+      out.el.style.left = out.x + "px";
+      out.el.style.top = out.y + "px";
     }
   }
 

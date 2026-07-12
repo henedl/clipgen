@@ -360,6 +360,12 @@ body {
   font-style: italic;
 }
 
+.map-axis-tip {
+  font-size: var(--text-2xs);
+  color: var(--fg-dim);
+  letter-spacing: 0.08em;
+}
+
 .map-tooltip {
   position: absolute;
   z-index: var(--z-float);
