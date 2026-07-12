@@ -35,6 +35,7 @@
     intakeClusters: [],       // clustered, non-navigational
     trIntakeMarks: [],        // valid transcript marks
     trIntakeClusters: [],
+    frictionMoments: [],      // LLM friction moments with resolved times
     activeTab: "metadata",
     // Bumped after every completed loadAll(). The tabs' staleness snapshots
     // compare against this — data can only "change" via an actual refetch,
@@ -159,7 +160,13 @@
       })
       .catch(function () { state.trIntakeMarks = []; });
 
-    return Promise.all([sheetP, baselineP, eventsP, marksP]).then(function () {
+    var frictionP = apiGet("api/friction-moments")
+      .then(function (data) {
+        state.frictionMoments = (data && data.moments) || [];
+      })
+      .catch(function () { state.frictionMoments = []; });
+
+    return Promise.all([sheetP, baselineP, eventsP, marksP, frictionP]).then(function () {
       buildClusters();
       state.dataVersion++;
       return state;

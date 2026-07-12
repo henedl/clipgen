@@ -569,6 +569,49 @@ def api_convergence_offsets_get():
     return ok(offsets=_clean_convergence_offsets(raw))
 
 
+@overview_bp.route("/api/friction-moments")
+def api_friction_moments():
+    """LLM-refined friction moments with resolved times, across participants.
+
+    The transcripts manifest stores moments as ``segment_ids`` lists; the Map
+    drill-down needs start/end seconds, so each moment's window is resolved
+    to [min(start), max(end)] of its segments. Moments whose segments are
+    gone (re-transcribed entry) are dropped.
+    """
+    source = transcripts.load_transcripts_manifest().get("source_transcripts", {})
+    moments: list[dict[str, Any]] = []
+    for pid, entry in (source or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        friction_data = entry.get("friction")
+        if not isinstance(friction_data, dict):
+            continue
+        segs = {
+            str(s.get("id")): s
+            for s in (entry.get("segments") or [])
+            if isinstance(s, dict)
+        }
+        for moment in friction_data.get("moments", []) or []:
+            if not isinstance(moment, dict):
+                continue
+            ids = [str(x) for x in (moment.get("segment_ids") or [])]
+            starts = [float(segs[i].get("start") or 0.0) for i in ids if i in segs]
+            ends = [float(segs[i].get("end") or 0.0) for i in ids if i in segs]
+            if not starts:
+                continue
+            moments.append(
+                {
+                    "participant": pid,
+                    "category": moment.get("category", ""),
+                    "rationale": moment.get("rationale", ""),
+                    "score": moment.get("score", 0.0),
+                    "start": min(starts),
+                    "end": max(ends),
+                }
+            )
+    return ok(moments=utils.sanitize_floats(moments))
+
+
 @overview_bp.route("/api/convergence/offsets", methods=["PUT"])
 def api_convergence_offsets_put():
     """Persist per-lane convergence display offsets.

@@ -555,11 +555,10 @@
   // ---- Participant drill-down: items, satellite burst, timeline drawer -----
   //
   // The underlying timestamps and notes come from the Overview hub's state —
-  // the same streams Convergence/Metadata read — so no extra endpoint:
-  // sheet observations (rows + OV.parseClipTimestamps for baselined times),
-  // clustered screenspace events, and clustered transcript marks. Friction
-  // moments are deferred to v2 (not in any hub stream; would need
-  // per-participant transcript fetches).
+  // the same streams Convergence/Metadata read: sheet observations (rows +
+  // OV.parseClipTimestamps for baselined times), clustered screenspace
+  // events, clustered transcript marks, and LLM friction moments (the hub
+  // fetches api/friction-moments, which resolves segment ids to times).
 
   function buildParticipantItems(pid) {
     var OV = window.ClipgenOverview;
@@ -613,6 +612,19 @@
       });
     }
 
+    for (i = 0; i < hub.frictionMoments.length; i++) {
+      var fm = hub.frictionMoments[i];
+      if (fm.participant !== pid) continue;
+      items.push({
+        source: "friction",
+        text: fm.rationale || "",
+        category: fm.category || "",
+        severity: "",
+        start: fm.start,
+        end: fm.end,
+      });
+    }
+
     items.sort(function (a, b) { return a.start - b.start || a.end - b.end; });
     return items;
   }
@@ -620,6 +632,7 @@
   function burstColor(source) {
     if (source === "sheet") return three.colors.streamSheet;
     if (source === "screenspace") return three.colors.streamScreenspace;
+    if (source === "friction") return three.colors.friction;
     return three.colors.streamTranscript;
   }
 
@@ -688,9 +701,11 @@
     { key: "sheet", label: "Sheet" },
     { key: "screenspace", label: "Screenspace" },
     { key: "transcript", label: "Transcript" },
+    { key: "friction", label: "Friction" },
   ];
 
   function drawerCssColor(source) {
+    if (source === "friction") return "var(--color-friction)";
     return "var(--stream-" + source + ")";
   }
 
@@ -843,6 +858,7 @@
       streamSheet: tokenColor("--stream-sheet", "#eab308"),
       streamScreenspace: tokenColor("--stream-screenspace", "#3498db"),
       streamTranscript: tokenColor("--stream-transcript", "#10a34a"),
+      friction: tokenColor("--color-friction", "#ea580c"),
     };
 
     three.scene = new THREE.Scene();

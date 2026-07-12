@@ -469,3 +469,48 @@ def test_feature_matrix_uses_injected_observation_rows(seeded_output_dir, monkey
     assert payload["availability"]["P05"]["observations"] is True
     cols = {c["key"]: j for j, c in enumerate(payload["columns"])}
     assert payload["matrix"][0][cols["obs_total"]] == 3.0
+
+
+def test_api_friction_moments_resolves_times(overview_client, seeded_output_dir):
+    _write_manifests(
+        seeded_output_dir,
+        transcripts={
+            "source_transcripts": {
+                "P01": {
+                    "segments": _segments("P01", ["a", "b", "c"]),
+                    "friction": {
+                        "segments": [],
+                        "stats": {
+                            "by_category": {},
+                            "markers_per_minute": 0,
+                            "total_markers": 0,
+                        },
+                        "moments": [
+                            {
+                                "segment_ids": ["P01:1", "P01:2"],
+                                "category": "confusion",
+                                "rationale": "lost in nav",
+                                "score": 0.8,
+                            },
+                            # Dangling segment ids -> dropped, not crashed.
+                            {
+                                "segment_ids": ["P01:99"],
+                                "category": "x",
+                                "rationale": "y",
+                                "score": 0.1,
+                            },
+                        ],
+                    },
+                }
+            },
+            "corrections": [],
+            "marks": [],
+        },
+    )
+    body = overview_client.get("/overview/api/friction-moments").get_json()
+    assert body["ok"] is True
+    assert len(body["moments"]) == 1
+    m = body["moments"][0]
+    assert m["participant"] == "P01"
+    assert m["start"] == 30.0 and m["end"] == 90.0
+    assert m["rationale"] == "lost in nav"
