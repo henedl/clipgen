@@ -154,7 +154,6 @@
           state.ssEvents = data.events || [];
           state.ssEventsLoaded = true;
           _buildEventsIndex();
-          if (state.searchResults) renderSearchResults(state.searchResults);
         }
       })
       .catch(function () { _markXrefSource("screenspace", true); });
@@ -172,7 +171,6 @@
           state.sheetParticipants = data.participants || [];
           state.sheetLoaded = true;
           _buildSheetIndex();
-          if (state.searchResults) renderSearchResults(state.searchResults);
         }
       })
       .catch(function () { _markXrefSource("studio", true); });
@@ -1908,13 +1906,10 @@
   }
 
   // ---- Search (impl in transcripts-search.js) ----
-  // Thin hub delegators: boot wires initSearch; the cross-reference
-  // data-load and the tooltip toggle re-render open results.
+  // Thin hub delegator: boot wires initSearch. Search renders its own results
+  // internally, so no renderSearchResults delegator is needed.
   function initSearch() {
     return TS.initSearch && TS.initSearch();
-  }
-  function renderSearchResults() {
-    return TS.renderSearchResults && TS.renderSearchResults.apply(null, arguments);
   }
 
   // ---- Participant pills (impl in transcripts-pills.js) ----
@@ -2001,7 +1996,16 @@
     // _summaryPoller lives in the agents satellite; ask it whether the summary
     // poll is already armed (TS.isSummaryPolling) rather than reading the var.
     if (summaryRunning && !(TS.isSummaryPolling && TS.isSummaryPolling()) && !state.summaryText) loadSummary(pid);
-    if (!state.frictionData && !state.frictionGenerating && _frictionDepMet()) loadFriction(pid);
+    // Reload friction when the panel is empty, or when the deterministic-only
+    // placeholder is showing and the summary-gated agent has now started/finished
+    // — otherwise the deterministic blob keeps this guard shut and
+    // the AI moments would never replace it (see agents/CODE-REVIEW.md poll gates).
+    var frictionActive = !!(p && p.agents && (p.agents.friction === "running" || p.agents.friction === "done"));
+    var showingDeterministic = !!(state.frictionData && state.frictionData.deterministic);
+    if (!state.frictionGenerating && _frictionDepMet() &&
+        (!state.frictionData || (showingDeterministic && frictionActive))) {
+      loadFriction(pid);
+    }
   }
 
   // Called from pill agent onStart/onStop after the API POST resolves.
@@ -2212,7 +2216,6 @@
       state.tooltipsEnabled = !state.tooltipsEnabled;
       btn.setAttribute("aria-pressed", state.tooltipsEnabled ? "true" : "false");
       setStoredTooltipPref(state.tooltipsEnabled);
-      if (state.searchResults) renderSearchResults(state.searchResults);
       if (state.segments.length > 0) renderSegments();
     });
   }
