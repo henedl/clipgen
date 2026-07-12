@@ -4453,52 +4453,9 @@
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
   function _syncMarkCategoriesFromSettings() { return STUDIO._syncMarkCategoriesFromSettings && STUDIO._syncMarkCategoriesFromSettings.apply(null, arguments); }
 
-  var XREF_ICON_BASE = "../screenspace/icons/";
-
-  function xrefBadgeIcon(iconName) {
-    return iconMaskSpan(iconName, { className: "xref-badge-icon", basePath: XREF_ICON_BASE });
-  }
-
-  // selfBadge: optional { icon, color, title } to prepend as the "self" source badge
-  function buildXrefBadges(xref, selfSource, selfBadge) {
-    var badges = [];
-    if (selfBadge) badges.push(selfBadge);
-    if (selfSource !== "screenspace" && xref.screenspaceEvents.length > 0) {
-      var types = [];
-      var seen = {};
-      for (var i = 0; i < xref.screenspaceEvents.length; i++) {
-        var et = xref.screenspaceEvents[i].event_type || xref.screenspaceEvents[i].detector;
-        if (!seen[et]) { seen[et] = true; types.push(et); }
-      }
-      badges.push({ icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: types.join(", ") });
-    }
-    if (selfSource !== "transcript" && xref.transcriptSnippets.length > 0) {
-      var trTexts = [];
-      for (var j = 0; j < xref.transcriptSnippets.length && j < 3; j++) {
-        var t = xref.transcriptSnippets[j].text;
-        trTexts.push(t.length > 80 ? t.substring(0, 80) + "\u2026" : t);
-      }
-      badges.push({ icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: trTexts.join("\n") });
-    }
-    if (xref.sheetObservations.length > 0) {
-      var obsTexts = [];
-      for (var k = 0; k < xref.sheetObservations.length && k < 3; k++) {
-        obsTexts.push(xref.sheetObservations[k].observation);
-      }
-      badges.push({ icon: XREF_BADGES.sheet.icon, color: XREF_BADGES.sheet.color, title: obsTexts.join("\n") });
-    }
-    if (badges.length === 0) return null;
-    var container = el("span", "xref-badge-stack");
-    for (var b = 0; b < badges.length; b++) {
-      var badge = el("span", "xref-badge");
-      badge.style.background = badges[b].color;
-      badge.style.zIndex = badges.length - b;
-      badge.appendChild(xrefBadgeIcon(badges[b].icon));
-      badge.title = badges[b].title;
-      container.appendChild(badge);
-    }
-    return container;
-  }
+  // buildXrefBadges / xrefBadgeIcon / XREF_ICON_BASE moved to utils.js \u2014 the
+  // Overview page (Convergence, Map drill-down) renders the same badge stacks.
+  // Bare references below resolve to the utils.js globals.
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;

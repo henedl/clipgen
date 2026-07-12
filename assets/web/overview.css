@@ -16,11 +16,72 @@ body {
   line-height: 1.5;
 }
 
+/* ---- Page shell: subheader tabs + panels ---- */
+
+.ov-study-name {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sub-tab underline-on-active styling (same visuals as Studio's sub-tabs;
+ * the shared .subheader container strip lives in tokens.css). */
+.preview-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 2px;
+  font-size: var(--subheader-font-size);
+  font-weight: 400;
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px; /* sits on subheader's bottom border */
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast);
+  font-family: inherit;
+}
+
+.preview-tab:hover { color: var(--fg); }
+
+.preview-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+#mapPanel,
+#convergencePanel,
+#metadataPanel {
+  transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+#mapPanel.hidden,
+#convergencePanel.hidden,
+#metadataPanel.hidden { display: none; }
+
+.tab-slide-enter {
+  opacity: 0 !important;
+  transform: translateX(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #mapPanel,
+  #convergencePanel,
+  #metadataPanel { transition: none; }
+  .tab-slide-enter {
+    opacity: 1 !important;
+    transform: none;
+  }
+}
+
 #mapShell {
   display: flex;
   height: 100vh;
-  /* Clears the fixed TopNav (the map has no subheader strip). */
-  padding-top: var(--topnav-height);
+  /* Clears the fixed TopNav + the Overview subheader strip. */
+  padding-top: var(--chrome-height);
   box-sizing: border-box;
 }
 

@@ -902,5 +902,23 @@
     loadData();
   }
 
-  initDom();
+  // ---- Tab-satellite contract (called by the overview.js hub) ----
+
+  var _mapBooted = false;
+
+  function mapActivate() {
+    if (!_mapBooted) {
+      // First activation happens with #mapPanel already visible, so the
+      // canvas measures its real size.
+      _mapBooted = true;
+      initDom();
+      return;
+    }
+    onResize();
+    requestRender();
+  }
+
+  window.ClipgenOverview.mapActivate = mapActivate;
+  window.ClipgenOverview.mapDeactivate = function () {};
+  window.ClipgenOverview.mapResize = onResize;
 })();

@@ -7,6 +7,7 @@
   <!-- CLIPGEN_HEAD_HERE -->
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="topnav.css">
+  <link rel="stylesheet" href="primitives.css">
   <link rel="stylesheet" href="overview.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="color-picker.css">
@@ -17,11 +18,27 @@
   <topnav-mount data-frontend="overview"></topnav-mount>
   <start-overlay-mount></start-overlay-mount>
 
-  <!-- Three-pane scaffold: lens/outlier sidebar · 3D canvas · explain panel.
-       The scene is a similarity space — participants positioned by PCA over
-       weighted, z-scored feature vectors so distance reads as "how alike".
-       All math runs client-side (overview-map.js); the server only ships the
-       raw feature matrix from /overview/api/data. -->
+  <!-- Subheader: study meta + the cohort-level tabs. Same shared .subheader
+       chrome strip Studio/Transcripts/Screenspace use (tokens.css). -->
+  <header id="ovSubheader" class="subheader">
+    <div class="subheader-left">
+      <span id="ovStudyName" class="ov-study-name"></span>
+    </div>
+    <nav class="subheader-tabs" role="tablist" aria-label="Overview tabs">
+      <button class="preview-tab active" type="button" role="tab" data-tab="map">Map</button>
+    </nav>
+    <div class="subheader-actions">
+      <button id="ovRefresh" class="btn btn-small" type="button"
+              title="Re-fetch sheet, Screenspace, and transcript data">Refresh</button>
+    </div>
+  </header>
+
+  <!-- Map tab — three-pane scaffold: lens/outlier sidebar · 3D canvas ·
+       explain panel. The scene is a similarity space: participants positioned
+       by PCA over weighted, z-scored feature vectors so distance reads as
+       "how alike". All math runs client-side (overview-map.js); the server
+       only ships the raw feature matrix from /overview/api/data. -->
+  <div id="mapPanel">
   <main id="mapShell">
     <aside id="mapSidebar" aria-label="Similarity lens and outliers">
       <div class="map-sidebar-header">Similarity lens</div>
@@ -49,7 +66,7 @@
       <div id="mapLabels" aria-hidden="true"></div>
       <div id="mapTooltip" class="map-tooltip hidden"></div>
       <div id="mapEmpty" class="map-empty hidden">
-        <h1>Study Map</h1>
+        <h1>Overview</h1>
         <p>No study data yet. The map draws on the manifests other tools
           write:</p>
         <p class="map-empty-sub">generate clips in <a href="/studio/">Studio</a>,
@@ -68,16 +85,21 @@
       <div id="mapExplainBody"></div>
     </aside>
   </main>
+  </div>
 
-  <!-- Deps order: utils → chrome → settings → vendored Three.js (global THREE,
-       r147 UMD — see vendor/README.md) → page hub. -->
+  <!-- Deps order is a contract: utils → primitives → chrome → settings →
+       intake-cluster (hub clustering) → vendored Three.js (global THREE,
+       r147 UMD — see vendor/README.md) → overview hub → satellites. -->
   <script src="utils.js" defer></script>
+  <script src="primitives.js" defer></script>
   <script src="topnav.js" defer></script>
   <script src="start-overlay.js" defer></script>
   <script src="dev-token-tweak.js" defer data-dev-only></script>
   <script src="color-picker.js" defer></script>
   <script src="settings-modal.js" defer></script>
+  <script src="intake-cluster.js" defer></script>
   <script src="vendor/three.min.js" defer></script>
+  <script src="overview.js" defer></script>
   <script src="overview-map.js" defer></script>
 </body>
 </html>

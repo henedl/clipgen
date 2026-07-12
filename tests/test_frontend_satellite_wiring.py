@@ -39,6 +39,7 @@ _WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
 # and so sorts last. Only IIFE-wrapped files are part of the carve (shared
 # non-IIFE files like screenspace-utils.js define globals and are ambient).
 _GROUPS = {
+    "overview": "overview*.js",
     "screenspace": "screenspace*.js",
     "transcripts": "transcripts*.js",
     "studio": "studio*.js",
