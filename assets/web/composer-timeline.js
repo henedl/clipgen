@@ -400,6 +400,8 @@
           type: "edge",
           cut: edgeHit.cut,
           edge: edgeHit.edge,
+          origStart: edgeHit.cut.start,
+          origEnd: edgeHit.cut.end,
           moved: false,
         };
         CO.selectCut(edgeHit.cut.id);
@@ -488,7 +490,7 @@
         canvas.releasePointerCapture(e.pointerId);
       }
       if ((d.type === "edge" || d.type === "body") && d.moved) {
-        CO.commitCutTimes(d.cut);
+        CO.commitCutTimes(d.cut, { start: d.origStart, end: d.origEnd });
       } else if (d.type === "body" && !d.moved) {
         CO.seekVideo(d.cut.start);
       }

@@ -23,38 +23,16 @@
     <label class="co-toolbar-label" for="coParticipantSelect">Participant</label>
     <select id="coParticipantSelect" aria-label="Participant" disabled></select>
     <span class="co-toolbar-sep"></span>
-    <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
-            aria-label="Play/Pause" title="Play/Pause (Space)">
-      <span id="coPlayIcon" class="co-btn-icon co-icon-play" aria-hidden="true"></span>
+    <!-- Undo / redo: the cut-edit stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
+         state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
+    <button id="coUndoBtn" class="btn btn-small btn-icon" type="button" disabled
+            aria-label="Undo" title="Undo (⌘Z)">
+      <span class="co-btn-icon co-icon-undo" aria-hidden="true"></span>
     </button>
-    <span id="coTimeLabel" class="co-time">0:00 / 0:00</span>
-    <span class="co-toolbar-sep"></span>
-    <button id="coSetInBtn" class="btn btn-small btn-icon" type="button" disabled
-            title="Set in point at playhead (I)">
-      <span class="co-btn-icon co-icon-in" aria-hidden="true"></span>In
+    <button id="coRedoBtn" class="btn btn-small btn-icon" type="button" disabled
+            aria-label="Redo" title="Redo (⌘⇧Z)">
+      <span class="co-btn-icon co-icon-redo" aria-hidden="true"></span>
     </button>
-    <button id="coSetOutBtn" class="btn btn-small btn-icon" type="button" disabled
-            title="Set out point — commits the cut (O)">
-      <span class="co-btn-icon co-icon-out" aria-hidden="true"></span>Out
-    </button>
-    <span id="coPendingInfo" class="co-pending-info" aria-live="polite"></span>
-    <span class="co-toolbar-sep"></span>
-    <!-- Marker-lane toggles: one pill per data source (1/2/3). Colors come from
-         the shared --stream-* tokens so lanes match the Convergence Browser. -->
-    <div class="co-lane-pills" role="group" aria-label="Marker sources">
-      <button id="coLaneSheet" class="co-lane-pill" type="button" data-source="sheet"
-              aria-pressed="true" title="Toggle Sheet markers (1)">
-        <span class="co-lane-dot" aria-hidden="true"></span>Sheet
-      </button>
-      <button id="coLaneScreenspace" class="co-lane-pill" type="button" data-source="screenspace"
-              aria-pressed="true" title="Toggle Screenspace markers (2)">
-        <span class="co-lane-dot" aria-hidden="true"></span>Screenspace
-      </button>
-      <button id="coLaneTranscript" class="co-lane-pill" type="button" data-source="transcript"
-              aria-pressed="true" title="Toggle Transcript markers (3)">
-        <span class="co-lane-dot" aria-hidden="true"></span>Transcript
-      </button>
-    </div>
     <div class="co-toolbar-spacer"></div>
     <button id="coGenerateBtn" class="btn btn-small btn-primary" type="button" disabled
             title="Generate clips from all cuts for this participant (G)">Generate clips</button>
@@ -76,6 +54,7 @@
           <div><dt>Set in / out point</dt><dd><kbd>I</kbd> <kbd>O</kbd></dd></div>
           <div><dt>Nudge selected edge</dt><dd><kbd>[</kbd> <kbd>]</kbd> (<kbd>⇧</kbd> = 1 s)</dd></div>
           <div><dt>Delete selected cut</dt><dd><kbd>X</kbd> <kbd>⌫</kbd></dd></div>
+          <div><dt>Undo / redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
           <div><dt>Toggle marker lanes</dt><dd><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>`</kbd></dd></div>
           <div><dt>Generate clips</dt><dd><kbd>G</kbd></dd></div>
           <div><dt>Cancel pending / deselect</dt><dd><kbd>Esc</kbd></dd></div>
@@ -111,6 +90,39 @@
       <canvas id="coPlayheadCanvas"></canvas>
     </div>
     <div id="coTimelineControls">
+      <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
+              aria-label="Play/Pause" title="Play/Pause (Space)">
+        <span id="coPlayIcon" class="co-btn-icon co-icon-play" aria-hidden="true"></span>
+      </button>
+      <span id="coTimeLabel" class="co-time">0:00 / 0:00</span>
+      <span class="co-toolbar-sep"></span>
+      <button id="coSetInBtn" class="btn btn-small btn-icon" type="button" disabled
+              title="Set in point at playhead (I)">
+        <span class="co-btn-icon co-icon-in" aria-hidden="true"></span>In
+      </button>
+      <button id="coSetOutBtn" class="btn btn-small btn-icon" type="button" disabled
+              title="Set out point — commits the cut (O)">
+        <span class="co-btn-icon co-icon-out" aria-hidden="true"></span>Out
+      </button>
+      <span id="coPendingInfo" class="co-pending-info" aria-live="polite"></span>
+      <span class="co-toolbar-sep"></span>
+      <!-- Marker-lane toggles: one pill per data source (1/2/3). Colors come from
+           the shared --stream-* tokens so lanes match the Convergence Browser. -->
+      <div class="co-lane-pills" role="group" aria-label="Marker sources">
+        <button id="coLaneSheet" class="co-lane-pill" type="button" data-source="sheet"
+                aria-pressed="true" title="Toggle Sheet markers (1)">
+          <span class="co-lane-dot" aria-hidden="true"></span>Sheet
+        </button>
+        <button id="coLaneScreenspace" class="co-lane-pill" type="button" data-source="screenspace"
+                aria-pressed="true" title="Toggle Screenspace markers (2)">
+          <span class="co-lane-dot" aria-hidden="true"></span>Screenspace
+        </button>
+        <button id="coLaneTranscript" class="co-lane-pill" type="button" data-source="transcript"
+                aria-pressed="true" title="Toggle Transcript markers (3)">
+          <span class="co-lane-dot" aria-hidden="true"></span>Transcript
+        </button>
+      </div>
+      <span class="co-toolbar-sep"></span>
       <button id="coZoomInBtn" class="btn btn-small btn-icon" type="button"
               aria-label="Zoom in" title="Zoom in"></button>
       <button id="coZoomOutBtn" class="btn btn-small btn-icon" type="button"
@@ -122,6 +134,15 @@
 
   <div id="coTooltip" class="co-tooltip hidden"></div>
   <div id="toast" class="toast hidden"></div>
+
+  <!-- Artifact log: session record of generated clips, toggled by the TopNav
+       #logBtn (a lightweight popover, not Studio's full modal). -->
+  <div id="coLogPanel" class="co-log-panel hidden" role="dialog" aria-label="Artifact log">
+    <div class="co-panel-header">Artifact log</div>
+    <div id="coLogContent" class="co-log-content">
+      <p class="co-empty-hint">Clips generated this session appear here.</p>
+    </div>
+  </div>
 
   <!-- Deps order: utils → chrome → settings → page hub → composer-*.js satellites.
        composer-markers.js loads before composer-timeline.js; the timeline only

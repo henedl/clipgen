@@ -31,6 +31,7 @@
     offset: 0,              // timeline pan offset (global seconds)
     dragging: false,        // timeline satellite sets during pan/edge drags
     generating: false,
+    artifactLog: [],        // session record of generate results (TopNav log)
   };
 
   var CO = { state: state };
@@ -246,6 +247,11 @@
     state.zoom = 1;
     state.offset = 0;
     state.markers = { sheet: [], screenspace: [], transcript: [] };
+    // Undo ops reference the previous participant's cuts — an undo fired after
+    // a switch would invisibly mutate that other timeline. Drop the stacks.
+    _undoStack.length = 0;
+    _redoStack.length = 0;
+    syncUndoButtons();
 
     var video = qs("#coVideo");
     video.pause();
@@ -320,6 +326,117 @@
     renderPlayhead();
   }
 
+  // Raw appliers — perform the API call + local state update, no undo
+  // recording. User actions wrap these and record an op; undo/redo replay
+  // them directly (recording again would corrupt the stacks).
+
+  function refreshCutViews() {
+    updateGenerateButton();
+    renderCutList();
+    renderTimeline();
+  }
+
+  function applyCreate(cutData) {
+    return apiSend("POST", "api/cuts", {
+      participant: cutData.participant,
+      start: cutData.start,
+      end: cutData.end,
+      label: cutData.label || "",
+    }).then(function (data) {
+      if (!data.ok) throw new Error(data.error || "Could not save cut");
+      state.cuts.push(data.cut);
+      refreshCutViews();
+      return data.cut;
+    });
+  }
+
+  function applyDelete(id) {
+    return apiSend("DELETE", "api/cuts/" + encodeURIComponent(id)).then(function (data) {
+      if (!data.ok) throw new Error(data.error || "Could not delete cut");
+      state.cuts = state.cuts.filter(function (c) { return c.id !== id; });
+      if (state.selectedCutId === id) state.selectedCutId = null;
+      refreshCutViews();
+    });
+  }
+
+  function applyTimes(id, times) {
+    return apiSend("PATCH", "api/cuts/" + encodeURIComponent(id), {
+      start: times.start,
+      end: times.end,
+    }).then(function (data) {
+      if (!data.ok) throw new Error(data.error || "Could not save cut");
+      var cut = findCut(id);
+      if (cut) {
+        cut.start = data.cut.start;
+        cut.end = data.cut.end;
+      }
+      refreshCutViews();
+      return data.cut;
+    });
+  }
+
+  function opFailed(err) {
+    showToast(err && err.message ? err.message : "Cut update failed");
+  }
+
+  // ---- Undo / redo (cut create / delete / edit) ----
+
+  var _undoStack = [];
+  var _redoStack = [];
+  var UNDO_LIMIT = 100;
+
+  function syncUndoButtons() {
+    qs("#coUndoBtn").disabled = _undoStack.length === 0;
+    qs("#coRedoBtn").disabled = _redoStack.length === 0;
+  }
+
+  function recordOp(op) {
+    _undoStack.push(op);
+    if (_undoStack.length > UNDO_LIMIT) _undoStack.shift();
+    _redoStack.length = 0;
+    syncUndoButtons();
+  }
+
+  // Apply *op* in the given direction. A re-created cut gets a fresh server id,
+  // so the op's stored cut is swapped for the new one — the paired redo/undo
+  // then targets the id that actually exists.
+  function applyOp(op, isUndo) {
+    if (op.type === "create") {
+      return isUndo
+        ? applyDelete(op.cut.id)
+        : applyCreate(op.cut).then(function (cut) { op.cut = cut; });
+    }
+    if (op.type === "delete") {
+      return isUndo
+        ? applyCreate(op.cut).then(function (cut) { op.cut = cut; })
+        : applyDelete(op.cut.id);
+    }
+    // edit
+    return applyTimes(op.id, isUndo ? op.before : op.after);
+  }
+
+  function undo() {
+    var op = _undoStack.pop();
+    syncUndoButtons();
+    if (!op) return;
+    applyOp(op, true).then(function () {
+      _redoStack.push(op);
+      syncUndoButtons();
+    }).catch(opFailed);
+  }
+
+  function redo() {
+    var op = _redoStack.pop();
+    syncUndoButtons();
+    if (!op) return;
+    applyOp(op, false).then(function () {
+      _undoStack.push(op);
+      syncUndoButtons();
+    }).catch(opFailed);
+  }
+
+  // ---- User-facing cut actions (record undo ops) ----
+
   function setOutPoint() {
     if (!state.participant || state.pendingIn === null) {
       showToast("Set an in point first (I)");
@@ -332,46 +449,41 @@
       showToast("Cut too short — move the playhead past the in point");
       return;
     }
-    apiSend("POST", "api/cuts", {
-      participant: state.participant,
-      start: start,
-      end: end,
-    }).then(function (data) {
-      if (!data.ok) { showToast(data.error || "Could not save cut"); return; }
-      state.cuts.push(data.cut);
-      state.pendingIn = null;
-      state.selectedCutId = data.cut.id;
-      updatePendingInfo();
-      updateGenerateButton();
-      renderCutList();
-      renderTimeline();
-    }).catch(function () { showToast("Could not save cut"); });
+    applyCreate({ participant: state.participant, start: start, end: end })
+      .then(function (cut) {
+        state.pendingIn = null;
+        state.selectedCutId = cut.id;
+        updatePendingInfo();
+        recordOp({ type: "create", cut: cut });
+        refreshCutViews();
+      })
+      .catch(opFailed);
   }
 
   function deleteCut(id) {
-    apiSend("DELETE", "api/cuts/" + encodeURIComponent(id)).then(function (data) {
-      if (!data.ok) { showToast(data.error || "Could not delete cut"); return; }
-      state.cuts = state.cuts.filter(function (c) { return c.id !== id; });
-      if (state.selectedCutId === id) state.selectedCutId = null;
-      updateGenerateButton();
-      renderCutList();
-      renderTimeline();
-    }).catch(function () { showToast("Could not delete cut"); });
+    var cut = findCut(id);
+    if (!cut) return;
+    var snapshot = { id: cut.id, participant: cut.participant, start: cut.start, end: cut.end, label: cut.label };
+    applyDelete(id).then(function () {
+      recordOp({ type: "delete", cut: snapshot });
+    }).catch(opFailed);
   }
   CO.deleteCut = deleteCut;
 
-  // Persist a cut's edited span (timeline edge/body drags land here on drag end).
-  function commitCutTimes(cut) {
-    apiSend("PATCH", "api/cuts/" + encodeURIComponent(cut.id), {
-      start: cut.start,
-      end: cut.end,
-    }).then(function (data) {
-      if (!data.ok) { showToast(data.error || "Could not save cut"); return; }
-      cut.start = data.cut.start;
-      cut.end = data.cut.end;
-      renderCutList();
-      renderTimeline();
-    }).catch(function () { showToast("Could not save cut"); });
+  // Persist a cut's edited span (timeline edge/body drags land here on drag
+  // end, with *before* = the pre-drag times so the edit is undoable).
+  function commitCutTimes(cut, before) {
+    var changed = !before || before.start !== cut.start || before.end !== cut.end;
+    applyTimes(cut.id, { start: cut.start, end: cut.end }).then(function (saved) {
+      if (before && changed) {
+        recordOp({
+          type: "edit",
+          id: cut.id,
+          before: before,
+          after: { start: saved.start, end: saved.end },
+        });
+      }
+    }).catch(opFailed);
   }
   CO.commitCutTimes = commitCutTimes;
 
@@ -385,10 +497,11 @@
   function nudgeSelectedCut(deltaSeconds) {
     var cut = state.selectedCutId && findCut(state.selectedCutId);
     if (!cut) return;
+    var before = { start: cut.start, end: cut.end };
     // Nudge the out edge; hold the in edge fixed (the common trim gesture).
     cut.end = clamp(cut.end + deltaSeconds, cut.start + 0.2, state.duration || cut.end + deltaSeconds);
     renderTimeline();
-    commitCutTimes(cut);
+    commitCutTimes(cut, before);
   }
 
   function renderCutList() {
@@ -498,6 +611,7 @@
       if (cut) cut._genStatus = data.ok ? "ok" : "fail";
       if (!data.ok) failed++;
       done++;
+      logArtifactResult(data, cut);
       btn.textContent = "Generating… " + done + "/" + cuts.length;
       renderCutList();
     }
@@ -534,6 +648,53 @@
   function onCancelGenerate() {
     apiSend("POST", "../studio/api/generate-intake/cancel").catch(function () {});
     if (_generateAbort) _generateAbort.abort();
+  }
+
+  // ---- Artifact log (TopNav #logBtn popover) ----
+
+  function logArtifactResult(data, cut) {
+    var artifact = data.artifact || {};
+    state.artifactLog.push({
+      ok: !!data.ok,
+      file: artifact.file ? String(artifact.file).split(/[\\/]/).pop() : "",
+      participant: artifact.participant || (cut && cut.participant) || "",
+      start: artifact.start !== undefined ? artifact.start : (cut && cut.start),
+      end: artifact.end !== undefined ? artifact.end : (cut && cut.end),
+      error: data.error || "",
+      at: new Date(),
+    });
+    if (!qs("#coLogPanel").classList.contains("hidden")) renderLogPanel();
+  }
+
+  function renderLogPanel() {
+    var content = qs("#coLogContent");
+    content.innerHTML = "";
+    if (!state.artifactLog.length) {
+      content.appendChild(el("p", "co-empty-hint",
+        "Clips generated this session appear here."));
+      return;
+    }
+    var frag = document.createDocumentFragment();
+    for (var i = state.artifactLog.length - 1; i >= 0; i--) {
+      var entry = state.artifactLog[i];
+      var item = el("div", "co-log-item" + (entry.ok ? "" : " fail"));
+      item.appendChild(el("span", "co-log-file",
+        entry.ok ? (entry.file || "clip") : "Failed: " + (entry.error || "unknown error")));
+      var meta = entry.participant + " · " +
+        formatTime(entry.start, { decimals: 1 }) + " – " +
+        formatTime(entry.end, { decimals: 1 }) + " · " +
+        entry.at.toLocaleTimeString();
+      item.appendChild(el("span", "co-log-meta", meta));
+      frag.appendChild(item);
+    }
+    content.appendChild(frag);
+  }
+
+  function toggleLogPanel(force) {
+    var panel = qs("#coLogPanel");
+    var show = force !== undefined ? force : panel.classList.contains("hidden");
+    panel.classList.toggle("hidden", !show);
+    if (show) renderLogPanel();
   }
 
   // ---- Keyboard (transcripts input-guard pattern) ----
@@ -600,6 +761,7 @@
         break;
       case "Escape":
         if (!shortcutsMenu().classList.contains("hidden")) toggleShortcuts(false);
+        else if (!qs("#coLogPanel").classList.contains("hidden")) toggleLogPanel(false);
         else if (state.pendingIn !== null) {
           state.pendingIn = null;
           updatePendingInfo();
@@ -626,6 +788,13 @@
   function initKeyboard() {
     document.addEventListener("keydown", function (e) {
       if (e.target.matches("input, textarea, select, [contenteditable=true]")) return;
+      // Undo/redo take the modifier path; everything else is bare-key.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (normalizeBracketKeys(e)) return;
       onKeyDown(e);
@@ -662,13 +831,23 @@
     qs("#coSetOutBtn").addEventListener("click", setOutPoint);
     qs("#coGenerateBtn").addEventListener("click", onGenerate);
     qs("#coCancelBtn").addEventListener("click", onCancelGenerate);
+    qs("#coUndoBtn").addEventListener("click", undo);
+    qs("#coRedoBtn").addEventListener("click", redo);
+    var logBtn = qs("#logBtn");
+    if (logBtn) logBtn.addEventListener("click", function () { toggleLogPanel(); });
     qs("#coShortcutsBtn").addEventListener("click", function () { toggleShortcuts(); });
     document.addEventListener("click", function (e) {
       var menu = shortcutsMenu();
-      if (menu.classList.contains("hidden")) return;
-      if (!menu.contains(e.target) && e.target !== qs("#coShortcutsBtn") &&
-          !qs("#coShortcutsBtn").contains(e.target)) {
+      if (!menu.classList.contains("hidden") &&
+          !menu.contains(e.target) && !qs("#coShortcutsBtn").contains(e.target)) {
         toggleShortcuts(false);
+      }
+      var logPanel = qs("#coLogPanel");
+      var logToggle = qs("#logBtn");
+      if (!logPanel.classList.contains("hidden") &&
+          !logPanel.contains(e.target) &&
+          !(logToggle && logToggle.contains(e.target))) {
+        toggleLogPanel(false);
       }
     });
 
