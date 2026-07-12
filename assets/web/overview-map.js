@@ -32,6 +32,8 @@
   var TOP_FEATURES = 8;     // explain panel rows
   var LERP_MS = 250;        // dot travel time after a re-layout
   var SIM_EDGE_K = 3;       // each participant links to its k nearest peers
+  var BURST_CAP = 40;       // max in-scene satellites per burst (drawer shows all)
+  var GOLDEN_ANGLE = 2.39996; // radians; spreads burst items on a sphere shell
 
   var state = {
     data: null,        // /overview/api/data payload
@@ -62,6 +64,7 @@
     colors: null,   // {base, hot} THREE.Color from tokens
     simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
     anchors: null,  // {features, meshes, labels, links} shared-anchor layer
+    burst: null,    // {owner, meshes, items, offsets} drill-down satellites
   };
 
   // Spherical orbit: hand-rolled (rotate + dolly is all a 30-dot scatter
@@ -549,6 +552,228 @@
     // Label visibility is applied by updateLabels() on the next render.
   }
 
+  // ---- Participant drill-down: items, satellite burst, timeline drawer -----
+  //
+  // The underlying timestamps and notes come from the Overview hub's state —
+  // the same streams Convergence/Metadata read — so no extra endpoint:
+  // sheet observations (rows + OV.parseClipTimestamps for baselined times),
+  // clustered screenspace events, and clustered transcript marks. Friction
+  // moments are deferred to v2 (not in any hub stream; would need
+  // per-participant transcript fetches).
+
+  function buildParticipantItems(pid) {
+    var OV = window.ClipgenOverview;
+    var hub = OV && OV.state;
+    var items = [];
+    if (!hub) return items;
+    var i;
+
+    if (hub.sheetData && hub.sheetData.rows) {
+      for (i = 0; i < hub.sheetData.rows.length; i++) {
+        var row = hub.sheetData.rows[i];
+        var cell = row.cells && row.cells[pid];
+        if (!cell || !cell.valid) continue;
+        var segs = OV.parseClipTimestamps(cell.value, pid);
+        for (var s = 0; s < segs.length; s++) {
+          items.push({
+            source: "sheet",
+            text: row.observation || "",
+            category: row.category || "",
+            severity: row.severity || "",
+            start: segs[s].startSeconds,
+            end: segs[s].startSeconds + segs[s].duration,
+          });
+        }
+      }
+    }
+
+    for (i = 0; i < hub.intakeClusters.length; i++) {
+      var sc = hub.intakeClusters[i];
+      if (sc.participant !== pid) continue;
+      items.push({
+        source: "screenspace",
+        text: sc.label || sc.event_type || sc.detector || "",
+        category: sc.detector || "",
+        severity: "",
+        start: sc.start,
+        end: sc.end,
+      });
+    }
+
+    for (i = 0; i < hub.trIntakeClusters.length; i++) {
+      var tc = hub.trIntakeClusters[i];
+      if (tc.participant !== pid) continue;
+      items.push({
+        source: "transcript",
+        text: tc.text || tc.label || "",
+        category: tc.category || "",
+        severity: tc.severity || "",
+        start: tc.start,
+        end: tc.end,
+      });
+    }
+
+    items.sort(function (a, b) { return a.start - b.start || a.end - b.end; });
+    return items;
+  }
+
+  function burstColor(source) {
+    if (source === "sheet") return three.colors.streamSheet;
+    if (source === "screenspace") return three.colors.streamScreenspace;
+    return three.colors.streamTranscript;
+  }
+
+  function clearBurst() {
+    if (!three.burst) return;
+    for (var i = 0; i < three.burst.meshes.length; i++) {
+      three.scene.remove(three.burst.meshes[i]);
+      three.burst.meshes[i].geometry.dispose();
+      three.burst.meshes[i].material.dispose();
+    }
+    three.burst = null;
+  }
+
+  // Golden-angle spiral on a sphere shell around the selected dot. Items are
+  // capped for the scene (evenly sampled across session time); the drawer
+  // below always shows the full list.
+  function showBurst(idx, items) {
+    clearBurst();
+    if (!items.length) return;
+
+    var shown = items;
+    if (items.length > BURST_CAP) {
+      shown = [];
+      var step = items.length / BURST_CAP;
+      for (var k = 0; k < BURST_CAP; k++) {
+        shown.push(items[Math.floor(k * step)]);
+      }
+    }
+
+    var geo = new THREE.SphereGeometry(0.12, 12, 8);
+    var meshes = [];
+    var offsets = [];
+    var n = shown.length;
+    for (var i = 0; i < n; i++) {
+      var y = 1 - 2 * (i + 0.5) / n;
+      var ring = Math.sqrt(Math.max(0, 1 - y * y));
+      var theta = i * GOLDEN_ANGLE;
+      // Vary the shell radius deterministically so items never sit coplanar.
+      var r = 1.1 + 0.5 * ((i * 0.37) % 1);
+      var offset = new THREE.Vector3(
+        r * ring * Math.cos(theta), r * y, r * ring * Math.sin(theta)
+      );
+      var mesh = new THREE.Mesh(
+        geo, new THREE.MeshBasicMaterial({ color: burstColor(shown[i].source) })
+      );
+      mesh.userData.burstItem = shown[i];
+      mesh.position.copy(three.dots[idx].position).add(offset);
+      three.scene.add(mesh);
+      meshes.push(mesh);
+      offsets.push(offset);
+    }
+    three.burst = { owner: idx, meshes: meshes, items: shown, offsets: offsets };
+  }
+
+  function syncBurstPositions() {
+    if (!three.burst) return;
+    var dot = three.dots[three.burst.owner].position;
+    for (var i = 0; i < three.burst.meshes.length; i++) {
+      three.burst.meshes[i].position.copy(dot).add(three.burst.offsets[i]);
+    }
+  }
+
+  // ---- Session-timeline drawer ---------------------------------------------
+
+  var DRAWER_SOURCES = [
+    { key: "sheet", label: "Sheet" },
+    { key: "screenspace", label: "Screenspace" },
+    { key: "transcript", label: "Transcript" },
+  ];
+
+  function drawerCssColor(source) {
+    return "var(--stream-" + source + ")";
+  }
+
+  function showDrawer(pid, items) {
+    els.drawerTitle.textContent = pid;
+    var capped = items.length > BURST_CAP
+      ? " (scene shows " + BURST_CAP + " of them)" : "";
+    els.drawerCount.textContent =
+      items.length + " moment" + (items.length === 1 ? "" : "s") + capped;
+    els.drawerNote.classList.add("hidden");
+
+    var duration = 0;
+    var i;
+    for (i = 0; i < items.length; i++) duration = Math.max(duration, items[i].end);
+
+    var frag = document.createDocumentFragment();
+    if (!items.length) {
+      var none = document.createElement("p");
+      none.className = "map-feature-detail";
+      none.textContent = "No timestamps, events, or marks for this participant yet.";
+      frag.appendChild(none);
+    }
+    DRAWER_SOURCES.forEach(function (src) {
+      var laneItems = items.filter(function (it) { return it.source === src.key; });
+      if (!laneItems.length) return;
+      var lane = document.createElement("div");
+      lane.className = "map-drawer-lane";
+      var label = document.createElement("span");
+      label.className = "map-drawer-lane-label";
+      label.textContent = src.label;
+      var track = document.createElement("div");
+      track.className = "map-drawer-track";
+      laneItems.forEach(function (item) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "map-drawer-item";
+        chip.style.background = drawerCssColor(src.key);
+        var left = duration > 0 ? (item.start / duration) * 100 : 0;
+        var width = duration > 0 ? ((item.end - item.start) / duration) * 100 : 0;
+        chip.style.left = Math.min(left, 99) + "%";
+        chip.style.width = Math.max(width, 0.8) + "%";
+        chip.title = formatTime(item.start) + " · " + (item.text || item.category);
+        chip.addEventListener("click", function () { renderDrawerNote(item); });
+        track.appendChild(chip);
+      });
+      lane.appendChild(label);
+      lane.appendChild(track);
+      frag.appendChild(lane);
+    });
+    els.drawerLanes.innerHTML = "";
+    els.drawerLanes.appendChild(frag);
+    els.drawer.classList.remove("hidden");
+  }
+
+  function renderDrawerNote(item) {
+    var host = els.drawerNote;
+    host.innerHTML = "";
+    var head = document.createElement("div");
+    head.className = "map-drawer-note-head";
+    var when = document.createElement("span");
+    when.className = "map-drawer-note-time";
+    when.textContent = formatTime(item.start) +
+      (item.end > item.start ? " – " + formatTime(item.end) : "");
+    head.appendChild(when);
+    var meta = [item.source, item.category, item.severity]
+      .filter(function (x) { return x; }).join(" · ");
+    var metaEl = document.createElement("span");
+    metaEl.className = "map-drawer-note-meta";
+    metaEl.textContent = meta;
+    head.appendChild(metaEl);
+    var body = document.createElement("div");
+    body.className = "map-drawer-note-text";
+    body.textContent = item.text || "(no note text)";
+    host.appendChild(head);
+    host.appendChild(body);
+    host.classList.remove("hidden");
+  }
+
+  function hideDrawer() {
+    els.drawer.classList.add("hidden");
+    els.drawerNote.classList.add("hidden");
+  }
+
   // ---- Data load ----------------------------------------------------------
 
   function loadData() {
@@ -615,6 +840,9 @@
       bg: tokenColor("--bg", "#0a0a0b"),
       obsAnchor: tokenColor("--severity-positive", "#4ade80"),
       ssAnchor: tokenColor("--cell-data-bright", "#2bc8c8"),
+      streamSheet: tokenColor("--stream-sheet", "#eab308"),
+      streamScreenspace: tokenColor("--stream-screenspace", "#3498db"),
+      streamTranscript: tokenColor("--stream-transcript", "#10a34a"),
     };
 
     three.scene = new THREE.Scene();
@@ -723,6 +951,7 @@
     }
     syncEdgePositions();
     placeAnchors();
+    syncBurstPositions();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -812,23 +1041,52 @@
     }, { passive: false });
   }
 
-  function pick(e) {
+  // Burst satellites are raycast before participant dots (they are smaller
+  // and sit in front of their owner). Returns {type: "dot"|"burst", ...}.
+  function pickTarget(e) {
     var rect = three.renderer.domElement.getBoundingClientRect();
     if (e.clientX < rect.left || e.clientX > rect.right ||
-        e.clientY < rect.top || e.clientY > rect.bottom) return -1;
+        e.clientY < rect.top || e.clientY > rect.bottom) return null;
     var ndc = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
       -((e.clientY - rect.top) / rect.height) * 2 + 1);
     three.raycaster.setFromCamera(ndc, three.camera);
+    if (three.burst) {
+      var bursts = three.raycaster.intersectObjects(three.burst.meshes, false);
+      if (bursts.length) {
+        return { type: "burst", item: bursts[0].object.userData.burstItem };
+      }
+    }
     var hits = three.raycaster.intersectObjects(three.dots, false);
-    return hits.length ? hits[0].object.userData.index : -1;
+    if (hits.length) return { type: "dot", index: hits[0].object.userData.index };
+    return null;
+  }
+
+  function pick(e) {
+    var target = pickTarget(e);
+    return target && target.type === "dot" ? target.index : -1;
   }
 
   function updateHover(e) {
     if (!three.renderer) return;
-    var idx = pick(e);
+    var target = pickTarget(e);
+
+    if (target && target.type === "burst") {
+      state.hovered = -1;
+      three.renderer.domElement.style.cursor = "pointer";
+      var item = target.item;
+      var text = item.text || item.category || item.source;
+      if (text.length > 90) text = text.substring(0, 90) + "…";
+      els.tooltip.textContent = formatTime(item.start) + " · " + text;
+      els.tooltip.classList.remove("hidden");
+      moveTooltip(e);
+      return;
+    }
+
+    var idx = target && target.type === "dot" ? target.index : -1;
     if (idx === state.hovered) {
       if (idx >= 0) moveTooltip(e);
+      else els.tooltip.classList.add("hidden");
       return;
     }
     state.hovered = idx;
@@ -852,7 +1110,12 @@
   }
 
   function handleClick(e) {
-    var idx = pick(e);
+    var target = pickTarget(e);
+    if (target && target.type === "burst") {
+      renderDrawerNote(target.item);
+      return;
+    }
+    var idx = target && target.type === "dot" ? target.index : -1;
     selectParticipant(idx === state.selected ? -1 : idx);
   }
 
@@ -860,9 +1123,21 @@
     state.selected = idx;
     if (idx < 0) {
       els.explain.classList.add("hidden");
+      clearBurst();
+      hideDrawer();
     } else {
       renderExplain(idx);
       els.explain.classList.remove("hidden");
+      // The hub's data is memoized (bootstrapped at page load); the .then is
+      // for the first-click race only.
+      var pid = state.data.participants[idx];
+      window.ClipgenOverview.ensureData().then(function () {
+        if (state.selected !== idx) return; // stale selection
+        var items = buildParticipantItems(pid);
+        showBurst(idx, items);
+        showDrawer(pid, items);
+        requestRender();
+      });
     }
     renderOutliers();
     styleDots();
@@ -1247,6 +1522,11 @@
     els.empty = document.getElementById("mapEmpty");
     els.weights = document.getElementById("mapWeights");
     els.layers = document.getElementById("mapLayers");
+    els.drawer = document.getElementById("mapDrawer");
+    els.drawerTitle = document.getElementById("mapDrawerTitle");
+    els.drawerCount = document.getElementById("mapDrawerCount");
+    els.drawerLanes = document.getElementById("mapDrawerLanes");
+    els.drawerNote = document.getElementById("mapDrawerNote");
     els.outliers = document.getElementById("mapOutliers");
     els.axisList = document.getElementById("mapAxisList");
     els.notice = document.getElementById("mapNotice");

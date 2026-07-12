@@ -72,6 +72,17 @@
            typography) projected to screen space each render. -->
       <div id="mapLabels" aria-hidden="true"></div>
       <div id="mapTooltip" class="map-tooltip hidden"></div>
+      <!-- Session-timeline drawer: the selected participant's observations /
+           events / marks on session time (overview-map.js fills it). Floats
+           over the canvas bottom so the scene never resizes. -->
+      <div id="mapDrawer" class="map-drawer hidden">
+        <div class="map-drawer-header">
+          <span id="mapDrawerTitle"></span>
+          <span id="mapDrawerCount" class="map-drawer-count"></span>
+        </div>
+        <div id="mapDrawerLanes" class="map-drawer-lanes"></div>
+        <div id="mapDrawerNote" class="map-drawer-note hidden"></div>
+      </div>
       <div id="mapEmpty" class="map-empty hidden">
         <h1>Overview</h1>
         <p>No study data yet. The map draws on the manifests other tools
