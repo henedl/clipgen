@@ -1029,16 +1029,129 @@
   }
 
   // ---- Data load ----------------------------------------------------------
+  //
+  // The feature matrix (api/data) is tied to the hub's dataVersion, the same
+  // staleness contract the Convergence/Metadata tabs use: _matrixVersion
+  // records the hub version the current matrix was fetched at, and a tab
+  // re-activation with a newer version re-fetches and rebuilds — so the
+  // header Refresh updates the layout, not just the drill-down items.
+
+  var _matrixVersion = -1;
+
+  function hubDataVersion() {
+    var OV = window.ClipgenOverview;
+    return OV && OV.state ? OV.state.dataVersion : 0;
+  }
 
   function loadData() {
-    apiGet("api/data")
-      .then(function (data) {
+    // Await the hub bootstrap alongside our own fetch so _matrixVersion is
+    // captured after the version settles (ensureData never rejects).
+    Promise.all([apiGet("api/data"), window.ClipgenOverview.ensureData()])
+      .then(function (results) {
+        var data = results[0];
         if (!data || !data.ok) throw new Error((data && data.error) || "bad payload");
+        _matrixVersion = hubDataVersion();
         init(data);
       })
       .catch(function (err) {
         showNotice("Could not load study data: " + err.message);
       });
+  }
+
+  function reloadData() {
+    apiGet("api/data")
+      .then(function (data) {
+        if (!data || !data.ok) throw new Error((data && data.error) || "bad payload");
+        _matrixVersion = hubDataVersion();
+        applyData(data);
+      })
+      .catch(function (err) {
+        showNotice("Could not refresh study data: " + err.message);
+      });
+  }
+
+  // Ingest a fresh matrix into a live scene: rebuild the participant objects
+  // (the cohort can grow/shrink), keep the user's lens (weights, muted
+  // features, layer toggles), and carry the selection over by participant id.
+  function applyData(data) {
+    if (window.clipgenApplyConfig) window.clipgenApplyConfig(data.config);
+
+    if (!data.participants.length) {
+      state.data = data;
+      els.empty.classList.remove("hidden");
+      if (three.renderer) {
+        state.scores = [];
+        state.order = [];
+        clearBurst();
+        disposeLayer(three.simEdges);
+        three.simEdges = null;
+        disposeAnchors();
+        disposeLayer(three.moments);
+        three.moments = null;
+        disposeDots();
+        selectParticipant(-1);
+      }
+      return;
+    }
+    els.empty.classList.add("hidden");
+
+    if (!three.renderer) {
+      // The study appeared after an empty boot — run the full first-boot path.
+      init(data);
+      return;
+    }
+
+    var prevSelected = state.selected >= 0 && state.data
+      ? state.data.participants[state.selected] : null;
+
+    state.data = data;
+    state.groupSizes = {};
+    var i;
+    for (i = 0; i < data.columns.length; i++) {
+      var g = data.columns[i].group;
+      state.groupSizes[g] = (state.groupSizes[g] || 0) + 1;
+    }
+    for (i = 0; i < data.groups.length; i++) {
+      if (state.weights[data.groups[i].key] == null) {
+        state.weights[data.groups[i].key] = 1;
+      }
+    }
+    var knownKeys = {};
+    for (i = 0; i < data.columns.length; i++) knownKeys[data.columns[i].key] = true;
+    Object.keys(state.mutedFeatures).forEach(function (key) {
+      if (!knownKeys[key]) delete state.mutedFeatures[key];
+    });
+
+    if (data.participants.length < 3) {
+      showNotice("Only " + data.participants.length + " participant" +
+        (data.participants.length === 1 ? "" : "s") +
+        " so far — 3+ make the similarity layout meaningful.");
+    } else {
+      els.notice.classList.add("hidden");
+    }
+
+    state.stats = computeStats(data.matrix, data.columns.length);
+    state.coords = null; // cohort indices changed; don't lerp across datasets
+    replay.norms = null; // items changed; replay densities rebuild lazily
+
+    clearBurst();
+    disposeLayer(three.moments);
+    three.moments = null;
+    disposeDots();
+    buildDots();
+
+    state.selected = prevSelected ? data.participants.indexOf(prevSelected) : -1;
+    renderWeights();
+    renderMutedChips();
+    recompute();
+    if (state.selected >= 0) {
+      selectParticipant(state.selected);
+    } else {
+      els.explain.classList.add("hidden");
+      hideDrawer();
+    }
+    if (state.showAllMoments) rebuildMoments();
+    requestRender();
   }
 
   function init(data) {
@@ -1057,6 +1170,7 @@
       els.empty.classList.remove("hidden");
       return;
     }
+    els.empty.classList.add("hidden");
     if (!window.THREE) {
       showNotice("Three.js failed to load — the map cannot render.");
       return;
@@ -1146,10 +1260,36 @@
     applyCamera();
   }
 
+  function disposeDots() {
+    var i;
+    for (i = 0; i < three.dots.length; i++) {
+      three.scene.remove(three.dots[i]);
+      three.dots[i].material.dispose();
+    }
+    for (i = 0; i < three.halos.length; i++) {
+      three.scene.remove(three.halos[i]);
+      three.halos[i].material.dispose();
+    }
+    for (i = 0; i < three.labels.length; i++) {
+      if (three.labels[i].parentNode) {
+        three.labels[i].parentNode.removeChild(three.labels[i]);
+      }
+    }
+    if (three._dotGeo) three._dotGeo.dispose();
+    if (three._haloGeo) three._haloGeo.dispose();
+    three._dotGeo = null;
+    three._haloGeo = null;
+    three.dots = [];
+    three.halos = [];
+    three.labels = [];
+  }
+
   function buildDots() {
     var participants = state.data.participants;
     var geo = new THREE.SphereGeometry(0.45, 24, 16);
     var haloGeo = new THREE.SphereGeometry(0.8, 24, 16);
+    three._dotGeo = geo;
+    three._haloGeo = haloGeo;
     var labelFrag = document.createDocumentFragment();
     var i;
     for (i = 0; i < participants.length; i++) {
@@ -1553,9 +1693,12 @@
       label.className = "map-weight-label";
       var name = document.createElement("span");
       name.textContent = group.label;
+      // Honor the current weight — after a data refresh the sliders rebuild
+      // and must not silently reset the user's lens.
+      var current = state.weights[group.key] != null ? state.weights[group.key] : 1;
       var value = document.createElement("span");
       value.className = "map-weight-value";
-      value.textContent = "1.0";
+      value.textContent = current.toFixed(1);
       label.appendChild(name);
       label.appendChild(value);
 
@@ -1564,7 +1707,7 @@
       slider.min = "0";
       slider.max = "2";
       slider.step = "0.1";
-      slider.value = "1";
+      slider.value = String(current);
       slider.setAttribute("aria-label", group.label + " weight");
       slider.addEventListener("input", function () {
         state.weights[group.key] = parseFloat(slider.value);
@@ -1934,10 +2077,16 @@
       initDom();
       return;
     }
-    // Re-activation (tab switch / hub Refresh): hub data may have changed,
-    // so data-derived layers rebuild here rather than on every recompute.
-    if (state.showAllMoments && three.renderer) rebuildMoments();
     onResize();
+    // Re-activation (tab switch / hub Refresh): when the hub refetched since
+    // this matrix was loaded, re-fetch api/data and rebuild the layout — the
+    // same dataVersion staleness contract Convergence/Metadata use. Otherwise
+    // only the hub-data-derived layers need a rebuild.
+    if (hubDataVersion() !== _matrixVersion) {
+      reloadData();
+      return;
+    }
+    if (state.showAllMoments && three.renderer) rebuildMoments();
     requestRender();
   }
 

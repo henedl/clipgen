@@ -66,6 +66,12 @@ def test_staleness_is_version_based_and_running_check_is_strict():
     assert "cvState._snapshot = { version: state.dataVersion }" in cv
     for src in (md, cv):
         assert "_snapshot.ss" not in src  # old length-compare heuristic
+    # The Map follows the same contract: re-activation with a newer hub
+    # version re-fetches api/data (a stale matrix froze the layout after
+    # Refresh while sibling tabs updated).
+    mp = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "hubDataVersion() !== _matrixVersion" in mp
+    assert "function reloadData()" in mp
 
 
 def test_hub_wires_shared_chrome_buttons():
