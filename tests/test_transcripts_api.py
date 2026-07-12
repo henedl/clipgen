@@ -868,8 +868,25 @@ def _join_orchestrator_threads(orch, timeout=2.0):
                 t.join(timeout)
 
 
-def test_friction_get_404_when_absent_and_idle(tr_client, _agent_state_clean):
-    _seed_friction_entry()
+def test_friction_get_deterministic_when_absent_and_idle(tr_client, _agent_state_clean):
+    """With segments but no stored friction (and no run in flight), the endpoint
+    surfaces the pure deterministic scorer so the heatmap/stats work before the
+    summary-gated agent produces LLM moments."""
+    _seed_friction_entry()  # segments present, no stored friction
+    resp = tr_client.get("/transcripts/api/agent/friction/P01")
+    assert resp.status_code == 200
+    fr = resp.get_json()["friction"]
+    assert fr["deterministic"] is True
+    assert fr["moments"] == []
+    assert len(fr["segments"]) == 1
+    assert "score" in fr["segments"][0]
+    assert "by_category" in fr["stats"]
+
+
+def test_friction_get_404_when_no_segments(tr_client, _agent_state_clean):
+    """No segments → nothing to score → 404 (the deterministic fallback needs
+    segments)."""
+    transcripts_server._manifest["source_transcripts"]["P01"] = {"summary": "s"}
     resp = tr_client.get("/transcripts/api/agent/friction/P01")
     assert resp.status_code == 404
     assert resp.get_json()["ok"] is False

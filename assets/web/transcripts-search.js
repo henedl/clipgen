@@ -1,14 +1,15 @@
 /* clipgen Transcripts search satellite — transcripts-search.js
  *
  * Header full-text search across all transcripts: debounced query, client-side
- * merge of the streaming participant's partial segments, grouped results with
- * cross-reference badges, "Mark All", and jump-to-result. Loaded after
+ * merge of the streaming participant's partial segments, grouped results,
+ * "Mark All", and jump-to-result. Result rows show only time + highlighted text
+ * (no cross-reference badges — they smush the narrow dropdown). Loaded after
  * transcripts.js; reads the hub's shared state + helpers through
- * window.ClipgenTranscripts (TS) and publishes initSearch / renderSearchResults
- * back (boot wires initSearch; the xref data-load and tooltip toggle re-render
- * open results). seekVideo lives in the video satellite, so jumpToResult reaches
- * it late-bound via TS.seekVideo. Plain utils.js globals (qs/apiGet/apiPost/
- * escapeHtml/formatTime/clipgenPluralUnit) are reached via the scope chain.
+ * window.ClipgenTranscripts (TS) and publishes initSearch back (boot wires it).
+ * seekVideo lives in the video satellite, so
+ * jumpToResult reaches it late-bound via TS.seekVideo. Plain utils.js globals
+ * (qs/apiGet/apiPost/escapeHtml/formatTime/clipgenPluralUnit) are reached via
+ * the scope chain.
  */
 (function () {
   "use strict";
@@ -17,7 +18,6 @@
   var state = TS.state;
   var showToast = TS.showToast,
     loadTranscript = TS.loadTranscript,
-    findOverlapsForSearch = TS.findOverlapsForSearch,
     selectParticipant = TS.selectParticipant;
 
   var SEARCH_DEBOUNCE = 300;
@@ -162,26 +162,9 @@
       var count = data.counts_by_participant[pid] || 0;
       html += '<div class="search-group-header">' + escapeHtml(pid) + ' (' + count + ')</div>';
       groups[pid].forEach(function (r) {
-        var xref = findOverlapsForSearch(r.participant, r.start, r.end);
         html += '<div class="search-result-row" data-participant="' + escapeHtml(r.participant) + '" data-start="' + r.start + '">';
         html += '<span class="search-result-time">' + formatTime(r.start) + '</span>';
         html += '<span class="search-result-text">' + highlightQuery(r.text, state.searchQuery) + '</span>';
-        if (state.tooltipsEnabled && xref.screenspaceEvents.length > 0) {
-          var seen = {};
-          html += '<span class="search-xref-events">';
-          for (var ei = 0; ei < xref.screenspaceEvents.length; ei++) {
-            var det = xref.screenspaceEvents[ei].detector;
-            if (seen[det]) continue;
-            seen[det] = true;
-            html += '<span class="search-xref-dot" style="background:var(--color-task-' + det + ', #888)" title="' + escapeHtml(xref.screenspaceEvents[ei].event_type || det) + '"></span>';
-          }
-          html += '</span>';
-        }
-        if (state.tooltipsEnabled && xref.sheetObservations.length > 0) {
-          var obsText = xref.sheetObservations[0].observation;
-          var truncObs = obsText.length > 50 ? obsText.substring(0, 50) + "…" : obsText;
-          html += '<span class="search-xref-sheet" title="' + escapeHtml(obsText) + '">' + escapeHtml(truncObs) + '</span>';
-        }
         html += '</div>';
       });
     });
@@ -225,7 +208,6 @@
     if (TS.seekVideo) TS.seekVideo(start);
   }
 
-  // ---- Published back to the hub (boot wires initSearch; xref/tooltip re-render) ----
+  // ---- Published back to the hub (boot wires initSearch) ----
   TS.initSearch = initSearch;
-  TS.renderSearchResults = renderSearchResults;
 })();

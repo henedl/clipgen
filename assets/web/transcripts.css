@@ -229,33 +229,6 @@ body {
   padding: 0 1px;
 }
 
-.search-xref-events {
-  display: inline-flex;
-  gap: 3px;
-  align-items: center;
-  margin-left: var(--space-2);
-  flex-shrink: 0;
-}
-
-.search-xref-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  display: inline-block;
-}
-
-.search-xref-sheet {
-  display: block;
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-  font-style: italic;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-  margin-top: 2px;
-}
-
 /* Main content */
 
 #trMain {
