@@ -24,7 +24,8 @@
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
   // Pure intake clustering lives in intake-cluster.js (loaded first) so the
-  // Convergence/Metadata sub-tabs can share it without reaching into Studio.
+  // Metadata sub-tab and the Overview page can share it without reaching
+  // into Studio.
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
@@ -1008,21 +1009,18 @@
     var refreshBtn = qs("#refreshSheet");
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
-    var convergencePanel = qs("#convergencePanel");
     var metadataPanel = qs("#metadataPanel");
 
     // Hide everything first
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
-    if (convergencePanel) convergencePanel.classList.add("hidden");
     if (metadataPanel) metadataPanel.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
 
     // Intake poll timers are started at DOMContentLoaded and kept running
     // across all tabs so the sub-tab counter badges stay live; switching away
     // from an intake tab no longer tears them down.
-    if (window.convergenceDeactivate) window.convergenceDeactivate();
     if (window.metadataDeactivate) window.metadataDeactivate();
 
     var activePanel = null;
@@ -1036,10 +1034,6 @@
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
       activePanel = trIntakePanel;
-    } else if (state.activePreviewTab === "convergence") {
-      if (convergencePanel) convergencePanel.classList.remove("hidden");
-      activePanel = convergencePanel;
-      if (window.convergenceActivate) window.convergenceActivate();
     } else if (state.activePreviewTab === "metadata") {
       if (metadataPanel) metadataPanel.classList.remove("hidden");
       activePanel = metadataPanel;
@@ -1182,7 +1176,6 @@
           updateCellClasses();
         }
         loadManifestState();
-        checkConvergenceTabVisibility();
         refreshMetadataIfActive();
       })
       .catch(function (err) {
@@ -4301,25 +4294,6 @@
 
   // ---- Init ----
 
-  function checkConvergenceTabVisibility() {
-    var tab = qs('.preview-tab[data-tab="convergence"]');
-    if (!tab) return;
-    // Show the tab whenever there is any data to plot — even a single
-    // participant — and let convergence.js's own empty/no-convergence message
-    // explain when there isn't enough to converge. Hiding the tab outright (the
-    // old multi-participant gate) made it vanish with no explanation.
-    var hasData =
-      (state.sheetData && state.sheetData.participants && state.sheetData.participants.length > 0) ||
-      state.intakeEvents.length > 0 ||
-      state.trIntakeMarks.length > 0;
-    if (hasData) {
-      tab.classList.remove("hidden");
-    } else {
-      tab.classList.add("hidden");
-    }
-    restoreStoredPreviewTab();
-  }
-
   function checkNavLinks() {
     apiGet("../api/status")
       .then(function (data) {
@@ -4531,7 +4505,6 @@
       }
     });
     window.addEventListener("resize", function () {
-      if (window.convergenceResize) window.convergenceResize();
       if (window.metadataResize) window.metadataResize();
     });
 
@@ -4544,12 +4517,10 @@
     });
   });
 
+  // Legacy globals read by metadata.js (Convergence moved to the Overview
+  // page and reads window.ClipgenOverview instead).
   window._studioState = state;
   window._studioParseClipTimestamps = parseClipTimestamps;
-  window._studioFindOverlappingData = findOverlappingData;
-  window._studioBuildXrefBadges = buildXrefBadges;
-  window._studioRenderArtifactQueue = renderArtifactQueue;
-  window._studioRenderReelQueue = renderReelQueue;
   window._studioROW_FUNCTIONS = ROW_FUNCTIONS;
   window._studioSyncPreviewTab = syncPreviewTab;
 
@@ -4559,7 +4530,6 @@
   STUDIO.state = state;
   STUDIO.buildQueueCardThumb = buildQueueCardThumb;
   STUDIO.buildXrefBadges = buildXrefBadges;
-  STUDIO.checkConvergenceTabVisibility = checkConvergenceTabVisibility;
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
   STUDIO.intakeAddItem = intakeAddItem;

@@ -330,3 +330,104 @@ def test_vendored_three_js_served_by_static_route(overview_client):
     resp = overview_client.get("/overview/vendor/three.min.js")
     assert resp.status_code == 200
     assert b"THREE" in resp.data[:1000]
+
+
+# ---- Convergence offsets routes (moved here with the Convergence tab) ----
+
+
+def test_api_convergence_offsets_get_empty(overview_client, seeded_output_dir):
+    resp = overview_client.get("/overview/api/convergence/offsets")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["offsets"] == {}
+
+
+def test_api_convergence_offsets_put_persists(overview_client, seeded_output_dir):
+    # Nested per-lane shape: the transcript: 0 lane is dropped on cleaning.
+    payload = {
+        "offsets": {
+            "P01": {"sheet": 12.5, "screenspace": 12.5, "transcript": 0},
+            "P03": {"sheet": -7.0},
+        }
+    }
+    expected = {"P01": {"sheet": 12.5, "screenspace": 12.5}, "P03": {"sheet": -7.0}}
+    resp = overview_client.put("/overview/api/convergence/offsets", json=payload)
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["offsets"] == expected
+
+    saved = json.loads(
+        (seeded_output_dir / config.CONVERGENCE_OFFSETS_FILENAME).read_text()
+    )
+    assert saved == {"offsets": expected}
+
+    resp2 = overview_client.get("/overview/api/convergence/offsets")
+    assert resp2.get_json()["offsets"] == expected
+
+
+def test_api_convergence_offsets_put_strips_zeros_and_garbage(
+    overview_client, seeded_output_dir
+):
+    payload = {
+        "offsets": {
+            # Surviving participant: only the non-zero, known-source lane stays.
+            "P01": {"sheet": 5.0, "screenspace": 0, "transcript": "nope"},
+            # All lanes zero/garbage -> participant dropped entirely.
+            "P02": {"sheet": 0, "screenspace": float("inf")},
+            # Unknown source key dropped -> participant has no lanes -> dropped.
+            "P03": {"audio": 5.0},
+            # Non-dict participant value -> dropped (not a 400).
+            "P04": 5,
+            # Empty participant id -> dropped.
+            "": {"sheet": 9.0},
+        }
+    }
+    resp = overview_client.put("/overview/api/convergence/offsets", json=payload)
+    assert resp.status_code == 200
+    assert resp.get_json()["offsets"] == {"P01": {"sheet": 5.0}}
+
+
+def test_api_convergence_offsets_round_trip_per_lane(
+    overview_client, seeded_output_dir
+):
+    """A participant with one non-zero and one zero lane round-trips to just the
+    non-zero lane through PUT then GET, keeping the get/put cleaners in sync."""
+    payload = {"offsets": {"P02": {"sheet": 0, "transcript": -3.5}}}
+    put = overview_client.put("/overview/api/convergence/offsets", json=payload)
+    assert put.status_code == 200
+    assert put.get_json()["offsets"] == {"P02": {"transcript": -3.5}}
+
+    get = overview_client.get("/overview/api/convergence/offsets")
+    assert get.get_json()["offsets"] == {"P02": {"transcript": -3.5}}
+
+
+def test_api_convergence_offsets_put_empty_removes_file(
+    overview_client, seeded_output_dir
+):
+    # Seed a manifest file via an earlier put.
+    overview_client.put(
+        "/overview/api/convergence/offsets",
+        json={"offsets": {"P01": {"sheet": 3.0}}},
+    )
+    settings_file = seeded_output_dir / config.CONVERGENCE_OFFSETS_FILENAME
+    assert settings_file.is_file()
+
+    resp = overview_client.put(
+        "/overview/api/convergence/offsets",
+        json={"offsets": {"P01": {"sheet": 0}}},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["offsets"] == {}
+    assert not settings_file.is_file()
+
+
+def test_api_convergence_offsets_put_rejects_non_dict(
+    overview_client, seeded_output_dir
+):
+    resp = overview_client.put(
+        "/overview/api/convergence/offsets", json={"offsets": "nope"}
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False

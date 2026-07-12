@@ -85,6 +85,38 @@ body {
   box-sizing: border-box;
 }
 
+/* Convergence + Metadata panels: full-viewport containers below the chrome.
+ * Their inner layout (flex column, scroll areas) lives in each tab's own
+ * stylesheet; on Studio they were flex children of #sheetMain instead. */
+#convergencePanel,
+#metadataPanel {
+  height: 100vh;
+  padding-top: var(--chrome-height);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+#metadataPanel { overflow-y: auto; }
+
+/* Toolbar row used by the Convergence controls (copied from studio.css —
+ * the class stays there too for the intake panels). */
+.area-controls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.area-controls select {
+  padding: var(--space-2) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
 #mapSidebar,
 #mapExplain {
   width: var(--sidebar-width-default);

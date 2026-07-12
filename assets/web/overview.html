@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="topnav.css">
   <link rel="stylesheet" href="primitives.css">
   <link rel="stylesheet" href="overview.css">
+  <link rel="stylesheet" href="overview-convergence.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="color-picker.css">
   <link rel="stylesheet" href="start-overlay.css">
@@ -26,6 +27,7 @@
     </div>
     <nav class="subheader-tabs" role="tablist" aria-label="Overview tabs">
       <button class="preview-tab active" type="button" role="tab" data-tab="map">Map</button>
+      <button class="preview-tab" type="button" role="tab" data-tab="convergence">Convergence</button>
     </nav>
     <div class="subheader-actions">
       <button id="ovRefresh" class="btn btn-small" type="button"
@@ -87,6 +89,13 @@
   </main>
   </div>
 
+  <!-- Convergence tab (overview-convergence.js renders into these) -->
+  <div id="convergencePanel" class="hidden">
+    <div id="convergenceControls" class="area-controls"></div>
+    <div id="convergenceFilters" class="convergence-filters"></div>
+    <div id="convergenceTimeline" class="convergence-timeline-container"></div>
+  </div>
+
   <!-- Deps order is a contract: utils → primitives → chrome → settings →
        intake-cluster (hub clustering) → vendored Three.js (global THREE,
        r147 UMD — see vendor/README.md) → overview hub → satellites. -->
@@ -101,5 +110,6 @@
   <script src="vendor/three.min.js" defer></script>
   <script src="overview.js" defer></script>
   <script src="overview-map.js" defer></script>
+  <script src="overview-convergence.js" defer></script>
 </body>
 </html>

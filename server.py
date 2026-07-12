@@ -52,7 +52,6 @@ import concurrent.futures
 import copy
 import hashlib
 import json
-import math
 import os
 import queue
 import re
@@ -66,7 +65,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 from flask import (
     Blueprint,
@@ -883,88 +882,6 @@ def api_sheet_baseline() -> FlaskResponse:
         baselines[pid] = utils._clock_to_seconds(value) or 0
 
     return ok(baselines=baselines)
-
-
-def _clean_convergence_offsets(raw: object) -> dict[str, dict[str, float]]:
-    """Normalize nested per-lane convergence offsets to {pid: {source: float}}.
-
-    Drops: non-string/empty participant ids, non-dict participant values,
-    unknown source keys (outside config.CONVERGENCE_SOURCES), non-numeric /
-    non-finite / zero lane values, and participants left with no lanes.
-    """
-    cleaned: dict[str, dict[str, float]] = {}
-    if not isinstance(raw, dict):
-        return cleaned
-    raw_map = cast(dict[str, Any], raw)
-    for pid, lanes in raw_map.items():
-        if not isinstance(pid, str) or not pid or not isinstance(lanes, dict):
-            continue
-        lane_map = cast(dict[str, Any], lanes)
-        clean_lanes: dict[str, float] = {}
-        for source, value in lane_map.items():
-            if source not in config.CONVERGENCE_SOURCES:
-                continue
-            try:
-                num = float(value)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(num) and num != 0:
-                clean_lanes[source] = num
-        if clean_lanes:
-            cleaned[pid] = clean_lanes
-    return cleaned
-
-
-@studio_bp.route("/api/convergence/offsets")
-def api_convergence_offsets_get() -> FlaskResponse:
-    """Return persisted per-lane convergence display offsets (seconds, signed).
-
-    Independent from /api/sheet/baseline: baselines convert sheet wall-clock
-    to video-time (sheet-only). Offsets shift a participant's events per data
-    source so misaligned recording start times — or a single drifting source
-    such as spreadsheet timestamps — can be nudged until lanes line up visually
-    in the Convergence Browser.
-
-    Response: {"ok": true, "offsets": {"P01": {"sheet": 12.5, "screenspace": 12.5}}}
-    """
-    data = utils.load_json_manifest(
-        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
-    )
-    raw = data.get("offsets") if isinstance(data, dict) else None
-    return ok(offsets=_clean_convergence_offsets(raw))
-
-
-@studio_bp.route("/api/convergence/offsets", methods=["PUT"])
-def api_convergence_offsets_put() -> FlaskResponse:
-    """Persist per-lane convergence display offsets.
-
-    Body: {"offsets": {"P01": {"sheet": 12.5, ...}, ...}}. Unknown sources,
-    zeros, and non-finite values are dropped per lane; participants left with
-    no lanes are dropped. When the cleaned dict is empty, the manifest file is
-    deleted so a clean output dir has no leftover empty manifest.
-    """
-    data = request.get_json(silent=True) or {}
-    raw = data.get("offsets")
-    if not isinstance(raw, dict):
-        return err("Invalid offsets payload")
-
-    cleaned = _clean_convergence_offsets(raw)
-
-    settings_path = (
-        Path(utils.get_effective_output_dir()) / config.CONVERGENCE_OFFSETS_FILENAME
-    )
-    if not cleaned:
-        if settings_path.is_file():
-            try:
-                settings_path.unlink()
-            except OSError:
-                pass
-    else:
-        utils.save_json_manifest(
-            config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}
-        )
-
-    return ok(offsets=cleaned)
 
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])

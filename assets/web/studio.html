@@ -12,7 +12,6 @@
   <link rel="stylesheet" href="card-scrubber.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="color-picker.css">
-  <link rel="stylesheet" href="convergence.css">
   <link rel="stylesheet" href="metadata.css">
   <link rel="stylesheet" href="start-overlay.css">
 </head>
@@ -29,7 +28,6 @@
       <button class="preview-tab active" data-tab="sheet">Sheet</button>
       <button class="preview-tab hidden" data-tab="intake"><span id="intakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
       <button class="preview-tab hidden" data-tab="transcript-intake"><span id="trIntakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
-      <button class="preview-tab hidden" data-tab="convergence">Convergence</button>
       <button class="preview-tab" data-tab="metadata">Metadata</button>
     </div>
     <div class="subheader-actions">
@@ -109,11 +107,6 @@
       <div id="trIntakeCards" class="intake-cards-grid">
         <div class="drop-target-empty">Transcript marks will appear here</div>
       </div>
-    </div>
-    <div id="convergencePanel" class="hidden">
-      <div id="convergenceControls" class="area-controls"></div>
-      <div id="convergenceFilters" class="convergence-filters"></div>
-      <div id="convergenceTimeline" class="convergence-timeline-container"></div>
     </div>
     <div id="metadataPanel" class="hidden"></div>
     </div>
@@ -308,7 +301,6 @@
   <script src="studio-trim.js" defer></script>
   <script src="studio-generate.js" defer></script>
   <script src="studio-intake.js" defer></script>
-  <script src="convergence.js" defer></script>
   <script src="metadata.js" defer></script>
 </body>
 </html>
