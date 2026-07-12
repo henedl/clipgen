@@ -18,15 +18,12 @@ import overview
 # ---- Fixtures -------------------------------------------------------------
 
 
-def _artifact(participant, category="nav", severity="High"):
+def _obs_row(participant, category="nav", severity="High", timestamps=1):
     return {
-        "id": f"a1c1s0_{participant}_{category}",
-        "type": "clip",
         "participant": participant,
         "category": category,
         "severity": severity,
-        "start": 10.0,
-        "end": 20.0,
+        "timestamps": timestamps,
     }
 
 
@@ -66,13 +63,13 @@ def _segments(participant, texts, seconds_each=30.0):
 
 
 def test_observation_shares_sum_to_one():
-    artifacts = [
-        _artifact("P01", category="nav"),
-        _artifact("P01", category="nav"),
-        _artifact("P01", category="search", severity="Low"),
-        _artifact("P02", category="search"),
+    # Timestamp-weighted: a two-timestamp nav cell counts twice.
+    rows = [
+        _obs_row("P01", category="nav", timestamps=2),
+        _obs_row("P01", category="search", severity="Low"),
+        _obs_row("P02", category="search"),
     ]
-    columns, values = overview.build_observation_features(artifacts)
+    columns, values = overview.build_observation_features(rows)
     keys = {c["key"] for c in columns}
     assert "obs_cat_nav" in keys and "obs_cat_search" in keys
     assert "obs_sev_high" in keys and "obs_sev_low" in keys
@@ -88,11 +85,16 @@ def test_observation_shares_sum_to_one():
 
 def test_observation_empty_category_becomes_uncategorized():
     columns, values = overview.build_observation_features(
-        [_artifact("P01", category="", severity="")]
+        [_obs_row("P01", category="", severity="")]
     )
     assert values["P01"]["obs_cat_uncategorized"] == 1.0
     # No severity labels anywhere -> no severity columns at all.
     assert not [c for c in columns if c["key"].startswith("obs_sev_")]
+
+
+def test_observation_rows_without_timestamps_are_ignored():
+    _, values = overview.build_observation_features([_obs_row("P01", timestamps=0)])
+    assert values == {}
 
 
 # ---- Screenspace features ----------------------------------------------------
@@ -154,6 +156,24 @@ def test_transcript_features_prefer_manifest_friction_stats():
     _, values = overview.build_transcript_features(source)
     assert values["P01"]["tr_fric_confusion"] == pytest.approx(3.0)
     assert values["P01"]["tr_markers_per_min"] == 3.0
+
+
+def test_transcript_mark_features():
+    # Marks (researcher annotations) contribute marks/min + category shares;
+    # participant comes from the mark's segment_id prefix when absent.
+    source = {"P01": {"segments": _segments("P01", ["a", "b"], seconds_each=60.0)}}
+    marks = [
+        {"segment_id": "P01:0", "category": "pain_point"},
+        {"segment_id": "P01:1", "category": "pain_point"},
+        {"segment_id": "P01:1", "category": "quote"},
+    ]
+    columns, values = overview.build_transcript_features(source, marks)
+    keys = {c["key"] for c in columns}
+    assert "tr_marks_per_min" in keys
+    assert "tr_mark_pain_point" in keys and "tr_mark_quote" in keys
+    p01 = values["P01"]
+    assert p01["tr_marks_per_min"] == pytest.approx(1.5)  # 3 marks / 2 min
+    assert p01["tr_mark_pain_point"] == pytest.approx(2 / 3, abs=1e-3)
 
 
 def test_transcript_entry_without_segments_is_skipped():
@@ -431,3 +451,21 @@ def test_api_convergence_offsets_put_rejects_non_dict(
     )
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
+
+
+# ---- Injected sheet observation rows ---------------------------------------
+
+
+def test_feature_matrix_uses_injected_observation_rows(seeded_output_dir, monkeypatch):
+    """With the server-injected getter wired, sheet timestamps alone populate
+    the observations group — no clip artifacts involved."""
+    monkeypatch.setattr(
+        overview,
+        "_observation_rows_getter",
+        lambda: [_obs_row("P05", category="nav", timestamps=3)],
+    )
+    payload = overview.build_feature_matrix()
+    assert payload["participants"] == ["P05"]
+    assert payload["availability"]["P05"]["observations"] is True
+    cols = {c["key"]: j for j, c in enumerate(payload["columns"])}
+    assert payload["matrix"][0][cols["obs_total"]] == 3.0

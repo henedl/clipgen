@@ -808,6 +808,37 @@ def _set_sheet_context(ctx: spreadsheet.SheetContext | None) -> None:
         _sheet_payload_cache = None
 
 
+def _sheet_observation_rows() -> list[dict[str, Any]]:
+    """Reduced sheet-timestamp records for the Overview Map's feature matrix.
+
+    One record per (sheet row x participant) cell with valid timestamps:
+    ``{"participant", "category", "severity", "timestamps": N}``. Injected
+    into overview.py via ``overview.configure()`` so the Map is populated as
+    soon as timestamps exist in the sheet — no artifact generation required.
+    """
+    if _sheet_context is None:
+        return []
+    payload = _get_sheet_payload(_sheet_context)
+    records: list[dict[str, Any]] = []
+    for row in payload["rows"]:
+        for pid, cell in row["cells"].items():
+            if not cell.get("valid"):
+                continue
+            cleaned, _, _ = utils.parse_cell_annotations(cell["value"])
+            count = len(utils.parse_timestamps(cleaned))
+            if not count:
+                continue
+            records.append(
+                {
+                    "participant": pid,
+                    "category": row["category"],
+                    "severity": row["severity"],
+                    "timestamps": count,
+                }
+            )
+    return records
+
+
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
@@ -3240,6 +3271,7 @@ def build_combined_app(
 
     import overview
 
+    overview.configure(observation_rows_getter=_sheet_observation_rows)
     combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
 
     combined.after_request(_set_cache_headers)
