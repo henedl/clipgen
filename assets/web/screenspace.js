@@ -3846,6 +3846,16 @@
               }
             }
           }
+          // Deep link (#P07, from the Overview Map) beats the stored pick.
+          var hashPid = clipgenHashParticipant();
+          if (hashPid) {
+            for (var hpi = 0; hpi < state.participants.length; hpi++) {
+              if (state.participants[hpi].id === hashPid) {
+                pickId = hashPid;
+                break;
+              }
+            }
+          }
           var initialTs;
           if (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant[pickId] === "number") {
             initialTs = stored.videoTimeByParticipant[pickId];

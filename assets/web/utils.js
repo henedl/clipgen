@@ -1571,6 +1571,19 @@ var setStoredTooltipPref = function (enabled) {
   } catch (_) {}
 };
 
+// ---- Participant deep links (location.hash) ----
+
+// /transcripts/#P07 and /screenspace/#P07 pre-select that participant on
+// load (set by the Overview Map's explain-panel links). Accepts any simple
+// token so participant-prefix rules stay in config.py alone; the consuming
+// page validates the id against its actual participant list.
+var clipgenHashParticipant = function () {
+  var raw = (window.location.hash || "").replace(/^#/, "");
+  if (!raw) return "";
+  try { raw = decodeURIComponent(raw); } catch (_) {}
+  return /^[A-Za-z][\w-]*$/.test(raw) ? raw : "";
+};
+
 // ---- Per-page UI state (localStorage) ----
 
 var UI_STATE_STORAGE_KEY = "clipgen-ui-state";

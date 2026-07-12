@@ -593,6 +593,10 @@
     });
   }
 
+  // One-shot #P07 deep-link guard: the hash must not re-hijack selection on
+  // later participant-list refreshes after the user has moved on.
+  var _hashPidApplied = false;
+
   function loadParticipants() {
     return apiGet("api/participants").then(function (data) {
       if (!data.ok) return;
@@ -607,6 +611,19 @@
         tryPostTranscriptionWarmup();
       }
       refreshTranscriptionModelHintOnce();
+
+      // Deep link (#P07, from the Overview Map's explain panel) wins once,
+      // on the first load that has the participant list.
+      var hashPid = _hashPidApplied ? "" : clipgenHashParticipant();
+      if (hashPid && state.participants.length) {
+        _hashPidApplied = true;
+        for (var h = 0; h < state.participants.length; h++) {
+          if (state.participants[h].id === hashPid) {
+            selectParticipant(hashPid);
+            return;
+          }
+        }
+      }
 
       // Preserve current in-memory selection if still valid (soft refresh)
       if (state.selectedParticipant) {

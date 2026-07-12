@@ -1509,12 +1509,15 @@
       frag.appendChild(none);
     }
 
-    // Plain links out; hash deep-links are a later enhancement.
+    // Deep links: Transcripts/Screenspace pre-select this participant via the
+    // #pid hash (clipgenHashParticipant in utils.js). Studio has no hash
+    // support, so its link stays plain.
     var links = document.createElement("div");
     links.className = "map-explain-links";
+    var hash = "#" + encodeURIComponent(pid);
     [
-      ["Transcripts", "/transcripts/"],
-      ["Screenspace", "/screenspace/"],
+      ["Transcripts", "/transcripts/" + hash],
+      ["Screenspace", "/screenspace/" + hash],
       ["Studio", "/studio/"],
     ].forEach(function (pair) {
       var a = document.createElement("a");
