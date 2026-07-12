@@ -54,6 +54,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 import config
 import files
+import friction
 import spreadsheet
 import ollama_client
 import thinking_agents
@@ -667,6 +668,33 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
                 "generating": True,
                 "started_at": _orchestrator.started_at(participant, agent_key),
                 "partial": _orchestrator.partial_text(participant, agent_key),
+            }
+        )
+    # Friction's per-segment scores + session stats come from a pure, deterministic
+    # scorer (friction.py) that needs no summary and no LLM. Surface them before the
+    # summary-gated friction agent runs so the heatmap/timeline/stats are usable
+    # immediately; the LLM-refined "moments" stay empty until the agent writes the
+    # manifest field, at which point the stored branch above wins. The `deterministic`
+    # flag lets the client show programmatic-only copy and keeps the friction poll
+    # from mistaking this display fallback for a completed run.
+    if agent_key == "friction" and entry and entry.get("segments"):
+        segments = entry["segments"]
+        scored = friction.score_segments(segments)
+        stats = friction.compute_stats(
+            scored, thinking_agents._segments_duration(segments)
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "friction": {
+                    "segments": scored,
+                    "moments": [],
+                    "stats": stats,
+                    "model": None,
+                    "llm_ok": None,
+                    "stale": False,
+                    "deterministic": True,
+                },
             }
         )
     return jsonify({"ok": False}), 404

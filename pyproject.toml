@@ -29,7 +29,8 @@ dev = ["pytest", "pytest-randomly"]
 [tool.setuptools]
 packages = []
 py-modules = [
-    "changelog", "cli", "clipgen", "config", "data_export", "excel_io",
+    "changelog", "cli", "clipgen", "composer_server", "config", "data_export",
+    "excel_io",
     "files", "friction", "google_api", "interactive", "ollama_client", "overview",
     "pipeline",
     "screenspace", "screenspace_frames", "screenspace_heatmap",

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>clipgen Composer</title>
+  <!-- CLIPGEN_HEAD_HERE -->
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="topnav.css">
+  <link rel="stylesheet" href="composer.css">
+  <link rel="stylesheet" href="settings-modal.css">
+  <link rel="stylesheet" href="color-picker.css">
+  <link rel="stylesheet" href="start-overlay.css">
+</head>
+<body data-frontend="composer">
+  <!-- Shared chrome: TopNav + start overlay -->
+  <topnav-mount data-frontend="composer"></topnav-mount>
+  <start-overlay-mount></start-overlay-mount>
+
+  <!-- Full-width glassy subheader: participant picker, transport, cut + lane
+       controls. Fixed under the TopNav (shared subheader chrome in tokens.css). -->
+  <header id="coToolbar" class="subheader">
+    <label class="co-toolbar-label" for="coParticipantSelect">Participant</label>
+    <select id="coParticipantSelect" aria-label="Participant" disabled></select>
+    <span class="co-toolbar-sep"></span>
+    <!-- Undo / redo: the cut-edit stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
+         state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
+    <button id="coUndoBtn" class="btn btn-small btn-icon" type="button" disabled
+            aria-label="Undo" title="Undo (⌘Z)">
+      <span class="co-btn-icon co-icon-undo" aria-hidden="true"></span>
+    </button>
+    <button id="coRedoBtn" class="btn btn-small btn-icon" type="button" disabled
+            aria-label="Redo" title="Redo (⌘⇧Z)">
+      <span class="co-btn-icon co-icon-redo" aria-hidden="true"></span>
+    </button>
+    <div class="co-toolbar-spacer"></div>
+    <button id="coGenerateBtn" class="btn btn-small btn-primary" type="button" disabled
+            title="Generate clips from all cuts for this participant (G)">Generate clips</button>
+    <button id="coCancelBtn" class="btn btn-small hidden" type="button"
+            title="Cancel generation">Cancel</button>
+    <!-- Keyboard shortcuts legend: a far-right ? popover (workflows pattern). -->
+    <div class="co-shortcuts-wrap">
+      <button id="coShortcutsBtn" class="btn btn-small btn-icon" type="button"
+              aria-haspopup="menu" aria-expanded="false"
+              aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+        <span class="co-btn-icon co-icon-help" aria-hidden="true"></span>
+      </button>
+      <div id="coShortcutsMenu" class="co-shortcuts-menu hidden" role="menu">
+        <div class="co-shortcuts-title">Keyboard</div>
+        <dl class="co-shortcuts-list">
+          <div><dt>Play / pause</dt><dd><kbd>Space</kbd> <kbd>K</kbd></dd></div>
+          <div><dt>Seek −5 s / +5 s</dt><dd><kbd>J</kbd> <kbd>L</kbd></dd></div>
+          <div><dt>Step −1 s / +1 s</dt><dd><kbd>,</kbd> <kbd>.</kbd></dd></div>
+          <div><dt>Set in / out point</dt><dd><kbd>I</kbd> <kbd>O</kbd></dd></div>
+          <div><dt>Nudge selected edge</dt><dd><kbd>[</kbd> <kbd>]</kbd> (<kbd>⇧</kbd> = 1 s)</dd></div>
+          <div><dt>Delete selected cut</dt><dd><kbd>X</kbd> <kbd>⌫</kbd></dd></div>
+          <div><dt>Undo / redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
+          <div><dt>Annotate: select / text / draw / erase</dt><dd><kbd>V</kbd> <kbd>T</kbd> <kbd>D</kbd> <kbd>E</kbd></dd></div>
+          <div><dt>Toggle marker lanes</dt><dd><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>`</kbd></dd></div>
+          <div><dt>Generate clips</dt><dd><kbd>G</kbd></dd></div>
+          <div><dt>Cancel pending / deselect</dt><dd><kbd>Esc</kbd></dd></div>
+          <div><dt>Zoom timeline</dt><dd>scroll · drag to pan</dd></div>
+        </dl>
+      </div>
+    </div>
+  </header>
+
+  <main id="coShell">
+    <section id="coStage" aria-label="Video">
+      <!-- Annotation toolbar: tools (V/T/D), color swatches, span-gated
+           exports. Floats over the stage's top-left. -->
+      <div id="coAnnotateBar" class="hidden" role="toolbar" aria-label="Annotate">
+        <button id="coToolSelect" class="co-tool-btn active" type="button"
+                data-tool="select" title="Select / move annotations (V)">
+          <span class="co-btn-icon co-icon-cursor" aria-hidden="true"></span>
+        </button>
+        <button id="coToolText" class="co-tool-btn" type="button"
+                data-tool="text" title="Add text (T) — click the video to place">
+          <span class="co-btn-icon co-icon-text" aria-hidden="true"></span>
+        </button>
+        <button id="coToolDraw" class="co-tool-btn" type="button"
+                data-tool="draw" title="Freehand draw (D)">
+          <span class="co-btn-icon co-icon-draw" aria-hidden="true"></span>
+        </button>
+        <button id="coToolErase" class="co-tool-btn" type="button"
+                data-tool="erase" title="Eraser (E) — click or drag over annotations">
+          <span class="co-btn-icon co-icon-erase" aria-hidden="true"></span>
+        </button>
+        <span class="co-toolbar-sep"></span>
+        <div id="coAnnotateColors" class="co-annotate-colors" role="group"
+             aria-label="Annotation color"></div>
+        <span class="co-toolbar-sep"></span>
+        <button id="coExportShotBtn" class="btn btn-small" type="button"
+                title="Export an annotated screenshot at the playhead">Shot</button>
+        <button id="coExportGifBtn" class="btn btn-small" type="button"
+                title="Export an annotated GIF of the selected cut's span">GIF</button>
+        <button id="coExportBurnBtn" class="btn btn-small" type="button"
+                title="Burn annotations into a clip of the selected cut's span">Burn</button>
+      </div>
+      <div id="coVideoFrame">
+        <video id="coVideo" preload="metadata" playsinline></video>
+        <!-- Annotation overlay: positioned over the video's content box
+             (letterbox-aware) by composer-annotate.js; normalized 0..1
+             geometry maps 1:1 onto this canvas. -->
+        <canvas id="coAnnotateCanvas"></canvas>
+        <input id="coAnnotateText" type="text" class="hidden" autocomplete="off"
+               placeholder="Type, then Enter" aria-label="Annotation text">
+        <div id="coVideoEmpty" class="co-video-empty">
+          <p>Select a participant to load their source video</p>
+          <p class="co-empty-sub">Set in/out pairs on the timeline below, toggle
+            Sheet / Screenspace / Transcript markers, then generate clips.</p>
+        </div>
+      </div>
+    </section>
+
+    <aside id="coCutPanel" aria-label="Timelines">
+      <!-- One tab per timeline: the Composer cuts plus the three read-only
+           marker sources. Every list item seeks the playhead to its in point. -->
+      <div class="co-panel-tabs" role="tablist" aria-label="Timeline lists">
+        <button class="co-panel-tab active" type="button" role="tab"
+                aria-selected="true" data-tab="cuts">Cuts</button>
+        <button class="co-panel-tab" type="button" role="tab"
+                aria-selected="false" data-tab="sheet">Sheet</button>
+        <button class="co-panel-tab" type="button" role="tab"
+                aria-selected="false" data-tab="screenspace" title="Screenspace">Screen</button>
+        <button class="co-panel-tab" type="button" role="tab"
+                aria-selected="false" data-tab="transcript" title="Transcript">Script</button>
+      </div>
+      <div id="coCutList" class="co-cut-list" role="tabpanel">
+        <p class="co-empty-hint">Press <kbd>I</kbd> then <kbd>O</kbd> to add a cut.</p>
+      </div>
+    </aside>
+  </main>
+
+  <section id="coTimelineSection" aria-label="Timeline">
+    <div id="coTimelineWrapper">
+      <canvas id="coTimelineCanvas"></canvas>
+      <canvas id="coPlayheadCanvas"></canvas>
+      <!-- Per-lane fold buttons, absolutely positioned over the canvas's left
+           edge (screenspace boundaryFlagRail pattern: rail ignores pointer
+           events, each button owns its own). -->
+      <div id="coLaneRail"></div>
+    </div>
+    <div id="coTimelineControls">
+      <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
+              aria-label="Play/Pause" title="Play/Pause (Space)">
+        <span id="coPlayIcon" class="co-btn-icon co-icon-play" aria-hidden="true"></span>
+      </button>
+      <span id="coTimeLabel" class="co-time">0:00 / 0:00</span>
+      <span class="co-toolbar-sep"></span>
+      <button id="coSetInBtn" class="btn btn-small btn-icon" type="button" disabled
+              title="Set in point at playhead (I)">
+        <span class="co-btn-icon co-icon-in" aria-hidden="true"></span>In
+      </button>
+      <button id="coSetOutBtn" class="btn btn-small btn-icon" type="button" disabled
+              title="Set out point — commits the cut (O)">
+        <span class="co-btn-icon co-icon-out" aria-hidden="true"></span>Out
+      </button>
+      <span id="coPendingInfo" class="co-pending-info" aria-live="polite"></span>
+      <span class="co-toolbar-sep"></span>
+      <!-- Marker-lane toggles: one pill per data source (1/2/3). Colors come from
+           the shared --stream-* tokens so lanes match the Convergence Browser. -->
+      <div class="co-lane-pills" role="group" aria-label="Marker sources">
+        <button id="coLaneSheet" class="co-lane-pill" type="button" data-source="sheet"
+                aria-pressed="true" title="Toggle Sheet markers (1)">
+          <span class="co-lane-dot" aria-hidden="true"></span>Sheet
+        </button>
+        <button id="coLaneScreenspace" class="co-lane-pill" type="button" data-source="screenspace"
+                aria-pressed="true" title="Toggle Screenspace markers (2)">
+          <span class="co-lane-dot" aria-hidden="true"></span>Screenspace
+        </button>
+        <button id="coLaneTranscript" class="co-lane-pill" type="button" data-source="transcript"
+                aria-pressed="true" title="Toggle Transcript markers (3)">
+          <span class="co-lane-dot" aria-hidden="true"></span>Transcript
+        </button>
+      </div>
+      <span class="co-toolbar-sep"></span>
+      <button id="coZoomInBtn" class="btn btn-small btn-icon" type="button"
+              aria-label="Zoom in" title="Zoom in"></button>
+      <button id="coZoomOutBtn" class="btn btn-small btn-icon" type="button"
+              aria-label="Zoom out" title="Zoom out"></button>
+      <button id="coZoomResetBtn" class="btn btn-small" type="button">Reset</button>
+      <span class="co-timeline-hint">scroll to zoom · drag to pan · drag cut edges to trim</span>
+    </div>
+  </section>
+
+  <div id="coTooltip" class="co-tooltip hidden"></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Artifact log: session record of generated clips, toggled by the TopNav
+       #logBtn. Same modal structure and .log-* styling as Studio's log. -->
+  <div id="logOverlay" class="hidden">
+    <div class="log-panel" role="dialog" aria-modal="true" aria-labelledby="logTitle">
+      <div class="log-header">
+        <h3 id="logTitle">Artifact Log</h3>
+        <button id="logClose" class="btn btn-small" type="button">Close</button>
+      </div>
+      <div id="logContent"></div>
+      <div class="log-footer">
+        <span id="logCount"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Deps order: utils → chrome → settings → page hub → composer-*.js satellites.
+       composer-markers.js loads before composer-timeline.js; the timeline only
+       reads marker state through CO.state either way. -->
+  <script src="utils.js" defer></script>
+  <script src="export-actions.js" defer></script>
+  <script src="topnav.js" defer></script>
+  <script src="start-overlay.js" defer></script>
+  <script src="dev-token-tweak.js" defer data-dev-only></script>
+  <script src="color-picker.js" defer></script>
+  <script src="settings-modal.js" defer></script>
+  <script src="intake-cluster.js" defer></script>
+  <script src="composer.js" defer></script>
+  <script src="composer-markers.js" defer></script>
+  <script src="composer-timeline.js" defer></script>
+  <script src="composer-annotate.js" defer></script>
+</body>
+</html>

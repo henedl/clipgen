@@ -350,6 +350,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Workflows node-canvas for chaining clip, Screenspace, and transcript actions",
     )
     viewer_manifest.add_argument(
+        "--composer",
+        action="store_true",
+        help="Launch the Composer timeline for cutting source videos and reviewing markers",
+    )
+    viewer_manifest.add_argument(
         "--overview",
         action="store_true",
         help="Launch the Overview frontend (Metadata, Convergence, and the 3D similarity Map)",
@@ -3188,6 +3193,12 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --workflows.",
     ),
     _ModeSpec(
+        key="composer",
+        truthy=lambda a: bool(getattr(a, "composer", False)),
+        error="--composer cannot be combined with mode, format, or other web/CLI mode flags.",
+        hint="Only -s (spreadsheet), -i/-o (directories), and -v (verbose) may be used alongside --composer.",
+    ),
+    _ModeSpec(
         key="overview",
         truthy=lambda a: bool(getattr(a, "overview", False)),
         error="--overview cannot be combined with mode, format, or other web/CLI mode flags.",
@@ -3507,6 +3518,8 @@ def _dispatch_standalone_mode(
         if getattr(args, "transcripts", False)
         else "workflows"
         if getattr(args, "workflows", False)
+        else "composer"
+        if getattr(args, "composer", False)
         else "overview"
         if getattr(args, "overview", False)
         else None
@@ -3745,6 +3758,16 @@ def main() -> None:
                 server.start_combined_server(
                     worksheet=worksheet,
                     default_page="workflows",
+                    gspread_client=gspread_client,
+                )
+                sys.exit(0)
+
+            if getattr(args, "composer", False):
+                import server
+
+                server.start_combined_server(
+                    worksheet=worksheet,
+                    default_page="composer",
                     gspread_client=gspread_client,
                 )
                 sys.exit(0)

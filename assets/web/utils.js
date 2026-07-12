@@ -61,6 +61,10 @@ var CLIPGEN_CONFIG = {
   clipFormat: ".mp4",
   screenshotFormat: ".png",
   gifFormat: ".gif",
+  composerAnnotationColor: "#f05a3c",
+  composerAnnotationStrokeWidth: 0.004,
+  composerAnnotationFontSize: 0.035,
+  composerAnnotationSpanSeconds: 10.0,
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -1255,6 +1259,7 @@ var XREF_BADGES = {
   screenspace: { icon: "squares-2x2", color: "color-mix(in srgb, var(--stream-screenspace) 85%, transparent)" },
   transcript:  { icon: "chat-bubble-bottom-center-text", color: "color-mix(in srgb, var(--stream-transcript) 85%, transparent)" },
   sheet:       { icon: "table-cells", color: "color-mix(in srgb, var(--stream-sheet) 85%, transparent)" },
+  composer:    { icon: "scissors", color: "color-mix(in srgb, var(--color-accent) 85%, transparent)" },
 };
 
 // Relative icon base works from any /prefix/ page — every served page has a

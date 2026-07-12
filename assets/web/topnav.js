@@ -22,6 +22,7 @@
     { id: "screenspace", label: "Screenspace", href: "/screenspace/" },
     { id: "transcripts", label: "Transcripts", href: "/transcripts/" },
     { id: "workflows", label: "Workflows", href: "/workflows/" },
+    { id: "composer", label: "Composer", href: "/composer/" },
     { id: "overview", label: "Overview", href: "/overview/" },
   ];
 
@@ -132,10 +133,10 @@
     startBtn.appendChild(startIcon);
     right.appendChild(startBtn);
 
-    // Log button — Studio-only: the artifact log overlay (#logOverlay) and
-    // its wiring live in studio.html/studio.js, so on every other surface the
-    // button would be dead chrome.
-    if (state.activeFrontend === "studio") {
+    // Log button — only on surfaces that wire an artifact log (Studio's
+    // #logOverlay in studio.js; Composer's log panel in composer.js). On
+    // every other surface the button would be dead chrome.
+    if (state.activeFrontend === "studio" || state.activeFrontend === "composer") {
       var logBtn = document.createElement("button");
       logBtn.type = "button";
       logBtn.id = "logBtn";

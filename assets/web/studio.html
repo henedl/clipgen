@@ -27,6 +27,7 @@
       <button class="preview-tab active" data-tab="sheet">Sheet</button>
       <button class="preview-tab hidden" data-tab="intake"><span id="intakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
       <button class="preview-tab hidden" data-tab="transcript-intake"><span id="trIntakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
+      <button class="preview-tab hidden" data-tab="composer-intake">Composer Intake <span id="coIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
     </div>
     <div class="subheader-actions">
       <button id="refreshSheet" class="cg-btn cg-btn-bare cg-btn-sm" title="Refresh sheet data from source"><span class="cg-btn-icon" data-icon="arrow-path"></span><span>Refresh</span></button>
@@ -34,7 +35,7 @@
   </div>
 
   <section id="sheetPreview">
-  <!-- Sheet + preview tabs (intake) -->
+  <!-- Sheet + preview tabs (screenspace/transcript/composer intake) -->
 
     <aside id="studioSidebar" class="cg-scroll-thin" data-open="true" aria-label="Sheet filters">
       <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
@@ -104,6 +105,20 @@
       <div id="trIntakeTimeline" class="intake-density-host"></div>
       <div id="trIntakeCards" class="intake-cards-grid">
         <div class="drop-target-empty">Transcript marks will appear here</div>
+      </div>
+    </div>
+    <div id="coIntakePanel" class="hidden">
+      <div class="area-controls" id="coIntakeControls">
+        <button id="coIntakeAddAllBtn" class="cg-btn cg-btn-sm" disabled><span>Add all to Artifacts</span></button>
+        <button id="coIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled><span>Add all to Reel</span></button>
+      </div>
+      <div class="intake-filters">
+        <input id="coIntakeFilterSearch" type="text" placeholder="Search cuts&#x2026;" class="intake-filter-search" autocomplete="off">
+        <div id="coIntakeFilterParticipants" class="intake-chip-row"></div>
+      </div>
+      <div id="coIntakeTimeline" class="intake-density-host"></div>
+      <div id="coIntakeCards" class="intake-cards-grid">
+        <div class="drop-target-empty">Composer cuts will appear here</div>
       </div>
     </div>
     </div>

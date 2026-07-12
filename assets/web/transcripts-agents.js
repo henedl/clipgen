@@ -97,9 +97,17 @@
       interval: 3000,
       timeout: _AGENT_POLL_TIMEOUT,
       _poller: null,
-      getResult: function (d) { return d.friction; },
+      // The deterministic placeholder (no persisted LLM run) is a display fallback,
+      // not a completed agent result — exclude it here so a run that ends without
+      // persisting (cancel/exception/None) falls through to onEmpty instead of being
+      // treated as "done". onEmpty still surfaces those programmatic scores.
+      getResult: function (d) { return d.friction && !d.friction.deterministic ? d.friction : null; },
       onResult: function (pid, d) { _setFrictionData(d.friction); },
-      onEmpty: function () { state.frictionGenerating = false; renderFrictionEmpty(); },
+      onEmpty: function (pid, d) {
+        state.frictionGenerating = false;
+        if (d && d.friction) _setFrictionData(d.friction);
+        else renderFrictionEmpty();
+      },
       onStale: function () { state.frictionGenerating = false; renderFriction(); },
     },
   };
@@ -131,7 +139,7 @@
             if (desc.onGenerating) desc.onGenerating(pid, data);
           } else {
             _stopAgentPoll(desc);
-            desc.onEmpty(pid);
+            desc.onEmpty(pid, data);
           }
         }).catch(function () {
           if (ver !== state.participantReqVer) return;
@@ -824,7 +832,11 @@
     _frictionEtaTracker.reset();
     cancel.classList.add("hidden");
     rerun.classList.remove("hidden");
-    rerun.textContent = state.frictionData ? "Re-run friction" : "Run friction analysis";
+    // The deterministic-only placeholder has no AI result yet, so it reads "Run",
+    // not "Re-run".
+    var isDeterministic = !!(state.frictionData && state.frictionData.deterministic);
+    rerun.textContent =
+      state.frictionData && !isDeterministic ? "Re-run friction" : "Run friction analysis";
     var depMet = _frictionDepMet();
     if (depMet) {
       rerun.removeAttribute("disabled");
@@ -836,7 +848,14 @@
     if (state.frictionData) {
       var fd = state.frictionData;
       var llmFailed = fd.llm_ok === false;
-      if (llmFailed) {
+      if (isDeterministic) {
+        // depMet distinguishes "no summary yet" (run Summary, which auto-chains
+        // friction) from "summary done, friction not run" (the friction button is
+        // enabled) so the copy points at the step the user can actually take.
+        statusEl.textContent = depMet
+          ? "Programmatic scores shown — run friction analysis for AI-refined moments."
+          : "Programmatic scores shown — run Summary for AI-refined moments.";
+      } else if (llmFailed) {
         statusEl.textContent =
           "Moment detection failed — model unavailable" +
           (fd.model ? " (tried " + fd.model + ")" : "") +
@@ -1082,7 +1101,11 @@
     });
     if (moments.length === 0) {
       var msg;
-      if (fd.llm_ok === false) {
+      if (fd.deterministic) {
+        msg = _frictionDepMet()
+          ? "Run friction analysis to surface AI-refined moments."
+          : "Run Summary to surface AI-refined friction moments.";
+      } else if (fd.llm_ok === false) {
         msg = "Moment detection failed — re-run with an installed Ollama model.";
       } else if (fd.moments && fd.moments.length) {
         msg = "No moments match the current filter.";

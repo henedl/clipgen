@@ -892,6 +892,10 @@ def get_frontend_config() -> dict[str, Any]:
         "clipFormat": config.FILEFORMAT,
         "screenshotFormat": config.SCREENSHOT_FORMAT,
         "gifFormat": config.GIF_FORMAT,
+        "composerAnnotationColor": config.COMPOSER_ANNOTATION_COLOR,
+        "composerAnnotationStrokeWidth": config.COMPOSER_ANNOTATION_STROKE_WIDTH,
+        "composerAnnotationFontSize": config.COMPOSER_ANNOTATION_FONT_SIZE,
+        "composerAnnotationSpanSeconds": config.COMPOSER_ANNOTATION_SPAN_SECONDS,
     }
 
 
