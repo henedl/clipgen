@@ -248,7 +248,13 @@ def api_cut_delete(cut_id: str) -> Any:
 
 @composer_bp.route("/api/trims/<path:key>", methods=["PUT"])
 def api_trim_put(key: str) -> Any:
-    """Set a non-destructive span override for one source marker."""
+    """Set a non-destructive span override for one source marker.
+
+    Optional ``participant``/``label``/``source`` describe the trimmed marker
+    for consumers that can't parse the key (Studio's Composer Intake cards).
+    Omitted fields keep any previously stored value — undo/redo re-PUTs carry
+    times only.
+    """
     data = request.get_json(silent=True) or {}
     try:
         start = float(data["start"])
@@ -257,9 +263,19 @@ def api_trim_put(key: str) -> Any:
         return err("start and end are required numbers")
     if end < start + MIN_CUT_SECONDS:
         return err("end must be after start")
-    trim = {"start": round(max(0.0, start), 3), "end": round(end, 3)}
     with _manifest_lock:
-        _manifest.setdefault("trims", {})[key] = trim
+        trims = _manifest.setdefault("trims", {})
+        existing = trims.get(key, {})
+        trim = {
+            "start": round(max(0.0, start), 3),
+            "end": round(end, 3),
+            "participant": str(
+                data.get("participant") or existing.get("participant", "")
+            ),
+            "label": str(data.get("label") or existing.get("label", "")),
+            "source": str(data.get("source") or existing.get("source", "")),
+        }
+        trims[key] = trim
         _persist_locked()
     return ok(key=key, trim=trim)
 

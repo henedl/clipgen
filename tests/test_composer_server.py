@@ -164,11 +164,32 @@ def test_ui_requires_some_payload(co_client):
 def test_trims_round_trip_and_reset(co_client, tmp_path):
     key = "sheet:12:P01:0"
     resp = co_client.put(
-        f"/composer/api/trims/{key}", json={"start": 61.0, "end": 70.5}
+        f"/composer/api/trims/{key}",
+        json={
+            "start": 61.0,
+            "end": 70.5,
+            "participant": "P01",
+            "label": "misses the CTA",
+            "source": "sheet",
+        },
     ).get_json()
     assert resp["ok"] is True
-    assert resp["trim"] == {"start": 61.0, "end": 70.5}
-    assert _manifest_on_disk(tmp_path)["trims"][key] == {"start": 61.0, "end": 70.5}
+    assert resp["trim"] == {
+        "start": 61.0,
+        "end": 70.5,
+        "participant": "P01",
+        "label": "misses the CTA",
+        "source": "sheet",
+    }
+    assert _manifest_on_disk(tmp_path)["trims"][key] == resp["trim"]
+
+    # A times-only re-PUT (undo/redo replay) keeps the stored metadata.
+    updated = co_client.put(
+        f"/composer/api/trims/{key}", json={"start": 62.0, "end": 69.0}
+    ).get_json()
+    assert updated["trim"]["participant"] == "P01"
+    assert updated["trim"]["label"] == "misses the CTA"
+    assert updated["trim"]["start"] == 62.0
 
     deleted = co_client.delete(f"/composer/api/trims/{key}").get_json()
     assert deleted["ok"] is True

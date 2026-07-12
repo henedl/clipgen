@@ -2759,6 +2759,29 @@ html[data-theme="dark"] .log-panel {
   display: block;
 }
 
+/* Asterisk chip on an SS/TR intake card whose event/mark has a Composer trim
+ * override — clicking jumps to the Composer Intake tab (bottom-right corner,
+ * mirroring the bottom-left source badge). */
+.intake-trim-badge {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  padding: 1px 5px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--color-accent) 85%, transparent);
+  color: var(--accent-fg);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.intake-trim-badge:hover {
+  background: var(--color-accent);
+}
+
 /* All queue cards stack a caption row over the source start–stop time line
  * (.queue-card-meta is column by default); intake-area cards add the
  * participant + type [+ transcript snippet] richness on top. */

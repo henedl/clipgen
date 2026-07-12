@@ -390,6 +390,16 @@
     onCardHover: function (card) {
       return card.dataset.transcriptContext || "";
     },
+    // Composer-trim cross-link: first event in the cluster with a trim override.
+    trimBadgeKey: function (c) {
+      var events = c.events || [];
+      for (var i = 0; i < events.length; i++) {
+        if (state.coTrims["screenspace:" + events[i].id]) {
+          return "screenspace:" + events[i].id;
+        }
+      }
+      return null;
+    },
     extraControl: function (cfg) {
       var newToggle = qs("#intakeFilterNew");
       if (newToggle) {
@@ -473,6 +483,16 @@
       var cluster = filteredTranscriptIntakeClusters()[idx];
       return cluster ? (cluster.text || cluster.label || "") : "";
     },
+    // Composer-trim cross-link: first mark in the cluster with a trim override.
+    trimBadgeKey: function (c) {
+      var marks = c.marks || [];
+      for (var i = 0; i < marks.length; i++) {
+        if (marks[i].id && state.coTrims["transcript-mark:" + marks[i].id]) {
+          return "transcript-mark:" + marks[i].id;
+        }
+      }
+      return null;
+    },
     extraControl: function (_cfg) {
       var showAllToggle = qs("#trIntakeShowAll");
       if (!showAllToggle) return;
@@ -508,6 +528,23 @@
       var xref = findOverlappingData(c.participant, c.start, c.end);
       var badgeStack = buildXrefBadges(xref, cfg.selfSource, cfg.selfBadge(c));
       if (badgeStack) thumb.appendChild(badgeStack);
+
+      // Asterisk badge: this cluster has a trimmed counterpart in Composer —
+      // click jumps to the Composer Intake tab and highlights it.
+      if (cfg.trimBadgeKey) {
+        var trimKey = cfg.trimBadgeKey(c);
+        if (trimKey) {
+          var trimBadge = el("button", "intake-trim-badge", "✱");
+          trimBadge.type = "button";
+          trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
+          trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
+          trimBadge.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            focusComposerIntakeItem(trimKey);
+          });
+          thumb.appendChild(trimBadge);
+        }
+      }
 
       var meta = el("div", "queue-card-meta");
       var row = el("div", "queue-card-meta-row");
@@ -1044,21 +1081,24 @@
 
   // ---- Composer Intake ----
   //
-  // The simplest of the three panels: Composer cuts are already curated
-  // in/out pairs (no clustering, no dismiss — cuts are managed on the
-  // Composer page), so this is a fingerprint-polled list of cards sharing
-  // the generic panel machinery via a CO_INTAKE config.
+  // The simplest of the three panels: Composer cuts and trims are already
+  // curated in/out pairs (no clustering, no dismiss — both are managed on
+  // the Composer page), so this is a fingerprint-polled list of cards
+  // sharing the generic panel machinery via a CO_INTAKE config. Trimmed
+  // source markers appear alongside cuts (item.isTrim), and the SS/TR
+  // panels' asterisk badges deep-link here via focusComposerIntakeItem.
 
   var _coIntakeDensityEl = null;
 
   function composerCutToItem(cut) {
+    var name = cut.label || (cut.isTrim ? "trimmed" : "composer");
     return {
       participant: cut.participant,
       start: cut.start,
       end: cut.end,
-      desc: cut.label || "composer",
+      desc: name,
       source: "composer",
-      event_type: cut.label || "composer",
+      event_type: name,
       event_ids: [cut.id],
     };
   }
@@ -1080,11 +1120,11 @@
   }
 
   function filteredComposerIntakeCuts() {
-    var cuts = state.coIntakeCuts;
+    var items = state.coIntakeItems;
     var parts = state.coIntakeFilterParticipants;
     var text = state.coIntakeFilterText.toLowerCase();
-    if (!parts.length && !text) return cuts;
-    return cuts.filter(function (c) {
+    if (!parts.length && !text) return items;
+    return items.filter(function (c) {
       if (parts.length && parts.indexOf(c.participant) === -1) return false;
       if (text && (c.label || "").toLowerCase().indexOf(text) === -1
           && (c.participant || "").toLowerCase().indexOf(text) === -1) return false;
@@ -1113,6 +1153,7 @@
       return categoryColor(c.label || "composer");
     },
     typeText: function (c) {
+      if (c.isTrim) return (c.label || "marker") + " (trimmed)";
       return c.label || "composer cut";
     },
     selfBadge: function (c) {
@@ -1125,7 +1166,7 @@
     // --- participant pills + density timeline ---
     participantsSel: "#coIntakeFilterParticipants",
     timelineSel: "#coIntakeTimeline",
-    clustersKey: "coIntakeCuts",
+    clustersKey: "coIntakeItems",
     filterParticipantsKey: "coIntakeFilterParticipants",
     hoveredIdxKey: "coIntakeHoveredIdx",
     filterTextKey: "coIntakeFilterText",
@@ -1156,24 +1197,76 @@
     extraControl: function () {},
   };
 
-  // Composer intake poll: the cuts list is tiny, so fetch the whole composer
-  // manifest and fingerprint the cut spans — re-render only on change.
+  // Composer intake poll: the cuts/trims lists are tiny, so fetch the whole
+  // composer manifest and fingerprint the spans — re-render only on change.
+  // Trims also repaint the SS/TR panels (their asterisk badges read coTrims).
   function pollComposerIntake() {
     return apiGet("../composer/api/manifest")
       .then(function (data) {
         if (!data || !data.ok || !data.manifest) return false;
         var cuts = data.manifest.cuts || [];
-        var fp = JSON.stringify(cuts.map(function (c) {
-          return [c.id, c.participant, c.start, c.end, c.label];
+        var trims = data.manifest.trims || {};
+        var items = cuts.slice();
+        Object.keys(trims).forEach(function (key) {
+          var t = trims[key];
+          // Metadata-less trims (edge case: written by an older Composer
+          // session) can't be carded — skip until the next re-trim.
+          if (!t || !t.participant) return;
+          items.push({
+            id: key,
+            key: key,
+            participant: t.participant,
+            start: t.start,
+            end: t.end,
+            label: t.label || "",
+            isTrim: true,
+          });
+        });
+        var fp = JSON.stringify(items.map(function (c) {
+          return [c.id, c.participant, c.start, c.end, c.label, !!c.isTrim];
         }));
         if (fp === state._coIntakeFp) return false;
         state._coIntakeFp = fp;
-        state.coIntakeCuts = cuts;
+        state.coIntakeItems = items;
+        state.coTrims = trims;
         renderComposerIntake();
+        renderIntake(false);
+        renderTranscriptIntake();
         checkConvergenceTabVisibility();
         return true;
       })
       .catch(function () { return false; });
+  }
+
+  // Deep link from an SS/TR card's asterisk badge: switch to the Composer
+  // Intake tab and highlight the trimmed counterpart (clearing any filters
+  // that would hide it).
+  function focusComposerIntakeItem(key) {
+    var tab = qs('.preview-tab[data-tab="composer-intake"]');
+    if (tab) tab.click();
+
+    function indexOfKey() {
+      var filtered = filteredComposerIntakeCuts();
+      for (var i = 0; i < filtered.length; i++) {
+        if (filtered[i].isTrim && filtered[i].key === key) return i;
+      }
+      return -1;
+    }
+    var idx = indexOfKey();
+    if (idx === -1) {
+      state.coIntakeFilterText = "";
+      state.coIntakeFilterParticipants = [];
+      var searchEl = qs("#coIntakeFilterSearch");
+      if (searchEl) searchEl.value = "";
+      renderComposerIntake();
+      idx = indexOfKey();
+    }
+    if (idx === -1) return;
+    state.coIntakeHoveredIdx = idx;
+    highlightCoIntakeCard(idx);
+    if (_coIntakeDensityEl) _coIntakeDensityEl.setHovered(idx);
+    var card = qsa(".co-intake-queue-card")[idx];
+    if (card) card.scrollIntoView({ block: "nearest" });
   }
 
   function renderComposerIntake() {
@@ -1186,8 +1279,8 @@
     var badge = qs("#coIntakeTabBadge");
 
     if (badge) {
-      if (state.coIntakeCuts.length > 0) {
-        badge.textContent = state.coIntakeCuts.length;
+      if (state.coIntakeItems.length > 0) {
+        badge.textContent = state.coIntakeItems.length;
         badge.classList.remove("hidden");
       } else {
         badge.classList.add("hidden");

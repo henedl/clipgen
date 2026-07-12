@@ -240,6 +240,7 @@
     if (!p) return;
     cancelPendingSeek();
     state.participant = pid;
+    setStoredUIStateField("composer", "participant", pid);
     state.parts = p.parts || [];
     state.duration = p.total_duration || 0;
     state.activePart = 0;
@@ -405,9 +406,19 @@
 
   // Raw trim applier: *values* = {start, end} sets the override, null resets
   // it. Updates the manifest, the local trims map, and the loaded marker.
+  // Marker metadata rides along when the marker is loaded so Studio's
+  // Composer Intake can render the trim as a card; the server preserves
+  // previously stored metadata when a re-PUT (undo/redo) omits it.
   function applyTrim(key, values) {
-    var call = values
-      ? apiSend("PUT", "api/trims/" + encodeURIComponent(key), values)
+    var payload = values ? { start: values.start, end: values.end } : null;
+    var meta = values && findMarker(key);
+    if (meta) {
+      payload.participant = state.participant;
+      payload.label = meta.label || meta.eventType || "";
+      payload.source = meta.source;
+    }
+    var call = payload
+      ? apiSend("PUT", "api/trims/" + encodeURIComponent(key), payload)
       : apiSend("DELETE", "api/trims/" + encodeURIComponent(key));
     return call.then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save trim");
@@ -1114,9 +1125,15 @@
       if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants || [];
       populateParticipantSelect();
-      if (state.participants.length === 1) {
-        qs("#coParticipantSelect").value = state.participants[0].id;
-        selectParticipant(state.participants[0].id);
+      // Restore the last-worked-on participant; fall back to auto-select
+      // when there is only one.
+      var stored = getStoredUIState("composer").participant;
+      var initial = stored && findParticipant(stored)
+        ? stored
+        : state.participants.length === 1 ? state.participants[0].id : null;
+      if (initial) {
+        qs("#coParticipantSelect").value = initial;
+        selectParticipant(initial);
       }
     }).catch(function () { showToast("Could not load participants"); });
 
