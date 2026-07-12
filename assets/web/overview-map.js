@@ -51,6 +51,7 @@
     hovered: -1,
     showSimEdges: true,   // similarity-link layer toggle
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
+    showAllMoments: false, // every participant's items as a point cloud
     mutedFeatures: {},    // column key -> true; muted = weight 0 everywhere
   };
 
@@ -66,6 +67,7 @@
     simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
     anchors: null,  // {features, meshes, labels, links} shared-anchor layer
     burst: null,    // {owner, meshes, items, offsets} drill-down satellites
+    moments: null,  // {mesh, owners, offsets, norms, baseColors} point cloud
     axisLabels: [], // [{el, pos}] X/Y/Z tip labels tied to the axis legend
   };
 
@@ -563,6 +565,86 @@
     // Label visibility is applied by updateLabels() on the next render.
   }
 
+  // ---- All-moments point cloud ----------------------------------------------
+  //
+  // Every participant's items (sampled to BURST_CAP each) as one THREE.Points
+  // cloud on tight golden-angle shells around their dots — the whole study's
+  // timestamps visible at once, colored by source. Independent of weights
+  // (items don't change on recompute), so it rebuilds only on toggle-on and
+  // tab re-activation; positions follow the dots per frame. Per-point
+  // normalized session times + base colors are kept for the replay glow.
+
+  function rebuildMoments() {
+    disposeLayer(three.moments);
+    three.moments = null;
+    if (!state.data || !state.data.participants.length) return;
+
+    var owners = [];
+    var offsets = [];
+    var colors = [];
+    var norms = [];
+    var i, k;
+    for (i = 0; i < state.data.participants.length; i++) {
+      var items = buildParticipantItems(state.data.participants[i]);
+      if (!items.length) continue;
+      var shown = items;
+      if (items.length > BURST_CAP) {
+        shown = [];
+        var step = items.length / BURST_CAP;
+        for (k = 0; k < BURST_CAP; k++) shown.push(items[Math.floor(k * step)]);
+      }
+      var maxEnd = 0;
+      for (k = 0; k < items.length; k++) maxEnd = Math.max(maxEnd, items[k].end);
+      for (k = 0; k < shown.length; k++) {
+        var y = 1 - 2 * (k + 0.5) / shown.length;
+        var ring = Math.sqrt(Math.max(0, 1 - y * y));
+        var theta = k * GOLDEN_ANGLE;
+        var r = 0.7 + 0.35 * ((k * 0.41) % 1);
+        offsets.push(new THREE.Vector3(
+          r * ring * Math.cos(theta), r * y, r * ring * Math.sin(theta)
+        ));
+        owners.push(i);
+        norms.push(maxEnd > 0 ? shown[k].start / maxEnd : 0);
+        var c = burstColor(shown[k].source);
+        colors.push(c.r, c.g, c.b);
+      }
+    }
+    if (!owners.length) return;
+
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      "position", new THREE.BufferAttribute(new Float32Array(owners.length * 3), 3)
+    );
+    geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(colors), 3));
+    var mat = new THREE.PointsMaterial({
+      size: 0.16, vertexColors: true, transparent: true, opacity: 0.8,
+    });
+    var mesh = new THREE.Points(geo, mat);
+    mesh.visible = !!state.showAllMoments;
+    three.scene.add(mesh);
+    three.moments = {
+      mesh: mesh,
+      owners: owners,
+      offsets: offsets,
+      norms: norms,
+      baseColors: new Float32Array(colors),
+    };
+    syncMomentsPositions();
+  }
+
+  function syncMomentsPositions() {
+    if (!three.moments) return;
+    var arr = three.moments.mesh.geometry.attributes.position.array;
+    for (var k = 0; k < three.moments.owners.length; k++) {
+      var d = three.dots[three.moments.owners[k]].position;
+      var o = three.moments.offsets[k];
+      arr[k * 3] = d.x + o.x;
+      arr[k * 3 + 1] = d.y + o.y;
+      arr[k * 3 + 2] = d.z + o.z;
+    }
+    three.moments.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
   // ---- Participant drill-down: items, satellite burst, timeline drawer -----
   //
   // The underlying timestamps and notes come from the Overview hub's state —
@@ -994,6 +1076,7 @@
     syncEdgePositions();
     placeAnchors();
     syncBurstPositions();
+    syncMomentsPositions();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -1368,6 +1451,21 @@
         hint: "Observation categories and detectors as anchor nodes, placed amid the participants exhibiting them — shows why dots cluster",
         apply: setAnchorsVisible,
       },
+      {
+        key: "showAllMoments",
+        label: "All moments",
+        hint: "Every participant's timestamps as a point cloud around their dot, colored by source",
+        apply: function (on) {
+          if (three.moments) {
+            three.moments.mesh.visible = on;
+          } else if (on) {
+            window.ClipgenOverview.ensureData().then(function () {
+              rebuildMoments();
+              requestRender();
+            });
+          }
+        },
+      },
     ];
   }
 
@@ -1689,6 +1787,9 @@
       initDom();
       return;
     }
+    // Re-activation (tab switch / hub Refresh): hub data may have changed,
+    // so data-derived layers rebuild here rather than on every recompute.
+    if (state.showAllMoments && three.renderer) rebuildMoments();
     onResize();
     requestRender();
   }
