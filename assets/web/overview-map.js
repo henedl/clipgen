@@ -31,6 +31,7 @@
   var HALO_COUNT = 3;       // top-k outliers get a halo ring
   var TOP_FEATURES = 8;     // explain panel rows
   var LERP_MS = 250;        // dot travel time after a re-layout
+  var SIM_EDGE_K = 3;       // each participant links to its k nearest peers
 
   var state = {
     data: null,        // /overview/api/data payload
@@ -46,6 +47,7 @@
     order: [],         // participant indices, most unusual first
     selected: -1,
     hovered: -1,
+    showSimEdges: true,   // similarity-link layer toggle
   };
 
   var three = {
@@ -57,6 +59,7 @@
     halos: [],      // top-k translucent rings
     labels: [],     // one overlay div per participant
     colors: null,   // {base, hot} THREE.Color from tokens
+    simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
   };
 
   // Spherical orbit: hand-rolled (rotate + dolly is all a 30-dot scatter
@@ -256,9 +259,136 @@
     if (three.renderer) {
       styleDots();
       if (!lerp.active) positionDots(state.coords);
+      rebuildLayers();
       requestRender();
     }
     if (state.selected >= 0) renderExplain(state.selected);
+  }
+
+  // ---- Similarity-link layer ----------------------------------------------
+  //
+  // Lines between each participant and its k most-similar peers, computed in
+  // the FULL weighted feature space (same matrix the layout projects from),
+  // so a link means "alike overall", not "happen to project nearby". The
+  // edge set is the union of every node's k nearest (non-mutual — mutual-only
+  // would starve exactly the outliers you want context for). Line topology
+  // rebuilds on every recompute; per-frame position updates follow the dots
+  // (including through the re-layout lerp) via syncEdgePositions().
+
+  function computeSimilarityEdges() {
+    var W = state.weighted;
+    var n = W.length;
+    var edges = [];
+    if (n < 2) return edges;
+
+    var dist = [];
+    var i, j, k;
+    for (i = 0; i < n; i++) dist.push(new Array(n));
+    for (i = 0; i < n; i++) {
+      dist[i][i] = 0;
+      for (j = i + 1; j < n; j++) {
+        var s = 0;
+        for (k = 0; k < W[i].length; k++) {
+          var d = W[i][k] - W[j][k];
+          s += d * d;
+        }
+        var dd = Math.sqrt(s);
+        dist[i][j] = dd;
+        dist[j][i] = dd;
+      }
+    }
+
+    var seen = {};
+    for (i = 0; i < n; i++) {
+      var order = [];
+      for (j = 0; j < n; j++) if (j !== i) order.push(j);
+      // Deterministic tie-break on index keeps the layout comparable.
+      order.sort(function (a, b) { return dist[i][a] - dist[i][b] || a - b; });
+      for (k = 0; k < Math.min(SIM_EDGE_K, order.length); k++) {
+        var a = Math.min(i, order[k]);
+        var b = Math.max(i, order[k]);
+        var key = a + "-" + b;
+        if (seen[key]) continue;
+        seen[key] = true;
+        edges.push({ a: a, b: b, sim: 1 / (1 + dist[a][b]) });
+      }
+    }
+
+    // Min-max normalize similarity into [0.15, 1] so the faintest edge is
+    // still visible while the strongest reads clearly brighter.
+    var lo = Infinity, hi = -Infinity;
+    for (i = 0; i < edges.length; i++) {
+      lo = Math.min(lo, edges[i].sim);
+      hi = Math.max(hi, edges[i].sim);
+    }
+    var span = hi - lo;
+    for (i = 0; i < edges.length; i++) {
+      edges[i].sim = span > 1e-12 ? 0.15 + 0.85 * ((edges[i].sim - lo) / span) : 1;
+    }
+    return edges;
+  }
+
+  function disposeLayer(entry) {
+    if (!entry || !entry.mesh) return;
+    three.scene.remove(entry.mesh);
+    entry.mesh.geometry.dispose();
+    entry.mesh.material.dispose();
+  }
+
+  // Rebuild every derived scene layer after a re-layout. Weight-slider drags
+  // fire this rapidly, so old geometries/materials are disposed each time.
+  function rebuildLayers() {
+    rebuildSimEdges();
+  }
+
+  function rebuildSimEdges() {
+    disposeLayer(three.simEdges);
+    three.simEdges = null;
+    var edges = computeSimilarityEdges();
+    if (!edges.length) return;
+
+    var positions = new Float32Array(edges.length * 6);
+    var colors = new Float32Array(edges.length * 6);
+    var c = new THREE.Color();
+    // LineBasicMaterial has no per-vertex alpha: fake per-edge opacity by
+    // lerping the edge color toward the scene background by (1 - sim).
+    for (var e = 0; e < edges.length; e++) {
+      c.copy(three.colors.base).lerp(three.colors.bg, 1 - edges[e].sim);
+      for (var v = 0; v < 2; v++) {
+        colors[e * 6 + v * 3] = c.r;
+        colors[e * 6 + v * 3 + 1] = c.g;
+        colors[e * 6 + v * 3 + 2] = c.b;
+      }
+    }
+
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    var mat = new THREE.LineBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.85,
+    });
+    var mesh = new THREE.LineSegments(geo, mat);
+    mesh.visible = !!state.showSimEdges;
+    three.scene.add(mesh);
+    three.simEdges = { mesh: mesh, edges: edges };
+    syncEdgePositions();
+  }
+
+  function syncEdgePositions() {
+    if (!three.simEdges) return;
+    var arr = three.simEdges.mesh.geometry.attributes.position.array;
+    var edges = three.simEdges.edges;
+    for (var e = 0; e < edges.length; e++) {
+      var pa = three.dots[edges[e].a].position;
+      var pb = three.dots[edges[e].b].position;
+      arr[e * 6] = pa.x;
+      arr[e * 6 + 1] = pa.y;
+      arr[e * 6 + 2] = pa.z;
+      arr[e * 6 + 3] = pb.x;
+      arr[e * 6 + 4] = pb.y;
+      arr[e * 6 + 5] = pb.z;
+    }
+    three.simEdges.mesh.geometry.attributes.position.needsUpdate = true;
   }
 
   // ---- Data load ----------------------------------------------------------
@@ -304,6 +434,7 @@
     initScene();
     buildDots();
     renderWeights();
+    renderLayerToggles();
     recompute();
   }
 
@@ -430,6 +561,7 @@
         three.halos[h].scale.copy(three.dots[idx].scale);
       }
     }
+    syncEdgePositions();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -667,6 +799,50 @@
     els.weights.appendChild(frag);
   }
 
+  // Scene-layer toggles. Each entry maps a state flag to a mesh accessor so
+  // toggling only flips visibility (no recompute) once the layer is built.
+  function layerToggleDefs() {
+    return [
+      {
+        key: "showSimEdges",
+        label: "Similarity links",
+        hint: "Each participant links to its " + SIM_EDGE_K + " most-similar peers; brighter = more alike",
+        entry: function () { return three.simEdges; },
+      },
+    ];
+  }
+
+  function renderLayerToggles() {
+    var host = els.layers;
+    if (!host) return;
+    var frag = document.createDocumentFragment();
+    layerToggleDefs().forEach(function (def) {
+      var label = document.createElement("label");
+      label.className = "map-layer-row";
+      label.title = def.hint;
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = !!state[def.key];
+      box.addEventListener("change", function () {
+        state[def.key] = box.checked;
+        var entry = def.entry();
+        if (entry && entry.mesh) {
+          entry.mesh.visible = box.checked;
+        } else if (box.checked) {
+          rebuildLayers();
+        }
+        requestRender();
+      });
+      var text = document.createElement("span");
+      text.textContent = def.label;
+      label.appendChild(box);
+      label.appendChild(text);
+      frag.appendChild(label);
+    });
+    host.innerHTML = "";
+    host.appendChild(frag);
+  }
+
   function renderOutliers() {
     var frag = document.createDocumentFragment();
     var suppress = state.data.participants.length < 3;
@@ -891,6 +1067,7 @@
     els.tooltip = document.getElementById("mapTooltip");
     els.empty = document.getElementById("mapEmpty");
     els.weights = document.getElementById("mapWeights");
+    els.layers = document.getElementById("mapLayers");
     els.outliers = document.getElementById("mapOutliers");
     els.axisList = document.getElementById("mapAxisList");
     els.notice = document.getElementById("mapNotice");
