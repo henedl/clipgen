@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Study Map: per-participant feature matrix + Flask blueprint for /map/.
+"""Overview: per-participant feature matrix + Flask blueprint for /overview/.
 
-Serves the 3D similarity-space visualization (assets/web/map.html/js/css):
-participants are positioned so spatial distance reflects behavioral
-similarity, exposing clusters and outliers across a study.
+Serves the Overview frontend (assets/web/overview.html + the overview-*.js
+satellites), whose Map tab is a 3D similarity space: participants are
+positioned so spatial distance reflects behavioral similarity, exposing
+clusters and outliers across a study.
 
 Split of responsibilities (thin server, thick client):
 
 - This module builds the RAW (un-normalized) participant x feature matrix
-  from the three on-disk manifests and serves it via ``GET /map/api/data``.
-- The client (map.js) does z-scoring, feature-group weighting, the 3D PCA
+  from the three on-disk manifests and serves it via ``GET /overview/api/data``.
+- The client (overview-map.js) does z-scoring, feature-group weighting, the 3D PCA
   projection, and outlier scoring, so weight sliders re-layout instantly
   without server round-trips. Raw values are shipped because the explain
   panel needs them ("12.0 events/min vs cohort mean 5.1").
@@ -381,7 +382,7 @@ def build_session_shape_features(
 
 
 def build_feature_matrix() -> dict[str, Any]:
-    """Assemble the /map/api/data payload from the three on-disk manifests.
+    """Assemble the /overview/api/data payload from the three on-disk manifests.
 
     The only I/O-touching function in this module. Missing manifests yield
     empty shapes (the loaders never raise for absent files), so the payload
@@ -435,14 +436,14 @@ def build_feature_matrix() -> dict[str, Any]:
 
 # ---- Flask blueprint -------------------------------------------------------
 
-map_bp = Blueprint("map", __name__)
+overview_bp = Blueprint("overview", __name__)
 
 
 # Registered before register_static_routes so the catch-all /<path:filename>
 # static route can never shadow the API (mirrors the other blueprints).
-@map_bp.route("/api/data")
+@overview_bp.route("/api/data")
 def api_map_data():
     return ok(**build_feature_matrix())
 
 
-utils.register_static_routes(map_bp, "map.html", icons=True)
+utils.register_static_routes(overview_bp, "overview.html", icons=True)

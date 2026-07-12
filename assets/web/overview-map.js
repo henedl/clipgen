@@ -1,6 +1,6 @@
-/* Study Map hub — 3D similarity space over the study's participants.
+/* Overview Map tab — 3D similarity space over the study's participants.
  *
- * The server (/map/api/data, study_map.py) ships a RAW participant x feature
+ * The server (/overview/api/data, overview.py) ships a RAW participant x feature
  * matrix; everything after that happens here so the weight sliders re-layout
  * instantly with no round-trips:
  *
@@ -33,7 +33,7 @@
   var LERP_MS = 250;        // dot travel time after a re-layout
 
   var state = {
-    data: null,        // /map/api/data payload
+    data: null,        // /overview/api/data payload
     weights: {},       // group key -> 0..2
     groupSizes: {},    // group key -> column count
     stats: null,       // per-column {mean, std} over non-null cells
@@ -264,8 +264,7 @@
   // ---- Data load ----------------------------------------------------------
 
   function loadData() {
-    fetch("/map/api/data")
-      .then(function (r) { return r.json(); })
+    apiGet("api/data")
       .then(function (data) {
         if (!data || !data.ok) throw new Error((data && data.error) || "bad payload");
         init(data);

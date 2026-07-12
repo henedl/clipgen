@@ -1,4 +1,4 @@
-"""Tests for study_map: feature builders and the /map/ blueprint.
+"""Tests for overview: feature builders and the /overview/ blueprint.
 
 Builder tests use synthetic manifest dicts (mirroring tests/test_data_export.py);
 route smokes mount the blueprint on a bare Flask app with a tmp output dir
@@ -12,7 +12,7 @@ import pytest
 
 import config
 import friction
-import study_map
+import overview
 
 
 # ---- Fixtures -------------------------------------------------------------
@@ -72,7 +72,7 @@ def test_observation_shares_sum_to_one():
         _artifact("P01", category="search", severity="Low"),
         _artifact("P02", category="search"),
     ]
-    columns, values = study_map.build_observation_features(artifacts)
+    columns, values = overview.build_observation_features(artifacts)
     keys = {c["key"] for c in columns}
     assert "obs_cat_nav" in keys and "obs_cat_search" in keys
     assert "obs_sev_high" in keys and "obs_sev_low" in keys
@@ -87,7 +87,7 @@ def test_observation_shares_sum_to_one():
 
 
 def test_observation_empty_category_becomes_uncategorized():
-    columns, values = study_map.build_observation_features(
+    columns, values = overview.build_observation_features(
         [_artifact("P01", category="", severity="")]
     )
     assert values["P01"]["obs_cat_uncategorized"] == 1.0
@@ -104,7 +104,7 @@ def test_screenspace_rates_use_last_event_time():
         _ss_row(detector="change", time_in=t, time_out=t + 5) for t in (0, 30, 60, 115)
     ]
     rows.append(_ss_row(detector="text", time_in=50, time_out=55, navigational=True))
-    columns, values = study_map.build_screenspace_features(rows)
+    columns, values = overview.build_screenspace_features(rows)
     p01 = values["P01"]
     assert p01["ss_rate_change"] == pytest.approx(2.0)
     assert p01["ss_total_rate"] == pytest.approx(2.5)
@@ -124,7 +124,7 @@ def test_transcript_features_fallback_scores_without_friction_field():
             )
         }
     }
-    columns, values = study_map.build_transcript_features(source)
+    columns, values = overview.build_transcript_features(source)
     p01 = values["P01"]
     assert {c["key"] for c in columns} >= {
         f"tr_fric_{c}" for c in friction.CATEGORY_ORDER
@@ -151,13 +151,13 @@ def test_transcript_features_prefer_manifest_friction_stats():
             },
         }
     }
-    _, values = study_map.build_transcript_features(source)
+    _, values = overview.build_transcript_features(source)
     assert values["P01"]["tr_fric_confusion"] == pytest.approx(3.0)
     assert values["P01"]["tr_markers_per_min"] == 3.0
 
 
 def test_transcript_entry_without_segments_is_skipped():
-    _, values = study_map.build_transcript_features({"P01": {"segments": []}})
+    _, values = overview.build_transcript_features({"P01": {"segments": []}})
     assert values == {}
 
 
@@ -171,7 +171,7 @@ def test_session_shape_bins_place_events_and_sum_to_one():
         _ss_row(time_in=1.0, time_out=3.0),
         _ss_row(time_in=98.0, time_out=100.0),
     ]
-    columns, values = study_map.build_session_shape_features(rows, {}, bins=4)
+    columns, values = overview.build_session_shape_features(rows, {}, bins=4)
     p01 = values["P01"]
     ss_bins = [p01[f"shape_ss_bin{i}"] for i in range(4)]
     assert sum(ss_bins) == pytest.approx(1.0, abs=1e-3)
@@ -189,7 +189,7 @@ def test_session_shape_friction_bins_from_segments():
             )
         }
     }
-    _, values = study_map.build_session_shape_features([], source, bins=4)
+    _, values = overview.build_session_shape_features([], source, bins=4)
     p01 = values["P01"]
     fric_bins = [p01[f"shape_fric_bin{i}"] for i in range(4)]
     assert sum(fric_bins) == pytest.approx(1.0, abs=1e-3)
@@ -224,14 +224,14 @@ def _ss_manifest(events):
 
 
 def test_feature_matrix_empty_output_dir(seeded_output_dir):
-    payload = study_map.build_feature_matrix()
+    payload = overview.build_feature_matrix()
     assert payload["participants"] == []
     assert payload["matrix"] == []
     assert payload["availability"] == {}
     # Fixed columns (transcript categories, shape bins, totals) exist even with
     # no data; dynamic ones (categories, detectors) don't.
     assert all(isinstance(c["key"], str) for c in payload["columns"])
-    assert [g["key"] for g in payload["groups"]] == list(study_map.GROUP_KEYS)
+    assert [g["key"] for g in payload["groups"]] == list(overview.GROUP_KEYS)
     assert "config" in payload
 
 
@@ -245,7 +245,7 @@ def test_feature_matrix_missing_groups_are_none(seeded_output_dir):
             "marks": [],
         },
     )
-    payload = study_map.build_feature_matrix()
+    payload = overview.build_feature_matrix()
     assert payload["participants"] == ["P01", "P02"]
     assert payload["availability"]["P01"] == {
         "observations": False,
@@ -272,7 +272,7 @@ def test_feature_matrix_scrubs_nonfinite_floats(seeded_output_dir):
         seeded_output_dir,
         screenspace=_ss_manifest([_ss_row(participant="P01", confidence=math.nan)]),
     )
-    payload = study_map.build_feature_matrix()
+    payload = overview.build_feature_matrix()
     text = json.dumps(payload)  # must not raise / emit bare NaN
     assert "NaN" not in text
 
@@ -284,30 +284,30 @@ def test_feature_matrix_is_deterministic(seeded_output_dir):
             [_ss_row(participant="P01"), _ss_row(participant="P02", detector="text")]
         ),
     )
-    assert study_map.build_feature_matrix() == study_map.build_feature_matrix()
+    assert overview.build_feature_matrix() == overview.build_feature_matrix()
 
 
 # ---- Route smokes ----------------------------------------------------------
 
 
 @pytest.fixture
-def map_client(seeded_output_dir):
+def overview_client(seeded_output_dir):
     Flask = pytest.importorskip("flask").Flask
     app = Flask(__name__)
-    app.register_blueprint(study_map.map_bp, url_prefix="/map")
+    app.register_blueprint(overview.overview_bp, url_prefix="/overview")
     with app.test_client() as c:
         yield c
 
 
-def test_map_page_serves(map_client):
-    resp = map_client.get("/map/")
+def test_overview_page_serves(overview_client):
+    resp = overview_client.get("/overview/")
     assert resp.status_code == 200
     assert "text/html" in resp.content_type
-    assert 'data-frontend="map"' in resp.get_data(as_text=True)
+    assert 'data-frontend="overview"' in resp.get_data(as_text=True)
 
 
-def test_map_api_data_is_json_not_shadowed_by_static_route(map_client):
-    resp = map_client.get("/map/api/data")
+def test_overview_api_data_is_json_not_shadowed_by_static_route(overview_client):
+    resp = overview_client.get("/overview/api/data")
     assert resp.status_code == 200
     assert "application/json" in resp.content_type
     body = resp.get_json()
@@ -315,18 +315,18 @@ def test_map_api_data_is_json_not_shadowed_by_static_route(map_client):
     assert body["participants"] == []
 
 
-def test_map_api_data_with_seeded_manifest(map_client, seeded_output_dir):
+def test_overview_api_data_with_seeded_manifest(overview_client, seeded_output_dir):
     _write_manifests(
         seeded_output_dir,
         screenspace=_ss_manifest([_ss_row(participant="P01")]),
     )
-    body = map_client.get("/map/api/data").get_json()
+    body = overview_client.get("/overview/api/data").get_json()
     assert body["participants"] == ["P01"]
     assert body["availability"]["P01"]["screenspace"] is True
     assert body["availability"]["P01"]["observations"] is False
 
 
-def test_vendored_three_js_served_by_static_route(map_client):
-    resp = map_client.get("/map/vendor/three.min.js")
+def test_vendored_three_js_served_by_static_route(overview_client):
+    resp = overview_client.get("/overview/vendor/three.min.js")
     assert resp.status_code == 200
     assert b"THREE" in resp.data[:1000]

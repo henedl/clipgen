@@ -30,12 +30,13 @@ dev = ["pytest", "pytest-randomly"]
 packages = []
 py-modules = [
     "changelog", "cli", "clipgen", "config", "data_export", "excel_io",
-    "files", "friction", "google_api", "interactive", "ollama_client", "pipeline",
+    "files", "friction", "google_api", "interactive", "ollama_client", "overview",
+    "pipeline",
     "screenspace", "screenspace_frames", "screenspace_heatmap",
     "screenspace_manifest", "screenspace_multitool", "screenspace_ocr",
     "screenspace_preview", "screenspace_primitives", "screenspace_scans",
     "screenspace_server", "screenspace_tools", "screenspace_worker", "server",
-    "server_utils", "spreadsheet", "start_settings", "study_map", "thinking_agents",
+    "server_utils", "spreadsheet", "start_settings", "thinking_agents",
     "titlecards",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
     "workflows", "workflows_server",

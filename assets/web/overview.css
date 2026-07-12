@@ -1,4 +1,4 @@
-/* Study Map — 3D similarity space (map.html / map.js).
+/* Overview — page shell + Map tab (overview.html / overview-map.js).
  *
  * Layout mirrors the Workflows three-pane shell: sidebar · canvas · panel.
  * All values flow from tokens.css; page-local variables only below. */

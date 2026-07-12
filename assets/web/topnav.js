@@ -22,7 +22,7 @@
     { id: "screenspace", label: "Screenspace", href: "/screenspace/" },
     { id: "transcripts", label: "Transcripts", href: "/transcripts/" },
     { id: "workflows", label: "Workflows", href: "/workflows/" },
-    { id: "map", label: "Map", href: "/map/" },
+    { id: "overview", label: "Overview", href: "/overview/" },
   ];
 
   var state = {

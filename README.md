@@ -101,13 +101,13 @@ A blueprint can run once, fan out across every participant in a study, or be arm
 uv run clipgen.py --workflows -i ./videos -o ./out
 ```
 
-### Study Map - spot outliers in a 3D similarity space
+### Overview - spot outliers in a 3D similarity space
 
-The **Study Map** (reachable from the top navigation on any served page, at `/map/`) renders every participant as a dot in 3D space, positioned so that spatial distance reflects behavioral similarity — computed from spreadsheet observation categories/severities, Screenspace event rates, transcript friction signals, and session pacing. Clusters and outliers pop out at a glance; clicking a dot explains which signals set that participant apart from the cohort, and per-group weight sliders shift the lens. The layout is deterministic: the same data always produces the same map.
+The **Overview** frontend (reachable from the top navigation on any served page, at `/overview/`) renders every participant as a dot in 3D space, positioned so that spatial distance reflects behavioral similarity — computed from spreadsheet observation categories/severities, Screenspace event rates, transcript friction signals, and session pacing. Clusters and outliers pop out at a glance; clicking a dot explains which signals set that participant apart from the cohort, and per-group weight sliders shift the lens. The layout is deterministic: the same data always produces the same map.
 
 ## Third-party code
 
-The web UIs are hand-written vanilla JavaScript with one exception: the Study Map vendors a single-file [Three.js](https://threejs.org) build (MIT) for WebGL rendering — see [assets/web/vendor/README.md](assets/web/vendor/README.md) for version and provenance. SVG icons are [Heroicons](https://heroicons.com) (MIT).
+The web UIs are hand-written vanilla JavaScript with one exception: the Overview map vendors a single-file [Three.js](https://threejs.org) build (MIT) for WebGL rendering — see [assets/web/vendor/README.md](assets/web/vendor/README.md) for version and provenance. SVG icons are [Heroicons](https://heroicons.com) (MIT).
 
 ## Building from source
 
