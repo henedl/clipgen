@@ -3152,18 +3152,25 @@ def _set_cache_headers(response):
 
     ``send_from_directory`` stamps a bare ``Cache-Control: no-cache`` by default
     (Werkzeug, when ``max_age`` is unset), which carries no real caching intent —
-    let it fall through so static css/js/svg get their TTLs. Deliberate cache
-    headers set by a route (thumbnails, SSE streams, video previews) are anything
-    other than a bare ``no-cache`` and are preserved untouched.
+    normalize it per content type. Deliberate cache headers set by a route
+    (thumbnails, SSE streams, video previews) are anything other than a bare
+    ``no-cache`` and are preserved untouched.
+
+    HTML/JS/CSS deliberately get ``no-cache`` (= revalidate each request,
+    answered with cheap localhost 304s via the ETag/Last-Modified that
+    ``send_from_directory`` already sets) rather than a TTL: a max-age on JS
+    once let a browser run hour-old page scripts against fresh no-cache HTML
+    after an update, which presents as "the fix didn't work" bug reports.
+    Only SVG icons keep a real TTL — content-stable, requested in bulk.
     """
     existing = response.headers.get("Cache-Control")
     if existing and existing != "no-cache":
         return response
     ct = response.content_type or ""
-    if ct.startswith("text/html"):
+    if ct.startswith(
+        ("text/html", "text/css", "application/javascript", "text/javascript")
+    ):
         response.headers["Cache-Control"] = "no-cache"
-    elif ct.startswith(("text/css", "application/javascript", "text/javascript")):
-        response.headers["Cache-Control"] = "public, max-age=3600"
     elif ct.startswith("image/svg"):
         response.headers["Cache-Control"] = "public, max-age=86400"
     return response
