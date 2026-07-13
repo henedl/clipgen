@@ -195,6 +195,29 @@ def test_map_session_trajectories():
     assert "state.worldScale" in body
 
 
+def test_map_cluster_hulls():
+    """K-means clusters in the FULL weighted feature space, deterministically
+    (farthest-point init — Math.random must never appear in the map source,
+    or clusters would shuffle run-to-run), with the standard rebuild/sync
+    layer pattern and its controls + CSS present."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function computeKmeans()" in src
+    assert "function runKmeans(" in src
+    assert "function rebuildClusterHulls()" in src
+    assert "function syncClusterHullPositions()" in src
+    assert "Math.random" not in src
+    kmeans_body = src[src.index("function runKmeans(") :]
+    kmeans_body = kmeans_body[: kmeans_body.index("\n  }")]
+    assert "state.weighted" in kmeans_body
+    assert "state.coords" not in kmeans_body
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapClusterControls"' in html
+    assert 'id="mapClusterK"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-cluster-controls" in css
+    assert ".map-cluster-label" in css
+
+
 def test_hidden_utility_class_defined():
     """overview.css must define the generic `.hidden` utility (CSS toggle
     completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata

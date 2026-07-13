@@ -59,6 +59,8 @@
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
     showAllMoments: false, // every participant's items as a point cloud
     showTrajectories: false, // per-participant session paths (bolder; default off)
+    showClusterHulls: false, // k-means ellipsoid shells (default off)
+    clusterK: 0,          // manual cluster count; 0 = auto (best silhouette)
     mutedFeatures: {},    // column key -> true; muted = weight 0 everywhere
   };
 
@@ -76,6 +78,7 @@
     burst: null,    // {owner, meshes, items, offsets} drill-down satellites
     compare: null,  // {a, b, line, beads} pairwise diff arc
     trajectories: null, // {lines, comets, cometGeo} session-trajectory paths
+    clusterHulls: null, // {geo, meshes, wires, labels, clusters} k-means shells
     moments: null,  // {mesh, owners, offsets, norms, baseColors} point cloud
     axisLabels: [], // [{el, pos}] X/Y/Z tip labels tied to the axis legend
   };
@@ -438,6 +441,7 @@
     rebuildAnchors();
     rebuildCompare();
     rebuildTrajectories(); // no-op (dispose only) while the toggle is off
+    rebuildClusterHulls(); // ditto; reclusters on weight/mute changes
   }
 
   function rebuildSimEdges() {
@@ -850,6 +854,278 @@
     syncCompareBtn();
     if (state.selected >= 0) renderExplain(state.selected);
     requestRender();
+  }
+
+  // ---- Cluster hulls (k-means) ------------------------------------------------
+  //
+  // Deterministic k-means over the FULL weighted feature space (the same
+  // matrix the layout projects from, never the projection): farthest-point
+  // init seeded from the top outlier — no randomness, so the same data +
+  // weights always produce identical clusters — then Lloyd iterations to
+  // convergence. Auto-k picks the best mean silhouette over k = 2..min(5,
+  // floor(n/2)). Each cluster renders as a translucent ellipsoid around its
+  // member dots (recomputed from live positions, so hulls ride the lerp)
+  // with an auto-label naming its top distinguishing features.
+
+  var KMEANS_MAX_ITER = 50;
+  var CLUSTER_MIN_PARTICIPANTS = 4;
+
+  function _clusterDistSq(vec, center) {
+    var s = 0;
+    for (var j = 0; j < vec.length; j++) {
+      var d = vec[j] - center[j];
+      s += d * d;
+    }
+    return s;
+  }
+
+  function runKmeans(k) {
+    var W = state.weighted;
+    var n = W.length;
+    var i, c, j;
+    // Farthest-point init: seed = the most unusual participant, then
+    // repeatedly the point farthest from every chosen center.
+    var centers = [W[state.order[0]].slice()];
+    while (centers.length < k) {
+      var far = 0;
+      var farDist = -1;
+      for (i = 0; i < n; i++) {
+        var nearest = Infinity;
+        for (c = 0; c < centers.length; c++) {
+          nearest = Math.min(nearest, _clusterDistSq(W[i], centers[c]));
+        }
+        if (nearest > farDist) { farDist = nearest; far = i; }
+      }
+      centers.push(W[far].slice());
+    }
+    var assign = new Array(n);
+    for (var it = 0; it < KMEANS_MAX_ITER; it++) {
+      var changed = false;
+      for (i = 0; i < n; i++) {
+        var bc = 0;
+        var bd = Infinity;
+        for (c = 0; c < k; c++) {
+          var dsq = _clusterDistSq(W[i], centers[c]);
+          if (dsq < bd) { bd = dsq; bc = c; }
+        }
+        if (assign[i] !== bc) { assign[i] = bc; changed = true; }
+      }
+      if (!changed) break;
+      for (c = 0; c < k; c++) {
+        var sum = null;
+        var count = 0;
+        for (i = 0; i < n; i++) {
+          if (assign[i] !== c) continue;
+          if (!sum) { sum = W[i].slice(); count = 1; continue; }
+          for (j = 0; j < sum.length; j++) sum[j] += W[i][j];
+          count++;
+        }
+        if (sum) {
+          for (j = 0; j < sum.length; j++) sum[j] /= count;
+          centers[c] = sum; // an empty cluster keeps its old center
+        }
+      }
+    }
+    return assign;
+  }
+
+  function meanSilhouette(assign, k) {
+    var W = state.weighted;
+    var n = W.length;
+    var total = 0;
+    var counted = 0;
+    for (var i = 0; i < n; i++) {
+      var sums = new Array(k);
+      var counts = new Array(k);
+      var c;
+      for (c = 0; c < k; c++) { sums[c] = 0; counts[c] = 0; }
+      for (var j = 0; j < n; j++) {
+        if (j === i) continue;
+        var dist = Math.sqrt(_clusterDistSq(W[i], W[j]));
+        sums[assign[j]] += dist;
+        counts[assign[j]]++;
+      }
+      if (!counts[assign[i]]) continue; // singleton: no silhouette
+      var a = sums[assign[i]] / counts[assign[i]];
+      var b = Infinity;
+      for (c = 0; c < k; c++) {
+        if (c === assign[i] || !counts[c]) continue;
+        b = Math.min(b, sums[c] / counts[c]);
+      }
+      if (b === Infinity) continue;
+      total += (b - a) / Math.max(a, b, 1e-12);
+      counted++;
+    }
+    return counted ? total / counted : -1;
+  }
+
+  function computeKmeans() {
+    var n = state.weighted ? state.weighted.length : 0;
+    if (n < CLUSTER_MIN_PARTICIPANTS) return null;
+    var k = state.clusterK;
+    if (k >= 2) {
+      k = Math.max(2, Math.min(k, Math.floor(n / 2)));
+      return { assign: runKmeans(k), k: k };
+    }
+    var kMax = Math.min(5, Math.floor(n / 2));
+    var best = null;
+    for (var kk = 2; kk <= kMax; kk++) {
+      var assign = runKmeans(kk);
+      var sil = meanSilhouette(assign, kk);
+      if (!best || sil > best.sil + 1e-9) best = { assign: assign, k: kk, sil: sil };
+    }
+    return best;
+  }
+
+  // Auto-label: top features by |cluster mean z| (the cohort mean z is 0 by
+  // construction, so a cluster's mean z IS its deviation), muted excluded.
+  function clusterLabel(members) {
+    var cols = state.data.columns;
+    var diffs = [];
+    for (var j = 0; j < cols.length; j++) {
+      if (state.mutedFeatures[cols[j].key]) continue;
+      var sum = 0;
+      var count = 0;
+      for (var m = 0; m < members.length; m++) {
+        var z = state.zRaw[members[m]][j];
+        if (z == null) continue;
+        sum += z;
+        count++;
+      }
+      if (count) diffs.push({ j: j, mean: sum / count });
+    }
+    diffs.sort(function (a, b) { return Math.abs(b.mean) - Math.abs(a.mean); });
+    var parts = [];
+    for (var t = 0; t < Math.min(2, diffs.length); t++) {
+      if (Math.abs(diffs[t].mean) < 0.3) break; // near the mean: not distinguishing
+      parts.push((diffs[t].mean > 0 ? "high " : "low ") + cols[diffs[t].j].label);
+    }
+    return parts.length ? parts.join(", ") : "near cohort mean";
+  }
+
+  function renderClusterNotice(result) {
+    var info = document.getElementById("mapClusterInfo");
+    if (!info) return;
+    if (!state.showClusterHulls) { info.textContent = ""; return; }
+    if (!result) {
+      info.textContent = "Needs " + CLUSTER_MIN_PARTICIPANTS + "+ participants";
+      return;
+    }
+    info.textContent = result.k + " clusters" + (state.clusterK >= 2 ? "" : " (auto)");
+  }
+
+  function disposeClusterHulls() {
+    if (!three.clusterHulls) return;
+    var h = three.clusterHulls;
+    var i;
+    for (i = 0; i < h.meshes.length; i++) {
+      three.scene.remove(h.meshes[i]);
+      h.meshes[i].material.dispose();
+    }
+    for (i = 0; i < h.wires.length; i++) {
+      three.scene.remove(h.wires[i]);
+      h.wires[i].material.dispose();
+    }
+    if (h.geo) h.geo.dispose();
+    for (i = 0; i < h.labels.length; i++) {
+      if (h.labels[i].parentNode) h.labels[i].parentNode.removeChild(h.labels[i]);
+    }
+    three.clusterHulls = null;
+  }
+
+  function rebuildClusterHulls() {
+    disposeClusterHulls();
+    if (!state.showClusterHulls) { renderClusterNotice(null); return; }
+    var result = computeKmeans();
+    renderClusterNotice(result);
+    if (!result) return;
+
+    var clusters = [];
+    var c, i;
+    for (c = 0; c < result.k; c++) clusters.push([]);
+    for (i = 0; i < result.assign.length; i++) {
+      clusters[result.assign[i]].push(i);
+    }
+    clusters = clusters.filter(function (m) { return m.length > 0; });
+    // Size-desc ordering keeps color assignment stable and meaningful.
+    clusters.sort(function (a, b) { return b.length - a.length || a[0] - b[0]; });
+
+    // Cluster colors cycle the group/stream palette (k <= 5, so at most one
+    // reuse); hulls are translucent so a repeat still reads.
+    var hullColors = [
+      three.colors.streamSheet,
+      three.colors.streamScreenspace,
+      three.colors.streamTranscript,
+      three.colors.base,
+      three.colors.friction,
+    ];
+
+    var geo = new THREE.SphereGeometry(1, 24, 16);
+    var meshes = [];
+    var wires = [];
+    var labels = [];
+    var labelFrag = document.createDocumentFragment();
+    for (c = 0; c < clusters.length; c++) {
+      var color = hullColors[c % hullColors.length];
+      var mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: color, transparent: true, opacity: 0.08, depthWrite: false,
+      }));
+      var wire = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: color, transparent: true, opacity: 0.18,
+        wireframe: true, depthWrite: false,
+      }));
+      three.scene.add(mesh);
+      three.scene.add(wire);
+      meshes.push(mesh);
+      wires.push(wire);
+
+      var label = document.createElement("div");
+      label.className = "map-label map-cluster-label";
+      label.textContent = "C" + (c + 1) + " · " + clusterLabel(clusters[c]) +
+        " (" + clusters[c].length + ")";
+      labelFrag.appendChild(label);
+      labels.push(label);
+    }
+    els.labels.appendChild(labelFrag);
+    three.clusterHulls = {
+      geo: geo, meshes: meshes, wires: wires, labels: labels, clusters: clusters,
+    };
+    syncClusterHullPositions();
+  }
+
+  // Ellipsoid = member-dot centroid, per-axis 1.6 x std (floored so tight
+  // clusters stay visible) — from LIVE dot positions, so hulls ride the lerp.
+  function syncClusterHullPositions() {
+    if (!three.clusterHulls) return;
+    var h = three.clusterHulls;
+    for (var c = 0; c < h.clusters.length; c++) {
+      var members = h.clusters[c];
+      var cx = 0, cy = 0, cz = 0;
+      var m, p;
+      for (m = 0; m < members.length; m++) {
+        p = three.dots[members[m]].position;
+        cx += p.x;
+        cy += p.y;
+        cz += p.z;
+      }
+      cx /= members.length;
+      cy /= members.length;
+      cz /= members.length;
+      var vx = 0, vy = 0, vz = 0;
+      for (m = 0; m < members.length; m++) {
+        p = three.dots[members[m]].position;
+        vx += (p.x - cx) * (p.x - cx);
+        vy += (p.y - cy) * (p.y - cy);
+        vz += (p.z - cz) * (p.z - cz);
+      }
+      var sx = Math.max(1.6 * Math.sqrt(vx / members.length), 0.9);
+      var sy = Math.max(1.6 * Math.sqrt(vy / members.length), 0.9);
+      var sz = Math.max(1.6 * Math.sqrt(vz / members.length), 0.9);
+      h.meshes[c].position.set(cx, cy, cz);
+      h.meshes[c].scale.set(sx, sy, sz);
+      h.wires[c].position.set(cx, cy, cz);
+      h.wires[c].scale.set(sx, sy, sz);
+    }
   }
 
   // ---- Session trajectories ---------------------------------------------------
@@ -1467,6 +1743,7 @@
         disposeLayer(three.moments);
         three.moments = null;
         disposeTrajectories();
+        disposeClusterHulls();
         disposeDots();
         selectParticipant(-1);
       }
@@ -1527,6 +1804,7 @@
     disposeLayer(three.moments);
     three.moments = null;
     disposeTrajectories(); // rebuilt by recompute's rebuildLayers if toggled on
+    disposeClusterHulls();
     disposeDots();
     buildDots();
 
@@ -1816,6 +2094,7 @@
     syncMomentsPositions();
     syncComparePositions();
     syncTrajectoryTails();
+    syncClusterHullPositions();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -2081,6 +2360,15 @@
         });
       }
     }
+    if (three.clusterHulls) {
+      for (i = 0; i < three.clusterHulls.labels.length; i++) {
+        entries.push({
+          el: three.clusterHulls.labels[i],
+          pos: three.clusterHulls.meshes[i].position,
+          priority: 2,
+        });
+      }
+    }
     for (i = 0; i < three.axisLabels.length; i++) {
       entries.push({
         el: three.axisLabels[i].el,
@@ -2222,6 +2510,21 @@
         apply: function (on) {
           if (on) rebuildTrajectories();
           else disposeTrajectories();
+        },
+      },
+      {
+        key: "showClusterHulls",
+        label: "Cluster hulls",
+        hint: "Deterministic k-means in the weighted feature space; " +
+          "translucent shells labeled by each cluster's top distinguishing features",
+        apply: function (on) {
+          var controls = document.getElementById("mapClusterControls");
+          if (controls) controls.classList.toggle("hidden", !on);
+          if (on) rebuildClusterHulls();
+          else {
+            disposeClusterHulls();
+            renderClusterNotice(null);
+          }
         },
       },
       {
@@ -2592,6 +2895,19 @@
     chips.appendChild(rankChip);
     frag.appendChild(chips);
 
+    // Cluster membership (when the hull layer is on).
+    if (three.clusterHulls) {
+      for (var ci = 0; ci < three.clusterHulls.clusters.length; ci++) {
+        if (three.clusterHulls.clusters[ci].indexOf(idx) < 0) continue;
+        var clusterLine = document.createElement("p");
+        clusterLine.className = "map-feature-detail";
+        clusterLine.textContent =
+          "Cluster: " + three.clusterHulls.labels[ci].textContent;
+        frag.appendChild(clusterLine);
+        break;
+      }
+    }
+
     // Per-group share of the squared distance: which lens makes them unusual.
     var contributions = {};
     var total = 0;
@@ -2888,6 +3204,16 @@
         _comparePickArmed = !_comparePickArmed;
         syncCompareBtn();
       });
+    var clusterK = document.getElementById("mapClusterK");
+    if (clusterK) {
+      clusterK.addEventListener("change", function () {
+        state.clusterK = parseInt(clusterK.value, 10) || 0;
+        if (state.showClusterHulls) {
+          rebuildClusterHulls();
+          requestRender();
+        }
+      });
+    }
     loadData();
   }
 

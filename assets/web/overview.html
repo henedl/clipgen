@@ -63,6 +63,21 @@
       <div class="map-sidebar-header">Layers</div>
       <div id="mapLayers" class="map-layers"></div>
 
+      <!-- k selector + status for the Cluster hulls layer (shown while the
+           layer toggle is on; overview-map.js wires it). -->
+      <div id="mapClusterControls" class="map-cluster-controls hidden">
+        <label class="map-cluster-k">k
+          <select id="mapClusterK" aria-label="Cluster count">
+            <option value="0" selected>auto</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </label>
+        <span id="mapClusterInfo"></span>
+      </div>
+
       <!-- Active "color by" choropleth (click the chip to restore the
            outlier ramp); populated by overview-map.js when a feature name
            is clicked in the explain panel or axis legend. -->
