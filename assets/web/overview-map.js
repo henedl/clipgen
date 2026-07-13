@@ -96,6 +96,7 @@
   };
 
   var renderPending = false;
+  var renderRaf = 0;
   var lerp = { active: false, from: null, to: null, start: 0 };
 
   var els = {};
@@ -2313,8 +2314,9 @@
   function requestRender() {
     if (renderPending || !three.renderer) return;
     renderPending = true;
-    requestAnimationFrame(function () {
+    renderRaf = requestAnimationFrame(function () {
       renderPending = false;
+      renderRaf = 0;
       three.renderer.render(three.scene, three.camera);
       updateLabels();
     });
@@ -3242,7 +3244,23 @@
     requestRender();
   }
 
+  function mapDeactivate() {
+    // Pause the free-running replay sweep. Its rAF loop guards on replay.playing,
+    // and setReplayPlaying(false) also resyncs the Play/Pause button + scrub UI.
+    if (replay.playing) setReplayPlaying(false);
+    // Cancel any queued on-demand render — no point painting a hidden canvas.
+    if (renderRaf) {
+      cancelAnimationFrame(renderRaf);
+      renderRaf = 0;
+      renderPending = false;
+    }
+    // Clear the transient hover tooltip; the drill-down drawer + selection persist
+    // so returning to the tab keeps the user's context.
+    if (els.tooltip) els.tooltip.classList.add("hidden");
+    state.hovered = -1;
+  }
+
   window.ClipgenOverview.mapActivate = mapActivate;
-  window.ClipgenOverview.mapDeactivate = function () {};
+  window.ClipgenOverview.mapDeactivate = mapDeactivate;
   window.ClipgenOverview.mapResize = onResize;
 })();
