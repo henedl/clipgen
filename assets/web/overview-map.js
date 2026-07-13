@@ -49,9 +49,18 @@
     order: [],         // participant indices, most unusual first
     selected: -1,
     hovered: -1,
+    compareWith: -1,   // second participant of the compare pair (A = selected)
+    colorBy: null,     // column key driving the dot choropleth (null = outlier ramp)
+    layoutMode: "pca", // "pca" (similarity layout) | "manual" (direct axes)
+    axisFeatures: { x: null, y: null, z: null, size: null }, // manual-mode column keys
+    imputedAxis: [],   // [n] true where a manual-axis value was imputed to the mean
+    worldScale: 1,     // scaleToWorld factor (projection units -> world units)
     showSimEdges: true,   // similarity-link layer toggle
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
     showAllMoments: false, // every participant's items as a point cloud
+    showTrajectories: false, // per-participant session paths (bolder; default off)
+    showClusterHulls: false, // k-means ellipsoid shells (default off)
+    clusterK: 0,          // manual cluster count; 0 = auto (best silhouette)
     mutedFeatures: {},    // column key -> true; muted = weight 0 everywhere
   };
 
@@ -67,6 +76,9 @@
     simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
     anchors: null,  // {features, meshes, labels, links} shared-anchor layer
     burst: null,    // {owner, meshes, items, offsets} drill-down satellites
+    compare: null,  // {a, b, line, beads} pairwise diff arc
+    trajectories: null, // {lines, comets, cometGeo} session-trajectory paths
+    clusterHulls: null, // {geo, meshes, wires, labels, clusters} k-means shells
     moments: null,  // {mesh, owners, offsets, norms, baseColors} point cloud
     axisLabels: [], // [{el, pos}] X/Y/Z tip labels tied to the axis legend
   };
@@ -238,14 +250,44 @@
     return scores;
   }
 
+  // Pairwise weighted-z difference between two participants — the same
+  // distance form the explain panel's contribution loop uses, but between two
+  // dots instead of dot-vs-centroid. Only columns where BOTH sides have data
+  // count; a group where either side is fully null reports count 0 so the
+  // panel can say "no shared data" instead of a misleading zero distance.
+  function computePairDiff(a, b) {
+    var data = state.data;
+    var groups = {};
+    var ranked = [];
+    var total = 0;
+    for (var j = 0; j < data.columns.length; j++) {
+      var col = data.columns[j];
+      if (!groups[col.group]) groups[col.group] = { dist: 0, count: 0 };
+      var zA = state.zRaw[a][j];
+      var zB = state.zRaw[b][j];
+      if (zA == null || zB == null) continue;
+      var dz = (zA - zB) * columnWeight(col);
+      groups[col.group].dist += dz * dz;
+      groups[col.group].count++;
+      total += dz * dz;
+      if (Math.abs(dz) > 1e-9) ranked.push({ j: j, dz: dz, zA: zA, zB: zB });
+    }
+    Object.keys(groups).forEach(function (g) {
+      groups[g].dist = Math.sqrt(groups[g].dist);
+    });
+    ranked.sort(function (x, y) { return Math.abs(y.dz) - Math.abs(x.dz); });
+    return { groups: groups, total: Math.sqrt(total), ranked: ranked };
+  }
+
   function scaleToWorld(coords) {
     var maxR = 0;
     var i, c;
     for (i = 0; i < coords.length; i++) {
       for (c = 0; c < 3; c++) maxR = Math.max(maxR, Math.abs(coords[i][c]));
     }
-    if (maxR <= 0) return coords;
+    if (maxR <= 0) { state.worldScale = 1; return coords; }
     var s = WORLD_RADIUS / maxR;
+    state.worldScale = s; // kept so other layers can project into dot space
     var out = [];
     for (i = 0; i < coords.length; i++) {
       out.push([coords[i][0] * s, coords[i][1] * s, coords[i][2] * s]);
@@ -253,15 +295,54 @@
     return out;
   }
 
+  function axisFeatureIndex(dim) {
+    var key = state.axisFeatures[dim];
+    if (!key || !state.data) return -1;
+    var cols = state.data.columns;
+    for (var j = 0; j < cols.length; j++) if (cols[j].key === key) return j;
+    return -1;
+  }
+
+  // Layout coordinates for the current mode. PCA mode projects the weighted
+  // matrix; manual mode maps the three hand-picked features straight onto the
+  // axes from state.zRaw — clamped z, UNWEIGHTED, because the group weights
+  // are a similarity lens and must not warp axes the user chose explicitly.
+  // Missing values impute to z = 0 (the cohort mean IS the axis midpoint in
+  // z-space); state.imputedAxis marks those dots so styleDots can fade them.
+  // PCA components are computed either way: the outlier list, sim-edges, and
+  // anchors all live off the full weighted feature space regardless of mode.
+  function computeLayoutCoords() {
+    var columns = state.data.columns;
+    var n = state.zRaw.length;
+    var i;
+    state.imputedAxis = [];
+    for (i = 0; i < n; i++) state.imputedAxis.push(false);
+    var pca = pcaProject(state.weighted, columns.length);
+    state.components = pca.components;
+    state.variance = pca.variance;
+    if (state.layoutMode !== "manual") return scaleToWorld(pca.coords);
+
+    var idx = [axisFeatureIndex("x"), axisFeatureIndex("y"), axisFeatureIndex("z")];
+    var coords = [];
+    for (i = 0; i < n; i++) {
+      var row = [0, 0, 0];
+      for (var c = 0; c < 3; c++) {
+        if (idx[c] < 0) continue;
+        var z = state.zRaw[i][idx[c]];
+        if (z == null) { state.imputedAxis[i] = true; continue; }
+        row[c] = z;
+      }
+      coords.push(row);
+    }
+    return scaleToWorld(coords);
+  }
+
   function recompute() {
     var data = state.data;
     var columns = data.columns;
     state.zRaw = computeZ(data.matrix, state.stats);
     state.weighted = applyWeights(state.zRaw, columns);
-    var pca = pcaProject(state.weighted, columns.length);
-    state.components = pca.components;
-    state.variance = pca.variance;
-    var newCoords = scaleToWorld(pca.coords);
+    var newCoords = computeLayoutCoords();
     state.scores = computeOutlierScores(state.zRaw, columns);
     state.order = data.participants
       .map(function (_, i) { return i; })
@@ -274,6 +355,7 @@
 
     renderOutliers();
     renderAxisLegend();
+    updateAxisTipText();
     if (three.renderer) {
       styleDots();
       if (!lerp.active) positionDots(state.coords);
@@ -358,6 +440,9 @@
   function rebuildLayers() {
     rebuildSimEdges();
     rebuildAnchors();
+    rebuildCompare();
+    rebuildTrajectories(); // no-op (dispose only) while the toggle is off
+    rebuildClusterHulls(); // ditto; reclusters on weight/mute changes
   }
 
   function rebuildSimEdges() {
@@ -646,6 +731,580 @@
     three.moments.mesh.geometry.attributes.position.needsUpdate = true;
   }
 
+  // ---- Pairwise compare arc --------------------------------------------------
+  //
+  // Shift-click (or arm the Compare button and click) a second dot while one
+  // is selected: a raised arc connects the pair, with one "difference bead"
+  // per feature group along it — bead size = that group's weighted-z distance
+  // between the two. Beads are deliberately NOT raycast targets (they sit
+  // between dots and would fight selection); numbers live in the panel.
+
+  var COMPARE_ARC_SEGMENTS = 32;
+  var _comparePickArmed = false;
+
+  // Feature-group colors reuse the page-wide stream tokens (observations ARE
+  // the sheet stream, screenspace/transcript likewise); session_shape has no
+  // stream of its own so it takes the neutral accent.
+  function groupColor(groupKey) {
+    if (groupKey === "observations") return three.colors.streamSheet;
+    if (groupKey === "screenspace") return three.colors.streamScreenspace;
+    if (groupKey === "transcript") return three.colors.streamTranscript;
+    return three.colors.base;
+  }
+
+  function groupCssColor(groupKey) {
+    if (groupKey === "observations") return "var(--stream-sheet)";
+    if (groupKey === "screenspace") return "var(--stream-screenspace)";
+    if (groupKey === "transcript") return "var(--stream-transcript)";
+    return "var(--accent)";
+  }
+
+  function disposeCompare() {
+    if (!three.compare) return;
+    disposeLayer({ mesh: three.compare.line });
+    for (var i = 0; i < three.compare.beads.length; i++) {
+      three.scene.remove(three.compare.beads[i].mesh);
+      three.compare.beads[i].mesh.geometry.dispose();
+      three.compare.beads[i].mesh.material.dispose();
+    }
+    three.compare = null;
+  }
+
+  // Arc between the pair's CURRENT dot positions: control point at the
+  // midpoint, pushed radially away from the origin so the arc rises above
+  // the cloud instead of cutting through it.
+  function compareCurve(a, b) {
+    var pa = three.dots[a].position;
+    var pb = three.dots[b].position;
+    var mid = new THREE.Vector3().addVectors(pa, pb).multiplyScalar(0.5);
+    var chord = pa.distanceTo(pb);
+    var lift = mid.length() > 1e-6
+      ? mid.clone().normalize() : new THREE.Vector3(0, 1, 0);
+    mid.add(lift.multiplyScalar(Math.max(chord * 0.35, 1.5)));
+    return new THREE.QuadraticBezierCurve3(pa.clone(), mid, pb.clone());
+  }
+
+  function rebuildCompare() {
+    disposeCompare();
+    if (state.selected < 0 || state.compareWith < 0) return;
+    var a = state.selected;
+    var b = state.compareWith;
+    var diff = computePairDiff(a, b);
+
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(
+      new Float32Array((COMPARE_ARC_SEGMENTS + 1) * 3), 3));
+    var line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color: three.colors.base, transparent: true, opacity: 0.8,
+    }));
+    three.scene.add(line);
+
+    var groups = state.data.groups;
+    var maxDist = 0;
+    var g;
+    for (g = 0; g < groups.length; g++) {
+      var entry = diff.groups[groups[g].key];
+      if (entry) maxDist = Math.max(maxDist, entry.dist);
+    }
+    var beadGeo = new THREE.SphereGeometry(1, 16, 12);
+    var beads = [];
+    for (g = 0; g < groups.length; g++) {
+      var e = diff.groups[groups[g].key] || { dist: 0, count: 0 };
+      var mesh = new THREE.Mesh(beadGeo, new THREE.MeshBasicMaterial({
+        color: groupColor(groups[g].key),
+        // A no-shared-data bead stays visible but ghosted.
+        transparent: e.count === 0, opacity: e.count === 0 ? 0.25 : 1,
+      }));
+      mesh.scale.setScalar(0.15 + (maxDist > 0 ? 0.45 * (e.dist / maxDist) : 0));
+      three.scene.add(mesh);
+      beads.push({ mesh: mesh, t: (g + 1) / (groups.length + 1) });
+    }
+    three.compare = { a: a, b: b, line: line, beads: beads };
+    syncComparePositions();
+  }
+
+  function syncComparePositions() {
+    if (!three.compare) return;
+    var curve = compareCurve(three.compare.a, three.compare.b);
+    var arr = three.compare.line.geometry.attributes.position.array;
+    for (var s = 0; s <= COMPARE_ARC_SEGMENTS; s++) {
+      var p = curve.getPoint(s / COMPARE_ARC_SEGMENTS);
+      arr[s * 3] = p.x;
+      arr[s * 3 + 1] = p.y;
+      arr[s * 3 + 2] = p.z;
+    }
+    three.compare.line.geometry.attributes.position.needsUpdate = true;
+    for (var i = 0; i < three.compare.beads.length; i++) {
+      three.compare.beads[i].mesh.position.copy(
+        curve.getPoint(three.compare.beads[i].t));
+    }
+  }
+
+  function syncCompareBtn() {
+    var btn = document.getElementById("mapCompareBtn");
+    if (!btn) return;
+    btn.classList.toggle("is-armed", _comparePickArmed || state.compareWith >= 0);
+    btn.textContent = state.compareWith >= 0 ? "End compare"
+      : (_comparePickArmed ? "Click a dot…" : "Compare…");
+  }
+
+  function setCompare(idx) {
+    state.compareWith = idx;
+    _comparePickArmed = false;
+    rebuildCompare();
+    syncCompareBtn();
+    if (state.selected >= 0) renderExplain(state.selected);
+    requestRender();
+  }
+
+  // ---- Cluster hulls (k-means) ------------------------------------------------
+  //
+  // Deterministic k-means over the FULL weighted feature space (the same
+  // matrix the layout projects from, never the projection): farthest-point
+  // init seeded from the top outlier — no randomness, so the same data +
+  // weights always produce identical clusters — then Lloyd iterations to
+  // convergence. Auto-k picks the best mean silhouette over k = 2..min(5,
+  // floor(n/2)). Each cluster renders as a translucent ellipsoid around its
+  // member dots (recomputed from live positions, so hulls ride the lerp)
+  // with an auto-label naming its top distinguishing features.
+
+  var KMEANS_MAX_ITER = 50;
+  var CLUSTER_MIN_PARTICIPANTS = 4;
+
+  function _clusterDistSq(vec, center) {
+    var s = 0;
+    for (var j = 0; j < vec.length; j++) {
+      var d = vec[j] - center[j];
+      s += d * d;
+    }
+    return s;
+  }
+
+  function runKmeans(k) {
+    var W = state.weighted;
+    var n = W.length;
+    var i, c, j;
+    // Farthest-point init: seed = the most unusual participant, then
+    // repeatedly the point farthest from every chosen center.
+    var centers = [W[state.order[0]].slice()];
+    while (centers.length < k) {
+      var far = 0;
+      var farDist = -1;
+      for (i = 0; i < n; i++) {
+        var nearest = Infinity;
+        for (c = 0; c < centers.length; c++) {
+          nearest = Math.min(nearest, _clusterDistSq(W[i], centers[c]));
+        }
+        if (nearest > farDist) { farDist = nearest; far = i; }
+      }
+      centers.push(W[far].slice());
+    }
+    var assign = new Array(n);
+    for (var it = 0; it < KMEANS_MAX_ITER; it++) {
+      var changed = false;
+      for (i = 0; i < n; i++) {
+        var bc = 0;
+        var bd = Infinity;
+        for (c = 0; c < k; c++) {
+          var dsq = _clusterDistSq(W[i], centers[c]);
+          if (dsq < bd) { bd = dsq; bc = c; }
+        }
+        if (assign[i] !== bc) { assign[i] = bc; changed = true; }
+      }
+      if (!changed) break;
+      for (c = 0; c < k; c++) {
+        var sum = null;
+        var count = 0;
+        for (i = 0; i < n; i++) {
+          if (assign[i] !== c) continue;
+          if (!sum) { sum = W[i].slice(); count = 1; continue; }
+          for (j = 0; j < sum.length; j++) sum[j] += W[i][j];
+          count++;
+        }
+        if (sum) {
+          for (j = 0; j < sum.length; j++) sum[j] /= count;
+          centers[c] = sum; // an empty cluster keeps its old center
+        }
+      }
+    }
+    return assign;
+  }
+
+  function meanSilhouette(assign, k) {
+    var W = state.weighted;
+    var n = W.length;
+    var total = 0;
+    var counted = 0;
+    for (var i = 0; i < n; i++) {
+      var sums = new Array(k);
+      var counts = new Array(k);
+      var c;
+      for (c = 0; c < k; c++) { sums[c] = 0; counts[c] = 0; }
+      for (var j = 0; j < n; j++) {
+        if (j === i) continue;
+        var dist = Math.sqrt(_clusterDistSq(W[i], W[j]));
+        sums[assign[j]] += dist;
+        counts[assign[j]]++;
+      }
+      if (!counts[assign[i]]) continue; // singleton: no silhouette
+      var a = sums[assign[i]] / counts[assign[i]];
+      var b = Infinity;
+      for (c = 0; c < k; c++) {
+        if (c === assign[i] || !counts[c]) continue;
+        b = Math.min(b, sums[c] / counts[c]);
+      }
+      if (b === Infinity) continue;
+      total += (b - a) / Math.max(a, b, 1e-12);
+      counted++;
+    }
+    return counted ? total / counted : -1;
+  }
+
+  function computeKmeans() {
+    var n = state.weighted ? state.weighted.length : 0;
+    if (n < CLUSTER_MIN_PARTICIPANTS) return null;
+    var k = state.clusterK;
+    if (k >= 2) {
+      k = Math.max(2, Math.min(k, Math.floor(n / 2)));
+      return { assign: runKmeans(k), k: k };
+    }
+    var kMax = Math.min(5, Math.floor(n / 2));
+    var best = null;
+    for (var kk = 2; kk <= kMax; kk++) {
+      var assign = runKmeans(kk);
+      var sil = meanSilhouette(assign, kk);
+      if (!best || sil > best.sil + 1e-9) best = { assign: assign, k: kk, sil: sil };
+    }
+    return best;
+  }
+
+  // Auto-label: top features by |cluster mean z| (the cohort mean z is 0 by
+  // construction, so a cluster's mean z IS its deviation), muted excluded.
+  function clusterLabel(members) {
+    var cols = state.data.columns;
+    var diffs = [];
+    for (var j = 0; j < cols.length; j++) {
+      if (state.mutedFeatures[cols[j].key]) continue;
+      var sum = 0;
+      var count = 0;
+      for (var m = 0; m < members.length; m++) {
+        var z = state.zRaw[members[m]][j];
+        if (z == null) continue;
+        sum += z;
+        count++;
+      }
+      if (count) diffs.push({ j: j, mean: sum / count });
+    }
+    diffs.sort(function (a, b) { return Math.abs(b.mean) - Math.abs(a.mean); });
+    var parts = [];
+    for (var t = 0; t < Math.min(2, diffs.length); t++) {
+      if (Math.abs(diffs[t].mean) < 0.3) break; // near the mean: not distinguishing
+      parts.push((diffs[t].mean > 0 ? "high " : "low ") + cols[diffs[t].j].label);
+    }
+    return parts.length ? parts.join(", ") : "near cohort mean";
+  }
+
+  function renderClusterNotice(result) {
+    var info = document.getElementById("mapClusterInfo");
+    if (!info) return;
+    if (!state.showClusterHulls) { info.textContent = ""; return; }
+    if (!result) {
+      info.textContent = "Needs " + CLUSTER_MIN_PARTICIPANTS + "+ participants";
+      return;
+    }
+    info.textContent = result.k + " clusters" + (state.clusterK >= 2 ? "" : " (auto)");
+  }
+
+  function disposeClusterHulls() {
+    if (!three.clusterHulls) return;
+    var h = three.clusterHulls;
+    var i;
+    for (i = 0; i < h.meshes.length; i++) {
+      three.scene.remove(h.meshes[i]);
+      h.meshes[i].material.dispose();
+    }
+    for (i = 0; i < h.wires.length; i++) {
+      three.scene.remove(h.wires[i]);
+      h.wires[i].material.dispose();
+    }
+    if (h.geo) h.geo.dispose();
+    for (i = 0; i < h.labels.length; i++) {
+      if (h.labels[i].parentNode) h.labels[i].parentNode.removeChild(h.labels[i]);
+    }
+    three.clusterHulls = null;
+  }
+
+  function rebuildClusterHulls() {
+    disposeClusterHulls();
+    if (!state.showClusterHulls) { renderClusterNotice(null); return; }
+    var result = computeKmeans();
+    renderClusterNotice(result);
+    if (!result) return;
+
+    var clusters = [];
+    var c, i;
+    for (c = 0; c < result.k; c++) clusters.push([]);
+    for (i = 0; i < result.assign.length; i++) {
+      clusters[result.assign[i]].push(i);
+    }
+    clusters = clusters.filter(function (m) { return m.length > 0; });
+    // Size-desc ordering keeps color assignment stable and meaningful.
+    clusters.sort(function (a, b) { return b.length - a.length || a[0] - b[0]; });
+
+    // Cluster colors cycle the group/stream palette (k <= 5, so at most one
+    // reuse); hulls are translucent so a repeat still reads.
+    var hullColors = [
+      three.colors.streamSheet,
+      three.colors.streamScreenspace,
+      three.colors.streamTranscript,
+      three.colors.base,
+      three.colors.friction,
+    ];
+
+    var geo = new THREE.SphereGeometry(1, 24, 16);
+    var meshes = [];
+    var wires = [];
+    var labels = [];
+    var labelFrag = document.createDocumentFragment();
+    for (c = 0; c < clusters.length; c++) {
+      var color = hullColors[c % hullColors.length];
+      var mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: color, transparent: true, opacity: 0.08, depthWrite: false,
+      }));
+      var wire = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: color, transparent: true, opacity: 0.18,
+        wireframe: true, depthWrite: false,
+      }));
+      three.scene.add(mesh);
+      three.scene.add(wire);
+      meshes.push(mesh);
+      wires.push(wire);
+
+      var label = document.createElement("div");
+      label.className = "map-label map-cluster-label";
+      label.textContent = "C" + (c + 1) + " · " + clusterLabel(clusters[c]) +
+        " (" + clusters[c].length + ")";
+      labelFrag.appendChild(label);
+      labels.push(label);
+    }
+    els.labels.appendChild(labelFrag);
+    three.clusterHulls = {
+      geo: geo, meshes: meshes, wires: wires, labels: labels, clusters: clusters,
+    };
+    syncClusterHullPositions();
+  }
+
+  // Ellipsoid = member-dot centroid, per-axis 1.6 x std (floored so tight
+  // clusters stay visible) — from LIVE dot positions, so hulls ride the lerp.
+  function syncClusterHullPositions() {
+    if (!three.clusterHulls) return;
+    var h = three.clusterHulls;
+    for (var c = 0; c < h.clusters.length; c++) {
+      var members = h.clusters[c];
+      var cx = 0, cy = 0, cz = 0;
+      var m, p;
+      for (m = 0; m < members.length; m++) {
+        p = three.dots[members[m]].position;
+        cx += p.x;
+        cy += p.y;
+        cz += p.z;
+      }
+      cx /= members.length;
+      cy /= members.length;
+      cz /= members.length;
+      var vx = 0, vy = 0, vz = 0;
+      for (m = 0; m < members.length; m++) {
+        p = three.dots[members[m]].position;
+        vx += (p.x - cx) * (p.x - cx);
+        vy += (p.y - cy) * (p.y - cy);
+        vz += (p.z - cz) * (p.z - cz);
+      }
+      var sx = Math.max(1.6 * Math.sqrt(vx / members.length), 0.9);
+      var sy = Math.max(1.6 * Math.sqrt(vy / members.length), 0.9);
+      var sz = Math.max(1.6 * Math.sqrt(vz / members.length), 0.9);
+      h.meshes[c].position.set(cx, cy, cz);
+      h.meshes[c].scale.set(sx, sy, sz);
+      h.wires[c].position.set(cx, cy, cz);
+      h.wires[c].scale.set(sx, sy, sz);
+    }
+  }
+
+  // ---- Session trajectories ---------------------------------------------------
+  //
+  // Each participant's session split into K temporal windows (server-built,
+  // payload.windows) becomes a polyline through the SAME space the dots live
+  // in: every window vector is z-scored with the whole-session stats,
+  // weighted, and projected onto the whole-session PCA basis
+  // (state.components x state.worldScale) — the frame the researcher tuned
+  // with the sliders. A pooled-window basis would either move the dots or
+  // put paths in a different space than the dots; both would be incoherent.
+  // In manual mode the window vectors map through the same hand-picked axes
+  // instead. The path's final vertex is appended AT the dot (the whole
+  // session), so every path visibly terminates at the participant's
+  // canonical position and all other layers stay anchored to one spot.
+
+  // [participant] -> [window] -> [x,y,z] or null (window fully null).
+  function computeWindowCoords() {
+    var data = state.data;
+    if (!data || !data.windows || !data.windows.matrices) return null;
+    var mats = data.windows.matrices;
+    var columns = data.columns;
+    var manual = state.layoutMode === "manual";
+    var axIdx = manual
+      ? [axisFeatureIndex("x"), axisFeatureIndex("y"), axisFeatureIndex("z")]
+      : null;
+    var out = [];
+    var i, w, j, c;
+    for (i = 0; i < data.participants.length; i++) out.push([]);
+    for (w = 0; w < mats.length; w++) {
+      var z = computeZ(mats[w], state.stats);
+      for (i = 0; i < z.length; i++) {
+        var row = z[i];
+        var allNull = true;
+        for (j = 0; j < row.length; j++) {
+          if (row[j] != null) { allNull = false; break; }
+        }
+        if (allNull) { out[i].push(null); continue; }
+        var v = [0, 0, 0];
+        if (manual) {
+          for (c = 0; c < 3; c++) {
+            if (axIdx[c] >= 0 && row[axIdx[c]] != null) v[c] = row[axIdx[c]];
+          }
+        } else {
+          for (j = 0; j < columns.length; j++) {
+            var wz = row[j] == null ? 0 : row[j] * columnWeight(columns[j]);
+            if (wz === 0) continue;
+            v[0] += wz * state.components[0][j];
+            v[1] += wz * state.components[1][j];
+            v[2] += wz * state.components[2][j];
+          }
+        }
+        out[i].push([
+          v[0] * state.worldScale,
+          v[1] * state.worldScale,
+          v[2] * state.worldScale,
+        ]);
+      }
+    }
+    return out;
+  }
+
+  function disposeTrajectories() {
+    if (!three.trajectories) return;
+    var t = three.trajectories;
+    var i;
+    for (i = 0; i < t.lines.length; i++) {
+      three.scene.remove(t.lines[i].mesh);
+      t.lines[i].mesh.geometry.dispose();
+      t.lines[i].mesh.material.dispose();
+    }
+    for (i = 0; i < t.comets.length; i++) {
+      three.scene.remove(t.comets[i].mesh);
+      t.comets[i].mesh.material.dispose();
+    }
+    if (t.cometGeo) t.cometGeo.dispose();
+    three.trajectories = null;
+  }
+
+  function rebuildTrajectories() {
+    disposeTrajectories();
+    if (!state.showTrajectories) return;
+    var coords = computeWindowCoords();
+    if (!coords) return;
+    var lines = [];
+    var comets = [];
+    var cometGeo = new THREE.SphereGeometry(0.18, 12, 8);
+    var base = new THREE.Color();
+    for (var i = 0; i < coords.length; i++) {
+      var verts = [];
+      for (var w = 0; w < coords[i].length; w++) {
+        if (coords[i][w]) verts.push(coords[i][w]);
+      }
+      if (!verts.length) continue; // no windowable source -> no path
+      var vCount = verts.length + 1; // +1: the dot itself, synced per frame
+      var positions = new Float32Array(vCount * 3);
+      var colors = new Float32Array(vCount * 3);
+      dotBaseColor(i, base);
+      for (var v = 0; v < vCount; v++) {
+        // Older vertices fade toward the background (LineBasicMaterial has
+        // no per-vertex alpha in r147 — same trick as the sim edges).
+        var mix = 1 - (v + 1) / vCount;
+        var cc = base.clone().lerp(three.colors.bg, mix * 0.75);
+        colors[v * 3] = cc.r;
+        colors[v * 3 + 1] = cc.g;
+        colors[v * 3 + 2] = cc.b;
+        if (v < verts.length) {
+          positions[v * 3] = verts[v][0];
+          positions[v * 3 + 1] = verts[v][1];
+          positions[v * 3 + 2] = verts[v][2];
+        }
+      }
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      var mesh = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.9,
+      }));
+      three.scene.add(mesh);
+      lines.push({ mesh: mesh, owner: i, count: vCount });
+
+      // One replay comet per path, positioned by syncComets during replay.
+      var comet = new THREE.Mesh(
+        cometGeo, new THREE.MeshBasicMaterial({ color: base.clone() })
+      );
+      comet.visible = false;
+      three.scene.add(comet);
+      comets.push({ mesh: comet, owner: i });
+    }
+    three.trajectories = { lines: lines, comets: comets, cometGeo: cometGeo };
+    syncTrajectoryTails();
+  }
+
+  // The appended last vertex tracks the (possibly lerping) dot each frame.
+  function syncTrajectoryTails() {
+    if (!three.trajectories) return;
+    var lines = three.trajectories.lines;
+    for (var i = 0; i < lines.length; i++) {
+      var arr = lines[i].mesh.geometry.attributes.position.array;
+      var p = three.dots[lines[i].owner].position;
+      var last = (lines[i].count - 1) * 3;
+      arr[last] = p.x;
+      arr[last + 1] = p.y;
+      arr[last + 2] = p.z;
+      lines[i].mesh.geometry.attributes.position.needsUpdate = true;
+    }
+  }
+
+  // Replay comet: a bright marker interpolated along each path at the
+  // playhead's normalized session time.
+  function syncComets(t) {
+    if (!three.trajectories) return;
+    var comets = three.trajectories.comets;
+    var lines = three.trajectories.lines;
+    var i;
+    if (!state.showTrajectories || t <= 0) {
+      for (i = 0; i < comets.length; i++) comets[i].mesh.visible = false;
+      return;
+    }
+    if (!_replayWhite) _replayWhite = new THREE.Color("#ffffff");
+    for (i = 0; i < lines.length; i++) {
+      var arr = lines[i].mesh.geometry.attributes.position.array;
+      var segs = lines[i].count - 1;
+      var f = Math.min(t, 1) * segs;
+      var v0 = Math.min(Math.floor(f), segs - 1);
+      var frac = f - v0;
+      var comet = comets[i].mesh;
+      comet.position.set(
+        arr[v0 * 3] + (arr[(v0 + 1) * 3] - arr[v0 * 3]) * frac,
+        arr[v0 * 3 + 1] + (arr[(v0 + 1) * 3 + 1] - arr[v0 * 3 + 1]) * frac,
+        arr[v0 * 3 + 2] + (arr[(v0 + 1) * 3 + 2] - arr[v0 * 3 + 2]) * frac
+      );
+      dotBaseColor(lines[i].owner, comet.material.color);
+      comet.material.color.lerp(_replayWhite, 0.5);
+      comet.visible = true;
+    }
+  }
+
   // ---- Session replay --------------------------------------------------------
   //
   // The mindwalk idea: sweep a playhead over normalized session time (each
@@ -700,20 +1359,13 @@
     if (!replay.norms || !three.renderer) return;
     if (!_replayWhite) _replayWhite = new THREE.Color("#ffffff");
     var t = replay.t;
-    var maxScore = 0;
     var i;
-    for (i = 0; i < state.scores.length; i++) {
-      maxScore = Math.max(maxScore, state.scores[i]);
-    }
     for (i = 0; i < three.dots.length; i++) {
-      var tScore = maxScore > 0 ? state.scores[i] / maxScore : 0;
       var glow = replayIntensity(i, t);
       var c = three.dots[i].material.color;
-      c.copy(three.colors.base).lerp(three.colors.hot, tScore);
+      dotBaseColor(i, c); // idle look from the single authority
       if (glow > 0) c.lerp(_replayWhite, glow * 0.7);
-      var scale = (i === state.selected ? 1.4 : 1) *
-        (0.85 + tScore * 0.5) * (1 + glow * 0.4);
-      three.dots[i].scale.setScalar(scale);
+      three.dots[i].scale.setScalar(dotBaseScale(i) * (1 + glow * 0.4));
     }
     if (three.moments && state.showAllMoments) {
       var colors = three.moments.mesh.geometry.attributes.color.array;
@@ -726,13 +1378,15 @@
       }
       three.moments.mesh.geometry.attributes.color.needsUpdate = true;
     }
+    syncComets(t);
     if (!lerp.active) positionDots(state.coords); // re-sync halo scale
     requestRender();
   }
 
-  // Back to the idle look: outlier ramp colors, no pulse, full-bright cloud.
+  // Back to the idle look: base dot colors, no pulse, full-bright cloud.
   function clearReplayGlow() {
     styleDots();
+    syncComets(0);
     if (three.moments) {
       three.moments.mesh.geometry.attributes.color.array.set(three.moments.baseColors);
       three.moments.mesh.geometry.attributes.color.needsUpdate = true;
@@ -1089,6 +1743,8 @@
         disposeAnchors();
         disposeLayer(three.moments);
         three.moments = null;
+        disposeTrajectories();
+        disposeClusterHulls();
         disposeDots();
         selectParticipant(-1);
       }
@@ -1122,6 +1778,13 @@
     Object.keys(state.mutedFeatures).forEach(function (key) {
       if (!knownKeys[key]) delete state.mutedFeatures[key];
     });
+    if (state.colorBy && !knownKeys[state.colorBy]) state.colorBy = null;
+    ["x", "y", "z", "size"].forEach(function (d) {
+      if (state.axisFeatures[d] && !knownKeys[state.axisFeatures[d]]) {
+        state.axisFeatures[d] = null;
+      }
+    });
+    if (state.layoutMode === "manual") ensureAxisDefaults();
 
     if (data.participants.length < 3) {
       showNotice("Only " + data.participants.length + " participant" +
@@ -1134,16 +1797,22 @@
     state.stats = computeStats(data.matrix, data.columns.length);
     state.coords = null; // cohort indices changed; don't lerp across datasets
     replay.norms = null; // items changed; replay densities rebuild lazily
+    state.compareWith = -1; // compare pair is index-based; indices just moved
+    _comparePickArmed = false;
+    syncCompareBtn();
 
     clearBurst();
     disposeLayer(three.moments);
     three.moments = null;
+    disposeTrajectories(); // rebuilt by recompute's rebuildLayers if toggled on
+    disposeClusterHulls();
     disposeDots();
     buildDots();
 
     state.selected = prevSelected ? data.participants.indexOf(prevSelected) : -1;
     renderWeights();
     renderMutedChips();
+    renderColorByChip();
     recompute();
     if (state.selected >= 0) {
       selectParticipant(state.selected);
@@ -1187,6 +1856,8 @@
     buildDots();
     renderWeights();
     renderLayerToggles();
+    renderLayoutControls();
+    renderAxisPickers();
     initReplayControls();
     recompute();
   }
@@ -1329,18 +2000,75 @@
     return false;
   }
 
-  function styleDots() {
+  // ---- Dot styling (single authority) ---------------------------------------
+  //
+  // dotBaseColor/dotBaseScale are the ONE place a dot's idle look is computed;
+  // styleDots() and applyReplayGlow() both build on them so the choropleth,
+  // the outlier ramp, selection, and the replay glow compose instead of each
+  // maintaining a divergent copy of the formula.
+
+  function colorByIndex() {
+    if (!state.colorBy || !state.data) return -1;
+    var cols = state.data.columns;
+    for (var j = 0; j < cols.length; j++) {
+      if (cols[j].key === state.colorBy) return j;
+    }
+    return -1;
+  }
+
+  function maxOutlierScore() {
     var maxScore = 0;
-    var i;
-    for (i = 0; i < state.scores.length; i++) {
+    for (var i = 0; i < state.scores.length; i++) {
       maxScore = Math.max(maxScore, state.scores[i]);
     }
-    for (i = 0; i < three.dots.length; i++) {
+    return maxScore;
+  }
+
+  // Writes dot i's idle color into `out`: with a "color by" feature active,
+  // that column's z ramp (a null cell fades toward the background — "no
+  // data", not "low"); otherwise the outlier-score ramp.
+  function dotBaseColor(i, out) {
+    var cj = colorByIndex();
+    if (cj >= 0) {
+      var z = state.zRaw ? state.zRaw[i][cj] : null;
+      if (z == null) {
+        return out.copy(three.colors.base).lerp(three.colors.bg, 0.65);
+      }
+      return out.copy(three.colors.base)
+        .lerp(three.colors.hot, (z + Z_CLAMP) / (2 * Z_CLAMP));
+    }
+    var maxScore = maxOutlierScore();
+    var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
+    return out.copy(three.colors.base).lerp(three.colors.hot, t);
+  }
+
+  function dotBaseScale(i) {
+    var sizeFactor;
+    var sj = state.layoutMode === "manual" ? axisFeatureIndex("size") : -1;
+    if (sj >= 0) {
+      // Manual size dimension: z ramp; null sits at the midpoint so missing
+      // data doesn't read as "small".
+      var z = state.zRaw ? state.zRaw[i][sj] : null;
+      var tz = z == null ? 0.5 : (z + Z_CLAMP) / (2 * Z_CLAMP);
+      sizeFactor = 0.6 + 0.9 * tz;
+    } else {
+      var maxScore = maxOutlierScore();
       var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
-      three.dots[i].material.color
-        .copy(three.colors.base).lerp(three.colors.hot, t);
-      var scale = (i === state.selected ? 1.4 : 1) * (0.85 + t * 0.5);
-      three.dots[i].scale.setScalar(scale);
+      sizeFactor = 0.85 + t * 0.5;
+    }
+    return (i === state.selected ? 1.4 : 1) * sizeFactor;
+  }
+
+  function styleDots() {
+    for (var i = 0; i < three.dots.length; i++) {
+      dotBaseColor(i, three.dots[i].material.color);
+      // Fade dots whose manual-axis value was imputed to the cohort mean.
+      // transparent is set per-dot, only where needed — cohort-wide
+      // transparency would invite sorting artifacts.
+      var imputed = state.layoutMode === "manual" && !!state.imputedAxis[i];
+      three.dots[i].material.transparent = imputed;
+      three.dots[i].material.opacity = imputed ? 0.35 : 1;
+      three.dots[i].scale.setScalar(dotBaseScale(i));
       three.labels[i].classList.toggle("is-selected", i === state.selected);
     }
   }
@@ -1365,6 +2093,9 @@
     placeAnchors();
     syncBurstPositions();
     syncMomentsPositions();
+    syncComparePositions();
+    syncTrajectoryTails();
+    syncClusterHullPositions();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -1510,8 +2241,14 @@
     }
     var pid = state.data.participants[idx];
     var rank = state.order.indexOf(idx) + 1;
-    els.tooltip.textContent = pid + " — unusualness " +
+    var tip = pid + " — unusualness " +
       state.scores[idx].toFixed(2) + " (#" + rank + ")";
+    var cj = colorByIndex();
+    if (cj >= 0) {
+      tip += " · " + state.data.columns[cj].label + ": " +
+        fmtNum(state.data.matrix[idx][cj]);
+    }
+    els.tooltip.textContent = tip;
     els.tooltip.classList.remove("hidden");
     moveTooltip(e);
   }
@@ -1529,10 +2266,24 @@
       return;
     }
     var idx = target && target.type === "dot" ? target.index : -1;
+    // Shift-click (or an armed Compare button) on a second dot diffs the
+    // pair instead of moving the selection; repeating it ends the compare.
+    if (idx >= 0 && state.selected >= 0 && idx !== state.selected &&
+        (e.shiftKey || _comparePickArmed)) {
+      setCompare(idx === state.compareWith ? -1 : idx);
+      return;
+    }
     selectParticipant(idx === state.selected ? -1 : idx);
   }
 
   function selectParticipant(idx) {
+    if (state.compareWith >= 0 && idx !== state.selected) {
+      // Any selection change ends the compare (B was relative to old A).
+      state.compareWith = -1;
+      _comparePickArmed = false;
+      disposeCompare();
+      syncCompareBtn();
+    }
     state.selected = idx;
     if (idx < 0) {
       els.explain.classList.add("hidden");
@@ -1607,6 +2358,15 @@
         entries.push({
           el: three.anchors.labels[i],
           pos: three.anchors.meshes[i].position,
+          priority: 2,
+        });
+      }
+    }
+    if (three.clusterHulls) {
+      for (i = 0; i < three.clusterHulls.labels.length; i++) {
+        entries.push({
+          el: three.clusterHulls.labels[i],
+          pos: three.clusterHulls.meshes[i].position,
           priority: 2,
         });
       }
@@ -1744,6 +2504,32 @@
         apply: setAnchorsVisible,
       },
       {
+        key: "showTrajectories",
+        label: "Session trajectories",
+        hint: "Each participant's path through behavior space across " +
+          (state.data && state.data.windows ? state.data.windows.count : 5) +
+          " session phases; the dot is the whole session",
+        apply: function (on) {
+          if (on) rebuildTrajectories();
+          else disposeTrajectories();
+        },
+      },
+      {
+        key: "showClusterHulls",
+        label: "Cluster hulls",
+        hint: "Deterministic k-means in the weighted feature space; " +
+          "translucent shells labeled by each cluster's top distinguishing features",
+        apply: function (on) {
+          var controls = document.getElementById("mapClusterControls");
+          if (controls) controls.classList.toggle("hidden", !on);
+          if (on) rebuildClusterHulls();
+          else {
+            disposeClusterHulls();
+            renderClusterNotice(null);
+          }
+        },
+      },
+      {
         key: "showAllMoments",
         label: "All moments",
         hint: "Every participant's timestamps as a point cloud around their dot, colored by source",
@@ -1785,6 +2571,185 @@
     });
     host.innerHTML = "";
     host.appendChild(frag);
+  }
+
+  // ---- Layout mode (PCA vs manual axes) -------------------------------------
+
+  // Manual mode never boots blank: X/Y/Z default to the first column of the
+  // first three non-empty groups (then any remaining columns), skipping keys
+  // already assigned to another axis.
+  function ensureAxisDefaults() {
+    var cols = state.data.columns;
+    if (!cols.length) return;
+    var used = {};
+    ["x", "y", "z"].forEach(function (d) {
+      if (axisFeatureIndex(d) >= 0) used[state.axisFeatures[d]] = true;
+    });
+    var firstByGroup = [];
+    var seenGroup = {};
+    var j;
+    for (j = 0; j < cols.length; j++) {
+      if (!seenGroup[cols[j].group]) {
+        seenGroup[cols[j].group] = true;
+        firstByGroup.push(cols[j].key);
+      }
+    }
+    var pool = firstByGroup.concat(cols.map(function (c) { return c.key; }));
+    ["x", "y", "z"].forEach(function (d) {
+      if (axisFeatureIndex(d) >= 0) return;
+      for (var p = 0; p < pool.length; p++) {
+        if (!used[pool[p]]) {
+          state.axisFeatures[d] = pool[p];
+          used[pool[p]] = true;
+          break;
+        }
+      }
+    });
+  }
+
+  function renderLayoutControls() {
+    var host = document.getElementById("mapLayoutMode");
+    if (!host) return;
+    var frag = document.createDocumentFragment();
+    [
+      { value: "pca", label: "Similarity (PCA)" },
+      { value: "manual", label: "Manual axes" },
+    ].forEach(function (opt) {
+      var label = document.createElement("label");
+      label.className = "map-layer-row";
+      var radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "mapLayoutMode";
+      radio.value = opt.value;
+      radio.checked = state.layoutMode === opt.value;
+      radio.addEventListener("change", function () {
+        if (!radio.checked) return;
+        state.layoutMode = opt.value;
+        if (opt.value === "manual") ensureAxisDefaults();
+        var pickers = document.getElementById("mapAxisPickers");
+        if (pickers) pickers.classList.toggle("hidden", opt.value !== "manual");
+        renderAxisPickers();
+        recompute(); // startLerp animates the mode switch for free
+      });
+      var text = document.createElement("span");
+      text.textContent = opt.label;
+      label.appendChild(radio);
+      label.appendChild(text);
+      frag.appendChild(label);
+    });
+    host.innerHTML = "";
+    host.appendChild(frag);
+  }
+
+  // Five pickers: X/Y/Z position, Size (4th dim), Color (5th dim — the same
+  // state.colorBy the explain-panel choropleth uses, so the two stay in
+  // lockstep by construction).
+  var AXIS_PICKER_DIMS = [
+    { dim: "x", label: "X" },
+    { dim: "y", label: "Y" },
+    { dim: "z", label: "Z" },
+    { dim: "size", label: "Size" },
+    { dim: "color", label: "Color" },
+  ];
+
+  function renderAxisPickers() {
+    var host = document.getElementById("mapAxisPickers");
+    if (!host || !state.data) return;
+    var frag = document.createDocumentFragment();
+    AXIS_PICKER_DIMS.forEach(function (def) {
+      var row = document.createElement("label");
+      row.className = "map-axis-picker-row";
+      var name = document.createElement("span");
+      name.className = "map-axis-picker-label";
+      name.textContent = def.label;
+      var select = document.createElement("select");
+      select.setAttribute("aria-label", def.label + " feature");
+      if (def.dim === "size" || def.dim === "color") {
+        var none = document.createElement("option");
+        none.value = "";
+        none.textContent = "(none)";
+        select.appendChild(none);
+      }
+      var byGroup = {};
+      state.data.groups.forEach(function (group) {
+        var og = document.createElement("optgroup");
+        og.label = group.label;
+        byGroup[group.key] = og;
+      });
+      state.data.columns.forEach(function (col) {
+        var opt = document.createElement("option");
+        opt.value = col.key;
+        opt.textContent = col.label;
+        (byGroup[col.group] || select).appendChild(opt);
+      });
+      state.data.groups.forEach(function (group) {
+        if (byGroup[group.key].children.length) {
+          select.appendChild(byGroup[group.key]);
+        }
+      });
+      var current = def.dim === "color"
+        ? state.colorBy : state.axisFeatures[def.dim];
+      select.value = current || "";
+      select.addEventListener("change", function () {
+        var key = select.value || null;
+        if (def.dim === "color") {
+          setColorBy(key); // never a recompute — color doesn't move dots
+          return;
+        }
+        state.axisFeatures[def.dim] = key;
+        recompute();
+      });
+      row.appendChild(name);
+      row.appendChild(select);
+      frag.appendChild(row);
+    });
+    host.innerHTML = "";
+    host.appendChild(frag);
+  }
+
+  // Axis tripod tip labels: feature names in manual mode, plain X/Y/Z in PCA
+  // (the sidebar legend explains the loadings there).
+  function updateAxisTipText() {
+    if (!three.axisLabels.length) return;
+    var names = ["X", "Y", "Z"];
+    var dims = ["x", "y", "z"];
+    for (var c = 0; c < 3; c++) {
+      var text = names[c];
+      if (state.layoutMode === "manual") {
+        var j = axisFeatureIndex(dims[c]);
+        if (j >= 0) {
+          var label = state.data.columns[j].label;
+          // The declutterer estimates width from text length; keep tips short.
+          text = label.length > 14 ? label.substring(0, 13) + "…" : label;
+        }
+      }
+      three.axisLabels[c].el.textContent = text;
+    }
+  }
+
+  // "Color by" choropleth: one feature key drives the dot color ramp instead
+  // of the outlier score. Set from the explain panel / axis legend feature
+  // names; cleared from the sidebar chip. Never a recompute — color doesn't
+  // move the layout.
+  function setColorBy(key) {
+    state.colorBy = key || null;
+    renderColorByChip();
+    if (three.renderer) {
+      styleDots();
+      requestRender();
+    }
+  }
+
+  function renderColorByChip() {
+    var section = document.getElementById("mapColorBySection");
+    var chip = document.getElementById("mapColorByChip");
+    if (!section || !chip) return;
+    var j = colorByIndex();
+    section.classList.toggle("hidden", j < 0);
+    renderAxisPickers(); // keep the manual-mode Color select in lockstep
+    if (j < 0) return;
+    chip.textContent = state.data.columns[j].label + " ✕";
+    chip.title = "Stop coloring dots by this feature";
   }
 
   // Chips for individually muted features; click restores. Lives in the
@@ -1855,6 +2820,23 @@
     var frag = document.createDocumentFragment();
     var axisNames = ["X", "Y", "Z"];
     var dl = document.createElement("dl");
+    if (state.layoutMode === "manual") {
+      // Manual axes: each axis IS a feature; no variance shares to explain.
+      ["x", "y", "z"].forEach(function (dim, c) {
+        var j = axisFeatureIndex(dim);
+        var dt = document.createElement("dt");
+        dt.textContent = axisNames[c] + " — " +
+          (j >= 0 ? state.data.columns[j].label : "(unset)");
+        dl.appendChild(dt);
+      });
+      var note = document.createElement("dd");
+      note.textContent = "z-scored per feature; the center is the cohort mean";
+      dl.appendChild(note);
+      frag.appendChild(dl);
+      els.axisList.innerHTML = "";
+      els.axisList.appendChild(frag);
+      return;
+    }
     state.components.forEach(function (comp, c) {
       var loadings = comp
         .map(function (v, j) { return { j: j, v: v }; })
@@ -1864,11 +2846,19 @@
       dt.textContent = axisNames[c] + " — " +
         Math.round(state.variance[c] * 100) + "% of variance";
       var dd = document.createElement("dd");
-      dd.textContent = loadings
-        .map(function (l) {
-          return (l.v >= 0 ? "+" : "−") + " " + state.data.columns[l.j].label;
-        })
-        .join(", ");
+      loadings.forEach(function (l, li) {
+        if (li) dd.appendChild(document.createTextNode(", "));
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "map-feature-name";
+        btn.textContent =
+          (l.v >= 0 ? "+" : "−") + " " + state.data.columns[l.j].label;
+        btn.title = "Color all dots by this feature";
+        btn.addEventListener("click", (function (key) {
+          return function () { setColorBy(key); };
+        })(state.data.columns[l.j].key));
+        dd.appendChild(btn);
+      });
       dl.appendChild(dt);
       dl.appendChild(dd);
     });
@@ -1878,6 +2868,11 @@
   }
 
   function renderExplain(idx) {
+    // While a compare is active the panel belongs to the pair, not to A.
+    if (state.compareWith >= 0 && state.compareWith !== idx) {
+      renderCompare(idx, state.compareWith);
+      return;
+    }
     var data = state.data;
     var pid = data.participants[idx];
     var avail = data.availability[pid] || {};
@@ -1901,6 +2896,19 @@
       " · #" + (state.order.indexOf(idx) + 1) + " of " + data.participants.length;
     chips.appendChild(rankChip);
     frag.appendChild(chips);
+
+    // Cluster membership (when the hull layer is on).
+    if (three.clusterHulls) {
+      for (var ci = 0; ci < three.clusterHulls.clusters.length; ci++) {
+        if (three.clusterHulls.clusters[ci].indexOf(idx) < 0) continue;
+        var clusterLine = document.createElement("p");
+        clusterLine.className = "map-feature-detail";
+        clusterLine.textContent =
+          "Cluster: " + three.clusterHulls.labels[ci].textContent;
+        frag.appendChild(clusterLine);
+        break;
+      }
+    }
 
     // Per-group share of the squared distance: which lens makes them unusual.
     var contributions = {};
@@ -1967,8 +2975,14 @@
 
       var label = document.createElement("div");
       label.className = "map-feature-label";
-      var name = document.createElement("span");
+      var name = document.createElement("button");
+      name.type = "button";
+      name.className = "map-feature-name";
       name.textContent = col.label;
+      name.title = "Color all dots by this feature";
+      name.addEventListener("click", (function (key) {
+        return function () { setColorBy(key); };
+      })(col.key));
       var zEl = document.createElement("span");
       zEl.className = "map-feature-z";
       zEl.textContent = (item.z >= 0 ? "+" : "−") +
@@ -2041,6 +3055,126 @@
     els.explainBody.appendChild(frag);
   }
 
+  // A-vs-B panel, shown in the explain pane while a compare is active:
+  // per-group weighted-z distance bars (bead sizes in numbers) and the top
+  // differing features with both raw values.
+  function renderCompare(a, b) {
+    var data = state.data;
+    var pidA = data.participants[a];
+    var pidB = data.participants[b];
+    els.explainTitle.textContent = pidA + " vs " + pidB;
+    var diff = computePairDiff(a, b);
+    var frag = document.createDocumentFragment();
+
+    var head = document.createElement("div");
+    head.className = "map-explain-section";
+    head.textContent = "Difference by signal group";
+    frag.appendChild(head);
+
+    var maxDist = 0;
+    data.groups.forEach(function (g) {
+      var e = diff.groups[g.key];
+      if (e) maxDist = Math.max(maxDist, e.dist);
+    });
+    var bars = document.createElement("div");
+    bars.className = "map-group-bars";
+    data.groups.forEach(function (group) {
+      var e = diff.groups[group.key] || { dist: 0, count: 0 };
+      var row = document.createElement("div");
+      row.className = "map-feature-row";
+      var label = document.createElement("div");
+      label.className = "map-feature-label";
+      var name = document.createElement("span");
+      name.className = "map-compare-name";
+      var swatch = document.createElement("span");
+      swatch.className = "map-compare-swatch";
+      swatch.style.background = groupCssColor(group.key);
+      name.appendChild(swatch);
+      name.appendChild(document.createTextNode(group.label));
+      var val = document.createElement("span");
+      val.className = "map-feature-z";
+      val.textContent = e.count ? e.dist.toFixed(2) : "no shared data";
+      label.appendChild(name);
+      label.appendChild(val);
+      var track = document.createElement("div");
+      track.className = "map-outlier-bar-track";
+      var bar = document.createElement("span");
+      bar.className = "map-outlier-bar";
+      bar.style.display = "block";
+      bar.style.width = (maxDist > 0 ? (e.dist / maxDist) * 100 : 0) + "%";
+      track.appendChild(bar);
+      row.appendChild(label);
+      row.appendChild(track);
+      bars.appendChild(row);
+    });
+    frag.appendChild(bars);
+
+    var featHead = document.createElement("div");
+    featHead.className = "map-explain-section";
+    featHead.textContent = "Where they differ most";
+    frag.appendChild(featHead);
+
+    diff.ranked.slice(0, TOP_FEATURES).forEach(function (item) {
+      var col = data.columns[item.j];
+      var dzRaw = item.zA - item.zB; // unweighted σ gap, same sign as dz
+      var row = document.createElement("div");
+      row.className = "map-feature-row";
+
+      var label = document.createElement("div");
+      label.className = "map-feature-label";
+      var name = document.createElement("span");
+      name.textContent = col.label;
+      var zEl = document.createElement("span");
+      zEl.className = "map-feature-z";
+      zEl.textContent = (dzRaw >= 0 ? pidA : pidB) + " +" +
+        Math.abs(dzRaw).toFixed(1) + "σ";
+      label.appendChild(name);
+      label.appendChild(zEl);
+
+      var detail = document.createElement("div");
+      detail.className = "map-feature-detail";
+      detail.textContent = pidA + ": " + fmtNum(data.matrix[a][item.j]) +
+        " · " + pidB + ": " + fmtNum(data.matrix[b][item.j]);
+
+      // Signed bar off the center line: right = A higher, left = B higher.
+      var track = document.createElement("div");
+      track.className = "map-feature-bar-track";
+      var bar = document.createElement("div");
+      bar.className = "map-feature-bar" + (dzRaw < 0 ? " is-negative" : "");
+      var half = Math.min(Math.abs(dzRaw) / (2 * Z_CLAMP), 1) * 50;
+      if (dzRaw >= 0) {
+        bar.style.left = "50%";
+        bar.style.width = half + "%";
+      } else {
+        bar.style.left = (50 - half) + "%";
+        bar.style.width = half + "%";
+      }
+      track.appendChild(bar);
+
+      row.appendChild(label);
+      row.appendChild(detail);
+      row.appendChild(track);
+      frag.appendChild(row);
+    });
+
+    if (!diff.ranked.length) {
+      var none = document.createElement("p");
+      none.className = "map-feature-detail";
+      none.textContent = "No shared features to diff.";
+      frag.appendChild(none);
+    }
+
+    var exit = document.createElement("button");
+    exit.type = "button";
+    exit.className = "btn btn-small";
+    exit.textContent = "End compare";
+    exit.addEventListener("click", function () { setCompare(-1); });
+    frag.appendChild(exit);
+
+    els.explainBody.innerHTML = "";
+    els.explainBody.appendChild(frag);
+  }
+
   // ---- Boot -----------------------------------------------------------------
 
   function initDom() {
@@ -2064,6 +3198,24 @@
     els.explainBody = document.getElementById("mapExplainBody");
     document.getElementById("mapExplainClose")
       .addEventListener("click", function () { selectParticipant(-1); });
+    document.getElementById("mapColorByChip")
+      .addEventListener("click", function () { setColorBy(null); });
+    document.getElementById("mapCompareBtn")
+      .addEventListener("click", function () {
+        if (state.compareWith >= 0) { setCompare(-1); return; }
+        _comparePickArmed = !_comparePickArmed;
+        syncCompareBtn();
+      });
+    var clusterK = document.getElementById("mapClusterK");
+    if (clusterK) {
+      clusterK.addEventListener("change", function () {
+        state.clusterK = parseInt(clusterK.value, 10) || 0;
+        if (state.showClusterHulls) {
+          rebuildClusterHulls();
+          requestRender();
+        }
+      });
+    }
     loadData();
   }
 
