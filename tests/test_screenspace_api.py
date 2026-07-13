@@ -3110,3 +3110,31 @@ def test_calibrate_caps_at_max_pins(calib_client, monkeypatch):
     )
     assert resp.status_code == 200
     assert len(resp.get_json()["pins"]) == 2
+
+
+# ---- Worker task restore ---------------------------------------------------
+
+
+def test_restore_tasks_demotes_in_flight_statuses():
+    """Tasks frozen mid-flight in the manifest (running/queued/paused from a
+    crashed or quit session) must restore as failed — nothing will ever
+    continue them, and restoring them verbatim made the task list (and the
+    Overview freshness banner) claim a scan was running forever."""
+    import screenspace_worker
+
+    worker = screenspace_worker.ScreenspaceWorker()
+    worker.restore_tasks(
+        [
+            {"id": "t_done", "status": "completed"},
+            {"id": "t_run", "status": "running"},
+            {"id": "t_queue", "status": "queued"},
+            {"id": "t_pause", "status": "paused"},
+            {"id": "t_cancel", "status": "cancelled"},
+        ]
+    )
+    by_id = {t["id"]: t for t in worker.get_all_tasks()}
+    assert by_id["t_done"]["status"] == "completed"
+    assert by_id["t_cancel"]["status"] == "cancelled"
+    for tid in ("t_run", "t_queue", "t_pause"):
+        assert by_id[tid]["status"] == "failed"
+        assert "Interrupted" in by_id[tid]["error"]

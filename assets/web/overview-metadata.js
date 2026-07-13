@@ -1,10 +1,13 @@
-/* Metadata Overview — Tab 5
+/* Metadata — a tab of the Overview page (overview.html).
  *
  * Read-only aggregate statistics across all loaded sessions and streams.
- * Computation + display only — all data comes from window._studioState.
+ * Computation + display only — all data comes from the overview.js hub's
+ * state via the window.ClipgenOverview (OV) namespace (lazy reads inside
+ * activate(), never top-level destructures).
  *
- * Lifecycle: window.metadataActivate / metadataDeactivate / metadataResize
- * Pattern follows convergence.js (IIFE, window exports, state via _studioState).
+ * Lifecycle: OV.metadataActivate / metadataDeactivate / metadataResize.
+ * Row/event drill-downs link to /studio/ (the intake tabs live there; the
+ * former filter carry-over was dropped in the move — no deep-link support).
  */
 (function () {
   "use strict";
@@ -765,20 +768,19 @@
     banner.innerHTML = '<span class="md-icon md-icon-warning"></span> Screenspace analysis is still running \u2014 statistics may be incomplete. <button class="btn btn-small md-banner-refresh">Refresh</button>';
     var refreshBtn = banner.querySelector(".md-banner-refresh");
     if (refreshBtn) {
-      refreshBtn.addEventListener("click", function () {
-        mdState._snapshot = null;
-        refresh();
-      });
+      refreshBtn.addEventListener("click", refetchAndRefresh);
     }
     panel.appendChild(banner);
 
-    // Check task status
+    // Check task status. Only queued/running mean work is in flight \u2014
+    // finished-but-unhappy states (failed / cancelled / paused) linger in the
+    // manifest and must not claim an analysis is still running.
     apiGet("../screenspace/api/tasks").then(function (data) {
       var running = false;
       if (data.tasks) {
         for (var i = 0; i < data.tasks.length; i++) {
           var s = data.tasks[i].status;
-          if (s !== "completed" && s !== "error") { running = true; break; }
+          if (s === "queued" || s === "running") { running = true; break; }
         }
       }
       if (running) banner.classList.remove("hidden");
@@ -790,10 +792,7 @@
     staleBanner.innerHTML = '<span class="md-icon md-icon-info"></span> Data has changed \u2014 <button class="btn btn-small md-banner-refresh">Refresh to update statistics</button>';
     var staleRefresh = staleBanner.querySelector(".md-banner-refresh");
     if (staleRefresh) {
-      staleRefresh.addEventListener("click", function () {
-        mdState._snapshot = null;
-        refresh();
-      });
+      staleRefresh.addEventListener("click", refetchAndRefresh);
     }
     panel.appendChild(staleBanner);
   }
@@ -1516,32 +1515,24 @@
   }
 
   // --- Drill-down helpers ---
+  //
+  // On Studio these jumped to the intake tabs with filters pre-applied; those
+  // tabs stayed in Studio, so drill-downs are now plain navigation (no filter
+  // carry-over — Studio has no deep-link support yet).
 
   function drillDownEventType(eventType) {
-    state.intakeFilterText = eventType;
-    var searchInput = qs("#intakeFilterSearch");
-    if (searchInput) searchInput.value = eventType;
-    switchToTab("intake");
+    void eventType;
+    window.location.href = "/studio/";
   }
 
   function drillDownTranscriptCategory(category) {
-    state.trIntakeFilterCategory = category;
-    switchToTab("transcript-intake");
+    void category;
+    window.location.href = "/studio/";
   }
 
   function drillDownParticipant(participant) {
-    state.intakeFilterParticipants = [participant];
-    switchToTab("intake");
-  }
-
-  function switchToTab(tabName) {
-    state.activePreviewTab = tabName;
-    var allTabs = qsa(".preview-tab");
-    for (var i = 0; i < allTabs.length; i++) {
-      allTabs[i].classList.remove("active");
-      if (allTabs[i].dataset.tab === tabName) allTabs[i].classList.add("active");
-    }
-    if (window._studioSyncPreviewTab) window._studioSyncPreviewTab(true);
+    void participant;
+    window.location.href = "/studio/";
   }
 
   // --- JSON Export ---
@@ -1679,20 +1670,16 @@
 
   // --- Staleness detection ---
 
+  // Staleness compares against the hub's data version, which only advances
+  // when OV.refreshData() actually refetched — so "data has changed" can
+  // never be a length-heuristic false positive.
   function takeSnapshot() {
-    mdState._snapshot = {
-      ss: state.intakeEvents.length,
-      tr: state.trIntakeMarks.length,
-      sh: state.sheetData ? state.sheetData.rows.length : 0,
-    };
+    mdState._snapshot = { version: state.dataVersion };
   }
 
   function checkStaleness() {
     if (!mdState._snapshot || !mdState.active) return;
-    var stale =
-      (state.intakeEvents.length !== mdState._snapshot.ss) ||
-      (state.trIntakeMarks.length !== mdState._snapshot.tr) ||
-      ((state.sheetData ? state.sheetData.rows.length : 0) !== mdState._snapshot.sh);
+    var stale = mdState._snapshot.version !== state.dataVersion;
     var banner = qs("#mdStaleBanner");
     if (banner) {
       if (stale) {
@@ -1701,6 +1688,16 @@
         banner.classList.add("hidden");
       }
     }
+  }
+
+  // Shared handler for both banners' Refresh buttons: on this page the data
+  // never changes without a hub refetch, so recomputing alone would be a
+  // no-op — pull fresh data first, then rebuild.
+  function refetchAndRefresh() {
+    window.ClipgenOverview.refreshData().then(function () {
+      mdState._snapshot = null;
+      refresh();
+    });
   }
 
   // --- Core lifecycle ---
@@ -1743,32 +1740,26 @@
   function activate() {
     mdState.active = true;
     if (!state) {
-      state = window._studioState;
-      parseClipTimestamps = window._studioParseClipTimestamps;
+      var OV = window.ClipgenOverview;
+      state = OV.state;
+      parseClipTimestamps = OV.parseClipTimestamps;
       clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
       clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
-      ROW_FUNCTIONS = window._studioROW_FUNCTIONS;
+      ROW_FUNCTIONS = OV.ROW_FUNCTIONS;
     }
     if (mdState._snapshot) {
       checkStaleness();
     }
     if (mdState.baselines === null) {
-      // First activation: fetch baselines for clock-time correction
-      apiGet("api/sheet/baseline").then(function (data) {
-        mdState.baselines = (data.ok && data.baselines) ? data.baselines : {};
-        refresh();
-      }).catch(function () {
-        mdState.baselines = {};
+      // First activation: the hub's memoized ensureData() supplies all
+      // streams + the baselines used for clock-time correction.
+      window.ClipgenOverview.ensureData().then(function () {
+        mdState.baselines = state.convergenceBaselines || {};
         refresh();
       });
     } else {
       refresh();
     }
-  }
-
-  function refreshIfActive() {
-    if (!mdState.active) return;
-    refresh();
   }
 
   function deactivate() {
@@ -1789,9 +1780,8 @@
     }
   });
 
-  // --- Window exports ---
-  window.metadataActivate = activate;
-  window.metadataDeactivate = deactivate;
-  window.metadataRefreshIfActive = refreshIfActive;
-  window.metadataResize = debounce(resize, 200);
+  // --- Hub exports (OV namespace) ---
+  window.ClipgenOverview.metadataActivate = activate;
+  window.ClipgenOverview.metadataDeactivate = deactivate;
+  window.ClipgenOverview.metadataResize = debounce(resize, 200);
 })();

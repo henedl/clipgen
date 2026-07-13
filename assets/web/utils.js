@@ -1262,6 +1262,57 @@ var XREF_BADGES = {
   composer:    { icon: "scissors", color: "color-mix(in srgb, var(--color-accent) 85%, transparent)" },
 };
 
+// Relative icon base works from any /prefix/ page — every served page has a
+// sibling /screenspace/icons/ route.
+var XREF_ICON_BASE = "../screenspace/icons/";
+
+var xrefBadgeIcon = function (iconName) {
+  return iconMaskSpan(iconName, { className: "xref-badge-icon", basePath: XREF_ICON_BASE });
+};
+
+// Stacked source badges for a findOverlappingData() result. Used by Studio's
+// intake cards and the Overview page (Convergence detail rows, Map drill-down).
+// selfBadge: optional { icon, color, title } to prepend as the "self" source badge.
+var buildXrefBadges = function (xref, selfSource, selfBadge) {
+  var badges = [];
+  if (selfBadge) badges.push(selfBadge);
+  if (selfSource !== "screenspace" && xref.screenspaceEvents.length > 0) {
+    var types = [];
+    var seen = {};
+    for (var i = 0; i < xref.screenspaceEvents.length; i++) {
+      var et = xref.screenspaceEvents[i].event_type || xref.screenspaceEvents[i].detector;
+      if (!seen[et]) { seen[et] = true; types.push(et); }
+    }
+    badges.push({ icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: types.join(", ") });
+  }
+  if (selfSource !== "transcript" && xref.transcriptSnippets.length > 0) {
+    var trTexts = [];
+    for (var j = 0; j < xref.transcriptSnippets.length && j < 3; j++) {
+      var t = xref.transcriptSnippets[j].text;
+      trTexts.push(t.length > 80 ? t.substring(0, 80) + "…" : t);
+    }
+    badges.push({ icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: trTexts.join("\n") });
+  }
+  if (xref.sheetObservations.length > 0) {
+    var obsTexts = [];
+    for (var k = 0; k < xref.sheetObservations.length && k < 3; k++) {
+      obsTexts.push(xref.sheetObservations[k].observation);
+    }
+    badges.push({ icon: XREF_BADGES.sheet.icon, color: XREF_BADGES.sheet.color, title: obsTexts.join("\n") });
+  }
+  if (badges.length === 0) return null;
+  var container = el("span", "xref-badge-stack");
+  for (var b = 0; b < badges.length; b++) {
+    var badge = el("span", "xref-badge");
+    badge.style.background = badges[b].color;
+    badge.style.zIndex = badges.length - b;
+    badge.appendChild(xrefBadgeIcon(badges[b].icon));
+    badge.title = badges[b].title;
+    container.appendChild(badge);
+  }
+  return container;
+};
+
 // ---- Filter helpers (artifact grids in viewer) ----
 
 // Sorted unique non-empty values of `field` across `items`.
@@ -1523,6 +1574,19 @@ var setStoredTooltipPref = function (enabled) {
   try {
     window.localStorage.setItem(TOOLTIP_STORAGE_KEY, enabled ? "true" : "false");
   } catch (_) {}
+};
+
+// ---- Participant deep links (location.hash) ----
+
+// /transcripts/#P07 and /screenspace/#P07 pre-select that participant on
+// load (set by the Overview Map's explain-panel links). Accepts any simple
+// token so participant-prefix rules stay in config.py alone; the consuming
+// page validates the id against its actual participant list.
+var clipgenHashParticipant = function () {
+  var raw = (window.location.hash || "").replace(/^#/, "");
+  if (!raw) return "";
+  try { raw = decodeURIComponent(raw); } catch (_) {}
+  return /^[A-Za-z][\w-]*$/.test(raw) ? raw : "";
 };
 
 // ---- Per-page UI state (localStorage) ----

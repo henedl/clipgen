@@ -24,15 +24,13 @@
   var QUEUE_STORAGE_KEY = "clipgen-studio-queues";
 
   // Pure intake clustering lives in intake-cluster.js (loaded first) so the
-  // Convergence/Metadata sub-tabs can share it without reaching into Studio.
+  // Overview page can share it without reaching into Studio.
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
   // Hub namespace for feature satellites (currently studio-intake.js). The hub
   // publishes `state` + the helpers a satellite needs onto this at load (tail);
   // satellites publish their entry points back, reached via the delegators above.
-  // (Separate from the legacy window._studio* globals that metadata.js /
-  // convergence.js still read — those stay as-is.)
   var STUDIO = (window.ClipgenStudio = window.ClipgenStudio || {});
 
   // Build a mask-image icon span as an HTML string. Sizing comes from a
@@ -65,7 +63,6 @@
     sortDir: "asc", // "asc" | "desc"
     cellExpandHover: true,
     cardScrubberEnabled: false,
-    metadataClusterScreenspace: true,
     filters: {
       categories: [],
       severities: [],
@@ -1016,23 +1013,13 @@
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
     var coIntakePanel = qs("#coIntakePanel");
-    var convergencePanel = qs("#convergencePanel");
-    var metadataPanel = qs("#metadataPanel");
 
     // Hide everything first
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
     if (coIntakePanel) coIntakePanel.classList.add("hidden");
-    if (convergencePanel) convergencePanel.classList.add("hidden");
-    if (metadataPanel) metadataPanel.classList.add("hidden");
     if (refreshBtn) refreshBtn.classList.add("hidden");
-
-    // Intake poll timers are started at DOMContentLoaded and kept running
-    // across all tabs so the sub-tab counter badges stay live; switching away
-    // from an intake tab no longer tears them down.
-    if (window.convergenceDeactivate) window.convergenceDeactivate();
-    if (window.metadataDeactivate) window.metadataDeactivate();
 
     var activePanel = null;
     if (state.activePreviewTab === "sheet") {
@@ -1048,14 +1035,6 @@
     } else if (state.activePreviewTab === "composer-intake") {
       if (coIntakePanel) coIntakePanel.classList.remove("hidden");
       activePanel = coIntakePanel;
-    } else if (state.activePreviewTab === "convergence") {
-      if (convergencePanel) convergencePanel.classList.remove("hidden");
-      activePanel = convergencePanel;
-      if (window.convergenceActivate) window.convergenceActivate();
-    } else if (state.activePreviewTab === "metadata") {
-      if (metadataPanel) metadataPanel.classList.remove("hidden");
-      activePanel = metadataPanel;
-      if (window.metadataActivate) window.metadataActivate();
     }
     if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");
@@ -1065,11 +1044,6 @@
         });
       });
     }
-  }
-
-  function refreshMetadataIfActive() {
-    if (state.activePreviewTab !== "metadata") return;
-    if (window.metadataRefreshIfActive) window.metadataRefreshIfActive();
   }
 
   // ---- Queue persistence (sessionStorage) ----
@@ -1134,7 +1108,6 @@
           clipgenApplyConfig(data.config);
           updateArtifactFormatLabels();
           state.sheetData = data;
-          refreshMetadataIfActive();
           return;
         }
         state.sheetData = data;
@@ -1155,11 +1128,9 @@
           .then(function (bdata) {
             state.convergenceBaselines = (bdata.ok && bdata.baselines) ? bdata.baselines : {};
             if (Object.keys(state.convergenceBaselines).length > 0) renderGrid();
-            refreshMetadataIfActive();
           })
           .catch(function () {
             state.convergenceBaselines = {};
-            refreshMetadataIfActive();
           });
         populateGalleryParticipants(data.participants || []);
         var durInput = qs("#highlightsDuration");
@@ -1180,9 +1151,6 @@
         if (data.cardScrubberEnabled !== undefined) {
           state.cardScrubberEnabled = data.cardScrubberEnabled;
         }
-        if (data.metadataClusterScreenspace !== undefined) {
-          state.metadataClusterScreenspace = data.metadataClusterScreenspace;
-        }
         var tcGroup = qs("#titlecardGroup");
         if (tcGroup && qs("#artifactFormat").value === "clip") {
           tcGroup.classList.remove("hidden");
@@ -1194,8 +1162,6 @@
           updateCellClasses();
         }
         loadManifestState();
-        checkConvergenceTabVisibility();
-        refreshMetadataIfActive();
       })
       .catch(function (err) {
         qs("#sheetLoading").textContent = "Failed to load sheet: " + err;
@@ -4323,14 +4289,6 @@
         renderIntake(false);
       }
     }
-    var mdCluster = _findSetting("STUDIO_METADATA_CLUSTER_SCREENSPACE");
-    if (mdCluster) {
-      var wasClustered = state.metadataClusterScreenspace;
-      state.metadataClusterScreenspace = !!mdCluster.value;
-      if (wasClustered !== state.metadataClusterScreenspace) {
-        refreshMetadataIfActive();
-      }
-    }
   }
 
   function persistTitlecardSettings() {
@@ -4356,25 +4314,6 @@
   }
 
   // ---- Init ----
-
-  function checkConvergenceTabVisibility() {
-    var tab = qs('.preview-tab[data-tab="convergence"]');
-    if (!tab) return;
-    // Show the tab whenever there is any data to plot — even a single
-    // participant — and let convergence.js's own empty/no-convergence message
-    // explain when there isn't enough to converge. Hiding the tab outright (the
-    // old multi-participant gate) made it vanish with no explanation.
-    var hasData =
-      (state.sheetData && state.sheetData.participants && state.sheetData.participants.length > 0) ||
-      state.intakeEvents.length > 0 ||
-      state.trIntakeMarks.length > 0;
-    if (hasData) {
-      tab.classList.remove("hidden");
-    } else {
-      tab.classList.add("hidden");
-    }
-    restoreStoredPreviewTab();
-  }
 
   function checkNavLinks() {
     apiGet("../api/status")
@@ -4515,52 +4454,9 @@
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
   function _syncMarkCategoriesFromSettings() { return STUDIO._syncMarkCategoriesFromSettings && STUDIO._syncMarkCategoriesFromSettings.apply(null, arguments); }
 
-  var XREF_ICON_BASE = "../screenspace/icons/";
-
-  function xrefBadgeIcon(iconName) {
-    return iconMaskSpan(iconName, { className: "xref-badge-icon", basePath: XREF_ICON_BASE });
-  }
-
-  // selfBadge: optional { icon, color, title } to prepend as the "self" source badge
-  function buildXrefBadges(xref, selfSource, selfBadge) {
-    var badges = [];
-    if (selfBadge) badges.push(selfBadge);
-    if (selfSource !== "screenspace" && xref.screenspaceEvents.length > 0) {
-      var types = [];
-      var seen = {};
-      for (var i = 0; i < xref.screenspaceEvents.length; i++) {
-        var et = xref.screenspaceEvents[i].event_type || xref.screenspaceEvents[i].detector;
-        if (!seen[et]) { seen[et] = true; types.push(et); }
-      }
-      badges.push({ icon: XREF_BADGES.screenspace.icon, color: XREF_BADGES.screenspace.color, title: types.join(", ") });
-    }
-    if (selfSource !== "transcript" && xref.transcriptSnippets.length > 0) {
-      var trTexts = [];
-      for (var j = 0; j < xref.transcriptSnippets.length && j < 3; j++) {
-        var t = xref.transcriptSnippets[j].text;
-        trTexts.push(t.length > 80 ? t.substring(0, 80) + "\u2026" : t);
-      }
-      badges.push({ icon: XREF_BADGES.transcript.icon, color: XREF_BADGES.transcript.color, title: trTexts.join("\n") });
-    }
-    if (xref.sheetObservations.length > 0) {
-      var obsTexts = [];
-      for (var k = 0; k < xref.sheetObservations.length && k < 3; k++) {
-        obsTexts.push(xref.sheetObservations[k].observation);
-      }
-      badges.push({ icon: XREF_BADGES.sheet.icon, color: XREF_BADGES.sheet.color, title: obsTexts.join("\n") });
-    }
-    if (badges.length === 0) return null;
-    var container = el("span", "xref-badge-stack");
-    for (var b = 0; b < badges.length; b++) {
-      var badge = el("span", "xref-badge");
-      badge.style.background = badges[b].color;
-      badge.style.zIndex = badges.length - b;
-      badge.appendChild(xrefBadgeIcon(badges[b].icon));
-      badge.title = badges[b].title;
-      container.appendChild(badge);
-    }
-    return container;
-  }
+  // buildXrefBadges / xrefBadgeIcon / XREF_ICON_BASE moved to utils.js \u2014 the
+  // Overview page (Convergence, Map drill-down) renders the same badge stacks.
+  // Bare references below resolve to the utils.js globals.
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
@@ -4637,11 +4533,6 @@
         if (isAnyStudioJobRunning()) _studioEtaTicker.ensure();
       }
     });
-    window.addEventListener("resize", function () {
-      if (window.convergenceResize) window.convergenceResize();
-      if (window.metadataResize) window.metadataResize();
-    });
-
     document.addEventListener("dragstart", function (ev) {
       if (!ev.target.closest(".stash-card")) return;
       requestAnimationFrame(revealEmptyStashAreas);
@@ -4651,28 +4542,17 @@
     });
   });
 
-  window._studioState = state;
-  window._studioParseClipTimestamps = parseClipTimestamps;
-  window._studioFindOverlappingData = findOverlappingData;
-  window._studioBuildXrefBadges = buildXrefBadges;
-  window._studioRenderArtifactQueue = renderArtifactQueue;
-  window._studioRenderReelQueue = renderReelQueue;
-  window._studioROW_FUNCTIONS = ROW_FUNCTIONS;
-  window._studioSyncPreviewTab = syncPreviewTab;
-
   // Hub → studio-intake.js: state + the hub helpers the intake satellite calls.
   // (Pure utils.js globals reach the satellite via the scope chain; only
   // hub-local functions need publishing here.)
   STUDIO.state = state;
   STUDIO.buildQueueCardThumb = buildQueueCardThumb;
   STUDIO.buildXrefBadges = buildXrefBadges;
-  STUDIO.checkConvergenceTabVisibility = checkConvergenceTabVisibility;
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
   STUDIO.intakeAddItem = intakeAddItem;
   STUDIO.intakeToggleItem = intakeToggleItem;
   STUDIO.isIntakeSource = isIntakeSource;
-  STUDIO.refreshMetadataIfActive = refreshMetadataIfActive;
   STUDIO.renderArtifactQueue = renderArtifactQueue;
   STUDIO.renderReelQueue = renderReelQueue;
   STUDIO.saveQueues = saveQueues;

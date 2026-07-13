@@ -12,8 +12,6 @@
   <link rel="stylesheet" href="card-scrubber.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="color-picker.css">
-  <link rel="stylesheet" href="convergence.css">
-  <link rel="stylesheet" href="metadata.css">
   <link rel="stylesheet" href="start-overlay.css">
 </head>
 <body data-frontend="studio">
@@ -30,8 +28,6 @@
       <button class="preview-tab hidden" data-tab="intake"><span id="intakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
       <button class="preview-tab hidden" data-tab="transcript-intake"><span id="trIntakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
       <button class="preview-tab hidden" data-tab="composer-intake">Composer Intake <span id="coIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
-      <button class="preview-tab hidden" data-tab="convergence">Convergence</button>
-      <button class="preview-tab" data-tab="metadata">Metadata</button>
     </div>
     <div class="subheader-actions">
       <button id="refreshSheet" class="cg-btn cg-btn-bare cg-btn-sm" title="Refresh sheet data from source"><span class="cg-btn-icon" data-icon="arrow-path"></span><span>Refresh</span></button>
@@ -39,7 +35,7 @@
   </div>
 
   <section id="sheetPreview">
-  <!-- Sheet + preview tabs (intake, convergence, metadata) -->
+  <!-- Sheet + preview tabs (screenspace/transcript/composer intake) -->
 
     <aside id="studioSidebar" class="cg-scroll-thin" data-open="true" aria-label="Sheet filters">
       <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
@@ -125,12 +121,6 @@
         <div class="drop-target-empty">Composer cuts will appear here</div>
       </div>
     </div>
-    <div id="convergencePanel" class="hidden">
-      <div id="convergenceControls" class="area-controls"></div>
-      <div id="convergenceFilters" class="convergence-filters"></div>
-      <div id="convergenceTimeline" class="convergence-timeline-container"></div>
-    </div>
-    <div id="metadataPanel" class="hidden"></div>
     </div>
   </section>
 
@@ -323,7 +313,5 @@
   <script src="studio-trim.js" defer></script>
   <script src="studio-generate.js" defer></script>
   <script src="studio-intake.js" defer></script>
-  <script src="convergence.js" defer></script>
-  <script src="metadata.js" defer></script>
 </body>
 </html>

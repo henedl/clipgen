@@ -23,6 +23,7 @@
     { id: "transcripts", label: "Transcripts", href: "/transcripts/" },
     { id: "workflows", label: "Workflows", href: "/workflows/" },
     { id: "composer", label: "Composer", href: "/composer/" },
+    { id: "overview", label: "Overview", href: "/overview/" },
   ];
 
   var state = {
@@ -132,18 +133,22 @@
     startBtn.appendChild(startIcon);
     right.appendChild(startBtn);
 
-    // Log button — keeps existing #logBtn id so studio.js wires to it.
-    var logBtn = document.createElement("button");
-    logBtn.type = "button";
-    logBtn.id = "logBtn";
-    logBtn.className = "topnav-icon-btn";
-    logBtn.title = "Artifact Log";
-    logBtn.setAttribute("aria-label", "Artifact Log");
-    var logIcon = document.createElement("span");
-    logIcon.className = "topnav-icon";
-    logIcon.style.cssText = iconMaskStyle("list-bullet");
-    logBtn.appendChild(logIcon);
-    right.appendChild(logBtn);
+    // Log button — only on surfaces that wire an artifact log (Studio's
+    // #logOverlay in studio.js; Composer's log panel in composer.js). On
+    // every other surface the button would be dead chrome.
+    if (state.activeFrontend === "studio" || state.activeFrontend === "composer") {
+      var logBtn = document.createElement("button");
+      logBtn.type = "button";
+      logBtn.id = "logBtn";
+      logBtn.className = "topnav-icon-btn";
+      logBtn.title = "Artifact Log";
+      logBtn.setAttribute("aria-label", "Artifact Log");
+      var logIcon = document.createElement("span");
+      logIcon.className = "topnav-icon";
+      logIcon.style.cssText = iconMaskStyle("list-bullet");
+      logBtn.appendChild(logIcon);
+      right.appendChild(logBtn);
+    }
 
     // Settings button — keeps existing #settingsBtn id.
     var settingsBtn = document.createElement("button");

@@ -208,13 +208,27 @@ class ScreenspaceWorker:
     def restore_tasks(self, tasks: list[dict[str, Any]]) -> None:
         """Load historical tasks into the worker (completed/failed/cancelled).
 
-        Only non-queued tasks are restored for display; queued tasks are not
-        re-enqueued since the analysis context (video caps) is gone.
+        Tasks the manifest froze mid-flight (``running``/``queued``/``paused``
+        — a previous session crashed or was quit during a scan) are demoted to
+        ``failed``: no thread will ever continue them after a restart, and
+        restoring them verbatim left the task list (and the Overview
+        "analysis is still running" banner) claiming a scan was in progress
+        forever.
         """
+        in_flight = (TASK_STATUS_RUNNING, TASK_STATUS_QUEUED, TASK_STATUS_PAUSED)
         with self._lock:
             for t in tasks:
-                if t.get("id"):
-                    self._tasks[t["id"]] = copy.deepcopy(t)
+                if not t.get("id"):
+                    continue
+                restored = copy.deepcopy(t)
+                old_status = restored.get("status")
+                if old_status in in_flight:
+                    restored["status"] = TASK_STATUS_FAILED
+                    restored["error"] = (
+                        f"Interrupted — clipgen exited while this scan was "
+                        f"{old_status}. Re-run the task to get results."
+                    )
+                self._tasks[restored["id"]] = restored
 
     def stop(self) -> None:
         """Signal the worker thread to stop."""

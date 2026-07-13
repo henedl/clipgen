@@ -1,4 +1,4 @@
-/* Convergence Browser.
+/* Convergence Browser — a tab of the Overview page (overview.html).
  *
  * Pulls events from multiple participants/streams (Screenspace detector
  * events + Transcripts marks + sheet timestamps) onto a single timeline,
@@ -6,8 +6,14 @@
  * short window into "convergence zones". Renders a SwimLane visualization
  * with cluster callouts; clicking a callout opens an inline detail panel below.
  *
- * `cvState._snapshot` records the last (ss, tr, sh) input lengths the view
- * was built against, so we can detect when upstream data changed and the
+ * Satellite of the overview.js hub: shares state and helpers through the
+ * window.ClipgenOverview (OV) namespace (lazy reads inside activate/getState —
+ * never top-level destructures). Data arrives via the hub's ensureData();
+ * only the per-participant alignment offsets are fetched/persisted here
+ * (GET/PUT api/convergence/offsets on the overview blueprint).
+ *
+ * `cvState._snapshot` records the hub data version the view was built
+ * against, so we can detect when a refetch brought new upstream data and the
  * view needs to be rebuilt.
  */
 
@@ -65,7 +71,7 @@
   // --- Utilities ---
 
   function getState() {
-    return window._studioState;
+    return window.ClipgenOverview.state;
   }
 
   // Per-lane offset lookup. Returns 0 when the participant or source is unset.
@@ -87,7 +93,7 @@
       return "../screenspace/api/video/frame/" + encodeURIComponent(participant)
         + "/" + Math.floor(startSec) + "?w=240";
     }
-    return "api/thumbnail/" + encodeURIComponent(participant) + "/" + Math.floor(startSec);
+    return "../studio/api/thumbnail/" + encodeURIComponent(participant) + "/" + Math.floor(startSec);
   }
 
   function cvEnsureFramePreview() {
@@ -327,11 +333,9 @@
 
     cvState.events = events;
 
-    cvState._snapshot = {
-      ss: state.intakeEvents.length,
-      tr: state.trIntakeMarks.length,
-      sh: state.sheetData ? state.sheetData.rows.length : 0,
-    };
+    // Staleness snapshot: the hub's data version, which only advances when
+    // OV.refreshData() actually refetched (see checkStaleness).
+    cvState._snapshot = { version: state.dataVersion };
   }
 
   // --- Convergence Algorithm ---
@@ -586,7 +590,7 @@
       icon: "arrow-path",
       size: "sm",
       onClick: function () {
-        bootstrapIntakeData().then(recalculate);
+        window.ClipgenOverview.refreshData().then(recalculate);
       },
     });
     refreshBtn.id = "cvRefreshBtn";
@@ -876,10 +880,7 @@
 
   function checkStaleness() {
     if (!cvState._snapshot || !cvState.active) return;
-    var state = getState();
-    var stale = (state.intakeEvents.length !== cvState._snapshot.ss) ||
-      (state.trIntakeMarks.length !== cvState._snapshot.tr) ||
-      ((state.sheetData ? state.sheetData.rows.length : 0) !== cvState._snapshot.sh);
+    var stale = cvState._snapshot.version !== getState().dataVersion;
 
     var btn = qs("#cvRefreshBtn");
     if (btn) {
@@ -977,17 +978,6 @@
     header.appendChild(closeBtn);
     host.appendChild(header);
 
-    var actions = el("div", "cv-detail-actions");
-    actions.appendChild(P.createBtn({
-      label: "Add All to Artifacts", icon: "plus", size: "sm",
-      onClick: dispatchAllToArtifacts,
-    }));
-    actions.appendChild(P.createBtn({
-      label: "Add All to Reel", icon: "plus", size: "sm",
-      onClick: dispatchAllToReel,
-    }));
-    host.appendChild(actions);
-
     var eventsByPid = {};
     for (var j = 0; j < sel.events.length; j++) {
       var ev = sel.events[j];
@@ -1044,11 +1034,11 @@
       row.appendChild(labelSpan);
     }
 
-    if (window._studioFindOverlappingData && window._studioBuildXrefBadges) {
+    if (window.ClipgenOverview.findOverlappingData) {
       // Overlap is computed against raw video time, matching how other
-      // panels (Intake, Metadata) index their artifacts.
-      var xref = window._studioFindOverlappingData(event.participant, event.rawStart, event.rawEnd);
-      var badges = window._studioBuildXrefBadges(xref, event.source);
+      // panels index their artifacts. buildXrefBadges is a utils.js global.
+      var xref = window.ClipgenOverview.findOverlappingData(event.participant, event.rawStart, event.rawEnd);
+      var badges = buildXrefBadges(xref, event.source);
       if (badges) {
         badges.style.position = "relative";
         badges.style.bottom = "auto";
@@ -1056,132 +1046,12 @@
         row.appendChild(badges);
       }
     }
-
-    var btnWrap = el("span", "cv-detail-event-actions");
-    var artBtn = P.createBtn({
-      label: "Artifact", icon: "plus", size: "sm", variant: "bare",
-      onClick: function (e) { e.stopPropagation(); dispatchToArtifacts(event); },
-    });
-    artBtn.classList.add("cv-detail-add-art");
-    btnWrap.appendChild(artBtn);
-    var reelBtn = P.createBtn({
-      label: "Reel", icon: "plus", size: "sm", variant: "bare",
-      onClick: function (e) { e.stopPropagation(); dispatchToReel(event); },
-    });
-    reelBtn.classList.add("cv-detail-add-reel");
-    btnWrap.appendChild(reelBtn);
-    row.appendChild(btnWrap);
     return row;
   }
 
-  // --- Queue Dispatch ---
-
-  function buildQueueItem(event) {
-    // start/end are the seek points into the source video, so they MUST
-    // be the raw (un-offset) times — the convergence offset is purely a
-    // visual alignment in the swim lane and never persists into artifacts.
-    var item = {
-      participant: event.participant,
-      start: event.rawStart,
-      end: event.rawEnd,
-    };
-    if (event.source === "screenspace") {
-      item.desc = event.eventType;
-      item.source = "screenspace";
-      item.event_type = event.eventType;
-      if (event.rawData.events && event.rawData.events.length > 0) {
-        item.event_ids = event.rawData.events.map(function (e) { return e.id; });
-      } else {
-        item.event_ids = [event.rawData.id || event.id];
-      }
-    } else if (event.source === "transcript") {
-      item.desc = event.eventType || "transcript";
-      item.source = "transcript";
-      if (event.rawData.marks && event.rawData.marks.length > 0) {
-        item.mark_ids = event.rawData.marks.map(function (m) { return m.id || m.segment_id; });
-      } else {
-        item.mark_ids = [event.rawData.id || event.rawData.segment_id || event.id];
-      }
-    } else {
-      var rawRow = event.rawData;
-      var cellValue = (rawRow.cells && rawRow.cells[event.participant])
-        ? rawRow.cells[event.participant].value : "";
-      var parts = event.id.split("_");
-      var segIdx = parseInt(parts[parts.length - 1], 10) || 0;
-      var baselineOffset2 = (cvState.baselines && cvState.baselines[event.participant]) || 0;
-      var segs = parseClipSegmentsForCell(cellValue, baselineOffset2, CLIPGEN_CONFIG.defaultDuration);
-      item.row = rawRow.rowNum;
-      item.desc = rawRow.observation || event.label || event.eventType;
-      item.timestamp = cellValue;
-      item.segIdx = segIdx;
-      item.segTotal = segs.length;
-    }
-    return item;
-  }
-
-  function dispatchToArtifacts(event) {
-    var state = getState();
-    state.artifactQueue.push(buildQueueItem(event));
-    if (window._studioRenderArtifactQueue) window._studioRenderArtifactQueue();
-  }
-
-  function dispatchToReel(event) {
-    var state = getState();
-    state.reelQueue.push(buildQueueItem(event));
-    if (window._studioRenderReelQueue) window._studioRenderReelQueue();
-  }
-
-  function dispatchAllToArtifacts() {
-    if (!cvState.selection) return;
-    var state = getState();
-    var events = cvState.selection.events;
-    for (var i = 0; i < events.length; i++) {
-      state.artifactQueue.push(buildQueueItem(events[i]));
-    }
-    if (window._studioRenderArtifactQueue) window._studioRenderArtifactQueue();
-  }
-
-  function dispatchAllToReel() {
-    if (!cvState.selection) return;
-    var state = getState();
-    var events = cvState.selection.events;
-    for (var i = 0; i < events.length; i++) {
-      state.reelQueue.push(buildQueueItem(events[i]));
-    }
-    if (window._studioRenderReelQueue) window._studioRenderReelQueue();
-  }
-
-  // --- Bootstrap ---
-  //
-  // Studio loads Screenspace events + Transcript marks lazily — those pollers
-  // only kick in when their respective Intake tabs activate. If the user lands
-  // on Convergence first (or refreshes while it's active), state.intakeEvents
-  // and state.trIntakeMarks are still empty and Convergence would only see
-  // sheet data. Fetch both endpoints once on first activation so all three
-  // streams are populated before the swim lane renders.
-  function bootstrapIntakeData() {
-    var s = getState();
-    var jobs = [];
-    jobs.push(
-      apiGet("../screenspace/api/events?excluded=false")
-        .then(function (data) {
-          if (data && data.ok && Array.isArray(data.events)) {
-            s.intakeEvents = data.events;
-          }
-        })
-        .catch(function () {})
-    );
-    jobs.push(
-      apiGet("../transcripts/api/marks")
-        .then(function (data) {
-          if (data && data.ok && Array.isArray(data.marks)) {
-            s.trIntakeMarks = data.marks.filter(function (m) { return m.valid; });
-          }
-        })
-        .catch(function () {})
-    );
-    return Promise.all(jobs);
-  }
+  // Queue dispatch (sending a convergence moment into Studio's artifact/reel
+  // queue) was a Studio-page feature; those queues are in-page Studio state a
+  // standalone Overview page cannot reach. Deliberately dropped in the move.
 
   // --- Lifecycle ---
 
@@ -1193,17 +1063,16 @@
     }
 
     if (cvState.baselines === null) {
-      // First activation: fetch baselines + per-participant convergence offsets +
-      // bootstrap intake/transcript data in parallel, then compute. Subsequent
-      // activations use the staleness banner so the user controls when to pull
-      // in new upstream data.
+      // First activation: the hub's memoized ensureData() supplies all three
+      // streams + baselines; only the per-participant alignment offsets are
+      // convergence-specific (they live on the overview blueprint). Subsequent
+      // activations use the staleness banner so the user controls when to
+      // pull in new upstream data.
       Promise.all([
-        apiGet("api/sheet/baseline").catch(function () { return { ok: false }; }),
+        window.ClipgenOverview.ensureData(),
         apiGet("api/convergence/offsets").catch(function () { return { ok: false }; }),
-        bootstrapIntakeData(),
       ]).then(function (results) {
-        var bData = results[0];
-        cvState.baselines = (bData && bData.ok && bData.baselines) ? bData.baselines : {};
+        cvState.baselines = getState().convergenceBaselines || {};
         var oData = results[1];
         cvState.offsets = (oData && oData.ok && oData.offsets) ? oData.offsets : {};
         cvState.uncoupled = {};
@@ -1763,10 +1632,10 @@
     });
   }
 
-  // --- Window exports ---
-  window.convergenceActivate = activate;
-  window.convergenceDeactivate = deactivate;
-  window.convergenceResize = debounce(function () {
+  // --- Hub exports (OV namespace) ---
+  window.ClipgenOverview.convergenceActivate = activate;
+  window.ClipgenOverview.convergenceDeactivate = deactivate;
+  window.ClipgenOverview.convergenceResize = debounce(function () {
     if (!cvState.active) return;
     render();
   }, 200);

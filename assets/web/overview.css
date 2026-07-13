@@ -1,0 +1,624 @@
+/* Overview — page shell + Map tab (overview.html / overview-map.js).
+ *
+ * Layout mirrors the Workflows three-pane shell: sidebar · canvas · panel.
+ * All values flow from tokens.css; page-local variables only below. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* Generic hide utility — every page CSS defines this (studio/screenspace/
+ * transcripts/workflows all do). The moved Convergence/Metadata satellites
+ * toggle `.hidden` on banners, buttons, and detail panels; without this rule
+ * all of them render unconditionally. */
+.hidden {
+  display: none !important;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+}
+
+/* ---- Page shell: subheader tabs + panels ---- */
+
+.ov-study-name {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sub-tab underline-on-active styling (same visuals as Studio's sub-tabs;
+ * the shared .subheader container strip lives in tokens.css). */
+.preview-tab {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 2px;
+  font-size: var(--subheader-font-size);
+  font-weight: 400;
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px; /* sits on subheader's bottom border */
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: color var(--duration-fast);
+  font-family: inherit;
+}
+
+.preview-tab:hover { color: var(--fg); }
+
+.preview-tab.active {
+  color: var(--fg);
+  border-bottom-color: var(--fg);
+}
+
+/* "Beta" pill on the Map tab — the similarity map is the newest surface. */
+.ov-beta-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-1-5);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-hover);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.6;
+}
+
+#mapPanel,
+#convergencePanel,
+#metadataPanel {
+  transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.tab-slide-enter {
+  opacity: 0 !important;
+  transform: translateX(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #mapPanel,
+  #convergencePanel,
+  #metadataPanel { transition: none; }
+  .tab-slide-enter {
+    opacity: 1 !important;
+    transform: none;
+  }
+}
+
+#mapShell {
+  display: flex;
+  height: 100vh;
+  /* Clears the fixed TopNav + the Overview subheader strip. */
+  padding-top: var(--chrome-height);
+  box-sizing: border-box;
+}
+
+/* Convergence + Metadata panels: full-viewport containers below the chrome.
+ * Their inner layout (flex column, scroll areas) lives in each tab's own
+ * stylesheet; on Studio they were flex children of #sheetMain instead. */
+#convergencePanel,
+#metadataPanel {
+  height: 100vh;
+  padding-top: var(--chrome-height);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+#metadataPanel { overflow-y: auto; }
+
+/* Toolbar row used by the Convergence controls (copied from studio.css —
+ * the class stays there too for the intake panels). */
+.area-controls {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.area-controls select {
+  padding: var(--space-2) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+#mapSidebar,
+#mapExplain {
+  width: var(--sidebar-width-default);
+  flex: 0 0 var(--sidebar-width-default);
+  min-width: 0;
+  background: var(--bg-elevated);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+#mapSidebar { border-right: 1px solid var(--border); }
+#mapExplain { border-left: 1px solid var(--border); }
+
+.map-sidebar-header {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  padding: var(--space-4) var(--space-4) var(--space-1);
+}
+
+.map-hint {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+/* ---- Weight sliders ---- */
+
+.map-weights { padding: 0 var(--space-4) var(--space-3); }
+
+.map-weight-row { margin-bottom: var(--space-2-5); }
+
+.map-weight-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  margin-bottom: var(--space-1);
+}
+
+.map-weight-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.map-weight-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* ---- Layer toggles ---- */
+
+.map-layers {
+  padding: 0 var(--space-4) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.map-layer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.map-layer-row input[type="checkbox"] { accent-color: var(--accent); }
+
+/* ---- Session replay ---- */
+
+.map-replay {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.map-replay input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.map-replay-pos {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-muted);
+  min-width: 3em;
+  text-align: right;
+}
+
+/* ---- Muted-feature chips ---- */
+
+.map-muted {
+  padding: 0 var(--space-4) var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.map-muted-chip {
+  font-size: var(--text-2xs);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.8;
+}
+
+.map-muted-chip:hover {
+  color: var(--fg);
+  border-color: var(--fg-muted);
+}
+
+.map-feature-mute {
+  border: none;
+  background: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: var(--text-2xs);
+  padding: 0 var(--space-1);
+  line-height: 1;
+}
+
+.map-feature-mute:hover { color: var(--severity-high); }
+
+/* ---- Outlier list ---- */
+
+.map-outlier-list {
+  list-style: none;
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.map-outlier-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  transition: background var(--duration-instant) ease;
+}
+
+.map-outlier-item:hover { background: var(--bg-hover); }
+.map-outlier-item.is-selected { background: var(--bg-active); }
+
+.map-outlier-pid {
+  font-family: var(--font-mono);
+  min-width: var(--space-8);
+}
+
+.map-outlier-bar-track {
+  flex: 1;
+  height: var(--space-1-5);
+  background: var(--bg-input);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+}
+
+.map-outlier-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-xs);
+}
+
+.map-outlier-score {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg-muted);
+}
+
+/* ---- Axis legend ---- */
+
+.map-axis-legend {
+  padding: 0 var(--space-4) var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.map-axis-legend summary { cursor: pointer; padding: var(--space-1) 0; }
+
+.map-axis-list dt {
+  font-weight: 600;
+  color: var(--fg);
+  margin-top: var(--space-2);
+}
+
+.map-axis-list dd { margin-left: 0; color: var(--fg-muted); }
+
+.map-notice {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 0 var(--space-4) var(--space-4);
+  padding: var(--space-2);
+}
+
+/* ---- Canvas + overlays ---- */
+
+#mapCanvasWrap {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+#mapCanvas, #mapCanvas canvas { position: absolute; inset: 0; }
+
+#mapLabels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.map-label {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - var(--space-2)));
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  text-shadow: 0 1px 2px var(--bg);
+  white-space: nowrap;
+}
+
+.map-label.is-partial { color: var(--fg-faint); font-style: italic; }
+.map-label.is-selected { color: var(--fg); font-weight: 600; }
+
+.map-anchor-label {
+  font-size: var(--text-2xs);
+  color: var(--fg-faint);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+.map-axis-tip {
+  font-size: var(--text-2xs);
+  color: var(--fg-dim);
+  letter-spacing: 0.08em;
+}
+
+.map-tooltip {
+  position: absolute;
+  z-index: var(--z-float);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-1-5) var(--space-2);
+  font-size: var(--text-xs);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.map-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-5);
+}
+
+
+/* ---- Session-timeline drawer ---- */
+
+.map-drawer {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: var(--z-float);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-2-5) var(--space-3);
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.map-drawer-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+}
+
+.map-drawer-count {
+  font-weight: 400;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.map-drawer-lane {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1-5);
+}
+
+.map-drawer-lane-label {
+  flex: 0 0 auto;
+  width: var(--space-8);
+  min-width: 86px;
+  font-size: var(--text-2xs);
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+.map-drawer-track {
+  position: relative;
+  flex: 1;
+  height: var(--space-3);
+  background: var(--bg-input);
+  border-radius: var(--radius-xs);
+}
+
+.map-drawer-item {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 3px;
+  border: none;
+  border-radius: var(--radius-xs);
+  opacity: 0.75;
+  cursor: pointer;
+  padding: 0;
+  transition: opacity var(--duration-instant) ease;
+}
+
+.map-drawer-item:hover { opacity: 1; }
+
+.map-drawer-note {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline);
+  font-size: var(--text-sm);
+}
+
+.map-drawer-note-head {
+  display: flex;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
+}
+
+.map-drawer-note-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.map-drawer-note-meta {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+.map-drawer-note-text { color: var(--fg); }
+.map-empty h1 { font-size: var(--text-2xl); }
+.map-empty p { color: var(--fg-muted); max-width: 42em; }
+.map-empty-sub { font-size: var(--text-sm); }
+.map-empty a { color: var(--accent); }
+
+/* ---- Explain panel ---- */
+
+.map-explain-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-md);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+#mapExplainBody { padding: var(--space-3) var(--space-4); }
+
+.map-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.map-chip {
+  font-size: var(--text-2xs);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 0 var(--space-2);
+  color: var(--fg-muted);
+}
+
+.map-chip.is-missing {
+  color: var(--fg-dim);
+  border-style: dashed;
+  text-decoration: line-through;
+}
+
+.map-explain-section {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: var(--space-3) 0 var(--space-1-5);
+}
+
+.map-feature-row { margin-bottom: var(--space-2); font-size: var(--text-sm); }
+
+.map-feature-label {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.map-feature-z {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.map-feature-detail {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+/* Signed z bar: track centered at the cohort mean, fill grows left/right. */
+.map-feature-bar-track {
+  position: relative;
+  height: var(--space-1-5);
+  background: var(--bg-input);
+  border-radius: var(--radius-xs);
+  margin-top: var(--space-1);
+}
+
+.map-feature-bar-track::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+.map-feature-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+}
+
+.map-feature-bar.is-negative { background: var(--severity-medium); }
+
+.map-group-bars { margin-bottom: var(--space-3); }
+
+.map-explain-links {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.map-explain-links a { color: var(--accent); text-decoration: none; }
+.map-explain-links a:hover { text-decoration: underline; }

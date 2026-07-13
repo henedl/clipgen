@@ -148,20 +148,18 @@ body {
   overflow: hidden;
 }
 
-/* Intake / convergence / metadata sub-tabs need their own breathing room since
+/* Intake sub-tabs need their own breathing room since
  * #sheetMain is now flush. Sheet sub-tab keeps its table flush to viewport
  * edges (matches prototype).
  *
  * The 92px top inset comes from the floating-nav scroll-under: TopNav +
  * subheader are fixed, so each sub-tab needs to push its visible content
  * below the chrome strip. The intake panels override this with a tighter
- * `padding: 92px var(--space-1) 0` further down — the convergence + metadata
- * panels rely on this rule directly. (`--space-0` doesn't exist; use a bare
- * `0` so the shorthand stays valid.) */
+ * `padding: 92px var(--space-1) 0` further down. (`--space-0` doesn't exist;
+ * use a bare `0` so the shorthand stays valid.) */
 #intakePanel,
 #trIntakePanel,
-#convergencePanel,
-#metadataPanel {
+#coIntakePanel {
   padding: var(--chrome-height) 0 var(--space-3);
 }
 
@@ -172,8 +170,7 @@ body {
 #sheetGrid,
 #intakePanel,
 #trIntakePanel,
-#convergencePanel,
-#metadataPanel {
+#coIntakePanel {
   min-width: 0;
 }
 
@@ -426,8 +423,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 #sheetGrid,
 #intakePanel,
 #trIntakePanel,
-#convergencePanel,
-#metadataPanel {
+#coIntakePanel {
   transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .tab-slide-enter {
@@ -438,8 +434,7 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   #sheetGrid,
   #intakePanel,
   #trIntakePanel,
-  #convergencePanel,
-  #metadataPanel {
+  #coIntakePanel {
     transition: none;
   }
   .tab-slide-enter {
@@ -657,8 +652,7 @@ body.bottom-collapsed #sheetPreview {
 body.bottom-collapsed #sheetGrid,
 body.bottom-collapsed #intakePanel,
 body.bottom-collapsed #trIntakePanel,
-body.bottom-collapsed #convergencePanel,
-body.bottom-collapsed #metadataPanel {
+body.bottom-collapsed #coIntakePanel {
   flex: 1 1 0;
   min-height: 0;
 }
@@ -2702,8 +2696,8 @@ html[data-theme="dark"] .log-panel {
   margin-bottom: var(--space-3);
 }
 
-/* Intake filters — matches `.convergence-filters` so the second toolbar row
- * sits flush with the top-row controls. */
+/* Intake filters — second toolbar row, flush with the top-row controls
+ * (same metrics as Overview's .convergence-filters). */
 .intake-filters {
   display: flex;
   align-items: center;

@@ -6,10 +6,10 @@
  * namespace; the hub calls back in via same-named guarded delegators. Loaded by
  * studio.html immediately after studio.js.
  *
- * Kept in the hub (NOT moved here; reached via STUDIO): `buildXrefBadges` (also
- * the legacy `window._studioBuildXrefBadges` that convergence.js reads) and the
- * `ss*Thumb*` lazy-thumbnail cluster (`ssClearPending`), which the hub's queue
- * cards share.
+ * Kept in the hub (NOT moved here; reached via STUDIO): the `ss*Thumb*`
+ * lazy-thumbnail cluster (`ssClearPending`), which the hub's queue cards
+ * share. `buildXrefBadges` is a utils.js ambient global (shared with the
+ * Overview page).
  */
 
 (function () {
@@ -20,12 +20,10 @@
   var attachQueueScrubbers = STUDIO.attachQueueScrubbers,
     buildQueueCardThumb = STUDIO.buildQueueCardThumb,
     buildXrefBadges = STUDIO.buildXrefBadges,
-    checkConvergenceTabVisibility = STUDIO.checkConvergenceTabVisibility,
     findIntakeInQueue = STUDIO.findIntakeInQueue,
     findOverlappingData = STUDIO.findOverlappingData,
     intakeAddItem = STUDIO.intakeAddItem,
     intakeToggleItem = STUDIO.intakeToggleItem,
-    refreshMetadataIfActive = STUDIO.refreshMetadataIfActive,
     renderArtifactQueue = STUDIO.renderArtifactQueue,
     renderReelQueue = STUDIO.renderReelQueue,
     setCardDragImage = STUDIO.setCardDragImage,
@@ -193,8 +191,6 @@
     var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
     state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
     renderIntake(hasNew);
-    checkConvergenceTabVisibility();
-    refreshMetadataIfActive();
     return true;
   }
 
@@ -869,8 +865,6 @@
       return false;
     }
     renderTranscriptIntake();
-    checkConvergenceTabVisibility();
-    refreshMetadataIfActive();
     return true;
   }
 
@@ -910,8 +904,6 @@
           }
           state.trIntakeClusters = clusterTranscriptMarks(allItems, threshold);
           renderTranscriptIntake();
-          checkConvergenceTabVisibility();
-          refreshMetadataIfActive();
         });
       })
       .catch(function () {});
@@ -1250,7 +1242,6 @@
         // Queue cards carry trim-asterisk badges too — repaint on change.
         renderArtifactQueue();
         renderReelQueue();
-        checkConvergenceTabVisibility();
         return true;
       })
       .catch(function () { return false; });

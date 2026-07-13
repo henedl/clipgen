@@ -52,7 +52,6 @@ import concurrent.futures
 import copy
 import hashlib
 import json
-import math
 import os
 import queue
 import re
@@ -66,7 +65,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 from flask import (
     Blueprint,
@@ -809,6 +808,37 @@ def _set_sheet_context(ctx: spreadsheet.SheetContext | None) -> None:
         _sheet_payload_cache = None
 
 
+def _sheet_observation_rows() -> list[dict[str, Any]]:
+    """Reduced sheet-timestamp records for the Overview Map's feature matrix.
+
+    One record per (sheet row x participant) cell with valid timestamps:
+    ``{"participant", "category", "severity", "timestamps": N}``. Injected
+    into overview.py via ``overview.configure()`` so the Map is populated as
+    soon as timestamps exist in the sheet — no artifact generation required.
+    """
+    if _sheet_context is None:
+        return []
+    payload = _get_sheet_payload(_sheet_context)
+    records: list[dict[str, Any]] = []
+    for row in payload["rows"]:
+        for pid, cell in row["cells"].items():
+            if not cell.get("valid"):
+                continue
+            cleaned, _, _ = utils.parse_cell_annotations(cell["value"])
+            count = len(utils.parse_timestamps(cleaned))
+            if not count:
+                continue
+            records.append(
+                {
+                    "participant": pid,
+                    "category": row["category"],
+                    "severity": row["severity"],
+                    "timestamps": count,
+                }
+            )
+    return records
+
+
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
@@ -883,88 +913,6 @@ def api_sheet_baseline() -> FlaskResponse:
         baselines[pid] = utils._clock_to_seconds(value) or 0
 
     return ok(baselines=baselines)
-
-
-def _clean_convergence_offsets(raw: object) -> dict[str, dict[str, float]]:
-    """Normalize nested per-lane convergence offsets to {pid: {source: float}}.
-
-    Drops: non-string/empty participant ids, non-dict participant values,
-    unknown source keys (outside config.CONVERGENCE_SOURCES), non-numeric /
-    non-finite / zero lane values, and participants left with no lanes.
-    """
-    cleaned: dict[str, dict[str, float]] = {}
-    if not isinstance(raw, dict):
-        return cleaned
-    raw_map = cast(dict[str, Any], raw)
-    for pid, lanes in raw_map.items():
-        if not isinstance(pid, str) or not pid or not isinstance(lanes, dict):
-            continue
-        lane_map = cast(dict[str, Any], lanes)
-        clean_lanes: dict[str, float] = {}
-        for source, value in lane_map.items():
-            if source not in config.CONVERGENCE_SOURCES:
-                continue
-            try:
-                num = float(value)
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(num) and num != 0:
-                clean_lanes[source] = num
-        if clean_lanes:
-            cleaned[pid] = clean_lanes
-    return cleaned
-
-
-@studio_bp.route("/api/convergence/offsets")
-def api_convergence_offsets_get() -> FlaskResponse:
-    """Return persisted per-lane convergence display offsets (seconds, signed).
-
-    Independent from /api/sheet/baseline: baselines convert sheet wall-clock
-    to video-time (sheet-only). Offsets shift a participant's events per data
-    source so misaligned recording start times — or a single drifting source
-    such as spreadsheet timestamps — can be nudged until lanes line up visually
-    in the Convergence Browser.
-
-    Response: {"ok": true, "offsets": {"P01": {"sheet": 12.5, "screenspace": 12.5}}}
-    """
-    data = utils.load_json_manifest(
-        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
-    )
-    raw = data.get("offsets") if isinstance(data, dict) else None
-    return ok(offsets=_clean_convergence_offsets(raw))
-
-
-@studio_bp.route("/api/convergence/offsets", methods=["PUT"])
-def api_convergence_offsets_put() -> FlaskResponse:
-    """Persist per-lane convergence display offsets.
-
-    Body: {"offsets": {"P01": {"sheet": 12.5, ...}, ...}}. Unknown sources,
-    zeros, and non-finite values are dropped per lane; participants left with
-    no lanes are dropped. When the cleaned dict is empty, the manifest file is
-    deleted so a clean output dir has no leftover empty manifest.
-    """
-    data = request.get_json(silent=True) or {}
-    raw = data.get("offsets")
-    if not isinstance(raw, dict):
-        return err("Invalid offsets payload")
-
-    cleaned = _clean_convergence_offsets(raw)
-
-    settings_path = (
-        Path(utils.get_effective_output_dir()) / config.CONVERGENCE_OFFSETS_FILENAME
-    )
-    if not cleaned:
-        if settings_path.is_file():
-            try:
-                settings_path.unlink()
-            except OSError:
-                pass
-    else:
-        utils.save_json_manifest(
-            config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}
-        )
-
-    return ok(offsets=cleaned)
 
 
 @studio_bp.route("/api/sheet/refresh", methods=["POST"])
@@ -3235,18 +3183,25 @@ def _set_cache_headers(response):
 
     ``send_from_directory`` stamps a bare ``Cache-Control: no-cache`` by default
     (Werkzeug, when ``max_age`` is unset), which carries no real caching intent —
-    let it fall through so static css/js/svg get their TTLs. Deliberate cache
-    headers set by a route (thumbnails, SSE streams, video previews) are anything
-    other than a bare ``no-cache`` and are preserved untouched.
+    normalize it per content type. Deliberate cache headers set by a route
+    (thumbnails, SSE streams, video previews) are anything other than a bare
+    ``no-cache`` and are preserved untouched.
+
+    HTML/JS/CSS deliberately get ``no-cache`` (= revalidate each request,
+    answered with cheap localhost 304s via the ETag/Last-Modified that
+    ``send_from_directory`` already sets) rather than a TTL: a max-age on JS
+    once let a browser run hour-old page scripts against fresh no-cache HTML
+    after an update, which presents as "the fix didn't work" bug reports.
+    Only SVG icons keep a real TTL — content-stable, requested in bulk.
     """
     existing = response.headers.get("Cache-Control")
     if existing and existing != "no-cache":
         return response
     ct = response.content_type or ""
-    if ct.startswith("text/html"):
+    if ct.startswith(
+        ("text/html", "text/css", "application/javascript", "text/javascript")
+    ):
         response.headers["Cache-Control"] = "no-cache"
-    elif ct.startswith(("text/css", "application/javascript", "text/javascript")):
-        response.headers["Cache-Control"] = "public, max-age=3600"
     elif ct.startswith("image/svg"):
         response.headers["Cache-Control"] = "public, max-age=86400"
     return response
@@ -3321,6 +3276,11 @@ def build_combined_app(
     )
     combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
 
+    import overview
+
+    overview.configure(observation_rows_getter=_sheet_observation_rows)
+    combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
+
     combined.after_request(_set_cache_headers)
 
     @combined.route("/")
@@ -3337,6 +3297,7 @@ def build_combined_app(
                 "transcripts": True,
                 "workflows": True,
                 "composer": True,
+                "overview": True,
                 "sheet_loaded": _worksheet is not None,
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
