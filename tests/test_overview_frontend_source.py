@@ -179,6 +179,22 @@ def test_map_direct_axes_mode():
     assert ".map-axis-picker-row" in css
 
 
+def test_map_session_trajectories():
+    """Trajectory paths project window vectors with the WHOLE-SESSION basis
+    (state.stats z-scoring + state.components + state.worldScale) — never a
+    pooled-window PCA — so paths live in the exact space the dots do."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function computeWindowCoords()" in src
+    assert "function rebuildTrajectories()" in src
+    assert "function syncComets(" in src
+    assert "showTrajectories" in src
+    body = src[src.index("function computeWindowCoords()") :]
+    body = body[: body.index("\n  }")]
+    assert "state.stats" in body
+    assert "state.components" in body
+    assert "state.worldScale" in body
+
+
 def test_hidden_utility_class_defined():
     """overview.css must define the generic `.hidden` utility (CSS toggle
     completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata

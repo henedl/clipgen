@@ -58,6 +58,7 @@
     showSimEdges: true,   // similarity-link layer toggle
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
     showAllMoments: false, // every participant's items as a point cloud
+    showTrajectories: false, // per-participant session paths (bolder; default off)
     mutedFeatures: {},    // column key -> true; muted = weight 0 everywhere
   };
 
@@ -74,6 +75,7 @@
     anchors: null,  // {features, meshes, labels, links} shared-anchor layer
     burst: null,    // {owner, meshes, items, offsets} drill-down satellites
     compare: null,  // {a, b, line, beads} pairwise diff arc
+    trajectories: null, // {lines, comets, cometGeo} session-trajectory paths
     moments: null,  // {mesh, owners, offsets, norms, baseColors} point cloud
     axisLabels: [], // [{el, pos}] X/Y/Z tip labels tied to the axis legend
   };
@@ -435,6 +437,7 @@
     rebuildSimEdges();
     rebuildAnchors();
     rebuildCompare();
+    rebuildTrajectories(); // no-op (dispose only) while the toggle is off
   }
 
   function rebuildSimEdges() {
@@ -849,6 +852,182 @@
     requestRender();
   }
 
+  // ---- Session trajectories ---------------------------------------------------
+  //
+  // Each participant's session split into K temporal windows (server-built,
+  // payload.windows) becomes a polyline through the SAME space the dots live
+  // in: every window vector is z-scored with the whole-session stats,
+  // weighted, and projected onto the whole-session PCA basis
+  // (state.components x state.worldScale) — the frame the researcher tuned
+  // with the sliders. A pooled-window basis would either move the dots or
+  // put paths in a different space than the dots; both would be incoherent.
+  // In manual mode the window vectors map through the same hand-picked axes
+  // instead. The path's final vertex is appended AT the dot (the whole
+  // session), so every path visibly terminates at the participant's
+  // canonical position and all other layers stay anchored to one spot.
+
+  // [participant] -> [window] -> [x,y,z] or null (window fully null).
+  function computeWindowCoords() {
+    var data = state.data;
+    if (!data || !data.windows || !data.windows.matrices) return null;
+    var mats = data.windows.matrices;
+    var columns = data.columns;
+    var manual = state.layoutMode === "manual";
+    var axIdx = manual
+      ? [axisFeatureIndex("x"), axisFeatureIndex("y"), axisFeatureIndex("z")]
+      : null;
+    var out = [];
+    var i, w, j, c;
+    for (i = 0; i < data.participants.length; i++) out.push([]);
+    for (w = 0; w < mats.length; w++) {
+      var z = computeZ(mats[w], state.stats);
+      for (i = 0; i < z.length; i++) {
+        var row = z[i];
+        var allNull = true;
+        for (j = 0; j < row.length; j++) {
+          if (row[j] != null) { allNull = false; break; }
+        }
+        if (allNull) { out[i].push(null); continue; }
+        var v = [0, 0, 0];
+        if (manual) {
+          for (c = 0; c < 3; c++) {
+            if (axIdx[c] >= 0 && row[axIdx[c]] != null) v[c] = row[axIdx[c]];
+          }
+        } else {
+          for (j = 0; j < columns.length; j++) {
+            var wz = row[j] == null ? 0 : row[j] * columnWeight(columns[j]);
+            if (wz === 0) continue;
+            v[0] += wz * state.components[0][j];
+            v[1] += wz * state.components[1][j];
+            v[2] += wz * state.components[2][j];
+          }
+        }
+        out[i].push([
+          v[0] * state.worldScale,
+          v[1] * state.worldScale,
+          v[2] * state.worldScale,
+        ]);
+      }
+    }
+    return out;
+  }
+
+  function disposeTrajectories() {
+    if (!three.trajectories) return;
+    var t = three.trajectories;
+    var i;
+    for (i = 0; i < t.lines.length; i++) {
+      three.scene.remove(t.lines[i].mesh);
+      t.lines[i].mesh.geometry.dispose();
+      t.lines[i].mesh.material.dispose();
+    }
+    for (i = 0; i < t.comets.length; i++) {
+      three.scene.remove(t.comets[i].mesh);
+      t.comets[i].mesh.material.dispose();
+    }
+    if (t.cometGeo) t.cometGeo.dispose();
+    three.trajectories = null;
+  }
+
+  function rebuildTrajectories() {
+    disposeTrajectories();
+    if (!state.showTrajectories) return;
+    var coords = computeWindowCoords();
+    if (!coords) return;
+    var lines = [];
+    var comets = [];
+    var cometGeo = new THREE.SphereGeometry(0.18, 12, 8);
+    var base = new THREE.Color();
+    for (var i = 0; i < coords.length; i++) {
+      var verts = [];
+      for (var w = 0; w < coords[i].length; w++) {
+        if (coords[i][w]) verts.push(coords[i][w]);
+      }
+      if (!verts.length) continue; // no windowable source -> no path
+      var vCount = verts.length + 1; // +1: the dot itself, synced per frame
+      var positions = new Float32Array(vCount * 3);
+      var colors = new Float32Array(vCount * 3);
+      dotBaseColor(i, base);
+      for (var v = 0; v < vCount; v++) {
+        // Older vertices fade toward the background (LineBasicMaterial has
+        // no per-vertex alpha in r147 — same trick as the sim edges).
+        var mix = 1 - (v + 1) / vCount;
+        var cc = base.clone().lerp(three.colors.bg, mix * 0.75);
+        colors[v * 3] = cc.r;
+        colors[v * 3 + 1] = cc.g;
+        colors[v * 3 + 2] = cc.b;
+        if (v < verts.length) {
+          positions[v * 3] = verts[v][0];
+          positions[v * 3 + 1] = verts[v][1];
+          positions[v * 3 + 2] = verts[v][2];
+        }
+      }
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      var mesh = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.9,
+      }));
+      three.scene.add(mesh);
+      lines.push({ mesh: mesh, owner: i, count: vCount });
+
+      // One replay comet per path, positioned by syncComets during replay.
+      var comet = new THREE.Mesh(
+        cometGeo, new THREE.MeshBasicMaterial({ color: base.clone() })
+      );
+      comet.visible = false;
+      three.scene.add(comet);
+      comets.push({ mesh: comet, owner: i });
+    }
+    three.trajectories = { lines: lines, comets: comets, cometGeo: cometGeo };
+    syncTrajectoryTails();
+  }
+
+  // The appended last vertex tracks the (possibly lerping) dot each frame.
+  function syncTrajectoryTails() {
+    if (!three.trajectories) return;
+    var lines = three.trajectories.lines;
+    for (var i = 0; i < lines.length; i++) {
+      var arr = lines[i].mesh.geometry.attributes.position.array;
+      var p = three.dots[lines[i].owner].position;
+      var last = (lines[i].count - 1) * 3;
+      arr[last] = p.x;
+      arr[last + 1] = p.y;
+      arr[last + 2] = p.z;
+      lines[i].mesh.geometry.attributes.position.needsUpdate = true;
+    }
+  }
+
+  // Replay comet: a bright marker interpolated along each path at the
+  // playhead's normalized session time.
+  function syncComets(t) {
+    if (!three.trajectories) return;
+    var comets = three.trajectories.comets;
+    var lines = three.trajectories.lines;
+    var i;
+    if (!state.showTrajectories || t <= 0) {
+      for (i = 0; i < comets.length; i++) comets[i].mesh.visible = false;
+      return;
+    }
+    if (!_replayWhite) _replayWhite = new THREE.Color("#ffffff");
+    for (i = 0; i < lines.length; i++) {
+      var arr = lines[i].mesh.geometry.attributes.position.array;
+      var segs = lines[i].count - 1;
+      var f = Math.min(t, 1) * segs;
+      var v0 = Math.min(Math.floor(f), segs - 1);
+      var frac = f - v0;
+      var comet = comets[i].mesh;
+      comet.position.set(
+        arr[v0 * 3] + (arr[(v0 + 1) * 3] - arr[v0 * 3]) * frac,
+        arr[v0 * 3 + 1] + (arr[(v0 + 1) * 3 + 1] - arr[v0 * 3 + 1]) * frac,
+        arr[v0 * 3 + 2] + (arr[(v0 + 1) * 3 + 2] - arr[v0 * 3 + 2]) * frac
+      );
+      dotBaseColor(lines[i].owner, comet.material.color);
+      comet.material.color.lerp(_replayWhite, 0.5);
+      comet.visible = true;
+    }
+  }
+
   // ---- Session replay --------------------------------------------------------
   //
   // The mindwalk idea: sweep a playhead over normalized session time (each
@@ -922,6 +1101,7 @@
       }
       three.moments.mesh.geometry.attributes.color.needsUpdate = true;
     }
+    syncComets(t);
     if (!lerp.active) positionDots(state.coords); // re-sync halo scale
     requestRender();
   }
@@ -929,6 +1109,7 @@
   // Back to the idle look: base dot colors, no pulse, full-bright cloud.
   function clearReplayGlow() {
     styleDots();
+    syncComets(0);
     if (three.moments) {
       three.moments.mesh.geometry.attributes.color.array.set(three.moments.baseColors);
       three.moments.mesh.geometry.attributes.color.needsUpdate = true;
@@ -1285,6 +1466,7 @@
         disposeAnchors();
         disposeLayer(three.moments);
         three.moments = null;
+        disposeTrajectories();
         disposeDots();
         selectParticipant(-1);
       }
@@ -1344,6 +1526,7 @@
     clearBurst();
     disposeLayer(three.moments);
     three.moments = null;
+    disposeTrajectories(); // rebuilt by recompute's rebuildLayers if toggled on
     disposeDots();
     buildDots();
 
@@ -1632,6 +1815,7 @@
     syncBurstPositions();
     syncMomentsPositions();
     syncComparePositions();
+    syncTrajectoryTails();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -2028,6 +2212,17 @@
         label: "Shared anchors",
         hint: "Observation categories and detectors as anchor nodes, placed amid the participants exhibiting them — shows why dots cluster",
         apply: setAnchorsVisible,
+      },
+      {
+        key: "showTrajectories",
+        label: "Session trajectories",
+        hint: "Each participant's path through behavior space across " +
+          (state.data && state.data.windows ? state.data.windows.count : 5) +
+          " session phases; the dot is the whole session",
+        apply: function (on) {
+          if (on) rebuildTrajectories();
+          else disposeTrajectories();
+        },
       },
       {
         key: "showAllMoments",
