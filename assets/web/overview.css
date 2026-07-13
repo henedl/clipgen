@@ -27,7 +27,6 @@ body {
 /* ---- Page shell: subheader tabs + panels ---- */
 
 .ov-study-name {
-  font-family: var(--font-mono);
   color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -60,8 +59,8 @@ body {
   border-bottom-color: var(--fg);
 }
 
-/* "Beta" pill on the Map tab — the similarity map is the newest surface. */
-.ov-beta-badge {
+/* "WIP" pill on the Map tab — the similarity map is the newest surface. */
+.ov-wip-badge {
   display: inline-flex;
   align-items: center;
   margin-left: var(--space-1-5);

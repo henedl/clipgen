@@ -35,6 +35,17 @@
   .topnav { background: var(--bg); }
 }
 
+/* Self-defending box model: the topnav's buttons, pill, and bar have fixed
+ * dimensions plus padding/border, so they rely on border-box. Most pages
+ * supply a universal `* { box-sizing: border-box }` reset, but a couple
+ * (Workflows, Composer) don't — leaving those topnavs a few px larger under
+ * the browser default `content-box`. Scope the reset to the component so the
+ * shared chrome renders identically regardless of the host page's reset. */
+.topnav,
+.topnav * {
+  box-sizing: border-box;
+}
+
 /* During an active drag, swap the glass nav for a solid bar. The 14px blur is
  * GPU-rasterized but invalidated whenever any pixel beneath the strip
  * repaints — including drop-target color flips on every dragover — which

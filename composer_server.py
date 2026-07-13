@@ -155,6 +155,15 @@ def api_participants() -> Any:
         if not p.get("has_video"):
             continue
         parts = _participant_parts(p["video_paths"])
+        # Resolution + fps for the subheader source readout (mirrors Screenspace's
+        # video-info line). Probed from the first part; stitched parts share the
+        # same source setup. probe_video_properties returns None on unprobeable
+        # files and only ever reports width/height > 0.
+        props = (
+            video.probe_video_properties(str(p["video_paths"][0]))
+            if p["video_paths"]
+            else None
+        )
         participants.append(
             {
                 "id": p["id"],
@@ -163,6 +172,9 @@ def api_participants() -> Any:
                 "total_duration": (
                     sum(part["duration"] for part in parts) if parts else None
                 ),
+                "width": props.get("width") if props else None,
+                "height": props.get("height") if props else None,
+                "fps": props.get("fps") if props else None,
             }
         )
     return ok(participants=participants, config=utils.get_frontend_config())

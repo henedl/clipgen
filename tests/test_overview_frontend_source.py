@@ -42,15 +42,15 @@ def test_script_order_three_before_map_hub_before_satellites():
     assert scripts.index("intake-cluster.js") < hub
 
 
-def test_tab_order_and_beta_badge():
-    """Tabs read Metadata | Convergence | Map; the Map tab carries the Beta
+def test_tab_order_and_wip_badge():
+    """Tabs read Metadata | Convergence | Map; the Map tab carries the WIP
     pill (the similarity map is the newest surface)."""
     html = OVERVIEW_HTML.read_text(encoding="utf-8")
     tabs = re.findall(r'data-tab="(\w+)"', html)
     assert tabs == ["metadata", "convergence", "map"]
     map_tab = html[html.index('data-tab="map"') :]
     map_tab = map_tab[: map_tab.index("</button>")]
-    assert "ov-beta-badge" in map_tab
+    assert "ov-wip-badge" in map_tab
 
 
 def test_staleness_is_version_based_and_running_check_is_strict():
