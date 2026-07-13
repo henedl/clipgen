@@ -569,6 +569,23 @@ body {
   gap: var(--space-2);
 }
 
+/* Clickable feature name (explain panel rows + axis-legend loadings):
+   sets the "color by" choropleth. Styled as inline text, not a button. */
+.map-feature-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-feature-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .map-feature-z {
   font-family: var(--font-mono);
   font-size: var(--text-xs);

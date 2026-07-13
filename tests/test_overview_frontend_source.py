@@ -118,6 +118,27 @@ def test_map_layers_and_drilldown_present():
     assert re.search(r"var BURST_CAP = \d+;", src)
 
 
+def test_map_color_by_choropleth():
+    """The "color by" choropleth: one authority computes the idle dot look
+    (dotBaseColor/dotBaseScale) and the replay glow composes on it — a
+    hardcoded ramp inside applyReplayGlow would silently override the
+    choropleth mid-replay."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function setColorBy(" in src
+    assert "colorBy: null" in src
+    assert "function dotBaseColor(" in src
+    assert "function dotBaseScale(" in src
+    glow_body = src[src.index("function applyReplayGlow()") :]
+    glow_body = glow_body[: glow_body.index("\n  }")]
+    assert "dotBaseColor(" in glow_body
+    assert "dotBaseScale(" in glow_body
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapColorBySection"' in html
+    assert 'id="mapColorByChip"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-feature-name" in css
+
+
 def test_hidden_utility_class_defined():
     """overview.css must define the generic `.hidden` utility (CSS toggle
     completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata

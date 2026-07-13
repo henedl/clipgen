@@ -56,6 +56,16 @@
       <div class="map-sidebar-header">Layers</div>
       <div id="mapLayers" class="map-layers"></div>
 
+      <!-- Active "color by" choropleth (click the chip to restore the
+           outlier ramp); populated by overview-map.js when a feature name
+           is clicked in the explain panel or axis legend. -->
+      <div id="mapColorBySection" class="hidden">
+        <div class="map-sidebar-header">Color by</div>
+        <div class="map-muted">
+          <button id="mapColorByChip" class="map-muted-chip" type="button"></button>
+        </div>
+      </div>
+
       <!-- Session replay: sweep a playhead over normalized session time;
            dots glow and pulse where activity clusters (mindwalk-style). -->
       <div class="map-sidebar-header">Session replay</div>

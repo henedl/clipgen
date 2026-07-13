@@ -49,6 +49,8 @@
     order: [],         // participant indices, most unusual first
     selected: -1,
     hovered: -1,
+    colorBy: null,     // column key driving the dot choropleth (null = outlier ramp)
+    worldScale: 1,     // scaleToWorld factor (projection units -> world units)
     showSimEdges: true,   // similarity-link layer toggle
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
     showAllMoments: false, // every participant's items as a point cloud
@@ -243,8 +245,9 @@
     for (i = 0; i < coords.length; i++) {
       for (c = 0; c < 3; c++) maxR = Math.max(maxR, Math.abs(coords[i][c]));
     }
-    if (maxR <= 0) return coords;
+    if (maxR <= 0) { state.worldScale = 1; return coords; }
     var s = WORLD_RADIUS / maxR;
+    state.worldScale = s; // kept so other layers can project into dot space
     var out = [];
     for (i = 0; i < coords.length; i++) {
       out.push([coords[i][0] * s, coords[i][1] * s, coords[i][2] * s]);
@@ -699,20 +702,13 @@
     if (!replay.norms || !three.renderer) return;
     if (!_replayWhite) _replayWhite = new THREE.Color("#ffffff");
     var t = replay.t;
-    var maxScore = 0;
     var i;
-    for (i = 0; i < state.scores.length; i++) {
-      maxScore = Math.max(maxScore, state.scores[i]);
-    }
     for (i = 0; i < three.dots.length; i++) {
-      var tScore = maxScore > 0 ? state.scores[i] / maxScore : 0;
       var glow = replayIntensity(i, t);
       var c = three.dots[i].material.color;
-      c.copy(three.colors.base).lerp(three.colors.hot, tScore);
+      dotBaseColor(i, c); // idle look from the single authority
       if (glow > 0) c.lerp(_replayWhite, glow * 0.7);
-      var scale = (i === state.selected ? 1.4 : 1) *
-        (0.85 + tScore * 0.5) * (1 + glow * 0.4);
-      three.dots[i].scale.setScalar(scale);
+      three.dots[i].scale.setScalar(dotBaseScale(i) * (1 + glow * 0.4));
     }
     if (three.moments && state.showAllMoments) {
       var colors = three.moments.mesh.geometry.attributes.color.array;
@@ -729,7 +725,7 @@
     requestRender();
   }
 
-  // Back to the idle look: outlier ramp colors, no pulse, full-bright cloud.
+  // Back to the idle look: base dot colors, no pulse, full-bright cloud.
   function clearReplayGlow() {
     styleDots();
     if (three.moments) {
@@ -1121,6 +1117,7 @@
     Object.keys(state.mutedFeatures).forEach(function (key) {
       if (!knownKeys[key]) delete state.mutedFeatures[key];
     });
+    if (state.colorBy && !knownKeys[state.colorBy]) state.colorBy = null;
 
     if (data.participants.length < 3) {
       showNotice("Only " + data.participants.length + " participant" +
@@ -1143,6 +1140,7 @@
     state.selected = prevSelected ? data.participants.indexOf(prevSelected) : -1;
     renderWeights();
     renderMutedChips();
+    renderColorByChip();
     recompute();
     if (state.selected >= 0) {
       selectParticipant(state.selected);
@@ -1328,18 +1326,58 @@
     return false;
   }
 
-  function styleDots() {
+  // ---- Dot styling (single authority) ---------------------------------------
+  //
+  // dotBaseColor/dotBaseScale are the ONE place a dot's idle look is computed;
+  // styleDots() and applyReplayGlow() both build on them so the choropleth,
+  // the outlier ramp, selection, and the replay glow compose instead of each
+  // maintaining a divergent copy of the formula.
+
+  function colorByIndex() {
+    if (!state.colorBy || !state.data) return -1;
+    var cols = state.data.columns;
+    for (var j = 0; j < cols.length; j++) {
+      if (cols[j].key === state.colorBy) return j;
+    }
+    return -1;
+  }
+
+  function maxOutlierScore() {
     var maxScore = 0;
-    var i;
-    for (i = 0; i < state.scores.length; i++) {
+    for (var i = 0; i < state.scores.length; i++) {
       maxScore = Math.max(maxScore, state.scores[i]);
     }
-    for (i = 0; i < three.dots.length; i++) {
-      var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
-      three.dots[i].material.color
-        .copy(three.colors.base).lerp(three.colors.hot, t);
-      var scale = (i === state.selected ? 1.4 : 1) * (0.85 + t * 0.5);
-      three.dots[i].scale.setScalar(scale);
+    return maxScore;
+  }
+
+  // Writes dot i's idle color into `out`: with a "color by" feature active,
+  // that column's z ramp (a null cell fades toward the background — "no
+  // data", not "low"); otherwise the outlier-score ramp.
+  function dotBaseColor(i, out) {
+    var cj = colorByIndex();
+    if (cj >= 0) {
+      var z = state.zRaw ? state.zRaw[i][cj] : null;
+      if (z == null) {
+        return out.copy(three.colors.base).lerp(three.colors.bg, 0.65);
+      }
+      return out.copy(three.colors.base)
+        .lerp(three.colors.hot, (z + Z_CLAMP) / (2 * Z_CLAMP));
+    }
+    var maxScore = maxOutlierScore();
+    var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
+    return out.copy(three.colors.base).lerp(three.colors.hot, t);
+  }
+
+  function dotBaseScale(i) {
+    var maxScore = maxOutlierScore();
+    var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
+    return (i === state.selected ? 1.4 : 1) * (0.85 + t * 0.5);
+  }
+
+  function styleDots() {
+    for (var i = 0; i < three.dots.length; i++) {
+      dotBaseColor(i, three.dots[i].material.color);
+      three.dots[i].scale.setScalar(dotBaseScale(i));
       three.labels[i].classList.toggle("is-selected", i === state.selected);
     }
   }
@@ -1509,8 +1547,14 @@
     }
     var pid = state.data.participants[idx];
     var rank = state.order.indexOf(idx) + 1;
-    els.tooltip.textContent = pid + " — unusualness " +
+    var tip = pid + " — unusualness " +
       state.scores[idx].toFixed(2) + " (#" + rank + ")";
+    var cj = colorByIndex();
+    if (cj >= 0) {
+      tip += " · " + state.data.columns[cj].label + ": " +
+        fmtNum(state.data.matrix[idx][cj]);
+    }
+    els.tooltip.textContent = tip;
     els.tooltip.classList.remove("hidden");
     moveTooltip(e);
   }
@@ -1785,6 +1829,30 @@
     host.appendChild(frag);
   }
 
+  // "Color by" choropleth: one feature key drives the dot color ramp instead
+  // of the outlier score. Set from the explain panel / axis legend feature
+  // names; cleared from the sidebar chip. Never a recompute — color doesn't
+  // move the layout.
+  function setColorBy(key) {
+    state.colorBy = key || null;
+    renderColorByChip();
+    if (three.renderer) {
+      styleDots();
+      requestRender();
+    }
+  }
+
+  function renderColorByChip() {
+    var section = document.getElementById("mapColorBySection");
+    var chip = document.getElementById("mapColorByChip");
+    if (!section || !chip) return;
+    var j = colorByIndex();
+    section.classList.toggle("hidden", j < 0);
+    if (j < 0) return;
+    chip.textContent = state.data.columns[j].label + " ✕";
+    chip.title = "Stop coloring dots by this feature";
+  }
+
   // Chips for individually muted features; click restores. Lives in the
   // sidebar because muted features drop out of the explain panel's ranking
   // (their weighted z is 0), so the panel can't offer the unmute itself.
@@ -1862,11 +1930,19 @@
       dt.textContent = axisNames[c] + " — " +
         Math.round(state.variance[c] * 100) + "% of variance";
       var dd = document.createElement("dd");
-      dd.textContent = loadings
-        .map(function (l) {
-          return (l.v >= 0 ? "+" : "−") + " " + state.data.columns[l.j].label;
-        })
-        .join(", ");
+      loadings.forEach(function (l, li) {
+        if (li) dd.appendChild(document.createTextNode(", "));
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "map-feature-name";
+        btn.textContent =
+          (l.v >= 0 ? "+" : "−") + " " + state.data.columns[l.j].label;
+        btn.title = "Color all dots by this feature";
+        btn.addEventListener("click", (function (key) {
+          return function () { setColorBy(key); };
+        })(state.data.columns[l.j].key));
+        dd.appendChild(btn);
+      });
       dl.appendChild(dt);
       dl.appendChild(dd);
     });
@@ -1965,8 +2041,14 @@
 
       var label = document.createElement("div");
       label.className = "map-feature-label";
-      var name = document.createElement("span");
+      var name = document.createElement("button");
+      name.type = "button";
+      name.className = "map-feature-name";
       name.textContent = col.label;
+      name.title = "Color all dots by this feature";
+      name.addEventListener("click", (function (key) {
+        return function () { setColorBy(key); };
+      })(col.key));
       var zEl = document.createElement("span");
       zEl.className = "map-feature-z";
       zEl.textContent = (item.z >= 0 ? "+" : "−") +
@@ -2062,6 +2144,8 @@
     els.explainBody = document.getElementById("mapExplainBody");
     document.getElementById("mapExplainClose")
       .addEventListener("click", function () { selectParticipant(-1); });
+    document.getElementById("mapColorByChip")
+      .addEventListener("click", function () { setColorBy(null); });
     loadData();
   }
 
