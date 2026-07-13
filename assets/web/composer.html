@@ -20,8 +20,9 @@
   <!-- Full-width glassy subheader: participant picker, transport, cut + lane
        controls. Fixed under the TopNav (shared subheader chrome in tokens.css). -->
   <header id="coToolbar" class="subheader">
-    <label class="co-toolbar-label" for="coParticipantSelect">Participant</label>
-    <select id="coParticipantSelect" aria-label="Participant" disabled></select>
+    <label class="co-toolbar-label" for="coParticipantSelect">Source</label>
+    <select id="coParticipantSelect" aria-label="Source" disabled></select>
+    <span id="coVideoInfo" class="co-video-info"></span>
     <span class="co-toolbar-sep"></span>
     <!-- Undo / redo: the cut-edit stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
          state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->

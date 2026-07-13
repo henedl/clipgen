@@ -190,6 +190,21 @@
       " / " + formatTime(state.duration, { decimals: 0 });
   }
 
+  // Subheader source readout: duration · resolution · fps (Screenspace's
+  // video-info format). Resolution/fps ride along on the participant record;
+  // duration may firm up later for single-part participants (loadedmetadata).
+  function updateVideoInfo() {
+    var elInfo = qs("#coVideoInfo");
+    if (!elInfo) return;
+    var p = findParticipant(state.participant);
+    if (!p) { elInfo.textContent = ""; return; }
+    var parts = [];
+    if (state.duration) parts.push(formatDuration(state.duration));
+    if (p.width && p.height) parts.push(p.width + "x" + p.height);
+    if (p.fps) parts.push(Math.round(p.fps) + "fps");
+    elInfo.textContent = parts.join(" · ");
+  }
+
   function initVideo() {
     var video = qs("#coVideo");
     video.addEventListener("play", function () {
@@ -229,6 +244,7 @@
         state.duration = video.duration;
         state.parts[0].duration = video.duration;
         updateTimeLabel();
+        updateVideoInfo();
         renderTimeline();
       }
     });
@@ -287,6 +303,7 @@
     updatePendingInfo();
     updatePlayButton();
     updateTimeLabel();
+    updateVideoInfo();
     updateGenerateButton();
     renderSidebar();
     if (CO.updateTimelineHeight) CO.updateTimelineHeight();
@@ -1100,6 +1117,8 @@
 
   var LOG_BLUR_PX = 6;
   var LOG_VEIL_ALPHA = 0.35;
+  var LOG_EXIT_MS = 360; // hold the overlay mounted through the veil fade before display:none
+  var _logCloseTimer = null;
 
   function logArtifactResult(data, cut) {
     var artifact = data.artifact || {};
@@ -1146,11 +1165,18 @@
   }
 
   function logOverlayVisible() {
-    return !qs("#logOverlay").classList.contains("hidden");
+    // A pending close timer means the panel is mid-fade (still not .hidden) —
+    // report it as not-visible so a toggle during the fade reopens instead of
+    // re-closing and leaving the panel stuck without its backdrop.
+    return !_logCloseTimer && !qs("#logOverlay").classList.contains("hidden");
   }
 
   function openLog() {
     var overlay = qs("#logOverlay");
+    if (_logCloseTimer) {
+      clearTimeout(_logCloseTimer);
+      _logCloseTimer = null;
+    }
     overlay.style.setProperty("--host-blur", "0px");
     overlay.style.setProperty("--veil-alpha", "0");
     overlay.classList.remove("hidden");
@@ -1166,7 +1192,13 @@
     var overlay = qs("#logOverlay");
     overlay.style.setProperty("--host-blur", "0px");
     overlay.style.setProperty("--veil-alpha", "0");
-    overlay.classList.add("hidden");
+    // Defer display:none until the veil fade finishes; adding .hidden
+    // synchronously would blink the overlay out in a single frame.
+    if (_logCloseTimer) clearTimeout(_logCloseTimer);
+    _logCloseTimer = setTimeout(function () {
+      overlay.classList.add("hidden");
+      _logCloseTimer = null;
+    }, LOG_EXIT_MS);
   }
 
   function toggleLogPanel(force) {

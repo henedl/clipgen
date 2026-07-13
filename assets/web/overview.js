@@ -195,6 +195,11 @@
     if (!elName) return;
     var study = state.sheetData && state.sheetData.study;
     elName.textContent = study || "";
+    var elMeta = qs("#ovStudyMeta");
+    if (elMeta) {
+      var participants = state.sheetData && state.sheetData.participants;
+      elMeta.textContent = participants ? participants.length + " participants" : "";
+    }
   }
 
   function initTabs() {
