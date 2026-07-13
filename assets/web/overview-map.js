@@ -51,6 +51,9 @@
     hovered: -1,
     compareWith: -1,   // second participant of the compare pair (A = selected)
     colorBy: null,     // column key driving the dot choropleth (null = outlier ramp)
+    layoutMode: "pca", // "pca" (similarity layout) | "manual" (direct axes)
+    axisFeatures: { x: null, y: null, z: null, size: null }, // manual-mode column keys
+    imputedAxis: [],   // [n] true where a manual-axis value was imputed to the mean
     worldScale: 1,     // scaleToWorld factor (projection units -> world units)
     showSimEdges: true,   // similarity-link layer toggle
     showAnchors: false,   // shared-anchor layer toggle (busier; default off)
@@ -286,15 +289,54 @@
     return out;
   }
 
+  function axisFeatureIndex(dim) {
+    var key = state.axisFeatures[dim];
+    if (!key || !state.data) return -1;
+    var cols = state.data.columns;
+    for (var j = 0; j < cols.length; j++) if (cols[j].key === key) return j;
+    return -1;
+  }
+
+  // Layout coordinates for the current mode. PCA mode projects the weighted
+  // matrix; manual mode maps the three hand-picked features straight onto the
+  // axes from state.zRaw — clamped z, UNWEIGHTED, because the group weights
+  // are a similarity lens and must not warp axes the user chose explicitly.
+  // Missing values impute to z = 0 (the cohort mean IS the axis midpoint in
+  // z-space); state.imputedAxis marks those dots so styleDots can fade them.
+  // PCA components are computed either way: the outlier list, sim-edges, and
+  // anchors all live off the full weighted feature space regardless of mode.
+  function computeLayoutCoords() {
+    var columns = state.data.columns;
+    var n = state.zRaw.length;
+    var i;
+    state.imputedAxis = [];
+    for (i = 0; i < n; i++) state.imputedAxis.push(false);
+    var pca = pcaProject(state.weighted, columns.length);
+    state.components = pca.components;
+    state.variance = pca.variance;
+    if (state.layoutMode !== "manual") return scaleToWorld(pca.coords);
+
+    var idx = [axisFeatureIndex("x"), axisFeatureIndex("y"), axisFeatureIndex("z")];
+    var coords = [];
+    for (i = 0; i < n; i++) {
+      var row = [0, 0, 0];
+      for (var c = 0; c < 3; c++) {
+        if (idx[c] < 0) continue;
+        var z = state.zRaw[i][idx[c]];
+        if (z == null) { state.imputedAxis[i] = true; continue; }
+        row[c] = z;
+      }
+      coords.push(row);
+    }
+    return scaleToWorld(coords);
+  }
+
   function recompute() {
     var data = state.data;
     var columns = data.columns;
     state.zRaw = computeZ(data.matrix, state.stats);
     state.weighted = applyWeights(state.zRaw, columns);
-    var pca = pcaProject(state.weighted, columns.length);
-    state.components = pca.components;
-    state.variance = pca.variance;
-    var newCoords = scaleToWorld(pca.coords);
+    var newCoords = computeLayoutCoords();
     state.scores = computeOutlierScores(state.zRaw, columns);
     state.order = data.participants
       .map(function (_, i) { return i; })
@@ -307,6 +349,7 @@
 
     renderOutliers();
     renderAxisLegend();
+    updateAxisTipText();
     if (three.renderer) {
       styleDots();
       if (!lerp.active) positionDots(state.coords);
@@ -1276,6 +1319,12 @@
       if (!knownKeys[key]) delete state.mutedFeatures[key];
     });
     if (state.colorBy && !knownKeys[state.colorBy]) state.colorBy = null;
+    ["x", "y", "z", "size"].forEach(function (d) {
+      if (state.axisFeatures[d] && !knownKeys[state.axisFeatures[d]]) {
+        state.axisFeatures[d] = null;
+      }
+    });
+    if (state.layoutMode === "manual") ensureAxisDefaults();
 
     if (data.participants.length < 3) {
       showNotice("Only " + data.participants.length + " participant" +
@@ -1345,6 +1394,8 @@
     buildDots();
     renderWeights();
     renderLayerToggles();
+    renderLayoutControls();
+    renderAxisPickers();
     initReplayControls();
     recompute();
   }
@@ -1530,14 +1581,31 @@
   }
 
   function dotBaseScale(i) {
-    var maxScore = maxOutlierScore();
-    var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
-    return (i === state.selected ? 1.4 : 1) * (0.85 + t * 0.5);
+    var sizeFactor;
+    var sj = state.layoutMode === "manual" ? axisFeatureIndex("size") : -1;
+    if (sj >= 0) {
+      // Manual size dimension: z ramp; null sits at the midpoint so missing
+      // data doesn't read as "small".
+      var z = state.zRaw ? state.zRaw[i][sj] : null;
+      var tz = z == null ? 0.5 : (z + Z_CLAMP) / (2 * Z_CLAMP);
+      sizeFactor = 0.6 + 0.9 * tz;
+    } else {
+      var maxScore = maxOutlierScore();
+      var t = maxScore > 0 ? state.scores[i] / maxScore : 0;
+      sizeFactor = 0.85 + t * 0.5;
+    }
+    return (i === state.selected ? 1.4 : 1) * sizeFactor;
   }
 
   function styleDots() {
     for (var i = 0; i < three.dots.length; i++) {
       dotBaseColor(i, three.dots[i].material.color);
+      // Fade dots whose manual-axis value was imputed to the cohort mean.
+      // transparent is set per-dot, only where needed — cohort-wide
+      // transparency would invite sorting artifacts.
+      var imputed = state.layoutMode === "manual" && !!state.imputedAxis[i];
+      three.dots[i].material.transparent = imputed;
+      three.dots[i].material.opacity = imputed ? 0.35 : 1;
       three.dots[i].scale.setScalar(dotBaseScale(i));
       three.labels[i].classList.toggle("is-selected", i === state.selected);
     }
@@ -2005,6 +2073,160 @@
     host.appendChild(frag);
   }
 
+  // ---- Layout mode (PCA vs manual axes) -------------------------------------
+
+  // Manual mode never boots blank: X/Y/Z default to the first column of the
+  // first three non-empty groups (then any remaining columns), skipping keys
+  // already assigned to another axis.
+  function ensureAxisDefaults() {
+    var cols = state.data.columns;
+    if (!cols.length) return;
+    var used = {};
+    ["x", "y", "z"].forEach(function (d) {
+      if (axisFeatureIndex(d) >= 0) used[state.axisFeatures[d]] = true;
+    });
+    var firstByGroup = [];
+    var seenGroup = {};
+    var j;
+    for (j = 0; j < cols.length; j++) {
+      if (!seenGroup[cols[j].group]) {
+        seenGroup[cols[j].group] = true;
+        firstByGroup.push(cols[j].key);
+      }
+    }
+    var pool = firstByGroup.concat(cols.map(function (c) { return c.key; }));
+    ["x", "y", "z"].forEach(function (d) {
+      if (axisFeatureIndex(d) >= 0) return;
+      for (var p = 0; p < pool.length; p++) {
+        if (!used[pool[p]]) {
+          state.axisFeatures[d] = pool[p];
+          used[pool[p]] = true;
+          break;
+        }
+      }
+    });
+  }
+
+  function renderLayoutControls() {
+    var host = document.getElementById("mapLayoutMode");
+    if (!host) return;
+    var frag = document.createDocumentFragment();
+    [
+      { value: "pca", label: "Similarity (PCA)" },
+      { value: "manual", label: "Manual axes" },
+    ].forEach(function (opt) {
+      var label = document.createElement("label");
+      label.className = "map-layer-row";
+      var radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "mapLayoutMode";
+      radio.value = opt.value;
+      radio.checked = state.layoutMode === opt.value;
+      radio.addEventListener("change", function () {
+        if (!radio.checked) return;
+        state.layoutMode = opt.value;
+        if (opt.value === "manual") ensureAxisDefaults();
+        var pickers = document.getElementById("mapAxisPickers");
+        if (pickers) pickers.classList.toggle("hidden", opt.value !== "manual");
+        renderAxisPickers();
+        recompute(); // startLerp animates the mode switch for free
+      });
+      var text = document.createElement("span");
+      text.textContent = opt.label;
+      label.appendChild(radio);
+      label.appendChild(text);
+      frag.appendChild(label);
+    });
+    host.innerHTML = "";
+    host.appendChild(frag);
+  }
+
+  // Five pickers: X/Y/Z position, Size (4th dim), Color (5th dim — the same
+  // state.colorBy the explain-panel choropleth uses, so the two stay in
+  // lockstep by construction).
+  var AXIS_PICKER_DIMS = [
+    { dim: "x", label: "X" },
+    { dim: "y", label: "Y" },
+    { dim: "z", label: "Z" },
+    { dim: "size", label: "Size" },
+    { dim: "color", label: "Color" },
+  ];
+
+  function renderAxisPickers() {
+    var host = document.getElementById("mapAxisPickers");
+    if (!host || !state.data) return;
+    var frag = document.createDocumentFragment();
+    AXIS_PICKER_DIMS.forEach(function (def) {
+      var row = document.createElement("label");
+      row.className = "map-axis-picker-row";
+      var name = document.createElement("span");
+      name.className = "map-axis-picker-label";
+      name.textContent = def.label;
+      var select = document.createElement("select");
+      select.setAttribute("aria-label", def.label + " feature");
+      if (def.dim === "size" || def.dim === "color") {
+        var none = document.createElement("option");
+        none.value = "";
+        none.textContent = "(none)";
+        select.appendChild(none);
+      }
+      var byGroup = {};
+      state.data.groups.forEach(function (group) {
+        var og = document.createElement("optgroup");
+        og.label = group.label;
+        byGroup[group.key] = og;
+      });
+      state.data.columns.forEach(function (col) {
+        var opt = document.createElement("option");
+        opt.value = col.key;
+        opt.textContent = col.label;
+        (byGroup[col.group] || select).appendChild(opt);
+      });
+      state.data.groups.forEach(function (group) {
+        if (byGroup[group.key].children.length) {
+          select.appendChild(byGroup[group.key]);
+        }
+      });
+      var current = def.dim === "color"
+        ? state.colorBy : state.axisFeatures[def.dim];
+      select.value = current || "";
+      select.addEventListener("change", function () {
+        var key = select.value || null;
+        if (def.dim === "color") {
+          setColorBy(key); // never a recompute — color doesn't move dots
+          return;
+        }
+        state.axisFeatures[def.dim] = key;
+        recompute();
+      });
+      row.appendChild(name);
+      row.appendChild(select);
+      frag.appendChild(row);
+    });
+    host.innerHTML = "";
+    host.appendChild(frag);
+  }
+
+  // Axis tripod tip labels: feature names in manual mode, plain X/Y/Z in PCA
+  // (the sidebar legend explains the loadings there).
+  function updateAxisTipText() {
+    if (!three.axisLabels.length) return;
+    var names = ["X", "Y", "Z"];
+    var dims = ["x", "y", "z"];
+    for (var c = 0; c < 3; c++) {
+      var text = names[c];
+      if (state.layoutMode === "manual") {
+        var j = axisFeatureIndex(dims[c]);
+        if (j >= 0) {
+          var label = state.data.columns[j].label;
+          // The declutterer estimates width from text length; keep tips short.
+          text = label.length > 14 ? label.substring(0, 13) + "…" : label;
+        }
+      }
+      three.axisLabels[c].el.textContent = text;
+    }
+  }
+
   // "Color by" choropleth: one feature key drives the dot color ramp instead
   // of the outlier score. Set from the explain panel / axis legend feature
   // names; cleared from the sidebar chip. Never a recompute — color doesn't
@@ -2024,6 +2246,7 @@
     if (!section || !chip) return;
     var j = colorByIndex();
     section.classList.toggle("hidden", j < 0);
+    renderAxisPickers(); // keep the manual-mode Color select in lockstep
     if (j < 0) return;
     chip.textContent = state.data.columns[j].label + " ✕";
     chip.title = "Stop coloring dots by this feature";
@@ -2097,6 +2320,23 @@
     var frag = document.createDocumentFragment();
     var axisNames = ["X", "Y", "Z"];
     var dl = document.createElement("dl");
+    if (state.layoutMode === "manual") {
+      // Manual axes: each axis IS a feature; no variance shares to explain.
+      ["x", "y", "z"].forEach(function (dim, c) {
+        var j = axisFeatureIndex(dim);
+        var dt = document.createElement("dt");
+        dt.textContent = axisNames[c] + " — " +
+          (j >= 0 ? state.data.columns[j].label : "(unset)");
+        dl.appendChild(dt);
+      });
+      var note = document.createElement("dd");
+      note.textContent = "z-scored per feature; the center is the cohort mean";
+      dl.appendChild(note);
+      frag.appendChild(dl);
+      els.axisList.innerHTML = "";
+      els.axisList.appendChild(frag);
+      return;
+    }
     state.components.forEach(function (comp, c) {
       var loadings = comp
         .map(function (v, j) { return { j: j, v: v }; })

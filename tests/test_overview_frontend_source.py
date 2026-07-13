@@ -158,6 +158,27 @@ def test_map_compare_arc():
     assert "#mapCompareBtn.is-armed" in css
 
 
+def test_map_direct_axes_mode():
+    """Manual-axes layout: coords come from state.zRaw (unweighted — the
+    group weights are a similarity lens, not an axis warp), PCA components
+    are still computed for the outlier/edge/anchor layers, and the pickers
+    UI exists with its CSS."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert 'layoutMode: "pca"' in src
+    assert "function computeLayoutCoords()" in src
+    assert "function renderAxisPickers()" in src
+    body = src[src.index("function computeLayoutCoords()") :]
+    body = body[: body.index("\n  }")]
+    assert "state.zRaw" in body
+    assert "pcaProject(state.weighted" in body  # components live on regardless
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapLayoutMode"' in html
+    assert 'id="mapAxisPickers"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-axis-pickers" in css
+    assert ".map-axis-picker-row" in css
+
+
 def test_hidden_utility_class_defined():
     """overview.css must define the generic `.hidden` utility (CSS toggle
     completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata
