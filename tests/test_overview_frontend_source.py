@@ -139,6 +139,25 @@ def test_map_color_by_choropleth():
     assert ".map-feature-name" in css
 
 
+def test_map_compare_arc():
+    """The pairwise compare: distances come from the weighted z matrix (never
+    projected coordinates), and the arc layer follows the standard
+    rebuild/sync pattern so it travels through the re-layout lerp."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function computePairDiff(" in src
+    assert "function rebuildCompare()" in src
+    assert "function syncComparePositions()" in src
+    diff_body = src[src.index("function computePairDiff(") :]
+    diff_body = diff_body[: diff_body.index("\n  }")]
+    assert "state.zRaw" in diff_body
+    assert "state.coords" not in diff_body
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapCompareBtn"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-compare-swatch" in css
+    assert "#mapCompareBtn.is-armed" in css
+
+
 def test_hidden_utility_class_defined():
     """overview.css must define the generic `.hidden` utility (CSS toggle
     completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata

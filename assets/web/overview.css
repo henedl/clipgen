@@ -531,6 +531,32 @@ body {
 
 #mapExplainBody { padding: var(--space-3) var(--space-4); }
 
+.map-explain-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Armed / active compare button reads accent so "click a dot next" lands. */
+#mapCompareBtn.is-armed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Compare panel: group swatch matches the arc's difference beads. */
+.map-compare-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.map-compare-swatch {
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+}
+
 .map-chip-row {
   display: flex;
   flex-wrap: wrap;

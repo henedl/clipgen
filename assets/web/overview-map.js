@@ -49,6 +49,7 @@
     order: [],         // participant indices, most unusual first
     selected: -1,
     hovered: -1,
+    compareWith: -1,   // second participant of the compare pair (A = selected)
     colorBy: null,     // column key driving the dot choropleth (null = outlier ramp)
     worldScale: 1,     // scaleToWorld factor (projection units -> world units)
     showSimEdges: true,   // similarity-link layer toggle
@@ -69,6 +70,7 @@
     simEdges: null, // {mesh, edges: [{a, b, sim}]} similarity-link layer
     anchors: null,  // {features, meshes, labels, links} shared-anchor layer
     burst: null,    // {owner, meshes, items, offsets} drill-down satellites
+    compare: null,  // {a, b, line, beads} pairwise diff arc
     moments: null,  // {mesh, owners, offsets, norms, baseColors} point cloud
     axisLabels: [], // [{el, pos}] X/Y/Z tip labels tied to the axis legend
   };
@@ -239,6 +241,35 @@
     return scores;
   }
 
+  // Pairwise weighted-z difference between two participants — the same
+  // distance form the explain panel's contribution loop uses, but between two
+  // dots instead of dot-vs-centroid. Only columns where BOTH sides have data
+  // count; a group where either side is fully null reports count 0 so the
+  // panel can say "no shared data" instead of a misleading zero distance.
+  function computePairDiff(a, b) {
+    var data = state.data;
+    var groups = {};
+    var ranked = [];
+    var total = 0;
+    for (var j = 0; j < data.columns.length; j++) {
+      var col = data.columns[j];
+      if (!groups[col.group]) groups[col.group] = { dist: 0, count: 0 };
+      var zA = state.zRaw[a][j];
+      var zB = state.zRaw[b][j];
+      if (zA == null || zB == null) continue;
+      var dz = (zA - zB) * columnWeight(col);
+      groups[col.group].dist += dz * dz;
+      groups[col.group].count++;
+      total += dz * dz;
+      if (Math.abs(dz) > 1e-9) ranked.push({ j: j, dz: dz, zA: zA, zB: zB });
+    }
+    Object.keys(groups).forEach(function (g) {
+      groups[g].dist = Math.sqrt(groups[g].dist);
+    });
+    ranked.sort(function (x, y) { return Math.abs(y.dz) - Math.abs(x.dz); });
+    return { groups: groups, total: Math.sqrt(total), ranked: ranked };
+  }
+
   function scaleToWorld(coords) {
     var maxR = 0;
     var i, c;
@@ -360,6 +391,7 @@
   function rebuildLayers() {
     rebuildSimEdges();
     rebuildAnchors();
+    rebuildCompare();
   }
 
   function rebuildSimEdges() {
@@ -646,6 +678,132 @@
       arr[k * 3 + 2] = d.z + o.z;
     }
     three.moments.mesh.geometry.attributes.position.needsUpdate = true;
+  }
+
+  // ---- Pairwise compare arc --------------------------------------------------
+  //
+  // Shift-click (or arm the Compare button and click) a second dot while one
+  // is selected: a raised arc connects the pair, with one "difference bead"
+  // per feature group along it — bead size = that group's weighted-z distance
+  // between the two. Beads are deliberately NOT raycast targets (they sit
+  // between dots and would fight selection); numbers live in the panel.
+
+  var COMPARE_ARC_SEGMENTS = 32;
+  var _comparePickArmed = false;
+
+  // Feature-group colors reuse the page-wide stream tokens (observations ARE
+  // the sheet stream, screenspace/transcript likewise); session_shape has no
+  // stream of its own so it takes the neutral accent.
+  function groupColor(groupKey) {
+    if (groupKey === "observations") return three.colors.streamSheet;
+    if (groupKey === "screenspace") return three.colors.streamScreenspace;
+    if (groupKey === "transcript") return three.colors.streamTranscript;
+    return three.colors.base;
+  }
+
+  function groupCssColor(groupKey) {
+    if (groupKey === "observations") return "var(--stream-sheet)";
+    if (groupKey === "screenspace") return "var(--stream-screenspace)";
+    if (groupKey === "transcript") return "var(--stream-transcript)";
+    return "var(--accent)";
+  }
+
+  function disposeCompare() {
+    if (!three.compare) return;
+    disposeLayer({ mesh: three.compare.line });
+    for (var i = 0; i < three.compare.beads.length; i++) {
+      three.scene.remove(three.compare.beads[i].mesh);
+      three.compare.beads[i].mesh.geometry.dispose();
+      three.compare.beads[i].mesh.material.dispose();
+    }
+    three.compare = null;
+  }
+
+  // Arc between the pair's CURRENT dot positions: control point at the
+  // midpoint, pushed radially away from the origin so the arc rises above
+  // the cloud instead of cutting through it.
+  function compareCurve(a, b) {
+    var pa = three.dots[a].position;
+    var pb = three.dots[b].position;
+    var mid = new THREE.Vector3().addVectors(pa, pb).multiplyScalar(0.5);
+    var chord = pa.distanceTo(pb);
+    var lift = mid.length() > 1e-6
+      ? mid.clone().normalize() : new THREE.Vector3(0, 1, 0);
+    mid.add(lift.multiplyScalar(Math.max(chord * 0.35, 1.5)));
+    return new THREE.QuadraticBezierCurve3(pa.clone(), mid, pb.clone());
+  }
+
+  function rebuildCompare() {
+    disposeCompare();
+    if (state.selected < 0 || state.compareWith < 0) return;
+    var a = state.selected;
+    var b = state.compareWith;
+    var diff = computePairDiff(a, b);
+
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(
+      new Float32Array((COMPARE_ARC_SEGMENTS + 1) * 3), 3));
+    var line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color: three.colors.base, transparent: true, opacity: 0.8,
+    }));
+    three.scene.add(line);
+
+    var groups = state.data.groups;
+    var maxDist = 0;
+    var g;
+    for (g = 0; g < groups.length; g++) {
+      var entry = diff.groups[groups[g].key];
+      if (entry) maxDist = Math.max(maxDist, entry.dist);
+    }
+    var beadGeo = new THREE.SphereGeometry(1, 16, 12);
+    var beads = [];
+    for (g = 0; g < groups.length; g++) {
+      var e = diff.groups[groups[g].key] || { dist: 0, count: 0 };
+      var mesh = new THREE.Mesh(beadGeo, new THREE.MeshBasicMaterial({
+        color: groupColor(groups[g].key),
+        // A no-shared-data bead stays visible but ghosted.
+        transparent: e.count === 0, opacity: e.count === 0 ? 0.25 : 1,
+      }));
+      mesh.scale.setScalar(0.15 + (maxDist > 0 ? 0.45 * (e.dist / maxDist) : 0));
+      three.scene.add(mesh);
+      beads.push({ mesh: mesh, t: (g + 1) / (groups.length + 1) });
+    }
+    three.compare = { a: a, b: b, line: line, beads: beads };
+    syncComparePositions();
+  }
+
+  function syncComparePositions() {
+    if (!three.compare) return;
+    var curve = compareCurve(three.compare.a, three.compare.b);
+    var arr = three.compare.line.geometry.attributes.position.array;
+    for (var s = 0; s <= COMPARE_ARC_SEGMENTS; s++) {
+      var p = curve.getPoint(s / COMPARE_ARC_SEGMENTS);
+      arr[s * 3] = p.x;
+      arr[s * 3 + 1] = p.y;
+      arr[s * 3 + 2] = p.z;
+    }
+    three.compare.line.geometry.attributes.position.needsUpdate = true;
+    for (var i = 0; i < three.compare.beads.length; i++) {
+      three.compare.beads[i].mesh.position.copy(
+        curve.getPoint(three.compare.beads[i].t));
+    }
+  }
+
+  function syncCompareBtn() {
+    var btn = document.getElementById("mapCompareBtn");
+    if (!btn) return;
+    btn.classList.toggle("is-armed", _comparePickArmed || state.compareWith >= 0);
+    btn.textContent = state.compareWith >= 0 ? "End compare"
+      : (_comparePickArmed ? "Click a dot…" : "Compare…");
+  }
+
+  function setCompare(idx) {
+    state.compareWith = idx;
+    _comparePickArmed = false;
+    rebuildCompare();
+    syncCompareBtn();
+    if (state.selected >= 0) renderExplain(state.selected);
+    requestRender();
   }
 
   // ---- Session replay --------------------------------------------------------
@@ -1130,6 +1288,9 @@
     state.stats = computeStats(data.matrix, data.columns.length);
     state.coords = null; // cohort indices changed; don't lerp across datasets
     replay.norms = null; // items changed; replay densities rebuild lazily
+    state.compareWith = -1; // compare pair is index-based; indices just moved
+    _comparePickArmed = false;
+    syncCompareBtn();
 
     clearBurst();
     disposeLayer(three.moments);
@@ -1402,6 +1563,7 @@
     placeAnchors();
     syncBurstPositions();
     syncMomentsPositions();
+    syncComparePositions();
   }
 
   // Short position lerp after a re-layout so dots travel instead of teleport
@@ -1572,10 +1734,24 @@
       return;
     }
     var idx = target && target.type === "dot" ? target.index : -1;
+    // Shift-click (or an armed Compare button) on a second dot diffs the
+    // pair instead of moving the selection; repeating it ends the compare.
+    if (idx >= 0 && state.selected >= 0 && idx !== state.selected &&
+        (e.shiftKey || _comparePickArmed)) {
+      setCompare(idx === state.compareWith ? -1 : idx);
+      return;
+    }
     selectParticipant(idx === state.selected ? -1 : idx);
   }
 
   function selectParticipant(idx) {
+    if (state.compareWith >= 0 && idx !== state.selected) {
+      // Any selection change ends the compare (B was relative to old A).
+      state.compareWith = -1;
+      _comparePickArmed = false;
+      disposeCompare();
+      syncCompareBtn();
+    }
     state.selected = idx;
     if (idx < 0) {
       els.explain.classList.add("hidden");
@@ -1952,6 +2128,11 @@
   }
 
   function renderExplain(idx) {
+    // While a compare is active the panel belongs to the pair, not to A.
+    if (state.compareWith >= 0 && state.compareWith !== idx) {
+      renderCompare(idx, state.compareWith);
+      return;
+    }
     var data = state.data;
     var pid = data.participants[idx];
     var avail = data.availability[pid] || {};
@@ -2121,6 +2302,126 @@
     els.explainBody.appendChild(frag);
   }
 
+  // A-vs-B panel, shown in the explain pane while a compare is active:
+  // per-group weighted-z distance bars (bead sizes in numbers) and the top
+  // differing features with both raw values.
+  function renderCompare(a, b) {
+    var data = state.data;
+    var pidA = data.participants[a];
+    var pidB = data.participants[b];
+    els.explainTitle.textContent = pidA + " vs " + pidB;
+    var diff = computePairDiff(a, b);
+    var frag = document.createDocumentFragment();
+
+    var head = document.createElement("div");
+    head.className = "map-explain-section";
+    head.textContent = "Difference by signal group";
+    frag.appendChild(head);
+
+    var maxDist = 0;
+    data.groups.forEach(function (g) {
+      var e = diff.groups[g.key];
+      if (e) maxDist = Math.max(maxDist, e.dist);
+    });
+    var bars = document.createElement("div");
+    bars.className = "map-group-bars";
+    data.groups.forEach(function (group) {
+      var e = diff.groups[group.key] || { dist: 0, count: 0 };
+      var row = document.createElement("div");
+      row.className = "map-feature-row";
+      var label = document.createElement("div");
+      label.className = "map-feature-label";
+      var name = document.createElement("span");
+      name.className = "map-compare-name";
+      var swatch = document.createElement("span");
+      swatch.className = "map-compare-swatch";
+      swatch.style.background = groupCssColor(group.key);
+      name.appendChild(swatch);
+      name.appendChild(document.createTextNode(group.label));
+      var val = document.createElement("span");
+      val.className = "map-feature-z";
+      val.textContent = e.count ? e.dist.toFixed(2) : "no shared data";
+      label.appendChild(name);
+      label.appendChild(val);
+      var track = document.createElement("div");
+      track.className = "map-outlier-bar-track";
+      var bar = document.createElement("span");
+      bar.className = "map-outlier-bar";
+      bar.style.display = "block";
+      bar.style.width = (maxDist > 0 ? (e.dist / maxDist) * 100 : 0) + "%";
+      track.appendChild(bar);
+      row.appendChild(label);
+      row.appendChild(track);
+      bars.appendChild(row);
+    });
+    frag.appendChild(bars);
+
+    var featHead = document.createElement("div");
+    featHead.className = "map-explain-section";
+    featHead.textContent = "Where they differ most";
+    frag.appendChild(featHead);
+
+    diff.ranked.slice(0, TOP_FEATURES).forEach(function (item) {
+      var col = data.columns[item.j];
+      var dzRaw = item.zA - item.zB; // unweighted σ gap, same sign as dz
+      var row = document.createElement("div");
+      row.className = "map-feature-row";
+
+      var label = document.createElement("div");
+      label.className = "map-feature-label";
+      var name = document.createElement("span");
+      name.textContent = col.label;
+      var zEl = document.createElement("span");
+      zEl.className = "map-feature-z";
+      zEl.textContent = (dzRaw >= 0 ? pidA : pidB) + " +" +
+        Math.abs(dzRaw).toFixed(1) + "σ";
+      label.appendChild(name);
+      label.appendChild(zEl);
+
+      var detail = document.createElement("div");
+      detail.className = "map-feature-detail";
+      detail.textContent = pidA + ": " + fmtNum(data.matrix[a][item.j]) +
+        " · " + pidB + ": " + fmtNum(data.matrix[b][item.j]);
+
+      // Signed bar off the center line: right = A higher, left = B higher.
+      var track = document.createElement("div");
+      track.className = "map-feature-bar-track";
+      var bar = document.createElement("div");
+      bar.className = "map-feature-bar" + (dzRaw < 0 ? " is-negative" : "");
+      var half = Math.min(Math.abs(dzRaw) / (2 * Z_CLAMP), 1) * 50;
+      if (dzRaw >= 0) {
+        bar.style.left = "50%";
+        bar.style.width = half + "%";
+      } else {
+        bar.style.left = (50 - half) + "%";
+        bar.style.width = half + "%";
+      }
+      track.appendChild(bar);
+
+      row.appendChild(label);
+      row.appendChild(detail);
+      row.appendChild(track);
+      frag.appendChild(row);
+    });
+
+    if (!diff.ranked.length) {
+      var none = document.createElement("p");
+      none.className = "map-feature-detail";
+      none.textContent = "No shared features to diff.";
+      frag.appendChild(none);
+    }
+
+    var exit = document.createElement("button");
+    exit.type = "button";
+    exit.className = "btn btn-small";
+    exit.textContent = "End compare";
+    exit.addEventListener("click", function () { setCompare(-1); });
+    frag.appendChild(exit);
+
+    els.explainBody.innerHTML = "";
+    els.explainBody.appendChild(frag);
+  }
+
   // ---- Boot -----------------------------------------------------------------
 
   function initDom() {
@@ -2146,6 +2447,12 @@
       .addEventListener("click", function () { selectParticipant(-1); });
     document.getElementById("mapColorByChip")
       .addEventListener("click", function () { setColorBy(null); });
+    document.getElementById("mapCompareBtn")
+      .addEventListener("click", function () {
+        if (state.compareWith >= 0) { setCompare(-1); return; }
+        _comparePickArmed = !_comparePickArmed;
+        syncCompareBtn();
+      });
     loadData();
   }
 
