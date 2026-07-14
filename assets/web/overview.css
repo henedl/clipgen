@@ -192,6 +192,74 @@ body {
 
 /* ---- Layer toggles ---- */
 
+/* Cluster-hull controls (k selector + status), under the layer toggles. */
+.map-cluster-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.map-cluster-k {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.map-cluster-controls select {
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.map-layout-mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.map-layout-mode input[type="radio"] { accent-color: var(--accent); }
+
+.map-axis-pickers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.map-axis-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.map-axis-picker-label {
+  flex: 0 0 var(--space-6);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.map-axis-picker-row select {
+  flex: 1;
+  min-width: 0; /* flex child: allow the select to shrink, not overflow */
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
 .map-layers {
   padding: 0 var(--space-4) var(--space-3);
   display: flex;
@@ -382,6 +450,13 @@ body {
   font-style: italic;
 }
 
+.map-cluster-label {
+  font-size: var(--text-2xs);
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
 .map-axis-tip {
   font-size: var(--text-2xs);
   color: var(--fg-dim);
@@ -531,6 +606,32 @@ body {
 
 #mapExplainBody { padding: var(--space-3) var(--space-4); }
 
+.map-explain-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Armed / active compare button reads accent so "click a dot next" lands. */
+#mapCompareBtn.is-armed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Compare panel: group swatch matches the arc's difference beads. */
+.map-compare-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.map-compare-swatch {
+  display: inline-block;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+}
+
 .map-chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -567,6 +668,23 @@ body {
   display: flex;
   justify-content: space-between;
   gap: var(--space-2);
+}
+
+/* Clickable feature name (explain panel rows + axis-legend loadings):
+   sets the "color by" choropleth. Styled as inline text, not a button. */
+.map-feature-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-feature-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .map-feature-z {

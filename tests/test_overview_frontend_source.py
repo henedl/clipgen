@@ -118,6 +118,106 @@ def test_map_layers_and_drilldown_present():
     assert re.search(r"var BURST_CAP = \d+;", src)
 
 
+def test_map_color_by_choropleth():
+    """The "color by" choropleth: one authority computes the idle dot look
+    (dotBaseColor/dotBaseScale) and the replay glow composes on it — a
+    hardcoded ramp inside applyReplayGlow would silently override the
+    choropleth mid-replay."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function setColorBy(" in src
+    assert "colorBy: null" in src
+    assert "function dotBaseColor(" in src
+    assert "function dotBaseScale(" in src
+    glow_body = src[src.index("function applyReplayGlow()") :]
+    glow_body = glow_body[: glow_body.index("\n  }")]
+    assert "dotBaseColor(" in glow_body
+    assert "dotBaseScale(" in glow_body
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapColorBySection"' in html
+    assert 'id="mapColorByChip"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-feature-name" in css
+
+
+def test_map_compare_arc():
+    """The pairwise compare: distances come from the weighted z matrix (never
+    projected coordinates), and the arc layer follows the standard
+    rebuild/sync pattern so it travels through the re-layout lerp."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function computePairDiff(" in src
+    assert "function rebuildCompare()" in src
+    assert "function syncComparePositions()" in src
+    diff_body = src[src.index("function computePairDiff(") :]
+    diff_body = diff_body[: diff_body.index("\n  }")]
+    assert "state.zRaw" in diff_body
+    assert "state.coords" not in diff_body
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapCompareBtn"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-compare-swatch" in css
+    assert "#mapCompareBtn.is-armed" in css
+
+
+def test_map_direct_axes_mode():
+    """Manual-axes layout: coords come from state.zRaw (unweighted — the
+    group weights are a similarity lens, not an axis warp), PCA components
+    are still computed for the outlier/edge/anchor layers, and the pickers
+    UI exists with its CSS."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert 'layoutMode: "pca"' in src
+    assert "function computeLayoutCoords()" in src
+    assert "function renderAxisPickers()" in src
+    body = src[src.index("function computeLayoutCoords()") :]
+    body = body[: body.index("\n  }")]
+    assert "state.zRaw" in body
+    assert "pcaProject(state.weighted" in body  # components live on regardless
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapLayoutMode"' in html
+    assert 'id="mapAxisPickers"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-axis-pickers" in css
+    assert ".map-axis-picker-row" in css
+
+
+def test_map_session_trajectories():
+    """Trajectory paths project window vectors with the WHOLE-SESSION basis
+    (state.stats z-scoring + state.components + state.worldScale) — never a
+    pooled-window PCA — so paths live in the exact space the dots do."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function computeWindowCoords()" in src
+    assert "function rebuildTrajectories()" in src
+    assert "function syncComets(" in src
+    assert "showTrajectories" in src
+    body = src[src.index("function computeWindowCoords()") :]
+    body = body[: body.index("\n  }")]
+    assert "state.stats" in body
+    assert "state.components" in body
+    assert "state.worldScale" in body
+
+
+def test_map_cluster_hulls():
+    """K-means clusters in the FULL weighted feature space, deterministically
+    (farthest-point init — Math.random must never appear in the map source,
+    or clusters would shuffle run-to-run), with the standard rebuild/sync
+    layer pattern and its controls + CSS present."""
+    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
+    assert "function computeKmeans()" in src
+    assert "function runKmeans(" in src
+    assert "function rebuildClusterHulls()" in src
+    assert "function syncClusterHullPositions()" in src
+    assert "Math.random" not in src
+    kmeans_body = src[src.index("function runKmeans(") :]
+    kmeans_body = kmeans_body[: kmeans_body.index("\n  }")]
+    assert "state.weighted" in kmeans_body
+    assert "state.coords" not in kmeans_body
+    html = OVERVIEW_HTML.read_text(encoding="utf-8")
+    assert 'id="mapClusterControls"' in html
+    assert 'id="mapClusterK"' in html
+    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    assert ".map-cluster-controls" in css
+    assert ".map-cluster-label" in css
+
+
 def test_hidden_utility_class_defined():
     """overview.css must define the generic `.hidden` utility (CSS toggle
     completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata

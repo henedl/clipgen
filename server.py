@@ -812,9 +812,11 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
     """Reduced sheet-timestamp records for the Overview Map's feature matrix.
 
     One record per (sheet row x participant) cell with valid timestamps:
-    ``{"participant", "category", "severity", "timestamps": N}``. Injected
-    into overview.py via ``overview.configure()`` so the Map is populated as
-    soon as timestamps exist in the sheet — no artifact generation required.
+    ``{"participant", "category", "severity", "timestamps": N, "seconds":
+    [start_seconds, ...]}`` (``seconds`` feeds the per-window trajectory
+    features). Injected into overview.py via ``overview.configure()`` so the
+    Map is populated as soon as timestamps exist in the sheet — no artifact
+    generation required.
     """
     if _sheet_context is None:
         return []
@@ -825,15 +827,21 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
             if not cell.get("valid"):
                 continue
             cleaned, _, _ = utils.parse_cell_annotations(cell["value"])
-            count = len(utils.parse_timestamps(cleaned))
-            if not count:
+            pairs = utils.parse_timestamps(cleaned)
+            if not pairs:
                 continue
+            seconds = [
+                s
+                for s in (utils.timestamp_to_seconds(start) for start, _ in pairs)
+                if s is not None
+            ]
             records.append(
                 {
                     "participant": pid,
                     "category": row["category"],
                     "severity": row["severity"],
-                    "timestamps": count,
+                    "timestamps": len(pairs),
+                    "seconds": seconds,
                 }
             )
     return records

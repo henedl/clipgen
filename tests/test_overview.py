@@ -18,12 +18,13 @@ import overview
 # ---- Fixtures -------------------------------------------------------------
 
 
-def _obs_row(participant, category="nav", severity="High", timestamps=1):
+def _obs_row(participant, category="nav", severity="High", timestamps=1, seconds=None):
     return {
         "participant": participant,
         "category": category,
         "severity": severity,
         "timestamps": timestamps,
+        "seconds": seconds if seconds is not None else [0.0] * timestamps,
     }
 
 
@@ -310,6 +311,76 @@ def test_feature_matrix_is_deterministic(seeded_output_dir):
         ),
     )
     assert overview.build_feature_matrix() == overview.build_feature_matrix()
+
+
+# ---- Window matrices (session trajectories) ---------------------------------
+
+
+def test_screenspace_window_rates_divide_by_window_minutes():
+    # 4 events in the first fifth of a 100 s session, K=5 -> 20 s windows
+    # (1/3 min) -> 12 events/min in window 0.
+    rows = [
+        _ss_row(time_in=2.0, time_out=4.0),
+        _ss_row(time_in=6.0, time_out=8.0),
+        _ss_row(time_in=10.0, time_out=12.0),
+        _ss_row(time_in=14.0, time_out=16.0),
+        _ss_row(time_in=95.0, time_out=100.0),
+    ]
+    out = overview.build_screenspace_window_values(rows, 5)
+    assert out[0]["P01"]["ss_total_rate"] == pytest.approx(12.0)
+    assert out[0]["P01"]["ss_rate_change"] == pytest.approx(12.0)
+    # Quiet middle windows have no entry (assembly turns that into real 0.0).
+    assert "P01" not in out[1]
+    assert out[4]["P01"]["ss_total_rate"] == pytest.approx(3.0)
+
+
+def test_observation_window_values_use_seconds():
+    rows = [
+        _obs_row("P01", category="nav", timestamps=2, seconds=[0.0, 10.0]),
+        _obs_row("P01", category="search", timestamps=1, seconds=[100.0]),
+    ]
+    out = overview.build_observation_window_values(rows, 5)
+    # Duration proxy = latest timestamp (100 s): 0 and 10 land in window 0,
+    # 100 in window 4; window shares are shares OF THAT WINDOW.
+    assert out[0]["P01"]["obs_total"] == 2.0
+    assert out[0]["P01"]["obs_cat_nav"] == 1.0
+    assert out[4]["P01"]["obs_cat_search"] == 1.0
+    assert "P01" not in out[2]
+
+
+def test_feature_matrix_windows_shape_and_null_policy(seeded_output_dir):
+    _write_manifests(
+        seeded_output_dir,
+        screenspace=_ss_manifest([_ss_row(participant="P01")]),
+        transcripts={
+            "source_transcripts": {"P02": {"segments": _segments("P02", ["um okay"])}},
+            "corrections": [],
+            "marks": [],
+        },
+    )
+    payload = overview.build_feature_matrix()
+    windows = payload["windows"]
+    assert windows["count"] == overview.TRAJECTORY_WINDOWS
+    assert len(windows["matrices"]) == windows["count"]
+    cols = payload["columns"]
+    for matrix_w in windows["matrices"]:
+        assert len(matrix_w) == len(payload["participants"])
+        for row in matrix_w:
+            assert len(row) == len(cols)
+            # session_shape and tr_duration_min are never windowed.
+            for j, col in enumerate(cols):
+                if col["group"] == "session_shape" or col["key"] == "tr_duration_min":
+                    assert row[j] is None
+
+    # Missing source stays None; present source with a quiet window is 0.0.
+    p01 = payload["participants"].index("P01")
+    p02 = payload["participants"].index("P02")
+    j_rate = next(j for j, c in enumerate(cols) if c["key"] == "ss_total_rate")
+    assert windows["matrices"][0][p02][j_rate] is None  # P02: no screenspace
+    # P01's single 10-20 s event (midpoint 15 of a 20 s session) sits in
+    # window 3; window 0 is a quiet-but-present window.
+    assert windows["matrices"][0][p01][j_rate] == 0.0
+    assert windows["matrices"][3][p01][j_rate] > 0
 
 
 # ---- Route smokes ----------------------------------------------------------

@@ -74,6 +74,21 @@ GROUP_LABELS: dict[str, str] = {
 # 1/sqrt(group_size) equalization.
 SESSION_SHAPE_BINS: int = 8
 
+# Temporal windows per participant for the Map's session-trajectory paths:
+# each session is split into this many equal slices of its own duration
+# proxy and the windowable features are rebuilt per slice. 5 is deliberate:
+# typical 20-60 min sessions give 4-12 min windows — enough events for
+# stable per-window rates on the sparsest source (sheet timestamps) — while
+# 5 vertices render a readable path (start/early/mid/late/end) and stay
+# visibly coarser than the 8-bin session_shape histograms.
+TRAJECTORY_WINDOWS: int = 5
+
+# Columns that describe the whole session and have no per-window meaning;
+# they ship as None in every window matrix. The whole session_shape group is
+# excluded the same way (it IS the temporal distribution — an 8-bin
+# histogram of a fifth of a session would be noise).
+_NON_WINDOWED_COLUMNS: frozenset[str] = frozenset({"tr_duration_min"})
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -452,6 +467,245 @@ def build_session_shape_features(
     return columns, values
 
 
+# ---- Window builders --------------------------------------------------------
+#
+# Per-window variants of the group builders above, for the Map's session
+# trajectories: window w covers [w/K, (w+1)/K) of the participant's OWN
+# duration proxy (the same per-source proxies as the full builders), and
+# rates divide by the WINDOW's minutes, not the session's. Each builder
+# returns ``[k]`` dicts of ``participant -> {key: value}`` using the exact
+# column keys of its full builder so window rows align to the payload's
+# ``columns``. A participant with the source but a quiet window has no entry
+# for it — the assembly turns that into real zeros ("a quiet fifth is
+# signal"); participants missing the source entirely stay None.
+
+
+def _window_index(pos: float, k: int) -> int:
+    return min(int(max(pos, 0.0) * k), k - 1)
+
+
+def build_observation_window_values(
+    observation_rows: list[dict[str, Any]], k: int
+) -> list[dict[str, dict[str, float]]]:
+    """Per-window observation features (duration proxy: latest timestamp).
+
+    Requires the ``seconds`` list on each record (start seconds per
+    timestamp, from the injected sheet getter). Shares are shares of that
+    window's timestamps; ``obs_total`` is the window count.
+    """
+    points: dict[str, list[tuple[str, str, float]]] = {}
+    for rec in observation_rows:
+        if not isinstance(rec, dict):
+            continue
+        pid = rec.get("participant", "")
+        seconds = [
+            float(s) for s in (rec.get("seconds") or []) if isinstance(s, (int, float))
+        ]
+        if not pid or not seconds:
+            continue
+        cat = rec.get("category") or "uncategorized"
+        sev = rec.get("severity") or ""
+        for sec in seconds:
+            points.setdefault(pid, []).append((cat, sev, sec))
+
+    out: list[dict[str, dict[str, float]]] = [{} for _ in range(k)]
+    for pid, pts in points.items():
+        duration = max(p[2] for p in pts)
+        buckets: list[list[tuple[str, str, float]]] = [[] for _ in range(k)]
+        for cat, sev, sec in pts:
+            pos = sec / duration if duration > 0 else 0.0
+            buckets[_window_index(pos, k)].append((cat, sev, sec))
+        for w, bucket in enumerate(buckets):
+            if not bucket:
+                continue
+            total = float(len(bucket))
+            row: dict[str, float] = {}
+            for cat in {b[0] for b in bucket}:
+                n = sum(1 for b in bucket if b[0] == cat)
+                row[f"obs_cat_{_slug(cat)}"] = round(n / total, 4)
+            for sev in {b[1] for b in bucket if b[1]}:
+                n = sum(1 for b in bucket if b[1] == sev)
+                row[f"obs_sev_{_slug(sev)}"] = round(n / total, 4)
+            row["obs_total"] = total
+            out[w][pid] = row
+    return out
+
+
+def build_screenspace_window_values(
+    event_rows: list[dict[str, Any]], k: int
+) -> list[dict[str, dict[str, float]]]:
+    """Per-window screenspace features; events bin by their midpoint."""
+    by_participant = _screenspace_rows_by_participant(event_rows)
+    out: list[dict[str, dict[str, float]]] = [{} for _ in range(k)]
+    for pid, rows in by_participant.items():
+        duration = _screenspace_duration_seconds(rows)
+        window_minutes = _minutes(duration) / k if duration > 0 else 0.0
+        buckets: list[list[dict[str, Any]]] = [[] for _ in range(k)]
+        for r in rows:
+            try:
+                mid = (
+                    float(r.get("time_in") or 0.0) + float(r.get("time_out") or 0.0)
+                ) / 2.0
+            except (TypeError, ValueError):
+                continue
+            pos = mid / duration if duration > 0 else 0.0
+            buckets[_window_index(pos, k)].append(r)
+        for w, bucket in enumerate(buckets):
+            if not bucket:
+                continue
+            row_out: dict[str, float] = {}
+            detectors = {r.get("detector", "") for r in bucket if r.get("detector")}
+            for d in detectors:
+                d_rows = [r for r in bucket if r.get("detector") == d]
+                row_out[f"ss_rate_{_slug(d)}"] = (
+                    round(len(d_rows) / window_minutes, 4)
+                    if window_minutes > 0
+                    else 0.0
+                )
+                confs = [
+                    float(r["confidence"])
+                    for r in d_rows
+                    if isinstance(r.get("confidence"), (int, float))
+                ]
+                row_out[f"ss_conf_{_slug(d)}"] = (
+                    round(sum(confs) / len(confs), 4) if confs else 0.0
+                )
+            row_out["ss_total_rate"] = (
+                round(len(bucket) / window_minutes, 4) if window_minutes > 0 else 0.0
+            )
+            row_out["ss_nav_share"] = round(
+                sum(1 for r in bucket if r.get("navigational")) / len(bucket), 4
+            )
+            out[w][pid] = row_out
+    return out
+
+
+def build_transcript_window_values(
+    source_transcripts: dict[str, Any],
+    marks: list[dict[str, Any]] | None,
+    k: int,
+) -> list[dict[str, dict[str, float]]]:
+    """Per-window transcript features.
+
+    Friction is scored ONCE per participant (manifest stats or the
+    deterministic scorer, same as the full builder) and the scored segments
+    bin by midpoint; marks bin by their start time.
+    """
+    marks = [m for m in (marks or []) if isinstance(m, dict)]
+    marks_by_pid: dict[str, list[dict[str, Any]]] = {}
+    for mk in marks:
+        pid = _mark_participant(mk)
+        if pid:
+            marks_by_pid.setdefault(pid, []).append(mk)
+
+    out: list[dict[str, dict[str, float]]] = [{} for _ in range(k)]
+    for pid, entry in source_transcripts.items():
+        if not isinstance(entry, dict):
+            continue
+        segments = [s for s in (entry.get("segments") or []) if isinstance(s, dict)]
+        if not segments:
+            continue
+        duration = _transcript_duration_seconds(segments)
+        window_minutes = _minutes(duration) / k if duration > 0 else 0.0
+        scored, _ = _friction_scored_and_stats(entry, segments, duration)
+        counts_by_id: dict[str, dict[str, int]] = {}
+        for srow in scored:
+            if isinstance(srow, dict):
+                counts_by_id[str(srow.get("id"))] = srow.get("counts", {}) or {}
+
+        seg_buckets: list[list[dict[str, Any]]] = [[] for _ in range(k)]
+        for idx, seg in enumerate(segments):
+            try:
+                mid = (
+                    float(seg.get("start") or 0.0) + float(seg.get("end") or 0.0)
+                ) / 2.0
+            except (TypeError, ValueError):
+                continue
+            pos = mid / duration if duration > 0 else 0.0
+            # Same id fallback as the session-shape builder.
+            seg_buckets[_window_index(pos, k)].append(
+                {"id": str(seg.get("id") or idx), "text": seg.get("text") or ""}
+            )
+
+        mark_buckets: list[list[dict[str, Any]]] = [[] for _ in range(k)]
+        for mk in marks_by_pid.get(pid, []):
+            try:
+                start = float(mk.get("start") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            pos = start / duration if duration > 0 else 0.0
+            mark_buckets[_window_index(pos, k)].append(mk)
+
+        for w in range(k):
+            bucket = seg_buckets[w]
+            w_marks = mark_buckets[w]
+            if not bucket and not w_marks:
+                continue
+            row: dict[str, float] = {}
+            marker_total = 0
+            for c in friction.CATEGORY_ORDER:
+                n = sum(
+                    int(counts_by_id.get(s["id"], {}).get(c, 0) or 0) for s in bucket
+                )
+                marker_total += n
+                row[f"tr_fric_{_slug(c)}"] = (
+                    round(n / window_minutes, 4) if window_minutes > 0 else 0.0
+                )
+            row["tr_markers_per_min"] = (
+                round(marker_total / window_minutes, 4) if window_minutes > 0 else 0.0
+            )
+            row["tr_marks_per_min"] = (
+                round(len(w_marks) / window_minutes, 4) if window_minutes > 0 else 0.0
+            )
+            for c in {(mk.get("category") or "uncategorized") for mk in w_marks}:
+                n = sum(
+                    1 for mk in w_marks if (mk.get("category") or "uncategorized") == c
+                )
+                row[f"tr_mark_{_slug(c)}"] = round(n / len(w_marks), 4)
+            row["tr_segment_count"] = float(len(bucket))
+            words = sum(len(s["text"].split()) for s in bucket)
+            row["tr_words_per_min"] = (
+                round(words / window_minutes, 4) if window_minutes > 0 else 0.0
+            )
+            out[w][pid] = row
+    return out
+
+
+def build_window_matrices(
+    participants: list[str],
+    groups: list[tuple[str, list[dict[str, str]], dict[str, dict[str, float]]]],
+    window_values: dict[str, list[dict[str, dict[str, float]]]],
+    k: int,
+) -> list[list[list[float | None]]]:
+    """K matrices row/column-aligned with the whole-session matrix.
+
+    Cell policy: participant missing the source (per the FULL builder's
+    values) -> None; group not windowable (session_shape, or a key in
+    ``_NON_WINDOWED_COLUMNS``) -> None; source present but the window is
+    quiet -> real 0.0.
+    """
+    matrices: list[list[list[float | None]]] = []
+    for w in range(k):
+        matrix_w: list[list[float | None]] = []
+        for pid in participants:
+            row: list[float | None] = []
+            for group_key, cols, vals in groups:
+                has_group = pid in vals
+                w_vals = window_values.get(group_key)
+                for col in cols:
+                    if (
+                        not has_group
+                        or w_vals is None
+                        or col["key"] in _NON_WINDOWED_COLUMNS
+                    ):
+                        row.append(None)
+                    else:
+                        row.append(w_vals[w].get(pid, {}).get(col["key"], 0.0))
+            matrix_w.append(row)
+        matrices.append(matrix_w)
+    return matrices
+
+
 # ---- Assembly -------------------------------------------------------------
 
 # Injected by server.create_combined_app: returns one record per (sheet row x
@@ -512,6 +766,19 @@ def build_feature_matrix() -> dict[str, Any]:
         matrix.append(row)
         availability[pid] = avail
 
+    # Per-window matrices for the session trajectories, shipped in the same
+    # payload so they are always row/column-aligned and atomically consistent
+    # with the whole-session matrix (a second endpoint would invite skew).
+    window_values = {
+        "observations": build_observation_window_values(
+            observation_rows, TRAJECTORY_WINDOWS
+        ),
+        "screenspace": build_screenspace_window_values(event_rows, TRAJECTORY_WINDOWS),
+        "transcript": build_transcript_window_values(
+            source_transcripts, marks, TRAJECTORY_WINDOWS
+        ),
+    }
+
     return utils.sanitize_floats(
         {
             "participants": participants,
@@ -519,6 +786,12 @@ def build_feature_matrix() -> dict[str, Any]:
             "matrix": matrix,
             "availability": availability,
             "groups": [{"key": k, "label": GROUP_LABELS[k]} for k in GROUP_KEYS],
+            "windows": {
+                "count": TRAJECTORY_WINDOWS,
+                "matrices": build_window_matrices(
+                    participants, groups, window_values, TRAJECTORY_WINDOWS
+                ),
+            },
             "config": utils.get_frontend_config(),
         }
     )

@@ -16,8 +16,11 @@ y/fontSize to height) — plus export endpoints that render annotations with
 PIL (transparent RGBA overlay; no ffmpeg ``drawtext``, sidestepping the
 Homebrew libfreetype gotcha) and burn them into a screenshot, GIF, or video
 span via the ffmpeg ``overlay`` filter with span-relative
-``enable='between(t,...)'`` windows. Exported artifacts land in the regular
-``clipgen_manifest.json`` via ``viewer.save_manifest``.
+``enable='between(t,...)'`` windows. A GIF/video span that straddles a
+recording-part boundary is first stitched into a temp clip (t=0 == span start)
+via ``pipeline.cut_global_range`` — the same cut/stitch chain Studio's intake
+uses — so the overlay pass always sees one continuous input. Exported artifacts
+land in the regular ``clipgen_manifest.json`` via ``viewer.save_manifest``.
 
 All Composer state lives in ``composer_manifest.json`` in the output dir
 (load-on-startup, save-after-mutations). Composer never writes to the
@@ -49,6 +52,7 @@ from flask import Blueprint, request
 
 import config
 import files
+import pipeline
 import utils
 import video
 from server_utils import err, ok
@@ -590,11 +594,8 @@ def _render_annotation_overlay(
 # ---- Exports (annotated screenshot / burned video / GIF) ----
 
 # One export at a time is plenty for a single-user tool; the cancel event
-# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag. The lock
-# enforces that single-export invariant so a second request can't clear the
-# shared cancel event out from under (or cross-cancel) an in-flight export.
+# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag.
 _export_cancel = threading.Event()
-_export_lock = threading.Lock()
 
 # Bound on the ffmpeg filter graph: one overlay input per visibility window.
 MAX_OVERLAY_WINDOWS = 20
@@ -618,6 +619,16 @@ def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
         if part["offset"] <= t < part["offset"] + part["duration"]:
             return part
     return parts[-1]
+
+
+def _unlink_quiet(path: str | None) -> None:
+    """Best-effort delete of a temp file; no-op on None or OSError."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _annotations_in_span(
@@ -843,17 +854,6 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     parts = _find_participant_parts(participant)
     if not parts:
         return err(f"No video for {participant}", 404)
-    start_part = _part_for_time(parts, start)
-    # Single-part iff the span's (exclusive) end stays within the start part.
-    # Comparing to the boundary directly is exact; the old
-    # `_part_for_time(end - 0.001)` sampling let near-boundary crossings slip
-    # through. Only fires when a later part exists, so a span running just past a
-    # lone video's end still exports to EOF.
-    start_end = start_part["offset"] + start_part["duration"]
-    if start_part is not parts[-1] and end > start_end:
-        return err(
-            "The span crosses a recording-part boundary; export each part separately."
-        )
     annotations = _annotations_in_span(participant, start, end)
     if not annotations:
         return err("No annotations in this span — use Generate for plain clips.")
@@ -863,13 +863,68 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
             f"Too many distinct annotation windows ({len(windows)}); "
             f"the limit is {MAX_OVERLAY_WINDOWS}."
         )
-    props = video.probe_video_properties(start_part["path"])
-    if not props or not props.get("width") or not props.get("height"):
-        return err("Could not probe the video resolution", 500)
 
     import tempfile
 
     out_dir = str(utils.get_effective_output_dir())
+    _export_cancel.clear()
+
+    # Resolve the source the overlay pass decodes. A within-part span decodes the
+    # owning part directly with a local seek; a span that straddles a part boundary
+    # is first stitched into a temp clip (t=0 == span start) via the same cut chain
+    # Studio's intake uses, so the overlay filter sees one continuous input.
+    video_paths = [p["path"] for p in parts]
+    timeline = video.timeline_or_none(video_paths)
+    pieces = (
+        utils.map_global_range_to_segments(timeline, start, end)
+        if timeline is not None
+        else None
+    )
+    if pieces is not None and not pieces:
+        return err("The span is outside the recording", 400)
+
+    stitch_tmp: str | None = None
+    if pieces is not None and len(pieces) > 1:
+        assert timeline is not None  # a non-None pieces implies a real timeline
+        fd, stitch_tmp = tempfile.mkstemp(
+            prefix=config.TEMP_ARTIFACT_PREFIX, suffix=config.FILEFORMAT, dir=out_dir
+        )
+        os.close(fd)
+        stitched = pipeline.cut_global_range(
+            timeline,
+            video_paths[0],
+            start,
+            end,
+            stitch_tmp,
+            reencode=config.REENCODING,
+            cancel_flag=_export_cancel.is_set,
+        )
+        if stitched is None:
+            _unlink_quiet(stitch_tmp)
+            return err(
+                "Export cancelled" if _export_cancel.is_set() else "ffmpeg failed"
+            )
+        overlay_input = stitch_tmp
+        overlay_local_start = 0.0
+        source_video_name = stitched["sourceVideo"]
+    elif pieces:
+        assert timeline is not None  # a non-None pieces implies a real timeline
+        seg_index, local_start, _ = pieces[0]
+        overlay_input = timeline[seg_index][0]
+        overlay_local_start = local_start
+        source_video_name = Path(overlay_input).name
+    else:
+        start_part = _part_for_time(parts, start)
+        overlay_input = start_part["path"]
+        overlay_local_start = start - start_part["offset"]
+        source_video_name = Path(overlay_input).name
+
+    # Parts can differ in resolution, so render overlays at the actual input's dims.
+    props = video.probe_video_properties(overlay_input)
+    if not props or not props.get("width") or not props.get("height"):
+        _unlink_quiet(stitch_tmp)
+        return err("Could not probe the video resolution", 500)
+
     fmt = config.GIF_FORMAT if gif else config.FILEFORMAT
     kind = "gif" if gif else "clip"
     time_tag = utils.seconds_to_timestamp(int(start)).replace(":", ".")
@@ -877,14 +932,6 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
         f"{participant} annotated {kind} {time_tag}{fmt}", fmt
     )
     overlay_specs: list[tuple[str, float, float]] = []
-    # Serialize exports (reject a second concurrent one) so it can't clear the
-    # shared cancel event mid-run and cross-cancel the in-flight export.
-    if not _export_lock.acquire(blocking=False):
-        # out_path was already reserved above; release it so a rejected export
-        # doesn't leave an empty placeholder behind.
-        files.release_reservation(out_path)
-        return err("An export is already running; wait for it to finish.", 409)
-    _export_cancel.clear()
     try:
         for window in windows:
             overlay = _render_annotation_overlay(
@@ -900,8 +947,8 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
             )
             overlay.save(png_path)
         cmd = _build_overlay_command(
-            start_part["path"],
-            start - start_part["offset"],
+            overlay_input,
+            overlay_local_start,
             end - start,
             overlay_specs,
             out_path,
@@ -909,18 +956,15 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
         )
         result = video.run_ffmpeg_process(
             cmd,
-            input_file=start_part["path"],
+            input_file=overlay_input,
             output_file=out_path,
             os_error_message="Annotated export failed.",
             cancel_flag=_export_cancel.is_set,
         )
     finally:
         for png_path, _, _ in overlay_specs:
-            try:
-                os.unlink(png_path)
-            except OSError:
-                pass
-        _export_lock.release()
+            _unlink_quiet(png_path)
+        _unlink_quiet(stitch_tmp)
     if result is None:
         files.release_reservation(out_path)
         return err("Export cancelled" if _export_cancel.is_set() else "ffmpeg failed")
@@ -935,7 +979,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
         start,
         end,
         f"Annotated {kind} ({len(annotations)} annotation(s))",
-        Path(start_part["path"]).name,
+        source_video_name,
     )
     _save_export_artifact(artifact, participant)
     return ok(artifact=artifact)

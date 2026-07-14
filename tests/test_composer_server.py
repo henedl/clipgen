@@ -373,48 +373,108 @@ def test_export_screenshot_composites_and_records(co_client, tmp_path, monkeypat
     assert out.is_file() and out.stat().st_size > 0
 
 
-def test_export_rejects_cross_part_span(co_client):
-    # Parts are [0,10) and [10,20); a span crossing the 10 s boundary is rejected
-    # before any ffmpeg work (the guard runs before the annotations/probe checks).
+class _FakeFfmpegResult:
+    returncode = 0
+    stderr = ""
+
+
+def _stub_overlay_ffmpeg(monkeypatch):
+    """Stub the overlay ffmpeg pass + probe so no real ffmpeg runs.
+
+    Returns the list that records every path probe_video_properties saw, so a
+    test can assert overlay dims came from the stitched temp, not a source part.
+    """
+    probed: list[str] = []
+
+    def fake_probe(path):
+        probed.append(path)
+        return {"width": 1280, "height": 720}
+
+    def fake_run(cmd, input_file, output_file, os_error_message, cancel_flag):
+        from pathlib import Path
+
+        Path(output_file).write_bytes(b"x")
+        return _FakeFfmpegResult()
+
+    monkeypatch.setattr(composer_server.video, "probe_video_properties", fake_probe)
+    monkeypatch.setattr(composer_server.video, "run_ffmpeg_process", fake_run)
+    return probed
+
+
+def _capture_stitch(monkeypatch):
+    """Record + stub pipeline.cut_global_range; return the call list."""
+    from pathlib import Path
+
+    calls: list[dict] = []
+
+    def fake_cut(timeline, base, start, end, out_path, *, reencode, cancel_flag):
+        calls.append({"start": start, "end": end, "out_path": out_path})
+        Path(out_path).write_bytes(b"stitched")
+        return {"sourceVideo": "study_P01-1.mp4", "localStart": start, "localEnd": 10.0}
+
+    monkeypatch.setattr(composer_server.pipeline, "cut_global_range", fake_cut)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "route,kind,fmt",
+    [("burn", "clip", config.FILEFORMAT), ("gif", "gif", config.GIF_FORMAT)],
+)
+def test_annotated_export_stitches_across_part_boundary(
+    co_client, tmp_path, monkeypatch, route, kind, fmt
+):
+    # Span 8→12 straddles the 10 s part boundary of the two-part fixture.
+    _make_annotation(co_client, span={"start": 8.0, "end": 12.0})
+    probed = _stub_overlay_ffmpeg(monkeypatch)
+    calls = _capture_stitch(monkeypatch)
+    saved = {}
+    monkeypatch.setattr(
+        composer_server,
+        "_save_export_artifact",
+        lambda artifact, participant: saved.update(artifact),
+    )
+
     resp = co_client.post(
-        "/composer/api/export/burn",
+        f"/composer/api/export/{route}",
         json={"participant": "P01", "start": 8.0, "end": 12.0},
-    )
-    assert resp.status_code == 400
-    assert "boundary" in resp.get_json()["error"]
+    ).get_json()
 
-    # The old `_part_for_time(end - 0.001)` sampling let a sub-epsilon crossing
-    # slip through (both ends resolved to part 1); the direct boundary check
-    # catches it — part 1 ends at 10.0 and this ends just past it.
-    resp2 = co_client.post(
-        "/composer/api/export/burn",
-        json={"participant": "P01", "start": 8.0, "end": 10.0005},
-    )
-    assert resp2.status_code == 400
-    assert "boundary" in resp2.get_json()["error"]
+    assert resp["ok"] is True
+    # The raw span was stitched across parts before the overlay pass.
+    assert len(calls) == 1
+    assert (calls[0]["start"], calls[0]["end"]) == (8.0, 12.0)
+    # Overlay dims were probed from the stitched temp, not a source part.
+    assert probed and probed[-1] == calls[0]["out_path"]
+    assert probed[-1] not in {
+        str(tmp_path / "study_P01-1.mp4"),
+        str(tmp_path / "study_P01-2.mp4"),
+    }
+    art = resp["artifact"]
+    assert art["type"] == kind
+    assert art["sourceVideo"] == "study_P01-1.mp4"
+    assert art["file"].endswith(fmt)
+    assert saved["id"] == art["id"]
 
 
-def test_concurrent_export_rejected_without_orphan_reservation(
+def test_annotated_burn_within_part_keeps_single_pass_fast_path(
     co_client, tmp_path, monkeypatch
 ):
+    # Span 2→5 lives wholly in part 1 → no stitch, decode the owning part directly.
     _make_annotation(co_client, span={"start": 1.0, "end": 9.0})
+    _stub_overlay_ffmpeg(monkeypatch)
+    calls = _capture_stitch(monkeypatch)
     monkeypatch.setattr(
-        video, "probe_video_properties", lambda path: {"width": 320, "height": 240}
+        composer_server, "_save_export_artifact", lambda artifact, participant: None
     )
-    # Simulate an export already in flight by holding the export lock.
-    assert composer_server._export_lock.acquire(blocking=False)
-    try:
-        before = sorted(p.name for p in tmp_path.iterdir())
-        resp = co_client.post(
-            "/composer/api/export/burn",
-            json={"participant": "P01", "start": 1.0, "end": 9.0},
-        )
-        assert resp.status_code == 409
-        # out_path is reserved before the lock check; the rejected export must
-        # release it rather than leave an empty placeholder behind.
-        assert sorted(p.name for p in tmp_path.iterdir()) == before
-    finally:
-        composer_server._export_lock.release()
+
+    resp = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 2.0, "end": 5.0},
+    ).get_json()
+
+    assert resp["ok"] is True
+    assert calls == []  # fast path never stitches
+    assert resp["artifact"]["sourceVideo"] == "study_P01-1.mp4"
 
 
 def test_combined_app_registers_composer(tmp_path, monkeypatch):

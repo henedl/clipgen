@@ -53,8 +53,40 @@
         space instantly.</p>
       <div id="mapWeights" class="map-weights"></div>
 
+      <!-- Layout mode: PCA similarity space (default) or manual axes — pick
+           any feature for X/Y/Z plus optional Size and Color dimensions
+           (a 5D scatter). overview-map.js renders the controls. -->
+      <div class="map-sidebar-header">Layout</div>
+      <div id="mapLayoutMode" class="map-layout-mode"></div>
+      <div id="mapAxisPickers" class="map-axis-pickers hidden"></div>
+
       <div class="map-sidebar-header">Layers</div>
       <div id="mapLayers" class="map-layers"></div>
+
+      <!-- k selector + status for the Cluster hulls layer (shown while the
+           layer toggle is on; overview-map.js wires it). -->
+      <div id="mapClusterControls" class="map-cluster-controls hidden">
+        <label class="map-cluster-k">k
+          <select id="mapClusterK" aria-label="Cluster count">
+            <option value="0" selected>auto</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </label>
+        <span id="mapClusterInfo"></span>
+      </div>
+
+      <!-- Active "color by" choropleth (click the chip to restore the
+           outlier ramp); populated by overview-map.js when a feature name
+           is clicked in the explain panel or axis legend. -->
+      <div id="mapColorBySection" class="hidden">
+        <div class="map-sidebar-header">Color by</div>
+        <div class="map-muted">
+          <button id="mapColorByChip" class="map-muted-chip" type="button"></button>
+        </div>
+      </div>
 
       <!-- Session replay: sweep a playhead over normalized session time;
            dots glow and pulse where activity clusters (mindwalk-style). -->
@@ -117,8 +149,12 @@
     <aside id="mapExplain" class="hidden" aria-label="Participant details">
       <div class="map-explain-header">
         <span id="mapExplainTitle"></span>
-        <button id="mapExplainClose" class="btn btn-small btn-icon" type="button"
-                aria-label="Close details">✕</button>
+        <span class="map-explain-actions">
+          <button id="mapCompareBtn" class="btn btn-small" type="button"
+                  title="Compare: shift-click another dot (or click here, then a dot) to diff this participant against it">Compare…</button>
+          <button id="mapExplainClose" class="btn btn-small btn-icon" type="button"
+                  aria-label="Close details">✕</button>
+        </span>
       </div>
       <div id="mapExplainBody"></div>
     </aside>
