@@ -201,7 +201,18 @@ def build_screenspace_features(
     (excluded events already dropped).
     """
     by_participant = _screenspace_rows_by_participant(event_rows)
-    detectors = sorted({r.get("detector", "") for r in event_rows if r.get("detector")})
+    # Navigational events (scene/boundary scaffolding) are excluded from the
+    # content-event rates/confidences below — matching Metadata and Convergence,
+    # which treat them as scaffolding — so a detector that only ever fires
+    # navigationally drops out here; ss_nav_share keeps navigation as its own
+    # signal.
+    detectors = sorted(
+        {
+            r.get("detector", "")
+            for r in event_rows
+            if r.get("detector") and not r.get("navigational")
+        }
+    )
 
     columns = [
         _column(f"ss_rate_{_slug(d)}", "screenspace", f"{d} events/min")
@@ -217,9 +228,10 @@ def build_screenspace_features(
     values: dict[str, dict[str, float]] = {}
     for pid, rows in by_participant.items():
         minutes = _minutes(_screenspace_duration_seconds(rows))
+        content = [r for r in rows if not r.get("navigational")]
         row_out: dict[str, float] = {}
         for d in detectors:
-            d_rows = [r for r in rows if r.get("detector") == d]
+            d_rows = [r for r in content if r.get("detector") == d]
             rate = len(d_rows) / minutes if minutes > 0 else 0.0
             confs = [
                 float(r["confidence"])
@@ -230,7 +242,9 @@ def build_screenspace_features(
             row_out[f"ss_conf_{_slug(d)}"] = (
                 round(sum(confs) / len(confs), 4) if confs else 0.0
             )
-        row_out["ss_total_rate"] = round(len(rows) / minutes, 4) if minutes > 0 else 0.0
+        row_out["ss_total_rate"] = (
+            round(len(content) / minutes, 4) if minutes > 0 else 0.0
+        )
         row_out["ss_nav_share"] = round(
             sum(1 for r in rows if r.get("navigational")) / len(rows), 4
         )
@@ -409,6 +423,8 @@ def build_session_shape_features(
         ss_positions: list[tuple[float, float]] = []
         if ss_duration > 0:
             for r in ss_rows:
+                if r.get("navigational"):
+                    continue  # scaffolding — excluded like the content-event rates
                 try:
                     mid = (
                         float(r.get("time_in") or 0.0) + float(r.get("time_out") or 0.0)

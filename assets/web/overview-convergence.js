@@ -459,6 +459,10 @@
   }
 
   function recalculate() {
+    // Re-read baselines from the hub on every recompute: a Refresh reassigns
+    // state.convergenceBaselines to a brand-new object, so the reference captured
+    // at first activation would go stale and misplace sheet events on the timeline.
+    cvState.baselines = getState().convergenceBaselines || {};
     clearSelection();
     collectAllEvents();
     populateEventTypeChips();

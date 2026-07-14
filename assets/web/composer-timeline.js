@@ -705,10 +705,10 @@
         var dt = ((e.clientX - drag.startX) / rect.width) * visLen;
         if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
         if (!drag.moved) return;
-        var span = drag.origEnd - drag.origStart;
-        var newStart = clamp(drag.origStart + dt, 0, state.duration - span);
+        var bodyLen = drag.origEnd - drag.origStart;
+        var newStart = clamp(drag.origStart + dt, 0, state.duration - bodyLen);
         drag.cut.start = newStart;
-        drag.cut.end = newStart + span;
+        drag.cut.end = newStart + bodyLen;
         canvas.classList.add("co-drag-body");
         scheduleRender();
       } else if (drag.type === "pan") {

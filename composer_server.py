@@ -109,12 +109,13 @@ def _load_manifest() -> dict[str, Any]:
 
 
 def _persist_locked() -> None:
-    """Write the composer manifest to disk. Caller must hold ``_manifest_lock``."""
-    path = _manifest_path()
-    try:
-        path.write_text(json.dumps(_manifest, indent=2), encoding="utf-8")
-    except OSError as exc:
-        utils.error_print(f"Could not write {path.name}: {exc}")
+    """Write the composer manifest to disk atomically (tmp + ``os.replace`` via
+    :func:`utils.save_json_manifest`) so an interrupted write can't truncate the
+    file and silently drop the session's cuts/trims/annotations. Caller must hold
+    ``_manifest_lock``."""
+    utils.save_json_manifest(
+        config.COMPOSER_MANIFEST_FILENAME, _manifest, warn_label="composer manifest"
+    )
 
 
 # ---- Participant / video discovery ----
@@ -940,10 +941,11 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
                 prefix=config.TEMP_ARTIFACT_PREFIX, suffix=".png", dir=out_dir
             )
             os.close(fd)
-            overlay.save(png_path)
+            # Track before save so a failed overlay.save still gets cleaned up.
             overlay_specs.append(
                 (png_path, window["start"] - start, window["end"] - start)
             )
+            overlay.save(png_path)
         cmd = _build_overlay_command(
             overlay_input,
             overlay_local_start,

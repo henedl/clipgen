@@ -160,6 +160,9 @@
   function switchToPart(i, localTime, resume) {
     var video = qs("#coVideo");
     if (!video) return;
+    // A same-part seek may still be deferred on loadedmetadata; drop it so it
+    // can't fire after this part loads and clobber this cross-part seek.
+    cancelPendingSeek();
     state.activePart = i;
     video.src = "media/" + encodeURIComponent(state.parts[i].name);
     video.load();
@@ -440,7 +443,7 @@
   // Marker metadata rides along when the marker is loaded so Studio's
   // Composer Intake can render the trim as a card; the server preserves
   // previously stored metadata when a re-PUT (undo/redo) omits it.
-  function applyTrim(key, values) {
+  function applyTrim(key, values, sourceSpan) {
     var payload = values ? { start: values.start, end: values.end } : null;
     var meta = values && findMarker(key);
     if (meta) {
@@ -458,8 +461,13 @@
         state.trims[key] = { start: data.trim.start, end: data.trim.end };
         if (marker) {
           if (!marker.trimmed) {
-            marker.origStart = marker.start;
-            marker.origEnd = marker.end;
+            // A drag-trim mutates marker.start/end live, so the current span is
+            // already the trimmed value; *sourceSpan* (the pre-drag span passed
+            // by commitMarkerTrim) is the true original. Non-drag callers omit it
+            // and fall back to the current span, which hasn't been mutated.
+            var src = sourceSpan || { start: marker.start, end: marker.end };
+            marker.origStart = src.start;
+            marker.origEnd = src.end;
           }
           marker.trimmed = true;
           marker.start = data.trim.start;
@@ -787,7 +795,7 @@
   // *origSpan* the marker's pre-drag visual span (for failure rollback).
   function commitMarkerTrim(marker, before, origSpan) {
     var after = { start: marker.start, end: marker.end };
-    applyTrim(marker.key, after).then(function () {
+    applyTrim(marker.key, after, origSpan).then(function () {
       recordOp({ type: "trim", key: marker.key, before: before, after: after });
     }).catch(function (error) {
       if (origSpan) {
@@ -885,8 +893,11 @@
       });
       nameRow.appendChild(name);
       if (cut._genStatus) {
-        nameRow.appendChild(el("span", "co-cut-status " + cut._genStatus,
-          cut._genStatus === "ok" ? "✓" : "✗"));
+        var okStatus = cut._genStatus === "ok";
+        var statusIcon = el("span", "co-cut-status co-btn-icon " + cut._genStatus +
+          (okStatus ? " co-icon-check" : " co-icon-x-mark"));
+        statusIcon.title = okStatus ? "Generated" : "Generation failed";
+        nameRow.appendChild(statusIcon);
       }
       var del = el("button", "co-cut-delete");
       del.type = "button";
@@ -1124,6 +1135,7 @@
     var artifact = data.artifact || {};
     state.artifactLog.push({
       ok: !!data.ok,
+      type: artifact.type || "clip",
       file: artifact.file ? String(artifact.file).split(/[\\/]/).pop() : "",
       participant: artifact.participant || (cut && cut.participant) || "",
       start: artifact.start !== undefined ? artifact.start : (cut && cut.start),
@@ -1147,16 +1159,25 @@
     for (var i = state.artifactLog.length - 1; i >= 0; i--) {
       var entry = state.artifactLog[i];
       var row = el("div", "log-entry");
-      var badge = el("span", "log-type-badge", entry.ok ? "clip" : "fail");
-      badge.setAttribute("data-type", entry.ok ? "clip" : "fail");
+      var typeLabel = entry.ok ? (entry.type || "clip") : "fail";
+      var badge = el("span", "log-type-badge", typeLabel);
+      badge.setAttribute("data-type", typeLabel);
       row.appendChild(badge);
       row.appendChild(el("span", "log-entry-file",
         entry.ok ? (entry.file || "clip") : (entry.error || "unknown error")));
-      row.appendChild(el("span", "log-entry-meta",
-        entry.participant + " · " +
-        formatTime(entry.start, { decimals: 1 }) + " – " +
-        formatTime(entry.end, { decimals: 1 }) + " · " +
-        entry.at.toLocaleTimeString()));
+      // A screenshot is a single instant (start === end): show one timestamp, not
+      // a zero-length "t – t" range; drop the time entirely if we have no numbers.
+      var meta = entry.participant;
+      var hasStart = typeof entry.start === "number" && isFinite(entry.start);
+      var hasEnd = typeof entry.end === "number" && isFinite(entry.end);
+      if (hasStart && hasEnd && entry.start !== entry.end) {
+        meta += " · " + formatTime(entry.start, { decimals: 1 }) +
+          " – " + formatTime(entry.end, { decimals: 1 });
+      } else if (hasStart) {
+        meta += " · " + formatTime(entry.start, { decimals: 1 });
+      }
+      meta += " · " + entry.at.toLocaleTimeString();
+      row.appendChild(el("span", "log-entry-meta", meta));
       frag.appendChild(row);
     }
     content.appendChild(frag);

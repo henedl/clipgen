@@ -507,7 +507,7 @@
 
   function anchorShortName(col) {
     return col.label
-      .replace(" share of observations", "")
+      .replace(" share of timestamps", "")
       .replace(" events/min", "");
   }
 
@@ -1698,6 +1698,14 @@
     return OV && OV.state ? OV.state.dataVersion : 0;
   }
 
+  // True only while the Map tab is the active one. The orbit/hover listeners are
+  // window-level (so a drag can leave the canvas), so gate the per-move raycast
+  // on this to avoid work while Convergence/Metadata is showing.
+  function mapIsActive() {
+    var OV = window.ClipgenOverview;
+    return !!(OV && OV.state && OV.state.activeTab === "map");
+  }
+
   function loadData() {
     // Await the hub bootstrap alongside our own fetch so _matrixVersion is
     // captured after the version settles (ensureData never rejects).
@@ -1928,7 +1936,9 @@
     }
 
     bindOrbit();
-    window.addEventListener("resize", onResize);
+    // Resize is driven by the hub's tab-aware forwarder (OV.mapResize) and by
+    // mapActivate()'s onResize() on (re)activation; a direct window listener here
+    // would also fire on inactive tabs and double-fire on the Map.
     applyCamera();
   }
 
@@ -2166,7 +2176,7 @@
         orbit.phi = Math.max(0.15, Math.min(Math.PI - 0.15, orbit.phi - dy * 0.008));
         applyCamera();
         requestRender();
-      } else {
+      } else if (mapIsActive()) {
         updateHover(e);
       }
     });

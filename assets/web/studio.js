@@ -2722,7 +2722,8 @@
     // to the Composer Intake tab and highlights it.
     var trimKey = queueItemTrimKey(item);
     if (trimKey) {
-      var trimBadge = el("button", "intake-trim-badge", "✱");
+      var trimBadge = el("button", "intake-trim-badge");
+      trimBadge.innerHTML = iconHTML("scissors");
       trimBadge.type = "button";
       trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
       trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");

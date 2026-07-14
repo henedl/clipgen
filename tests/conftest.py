@@ -23,6 +23,24 @@ def _sandbox_cwd(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _reset_no_input_mode():
+    """Restore ``utils.NO_INPUT_MODE`` after every test.
+
+    ``server.create_combined_app`` sets the module global ``NO_INPUT_MODE = True``
+    and never resets it, so under ``pytest-randomly`` a server test ordered before
+    an interactive-prompt test (e.g. the Excel fallback) leaks the flag and makes
+    the prompt refuse to read input. Snapshot + restore keeps it isolated per test.
+    """
+    import utils
+
+    original = utils.NO_INPUT_MODE
+    try:
+        yield
+    finally:
+        utils.NO_INPUT_MODE = original
+
+
 @pytest.fixture
 def make_clip():
     def _make_clip(
