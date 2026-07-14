@@ -121,6 +121,8 @@ body[data-frontend="composer"] {
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-trash { --co-icon: url("icons/trash.svg"); }
 .co-icon-scissors { --co-icon: url("icons/scissors.svg"); }
+.co-icon-check { --co-icon: url("icons/check.svg"); }
+.co-icon-x-mark { --co-icon: url("icons/x-mark.svg"); }
 
 /* ---- Marker-lane toggle pills ---- */
 

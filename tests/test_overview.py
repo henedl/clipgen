@@ -100,16 +100,21 @@ def test_observation_rows_without_timestamps_are_ignored():
 # ---- Screenspace features ----------------------------------------------------
 
 
-def test_screenspace_rates_use_last_event_time():
-    # Session proxy = last time_out (120 s = 2 min); 4 change events -> 2/min.
+def test_screenspace_rates_exclude_navigational_but_nav_share_counts_it():
+    # Session proxy = last time_out (120 s = 2 min); 4 content "change" events -> 2/min.
+    # The navigational "text" event is scaffolding (like Metadata/Convergence treat
+    # it): excluded from the content rates -- so ss_total_rate stays 4/2min = 2.0 and
+    # a navigational-only detector gets no rate column -- but still counted in
+    # ss_nav_share (1 of 5 total events).
     rows = [
         _ss_row(detector="change", time_in=t, time_out=t + 5) for t in (0, 30, 60, 115)
     ]
     rows.append(_ss_row(detector="text", time_in=50, time_out=55, navigational=True))
     columns, values = overview.build_screenspace_features(rows)
+    assert "ss_rate_text" not in {c["key"] for c in columns}
     p01 = values["P01"]
     assert p01["ss_rate_change"] == pytest.approx(2.0)
-    assert p01["ss_total_rate"] == pytest.approx(2.5)
+    assert p01["ss_total_rate"] == pytest.approx(2.0)
     assert p01["ss_nav_share"] == pytest.approx(1 / 5)
     assert p01["ss_conf_change"] == pytest.approx(0.8)
 

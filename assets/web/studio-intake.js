@@ -530,7 +530,10 @@
       if (cfg.trimBadgeKey) {
         var trimKey = cfg.trimBadgeKey(c);
         if (trimKey) {
-          var trimBadge = el("button", "intake-trim-badge", "✱");
+          // iconHTML lives in the studio.js hub IIFE (not reachable here), so
+          // inline the sanctioned mask-icon span directly.
+          var trimBadge = el("button", "intake-trim-badge");
+          trimBadge.innerHTML = '<span class="cg-icon cg-icon--scissors"></span>';
           trimBadge.type = "button";
           trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
           trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");

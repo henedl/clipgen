@@ -105,12 +105,13 @@ def _load_manifest() -> dict[str, Any]:
 
 
 def _persist_locked() -> None:
-    """Write the composer manifest to disk. Caller must hold ``_manifest_lock``."""
-    path = _manifest_path()
-    try:
-        path.write_text(json.dumps(_manifest, indent=2), encoding="utf-8")
-    except OSError as exc:
-        utils.error_print(f"Could not write {path.name}: {exc}")
+    """Write the composer manifest to disk atomically (tmp + ``os.replace`` via
+    :func:`utils.save_json_manifest`) so an interrupted write can't truncate the
+    file and silently drop the session's cuts/trims/annotations. Caller must hold
+    ``_manifest_lock``."""
+    utils.save_json_manifest(
+        config.COMPOSER_MANIFEST_FILENAME, _manifest, warn_label="composer manifest"
+    )
 
 
 # ---- Participant / video discovery ----
@@ -589,8 +590,11 @@ def _render_annotation_overlay(
 # ---- Exports (annotated screenshot / burned video / GIF) ----
 
 # One export at a time is plenty for a single-user tool; the cancel event
-# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag.
+# terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag. The lock
+# enforces that single-export invariant so a second request can't clear the
+# shared cancel event out from under (or cross-cancel) an in-flight export.
 _export_cancel = threading.Event()
+_export_lock = threading.Lock()
 
 # Bound on the ffmpeg filter graph: one overlay input per visibility window.
 MAX_OVERLAY_WINDOWS = 20
@@ -840,8 +844,13 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     if not parts:
         return err(f"No video for {participant}", 404)
     start_part = _part_for_time(parts, start)
-    end_part = _part_for_time(parts, max(start, end - 0.001))
-    if start_part is not end_part:
+    # Single-part iff the span's (exclusive) end stays within the start part.
+    # Comparing to the boundary directly is exact; the old
+    # `_part_for_time(end - 0.001)` sampling let near-boundary crossings slip
+    # through. Only fires when a later part exists, so a span running just past a
+    # lone video's end still exports to EOF.
+    start_end = start_part["offset"] + start_part["duration"]
+    if start_part is not parts[-1] and end > start_end:
         return err(
             "The span crosses a recording-part boundary; export each part separately."
         )
@@ -868,6 +877,13 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
         f"{participant} annotated {kind} {time_tag}{fmt}", fmt
     )
     overlay_specs: list[tuple[str, float, float]] = []
+    # Serialize exports (reject a second concurrent one) so it can't clear the
+    # shared cancel event mid-run and cross-cancel the in-flight export.
+    if not _export_lock.acquire(blocking=False):
+        # out_path was already reserved above; release it so a rejected export
+        # doesn't leave an empty placeholder behind.
+        files.release_reservation(out_path)
+        return err("An export is already running; wait for it to finish.", 409)
     _export_cancel.clear()
     try:
         for window in windows:
@@ -878,10 +894,11 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
                 prefix=config.TEMP_ARTIFACT_PREFIX, suffix=".png", dir=out_dir
             )
             os.close(fd)
-            overlay.save(png_path)
+            # Track before save so a failed overlay.save still gets cleaned up.
             overlay_specs.append(
                 (png_path, window["start"] - start, window["end"] - start)
             )
+            overlay.save(png_path)
         cmd = _build_overlay_command(
             start_part["path"],
             start - start_part["offset"],
@@ -903,6 +920,7 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
                 os.unlink(png_path)
             except OSError:
                 pass
+        _export_lock.release()
     if result is None:
         files.release_reservation(out_path)
         return err("Export cancelled" if _export_cancel.is_set() else "ffmpeg failed")

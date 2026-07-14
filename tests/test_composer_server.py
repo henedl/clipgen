@@ -373,6 +373,50 @@ def test_export_screenshot_composites_and_records(co_client, tmp_path, monkeypat
     assert out.is_file() and out.stat().st_size > 0
 
 
+def test_export_rejects_cross_part_span(co_client):
+    # Parts are [0,10) and [10,20); a span crossing the 10 s boundary is rejected
+    # before any ffmpeg work (the guard runs before the annotations/probe checks).
+    resp = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 8.0, "end": 12.0},
+    )
+    assert resp.status_code == 400
+    assert "boundary" in resp.get_json()["error"]
+
+    # The old `_part_for_time(end - 0.001)` sampling let a sub-epsilon crossing
+    # slip through (both ends resolved to part 1); the direct boundary check
+    # catches it — part 1 ends at 10.0 and this ends just past it.
+    resp2 = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 8.0, "end": 10.0005},
+    )
+    assert resp2.status_code == 400
+    assert "boundary" in resp2.get_json()["error"]
+
+
+def test_concurrent_export_rejected_without_orphan_reservation(
+    co_client, tmp_path, monkeypatch
+):
+    _make_annotation(co_client, span={"start": 1.0, "end": 9.0})
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda path: {"width": 320, "height": 240}
+    )
+    # Simulate an export already in flight by holding the export lock.
+    assert composer_server._export_lock.acquire(blocking=False)
+    try:
+        before = sorted(p.name for p in tmp_path.iterdir())
+        resp = co_client.post(
+            "/composer/api/export/burn",
+            json={"participant": "P01", "start": 1.0, "end": 9.0},
+        )
+        assert resp.status_code == 409
+        # out_path is reserved before the lock check; the rejected export must
+        # release it rather than leave an empty placeholder behind.
+        assert sorted(p.name for p in tmp_path.iterdir()) == before
+    finally:
+        composer_server._export_lock.release()
+
+
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
     import server
     import start_settings

@@ -2781,6 +2781,14 @@ html[data-theme="dark"] .log-panel {
   background: var(--color-accent);
 }
 
+/* Icon-only badge (scissors): .cg-icon has no intrinsic size, so set it here or
+   it collapses to 0×0. Color follows the badge's accent-fg via currentColor. */
+.intake-trim-badge .cg-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  vertical-align: middle;
+}
+
 /* All queue cards stack a caption row over the source start–stop time line
  * (.queue-card-meta is column by default); intake-area cards add the
  * participant + type [+ transcript snippet] richness on top. */
