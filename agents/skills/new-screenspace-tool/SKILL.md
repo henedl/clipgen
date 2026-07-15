@@ -14,13 +14,13 @@ Eight files need touching. Work through this checklist in order.
 
 3. **Design token** (`assets/web/tokens.css`)
    - Add `--color-task-{name}` to the Screenspace task color block
-   - Read it in JS via `getComputedStyle(document.documentElement).getPropertyValue("--color-task-" + type)` — never hardcode hex
+   - Read it in JS via `getComputedStyle(document.documentElement).getPropertyValue("--color-task-" + type)`. Never hardcode hex
 
 4. **Frontend UI** (`assets/web/screenspace.js`)
    - Add the tool to the tool selector
    - Add result rendering logic
 
-5. **Timeline viewer** (`viewer.py`) — _skip for timelapse_
+5. **Timeline viewer** (`viewer.py`), _skip for timelapse_
    - Add the task type to `SS_DETECTOR_COLORS` and `SS_DETECTOR_ICON_PATHS`
    - Timelapse produces a single output file and does NOT need entries here
 
@@ -35,5 +35,5 @@ Eight files need touching. Work through this checklist in order.
 
 ## Notes
 
-- Icon for the tool: pick a Heroicon from `assets/icons/` (kebab-case, e.g. `eye.svg`). Use the CSS `mask-image` pattern — see `XREF_BADGES` in `utils.js` for the canonical example.
+- Icon for the tool: pick a Heroicon from `assets/icons/` (kebab-case, e.g. `eye.svg`). Use the CSS `mask-image` pattern. See `XREF_BADGES` in `utils.js` for the canonical example.
 - Tool-specific CLI parameters (e.g. `--ss-target-color`, `--ss-threshold`) go in the screenspace args group in `cli.py`.
