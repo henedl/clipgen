@@ -19,4 +19,4 @@ Report pass/fail per stage. If all pass, remind the agent:
 - **Ruff format**: auto-fixed by running `uv run ruff format`. Most common cause of CI failures.
 - **ty `union-attr`**: narrow the Optional before use with `assert x is not None` rather than `# type: ignore`.
 - **ty JSON dicts**: after `isinstance(item, dict)`, use `cast(Dict[str, Any], item)`.
-- **Tests**: run a single file to isolate — `uv run --extra dev pytest -c tests/pytest.ini tests/test_foo.py`.
+- **Tests**: run a single file to isolate: `uv run --extra dev pytest -c tests/pytest.ini tests/test_foo.py`.
