@@ -1910,6 +1910,21 @@
     return state.reelGenerating;
   }
 
+  // "3 clip" -> "3 clips" ("GIF" -> "GIFs"). Presentation copy for tooltips.
+  function plural(n, word) {
+    return n + " " + word + (n === 1 ? "" : "s");
+  }
+
+  // Singular noun for the currently selected artifact output format.
+  function artifactNoun() {
+    var sel = qs("#artifactFormat");
+    var v = sel ? sel.value : "";
+    if (v === "screen") return "screenshot";
+    if (v === "gif") return "GIF";
+    if (v === "clip") return "clip";
+    return "artifact";
+  }
+
   function updateArtifactActions() {
     var n = state.artifactQueue.length;
     var artLocked = isArtifactQueueLocked();
@@ -1917,25 +1932,40 @@
     var genBtn = qs("#generateBtn");
     if (genBtn) {
       genBtn.disabled = artLocked || n === 0;
-      if (n === 0 && !artLocked) {
-        genBtn.setAttribute("data-tooltip", "Add cells to the work area first");
-      }
+      genBtn.setAttribute(
+        "data-tooltip",
+        artLocked
+          ? "Generating…"
+          : n === 0
+            ? "Add cells to the work area first"
+            : "Generate " + plural(n, artifactNoun()),
+      );
     }
     var clearBtn = qs("#clearArtifactsBtn");
     if (clearBtn) clearBtn.disabled = artLocked;
     var stashBtn = qs("#stashArtifactsBtn");
     if (stashBtn) {
       stashBtn.disabled = artLocked || n === 0;
-      if (n === 0 && !artLocked) {
-        stashBtn.setAttribute("data-tooltip", "Add cells to the work area first");
-      }
+      stashBtn.setAttribute(
+        "data-tooltip",
+        artLocked
+          ? "Finish generating first"
+          : n === 0
+            ? "Add cells to the work area first"
+            : "Stash " + plural(n, "artifact") + " to reuse later",
+      );
     }
     var addToReelBtn = qs("#addToReelBtn");
     if (addToReelBtn) {
       addToReelBtn.disabled = reelLocked || n === 0;
-      if (n === 0 && !reelLocked) {
-        addToReelBtn.setAttribute("data-tooltip", "Add cells to the work area first");
-      }
+      addToReelBtn.setAttribute(
+        "data-tooltip",
+        reelLocked
+          ? "Finish generating first"
+          : n === 0
+            ? "Add cells to the work area first"
+            : "Add " + plural(n, "clip") + " to the reel",
+      );
     }
   }
 
@@ -1945,18 +1975,28 @@
     var buildBtn = qs("#buildReelBtn");
     if (buildBtn) {
       buildBtn.disabled = reelLocked || n === 0;
-      if (n === 0 && !reelLocked) {
-        buildBtn.setAttribute("data-tooltip", "Add clips to the reel first");
-      }
+      buildBtn.setAttribute(
+        "data-tooltip",
+        reelLocked
+          ? "Building…"
+          : n === 0
+            ? "Add clips to the reel first"
+            : "Build a reel from " + plural(n, "clip"),
+      );
     }
     var clearBtn = qs("#clearReelBtn");
     if (clearBtn) clearBtn.disabled = reelLocked;
     var stashBtn = qs("#stashReelBtn");
     if (stashBtn) {
       stashBtn.disabled = reelLocked || n === 0;
-      if (n === 0 && !reelLocked) {
-        stashBtn.setAttribute("data-tooltip", "Add clips to the reel first");
-      }
+      stashBtn.setAttribute(
+        "data-tooltip",
+        reelLocked
+          ? "Finish generating first"
+          : n === 0
+            ? "Add clips to the reel first"
+            : "Stash this reel to reuse later",
+      );
     }
     var highlightsBtn = qs("#buildHighlightsBtn");
     if (highlightsBtn) highlightsBtn.disabled = reelLocked;
@@ -3195,6 +3235,8 @@
         if (this.value === "clip") tcGroup.classList.remove("hidden");
         else tcGroup.classList.add("hidden");
       }
+      // Refresh the Generate tooltip so its noun tracks the selected format.
+      updateArtifactActions();
     });
 
     qs("#titlecardEnabled").addEventListener("change", persistTitlecardSettings);
