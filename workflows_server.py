@@ -129,6 +129,9 @@ def api_catalog() -> Any:
     """
     videos = utils.discover_participant_videos()
     return ok(
+        # Bootstrap channel for shared frontend config (hotkey overrides etc.);
+        # this page has no sheet-data fetch, so the config rides along here.
+        config=utils.get_frontend_config(),
         catalog=workflows.serialize_catalog(),
         # Adapter pairs the runner coerces across (events→clipRecords, …) so
         # the frontend's canConnect accepts the same wires the runner runs.

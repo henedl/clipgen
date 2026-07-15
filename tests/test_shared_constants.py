@@ -149,6 +149,7 @@ def test_get_frontend_config_shape():
         "composerAnnotationStrokeWidth",
         "composerAnnotationFontSize",
         "composerAnnotationSpanSeconds",
+        "hotkeyOverrides",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -221,13 +222,20 @@ def test_studio_api_payload_includes_config():
 
 
 def test_exported_viewer_payloads_include_config():
-    """finalize_timeline_data / gallery viewer embed `config`."""
+    """finalize_timeline_data / gallery viewer embed `config`.
+
+    Exports go through _export_config(), which strips hotkeyOverrides so a
+    standalone HTML file always runs the default keymap.
+    """
     src = (Path(__file__).resolve().parent.parent / "viewer.py").read_text("utf-8")
-    occurrences = src.count('"config": utils.get_frontend_config()')
+    occurrences = src.count('"config": _export_config()')
     assert occurrences >= 2, (
         f"Expected at least 2 occurrences of config payload in viewer.py "
         f"(timeline/gallery), found {occurrences}"
     )
+    import viewer
+
+    assert "hotkeyOverrides" not in viewer._export_config()
 
 
 def _parse_js_string_array(name: str) -> list[str]:

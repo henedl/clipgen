@@ -198,6 +198,41 @@ _settings_defaults: dict[str, Any] = {
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _MARK_KEY_RE = re.compile(r"^[a-z0-9_]+$")
 
+# Hotkey overrides: structural validation only. The action catalog (which ids
+# exist, what they do) lives in assets/web/hotkeys.js; unknown ids are stored
+# as-is and simply never dispatch client-side.
+_HOTKEY_ID_RE = re.compile(r"^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+$")
+_HOTKEY_COMBO_RE = re.compile(
+    r"^((Mod|Ctrl|Alt|Shift)\+)*([\x21-\x7E]|[A-Za-z][A-Za-z0-9]+)$"
+)
+_HOTKEY_RESERVED_KEYS = ("Escape", "Tab")
+
+
+def _coerce_hotkey_overrides(value: Any) -> dict[str, str] | None:
+    """Validate and normalize a hotkey-overrides payload.
+
+    Keys are dot-namespaced action ids; values are ``""`` (shortcut disabled)
+    or whitespace-separated combo tokens like ``Mod+Shift+Z``. Escape and Tab
+    are reserved for modal/focus semantics and rejected as final keys.
+    Returns the cleaned dict, or None if the payload is structurally invalid.
+    """
+    if not isinstance(value, dict):
+        return None
+    cleaned: dict[str, str] = {}
+    for raw_key, raw_combo in value.items():
+        if not isinstance(raw_key, str) or not _HOTKEY_ID_RE.match(raw_key):
+            return None
+        if not isinstance(raw_combo, str):
+            return None
+        combo = raw_combo.strip()
+        for token in combo.split():
+            if not _HOTKEY_COMBO_RE.match(token):
+                return None
+            if token.split("+")[-1] in _HOTKEY_RESERVED_KEYS:
+                return None
+        cleaned[raw_key] = combo
+    return cleaned
+
 
 def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     """Validate and normalize a mark_categories payload.
@@ -1238,6 +1273,11 @@ def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None
         if cleaned is None:
             return False, None, f"Invalid {name} payload"
         return True, cleaned, None
+    if stype == "hotkeys":
+        cleaned_hotkeys = _coerce_hotkey_overrides(value)
+        if cleaned_hotkeys is None:
+            return False, None, f"Invalid {name} payload"
+        return True, cleaned_hotkeys, None
     if stype == "card_picker":
         cleaned = _coerce_card_image(value, str(meta.get("kind", "title")))
         if cleaned is None:

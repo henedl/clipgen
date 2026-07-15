@@ -52,6 +52,7 @@
   // toast would leave a canvas that looks editable but never saves).
   function loadCatalog() {
     return apiGet("api/catalog").then(function (res) {
+      if (res && res.config) clipgenApplyConfig(res.config);
       state.catalog = (res && res.catalog) || [];
       state.context = (res && res.context) || { sheet: false, videoDir: false };
       // Adapter pairs the runner coerces across; canConnect consults this Set so

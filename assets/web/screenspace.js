@@ -3878,6 +3878,7 @@
     apiGet("api/participants")
       .then(function (data) {
         if (!data.ok) return;
+        if (data.config) clipgenApplyConfig(data.config);
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
         // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
         // preload loop below already includes the ?v= cache-bust suffix.

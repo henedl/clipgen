@@ -11,6 +11,7 @@
 (function () {
   var TAB_ORDER = [
     "General",
+    "Hotkeys",
     "Video & Clips",
     "Screenspace",
     "Transcription",
@@ -204,6 +205,8 @@
 
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
+    // A hotkey recording capture-listener must never outlive the modal.
+    _hkStopRecording();
     // Dismiss the inline color popover; it lives on document.body at --z-toast
     // and would otherwise outlive the modal.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
@@ -250,12 +253,21 @@
     return null;
   }
 
+  function _isChanged(s) {
+    // Object-valued settings (mark_categories, hotkeys) need structural
+    // comparison; identity-compare is always true for two parsed JSON objects.
+    if (s.value !== null && typeof s.value === "object") {
+      return JSON.stringify(s.value) !== JSON.stringify(s.default);
+    }
+    return s.value !== s.default;
+  }
+
   function _updateChanged(name) {
     var s = _findSetting(name);
     if (!s) return;
     var row = _panelsEl.querySelector('.settings-row[data-setting="' + name + '"]');
     if (!row) return;
-    if (s.value !== s.default) row.classList.add("settings-changed");
+    if (_isChanged(s)) row.classList.add("settings-changed");
     else row.classList.remove("settings-changed");
   }
 
@@ -367,7 +379,7 @@
 
   function _buildRow(s) {
     var row = el("div", "settings-row");
-    if (s.value !== s.default) row.classList.add("settings-changed");
+    if (_isChanged(s)) row.classList.add("settings-changed");
     row.setAttribute("data-setting", s.name);
 
     var labelDiv = el("div", "settings-label");
@@ -466,6 +478,9 @@
     } else if (s.type === "mark_categories") {
       row.classList.add("settings-row-stacked");
       _renderMarkCategoriesEditor(controlDiv, settingName);
+    } else if (s.type === "hotkeys") {
+      row.classList.add("settings-row-stacked");
+      _renderHotkeysEditor(controlDiv, settingName);
     } else if (s.type === "card_picker") {
       row.classList.add("settings-row-stacked");
       var kind = s.kind === "end" ? "end" : "title";
@@ -532,6 +547,195 @@
     row.appendChild(labelDiv);
     row.appendChild(controlDiv);
     return row;
+  }
+
+  // ---- Hotkeys editor ----
+  // Renders from the JS action catalog (window.ClipgenHotkeys.catalog());
+  // the setting's value stores only overrides {actionId: "combo"} with ""
+  // meaning "disabled". Recording captures one combo which replaces the
+  // action's default alias list; per-action Reset deletes the override.
+
+  var _hkRecordCleanup = null;
+
+  function _hkStopRecording() {
+    if (_hkRecordCleanup) {
+      _hkRecordCleanup();
+      _hkRecordCleanup = null;
+    }
+  }
+
+  function _hkCommit(container, settingName, action, combo) {
+    var s = _findSetting(settingName);
+    if (!s) return;
+    if (!s.value || typeof s.value !== "object") s.value = {};
+    if (combo === (action.combos || []).join(" ")) delete s.value[action.id];
+    else s.value[action.id] = combo;
+    // Apply live so the open page reflects the new binding immediately;
+    // other pages pick it up from config on their next load.
+    window.ClipgenHotkeys.applyOverrides(s.value);
+    CLIPGEN_CONFIG.hotkeyOverrides = s.value;
+    _updateChanged(settingName);
+    _scheduleSave();
+    _renderHotkeysEditor(container, settingName);
+  }
+
+  function _hkStartRecording(container, settingName, action, chipsEl) {
+    _hkStopRecording();
+    chipsEl.classList.add("hotkey-recording");
+    chipsEl.innerHTML = "";
+    chipsEl.appendChild(el("span", "hotkey-record-hint", "Press keys… Esc cancels · ⌫ disables"));
+    var conflictEl = null;
+
+    function cleanup() {
+      document.removeEventListener("keydown", onRec, true);
+      chipsEl.classList.remove("hotkey-recording");
+      if (conflictEl && conflictEl.parentNode) conflictEl.parentNode.removeChild(conflictEl);
+    }
+
+    function showConflict(combo, conflicts) {
+      // One decision at a time: swap the hint for a Replace/Cancel prompt.
+      document.removeEventListener("keydown", onRec, true);
+      chipsEl.innerHTML = "";
+      var names = [];
+      for (var i = 0; i < conflicts.length; i++) names.push(conflicts[i].label);
+      conflictEl = el("span", "hotkey-conflict");
+      conflictEl.appendChild(el("span", "", "Already used by " + names.join(", ") + "."));
+      var replaceBtn = el("button", "btn btn-small", "Replace");
+      replaceBtn.type = "button";
+      replaceBtn.addEventListener("click", function () {
+        var s = _findSetting(settingName);
+        if (!s) return;
+        if (!s.value || typeof s.value !== "object") s.value = {};
+        // Never leave two live bindings: disable the previous owners.
+        for (var c = 0; c < conflicts.length; c++) s.value[conflicts[c].id] = "";
+        _hkRecordCleanup = null;
+        cleanup();
+        _hkCommit(container, settingName, action, combo);
+      });
+      var cancelBtn = el("button", "btn btn-small", "Cancel");
+      cancelBtn.type = "button";
+      cancelBtn.addEventListener("click", function () {
+        _hkRecordCleanup = null;
+        cleanup();
+        _renderHotkeysEditor(container, settingName);
+      });
+      conflictEl.appendChild(replaceBtn);
+      conflictEl.appendChild(cancelBtn);
+      chipsEl.appendChild(conflictEl);
+    }
+
+    function onRec(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        _hkRecordCleanup = null;
+        cleanup();
+        _renderHotkeysEditor(container, settingName);
+        return;
+      }
+      if (e.key === "Backspace" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        _hkRecordCleanup = null;
+        cleanup();
+        _hkCommit(container, settingName, action, "");
+        return;
+      }
+      var combo = window.ClipgenHotkeys.normalizeEvent(e);
+      if (!combo) return; // modifier-only keydown; keep waiting
+      var conflicts = window.ClipgenHotkeys.comboConflicts(combo, action.id);
+      if (conflicts.length) {
+        showConflict(combo, conflicts);
+        return;
+      }
+      _hkRecordCleanup = null;
+      cleanup();
+      _hkCommit(container, settingName, action, combo);
+    }
+
+    document.addEventListener("keydown", onRec, true);
+    _hkRecordCleanup = cleanup;
+  }
+
+  function _renderHotkeysEditor(container, settingName) {
+    _hkStopRecording();
+    container.innerHTML = "";
+    var setting = _findSetting(settingName);
+    if (!setting) return;
+    if (!window.ClipgenHotkeys) {
+      container.appendChild(
+        el("div", "settings-label-desc", "Hotkey catalog unavailable on this page."),
+      );
+      return;
+    }
+    if (!setting.value || typeof setting.value !== "object") setting.value = {};
+    // Keep the live registry in sync with what the editor shows (also
+    // self-heals after reset-tab / reset-all re-renders).
+    window.ClipgenHotkeys.applyOverrides(setting.value);
+    CLIPGEN_CONFIG.hotkeyOverrides = setting.value;
+
+    var cat = window.ClipgenHotkeys.catalog();
+    var editor = el("div", "hotkey-editor");
+    for (var si = 0; si < cat.sections.length; si++) {
+      var section = cat.sections[si];
+      var rows = [];
+      for (var ai = 0; ai < cat.actions.length; ai++) {
+        var a = cat.actions[ai];
+        if (a.section === section.id && !a.note) rows.push(a);
+      }
+      if (!rows.length) continue;
+      editor.appendChild(el("div", "settings-group-label", section.label));
+      for (var ri = 0; ri < rows.length; ri++) {
+        editor.appendChild(_hkBuildActionRow(container, settingName, setting, rows[ri]));
+      }
+    }
+    container.appendChild(editor);
+  }
+
+  function _hkBuildActionRow(container, settingName, setting, action) {
+    var rowEl = el("div", "hotkey-row");
+    var overridden = Object.prototype.hasOwnProperty.call(setting.value, action.id);
+    if (overridden) rowEl.classList.add("hotkey-row-changed");
+
+    var chips = el("span", "hotkey-chips");
+    var combos = window.ClipgenHotkeys.resolvedCombos(action.id);
+    if (action.rebindable === false) {
+      chips.classList.add("hotkey-fixed");
+      chips.appendChild(el("kbd", "hotkey-chip", action.displayKeys || (action.combos || []).join(" ")));
+      chips.title = "This shortcut cannot be rebound.";
+    } else if (!combos.length) {
+      var offChip = el("span", "hotkey-chip hotkey-chip-disabled", "Disabled");
+      chips.appendChild(offChip);
+    } else {
+      for (var ci = 0; ci < combos.length; ci++) {
+        chips.appendChild(el("kbd", "hotkey-chip", window.ClipgenHotkeys.formatCombo(combos[ci])));
+      }
+    }
+    if (action.rebindable !== false) {
+      chips.title = "Click to rebind";
+      chips.setAttribute("role", "button");
+      chips.tabIndex = 0;
+      chips.addEventListener("click", function () {
+        _hkStartRecording(container, settingName, action, chips);
+      });
+    }
+    rowEl.appendChild(chips);
+    rowEl.appendChild(el("span", "hotkey-label", action.label));
+
+    if (overridden && action.rebindable !== false) {
+      var resetBtn = el("button", "btn btn-small hotkey-reset", "Reset");
+      resetBtn.type = "button";
+      resetBtn.addEventListener("click", function () {
+        var s = _findSetting(settingName);
+        if (!s || !s.value) return;
+        delete s.value[action.id];
+        window.ClipgenHotkeys.applyOverrides(s.value);
+        CLIPGEN_CONFIG.hotkeyOverrides = s.value;
+        _updateChanged(settingName);
+        _scheduleSave();
+        _renderHotkeysEditor(container, settingName);
+      });
+      rowEl.appendChild(resetBtn);
+    }
+    return rowEl;
   }
 
   function _slugifyKey(label, existingKeys) {

@@ -272,7 +272,9 @@ def api_participants() -> FlaskResponse:
                     for path, dur, cum in timeline
                 ]
         payload.append(entry)
-    return ok(participants=payload)
+    # Bootstrap channel for shared frontend config (hotkey overrides etc.);
+    # this page has no sheet-data fetch, so the config rides along here.
+    return ok(participants=payload, config=utils.get_frontend_config())
 
 
 @screenspace_bp.route("/api/participants/<pid>/notes")
