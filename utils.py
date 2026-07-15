@@ -1232,11 +1232,20 @@ def _parse_single_timestamp_token(token: str) -> tuple[str, str] | None:
     if token == "":
         return None
     # Dash range: "start-end". Require a digit before the dash so we don't
-    # treat a leading dash (e.g. "-5") or non-time dash as a range.
+    # treat a leading dash (e.g. "-5") or non-time dash as a range, and require
+    # both halves to be real timestamps so half-garbage ranges ("1:23-abc",
+    # "5-10", "1:23-1:45-2:00") are reported as skipped here instead of
+    # failing deep in ffmpeg with the clip silently dropped.
     if "-" in token:
         dash_pos = token.find("-")
         if dash_pos > 0 and token[dash_pos - 1].isdigit():
-            return (token[:dash_pos], token[dash_pos + 1 :])
+            start_time = token[:dash_pos]
+            end_time = token[dash_pos + 1 :]
+            if (
+                timestamp_to_seconds(start_time) is not None
+                and timestamp_to_seconds(end_time) is not None
+            ):
+                return (start_time, end_time)
         return None
     # Single timestamp with colon: use as start and add default duration for end.
     # Require a digit before the first colon so we only match time-like strings.

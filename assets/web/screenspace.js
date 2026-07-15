@@ -1306,7 +1306,7 @@
         togglePinPolarity(pin.id);
       });
       meta.appendChild(dot);
-      var time = el("span", "pin-tray-time");
+      var time = el("span", "");
       time.textContent = formatTime(pin.timestamp, { decimals: 1 });
       meta.appendChild(time);
       if (pin.stale) {

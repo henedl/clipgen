@@ -529,7 +529,7 @@
   function sortableHeaderTh(thClass, label, column) {
     var th = el("th", thClass);
     var inner = el("div", "col-header-inner");
-    inner.appendChild(el("span", "col-header-label", label));
+    inner.appendChild(el("span", "", label));
     inner.appendChild(buildSortButton(column));
     th.appendChild(inner);
     return th;

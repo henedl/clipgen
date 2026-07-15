@@ -403,6 +403,10 @@ def average_color_hsv(
     Returns:
         Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
     """
+    if region_pixels.size == 0:
+        # A region cropped fully off-frame: np.mean on the empty crop would
+        # yield NaN (same guard as color_present).
+        return {"h": 0.0, "s": 0.0, "v": 0.0}
     h, w = region_pixels.shape[:2]
     if h > 64 or w > 64:
         new_w, new_h = min(w, 64), min(h, 64)

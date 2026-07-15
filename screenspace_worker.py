@@ -399,7 +399,16 @@ class ScreenspaceWorker:
                     end = timeline[-1][1] + timeline[-1][2]
                 else:
                     _, end = _probe_video_meta(task["video_paths"][0])
-            resume_at = start + progress * (end - start)
+            # ``progress`` is a GLOBAL fraction of the original scan range
+            # (mapped via _progress_offset/_progress_scale in _on_progress),
+            # but ``start`` is the CURRENT segment start — already advanced by
+            # any previous resume. Convert back to the current segment's local
+            # fraction before projecting, or a 2nd+ resume overshoots the true
+            # stop point and skips frames.
+            prev_offset = task.get("_progress_offset", 0.0)
+            prev_scale = task.get("_progress_scale", 1.0)
+            local = max(0.0, min(1.0, (progress - prev_offset) / prev_scale))
+            resume_at = start + local * (end - start)
 
             with self._lock:
                 task["_partial_results"] = list(task.get("result") or [])
@@ -676,6 +685,14 @@ class ScreenspaceWorker:
                 if t:
                     if t.get("_paused_flag"):
                         t["status"] = TASK_STATUS_PAUSED
+                        # ``result`` holds only THIS invocation's detections;
+                        # prepend the pre-pause carry-over (like the completed
+                        # branch below) or a pause on a resumed scan drops the
+                        # earlier results for good — the next resume re-seeds
+                        # _partial_results from t["result"].
+                        partial = t.get("_partial_results")
+                        if partial and isinstance(result, list):
+                            result = partial + result
                         t["result"] = result
                     elif t.get("_cancelled") and not t.get("parameters", {}).get(
                         "detect_first"

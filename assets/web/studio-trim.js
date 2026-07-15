@@ -145,8 +145,8 @@
 
     // Row 2 — in / out points (drag each; click to type).
     var rowInOut = el("div", "trim-row trim-row-inout");
-    var inVal = el("span", "trim-time trim-time-in", formatTime(item.start));
-    var outVal = el("span", "trim-time trim-time-out", formatTime(item.end));
+    var inVal = el("span", "trim-time", formatTime(item.start));
+    var outVal = el("span", "trim-time", formatTime(item.end));
     inVal.title = "Drag to move the in-point · click to type";
     outVal.title = "Drag to move the out-point · click to type";
     rowInOut.appendChild(inVal);

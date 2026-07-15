@@ -477,6 +477,24 @@ def test_annotated_burn_within_part_keeps_single_pass_fast_path(
     assert resp["artifact"]["sourceVideo"] == "study_P01-1.mp4"
 
 
+def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
+    # _export_cancel is a single shared Event; the busy lock enforces the
+    # one-export-at-a-time assumption it relies on. Without it a second
+    # export's clear() would un-cancel the first, and one cancel POST would
+    # abort both in-flight encodes.
+    assert composer_server._export_busy.acquire(blocking=False)
+    try:
+        for route in ("burn", "gif"):
+            resp = co_client.post(
+                f"/composer/api/export/{route}",
+                json={"participant": "P01", "start": 2.0, "end": 5.0},
+            )
+            assert resp.status_code == 409
+            assert resp.get_json()["ok"] is False
+    finally:
+        composer_server._export_busy.release()
+
+
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
     import server
     import start_settings

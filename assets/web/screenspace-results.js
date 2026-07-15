@@ -590,7 +590,7 @@
       applyIconMask(fIcon, "chevron-double-right", "/screenspace/icons/");
       fastLabel.appendChild(fIcon);
       fastLabel.appendChild(document.createTextNode("Fast scan results"));
-      var rerunBtn = el("button", "ss-btn ss-btn-sm fast-scan-rerun-btn", "Re-Run Normal");
+      var rerunBtn = el("button", "btn btn-small fast-scan-rerun-btn", "Re-Run Normal");
       (function (t) {
         rerunBtn.addEventListener("click", function () {
           var params = {};

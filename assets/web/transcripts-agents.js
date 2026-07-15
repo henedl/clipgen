@@ -978,7 +978,7 @@
     cats.forEach(function (c) {
       var chip = document.createElement("span");
       chip.className = "friction-chip";
-      var lab = el("span", "friction-chip-label", c.label);
+      var lab = el("span", "", c.label);
       var cnt = el("span", "friction-chip-count", String(byCat[c.key] || 0));
       chip.appendChild(lab);
       chip.appendChild(cnt);
