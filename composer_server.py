@@ -602,7 +602,11 @@ def _render_annotation_overlay(
 
 # One export at a time is plenty for a single-user tool; the cancel event
 # terminates the in-flight ffmpeg via run_ffmpeg_process's cancel_flag.
+# _export_busy enforces the single-export assumption the shared event relies
+# on: without it, a second export's clear() would un-cancel the first, and one
+# cancel POST would abort both in-flight encodes.
 _export_cancel = threading.Event()
+_export_busy = threading.Lock()
 
 # Bound on the ffmpeg filter graph: one overlay input per visibility window.
 MAX_OVERLAY_WINDOWS = 20
@@ -995,13 +999,23 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
 @composer_bp.route("/api/export/burn", methods=["POST"])
 def api_export_burn() -> Any:
     """Burn annotations into a video span (seek-first; span-only encode)."""
-    return _run_overlay_export(request.get_json(silent=True) or {}, gif=False)
+    if not _export_busy.acquire(blocking=False):
+        return err("An export is already running", 409)
+    try:
+        return _run_overlay_export(request.get_json(silent=True) or {}, gif=False)
+    finally:
+        _export_busy.release()
 
 
 @composer_bp.route("/api/export/gif", methods=["POST"])
 def api_export_gif() -> Any:
     """Burn annotations into an animated GIF of the span."""
-    return _run_overlay_export(request.get_json(silent=True) or {}, gif=True)
+    if not _export_busy.acquire(blocking=False):
+        return err("An export is already running", 409)
+    try:
+        return _run_overlay_export(request.get_json(silent=True) or {}, gif=True)
+    finally:
+        _export_busy.release()
 
 
 # ---- State init ----

@@ -9,6 +9,19 @@ def test_parse_timestamps_parses_single_and_range():
     assert range_only == [("1:23", "1:45")]
 
 
+def test_parse_timestamps_rejects_half_garbage_dash_ranges():
+    # A dash range must have a valid timestamp on BOTH sides; half-garbage
+    # ranges are skipped like any other unparseable token instead of flowing
+    # to ffmpeg as bogus (start, end) pairs.
+    assert utils.parse_timestamps("1:23-abc") == []
+    assert utils.parse_timestamps("5-10") == []
+    assert utils.parse_timestamps("1:23-1:45-2:00") == []
+    # Valid ranges still parse, including hours and the MM:SS >59-minute form.
+    assert utils.parse_timestamps("1:23-1:45") == [("1:23", "1:45")]
+    assert utils.parse_timestamps("1:02:03-1:04:05") == [("1:02:03", "1:04:05")]
+    assert utils.parse_timestamps("75:00-80:00") == [("75:00", "80:00")]
+
+
 def test_parse_timestamps_parses_multiple_separators_and_ignored_tokens(monkeypatch):
     monkeypatch.setattr(
         utils.config,

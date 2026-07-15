@@ -104,6 +104,10 @@ def _build_drawtext_filter(text: str) -> str:
     )
     return (
         "drawtext=text='{}'"
+        # The text is static — disable drawtext's %{...} expansion so a
+        # description containing "%" (which sanitize_filename keeps) renders
+        # literally instead of erroring the encode.
+        ":expansion=none"
         ":font=monospace"
         ":fontcolor=white"
         ":fontsize=min(w\\,h)/16"

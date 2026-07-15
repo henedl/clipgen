@@ -60,6 +60,15 @@ def test_build_titlecard_frame_uses_black_background_when_no_asset(
     assert "drawtext=text='No asset'" in joined
 
 
+def test_build_drawtext_filter_disables_expansion():
+    # "%" survives sanitize_filename; with drawtext's default expansion=normal
+    # a "%{" in the description would trigger text expansion and error the
+    # encode. The filter must render the text literally.
+    filt = titlecards._build_drawtext_filter("Progress 50%{pts}")
+    assert ":expansion=none" in filt
+    assert "Progress 50%{pts}" in filt
+
+
 def test_wrap_clip_with_cards_respects_disabled_flag(monkeypatch, make_clip):
     clip = make_clip()
 

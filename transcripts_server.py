@@ -77,6 +77,13 @@ _manifest_lock = threading.Lock()
 # frozen segments over in-memory edits. Re-transcription mints a fresh task id,
 # so its new segments still merge (and win) exactly once.
 _merged_task_ids: set[str] = set()
+# Participants whose transcript was freshly merged but whose completion side
+# effects (clearing stale agent fields + starting the thinking-agent chain)
+# have not run yet. The merge can be reached from either _on_task_complete or
+# a debounced _do_persist — whichever wins _manifest_lock merges the task — so
+# the reaction must drain this queue rather than key off which caller merged.
+# Guarded by _manifest_lock.
+_pending_chain_pids: list[str] = []
 _transcript_model_warming = False
 _transcript_model_warming_lock = threading.Lock()
 # Thinking-agent orchestrator. Owns per-agent in-flight, cancel-event, and
@@ -1560,6 +1567,9 @@ def _merge_completed_results_locked() -> list[str]:
             _merged_task_ids.add(task["id"])
             merged_pids.append(pid)
     _manifest["tasks"] = _worker.get_all_tasks()
+    # Queue the completion side effects for _on_task_complete no matter which
+    # caller performed the merge (a debounced _do_persist can win the race).
+    _pending_chain_pids.extend(merged_pids)
     if merged_pids:
         # Each task merges exactly once, so a non-empty merged_pids means a
         # participant's segments were just (re)placed — invalidate the
@@ -1607,9 +1617,13 @@ def _on_task_complete() -> None:
     """
     with _manifest_lock:
         # Merge first so next_eligible() sees the freshly completed segments.
-        # merged_pids are the participants with a *new* transcript this call —
-        # both first transcription and re-transcription (a new task id).
-        merged_pids = _merge_completed_results_locked()
+        # A debounced _do_persist may already have merged this task; either
+        # way the freshly merged participants (first transcription and
+        # re-transcription alike — a new task id) sit in _pending_chain_pids,
+        # so drain that instead of trusting this call's own merge return.
+        _merge_completed_results_locked()
+        merged_pids = list(dict.fromkeys(_pending_chain_pids))
+        _pending_chain_pids.clear()
         src = _manifest.get("source_transcripts", {})
         for pid in merged_pids:
             entry = src.get(pid)
@@ -1623,7 +1637,7 @@ def _on_task_complete() -> None:
 
     # run_chain -> next_eligible/run_agent re-acquire _manifest_lock, so this
     # must run OUTSIDE the block above (the lock is non-reentrant).
-    for pid in dict.fromkeys(merged_pids):
+    for pid in merged_pids:
         _orchestrator.run_chain(pid)
 
     _persist_manifest()
@@ -1903,6 +1917,7 @@ def _init_transcripts_state(
     _input_dir = str(utils.get_effective_input_dir())
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()
+    _pending_chain_pids.clear()
 
     _participants = []
     study_name = ""

@@ -1979,8 +1979,15 @@ def _regenerate_reel(
                 {
                     "idx": len(tasks),
                     "source_path": source_path,
-                    "start_ts": utils.seconds_to_timestamp(int(local_start)),
-                    "end_ts": utils.seconds_to_timestamp(int(local_end)),
+                    # Match _local_timestamp's rounding + force_hours so a
+                    # regenerated segment reproduces the original cut instead
+                    # of truncating up to ~1s off it.
+                    "start_ts": utils.seconds_to_timestamp(
+                        int(round(local_start)), force_hours=True
+                    ),
+                    "end_ts": utils.seconds_to_timestamp(
+                        int(round(local_end)), force_hours=True
+                    ),
                 }
             )
 

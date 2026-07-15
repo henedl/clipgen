@@ -665,6 +665,15 @@ body[data-frontend="workflows"] {
   flex-direction: row-reverse;
 }
 
+/* Port name / "gate" text — truncate instead of widening the node card
+   (font + colour inherit from .wf-port). */
+.wf-port-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Connector anchor — drag from a dot to another dot to wire a typed edge.
    Coloured by data type (--wf-port-color, set per type below); hollow when open,
    filled when wired (.wf-port-connected). */
