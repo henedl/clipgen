@@ -514,8 +514,8 @@
     btn.type = "button";
     btn.title = active
       ? state.sortDir === "asc"
-        ? "Sorted ascending — click for descending"
-        : "Sorted descending — click to clear"
+        ? "Sorted ascending. Click for descending"
+        : "Sorted descending. Click to clear"
       : "Sort by this column";
     btn.innerHTML = '<span class="cg-icon cg-icon--' + iconName + '"></span>';
     btn.addEventListener("click", function (ev) {
@@ -1095,7 +1095,7 @@
             loading.classList.add("is-empty");
             var caption = document.createElement("div");
             caption.className = "sheet-empty-caption";
-            var prefix = document.createTextNode("No spreadsheet loaded — click ");
+            var prefix = document.createTextNode("No spreadsheet loaded. Click ");
             var icon = document.createElement("span");
             icon.className = "sheet-empty-caption-icon";
             icon.setAttribute("aria-hidden", "true");
@@ -2725,7 +2725,7 @@
       var trimBadge = el("button", "intake-trim-badge");
       trimBadge.innerHTML = iconHTML("scissors");
       trimBadge.type = "button";
-      trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
+      trimBadge.title = "Trimmed in Composer. Click to view the trimmed version";
       trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
       trimBadge.addEventListener("click", function (ev) {
         ev.stopPropagation();
@@ -2844,7 +2844,7 @@
     areaSel: "#stashedArtifactsArea",
     listSel: "#stashedArtifactsList",
     dragSource: "artifact-stash",
-    emptyHint: "Stash artifacts to keep them aside — drag, or use the Stash button.",
+    emptyHint: "Stash artifacts to keep them aside. Drag them here or use the Stash button.",
     queueKey: "artifactQueue",
     isLocked: isArtifactQueueLocked,
     renderQueue: renderArtifactQueue,

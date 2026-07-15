@@ -500,7 +500,7 @@
           var trimBadge = el("button", "intake-trim-badge");
           trimBadge.innerHTML = '<span class="cg-icon cg-icon--scissors"></span>';
           trimBadge.type = "button";
-          trimBadge.title = "Trimmed in Composer — click to view the trimmed version";
+          trimBadge.title = "Trimmed in Composer. Click to view the trimmed version";
           trimBadge.setAttribute("aria-label", "Show trimmed version in Composer Intake");
           trimBadge.addEventListener("click", function (ev) {
             ev.stopPropagation();
@@ -1271,7 +1271,7 @@
     buildIntakeDensityTimeline(CO_INTAKE, filtered);
 
     if (filtered.length === 0) {
-      container.innerHTML = '<div class="drop-target-empty">Composer cuts will appear here — set in/out pairs on the Composer page</div>';
+      container.innerHTML = '<div class="drop-target-empty">Composer cuts will appear here. Set in/out pairs on the Composer page</div>';
       return;
     }
 

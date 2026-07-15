@@ -756,7 +756,7 @@
 
     if (cvState.events.length === 0) {
       var empty = el("div", "cv-empty-state");
-      empty.textContent = "No events loaded yet — add intake or load a multi-participant sheet to see convergence.";
+      empty.textContent = "No events loaded yet. Add intake or load a multi-participant sheet to see convergence.";
       container.appendChild(empty);
       return;
     }
@@ -917,7 +917,7 @@
     if (btn) {
       btn.classList.toggle("is-stale", stale);
       btn.title = stale
-        ? "New upstream data available — click to refresh"
+        ? "New upstream data available. Click to refresh"
         : "Re-fetch upstream data and recompute convergence";
     }
   }

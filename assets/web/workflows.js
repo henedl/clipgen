@@ -125,7 +125,7 @@
       var req = "Requires " + ((node.requires || []).join(", ") || "context");
       item.setAttribute(
         "data-tooltip",
-        node.description ? node.description + " — " + req : req,
+        node.description ? node.description + ". " + req : req,
       );
     }
     return item;
@@ -496,7 +496,7 @@
     var other = armedBlueprint();
     if (armed) {
       btn.title =
-        "Watching the input folder — new videos auto-run this blueprint. Click to stop.";
+        "Watching the input folder. New videos auto-run this blueprint. Click to stop.";
     } else if (other) {
       btn.title =
         "Auto-run is armed on “" +

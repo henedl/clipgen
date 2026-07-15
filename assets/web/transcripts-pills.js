@@ -348,7 +348,7 @@
       var opts = '<option value="">Default</option>';
       models.forEach(function (m) {
         if (m.selected) defaultName = m.name;
-        var label = m.name + (m.cached === false ? " — not downloaded" : "");
+        var label = m.name + (m.cached === false ? " (not downloaded)" : "");
         opts += '<option value="' + escapeHtml(m.name) + '">' + escapeHtml(label) + '</option>';
       });
       modelSelect.innerHTML = opts;

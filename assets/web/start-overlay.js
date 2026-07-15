@@ -793,7 +793,7 @@
       }
       if (Date.now() > state.googlePollDeadline) {
         state.googlePollTimer = null;
-        renderGoogleConnectCTA(false, "Sign-in timed out — try again.");
+        renderGoogleConnectCTA(false, "Sign-in timed out. Try again.");
         return;
       }
       state.googlePollTimer = setTimeout(pollGoogleAuthOnce, GOOGLE_POLL_INTERVAL_MS);

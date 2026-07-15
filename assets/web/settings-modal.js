@@ -482,7 +482,7 @@
         }
       } else {
         hint.appendChild(
-          el("span", "settings-prompt-hint-label", "Sent verbatim — no placeholders."),
+          el("span", "settings-prompt-hint-label", "Sent verbatim (no placeholders)."),
         );
       }
       controlDiv.appendChild(hint);

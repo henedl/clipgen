@@ -819,7 +819,7 @@
       var p = empty.querySelector("p");
       if (p) {
         p.textContent = hasOtherOutputs
-          ? "No timeline clips for this run — see the outputs above."
+          ? "No timeline clips for this run. See the outputs above."
           : "No artifacts were generated for this run.";
       }
       empty.classList.remove("hidden");

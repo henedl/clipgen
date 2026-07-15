@@ -71,7 +71,7 @@
     var stashes = state.stashes || [];
     if (!stashes.length) {
       list.appendChild(
-        el("div", "wf-stash-empty", "No stashes yet — select nodes, then Stash them.")
+        el("div", "wf-stash-empty", "No stashes yet. Select nodes, then Stash them.")
       );
       return;
     }
@@ -88,7 +88,7 @@
     item.dataset.stashId = stash.id;
     item.draggable = true;
     item.title = stash.builtin
-      ? "Built-in recipe — drag or click to add to the canvas"
+      ? "Built-in recipe. Drag or click to add to the canvas"
       : "Drag or click to add to the canvas";
 
     item.appendChild(el("span", "wf-stash-label", stash.name));

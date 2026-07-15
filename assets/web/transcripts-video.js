@@ -462,7 +462,7 @@
     var snippet = (seg.text || "").trim().slice(0, 80);
     if ((seg.text || "").length > 80) snippet += "…";
     var extraCount = (seg.marks && seg.marks.length > 1) ? (seg.marks.length - 1) : 0;
-    var label = mark && mark.label ? " — " + mark.label : "";
+    var label = mark && mark.label ? " · " + mark.label : "";
     tip.textContent = "";
     var catSpan = el("span", "tr-tooltip-cat", cat.label);
     // Set color via property API rather than string-interpolating into a
