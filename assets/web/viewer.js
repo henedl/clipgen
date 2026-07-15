@@ -794,7 +794,34 @@
     initFilmstripToggle();
     initScrubAudioToggle();
     if (_filmstripEnabled) applyFilmstripMode();
+    initHotkeys();
   });
+
+  // ---- Hotkeys (shared hotkeys.js registry, inlined into exports) ----
+
+  // j/k walk the filtered artifact list in its current sort order, selecting
+  // the adjacent card (which also seeks the player / opens the detail pane).
+  function selectAdjacentArtifact(delta) {
+    var list = state.filtered || [];
+    if (!list.length) return;
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === state.selectedId) { idx = i; break; }
+    }
+    var next = idx < 0 ? (delta > 0 ? 0 : list.length - 1) : idx + delta;
+    if (next < 0) next = 0;
+    if (next > list.length - 1) next = list.length - 1;
+    if (next === idx) return;
+    selectArtifact(list[next].id);
+  }
+
+  function initHotkeys() {
+    if (!window.ClipgenHotkeys) return;
+    window.ClipgenHotkeys.register([
+      { id: "nav.next", handler: function () { selectAdjacentArtifact(1); } },
+      { id: "nav.prev", handler: function () { selectAdjacentArtifact(-1); } },
+    ]);
+  }
 
   function derivePresentTypes(artifacts) {
     var found = {};

@@ -3229,6 +3229,31 @@
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
     bindGalleryDialog();
 
+    // Page hotkeys (shared hotkeys.js registry). Gated on the corresponding
+    // toolbar button being enabled so the queue-lock logic stays in one place.
+    function hotkeyBtnEnabled(sel) {
+      var b = qs(sel);
+      return !!(b && !b.disabled);
+    }
+    window.ClipgenHotkeys.register([
+      {
+        id: "global.primary",
+        when: function () { return hotkeyBtnEnabled("#generateBtn"); },
+        handler: function () { onGenerate(); },
+      },
+      {
+        id: "studio.buildReel",
+        when: function () { return hotkeyBtnEnabled("#buildReelBtn"); },
+        handler: function () { onBuildReel(); },
+      },
+      {
+        id: "studio.buildHighlights",
+        when: function () { return hotkeyBtnEnabled("#buildHighlightsBtn"); },
+        handler: function () { onBuildHighlights(); },
+      },
+      { id: "global.refresh", handler: function () { refreshSheetData(); } },
+    ]);
+
     qs("#artifactFormat").addEventListener("change", function () {
       var tcGroup = qs("#titlecardGroup");
       if (tcGroup) {
