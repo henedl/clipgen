@@ -702,7 +702,7 @@ NODE_TYPES: dict[str, NodeType] = {
     "gate_collection": {
         "id": "gate_collection",
         "label": "Threshold Gate",
-        "description": "Measure events, clips, or segments and gate downstream nodes on the result — Measure + Gate in one node.",
+        "description": "Measure events, clips, or segments and gate downstream nodes on the result (Measure + Gate in one node).",
         "domain": "control",
         "category": "Control",
         "inputs": [
@@ -1085,7 +1085,7 @@ for _ss_tool in _SS_DETECTOR_SPECS:
 NODE_TYPES["detect"] = {
     "id": "detect",
     "label": "Detect",
-    "description": "Detect a region condition (text, colour, motion, numbers, …) — pick the detector.",
+    "description": "Detect a region condition (text, colour, motion, numbers). Pick the detector.",
     "domain": "screenspace",
     "category": "Screenspace",
     "inputs": [
@@ -1580,7 +1580,7 @@ def _exec_summarize(
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
     if not ollama_client.is_available():
-        return {"summary": "", "__note__": "Ollama not available — summary skipped"}
+        return {"summary": "", "__note__": "Ollama not available. Summary skipped"}
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -1597,7 +1597,7 @@ def _exec_citations(
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     if not ollama_client.is_available():
-        return {"citations": [], "__note__": "Ollama not available — citations skipped"}
+        return {"citations": [], "__note__": "Ollama not available. Citations skipped"}
     cites = thinking_agents.find_citations(
         summary,
         segments,
@@ -1618,7 +1618,7 @@ def _exec_friction(
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
     if not ollama_client.is_available():
-        return {"friction": [], "__note__": "Ollama not available — friction skipped"}
+        return {"friction": [], "__note__": "Ollama not available. Friction skipped"}
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored)
     moments = thinking_agents.find_friction_moments(
@@ -2037,7 +2037,7 @@ def _exec_make_clips(
     if not records:
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "No clips to render — wire clips, a time range, or a video",
+            "__note__": "No clips to render. Wire clips, a time range, or a video",
         }
     pad_pre, pad_post, max_duration = _artifact_padding_params(params)
     count, artifacts = pipeline.process_clips(
@@ -2217,7 +2217,7 @@ def _exec_heatmap(
     paths = list(src.get("video_paths") or [])
     if not results or not paths or style not in ("template", "flow", "change"):
         note = (
-            "No detector results — wire a matching template/flow/change detector"
+            "No detector results. Wire a matching template/flow/change detector"
             if not results
             else "No video for the heatmap"
         )
@@ -3615,7 +3615,7 @@ class WorkflowRunner:
                         utils.warning_print(
                             f"workflow adapter {out_type}->{in_type} failed: {exc}"
                         )
-                        notes.append(f"Couldn't convert {out_type} → {in_type}")
+                        notes.append(f"Couldn't convert {out_type} to {in_type}")
                         value = None
             inputs[to_port] = value
         return inputs, notes
