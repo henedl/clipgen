@@ -42,7 +42,7 @@
     similarity: "Gray-blurred region (≤256 px); reference appears once captured.",
     text: "Grayscale region fed to OCR.",
     numbers: "Grayscale region fed to OCR.",
-    timelapse: "Region crop — FFmpeg encodes this unmodified.",
+    timelapse: "Region crop. FFmpeg encodes this unmodified.",
     template: "Gray-blurred frame, template, and normalized match heatmap.",
     flow: "Prev + current gray frames with dense optical-flow vectors.",
     scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",

@@ -64,11 +64,11 @@
     inactivity: { sliderId: "paramInactThresh", invert: true, drawLine: true, compare: "le" },
     color: {
       sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false,
-      rowNote: "Tolerance ≠ confidence — read the gap between green and red dots.",
+      rowNote: "Tolerance ≠ confidence. Read the gap between green and red dots.",
     },
     scene: {
       sliderId: null, rangeMin: 0, rangeMax: 1, invert: false, drawLine: false,
-      rowNote: "Per-scene thresholds — dot colour is pass/fail; hover for the matched scene.",
+      rowNote: "Per-scene thresholds. Dot colour is pass/fail; hover for the matched scene.",
     },
   };
 
@@ -253,9 +253,9 @@
         if (suggestion.mode === "gap") {
           applyTip = "Set the threshold midway between your positives and negatives (gap " + _calFmtVal(suggestion.margin, step) + ").";
         } else if (suggestion.mode === "positives") {
-          applyTip = "Set the threshold at the edge of your positives — pin a negative to widen the margin.";
+          applyTip = "Set the threshold at the edge of your positives. Pin a negative to widen the margin.";
         } else {
-          applyTip = "Set the threshold just past your negatives — pin a positive to widen the margin.";
+          applyTip = "Set the threshold just past your negatives. Pin a positive to widen the margin.";
         }
         applyBadge.setAttribute("data-tooltip", applyTip);
         (function (sid, val, sl) {
@@ -301,7 +301,7 @@
     if (applyBadge) track.appendChild(applyBadge);
     var note = (!axis.drawLine && axis.rowNote) ? axis.rowNote : null;
     if (suggestion && !suggestion.separated) {
-      note = "Positive and negative scores overlap — no clean threshold (check the region or tool).";
+      note = "Positive and negative scores overlap. No clean threshold (check the region or tool).";
     } else if (narrowGap) {
       note = "No step-aligned threshold separates these pins (gap narrower than the slider step, or outside its range).";
     }

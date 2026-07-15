@@ -261,8 +261,8 @@
     var verb = { add: "Added to", subtract: "Subtracted from", intersect: "Intersected" }[op];
     if (!contours.length || contoursArea(contours) < 64) {
       showToast(savedRegion
-        ? "Nothing would remain of '" + name + "' — not applied"
-        : "Nothing would remain — not applied");
+        ? "Nothing would remain of '" + name + "', so this was not applied"
+        : "Nothing would remain, so this was not applied");
       return;
     }
     if (savedRegion) {
@@ -276,7 +276,7 @@
       ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
       : pendingShapedRegion(contours, "combo");
     if (!updated) {
-      showToast("Nothing would remain — not applied");
+      showToast("Nothing would remain, so this was not applied");
       return;
     }
     state.pendingRegion = updated;
@@ -322,7 +322,7 @@
         // Drop the draw silently for click-without-drag (zero size), but
         // surface a hint when the user actually dragged a too-small box —
         // otherwise the picker just snaps closed with no feedback.
-        showToast("Region too small — drag a larger area");
+        showToast("Region too small. Drag a larger area");
       }
       flushOverlayRender();
       updateRegionButtons();
@@ -369,7 +369,7 @@
         if (simplified.length >= 3 && polygonArea(simplified) >= 8) {
           applyRegionCombine(combine, { contours: [simplified] });
         } else if (pts.length > 2) {
-          showToast("Shape too small — draw a larger area");
+          showToast("Shape too small. Draw a larger area");
         }
         flushOverlayRender();
         updateRegionButtons();
@@ -379,7 +379,7 @@
       if (pending) {
         state.pendingRegion = pending;
       } else if (pts.length > 2) {
-        showToast("Shape too small — draw a larger area");
+        showToast("Shape too small. Draw a larger area");
       }
       flushOverlayRender();
       updateRegionButtons();
@@ -477,12 +477,12 @@
         if (contour && contour.length >= 3 && polygonArea(contour) >= 8) {
           applyRegionCombine(combine, { contours: [contour] });
         } else {
-          showToast("No contiguous area found — adjust tolerance and try again");
+          showToast("No contiguous area found. Adjust tolerance and try again");
         }
       } else {
         var pending = contour ? pendingShapedRegion([contour], "wand") : null;
         if (pending) state.pendingRegion = pending;
-        else showToast("No contiguous area found — adjust tolerance and try again");
+        else showToast("No contiguous area found. Adjust tolerance and try again");
       }
       flushOverlayRender();
       updateRegionButtons();

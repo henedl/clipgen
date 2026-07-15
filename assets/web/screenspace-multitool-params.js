@@ -595,8 +595,8 @@
         var current = (step.logic || "AND").toUpperCase();
         opBtn.classList.add(current === "NOT" ? "is-not" : "is-and");
         opBtn.title = current === "NOT"
-          ? "NOT — frame rejected if this matches (click to switch to AND)"
-          : "AND — frame must also match (click to switch to NOT)";
+          ? "NOT: frame rejected if this matches (click to switch to AND)"
+          : "AND: frame must also match (click to switch to NOT)";
         opBtn.appendChild(el("span", "multitool-operator-icon"));
         (function (capturedIdx) {
           opBtn.addEventListener("click", function (e) {
@@ -607,8 +607,8 @@
             opBtn.classList.toggle("is-not", next === "NOT");
             opBtn.classList.toggle("is-and", next === "AND");
             opBtn.title = next === "NOT"
-              ? "NOT — frame rejected if this matches (click to switch to AND)"
-              : "AND — frame must also match (click to switch to NOT)";
+              ? "NOT: frame rejected if this matches (click to switch to AND)"
+              : "AND: frame must also match (click to switch to NOT)";
             refreshCalibration({ debounce: true });
           });
         })(idx);
@@ -646,8 +646,8 @@
 
         function setOffsetTitle(active) {
           offBtn.title = active
-            ? "Offset window on — match within a time window of the previous step's frame (not evaluated in calibration; click to disable)"
-            : "Offset — match within a time window relative to the previous step";
+            ? "Offset window on: match within a time window of the previous step's frame (not evaluated in calibration; click to disable)"
+            : "Offset: match within a time window relative to the previous step";
         }
         setOffsetTitle(offActive);
 

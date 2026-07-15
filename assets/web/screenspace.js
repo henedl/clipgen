@@ -55,9 +55,9 @@
   // you pick before the fuzzy compare — see _normalize_ocr_text in
   // screenspace.py. Off sits in the middle: digit→letter | off | letter→digit.
   var NORMALIZE_MODES = [
-    { mode: "letters", icon: "language", desc: "Fold digits→letters before matching (0→o, 1→l, 5→s) — for word targets OCR may read as digits" },
+    { mode: "letters", icon: "language", desc: "Fold digits to letters before matching (0→o, 1→l, 5→s). For word targets that OCR may read as digits" },
     { mode: "off", icon: "no-symbol", desc: "No character folding" },
-    { mode: "digits", icon: "hashtag", desc: "Fold letters→digits before matching (O→0, l→1, S→5) — for number targets OCR may read as letters" },
+    { mode: "digits", icon: "hashtag", desc: "Fold letters to digits before matching (O→0, l→1, S→5). For number targets that OCR may read as letters" },
   ];
 
   function _normalizeMode(mode) {
@@ -858,30 +858,30 @@
       "Region":           "Which screen region this step analyzes",
     },
     color: {
-      "Tolerance":        "How far from the target color still counts — widen to catch more shades, tighten to be stricter",
+      "Tolerance":        "How far from the target color still counts. Widen to catch more shades, tighten to be stricter",
       "Hex color":        "Target color in hex notation",
       "Mode":             "Average matches the region's mean colour; Presence fires when the target colour appears anywhere in the region (per-pixel)",
       "Min area %":       "Presence mode only: the minimum share of region pixels that must match before an event fires. 0% = any presence detected (no minimum size); raise it to ignore stray noise pixels. The readout shows the approximate pixel count for the current region.",
     },
     change: {
-      "Threshold":        "How much of the region must change to trigger — raise it to ignore minor flicker",
+      "Threshold":        "How much of the region must change to trigger. Raise it to ignore minor flicker",
       "Noise Thr.":       "Ignore changes below this pixel intensity",
       "Noise":            "Ignore changes below this pixel intensity",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     similarity: {
       "Reference":        "Capture the frame you want later frames to match against",
-      "Threshold":        "How close a frame must look to the reference — lower it to allow looser matches",
+      "Threshold":        "How close a frame must look to the reference. Lower it to allow looser matches",
     },
     text: {
       "Search text":      "Exact or partial text to find on screen",
       "Search":           "Exact or partial text to find on screen",
-      "Fuzzy Thr.":       "How closely the text must match (1.0 = exact) — lower it to tolerate more misreads",
-      "Fuzzy":            "How closely the text must match (1.0 = exact) — lower it to tolerate more misreads",
+      "Fuzzy Thr.":       "How closely the text must match (1.0 = exact). Lower it to tolerate more misreads",
+      "Fuzzy":            "How closely the text must match (1.0 = exact). Lower it to tolerate more misreads",
       "Min OCR conf.":    "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before fuzzy matching (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD text)",
-      "Normalize":        "Fold easily-confused glyphs before matching: digit→letter, off, or letter→digit. Pick the side matching what your search target is (letters vs digits).",
+      "Normalize":        "Fold easily-confused glyphs before matching: digits to letters, off, or letters to digits. Pick the side that matches your search target (letters vs digits).",
       "Language":         "OCR language for text recognition",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
@@ -904,17 +904,17 @@
     },
     template: {
       "Template":         "Capture or upload the picture to search for anywhere on screen",
-      "Threshold":        "How closely the picture must match — lower it to allow looser matches",
+      "Threshold":        "How closely the picture must match. Lower it to allow looser matches",
     },
     flow: {
-      "Magnitude":        "Minimum movement strength to count — raise it to ignore small or slow motion",
+      "Magnitude":        "Minimum movement strength to count. Raise it to ignore small or slow motion",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     scene: {
       "Add Scene":        "Capture and name each screen you want to recognize",
     },
     inactivity: {
-      "Sensitivity":      "How little movement still counts as idle — raise it to treat more frames as still",
+      "Sensitivity":      "How little movement still counts as idle. Raise it to treat more frames as still",
       "Min duration (s)": "Seconds of stillness required before a stall is reported",
     },
     boundary: {
@@ -1167,7 +1167,7 @@
     var disabled = !hasVideo || atCap;
     posBtn.disabled = disabled;
     negBtn.disabled = disabled;
-    var capNote = atCap ? " — limit reached (" + state.maxPins + ")" : "";
+    var capNote = atCap ? ". Limit reached (" + state.maxPins + ")" : "";
     posBtn.title = "Pin this frame as a positive (condition is true here)" + capNote;
     negBtn.title = "Pin this frame as a negative (condition must not fire here)" + capNote;
   }
@@ -2262,18 +2262,18 @@
   // ---- Tool info tooltip ----
 
   var TOOL_INFO = {
-    multitool: "Combines several tools so a frame only matches when it passes every step — e.g. a red health bar AND the word 'DEAD'. Add at least two steps; a step can also be set to exclude (match only when it does NOT apply). Get each tool working on its own first, then chain them here to pin down precise moments.",
+    multitool: "Combines several tools so a frame only matches when it passes every step. For example, a red health bar AND the word 'DEAD'. Add at least two steps; a step can also be set to exclude (match only when it does NOT apply). Get each tool working on its own first, then chain them here to pin down precise moments.",
     color: "Finds frames where the average color of your region matches a color you pick. Draw a small region over a solid-colored element and sample its color; widen Tolerance to catch more shades, tighten it to be stricter. Good for color-coded elements like a health bar or status light. To find a specific icon or picture instead, use Template.",
-    change: "Flags frames where the picture inside your region differs from a moment earlier — sudden changes like a screen transition, a pop-up appearing, or a loading screen finishing. Raise the Threshold if it fires on every small flicker. Unlike Flow (which measures movement) it reacts to any difference; unlike Boundary it watches only the region you draw, not the whole screen.",
-    similarity: "Capture one reference frame, then this finds every later frame that looks almost identical — a strict, pixel-for-pixel match that's sensitive to lighting and layout shifts. Lower the Threshold to allow looser matches. Use it to catch when one exact state returns (a specific dialog or menu). For 'which screen are we on' across several screens that vary, use Scene instead.",
+    change: "Flags frames where the picture inside your region differs from a moment earlier: sudden changes such as a screen transition, a pop-up appearing, or a loading screen finishing. Raise the Threshold if it fires on every small flicker. Unlike Flow (which measures movement) it reacts to any difference; unlike Boundary it watches only the region you draw, not the whole screen.",
+    similarity: "Capture one reference frame, then this finds every later frame that looks almost identical: a strict, pixel-for-pixel match that's sensitive to lighting and layout shifts. Lower the Threshold to allow looser matches. Use it to catch when one exact state returns (a specific dialog or menu). For 'which screen are we on' across several screens that vary, use Scene instead.",
     text: "Reads on-screen text in your region (OCR) and flags frames matching your search words, allowing for small misreads. Draw a tight region around the text; raise the OCR confidence if you get false hits. Good for catching specific labels, error messages, or button text. To compare on-screen numbers (e.g. score over 1000), use Numbers.",
-    numbers: "Reads a number from your region (OCR) and flags frames where it meets a rule you set — equals, greater than, less than, or within a range. Draw a tight region around just the number, then pick the operator and target value. Great for scores, timers, lives, or any changing count. For words rather than numbers, use Text.",
-    timelapse: "Produces one sped-up video or GIF of your region over the time range you choose — a fast way to skim a long session. Unlike every other tool it doesn't mark individual moments on the timeline; it outputs a single clip. Set the speed, and optionally sample every N seconds for a shorter file.",
-    template: "Capture or upload a small reference image, then this looks for that exact picture anywhere on screen — not just inside a region. Ideal for finding an icon, button, or logo wherever it appears. Lower the Threshold to allow looser matches. Unlike Color (which matches an average shade) it matches the picture itself; unlike Similarity it searches the whole frame, not one region.",
-    flow: "Detects movement inside your region — a character running, an animation playing, activity in one corner. Raise the strength threshold to ignore small or slow motion. Unlike Change (which fires on any pixel difference, including flicker) Flow responds only to real movement, so it stays steadier on noisy footage.",
-    scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles — building a timeline of which screen is showing (title, map, level, pause menu…). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
+    numbers: "Reads a number from your region (OCR) and flags frames where it meets a rule you set: equals, greater than, less than, or within a range. Draw a tight region around just the number, then pick the operator and target value. Great for scores, timers, lives, or any changing count. For words rather than numbers, use Text.",
+    timelapse: "Produces one sped-up video or GIF of your region over the time range you choose: a fast way to skim a long session. Unlike every other tool it doesn't mark individual moments on the timeline; it outputs a single clip. Set the speed, and optionally sample every N seconds for a shorter file.",
+    template: "Capture or upload a small reference image, then this looks for that exact picture anywhere on screen, not just inside a region. Ideal for finding an icon, button, or logo wherever it appears. Lower the Threshold to allow looser matches. Unlike Color (which matches an average shade) it matches the picture itself; unlike Similarity it searches the whole frame, not one region.",
+    flow: "Detects movement inside your region: a character running, an animation playing, or activity in one corner. Raise the strength threshold to ignore small or slow motion. Unlike Change (which fires on any pixel difference, including flicker) Flow responds only to real movement, so it stays steadier on noisy footage.",
+    scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles. This builds a timeline of which screen is showing (title, map, level, pause menu). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
     inactivity: "Finds stretches where your region barely changes for a while — loading screens, frozen states, or a player standing idle. It's the opposite of Change: it fires when nothing happens, not when something does. Set the minimum duration so brief pauses are ignored and only real stalls are reported.",
-    boundary: "Scans the whole screen for period transitions — menu → gameplay, a level loading, a loading screen ending. Metric: Auto (recommended) uses a content fingerprint and only marks a change that holds for a moment and is backed by a hard cut, so camera motion and brief overlays don't fragment one continuous period; pHash is the simpler 'any big frame-to-frame jump' detector. Sensitivity tunes the hard-cut threshold; Min gap avoids clustered markers during fast action. After scanning, near-identical periods are merged and transient blips dissolved. These are orientation markers, not clip candidates; unlike Scene it doesn't label the screens — only marks where they change."
+    boundary: "Scans the whole screen for period transitions: menu to gameplay, a level loading, a loading screen ending. Metric: Auto (recommended) uses a content fingerprint and only marks a change that holds for a moment and is backed by a hard cut, so camera motion and brief overlays don't fragment one continuous period; pHash is the simpler 'any big frame-to-frame jump' detector. Sensitivity tunes the hard-cut threshold; Min gap avoids clustered markers during fast action. After scanning, near-identical periods are merged and transient blips dissolved. These are orientation markers, not clip candidates; unlike Scene, it doesn't label the screens; it only marks where they change."
   };
 
   var _toolInfoPinned = false;
@@ -3061,7 +3061,7 @@
     // calibrationGreen is only ever true after a green evaluation, which
     // implies pins exist.
     if (!btn.disabled && state.calibrationGreen) {
-      btn.setAttribute("data-tooltip", "Calibrated — pins satisfied");
+      btn.setAttribute("data-tooltip", "Calibrated: pins satisfied");
     }
   }
 

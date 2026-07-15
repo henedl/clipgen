@@ -1208,7 +1208,7 @@
         state.eventSource = null;
         if (!state.sseFellBack) {
           state.sseFellBack = true;
-          showToast("Live updates interrupted — falling back to polling");
+          showToast("Live updates interrupted. Falling back to polling");
         }
         startPolling();
       },

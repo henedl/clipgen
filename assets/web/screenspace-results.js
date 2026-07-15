@@ -285,7 +285,7 @@
         renderResults(); // surface freshly-loaded events (histogram, excluded toggle, rows)
         if (!evts.length) {
           showToast(task.status === "running"
-            ? "No events to exclude yet — analysis still running"
+            ? "No events to exclude yet. Analysis still running"
             : "No events to exclude");
           return;
         }

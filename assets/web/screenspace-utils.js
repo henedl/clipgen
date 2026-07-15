@@ -137,7 +137,7 @@ function formatMultitoolStepParams(step) {
 // Readout for a color tool's presence min-area control: percentage plus an
 // approximate pixel count when the analysed region's area is known.
 function _formatMinAreaReadout(pct, area) {
-  if (!(pct > 0)) return "Any presence — no minimum size";
+  if (!(pct > 0)) return "Any presence (no minimum size)";
   var txt = pct + "%";
   if (area && area > 0) {
     var px = Math.max(1, Math.round((pct / 100) * area));
