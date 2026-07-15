@@ -1625,41 +1625,42 @@
     document.addEventListener("mousemove", _cvOnDocMouseMove);
     document.addEventListener("mouseup", _cvOnDocMouseUp);
 
-    document.addEventListener("keydown", function (e) {
-      if (!cvState.active) return;
-
-      // Don't steal arrow keys from a focused offset input (coupled or per-lane).
-      var ae = document.activeElement;
-      if (ae && ae.classList &&
-          (ae.classList.contains("cv-offset-input") ||
-           ae.classList.contains("cv-offset-lane-input"))) return;
-
-      if (e.key === "Escape" && cvState.selection) {
+    // Zone navigation via the shared hotkey registry. The offset inputs no
+    // longer need an explicit guard — the dispatcher's typing guard covers
+    // focused <input>s.
+    function _zoneNavReady() {
+      return cvState.active && !!(cvState.selection && cvState.selection.zone);
+    }
+    function _moveZoneSelection(dir) {
+      var zones = cvState.convergenceZones;
+      if (!zones.length) return;
+      var currentIdx = -1;
+      var selZone = cvState.selection.zone;
+      for (var i = 0; i < zones.length; i++) {
+        if (zones[i].start === selZone.start && zones[i].end === selZone.end) {
+          currentIdx = i; break;
+        }
+      }
+      if (currentIdx === -1) return;
+      var nextIdx = dir < 0
+        ? Math.max(0, currentIdx - 1)
+        : Math.min(zones.length - 1, currentIdx + 1);
+      if (nextIdx !== currentIdx) {
+        var nextZone = zones[nextIdx];
+        setSelection(nextZone.start, nextZone.end, nextZone);
+        renderDetailInline(nextIdx);
+      }
+    }
+    window.ClipgenHotkeys.register([
+      { id: "overview.zonePrev", when: _zoneNavReady, handler: function () { _moveZoneSelection(-1); } },
+      { id: "overview.zoneNext", when: _zoneNavReady, handler: function () { _moveZoneSelection(1); } },
+    ]);
+    window.ClipgenHotkeys.registerEscape(function () {
+      if (cvState.active && cvState.selection) {
         clearSelection();
-        return;
+        return true;
       }
-
-      if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && cvState.selection && cvState.selection.zone) {
-        var zones = cvState.convergenceZones;
-        if (!zones.length) return;
-        var currentIdx = -1;
-        var selZone = cvState.selection.zone;
-        for (var i = 0; i < zones.length; i++) {
-          if (zones[i].start === selZone.start && zones[i].end === selZone.end) {
-            currentIdx = i; break;
-          }
-        }
-        if (currentIdx === -1) return;
-        var nextIdx = e.key === "ArrowLeft"
-          ? Math.max(0, currentIdx - 1)
-          : Math.min(zones.length - 1, currentIdx + 1);
-        if (nextIdx !== currentIdx) {
-          var nextZone = zones[nextIdx];
-          setSelection(nextZone.start, nextZone.end, nextZone);
-          renderDetailInline(nextIdx);
-        }
-        e.preventDefault();
-      }
+      return false;
     });
   }
 

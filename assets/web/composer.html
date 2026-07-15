@@ -40,31 +40,11 @@
             title="Generate clips from all cuts for this participant (G)">Generate clips</button>
     <button id="coCancelBtn" class="btn btn-small hidden" type="button"
             title="Cancel generation">Cancel</button>
-    <!-- Keyboard shortcuts legend: a far-right ? popover (workflows pattern). -->
-    <div class="co-shortcuts-wrap">
-      <button id="coShortcutsBtn" class="btn btn-small btn-icon" type="button"
-              aria-haspopup="menu" aria-expanded="false"
-              aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
-        <span class="co-btn-icon co-icon-help" aria-hidden="true"></span>
-      </button>
-      <div id="coShortcutsMenu" class="co-shortcuts-menu hidden" role="menu">
-        <div class="co-shortcuts-title">Keyboard</div>
-        <dl class="co-shortcuts-list">
-          <div><dt>Play / pause</dt><dd><kbd>Space</kbd> <kbd>K</kbd></dd></div>
-          <div><dt>Seek −5 s / +5 s</dt><dd><kbd>J</kbd> <kbd>L</kbd></dd></div>
-          <div><dt>Step −1 s / +1 s</dt><dd><kbd>,</kbd> <kbd>.</kbd></dd></div>
-          <div><dt>Set in / out point</dt><dd><kbd>I</kbd> <kbd>O</kbd></dd></div>
-          <div><dt>Nudge selected edge</dt><dd><kbd>[</kbd> <kbd>]</kbd> (<kbd>⇧</kbd> = 1 s)</dd></div>
-          <div><dt>Delete selected cut</dt><dd><kbd>X</kbd> <kbd>⌫</kbd></dd></div>
-          <div><dt>Undo / redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
-          <div><dt>Annotate: select / text / draw / erase</dt><dd><kbd>V</kbd> <kbd>T</kbd> <kbd>D</kbd> <kbd>E</kbd></dd></div>
-          <div><dt>Toggle marker lanes</dt><dd><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>`</kbd></dd></div>
-          <div><dt>Generate clips</dt><dd><kbd>G</kbd></dd></div>
-          <div><dt>Cancel pending / deselect</dt><dd><kbd>Esc</kbd></dd></div>
-          <div><dt>Zoom timeline</dt><dd>scroll · drag to pan</dd></div>
-        </dl>
-      </div>
-    </div>
+    <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
+    <button id="coShortcutsBtn" class="btn btn-small btn-icon" type="button"
+            aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+      <span class="co-btn-icon co-icon-help" aria-hidden="true"></span>
+    </button>
   </header>
 
   <main id="coShell">

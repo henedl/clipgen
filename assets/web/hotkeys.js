@@ -78,6 +78,7 @@
     { id: "composer.toolErase",        section: "composer", group: "Annotate", label: "Erase tool", combos: ["E"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
     { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["`"] },
+    { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
 
@@ -91,8 +92,9 @@
     { id: "workflows.duplicate",       section: "workflows", group: "Clipboard", label: "Duplicate selection", combos: ["Mod+D"] },
     { id: "workflows.fitView",         section: "workflows", group: "Canvas", label: "Fit graph to view", combos: ["F"] },
     { id: "workflows.deleteSelection", section: "workflows", group: "Canvas", label: "Delete selected wire / nodes", combos: ["Delete", "Backspace"] },
-    { id: "workflows.note.pan",        section: "workflows", group: "Canvas", label: "Pan canvas", note: "drag empty canvas" },
+    { id: "workflows.note.pan",        section: "workflows", group: "Canvas", label: "Pan canvas", note: "middle-drag" },
     { id: "workflows.note.zoom",       section: "workflows", group: "Canvas", label: "Zoom canvas", note: "scroll wheel" },
+    { id: "workflows.note.select",     section: "workflows", group: "Canvas", label: "Select nodes", note: "drag / shift-click" },
 
     { id: "overview.tabMap",         section: "overview", group: "Tabs", label: "Show Map tab", combos: ["1"] },
     { id: "overview.tabConvergence", section: "overview", group: "Tabs", label: "Show Convergence tab", combos: ["2"] },

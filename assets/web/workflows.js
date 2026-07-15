@@ -803,13 +803,13 @@
     }
   }
 
-  // Keyboard/mouse shortcuts legend — a far-right ? popover. Static content, so
-  // no gating; reuses the same outside-click/Escape toggle as the run menu.
+  // Keyboard/mouse shortcuts button — opens the shared hotkeys.js cheatsheet.
   function initShortcutsMenu() {
     var btn = qs("#wfShortcutsBtn");
-    var menu = qs("#wfShortcutsMenu");
-    if (!btn || !menu) return;
-    bindMenuToggle(btn, menu);
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      window.ClipgenHotkeys.toggleCheatsheet();
+    });
   }
 
   // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
