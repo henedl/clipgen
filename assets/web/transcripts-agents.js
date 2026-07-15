@@ -853,15 +853,15 @@
         // friction) from "summary done, friction not run" (the friction button is
         // enabled) so the copy points at the step the user can actually take.
         statusEl.textContent = depMet
-          ? "Programmatic scores shown — run friction analysis for AI-refined moments."
-          : "Programmatic scores shown — run Summary for AI-refined moments.";
+          ? "Programmatic scores shown. Run friction analysis for AI-refined moments."
+          : "Programmatic scores shown. Run Summary for AI-refined moments.";
       } else if (llmFailed) {
         statusEl.textContent =
-          "Moment detection failed — model unavailable" +
+          "Moment detection failed: model unavailable" +
           (fd.model ? " (tried " + fd.model + ")" : "") +
           ". Showing programmatic scores; re-run with an installed model.";
       } else if (fd.stale) {
-        statusEl.textContent = "Stale — segments edited since last run" +
+        statusEl.textContent = "Stale: segments edited since last run" +
           (fd.model ? " · " + fd.model : "");
       } else {
         statusEl.textContent = "Computed " + _friendlyTimeAgo(fd.computed_at) +
@@ -908,7 +908,7 @@
     qs("#frictionEmpty").classList.remove("hidden");
     qs("#frictionEmptyHint").textContent = _frictionDepMet()
       ? "Run the analysis to surface moments of likely friction."
-      : "Requires a summary first — run Summary, then friction.";
+      : "Requires a summary first. Run Summary, then friction.";
     _renderFrictionHeader();
     updateFrictionStaleDot();
   }
@@ -1106,7 +1106,7 @@
           ? "Run friction analysis to surface AI-refined moments."
           : "Run Summary to surface AI-refined friction moments.";
       } else if (fd.llm_ok === false) {
-        msg = "Moment detection failed — re-run with an installed Ollama model.";
+        msg = "Moment detection failed. Re-run with an installed Ollama model.";
       } else if (fd.moments && fd.moments.length) {
         msg = "No moments match the current filter.";
       } else {

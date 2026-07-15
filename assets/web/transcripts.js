@@ -136,7 +136,7 @@
     var now = state.xrefErrors.screenspace || state.xrefErrors.studio;
     if (now && !prev && !state.xrefErrorToastShown) {
       state.xrefErrorToastShown = true;
-      showToast("Cross-references unavailable — is Screenspace/Studio running?");
+      showToast("Cross-references unavailable. Is Screenspace/Studio running?");
     }
     if (!now) state.xrefErrorToastShown = false;
     updateStatusIndicator();
@@ -2394,7 +2394,7 @@
           if (st.total > 0) {
             var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
             barFill.style.width = pct + "%";
-            progressText.textContent = (st.status || "Downloading") + " — " + pct + "%";
+            progressText.textContent = (st.status || "Downloading") + ": " + pct + "%";
           } else {
             progressText.textContent = st.status || "Working…";
           }
