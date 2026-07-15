@@ -177,7 +177,12 @@ COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
 # Data-source lanes shown (in order) per participant in the Convergence Browser.
 # Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
 # layout and per-lane offset keys stay in sync; do not hardcode this list in JS.
-CONVERGENCE_SOURCES: tuple[str, ...] = ("sheet", "screenspace", "transcript")
+CONVERGENCE_SOURCES: tuple[str, ...] = (
+    "sheet",
+    "screenspace",
+    "transcript",
+    "composer",
+)
 STUDIO_CELL_EXPAND_HOVER: bool = True
 GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429, 5xx)
 

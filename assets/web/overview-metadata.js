@@ -30,7 +30,13 @@
     filterParticipants: [],
     collapsedSections: {},
     collisionWindow: 5,
+    searchIndex: [],
+    searchQuery: "",
   };
+
+  var _searchTimer = null;
+  var _searchDocBound = false;
+  var SEARCH_DEBOUNCE_MS = 200;
 
   // Screenspace clustering window for the Metadata tab's headline counts.
   // Matches the 5s used by the tab's own Cross-Stream Collisions clustering
@@ -644,6 +650,13 @@
     // Detailed sections collapsed behind a "Show details" expander
     var expander = renderDetailsExpander(cache);
     panel.appendChild(expander);
+
+    // The header (and its search box) is rebuilt on every render, so an active
+    // query would otherwise sit in the input with a stale/empty dropdown. The
+    // panel is already in the live DOM here, so re-running repopulates the
+    // dropdown + count against the freshly-built index.
+    var activeQuery = (mdState.searchQuery || "").trim();
+    if (activeQuery.length >= 2) runSearch(activeQuery);
   }
 
   function renderDetailsExpander(cache) {
@@ -708,11 +721,265 @@
     return wrap;
   }
 
+  // --- Search (Transcripts-style dropdown, jump-to-result) ---
+  //
+  // Client-side only: everything is already in mdState.cache. buildSearchIndex
+  // stamps a stable `_searchId` onto each cache entry so its rendered row can be
+  // located regardless of table sort order (participants have no cache object;
+  // they're located by coverage-cell text). Searchable fields cover the four the
+  // user asked for: type (event type), category (transcript + spreadsheet),
+  // description (observation), and participant.
+
+  function buildSearchIndex(cache) {
+    var index = [];
+    var sid = 0;
+    function tag(entry) {
+      entry._searchId = "mds" + sid++;
+      return entry._searchId;
+    }
+    function push(rec) {
+      rec._hay = ((rec.label || "") + " " + (rec.context || "")).toLowerCase();
+      index.push(rec);
+    }
+
+    var i;
+    for (i = 0; i < cache.eventTypeStats.length; i++) {
+      var et = cache.eventTypeStats[i];
+      push({
+        kind: "Event type", label: et.event_type,
+        context: (et.detector ? et.detector + " · " : "")
+          + et.total_count + " events",
+        searchId: tag(et), sectionKey: "event-types", inExpander: true,
+      });
+    }
+    for (i = 0; i < cache.transcriptCategoryStats.length; i++) {
+      var tc = cache.transcriptCategoryStats[i];
+      var tcLabel = (MARK_CATEGORIES[tc.category] || {}).label || tc.category;
+      push({
+        kind: "Category", label: tcLabel,
+        context: "Transcript · " + tc.total_count + " marks",
+        searchId: tag(tc), sectionKey: "tr-categories", inExpander: true,
+        // Match the raw category key too (e.g. "pain_point" behind "Pain point").
+        _extra: tc.category,
+      });
+    }
+    for (i = 0; i < cache.categoryBreakdown.length; i++) {
+      var cb = cache.categoryBreakdown[i];
+      push({
+        kind: "Category", label: cb.category,
+        context: "Spreadsheet · " + cb.count + " timestamps",
+        searchId: tag(cb), sectionKey: "cat-breakdown", inExpander: true,
+      });
+    }
+    for (i = 0; i < cache.observationStats.length; i++) {
+      var ob = cache.observationStats[i];
+      push({
+        kind: "Observation", label: ob.observation,
+        context: (ob.category || "")
+          + (ob.severity ? " · " + ob.severity : ""),
+        searchId: tag(ob), sectionKey: "observations", inExpander: true,
+      });
+    }
+    for (i = 0; i < cache.allParticipants.length; i++) {
+      var pid = cache.allParticipants[i];
+      var cov = cache.coverage[pid] || { sheet: 0, screenspace: 0, transcript: 0 };
+      push({
+        kind: "Participant", label: pid,
+        context: cov.sheet + " sheet · " + cov.screenspace + " screenspace · "
+          + cov.transcript + " transcript",
+        participant: pid, sectionKey: "coverage", inExpander: false,
+      });
+    }
+
+    // Fold the raw-key extras into the haystack after `push` computed it.
+    for (i = 0; i < index.length; i++) {
+      if (index[i]._extra) index[i]._hay += " " + String(index[i]._extra).toLowerCase();
+    }
+    mdState.searchIndex = index;
+  }
+
+  function renderSearchBox() {
+    var wrap = el("div", "md-search");
+    wrap.id = "mdSearch";
+
+    var icon = el("span", "md-search-icon md-icon");
+    wrap.appendChild(icon);
+
+    var input = document.createElement("input");
+    input.type = "text";
+    input.id = "mdSearchInput";
+    input.className = "md-search-input";
+    input.autocomplete = "off";
+    input.placeholder = "Search type, category, description, participant…";
+    input.value = mdState.searchQuery || "";
+    input.addEventListener("input", function () { onSearchInput(input); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { input.value = ""; mdState.searchQuery = ""; hideSearchResults(); }
+    });
+    wrap.appendChild(input);
+
+    var count = el("span", "md-search-count");
+    count.id = "mdSearchCount";
+    wrap.appendChild(count);
+
+    var results = el("div", "md-search-results hidden");
+    results.id = "mdSearchResults";
+    wrap.appendChild(results);
+
+    // Bind the click-outside dismiss once (module-scoped element lookup keeps it
+    // valid across header re-renders; avoids stacking document listeners).
+    if (!_searchDocBound) {
+      _searchDocBound = true;
+      document.addEventListener("click", function (e) {
+        var area = qs("#mdSearch");
+        if (area && !area.contains(e.target)) hideSearchResults();
+      });
+    }
+    return wrap;
+  }
+
+  function onSearchInput(input) {
+    // Track the raw value on every keystroke (not just when the debounce fires),
+    // so a header/panel rebuild mid-type restores the in-progress text faithfully.
+    mdState.searchQuery = input.value;
+    clearTimeout(_searchTimer);
+    var q = input.value.trim();
+    if (q.length < 2) { hideSearchResults(); return; }
+    _searchTimer = setTimeout(function () { runSearch(q); }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function runSearch(query) {
+    var lower = query.toLowerCase();
+    var matches = [];
+    for (var i = 0; i < mdState.searchIndex.length; i++) {
+      if (mdState.searchIndex[i]._hay.indexOf(lower) >= 0) matches.push(mdState.searchIndex[i]);
+      if (matches.length >= 60) break;
+    }
+    renderSearchResults(matches, query);
+  }
+
+  var SEARCH_GROUP_ORDER = ["Observation", "Event type", "Category", "Participant"];
+
+  function renderSearchResults(matches, query) {
+    var container = qs("#mdSearchResults");
+    var countEl = qs("#mdSearchCount");
+    if (!container) return;
+    if (countEl) {
+      countEl.textContent = matches.length
+        + " match" + (matches.length === 1 ? "" : "es")
+        + (matches.length >= 60 ? "+" : "");
+    }
+
+    if (!matches.length) {
+      container.innerHTML = '<div class="md-search-empty">No matches</div>';
+      container.classList.remove("hidden");
+      return;
+    }
+
+    var groups = {};
+    for (var i = 0; i < matches.length; i++) {
+      (groups[matches[i].kind] || (groups[matches[i].kind] = [])).push(matches[i]);
+    }
+    container.innerHTML = "";
+    for (var g = 0; g < SEARCH_GROUP_ORDER.length; g++) {
+      var kind = SEARCH_GROUP_ORDER[g];
+      var list = groups[kind];
+      if (!list || !list.length) continue;
+      var header = el("div", "md-search-group", kind + " (" + list.length + ")");
+      container.appendChild(header);
+      for (var r = 0; r < list.length; r++) {
+        container.appendChild(buildSearchRow(list[r], query));
+      }
+    }
+    container.scrollTop = 0;
+    container.classList.remove("hidden");
+  }
+
+  function buildSearchRow(rec, query) {
+    var row = el("div", "md-search-row");
+    var label = el("span", "md-search-row-label");
+    label.innerHTML = mdHighlight(rec.label || "", query);
+    label.title = rec.label || "";
+    row.appendChild(label);
+    if (rec.context) {
+      var ctx = el("span", "md-search-row-context");
+      ctx.innerHTML = mdHighlight(rec.context, query);
+      row.appendChild(ctx);
+    }
+    row.addEventListener("click", function () { jumpToSearchResult(rec); });
+    return row;
+  }
+
+  function mdHighlight(text, query) {
+    var escaped = escapeHtml(text);
+    if (!query) return escaped;
+    var re = new RegExp("(" + query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
+    return escaped.replace(re, '<span class="md-search-highlight">$1</span>');
+  }
+
+  function hideSearchResults() {
+    var container = qs("#mdSearchResults");
+    if (container) container.classList.add("hidden");
+    var countEl = qs("#mdSearchCount");
+    if (countEl) countEl.textContent = "";
+  }
+
+  function openDetailsExpander() {
+    // Reuse the header's real toggle so its closure state + localStorage persist.
+    var wrap = qs("#mdDetailsExpander");
+    if (wrap && !wrap.classList.contains("is-open")) {
+      var head = wrap.querySelector(".md-details-head");
+      if (head) head.click();
+    }
+  }
+
+  function uncollapseSection(key) {
+    mdState.collapsedSections[key] = false;
+    var section = qs('.md-section[data-section="' + key + '"]');
+    if (section) section.classList.remove("collapsed");
+  }
+
+  function flashRow(node) {
+    node.classList.remove("md-row-flash");
+    // Force reflow so re-adding the class restarts the animation.
+    void node.offsetWidth;
+    node.classList.add("md-row-flash");
+    setTimeout(function () { node.classList.remove("md-row-flash"); }, 1600);
+  }
+
+  function jumpToSearchResult(rec) {
+    hideSearchResults();
+    var panel = qs("#metadataPanel");
+    if (!panel) return;
+    if (rec.inExpander) openDetailsExpander();
+    if (rec.sectionKey) uncollapseSection(rec.sectionKey);
+
+    var target = null;
+    if (rec.searchId) {
+      target = panel.querySelector('[data-md-search-id="' + rec.searchId + '"]');
+    } else if (rec.participant) {
+      // Coverage matrix cells come from a primitive (no data attr); match by text.
+      var cells = panel.querySelectorAll(".cg-cov-td-left");
+      for (var i = 0; i < cells.length; i++) {
+        if ((cells[i].textContent || "").trim() === rec.participant) {
+          target = cells[i].closest("tr") || cells[i];
+          break;
+        }
+      }
+    }
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      flashRow(target);
+    }
+  }
+
   // --- Header bar ---
 
   function renderHeaderBar(cache) {
     var P = window.ClipgenPrimitives || {};
     var bar = el("div", "md-header-bar");
+
+    bar.appendChild(renderSearchBox());
 
     var pills = el("div", "md-participant-pills");
     var allP = cache.allParticipants;
@@ -1027,6 +1294,7 @@
         var d = sortedData[i];
         var row = el("tr", "md-event-type-row");
         row.dataset.eventType = d.event_type;
+        if (d._searchId) row.dataset.mdSearchId = d._searchId;
 
         row.appendChild(el("td", "md-et-name", d.event_type));
         row.appendChild(el("td", "md-et-detector", d.detector));
@@ -1148,6 +1416,7 @@
       var d = data[j];
       var row = el("tr", "md-tr-category-row");
       row.dataset.category = d.category;
+      if (d._searchId) row.dataset.mdSearchId = d._searchId;
       var catInfo2 = MARK_CATEGORIES[d.category] || { color: "#888", label: d.category };
       var nameTd = el("td", "");
       var dot = el("span", "md-cat-dot");
@@ -1208,6 +1477,7 @@
       for (var i = 0; i < sortedData.length; i++) {
         var d = sortedData[i];
         var row = el("tr");
+        if (d._searchId) row.dataset.mdSearchId = d._searchId;
 
         var obsTd = el("td", "md-obs-name");
         obsTd.textContent = d.observation;
@@ -1332,6 +1602,7 @@
     for (var i = 0; i < data.length; i++) {
       var d = data[i];
       var row = el("div", "md-cat-bar-row");
+      if (d._searchId) row.dataset.mdSearchId = d._searchId;
 
       var label = el("span", "md-cat-bar-label", d.category);
       row.appendChild(label);
@@ -1704,6 +1975,8 @@
 
   function refresh() {
     mdState.cache = computeAllStats(mdState.filterParticipants);
+    // Stamp _searchId onto cache entries before rendering so tagged rows carry it.
+    buildSearchIndex(mdState.cache);
     renderAll(mdState.cache);
     takeSnapshot();
   }

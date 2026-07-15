@@ -83,6 +83,7 @@
   function getEventTypeColor(source, eventType) {
     if (source === "screenspace") return DETECTOR_COLORS[eventType] || "#888";
     if (source === "transcript") return (MARK_CATEGORIES[eventType] || {}).color || "#0891b2";
+    if (source === "composer") return XREF_BADGES.composer.color;
     return XREF_BADGES.sheet.color;
   }
 
@@ -301,6 +302,31 @@
         clusterCount: tcCount,
       });
       participantSet[tc.participant] = true;
+    }
+
+    // Composer cuts (named in/out pairs). Each cut carries its own participant
+    // and real source-video seconds (end > start), so it renders as a span like
+    // sheet ranges and — being non-navigational — seeds convergence zones too.
+    var composerCuts = state.composerCuts || [];
+    for (var ci = 0; ci < composerCuts.length; ci++) {
+      var cut = composerCuts[ci];
+      if (!cut || !cut.participant) continue;
+      if (typeof cut.start !== "number" || typeof cut.end !== "number") continue;
+      var tCo = applyOffset(cut.participant, "composer", cut.start, cut.end);
+      var cutLabel = cut.label || "cut";
+      events.push({
+        participant: cut.participant,
+        start: tCo.start,
+        end: tCo.end,
+        rawStart: tCo.rawStart,
+        rawEnd: tCo.rawEnd,
+        source: "composer",
+        eventType: cutLabel,
+        label: cutLabel,
+        id: "co_" + (cut.id || ci),
+        rawData: cut,
+      });
+      participantSet[cut.participant] = true;
     }
 
     // Duration: take the max of raw and offset-adjusted ends so a negative
@@ -532,6 +558,7 @@
     { key: "sheet", label: "Sheet" },
     { key: "screenspace", label: "Screenspace" },
     { key: "transcript", label: "Transcript" },
+    { key: "composer", label: "Composer" },
   ];
 
   function buildFilterControls() {
@@ -1339,9 +1366,9 @@
     if (participantHasOffset(pid)) badge.title = offsetSummaryTitle(pid);
     label.appendChild(badge);
 
-    // Coupled: one input drives all three lanes. Uncoupled: a stacked column of
-    // three tiny inputs, one per source, each aligned to its sub-row. Both are
-    // built; CSS shows the right one based on .is-uncoupled.is-unlocked.
+    // Coupled: one input drives all lanes. Uncoupled: a stacked column of tiny
+    // inputs, one per source, each aligned to its sub-row. Both are built; CSS
+    // shows the right one based on .is-uncoupled.is-unlocked.
     label.appendChild(makeOffsetInput(pid, null));
 
     var laneWrap = el("div", "cv-offset-lane-inputs");
