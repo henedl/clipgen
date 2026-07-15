@@ -35,6 +35,7 @@
     intakeClusters: [],       // clustered, non-navigational
     trIntakeMarks: [],        // valid transcript marks
     trIntakeClusters: [],
+    composerCuts: [],         // ../composer/api/manifest cuts (each carries participant)
     frictionMoments: [],      // LLM friction moments with resolved times
     activeTab: "metadata",
     // Bumped after every completed loadAll(). The tabs' staleness snapshots
@@ -166,7 +167,15 @@
       })
       .catch(function () { state.frictionMoments = []; });
 
-    return Promise.all([sheetP, baselineP, eventsP, marksP, frictionP]).then(function () {
+    // Composer cuts are one flat array (each cut carries its own participant),
+    // so a single fetch covers every participant's 4th Convergence lane.
+    var composerP = apiGet("../composer/api/manifest")
+      .then(function (data) {
+        state.composerCuts = (data && data.manifest && data.manifest.cuts) || [];
+      })
+      .catch(function () { state.composerCuts = []; });
+
+    return Promise.all([sheetP, baselineP, eventsP, marksP, frictionP, composerP]).then(function () {
       buildClusters();
       state.dataVersion++;
       return state;

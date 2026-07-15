@@ -67,6 +67,13 @@ _manifest_lock = threading.Lock()
 # Shortest allowed cut pair. Anything under this is a misclick, not a clip.
 MIN_CUT_SECONDS = 0.2
 
+# The read-only marker lanes shown in Composer are the *other* streams, never
+# Composer itself. "composer" is a Convergence swim-lane source (Overview), so we
+# strip it here to keep Composer's Sheet/Screenspace/Transcript lanes unchanged.
+_MARKER_SOURCES: tuple[str, ...] = tuple(
+    src for src in config.CONVERGENCE_SOURCES if src != "composer"
+)
+
 # ---- Blueprint ----
 
 composer_bp = Blueprint("composer", __name__)
@@ -90,7 +97,7 @@ def _manifest_path() -> Path:
 def _empty_manifest() -> dict[str, Any]:
     return {
         "cuts": [],
-        "ui": {"markerSources": {src: True for src in config.CONVERGENCE_SOURCES}},
+        "ui": {"markerSources": {src: True for src in _MARKER_SOURCES}},
     }
 
 
@@ -335,11 +342,11 @@ def api_ui_update() -> Any:
         ui = _manifest.setdefault("ui", {})
         if isinstance(sources, dict):
             ui["markerSources"] = {
-                src: bool(sources.get(src, True)) for src in config.CONVERGENCE_SOURCES
+                src: bool(sources.get(src, True)) for src in _MARKER_SOURCES
             }
             response["markerSources"] = ui["markerSources"]
         if isinstance(folds, dict):
-            fold_lanes = (*config.CONVERGENCE_SOURCES, "annotations")
+            fold_lanes = (*_MARKER_SOURCES, "annotations")
             ui["laneFolds"] = {lane: bool(folds.get(lane, True)) for lane in fold_lanes}
             response["laneFolds"] = ui["laneFolds"]
         _persist_locked()

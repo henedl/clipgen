@@ -55,7 +55,7 @@ var CLIPGEN_CONFIG = {
   ],
   frictionColorToken: "--color-friction",
   frictionMomentLimit: 5,
-  convergenceSources: ["sheet", "screenspace", "transcript"],
+  convergenceSources: ["sheet", "screenspace", "transcript", "composer"],
   cardScrubberSpriteCols: 5,
   cardScrubberSpriteRows: 5,
   clipFormat: ".mp4",

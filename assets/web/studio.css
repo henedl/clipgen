@@ -2607,7 +2607,8 @@ html[data-theme="dark"] .log-panel {
 /* Match the Convergence top-row layout: padded toolbar with hairline divider
  * so intake panels read consistently with the rest of Studio. */
 #intakeControls,
-#trIntakeControls {
+#trIntakeControls,
+#coIntakeControls {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -2644,7 +2645,8 @@ html[data-theme="dark"] .log-panel {
 }
 
 #intakeTimeline,
-#trIntakeTimeline {
+#trIntakeTimeline,
+#coIntakeTimeline {
   width: 100%;
   height: 48px;
   border-radius: calc(var(--radius) - 2px);

@@ -144,35 +144,6 @@
     renderIntake(false);
   }
 
-  // One-click boundary detection: enqueue a full-frame boundary task per
-  // participant that has a source video. Progress surfaces through the existing
-  // task poll (intake tab dot) and new boundary events arrive via pollScreenspaceIntake.
-  function intakeDetectBoundaries(btn) {
-    var labelEl = btn ? btn.querySelector("span") : null;
-    var origLabel = labelEl ? labelEl.textContent : "";
-    function restore() {
-      if (btn) btn.disabled = false;
-      if (labelEl) labelEl.textContent = origLabel;
-    }
-    apiGet("../screenspace/api/participants")
-      .then(function (data) {
-        if (!data.ok) return restore();
-        var withVideo = (data.participants || []).filter(function (p) { return p.has_video; });
-        if (!withVideo.length) {
-          if (labelEl) labelEl.textContent = "No videos";
-          setTimeout(restore, 1500);
-          return;
-        }
-        if (btn) btn.disabled = true;
-        if (labelEl) labelEl.textContent = "Queued " + withVideo.length + "…";
-        return Promise.all(withVideo.map(function (p) {
-          return apiPost("../screenspace/api/tasks", { type: "boundary", participant: p.id })
-            .catch(function () { return null; });
-        })).then(restore);
-      })
-      .catch(restore);
-  }
-
   // Apply the events slice from a Screenspace intake poll. Dirty-checks against
   // the last raw payload; returns true when it changed (and re-rendered), false
   // when nothing changed (so the poller can back off).
@@ -411,12 +382,6 @@
           // Navigational events change the clustering input, so re-cluster
           // rather than just re-render the existing clusters.
           reclusterIntake();
-        });
-      }
-      var detectBtn = qs("#intakeDetectBoundariesBtn");
-      if (detectBtn) {
-        detectBtn.addEventListener("click", function () {
-          intakeDetectBoundaries(detectBtn);
         });
       }
     },

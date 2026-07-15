@@ -3694,16 +3694,79 @@
 
   // ---- Init ----
 
+  // One-click boundary detection: enqueue a full-frame boundary task for every
+  // participant that has a source video (state.participants is already filtered
+  // to has_video). New tasks are pushed to state.tasks + rendered immediately,
+  // matching the Run button's enqueue path; results stream in over SSE. The
+  // in-flight guard blocks duplicate posts if the action is triggered again
+  // before the sequential enqueue chain finishes.
+  var _boundaryEnqueueInFlight = false;
+
+  function detectBoundariesForAll() {
+    if (_boundaryEnqueueInFlight) return;
+    var participants = state.participants || [];
+    if (!participants.length) return;
+    _boundaryEnqueueInFlight = true;
+    var chain = Promise.resolve();
+    participants.forEach(function (p) {
+      var pid = p.id;
+      chain = chain.then(function () {
+        return apiPost("api/tasks", { type: "boundary", participant: pid })
+          .then(function (data) {
+            if (data.ok && data.task) {
+              if (!state.tasks.some(function (t) { return t.id === data.task.id; })) {
+                state.tasks.push(data.task);
+              }
+              renderTaskList();
+            }
+          })
+          .catch(function () { return null; });
+      });
+    });
+    chain.then(function () {
+      _boundaryEnqueueInFlight = false;
+      showToast("Queued boundary detection for "
+        + clipgenPluralUnit(participants.length, "participant", "participants"));
+      startSSE();
+    }).catch(function (err) {
+      _boundaryEnqueueInFlight = false;
+      showToast("Error: " + err.message);
+    });
+  }
+
+  function detectBoundariesQuickAction() {
+    var count = (state.participants || []).length;
+    var busy = _boundaryEnqueueInFlight;
+    return {
+      icon: "film",
+      label: "Detect boundaries",
+      action: detectBoundariesForAll,
+      disabled: count === 0 || busy,
+      title: busy
+        ? "Boundary detection is already being queued…"
+        : count === 0
+          ? "Load a participant with a source video first to detect boundaries."
+          : "Detect scene boundaries for every participant with a source video (" + count + ").",
+    };
+  }
+
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
     function rebuild() {
       window.ClipgenTopNav.setQuickActions([
+        detectBoundariesQuickAction(),
         window.ClipgenExportActions.exportQuickAction(),
       ]);
     }
     rebuild();
     window.ClipgenExportActions.refreshExportStatus(rebuild);
     window.ClipgenTopNav.onBeforeOpen(function () {
+      // Rebuild on every open so the boundary action reflects the current
+      // participant list (loaded async after init). refreshExportStatus only
+      // re-runs rebuild when the export flag flips, so it can't do this alone —
+      // without this the boundary item stays frozen in its init-time (empty,
+      // disabled) state.
+      rebuild();
       window.ClipgenExportActions.refreshExportStatus(rebuild);
     });
   }
