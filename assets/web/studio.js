@@ -4481,6 +4481,58 @@
     });
   }
 
+  // Command palette (command-palette.js): additions beyond the auto-ingested
+  // quick actions — Generate, preview-tab switchers, the Artifact Log.
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    function tabCommand(tabKey, title, icon) {
+      function tabEl() {
+        return document.querySelector('.preview-tab[data-tab="' + tabKey + '"]');
+      }
+      return {
+        id: "studio.tab-" + tabKey,
+        title: title,
+        icon: icon,
+        keywords: "tab show switch",
+        section: "Studio",
+        visible: function () {
+          var tab = tabEl();
+          return !!tab && !tab.classList.contains("hidden");
+        },
+        run: function () { tabEl().click(); },
+      };
+    }
+    window.ClipgenCommandPalette.register("studio", function () {
+      return [
+        {
+          id: "studio.generate",
+          title: "Generate clips",
+          icon: "play",
+          keywords: "render build artifacts",
+          section: "Studio",
+          enabled: function () {
+            var btn = document.getElementById("generateBtn");
+            return !!btn && !btn.disabled;
+          },
+          run: function () { document.getElementById("generateBtn").click(); },
+        },
+        tabCommand("sheet", "Show Sheet tab", "table-cells"),
+        tabCommand("intake", "Show Screenspace Intake tab", "rectangle-stack"),
+        tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
+        tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
+        {
+          id: "studio.artifact-log",
+          title: "Open Artifact Log",
+          icon: "list-bullet",
+          keywords: "history builds",
+          section: "Studio",
+          visible: function () { return !!document.getElementById("logBtn"); },
+          run: function () { document.getElementById("logBtn").click(); },
+        },
+      ];
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Apply mask-image to every static [data-icon] element (mirrors what
     // createBtn does for primitives — needed for the bottom-strip toolbar
@@ -4507,6 +4559,7 @@
     checkNavLinks();
     initFrontendSwitcher();
     initTopNavActions();
+    initCommandPalette();
     initIntake();
     // Live counter polls — two combined per-domain endpoints, each carrying its
     // status dot + curation payload, keep the start-overlay pills and sub-tab

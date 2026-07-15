@@ -249,6 +249,17 @@
     els.qaPanel.classList.remove("is-open");
   }
 
+  function getQuickActions(opts) {
+    // refresh:true re-runs the same gating callbacks the menu runs on open,
+    // so callers (the command palette) see the same snapshot the menu would.
+    if (opts && opts.refresh) {
+      for (var i = 0; i < beforeOpenCallbacks.length; i++) {
+        try { beforeOpenCallbacks[i](); } catch (_) {}
+      }
+    }
+    return state.quickActions.slice();
+  }
+
   function setQuickActions(items) {
     state.quickActions = Array.isArray(items) ? items : [];
     if (!els.qaPanel) return;
@@ -337,6 +348,7 @@
 
   window.ClipgenTopNav = {
     setQuickActions: setQuickActions,
+    getQuickActions: getQuickActions,
     refreshVersion: setVersion,
     onReady: onReady,
     onBeforeOpen: onBeforeOpen,

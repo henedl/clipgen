@@ -2613,6 +2613,64 @@
     });
   }
 
+  // Command palette (command-palette.js): additions beyond the auto-ingested
+  // quick actions — search focus, cheatsheet, panel tabs, participant jumps
+  // (the provider runs on every palette open, so it tracks state.participants).
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    function clickCommand(id, title, icon, keywords, elId) {
+      return {
+        id: id,
+        title: title,
+        icon: icon,
+        keywords: keywords,
+        section: "Transcripts",
+        visible: function () { return !!document.getElementById(elId); },
+        run: function () { document.getElementById(elId).click(); },
+      };
+    }
+    window.ClipgenCommandPalette.register("transcripts", function () {
+      var cmds = [
+        {
+          id: "transcripts.search",
+          title: "Focus transcript search",
+          icon: "magnifying-glass",
+          keywords: "find text query",
+          section: "Transcripts",
+          visible: function () { return !!document.getElementById("searchInput"); },
+          // Runs after the palette closes and restores focus, so this focus
+          // call wins.
+          run: function () { document.getElementById("searchInput").focus(); },
+        },
+        clickCommand("transcripts.shortcuts", "Keyboard shortcuts", "command-line",
+          "cheatsheet keys help", "shortcutsBtn"),
+        clickCommand("transcripts.tab-summary", "Show Summary tab", "table-cells",
+          "panel agents", "tabBtnSummary"),
+        clickCommand("transcripts.tab-friction", "Show Friction tab", "table-cells",
+          "panel analysis moments", "tabBtnFriction"),
+      ];
+      (state.participants || []).forEach(function (p) {
+        cmds.push({
+          id: "transcripts.p." + p.id,
+          title: "Jump to " + p.id,
+          icon: "user",
+          keywords: "participant select transcript",
+          section: "Participants",
+          run: function () { selectParticipant(p.id); },
+        });
+        cmds.push({
+          id: "transcripts.p-ss." + p.id,
+          title: "Open " + p.id + " in Screenspace",
+          icon: "user-circle",
+          keywords: "participant screenspace video",
+          section: "Participants",
+          run: function () { location.href = "/screenspace/#" + p.id; },
+        });
+      });
+      return cmds;
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initTooltipToggle();
@@ -2634,6 +2692,7 @@
     initFrictionHeatmapToggle();
     initTranscriptSettings();
     initTopNavActions();
+    initCommandPalette();
 
     // Pause every poller when tab is hidden; resume what was active on focus.
     // Without this, summary/citations/model-hint pollers (1.5–3 s cadence)

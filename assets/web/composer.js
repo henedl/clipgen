@@ -1349,6 +1349,65 @@
     });
   }
 
+  // Command palette (command-palette.js): Composer registers no TopNav quick
+  // actions, so besides the built-in nav/global entries this is the page's
+  // whole palette — toolbar actions, lane toggles, participant jumps.
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    function buttonCommand(id, title, icon, keywords, elId) {
+      return {
+        id: id,
+        title: title,
+        icon: icon,
+        keywords: keywords,
+        section: "Composer",
+        enabled: function () {
+          var btn = qs("#" + elId);
+          return !!btn && !btn.disabled;
+        },
+        run: function () { qs("#" + elId).click(); },
+      };
+    }
+    window.ClipgenCommandPalette.register("composer", function () {
+      var cmds = [
+        buttonCommand("composer.generate", "Generate clips", "play",
+          "cuts render build", "coGenerateBtn"),
+        buttonCommand("composer.export-shot", "Export screenshot", "arrow-down-tray",
+          "annotated frame image", "coExportShotBtn"),
+        buttonCommand("composer.export-gif", "Export GIF", "arrow-down-tray",
+          "annotated animation", "coExportGifBtn"),
+        buttonCommand("composer.export-burn", "Export burned clip", "arrow-down-tray",
+          "annotations video render", "coExportBurnBtn"),
+        buttonCommand("composer.undo", "Undo", "arrow-uturn-left",
+          "revert history", "coUndoBtn"),
+        buttonCommand("composer.redo", "Redo", "arrow-uturn-right",
+          "repeat history", "coRedoBtn"),
+        buttonCommand("composer.lane-sheet", "Toggle Sheet marker lane", "queue-list",
+          "timestamps markers", "coLaneSheet"),
+        buttonCommand("composer.lane-screenspace", "Toggle Screenspace marker lane", "queue-list",
+          "events markers", "coLaneScreenspace"),
+        buttonCommand("composer.lane-transcript", "Toggle Transcript marker lane", "queue-list",
+          "marks markers", "coLaneTranscript"),
+        buttonCommand("composer.shortcuts", "Keyboard shortcuts", "command-line",
+          "cheatsheet keys help", "coShortcutsBtn"),
+      ];
+      (state.participants || []).forEach(function (p) {
+        cmds.push({
+          id: "composer.p." + p.id,
+          title: "Jump to " + p.id,
+          icon: "user",
+          keywords: "participant select source",
+          section: "Participants",
+          run: function () {
+            qs("#coParticipantSelect").value = p.id;
+            selectParticipant(p.id);
+          },
+        });
+      });
+      return cmds;
+    });
+  }
+
   // ---- Boot ----
 
   function boot() {
@@ -1370,6 +1429,7 @@
     }
 
     state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+    initCommandPalette();
     initParticipantSelect();
     initVideo();
     initKeyboard();

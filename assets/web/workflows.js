@@ -842,6 +842,50 @@
     window.ClipgenTopNav.onBeforeOpen(rebuild);
   }
 
+  // Command palette (command-palette.js): additions beyond the auto-ingested
+  // quick actions — the toolbar's run/stop/new/fit/undo/redo buttons.
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    function buttonCommand(id, title, icon, keywords, elId) {
+      return {
+        id: id,
+        title: title,
+        icon: icon,
+        keywords: keywords,
+        section: "Workflows",
+        enabled: function () {
+          var btn = qs("#" + elId);
+          return !!btn && !btn.disabled;
+        },
+        run: function () { qs("#" + elId).click(); },
+      };
+    }
+    window.ClipgenCommandPalette.register("workflows", function () {
+      var stopBtn = qs("#wfStopBtn");
+      return [
+        buttonCommand("workflows.run", "Run blueprint", "play",
+          "execute start batch", "wfRunBtn"),
+        {
+          id: "workflows.stop",
+          title: "Stop run",
+          icon: "stop",
+          keywords: "cancel abort",
+          section: "Workflows",
+          visible: !!stopBtn && !stopBtn.classList.contains("hidden"),
+          run: function () { qs("#wfStopBtn").click(); },
+        },
+        buttonCommand("workflows.new", "New blueprint", "squares-plus",
+          "create canvas", "wfNewBlueprint"),
+        buttonCommand("workflows.fit", "Fit to view", "arrows-pointing-out",
+          "zoom center canvas", "wfFitView"),
+        buttonCommand("workflows.undo", "Undo", "arrow-uturn-left",
+          "revert history", "wfUndo"),
+        buttonCommand("workflows.redo", "Redo", "arrow-uturn-right",
+          "repeat history", "wfRedo"),
+      ];
+    });
+  }
+
   // ---- Boot -----------------------------------------------------------------
 
   function boot() {
@@ -886,6 +930,7 @@
       });
     }
     buildQuickActions();
+    initCommandPalette();
     var delBtn = qs("#wfDeleteBlueprint");
     if (delBtn) {
       delBtn.addEventListener("click", function () {

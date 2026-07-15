@@ -3771,6 +3771,52 @@
     });
   }
 
+  // Command palette (command-palette.js): additions beyond the auto-ingested
+  // quick actions — Run, plus per-participant jumps (the provider runs on
+  // every palette open, so the list tracks state.participants).
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    window.ClipgenCommandPalette.register("screenspace", function () {
+      var cmds = [
+        {
+          id: "screenspace.run",
+          title: "Run analysis tool",
+          icon: "play",
+          keywords: "scan task queue start",
+          section: "Screenspace",
+          enabled: function () {
+            var btn = qs("#runBtn");
+            return !!btn && !btn.disabled;
+          },
+          run: function () { qs("#runBtn").click(); },
+        },
+      ];
+      (state.participants || []).forEach(function (p) {
+        cmds.push({
+          id: "screenspace.p." + p.id,
+          title: "Jump to " + p.id,
+          icon: "user",
+          keywords: "participant select video",
+          section: "Participants",
+          run: function () {
+            var sel = qs("#participantSelect");
+            sel.value = p.id;
+            sel.dispatchEvent(new Event("change"));
+          },
+        });
+        cmds.push({
+          id: "screenspace.p-tr." + p.id,
+          title: "Open " + p.id + " in Transcripts",
+          icon: "user-circle",
+          keywords: "participant transcript",
+          section: "Participants",
+          run: function () { location.href = "/transcripts/#" + p.id; },
+        });
+      });
+      return cmds;
+    });
+  }
+
   // ---- Settings (server-side STUDIO_SETTINGS) ----
   //
   // Backed by /api/settings. We mirror the Screenspace-relevant flags onto
@@ -3832,6 +3878,7 @@
     initKeyboard();
     initFrontendSwitcher();
     initTopNavActions();
+    initCommandPalette();
 
     // Settings
     fetchScreenspaceSettings();
