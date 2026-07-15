@@ -25,7 +25,7 @@ Missing mode-detection is the most common integration bug when adding new flags.
    - Test that the flag is accepted, dispatches correctly, and that incompatible flag combinations raise errors
 
 6. **New top-level modules** (if any)
-   - If the mode adds a new root `*.py` module, list it in `pyproject.toml [tool.setuptools] py-modules` — source-tree imports mask the omission but `uv pip install .` breaks. Guarded by `tests/test_packaging.py`. See [agents/skills/split-module/SKILL.md](../split-module/SKILL.md).
+   - If the mode adds a new root `*.py` module, list it in `pyproject.toml [tool.setuptools] py-modules`. Source-tree imports mask the omission but `uv pip install .` breaks. Guarded by `tests/test_packaging.py`. See [agents/skills/split-module/SKILL.md](../split-module/SKILL.md).
 
 7. **Version bump**
    - Increment patch in `build/VERSION` (see [agents/skills/bump/SKILL.md](../bump/SKILL.md))
