@@ -1797,7 +1797,7 @@
     if (data.participants.length < 3) {
       showNotice("Only " + data.participants.length + " participant" +
         (data.participants.length === 1 ? "" : "s") +
-        " so far — 3+ make the similarity layout meaningful.");
+        " so far: 3+ make the similarity layout meaningful.");
     } else {
       els.notice.classList.add("hidden");
     }
@@ -1850,13 +1850,13 @@
     }
     els.empty.classList.add("hidden");
     if (!window.THREE) {
-      showNotice("Three.js failed to load — the map cannot render.");
+      showNotice("Three.js failed to load. The map cannot render.");
       return;
     }
     if (data.participants.length < 3) {
       showNotice("Only " + data.participants.length + " participant" +
         (data.participants.length === 1 ? "" : "s") +
-        " so far — 3+ make the similarity layout meaningful.");
+        " so far: 3+ make the similarity layout meaningful.");
     }
 
     state.stats = computeStats(data.matrix, data.columns.length);
@@ -2251,7 +2251,7 @@
     }
     var pid = state.data.participants[idx];
     var rank = state.order.indexOf(idx) + 1;
-    var tip = pid + " — unusualness " +
+    var tip = pid + " · unusualness " +
       state.scores[idx].toFixed(2) + " (#" + rank + ")";
     var cj = colorByIndex();
     if (cj >= 0) {
@@ -2510,7 +2510,7 @@
       {
         key: "showAnchors",
         label: "Shared anchors",
-        hint: "Observation categories and detectors as anchor nodes, placed amid the participants exhibiting them — shows why dots cluster",
+        hint: "Observation categories and detectors as anchor nodes, placed amid the participants exhibiting them; shows why dots cluster",
         apply: setAnchorsVisible,
       },
       {
@@ -2835,7 +2835,7 @@
       ["x", "y", "z"].forEach(function (dim, c) {
         var j = axisFeatureIndex(dim);
         var dt = document.createElement("dt");
-        dt.textContent = axisNames[c] + " — " +
+        dt.textContent = axisNames[c] + ": " +
           (j >= 0 ? state.data.columns[j].label : "(unset)");
         dl.appendChild(dt);
       });
@@ -2853,7 +2853,7 @@
         .sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); })
         .slice(0, 3);
       var dt = document.createElement("dt");
-      dt.textContent = axisNames[c] + " — " +
+      dt.textContent = axisNames[c] + ": " +
         Math.round(state.variance[c] * 100) + "% of variance";
       var dd = document.createElement("dd");
       loadings.forEach(function (l, li) {
@@ -3001,7 +3001,7 @@
       muteBtn.type = "button";
       muteBtn.className = "map-feature-mute";
       muteBtn.textContent = "✕";
-      muteBtn.title = "Mute this feature — exclude it from similarity, " +
+      muteBtn.title = "Mute this feature: exclude it from similarity, " +
         "outlier scores, and the layout (restore from the sidebar)";
       muteBtn.addEventListener("click", (function (key) {
         return function () { setFeatureMuted(key, true); };
