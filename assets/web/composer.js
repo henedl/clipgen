@@ -355,7 +355,7 @@
     var info = qs("#coPendingInfo");
     info.textContent = state.pendingIn === null
       ? ""
-      : "In: " + formatTime(state.pendingIn, { decimals: 1 }) + " — press O";
+      : "In: " + formatTime(state.pendingIn, { decimals: 1 }) + ", press O";
   }
 
   function setInPoint() {
@@ -574,7 +574,7 @@
     var end = state.playhead;
     if (end < start) { var tmp = start; start = end; end = tmp; }
     if (end - start < 0.2) {
-      showToast("Cut too short — move the playhead past the in point");
+      showToast("Cut too short. Move the playhead past the in point.");
       return;
     }
     applyCreate({ participant: state.participant, start: start, end: end })
