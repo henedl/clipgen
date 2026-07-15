@@ -11,7 +11,7 @@ The only third-party JavaScript in the project. Everything else under
 - **Used by:** `overview-map.js` (the Overview page's Map tab, `/overview/`)
 
 **Do not upgrade this file.** Three.js deprecated the UMD `three.min.js`
-builds in r150 and removed them in r160 — newer releases ship ES modules
+builds in r150 and removed them in r160. Newer releases ship ES modules
 only, which are incompatible with this repo's no-build-tools rule (plain
 `<script>` tags, global `THREE`). r147 is the last clean UMD build; it is
 feature-complete for everything the Overview map needs (points, meshes,

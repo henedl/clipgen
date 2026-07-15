@@ -5,13 +5,13 @@ Any value shared between Python and the frontend must flow through `utils.get_fr
 ## Audit checklist
 
 1. **Python source** (`utils.py`)
-   - Open `get_frontend_config()` — list every key it returns
+   - Open `get_frontend_config()`: list every key it returns
 
 2. **JS defaults** (`assets/web/utils.js`)
    - Check `CLIPGEN_CONFIG` has a default for every key
    - Check `clipgenApplyConfig()` copies every key from the payload onto `CLIPGEN_CONFIG`
 
-3. **Server routes** — each must embed `"config": utils.get_frontend_config()` in its JSON response:
+3. **Server routes**. Each must embed `"config": utils.get_frontend_config()` in its JSON response:
    - `server.py`: `/api/sheet` endpoint
    - `viewer.py`: `finalize_timeline_data()`, gallery finalize
 

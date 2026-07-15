@@ -1,6 +1,6 @@
 # clipgen-new-thinking-agent — Add an Ollama thinking agent
 
-Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key — no orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing.
+Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key. No orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing.
 
 ## Checklist
 
@@ -17,16 +17,16 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
      - Set `depends_on` to the `manifest_field` names of agents this one needs
      - Set `manifest_field` to the key that will be written into the transcript entry
      - Set `on_upstream_change` to `"clear"` (drop the result when an upstream
-       dependency regenerates — the default) or `"stale"` (keep it but flag for a
+       dependency regenerates, the default) or `"stale"` (keep it but flag for a
        prompted re-run; only the friction shape carries a `stale` flag today, so a
        new `"stale"` agent also needs a `stale`-flagging path)
 
-3. **Backend routes** (`transcripts_server.py`) — **usually nothing**
+3. **Backend routes** (`transcripts_server.py`), **usually nothing**
    - The generic `/api/agent/<key>/<participant>` routes (poll / `regenerate` /
      `stop`) cover every agent in `AGENTS` by key, so a new agent needs **no**
      route edits. The generic poll returns the result under the agent's
      `manifest_field`, plus a `<dep_field>_generating`/`_started_at` block for
-     any dependents — driven off `depends_on`.
+     any dependents, driven off `depends_on`.
    - Only add a route for genuinely-unique behavior. Summary is the sole example:
      its SSE token **stream** (`/api/agent/summary/<pid>/stream`) and user-**edit**
      PUT are hand-written because only summary streams tokens / is user-editable.
@@ -37,7 +37,7 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
    - Add an `AGENT_DESCRIPTORS` entry (URL base `api/agent/<key>`, poll interval,
      optional timeout) plus the agent's render hooks (`onResult`/`onGenerating`/
      `onEmpty`/`onStale`). The shared `_makeAgentPoll` factory handles the
-     poll/staleness/timeout scaffolding — no new poll/stop plumbing.
+     poll/staleness/timeout scaffolding. No new poll/stop plumbing.
    - Agent run/stop rows in `transcripts-pills.js` build URLs from the agent key
      (`api/agent/<key>/...`), so a new pill row is data-only too.
 

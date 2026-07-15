@@ -22,18 +22,18 @@
 
 #### Where to use
 
-Once on page load: drop it in the header — no replay logic needed.
+Once on page load: drop it in the header. No replay logic needed.
 Onboarding / splash screens: render with key={mountedAt} so each visit replays.
 Loading state: loop by adding animation-iteration-count: infinite and an idle gap (e.g. extend keyframes to 0% draw → 70% drawn → 100% drawn-and-hold, then animation-duration: 2.8s).
 
 #### Animation notes for implementing agent
 
-Don't change the path data or stroke-width — both affect visual weight. Use F.3 (stroke 13) at small sizes (<32px), F.2 (stroke 11) at large display sizes if you want a slightly lighter feel.
-Color is currentColor — set the SVG's parent color (or the SVG's own color) to swap themes; no need to fork files.
-Do not add easing variants per-line — uniform easing is the design; staggered timing is what creates the cascade.
-Don't fade lines in (no opacity animation) — the draw-on stroke is the entire effect.
-Min display size: 14px. Below that, swap to a static SVG — animations on tiny SVGs look broken.
-Reference implementation: exports-f3/clipgen-mark.jsx — the React <StackedFAnimated> component is one valid implementation, but the CSS-only version above is lighter and preferred for production frontends.
+Don't change the path data or stroke-width. Both affect visual weight. Use F.3 (stroke 13) at small sizes (<32px), F.2 (stroke 11) at large display sizes if you want a slightly lighter feel.
+Color is currentColor. Set the SVG's parent color (or the SVG's own color) to swap themes; no need to fork files.
+Do not add easing variants per-line. Uniform easing is the design; staggered timing is what creates the cascade.
+Don't fade lines in (no opacity animation). The draw-on stroke is the entire effect.
+Min display size: 14px. Below that, swap to a static SVG. Animations on tiny SVGs look broken.
+Reference implementation: exports-f3/clipgen-mark.jsx. The React <StackedFAnimated> component is one valid implementation, but the CSS-only version above is lighter and preferred for production frontends.
 
 ## HTML usage
 

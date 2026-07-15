@@ -34,12 +34,12 @@ UI at `http://127.0.0.1:8089/transcripts/`
 
 ## Step 4: Run thinking agents (requires Ollama)
 
-Summaries (Pass 1 — paragraph + bullets):
+Summaries (Pass 1: paragraph + bullets):
 ```
 uv run clipgen.py --summarize [P01 P03 ...] -i INPUT_DIR -o OUTPUT_DIR
 ```
 
-Citations (Pass 2 — requires summaries to exist first):
+Citations (Pass 2: requires summaries to exist first):
 ```
 uv run clipgen.py --citations [P01 P03 ...] -i INPUT_DIR -o OUTPUT_DIR
 ```
@@ -73,7 +73,7 @@ Filters (all optional, comma-separated where listed):
 - `--transcript-clips-mark insight,action` — only segments tagged with these mark categories (set via the Transcripts UI)
 - `--transcript-clips-text "checkout"` — case-insensitive substring on segment text
 
-Clustering & padding (defaults shown): same as `--ss-clips` —
+Clustering & padding (defaults shown): same as `--ss-clips`:
 `--cluster-gap 5.0`, `--clip-pre 5.0`, `--clip-post 5.0`, `--max-clip-duration 0`.
 
 Examples:
@@ -93,7 +93,7 @@ When a mark filter is set, the clip's category is `mark-{category}`; otherwise `
 
 ## Step 6: Batch-mark segments by text term
 
-Mark every transcript segment whose text contains a term — same effect as the Transcripts UI's search box + "Mark all results" button, but headless:
+Mark every transcript segment whose text contains a term, same effect as the Transcripts UI's search box + "Mark all results" button, but headless:
 
 ```
 uv run clipgen.py --transcript-mark TERM --transcript-mark-category CAT [filters] -i INPUT_DIR -o OUTPUT_DIR
@@ -119,7 +119,7 @@ uv run clipgen.py --transcript-clips --transcript-clips-mark insight -i IN -o OU
 
 ## Notes
 
-- `config.DEBUGGING = True` returns stub transcripts without loading the Whisper model — useful for development
+- `config.DEBUGGING = True` returns stub transcripts without loading the Whisper model, useful for development
 - Thinking agent results are stored in `transcripts_manifest.json` under each participant's entry
 - Agents run in dependency order: both `citations` and `friction` depend on `summary` being populated first (friction runs after summary even when citations is disabled)
 - Ollama must be running (`ollama serve`) or clipgen will attempt to auto-start it

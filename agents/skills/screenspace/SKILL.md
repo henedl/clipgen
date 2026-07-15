@@ -23,14 +23,14 @@ uv run clipgen.py --ss-task TYPE PARTICIPANT REGION [options] -i INPUT_DIR -o OU
 | `color` | Presence/prevalence of a target color |
 | `change` | Frame-to-frame pixel change (motion) |
 | `similarity` | Visual similarity to a reference frame |
-| `text` | OCR — detect or match text in region |
+| `text` | OCR: detect or match text in region |
 | `numbers` | Extract numeric values from region |
 | `timelapse` | Generate a timelapse of the region |
 | `template` | Match a template image within region |
 | `flow` | Optical flow / movement direction |
 | `inactivity` | Detect periods of no change |
 | `scene` | Classify frames by similarity to one or more reference scenes |
-| `multitool` | Chain several tools (temporal AND/NOT with offset windows) — re-run only, see below |
+| `multitool` | Chain several tools (temporal AND/NOT with offset windows), re-run only, see below |
 
 ### Tool-specific parameters
 
@@ -50,7 +50,7 @@ uv run clipgen.py --ss-task scene P01 myregion \
 ### Re-run a saved task (multitool, scene, any type)
 
 Multitool chains and complex scene setups are easiest to build in the `--screenspace`
-UI. Once saved to the manifest, re-run any task headlessly by id — reference frames are
+UI. Once saved to the manifest, re-run any task headlessly by id. Reference frames are
 re-extracted from the source video:
 
 ```
@@ -60,7 +60,7 @@ uv run clipgen.py --ss-run-task ss_abcd1234 -i INPUT -o OUTPUT
 
 Re-run creates a fresh task run (new id; the original is preserved). The one case that
 can't be re-run is a step built from an **uploaded** template image (no timestamp was
-saved to re-extract from) — the CLI reports this and exits.
+saved to re-extract from). The CLI reports this and exits.
 
 ### List operations
 

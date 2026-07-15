@@ -6,7 +6,7 @@
 - `-i INPUT_DIR` — directory containing source video files (default: current dir)
 - `-o OUTPUT_DIR` — directory for generated artifacts (default: current dir)
 
-## Selection modes (mutually exclusive — pick exactly one)
+## Selection modes (mutually exclusive, pick exactly one)
 
 | Intent | Flag |
 |--------|------|
@@ -23,7 +23,7 @@
 | Combined reel from selectors | `-R "5, P01.11, 13-16"` |
 | Chronological reel | `-T P01` |
 
-## Output format (mutually exclusive — default is .mp4)
+## Output format (mutually exclusive, default is .mp4)
 
 | Output | Flag |
 |--------|------|
@@ -41,7 +41,7 @@
 
 ## Video file naming convention
 
-Source videos must be named `{study}_{participant}.mp4` — e.g. `mystudy_P01.mp4`. The study name comes from the spreadsheet, lowercased and filesystem-safe. Before running, confirm the files exist in `INPUT_DIR`.
+Source videos must be named `{study}_{participant}.mp4`, e.g. `mystudy_P01.mp4`. The study name comes from the spreadsheet, lowercased and filesystem-safe. Before running, confirm the files exist in `INPUT_DIR`.
 
 ## Example translations
 
@@ -57,7 +57,7 @@ Source videos must be named `{study}_{participant}.mp4` — e.g. `mystudy_P01.mp
 
 ## Event-driven clips (no spreadsheet)
 
-When the user wants to cut clips from existing Screenspace events or transcript segments instead of a spreadsheet, use the manifest-driven modes — no `-s` needed:
+When the user wants to cut clips from existing Screenspace events or transcript segments instead of a spreadsheet, use the manifest-driven modes, no `-s` needed:
 
 | Natural language | Command |
 |-----------------|---------|

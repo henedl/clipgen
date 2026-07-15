@@ -8,7 +8,7 @@ Press-drag-release on the magic wand: horizontal drag scrubs flood-fill toleranc
 
 ## v0.13.59 — 2026-07-10 — Screenspace
 **Boolean edits on unsaved canvas regions**
-Shift/Alt/Shift+Alt add, subtract, and intersect now target the pending region drawn on the video before it is saved — refine a rough shape in place with no server round-trip.
+Shift/Alt/Shift+Alt add, subtract, and intersect now target the pending region drawn on the video before it is saved. Refine a rough shape in place with no server round-trip.
 
 ## v0.13.59 — 2026-07-10 — Screenspace
 **Auto-generated task and event names**
@@ -16,7 +16,7 @@ New tasks get descriptive names from their params (e.g. `Text "checkout" · head
 
 ## v0.13.58 — 2026-07-10 — Screenspace
 **Boolean region editing**
-Combine shaped regions with Photoshop-style modifiers — Shift add, Alt subtract, Shift+Alt intersect — or merge shift-selected regions; multi-contour combo shapes persist when the result is not axis-aligned.
+Combine shaped regions with Photoshop-style modifiers (Shift add, Alt subtract, Shift+Alt intersect) or merge shift-selected regions; multi-contour combo shapes persist when the result is not axis-aligned.
 
 ## v0.13.57 — 2026-07-09 — Transcripts
 **Optional severity on flagged segments**
@@ -32,7 +32,7 @@ The Metadata tab counts time-adjacent Screenspace event clusters instead of raw 
 
 ## v0.13.56 — 2026-07-09 — Workflows
 **Clip padding and max duration on artifact nodes**
-Make Clips and Build Reel nodes expose pad start, pad end, and max duration params — nudge clip boundaries inward or outward or cap segment length without new queue cards.
+Make Clips and Build Reel nodes expose pad start, pad end, and max duration params: nudge clip boundaries inward or outward or cap segment length without new queue cards.
 
 ## v0.13.55 — 2026-07-09 — Screenspace
 **Lasso and magic-wand region selectors**
@@ -52,7 +52,7 @@ Summary generation streams tokens into the Transcripts panel as the model produc
 
 ## v0.13.52 — 2026-07-06 — Transcripts
 **Faster Whisper transcription**
-VAD on by default skips silence without clipping quiet speech; beam size 2 and configurable CPU threads speed decode on many-core machines — all tunable in Studio → Transcription settings.
+VAD on by default skips silence without clipping quiet speech; beam size 2 and configurable CPU threads speed decode on many-core machines. All tunable in Studio → Transcription settings.
 
 ## v0.13.51 — 2026-07-04 — Core
 **Unified motion for toasts and Studio overlays**
@@ -64,7 +64,7 @@ Screenspace region pills and Studio queue, artifact, and reel cards play staged 
 
 ## v0.13.49 — 2026-06-30 — Workflows
 **Multi-select participant batch**
-Video Source participant param is a checkbox popover — pick any subset to fan out a batch instead of only one participant or all; empty selection raises a validation warning.
+Video Source participant param is a checkbox popover. Pick any subset to fan out a batch instead of only one participant or all; empty selection raises a validation warning.
 
 ## v0.13.48 — 2026-06-30 — Workflows
 **Canvas navigation**
@@ -104,7 +104,7 @@ Unified Detect node over per-detector types; Interval Captures samples screensho
 
 ## v0.13.27 — 2026-06-27 — Workflows
 **Collection control nodes**
-Filter, partition, merge, limit, and dedup nodes thin or combine the collections flowing through a graph — gate clip selections before Make Clips, cap artifacts before the viewer, or branch matched vs. unmatched streams.
+Filter, partition, merge, limit, and dedup nodes thin or combine the collections flowing through a graph: gate clip selections before Make Clips, cap artifacts before the viewer, or branch matched vs. unmatched streams.
 
 ## v0.13.26 — 2026-06-27 — Workflows
 **Watch-dir auto-run**
@@ -119,7 +119,7 @@ An Issues panel blocks Run on wiring or param errors; completed nodes expose laz
 Per-detector Screenspace nodes, highlights selector, multitool/timelapse/heatmap/measure, and adapter-aware dashed wires; Video Source "All participants" fans out a whole study; save sub-graphs as named stashes or start from two built-in recipes.
 
 ## v0.13.16 — 2026-06-25 — Workflows
-**Workflows mode — node canvas and run engine**
+**Workflows mode: node canvas and run engine**
 A fourth top-level tab chains clip, Screenspace, and transcript actions on an infinite pan/zoom canvas: drag nodes from a catalog, wire typed ports, edit params, Run with live per-node progress, and skip branches via Gate control edges.
 
 ## v0.13.11 — 2026-06-23 — Core
@@ -160,7 +160,7 @@ Cycle #, Category, Severity, and Function headers through Ascending → Descendi
 
 ## v0.12.9 — 2026-06-20 — Screenspace
 **Color presence detection mode**
-The Color tool can fire when a target colour appears anywhere in the region (per-pixel), with a Min area % control and presence-aware calibration — standalone, in Multitool steps, or from the CLI.
+The Color tool can fire when a target colour appears anywhere in the region (per-pixel), with a Min area % control and presence-aware calibration, standalone, in Multitool steps, or from the CLI.
 
 ## v0.12.8 — 2026-06-20 — Studio
 **Source times and severity tint on queue cards**
@@ -172,7 +172,7 @@ Screenspace tasks and transcription show elapsed plus an estimated time remainin
 
 ## v0.12.7 — 2026-06-20 — Screenspace
 **CLI scene analysis and headless task re-run**
-Run scene analysis from the command line with `--ss-task scene` and re-run any saved manifest task headlessly with `--ss-run-task` — the path for unattended multitool chains.
+Run scene analysis from the command line with `--ss-task scene` and re-run any saved manifest task headlessly with `--ss-run-task`, the path for unattended multitool chains.
 
 ## v0.12.6 — 2026-06-20 — Studio
 **Editable clip length**
@@ -200,11 +200,11 @@ Alignment offsets can be set independently per participant lane when sessions ar
 
 ## v0.12.2 — 2026-06-18 — Screenspace
 **Automated scene boundary detector**
-A full-frame Boundary tool flags where visual content changes substantially — menu-to-gameplay, level transitions, loading screens ending — without drawing a region first.
+A full-frame Boundary tool flags where visual content changes substantially (menu-to-gameplay, level transitions, loading screens ending) without drawing a region first.
 
 ## v0.12.1 — 2026-06-18 — Screenspace
 **Pinned-frame calibration workflow**
-Pin reference frames on the timeline, score detector sensitivity against them, get a suggested threshold, and apply it — with a calibration strip, grid controls, and integration into task creation.
+Pin reference frames on the timeline, score detector sensitivity against them, get a suggested threshold, and apply it, with a calibration strip, grid controls, and integration into task creation.
 
 ## v0.11.21 — 2026-06-09 — Screenspace
 **OCR accuracy controls**

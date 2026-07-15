@@ -6,7 +6,7 @@
 uv run --extra dev pytest -c tests/pytest.ini
 ```
 
-Run from the project root. The `--extra dev` flag is required — pytest is only in the optional `dev` extra and is not installed by `uv sync` alone.
+Run from the project root. The `--extra dev` flag is required: pytest is only in the optional `dev` extra and is not installed by `uv sync` alone.
 
 To filter to specific tests, append the file or test name:
 ```
