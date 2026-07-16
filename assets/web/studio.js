@@ -3400,8 +3400,10 @@
       { id: "studio.sendReel", handler: function () { return kbSend(true); } },
     ]);
 
-    // Escape clears the keyboard cursor before anything else backs out.
+    // Escape cascade: cancel an open highlights-parameter drawer first, then
+    // clear the keyboard cursor.
     window.ClipgenHotkeys.registerEscape(function () {
+      if (cancelHighlightsDrawer()) return true;
       return kbClearCursor();
     });
 
@@ -3956,6 +3958,24 @@
   }
 
   var _highlightsBtnOrigHTML = "";
+
+  // Collapse the highlights duration drawer without running the job (Escape,
+  // mirroring the confirm-button flow in onBuildHighlights). Returns whether
+  // there was an open drawer to cancel.
+  function cancelHighlightsDrawer() {
+    var drawer = qs("#highlightsDurationDrawer");
+    if (!drawer || !drawer.classList.contains("open")) return false;
+    if (document.activeElement && drawer.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    drawer.classList.remove("open");
+    var btn = qs("#buildHighlightsBtn");
+    if (btn) {
+      btn.style.minWidth = "";
+      if (_highlightsBtnOrigHTML) btn.innerHTML = _highlightsBtnOrigHTML;
+    }
+    return true;
+  }
 
   function onBuildHighlights() {
     if (isAnyStudioJobRunning()) return;

@@ -15,19 +15,26 @@
   var showToast = TS.showToast,
     loadTranscript = TS.loadTranscript;
 
+  function closeCorrectionsModal() {
+    var modal = qs("#correctionsModal");
+    closeBlockingModal(modal);
+    modal.classList.add("hidden");
+  }
+
   function initCorrectionsModal() {
     qs("#correctionsBtn").addEventListener("click", function () {
-      qs("#correctionsModal").classList.remove("hidden");
+      var modal = qs("#correctionsModal");
+      modal.classList.remove("hidden");
+      // Escape and backdrop click both dismiss (blocking-modal lifecycle also
+      // keeps page hotkeys suppressed while the modal is up).
+      openBlockingModal(modal, {
+        onEscape: closeCorrectionsModal,
+        onBackdropClick: closeCorrectionsModal,
+      });
       loadCorrections();
     });
 
-    qs("#closeCorrectionsBtn").addEventListener("click", function () {
-      qs("#correctionsModal").classList.add("hidden");
-    });
-
-    qs("#correctionsModal").addEventListener("click", function (e) {
-      if (e.target === this) this.classList.add("hidden");
-    });
+    qs("#closeCorrectionsBtn").addEventListener("click", closeCorrectionsModal);
 
     qs("#addCorrectionBtn").addEventListener("click", function () {
       addCorrection();

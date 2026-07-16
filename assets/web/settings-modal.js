@@ -1217,6 +1217,18 @@
     }
   }
 
+  // Escape closes the modal. Bubble-phase so capture-phase owners layered on
+  // top win first: the hotkey recorder stops propagation (Esc = cancel
+  // recording), and the color-picker popover stops propagation (Esc = close
+  // just the picker); the isOpen guard covers the picker's same-press case.
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    if (!_root || _root.classList.contains("hidden")) return;
+    if (window.ClipgenColorPicker && window.ClipgenColorPicker.isOpen && window.ClipgenColorPicker.isOpen()) return;
+    e.preventDefault();
+    _close();
+  });
+
   window.openSettingsModal = function (options) {
     _opts = options || {};
     if (_opts.initialTab) _activeTab = _opts.initialTab;

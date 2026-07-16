@@ -3484,9 +3484,15 @@
       },
     ]);
 
-    // Back-out cascade: cancel the active pointer interaction first, then the
-    // pending/active region, then the region-name modal.
+    // Back-out cascade: an open run-picker dropdown first, then the active
+    // pointer interaction, then the pending/active region, then the
+    // region-name modal.
     window.ClipgenHotkeys.registerEscape(function () {
+      var openPicker = qs(".run-picker-panel:not(.hidden)");
+      if (openPicker) {
+        closeRunPicker();
+        return true;
+      }
       var consumed = true;
       if (state.pipetteActive) {
         deactivatePipette();
