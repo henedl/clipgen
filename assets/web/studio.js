@@ -1045,6 +1045,9 @@
         });
       });
     }
+    // The keyboard cursor is per-surface: drop stale paint (and the context
+    // hint bar) when the cursor's surface is no longer the active tab.
+    kbPaintCursor();
   }
 
   // ---- Queue persistence (sessionStorage) ----
@@ -1631,7 +1634,31 @@
     if (cur) {
       cur.classList.add("kb-cursor");
       if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+      window.ClipgenHotkeys.showActionHints(kbActionHintEntries());
+    } else {
+      window.ClipgenHotkeys.hideActionHints();
     }
+  }
+
+  // The context-hint bar under the cursor: what Enter / Shift+Enter would do
+  // to the selected cell right now. Sheet cells know their queue membership
+  // (findInQueue), so the verb flips between Send and Remove; intake cards
+  // keep the generic Send labels (membership lives in the satellite).
+  function kbActionHintEntries() {
+    var artLabel = "Send to Artifacts";
+    var reelLabel = "Send to Reel";
+    if (_kbCursor && _kbCursor.surface === "sheet") {
+      if (findInQueue(state.artifactQueue, _kbCursor.participant, _kbCursor.row) >= 0) {
+        artLabel = "Remove from Artifacts";
+      }
+      if (findInQueue(state.reelQueue, _kbCursor.participant, _kbCursor.row) >= 0) {
+        reelLabel = "Remove from Reel";
+      }
+    }
+    return [
+      { id: "studio.sendArtifacts", label: artLabel },
+      { id: "studio.sendReel", label: reelLabel },
+    ];
   }
 
   function kbClearCursor() {
@@ -1728,6 +1755,7 @@
       var info = getCellInfo(td);
       if (reel) toggleReelCell(info);
       else toggleArtifactCell(info);
+      kbPaintCursor(); // refresh the hint bar's Send/Remove verbs
       return true;
     }
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));

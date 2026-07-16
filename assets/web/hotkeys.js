@@ -483,6 +483,47 @@
     _hintLayer.textContent = "";
   }
 
+  // ---- Context action hints ----
+  //
+  // A fixed bottom bar of "key — action" pairs that a page shows while its
+  // keyboard cursor/selection is active (e.g. Studio's cell/card browser:
+  // "↩ Send to Artifacts · ⇧↩ Send to Reel"). Entries are {id, label} — the
+  // combo resolves through the same override-aware pipeline as dispatch, the
+  // label is the page's short verb phrase for what the key does right now.
+
+  var _ctxBar = null;
+
+  function showActionHints(entries) {
+    var frag = document.createDocumentFragment();
+    var shown = 0;
+    for (var n = 0; n < entries.length; n++) {
+      var combos = resolvedCombos(entries[n].id);
+      if (!combos.length) continue; // unknown id or user-disabled binding
+      var item = el("span", "hk-context-item");
+      item.appendChild(el("kbd", "", formatCombo(combos[0])));
+      item.appendChild(el("span", "hk-context-label", entries[n].label));
+      frag.appendChild(item);
+      shown++;
+    }
+    if (!shown) {
+      hideActionHints();
+      return;
+    }
+    if (!_ctxBar) {
+      _ctxBar = el("div", "hk-context hidden");
+      document.body.appendChild(_ctxBar);
+    }
+    _ctxBar.textContent = "";
+    _ctxBar.appendChild(frag);
+    _ctxBar.classList.remove("hidden");
+  }
+
+  function hideActionHints() {
+    if (!_ctxBar) return;
+    _ctxBar.classList.add("hidden");
+    _ctxBar.textContent = "";
+  }
+
   // ---- Shared "?" help button ----
   // Every page carries a [data-hotkeys-help] button (see hotkeys.css for the
   // shared look). Delegation instead of a per-page init: no load-order
@@ -605,6 +646,8 @@
     formatCombo: formatCombo,
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
-    closeCheatsheet: closeCheatsheet
+    closeCheatsheet: closeCheatsheet,
+    showActionHints: showActionHints,
+    hideActionHints: hideActionHints
   };
 })();

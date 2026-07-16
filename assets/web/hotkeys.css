@@ -99,7 +99,8 @@
   gap: var(--space-1);
 }
 
-.hk-keys kbd {
+.hk-keys kbd,
+.hk-context kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--fg);
@@ -183,6 +184,45 @@
   color: var(--bg);
   box-shadow: var(--shadow-md);
   white-space: nowrap;
+}
+
+/* ---- Context action hints ----------------------------------------------- */
+/* Fixed bottom-center bar shown by ClipgenHotkeys.showActionHints() while a
+ * page's keyboard cursor is active: one keycap per entry with the action's
+ * short label to its right. Panel-styled (not inverted) since it can linger
+ * on screen while the user keeps browsing. */
+
+.hk-context {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-toast);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.hk-context.hidden {
+  display: none;
+}
+
+.hk-context-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.hk-context-label {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
 }
 
 /* ---- Shared "?" cheatsheet button --------------------------------------- */
