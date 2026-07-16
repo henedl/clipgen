@@ -18,7 +18,7 @@ var CLIPGEN_DEV_TOKEN_TWEAK = false;
 
 // ---- Canonical config (mirror of config.py via utils.get_frontend_config)
 //
-// Source of truth: every API response (server.py /api/sheet-data) and every
+// Source of truth: every API response (server.py /api/sheet) and every
 // exported viewer payload (viewer.py finalize_*) embeds a `config` field.
 // Pages call
 // clipgenApplyConfig(payload) to overlay the live values onto these defaults.
@@ -65,6 +65,7 @@ var CLIPGEN_CONFIG = {
   composerAnnotationStrokeWidth: 0.004,
   composerAnnotationFontSize: 0.035,
   composerAnnotationSpanSeconds: 10.0,
+  hotkeyOverrides: {},
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -119,6 +120,12 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.gifFormat === "string") {
     CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
+  }
+  if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
+    CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;
+    if (window.ClipgenHotkeys) {
+      window.ClipgenHotkeys.applyOverrides(payload.hotkeyOverrides);
+    }
   }
 };
 
@@ -1213,11 +1220,12 @@ var closeBlockingModal = function (overlayEl) {
   }
 };
 
-// Whether any blocking-modal trap is active. openBlockingModal is a
-// singleton, so anything that opens on a chord (the command palette) must
-// check this first — opening would release the existing overlay's trap and
-// leave it visible with Escape/backdrop dismiss dead.
-var hasBlockingModal = function () {
+// Whether any blocking modal is currently open. Consulted by the hotkeys.js
+// dispatcher so page hotkeys stay dead while a modal owns the keyboard, and
+// by the command palette so opening on a chord never steals an existing
+// overlay's trap (openBlockingModal is a singleton — stealing would leave
+// the overlay visible with Escape/backdrop dismiss dead).
+var isBlockingModalOpen = function () {
   return _activeBlockingModal !== null;
 };
 

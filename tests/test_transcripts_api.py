@@ -48,6 +48,7 @@ def tr_client(tmp_path, monkeypatch):
     # Fresh corrected-segments cache + merged-task set per test (auto-restored).
     monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
     monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
 
     monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: [])
 
@@ -97,6 +98,47 @@ def test_transcribe_status_slim_and_segments_tail(tr_client):
     ).get_json()
     assert [s["text"] for s in seg["segments"]] == ["1", "2"]
     assert seg["total"] == 3
+
+
+def test_completion_side_effects_survive_debounced_merge_race(tr_client, monkeypatch):
+    """A debounced _do_persist can win _manifest_lock and merge a completed
+    transcription before _on_task_complete runs. The completion side effects —
+    clearing stale agent fields and starting the thinking-agent chain — must
+    still fire (they drain _pending_chain_pids, not the handler's own merge)."""
+    monkeypatch.setattr(transcripts, "save_transcripts_manifest", lambda *a, **k: None)
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+    worker.enqueue(task)
+    new_segments = [{"start": 0.0, "end": 1.0, "text": "new words"}]
+    with worker._lock:
+        t = worker._tasks[task["id"]]
+        t["status"] = transcripts.TASK_STATUS_COMPLETED
+        t["result"] = {"segments": new_segments}
+    monkeypatch.setattr(transcripts_server, "_worker", worker)
+
+    # Stale AI output from a previous transcription of the same participant.
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"start": 0.0, "end": 1.0, "text": "old words"}],
+        "summary": "stale summary",
+    }
+
+    chained: list[str] = []
+    monkeypatch.setattr(
+        transcripts_server._orchestrator,
+        "run_chain",
+        lambda pid: chained.append(pid),
+    )
+
+    # The debounce timer fires first and wins the merge...
+    with transcripts_server._manifest_lock:
+        transcripts_server._do_persist()
+    # ...then the worker's completion callback runs.
+    transcripts_server._on_task_complete()
+
+    entry = transcripts_server._manifest["source_transcripts"]["P01"]
+    assert entry["segments"] == new_segments
+    assert "summary" not in entry  # stale output cleared
+    assert chained == ["P01"]  # chain still kicked off
 
 
 def test_participants_includes_video_version(tr_client, tmp_path):

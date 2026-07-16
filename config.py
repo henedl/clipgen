@@ -360,7 +360,9 @@ SECONDS_PER_MINUTE: int = 60
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
 # x264 settings for title/endcard generation and the card-wrap re-encode. The
-# wrap re-encodes the whole clip body, so the preset dominates titlecard time;
+# wrap stream-copies a copy-safe clip body (titlecards._body_is_copy_safe) and
+# re-encodes only the ~2s cards, so the preset dominates titlecard time only on
+# the fallback re-encode path (non-h264/exotic bodies, or a failed copy concat);
 # "veryfast" is several times quicker than libx264's "medium" default at
 # negligible quality cost for short research clips. Raise quality with a lower
 # CRF, or trade quality for speed with "superfast"/"ultrafast".
@@ -430,6 +432,14 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
     "bookmark": {"label": "Bookmark", "color": "#0891b2"},
     "friction": {"label": "Friction", "color": "#ea580c"},
 }
+
+# ── Hotkeys ─────────────────────────────────────────────────────────
+# User overrides for web-frontend keyboard shortcuts, keyed by action id
+# (the catalog of ids and default combos lives in assets/web/hotkeys.js).
+# Values are space-separated combo strings ("Mod+Shift+Z Mod+Y"); an empty
+# string disables the shortcut. Edited via Settings → Hotkeys; the server
+# only persists and structurally validates this dict, never interprets it.
+HOTKEY_OVERRIDES: dict[str, str] = {}
 
 # ── Ollama (Local AI) ───────────────────────────────────────────────
 OLLAMA_SUMMARY_ENABLED: bool = (
@@ -561,6 +571,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD": "Seconds of surrounding silence for hallucination skip logic; 0 = off. When > 0, enables word-level timestamps (slower).",
     "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": "Use prior segment text as context for the next decode; disable to reduce chained hallucinations.",
     "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
+    "HOTKEY_OVERRIDES": "Custom keyboard-shortcut bindings, keyed by action id. Click a shortcut to rebind it; an empty value disables the shortcut.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
     "MANIFEST_ENABLED": "Write a manifest JSON file alongside generated artifacts for session tracking.",
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
@@ -827,6 +838,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "tab": "Transcription",
         "group": "Markers",
         "type": "mark_categories",
+    },
+    "HOTKEY_OVERRIDES": {
+        "tab": "Hotkeys",
+        "group": "",
+        "type": "hotkeys",
     },
     "OLLAMA_SUMMARY_ENABLED": {
         "tab": "Summaries",

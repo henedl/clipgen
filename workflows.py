@@ -23,7 +23,7 @@ This module is the backend home for:
   ``cancel_event`` contract ``NodeContext`` carries. ``topo_order`` rejects cycles;
   control edges (a gate's ``control`` output) gate downstream without feeding data.
 
-See ``plans/WORKFLOWS-PLAN.md``.
+See ``plans/archive/WORKFLOWS-PLAN.md``.
 
 Manifest shape (``workflows_manifest.json`` in the output directory)::
 
@@ -130,9 +130,9 @@ class NodeContext:
     Carries launch context (output dir + optional sheet) plus the uniform
     progress and cancellation seams. Executors forward ``cancel_flag`` to
     scan/clip callees and ``cancel_event`` to thinking-agent callees — the dual
-    contract the backend functions already expose (see ``plans/WORKFLOWS-PLAN.md``
-    and AGENTS.md). M4's ``WorkflowRunner`` builds one ``NodeContext`` per run; in
-    M3 it is constructed directly by tests.
+    contract the backend functions already expose (see
+    ``plans/archive/WORKFLOWS-PLAN.md`` and AGENTS.md). ``WorkflowRunner`` builds
+    one ``NodeContext`` per run; tests construct it directly.
     """
 
     input_dir: Path
@@ -164,10 +164,9 @@ class NodeContext:
 #
 # Modelled on ``thinking_agents.AGENTS``: a data-driven, enumerable registry
 # the frontend renders generically. Each node carries the typed ports the DAG
-# needs (the wire vocabulary lives in plans/WORKFLOWS-PLAN.md). ``execute`` is
-# deferred to M3 — these entries are declarative-only, so adding a node in a
-# later milestone is "append a NodeType + (in M3) an executor", zero frontend
-# edits. ``serialize_catalog`` strips any ``execute`` for the JSON endpoint.
+# needs (the wire vocabulary lives in plans/archive/WORKFLOWS-PLAN.md). Adding
+# a node is "append a NodeType + an executor" (executors section below), zero
+# frontend edits. ``serialize_catalog`` strips ``execute`` for the JSON endpoint.
 
 
 class Port(TypedDict):
@@ -179,7 +178,7 @@ class Port(TypedDict):
 
 
 class ParamSpec(TypedDict):
-    """A node parameter the frontend renders an editor for (editors land in M2)."""
+    """A node parameter the frontend renders an editor for."""
 
     name: str
     type: str  # number | string | enum | bool | participant | region | ...
@@ -194,7 +193,7 @@ class ParamSpec(TypedDict):
 
 
 class NodeType(TypedDict):
-    """One node in the catalog. ``execute`` is filled in M3 (see module docstring)."""
+    """One node in the catalog. ``execute`` is bound in the executors section below."""
 
     id: str
     label: str
@@ -225,9 +224,8 @@ _OLLAMA_MODEL_PARAM: ParamSpec = {
 }
 
 
-# Curated v1 node set (plans/WORKFLOWS-PLAN.md). Keyed by id so the frontend can
-# both iterate (palette) and look up a placed node's type. Ports/params may be
-# refined when the M3 executors are wired against the underlying functions.
+# Curated v1 node set (plans/archive/WORKFLOWS-PLAN.md). Keyed by id so the
+# frontend can both iterate (palette) and look up a placed node's type.
 NODE_TYPES: dict[str, NodeType] = {
     # ---- Sources ----
     "video_source": {
@@ -1377,7 +1375,7 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
 # value}`` (keyed by OUTPUT-port name). Backend modules are imported lazily
 # inside each executor (mirrors ``cli._run_ss_clips``) to avoid import cost and
 # cycles — Workflows sits at the top of the dependency DAG. The concrete value
-# carried on each wire is documented in ``plans/WORKFLOWS-PLAN.md``; the unifying
+# carried on each wire is documented in ``plans/archive/WORKFLOWS-PLAN.md``; the unifying
 # primitive is a "source descriptor" embedded in every domain value so the pure
 # ``ADAPTERS`` (value -> value, no ctx/params) can still reach a clip's source.
 

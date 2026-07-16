@@ -837,80 +837,90 @@
     }
   }
 
-  function onTranscriptKeydown(e) {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    var t = e.target;
-    if (t && t.matches && t.matches("input, textarea, select, [contenteditable=true]")) return;
-    if (state.editingTextEl) return;
-
-    // The cheatsheet works regardless of player/segment state.
-    if (e.key === "?") { e.preventDefault(); toggleShortcuts(); return; }
-    if (e.key === "Escape" && _shortcutsOpen()) { e.preventDefault(); hideShortcuts(); return; }
-
+  // Shared gate for every transcript hotkey: dead while a text edit is live or
+  // while the corrections modal / mark popover own the keyboard. (The generic
+  // input/contenteditable guard and blocking-modal suppression live in the
+  // hotkeys.js dispatcher.)
+  function _hotkeysActive() {
+    if (state.editingTextEl) return false;
     var modal = qs("#correctionsModal");
-    if (modal && !modal.classList.contains("hidden")) return;
+    if (modal && !modal.classList.contains("hidden")) return false;
     var pop = qs("#markPopover");
-    if (pop && !pop.classList.contains("hidden")) return;
+    if (pop && !pop.classList.contains("hidden")) return false;
+    return true;
+  }
 
-    var key = e.key;
-    if (e.code === "Space" || key === " ") {
-      var v = qs("#videoPlayer");
-      if (!v || !v.src) return;
-      e.preventDefault();
-      if (v.paused) v.play();
-      else v.pause();
-      return;
-    }
-
-    // Remaining shortcuts act on the segment list.
-    if (!state.segments || !state.segments.length) return;
-    if (key === "j" || key === "ArrowDown") { e.preventDefault(); _moveActiveSegment(1); return; }
-    if (key === "k" || key === "ArrowUp") { e.preventDefault(); _moveActiveSegment(-1); return; }
-    if (key === "n") { e.preventDefault(); _jumpToMarkedSegment(1); return; }
-    if (key === "p") { e.preventDefault(); _jumpToMarkedSegment(-1); return; }
-    if (key === "m") { e.preventDefault(); _markActiveSegment(null); return; }
-    if (key === ",") { e.preventDefault(); seekVideo(Math.max(0, videoGlobalTime() - 5)); return; }
-    if (key === ".") { e.preventDefault(); seekVideo(videoGlobalTime() + 5); return; }
-    if (key >= "1" && key <= "9") {
-      var catKeys = Object.keys(MARK_CATEGORIES);
-      var ci = parseInt(key, 10) - 1;
-      if (ci < catKeys.length) { e.preventDefault(); _markActiveSegment(catKeys[ci]); }
-      return;
-    }
+  function _segmentsReady() {
+    return _hotkeysActive() && !!(state.segments && state.segments.length);
   }
 
   function initPlayerKeyboard() {
-    document.addEventListener("keydown", onTranscriptKeydown);
-  }
-
-  // ---- Keyboard shortcuts cheatsheet ----
-
-  function _shortcutsOpen() {
-    var el = qs("#trShortcuts");
-    return !!(el && !el.classList.contains("hidden"));
-  }
-  function showShortcuts() {
-    var el = qs("#trShortcuts");
-    if (el) el.classList.remove("hidden");
-  }
-  function hideShortcuts() {
-    var el = qs("#trShortcuts");
-    if (el) el.classList.add("hidden");
-  }
-  function toggleShortcuts() {
-    if (_shortcutsOpen()) hideShortcuts();
-    else showShortcuts();
+    window.ClipgenHotkeys.register([
+      {
+        id: "transport.playPause",
+        when: function () {
+          var v = qs("#videoPlayer");
+          return _hotkeysActive() && !!(v && v.src);
+        },
+        handler: function () {
+          var v = qs("#videoPlayer");
+          if (v.paused) v.play();
+          else v.pause();
+        },
+      },
+      {
+        id: "transport.seekBack",
+        when: _hotkeysActive,
+        handler: function () { seekVideo(Math.max(0, videoGlobalTime() - 5)); },
+      },
+      {
+        id: "transport.seekFwd",
+        when: _hotkeysActive,
+        handler: function () { seekVideo(videoGlobalTime() + 5); },
+      },
+      {
+        id: "transport.stepBack",
+        when: _hotkeysActive,
+        handler: function () { seekVideo(Math.max(0, videoGlobalTime() - 1)); },
+      },
+      {
+        id: "transport.stepFwd",
+        when: _hotkeysActive,
+        handler: function () { seekVideo(videoGlobalTime() + 1); },
+      },
+      { id: "nav.next", when: _segmentsReady, handler: function () { _moveActiveSegment(1); } },
+      { id: "nav.prev", when: _segmentsReady, handler: function () { _moveActiveSegment(-1); } },
+      { id: "transcripts.nextMarked", when: _segmentsReady, handler: function () { _jumpToMarkedSegment(1); } },
+      { id: "transcripts.prevMarked", when: _segmentsReady, handler: function () { _jumpToMarkedSegment(-1); } },
+      { id: "transcripts.mark", when: _segmentsReady, handler: function () { _markActiveSegment(null); } },
+      {
+        id: "transcripts.markCategory",
+        when: _segmentsReady,
+        handler: function (e, combo) {
+          var catKeys = Object.keys(MARK_CATEGORIES);
+          var ci = parseInt(combo, 10) - 1;
+          if (isNaN(ci) || ci < 0 || ci >= catKeys.length) return false;
+          _markActiveSegment(catKeys[ci]);
+        },
+      },
+      {
+        id: "global.search",
+        when: _hotkeysActive,
+        handler: function () {
+          var input = qs("#searchInput");
+          if (!input) return false;
+          input.focus();
+          input.select();
+        },
+      },
+    ]);
   }
 
   function initShortcutsOverlay() {
     var btn = qs("#shortcutsBtn");
-    if (btn) btn.addEventListener("click", function () { toggleShortcuts(); });
-    var closeBtn = qs("#shortcutsClose");
-    if (closeBtn) closeBtn.addEventListener("click", hideShortcuts);
-    var overlay = qs("#trShortcuts");
-    if (overlay) {
-      overlay.addEventListener("click", function (e) {
-        if (e.target === overlay) hideShortcuts();
+    if (btn) {
+      btn.addEventListener("click", function () {
+        window.ClipgenHotkeys.toggleCheatsheet();
       });
     }
   }

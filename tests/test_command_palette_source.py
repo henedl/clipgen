@@ -110,23 +110,51 @@ def test_css_toggle_completeness_and_tokens():
     assert not re.search(r"z-index: \d", css), "raw z-index in command-palette.css"
 
 
-def test_summon_chord_and_modal_guard():
-    """The chord listener is capture-phase, handles both Cmd/Ctrl+Shift+P and
-    Cmd/Ctrl+K (Firefox reserves Ctrl+Shift+P), and open() refuses to steal
-    an existing overlay's trap — both the settings modal (body.modal-open,
-    no openBlockingModal) and the openBlockingModal holders (Studio
-    gallery/status/confirm, Transcripts install dialog) that never set the
-    class."""
+def test_summon_chord_via_hotkey_registry():
+    """The chord is a hotkeys.js catalog action ("global.palette", default
+    Mod+Shift+P / Mod+K — Firefox reserves Ctrl+Shift+P), registered with
+    allowInInput so it fires while typing (Spotlight behavior). The registry
+    suppresses combos while a blocking modal is open, so toggling closed is
+    handled by the palette input's own keydown via resolvedCombos (which
+    respects Settings → Hotkeys rebinds). No raw document keydown listener —
+    that contract is also enforced by test_hotkeys_frontend_source.py."""
+    hotkeys_src = (_WEB / "hotkeys.js").read_text(encoding="utf-8")
+    entry = re.search(r'\{ id: "global\.palette".*\}', hotkeys_src)
+    assert entry, "hotkeys.js catalog lacks the global.palette action"
+    assert '"Mod+Shift+P"' in entry.group(0)
+    assert '"Mod+K"' in entry.group(0)
     src = PALETTE_JS.read_text(encoding="utf-8")
-    assert re.search(r"addEventListener\(\s*\"keydown\",[\s\S]*?\}, true\)", src), (
-        "summon chord listener is not capture-phase"
+    assert re.search(
+        r'\{ id: "global\.palette", handler: toggle, allowInInput: true \}', src
+    ), "palette does not register the chord through ClipgenHotkeys"
+    assert 'resolvedCombos("global.palette")' in src  # toggle-while-open
+    assert not re.search(r'document\.addEventListener\(\s*"keydown"', src), (
+        "command-palette.js must not attach document-level keydown listeners"
     )
-    assert 'k === "p"' in src
-    assert 'k === "k"' in src
+
+
+def test_command_ids_stay_out_of_hotkey_namespace():
+    """Palette command ids use ":" separators; dotted "a.b" ids are reserved
+    for hotkey catalog actions (test_hotkeys_frontend_source.py scans every
+    id: \"a.b\" literal and requires it in HOTKEY_CATALOG). global.palette is
+    the one deliberate exception — it IS a catalog action."""
+    src = PALETTE_JS.read_text(encoding="utf-8")
+    dotted = re.findall(r'id: "([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)"', src)
+    assert dotted == ["global.palette"], (
+        f"unexpected dotted command ids in command-palette.js: {dotted}"
+    )
+
+
+def test_modal_guard():
+    """open() refuses to steal an existing overlay's trap — both the settings
+    modal (body.modal-open, no openBlockingModal) and the openBlockingModal
+    holders (Studio gallery/status/confirm, Transcripts install dialog,
+    hotkeys cheatsheet) that never set the class."""
+    src = PALETTE_JS.read_text(encoding="utf-8")
     assert 'classList.contains("modal-open")' in src
-    assert "hasBlockingModal()" in src
+    assert "isBlockingModalOpen()" in src
     utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
-    assert "var hasBlockingModal = function () {" in utils_src
+    assert "var isBlockingModalOpen = function () {" in utils_src
 
 
 def test_cross_page_deep_links():

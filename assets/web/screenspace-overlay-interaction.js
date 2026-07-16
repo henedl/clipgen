@@ -958,7 +958,12 @@
 
     qs("#regionNameInput").addEventListener("keydown", function (e) {
       if (e.key === "Enter") qs("#regionNameSave").click();
-      if (e.key === "Escape") hideRegionNameModal();
+      if (e.key === "Escape") {
+        // Fully handled here: stop the page Escape cascade so cancelling the
+        // name prompt doesn't also discard the pending region underneath.
+        e.stopPropagation();
+        hideRegionNameModal();
+      }
     });
 
     // Convert vertical scroll to horizontal on region chips

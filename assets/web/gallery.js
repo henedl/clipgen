@@ -165,11 +165,15 @@
       if (e.target === lb) closeLightbox();
     });
 
-    document.addEventListener("keydown", function (e) {
-      if (state.lightboxIndex < 0) return;
-      if (e.key === "Escape") closeLightbox();
-      else if (e.key === "ArrowLeft") navigateLightbox(-1);
-      else if (e.key === "ArrowRight") navigateLightbox(1);
+    function lightboxOpen() { return state.lightboxIndex >= 0; }
+    window.ClipgenHotkeys.register([
+      { id: "gallery.prev", when: lightboxOpen, handler: function () { navigateLightbox(-1); } },
+      { id: "gallery.next", when: lightboxOpen, handler: function () { navigateLightbox(1); } },
+    ]);
+    window.ClipgenHotkeys.registerEscape(function () {
+      if (!lightboxOpen()) return false;
+      closeLightbox();
+      return true;
     });
   }
 

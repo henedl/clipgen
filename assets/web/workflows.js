@@ -52,6 +52,7 @@
   // toast would leave a canvas that looks editable but never saves).
   function loadCatalog() {
     return apiGet("api/catalog").then(function (res) {
+      if (res && res.config) clipgenApplyConfig(res.config);
       state.catalog = (res && res.catalog) || [];
       state.context = (res && res.context) || { sheet: false, videoDir: false };
       // Adapter pairs the runner coerces across; canConnect consults this Set so
@@ -802,13 +803,13 @@
     }
   }
 
-  // Keyboard/mouse shortcuts legend — a far-right ? popover. Static content, so
-  // no gating; reuses the same outside-click/Escape toggle as the run menu.
+  // Keyboard/mouse shortcuts button — opens the shared hotkeys.js cheatsheet.
   function initShortcutsMenu() {
     var btn = qs("#wfShortcutsBtn");
-    var menu = qs("#wfShortcutsMenu");
-    if (!btn || !menu) return;
-    bindMenuToggle(btn, menu);
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      window.ClipgenHotkeys.toggleCheatsheet();
+    });
   }
 
   // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
@@ -866,10 +867,10 @@
     window.ClipgenCommandPalette.register("workflows", function () {
       var stopBtn = qs("#wfStopBtn");
       return [
-        buttonCommand("workflows.run", "Run blueprint", "play",
+        buttonCommand("workflows:run", "Run blueprint", "play",
           "execute start batch", "wfRunBtn"),
         {
-          id: "workflows.stop",
+          id: "workflows:stop",
           title: "Stop run",
           icon: "stop",
           keywords: "cancel abort",
@@ -877,13 +878,13 @@
           visible: !!stopBtn && !stopBtn.classList.contains("hidden"),
           run: function () { qs("#wfStopBtn").click(); },
         },
-        buttonCommand("workflows.new", "New blueprint", "squares-plus",
+        buttonCommand("workflows:new", "New blueprint", "squares-plus",
           "create canvas", "wfNewBlueprint"),
-        buttonCommand("workflows.fit", "Fit to view", "arrows-pointing-out",
+        buttonCommand("workflows:fit", "Fit to view", "arrows-pointing-out",
           "zoom center canvas", "wfFitView"),
-        buttonCommand("workflows.undo", "Undo", "arrow-uturn-left",
+        buttonCommand("workflows:undo", "Undo", "arrow-uturn-left",
           "revert history", "wfUndo"),
-        buttonCommand("workflows.redo", "Redo", "arrow-uturn-right",
+        buttonCommand("workflows:redo", "Redo", "arrow-uturn-right",
           "repeat history", "wfRedo"),
       ];
     });

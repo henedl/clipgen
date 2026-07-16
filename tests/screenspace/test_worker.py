@@ -386,6 +386,89 @@ class TestScreenspaceWorker:
         assert t["parameters"]["start_seconds"] == 55.0  # 10 + 0.5*(100-10)
         assert t.get("_partial_results") == [{"timestamp": 5.0}]
 
+    def test_second_resume_uses_segment_local_progress(self):
+        # task["progress"] is a GLOBAL fraction, but start_seconds was already
+        # advanced by the first resume. A second resume must convert back to
+        # the current segment's local fraction — projecting the global
+        # fraction onto the shortened segment overshoots the true stop point
+        # and silently skips frames.
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        tid = task["id"]
+        with worker._lock:
+            worker._tasks[tid]["status"] = screenspace.TASK_STATUS_PAUSED
+            worker._tasks[tid]["progress"] = 0.5
+            worker._tasks[tid]["result"] = [{"timestamp": 5.0}]
+        worker.resume()
+        with worker._lock:
+            t = worker._tasks[tid]
+            assert t["parameters"]["start_seconds"] == 50.0
+            # Simulate the resumed scan pausing again at global progress 0.75
+            # — halfway through the [50, 100] segment — with one more result.
+            t["status"] = screenspace.TASK_STATUS_PAUSED
+            t["progress"] = 0.75
+            t["result"] = [{"timestamp": 5.0}, {"timestamp": 60.0}]
+        worker.resume()
+        with worker._lock:
+            t = worker._tasks[tid]
+            assert t["parameters"]["start_seconds"] == 75.0  # not 87.5
+            assert t["_partial_results"] == [
+                {"timestamp": 5.0},
+                {"timestamp": 60.0},
+            ]
+
+    def test_pause_after_resume_preserves_earlier_results(self, monkeypatch):
+        # The paused branch of _execute_task must prepend _partial_results
+        # like the completed branch does — otherwise pausing a resumed scan
+        # permanently drops the results found before the first pause.
+        def pausing_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            with self._lock:
+                self._tasks[task["id"]]["_paused_flag"] = True
+            return [{"timestamp": 60.0}]
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", pausing_dispatch
+        )
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "color",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r",
+            {"x": 0, "y": 0, "w": 1, "h": 1},
+            parameters={"start_seconds": 0.0, "end_seconds": 100.0},
+        )
+        worker.enqueue(task)
+        with worker._lock:
+            t = worker._tasks[task["id"]]
+            t["status"] = screenspace.TASK_STATUS_PAUSED
+            t["progress"] = 0.5
+            t["result"] = [{"timestamp": 5.0}]
+        worker.resume()  # seeds _partial_results and re-enqueues
+        worker.start()
+        try:
+            for _ in range(100):
+                t = worker.get_task(task["id"])
+                if t and t["status"] == screenspace.TASK_STATUS_PAUSED:
+                    break
+                time.sleep(0.05)
+            with worker._lock:
+                t = worker._tasks[task["id"]]
+                assert t["status"] == screenspace.TASK_STATUS_PAUSED
+                assert t["result"] == [{"timestamp": 5.0}, {"timestamp": 60.0}]
+        finally:
+            worker.stop()
+
 
 class TestWorkerParallel:
     def test_two_tasks_run_concurrently(self, monkeypatch):

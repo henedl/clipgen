@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="studio.css">
   <link rel="stylesheet" href="card-scrubber.css">
   <link rel="stylesheet" href="settings-modal.css">
+  <link rel="stylesheet" href="hotkeys.css">
   <link rel="stylesheet" href="command-palette.css">
   <link rel="stylesheet" href="color-picker.css">
   <link rel="stylesheet" href="start-overlay.css">
@@ -39,7 +40,7 @@
   <!-- Sheet + preview tabs (screenspace/transcript/composer intake) -->
 
     <aside id="studioSidebar" class="cg-scroll-thin" data-open="true" aria-label="Sheet filters">
-      <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
+      <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar" data-tooltip="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
       <section class="studio-sidebar-section" data-section="views">
         <header class="studio-sidebar-header">Views</header>
         <div class="studio-sidebar-body" data-target="views"></div>
@@ -73,16 +74,16 @@
     </div>
     <div id="intakePanel" class="hidden">
       <div class="area-controls" id="intakeControls">
-        <label class="intake-cluster-label">Cluster <input id="intakeClusterThreshold" type="number" min="1" max="60" value="10" class="intake-cluster-input">s</label>
-        <button id="intakeAddAllBtn" class="cg-btn cg-btn-sm" disabled><span>Add all to Artifacts</span></button>
-        <button id="intakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled><span>Add all to Reel</span></button>
+        <label class="intake-cluster-label" data-tooltip="Group events within this many seconds into one card">Cluster <input id="intakeClusterThreshold" type="number" min="1" max="60" value="10" class="intake-cluster-input">s</label>
+        <button id="intakeAddAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Queue every listed event as an artifact"><span>Add all to Artifacts</span></button>
+        <button id="intakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add every listed event to the reel"><span>Add all to Reel</span></button>
       </div>
       <div class="intake-filters">
         <input id="intakeFilterSearch" type="text" placeholder="Search events&#x2026;" class="intake-filter-search" autocomplete="off">
         <div id="intakeDetectorPills" class="intake-chip-row"></div>
         <div id="intakeFilterParticipants" class="intake-chip-row"></div>
-        <label class="intake-filter-new-label"><input id="intakeFilterNew" type="checkbox"> New only</label>
-        <label class="intake-filter-new-label"><input id="intakeShowNavigational" type="checkbox"> Show navigational</label>
+        <label class="intake-filter-new-label" data-tooltip="Show only events not yet generated"><input id="intakeFilterNew" type="checkbox"> New only</label>
+        <label class="intake-filter-new-label" data-tooltip="Include low-signal navigational events"><input id="intakeShowNavigational" type="checkbox"> Show navigational</label>
       </div>
       <div id="intakeTimeline" class="intake-density-host"></div>
       <div id="intakeCards" class="intake-cards-grid">
@@ -91,10 +92,10 @@
     </div>
     <div id="trIntakePanel" class="hidden">
       <div class="area-controls" id="trIntakeControls">
-        <label class="intake-cluster-label">Merge gap <input id="trIntakeClusterThreshold" type="number" min="1" max="60" value="10" class="intake-cluster-input">s</label>
-        <label class="tr-intake-toggle"><input id="trIntakeShowAll" type="checkbox"> Show all</label>
-        <button id="trIntakeAddAllBtn" class="cg-btn cg-btn-sm" disabled><span>Add all to Artifacts</span></button>
-        <button id="trIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled><span>Add all to Reel</span></button>
+        <label class="intake-cluster-label" data-tooltip="Merge marks within this many seconds into one card">Merge gap <input id="trIntakeClusterThreshold" type="number" min="1" max="60" value="10" class="intake-cluster-input">s</label>
+        <label class="tr-intake-toggle" data-tooltip="Show all marks, including filtered ones"><input id="trIntakeShowAll" type="checkbox"> Show all</label>
+        <button id="trIntakeAddAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Queue every listed mark as an artifact"><span>Add all to Artifacts</span></button>
+        <button id="trIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add every listed mark to the reel"><span>Add all to Reel</span></button>
       </div>
       <div class="intake-filters">
         <input id="trIntakeFilterSearch" type="text" placeholder="Search transcript&#x2026;" class="intake-filter-search" autocomplete="off">
@@ -109,8 +110,8 @@
     </div>
     <div id="coIntakePanel" class="hidden">
       <div class="area-controls" id="coIntakeControls">
-        <button id="coIntakeAddAllBtn" class="cg-btn cg-btn-sm" disabled><span>Add all to Artifacts</span></button>
-        <button id="coIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled><span>Add all to Reel</span></button>
+        <button id="coIntakeAddAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Queue every listed cut as an artifact"><span>Add all to Artifacts</span></button>
+        <button id="coIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add every listed cut to the reel"><span>Add all to Reel</span></button>
       </div>
       <div class="intake-filters">
         <input id="coIntakeFilterSearch" type="text" placeholder="Search cuts&#x2026;" class="intake-filter-search" autocomplete="off">
@@ -136,27 +137,27 @@
     <div id="artifactsArea" class="drop-area">
       <div class="bs-toolbar" id="artifactsToolbar">
         <span class="bs-label">Artifacts</span>
-        <span id="artifactsCount" class="bs-count cg-mono">(0)</span>
+        <span id="artifactsCount" class="bs-count cg-mono" data-tooltip="Cells queued for generation">(0)</span>
         <!-- Intentional inline SVG (icon convention exception): animated loading spinner (animateTransform), not an icon. -->
         <svg id="artifactsSpinner" class="title-spinner bs-spinner" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>
         <span id="generateProgress" class="generate-progress hidden cg-mono" aria-live="polite"></span>
-        <select id="artifactFormat" class="bs-select">
+        <select id="artifactFormat" class="bs-select" data-tooltip="Output format: video clip, screenshot, or animated GIF">
           <option value="clip">Clip (.mp4)</option>
           <option value="screen">Screenshot (.png)</option>
           <option value="gif">GIF (.gif)</option>
         </select>
-        <label id="titlecardGroup" class="titlecard-group">
+        <label id="titlecardGroup" class="titlecard-group" data-tooltip="Prepend a title card (study, participant, description) to each clip">
           <input id="titlecardEnabled" type="checkbox">
           <span class="titlecard-label-text">Titlecards</span>
           <input id="titlecardDuration" type="number" min="1" step="1" value="2"
-                 class="titlecard-duration-input bs-input" title="Duration (seconds)">
+                 class="titlecard-duration-input bs-input" data-tooltip="Title card duration (seconds)">
           <span class="titlecard-label-unit">s</span>
         </label>
         <div class="bs-actions">
           <button id="generateBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="play"></span><span>Generate</span></button>
           <button id="cancelGenerateBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
           <button id="stashArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
-          <button id="clearArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
+          <button id="clearArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-tooltip="Remove all queued artifacts"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
         </div>
       </div>
       <div id="artifactsList" class="drop-target">
@@ -178,16 +179,16 @@
   <section id="reelArea">
     <div class="bs-toolbar" id="reelToolbar">
       <span class="bs-label">Reel</span>
-      <span id="reelCount" class="bs-count cg-mono">(0)</span>
-      <span id="reelDuration" class="bs-count cg-mono"></span>
+      <span id="reelCount" class="bs-count cg-mono" data-tooltip="Clips queued for the reel">(0)</span>
+      <span id="reelDuration" class="bs-count cg-mono" data-tooltip="Estimated total length of the reel"></span>
       <!-- Intentional inline SVG (icon convention exception): animated loading spinner (animateTransform), not an icon. -->
       <svg id="reelSpinner" class="title-spinner bs-spinner" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>
       <div class="bs-actions">
         <div class="highlights-group">
-          <button id="buildHighlightsBtn" class="cg-btn cg-btn-solid cg-btn-sm" title="Auto-select the best clips scored by severity, uniqueness, and keyword annotations."><span class="cg-btn-icon" data-icon="sparkles"></span><span>Find Highlights</span></button>
+          <button id="buildHighlightsBtn" class="cg-btn cg-btn-solid cg-btn-sm" data-tooltip="Auto-select the best clips scored by severity, uniqueness, and keyword annotations."><span class="cg-btn-icon" data-icon="sparkles"></span><span>Find Highlights</span></button>
           <div id="highlightsDurationDrawer" class="highlights-drawer">
             <label class="highlights-drawer-label">Duration (s)
-              <input id="highlightsDuration" type="number" min="10" step="10" value="180" class="highlights-drawer-input bs-input">
+              <input id="highlightsDuration" type="number" min="10" step="10" value="180" class="highlights-drawer-input bs-input" data-tooltip="Target reel length in seconds">
             </label>
           </div>
         </div>
@@ -195,7 +196,7 @@
         <button id="cancelReelBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
         <span id="reelEtaText" class="job-eta cg-mono hidden" aria-live="polite"></span>
         <button id="stashReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
-        <button id="clearReelBtn" class="cg-btn cg-btn-bare cg-btn-sm"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
+        <button id="clearReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-tooltip="Remove all clips from the reel"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
       </div>
     </div>
     <div id="reelList" class="drop-target">
@@ -298,6 +299,7 @@
   <div id="toast" class="toast hidden"></div>
   <!-- Deps: utils → primitives → chrome → settings → studio hub → satellites (intake) + panels -->
   <script src="utils.js" defer></script>
+  <script src="hotkeys.js" defer></script>
   <script src="motion.js" defer></script>
   <script src="card-scrubber.js" defer></script>
   <script src="primitives.js" defer></script>

@@ -40,6 +40,10 @@ def _cell_to_str(v: Any) -> str:
         h, rem = divmod(total, 3600)
         m, s = divmod(rem, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
+    if isinstance(v, float) and v.is_integer():
+        # openpyxl often stores whole numbers as floats; gspread returns the
+        # displayed value ("5"), not the repr ("5.0").
+        return str(int(v))
     return str(v)
 
 

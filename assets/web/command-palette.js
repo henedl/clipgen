@@ -1,8 +1,14 @@
 /* clipgen global command palette — command-palette.js
  *
- * Spotlight-style palette summoned with Cmd/Ctrl+Shift+P (or Cmd/Ctrl+K —
- * Firefox reserves Ctrl+Shift+P for private windows). Loaded on every hub
- * page after utils.js/topnav.js/settings-modal.js and before the page hub.
+ * Spotlight-style palette summoned via the shared hotkey registry: catalog
+ * action "global.palette" in hotkeys.js, default Mod+Shift+P or Mod+K
+ * (Firefox reserves Ctrl+Shift+P for private windows), rebindable in
+ * Settings → Hotkeys. Loaded on every hub page after
+ * utils.js/hotkeys.js/topnav.js/settings-modal.js and before the page hub.
+ *
+ * Command ids use ":" separators ("studio:generate") on purpose — dotted
+ * "a.b" ids are reserved for hotkey catalog actions and guarded by
+ * tests/test_hotkeys_frontend_source.py's registered-id scan.
  *
  * Exposes exactly one global:
  *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle }
@@ -20,7 +26,7 @@
  *
  * Command shape:
  *   {
- *     id: "studio.generate",     // stable, required — keys the recents list
+ *     id: "studio:generate",     // stable, required — keys the recents list
  *     title: "Generate clips",   // required
  *     subtitle: "…",             // optional second line
  *     icon: "play",              // heroicon stem in assets/icons/, optional
@@ -41,7 +47,7 @@
  * The overlay lifecycle rides openBlockingModal (utils.js): Escape, Tab trap,
  * backdrop click, restore-focus. Because openBlockingModal is a singleton,
  * open() bails while another overlay is up (body.modal-open for the settings
- * modal, hasBlockingModal() for everything that holds the shared trap).
+ * modal, isBlockingModalOpen() for everything that holds the shared trap).
  */
 
 (function () {
@@ -129,7 +135,7 @@
       if (tab.getAttribute("aria-current") === "page") continue;
       var frontend = tab.getAttribute("data-frontend") || "";
       out.push({
-        id: "nav." + frontend,
+        id: "nav:" + frontend,
         title: "Go to " + tab.textContent,
         icon: NAV_ICONS[frontend] || "arrow-right",
         keywords: "navigate open page switch",
@@ -141,7 +147,7 @@
       var pageTabs = NAV_TABS[frontend] || [];
       for (var t = 0; t < pageTabs.length; t++) {
         out.push({
-          id: "nav." + frontend + ".tab-" + pageTabs[t].key,
+          id: "nav:" + frontend + ":tab-" + pageTabs[t].key,
           title: "Open " + pageTabs[t].label + " in " + tab.textContent,
           icon: NAV_ICONS[frontend] || "arrow-right",
           keywords: "navigate tab " + frontend,
@@ -169,7 +175,7 @@
         var dest = PARTICIPANT_PAGES[d];
         if (dest.id === current) continue;
         out.push({
-          id: "nav.p." + dest.id + "." + pids[i],
+          id: "nav:p:" + dest.id + ":" + pids[i],
           title: "Open " + pids[i] + " in " + dest.label,
           icon: "user-circle",
           keywords: "participant navigate " + dest.id,
@@ -191,7 +197,7 @@
   function globalCommands() {
     return [
       {
-        id: "global.settings",
+        id: "global:settings",
         title: "Open Settings",
         icon: "cog-6-tooth",
         keywords: "preferences configure options",
@@ -200,7 +206,7 @@
         run: function () { window.openSettingsModal({}); },
       },
       {
-        id: "global.theme",
+        id: "global:theme",
         title: "Toggle theme",
         icon: "moon",
         keywords: "dark light mode appearance",
@@ -209,7 +215,7 @@
         run: function () { document.getElementById("themeToggle").click(); },
       },
       {
-        id: "global.start",
+        id: "global:start",
         title: "Open Start panel",
         icon: "home",
         keywords: "study picker first run",
@@ -220,7 +226,7 @@
         run: function () { window.ClipgenStartOverlay.open(); },
       },
       {
-        id: "global.tooltips",
+        id: "global:tooltips",
         title: "Toggle cross-reference tooltips",
         icon: "chat-bubble-left-ellipsis",
         keywords: "xref hover badges",
@@ -239,7 +245,7 @@
       var item = items[i];
       if (item.divider || item.header || typeof item.action !== "function") continue;
       out.push({
-        id: "qa." + (item.label || i),
+        id: "qa:" + (item.label || i),
         title: item.label || "",
         subtitle: item.title || "",
         icon: item.icon || "",
@@ -530,6 +536,12 @@
   // ---- Events ----
 
   function onInputKeydown(e) {
+    if (isToggleChord(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      return;
+    }
     var handled = true;
     if (e.key === "ArrowDown") moveSelection(1);
     else if (e.key === "ArrowUp") moveSelection(-1);
@@ -582,7 +594,7 @@
     // body.modal-open but doesn't use openBlockingModal, while Studio's
     // gallery/status/confirm and Transcripts' install dialog do the reverse.
     if (document.body.classList.contains("modal-open")) return;
-    if (hasBlockingModal()) return;
+    if (isBlockingModalOpen()) return;
     if (!els) buildDom();
     commands = collectCommands();
     els.input.value = "";
@@ -615,17 +627,28 @@
   }
 
   // ---- Summon chord ----
+  //
+  // The chord lives in the shared hotkey registry (hotkeys.js catalog id
+  // "global.palette", default Mod+Shift+P / Mod+K, rebindable in Settings →
+  // Hotkeys). allowInInput keeps the Spotlight behavior: the chord is
+  // deliberate, so it fires even while typing in a page input. The registry
+  // dispatcher suppresses all combos while a blocking modal is open — which
+  // includes the palette itself — so toggling *closed* is handled by the
+  // palette input's own keydown handler (isToggleChord in onInputKeydown),
+  // mirroring how the hotkeys cheatsheet passes its own toggle back through.
 
-  document.addEventListener("keydown", function (e) {
-    var k = (e.key || "").toLowerCase();
-    var mod = e.metaKey || e.ctrlKey;
-    var primary = mod && e.shiftKey && !e.altKey && k === "p";
-    var secondary = mod && !e.shiftKey && !e.altKey && k === "k";
-    if (!primary && !secondary) return;
-    e.preventDefault();
-    e.stopPropagation();
-    toggle();
-  }, true);
+  function isToggleChord(e) {
+    if (!window.ClipgenHotkeys) return false;
+    var combo = window.ClipgenHotkeys.normalizeEvent(e);
+    if (!combo) return false;
+    return window.ClipgenHotkeys.resolvedCombos("global.palette").indexOf(combo) !== -1;
+  }
+
+  if (window.ClipgenHotkeys) {
+    window.ClipgenHotkeys.register([
+      { id: "global.palette", handler: toggle, allowInInput: true },
+    ]);
+  }
 
   window.ClipgenCommandPalette = {
     register: register,

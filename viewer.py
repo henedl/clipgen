@@ -45,6 +45,18 @@ INTERACTIVE_ARTIFACTS: list[dict[str, Any]] = []
 INTERACTIVE_REELS: list[dict[str, Any]] = []
 
 
+def _export_config() -> dict[str, Any]:
+    """Frontend config for exported viewers.
+
+    Exported HTML always runs the default keymap (a standalone file has no
+    settings UI to inspect or fix a surprising binding), so the user's
+    hotkey overrides are stripped from the embedded payload.
+    """
+    cfg = utils.get_frontend_config()
+    cfg.pop("hotkeyOverrides", None)
+    return cfg
+
+
 def build_artifact_records_for_clip(
     clip: utils.ClipRecord,
     base_video: str,
@@ -129,7 +141,7 @@ def finalize_timeline_data(
             "sourceFileType": "excel" if is_excel else "google",
             "filmstripEnabled": config.FILMSTRIP_ENABLED,
         },
-        "config": utils.get_frontend_config(),
+        "config": _export_config(),
         "artifacts": artifacts,
         "timeline": {
             "duration": duration,
@@ -287,6 +299,30 @@ def _generate_viewer_html(
         except OSError:
             pass
 
+    # Inline the shared hotkey registry (cheatsheet + dispatcher). Exported
+    # viewers always run the default keymap: the embedded config deliberately
+    # omits hotkeyOverrides (see _export_config).
+    hk_css_tag = '<link rel="stylesheet" href="hotkeys.css">'
+    hk_js_tag = '<script src="hotkeys.js" defer></script>'
+    if hk_css_tag in template_html:
+        hk_css_path = assets_dir / "hotkeys.css"
+        if hk_css_path.is_file():
+            try:
+                css_text = css_text + "\n" + _read_bundled_asset(str(hk_css_path))
+            except OSError:
+                pass
+        template_html = template_html.replace(hk_css_tag, "")
+    if hk_js_tag in template_html:
+        hk_js_path = assets_dir / "hotkeys.js"
+        if hk_js_path.is_file():
+            try:
+                # utils.js is prepended below, ahead of this, so the final
+                # order stays utils -> hotkeys -> page modules.
+                js_text = _read_bundled_asset(str(hk_js_path)) + "\n" + js_text
+            except OSError:
+                pass
+        template_html = template_html.replace(hk_js_tag, "")
+
     # Inline the card-scrubber module into viewers that reference it (timeline,
     # not gallery). Its CSS/JS join the shared bundles so the export stays
     # self-contained; the external tags are stripped below.
@@ -443,7 +479,7 @@ def finalize_gallery_data(
             "videoDuration": video_duration,
             "bundled": bundle,
         },
-        "config": utils.get_frontend_config(),
+        "config": _export_config(),
         "artifacts": artifacts,
     }
 

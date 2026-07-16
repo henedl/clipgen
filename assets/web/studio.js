@@ -28,9 +28,10 @@
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
-  // Hub namespace for feature satellites (currently studio-intake.js). The hub
-  // publishes `state` + the helpers a satellite needs onto this at load (tail);
-  // satellites publish their entry points back, reached via the delegators above.
+  // Hub namespace for the feature satellites (studio-{intake,generate,trim,
+  // scrubber}.js). The hub publishes `state` + the helpers a satellite needs
+  // onto this at load (tail); satellites publish their entry points back,
+  // reached via same-named guarded delegators throughout the hub.
   var STUDIO = (window.ClipgenStudio = window.ClipgenStudio || {});
 
   // Build a mask-image icon span as an HTML string. Sizing comes from a
@@ -529,7 +530,7 @@
   function sortableHeaderTh(thClass, label, column) {
     var th = el("th", thClass);
     var inner = el("div", "col-header-inner");
-    inner.appendChild(el("span", "col-header-label", label));
+    inner.appendChild(el("span", "", label));
     inner.appendChild(buildSortButton(column));
     th.appendChild(inner);
     return th;
@@ -1375,7 +1376,7 @@
 
   function startJobStatusPoll() {
     if (state.jobStatusPoller) return;
-    // runImmediately is false to match the previous setInterval (first poll after 1s).
+    // runImmediately is false: the first poll fires after one interval (1s).
     state.jobStatusPoller = createPoller(pollJobStatus, 1000, { runImmediately: false });
     state.jobStatusPoller.start();
   }
@@ -1592,6 +1593,144 @@
     tbody.appendChild(frag);
     updateCellClasses();
     if (state.activeFunction) updateFunctionColumn();
+    kbPaintCursor();
+  }
+
+  // ---- Keyboard cursor (arrows / j / k selection over cells and intake cards) ----
+  //
+  // One logical cursor per surface: the sheet grid when the Sheet tab is
+  // active, otherwise the active intake tab's card row (satellite access via
+  // STUDIO.intakeCardCount/intakeCardAt/intakeToggleAt). Enter mirrors click
+  // (toggle in the artifact work area), Shift+Enter mirrors shift-click
+  // (toggle in the reel). The cursor is logical state — re-renders repaint it
+  // via kbPaintCursor() rather than keeping a live element reference.
+
+  var _kbCursor = null; // {surface: "sheet", participant, row} | {surface: <intake tab>, idx}
+
+  function kbSurface() {
+    return state.activePreviewTab || "sheet";
+  }
+
+  function kbSheetCells() {
+    return qsa("#sheetGrid .ts-cell.valid-ts");
+  }
+
+  function kbCursorEl() {
+    if (!_kbCursor || _kbCursor.surface !== kbSurface()) return null;
+    if (_kbCursor.surface === "sheet") {
+      return qs('#sheetGrid .ts-cell.valid-ts[data-participant="' + CSS.escape(_kbCursor.participant) +
+                '"][data-row="' + CSS.escape(String(_kbCursor.row)) + '"]');
+    }
+    return STUDIO.intakeCardAt ? STUDIO.intakeCardAt(_kbCursor.surface, _kbCursor.idx) : null;
+  }
+
+  function kbPaintCursor() {
+    var old = qsa(".kb-cursor");
+    for (var i = 0; i < old.length; i++) old[i].classList.remove("kb-cursor");
+    var cur = kbCursorEl();
+    if (cur) {
+      cur.classList.add("kb-cursor");
+      if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  function kbClearCursor() {
+    if (!_kbCursor) return false;
+    _kbCursor = null;
+    kbPaintCursor();
+    return true;
+  }
+
+  // Linear step: row-major across sheet cells (wraps to the next row
+  // naturally), index step across intake cards. Returns false (declines the
+  // event) when the surface has nothing to select.
+  function kbStep(delta) {
+    var surface = kbSurface();
+    if (surface === "sheet") {
+      var cells = kbSheetCells();
+      if (!cells.length) return false;
+      var idx = -1;
+      var cur = kbCursorEl();
+      for (var i = 0; i < cells.length; i++) {
+        if (cells[i] === cur) { idx = i; break; }
+      }
+      var next = idx < 0 ? (delta > 0 ? 0 : cells.length - 1) : idx + delta;
+      if (next < 0) next = 0;
+      if (next > cells.length - 1) next = cells.length - 1;
+      var td = cells[next];
+      _kbCursor = {
+        surface: "sheet",
+        participant: td.getAttribute("data-participant"),
+        row: parseInt(td.getAttribute("data-row"), 10),
+      };
+    } else {
+      var count = STUDIO.intakeCardCount ? STUDIO.intakeCardCount(surface) : 0;
+      if (!count) return false;
+      var cardIdx = _kbCursor && _kbCursor.surface === surface ? _kbCursor.idx + delta : (delta > 0 ? 0 : count - 1);
+      if (cardIdx < 0) cardIdx = 0;
+      if (cardIdx > count - 1) cardIdx = count - 1;
+      _kbCursor = { surface: surface, idx: cardIdx };
+    }
+    kbPaintCursor();
+    return true;
+  }
+
+  // Vertical step on the sheet: the nearest valid cell in a lower/higher row,
+  // preferring the same participant column (i.e. that participant's next
+  // timestamp), falling back to the first valid cell of the adjacent row.
+  // Intake cards are a single row, so vertical falls back to a linear step.
+  function kbStepVertical(dir) {
+    var surface = kbSurface();
+    if (surface !== "sheet") return kbStep(dir);
+    var cells = kbSheetCells();
+    if (!cells.length) return false;
+    var cur = kbCursorEl();
+    if (!cur) return kbStep(dir);
+    var curRow = parseInt(cur.getAttribute("data-row"), 10);
+    var curP = cur.getAttribute("data-participant");
+    var idx = -1;
+    for (var i = 0; i < cells.length; i++) {
+      if (cells[i] === cur) { idx = i; break; }
+    }
+    var fallback = null;
+    var target = null;
+    for (var j = idx + dir; j >= 0 && j < cells.length; j += dir) {
+      var rowNum = parseInt(cells[j].getAttribute("data-row"), 10);
+      if (dir > 0 ? rowNum <= curRow : rowNum >= curRow) continue;
+      if (!fallback) fallback = cells[j];
+      if (cells[j].getAttribute("data-participant") === curP) { target = cells[j]; break; }
+    }
+    var td = target || fallback;
+    if (!td) return false;
+    _kbCursor = {
+      surface: "sheet",
+      participant: td.getAttribute("data-participant"),
+      row: parseInt(td.getAttribute("data-row"), 10),
+    };
+    kbPaintCursor();
+    return true;
+  }
+
+  // Enter must not hijack a focused control (button/link activation).
+  function kbEnterSafe() {
+    var ae = document.activeElement;
+    if (!ae || ae === document.body) return true;
+    return !(ae.tagName === "BUTTON" || ae.tagName === "A" || ae.tabIndex >= 0);
+  }
+
+  function kbSend(reel) {
+    if (!kbEnterSafe()) return false;
+    var surface = kbSurface();
+    if (!_kbCursor || _kbCursor.surface !== surface) return false;
+    if (surface === "sheet") {
+      var td = kbCursorEl();
+      if (!isSelectableTimestampCell(td)) return false;
+      var info = getCellInfo(td);
+      if (reel) toggleReelCell(info);
+      else toggleArtifactCell(info);
+      return true;
+    }
+    return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
   }
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
@@ -1910,6 +2049,21 @@
     return state.reelGenerating;
   }
 
+  // "3 clip" -> "3 clips" ("GIF" -> "GIFs"). Presentation copy for tooltips.
+  function plural(n, word) {
+    return n + " " + word + (n === 1 ? "" : "s");
+  }
+
+  // Singular noun for the currently selected artifact output format.
+  function artifactNoun() {
+    var sel = qs("#artifactFormat");
+    var v = sel ? sel.value : "";
+    if (v === "screen") return "screenshot";
+    if (v === "gif") return "GIF";
+    if (v === "clip") return "clip";
+    return "artifact";
+  }
+
   function updateArtifactActions() {
     var n = state.artifactQueue.length;
     var artLocked = isArtifactQueueLocked();
@@ -1917,25 +2071,40 @@
     var genBtn = qs("#generateBtn");
     if (genBtn) {
       genBtn.disabled = artLocked || n === 0;
-      if (n === 0 && !artLocked) {
-        genBtn.setAttribute("data-tooltip", "Add cells to the work area first");
-      }
+      genBtn.setAttribute(
+        "data-tooltip",
+        artLocked
+          ? "Generating…"
+          : n === 0
+            ? "Add cells to the work area first"
+            : "Generate " + plural(n, artifactNoun()),
+      );
     }
     var clearBtn = qs("#clearArtifactsBtn");
     if (clearBtn) clearBtn.disabled = artLocked;
     var stashBtn = qs("#stashArtifactsBtn");
     if (stashBtn) {
       stashBtn.disabled = artLocked || n === 0;
-      if (n === 0 && !artLocked) {
-        stashBtn.setAttribute("data-tooltip", "Add cells to the work area first");
-      }
+      stashBtn.setAttribute(
+        "data-tooltip",
+        artLocked
+          ? "Finish generating first"
+          : n === 0
+            ? "Add cells to the work area first"
+            : "Stash " + plural(n, "artifact") + " to reuse later",
+      );
     }
     var addToReelBtn = qs("#addToReelBtn");
     if (addToReelBtn) {
       addToReelBtn.disabled = reelLocked || n === 0;
-      if (n === 0 && !reelLocked) {
-        addToReelBtn.setAttribute("data-tooltip", "Add cells to the work area first");
-      }
+      addToReelBtn.setAttribute(
+        "data-tooltip",
+        reelLocked
+          ? "Finish generating first"
+          : n === 0
+            ? "Add cells to the work area first"
+            : "Add " + plural(n, "clip") + " to the reel",
+      );
     }
   }
 
@@ -1945,18 +2114,28 @@
     var buildBtn = qs("#buildReelBtn");
     if (buildBtn) {
       buildBtn.disabled = reelLocked || n === 0;
-      if (n === 0 && !reelLocked) {
-        buildBtn.setAttribute("data-tooltip", "Add clips to the reel first");
-      }
+      buildBtn.setAttribute(
+        "data-tooltip",
+        reelLocked
+          ? "Building…"
+          : n === 0
+            ? "Add clips to the reel first"
+            : "Build a reel from " + plural(n, "clip"),
+      );
     }
     var clearBtn = qs("#clearReelBtn");
     if (clearBtn) clearBtn.disabled = reelLocked;
     var stashBtn = qs("#stashReelBtn");
     if (stashBtn) {
       stashBtn.disabled = reelLocked || n === 0;
-      if (n === 0 && !reelLocked) {
-        stashBtn.setAttribute("data-tooltip", "Add clips to the reel first");
-      }
+      stashBtn.setAttribute(
+        "data-tooltip",
+        reelLocked
+          ? "Finish generating first"
+          : n === 0
+            ? "Add clips to the reel first"
+            : "Stash this reel to reuse later",
+      );
     }
     var highlightsBtn = qs("#buildHighlightsBtn");
     if (highlightsBtn) highlightsBtn.disabled = reelLocked;
@@ -3189,12 +3368,54 @@
     qs("#buildHighlightsBtn").addEventListener("click", onBuildHighlights);
     bindGalleryDialog();
 
+    // Page hotkeys (shared hotkeys.js registry). Gated on the corresponding
+    // toolbar button being enabled so the queue-lock logic stays in one place.
+    function hotkeyBtnEnabled(sel) {
+      var b = qs(sel);
+      return !!(b && !b.disabled);
+    }
+    window.ClipgenHotkeys.register([
+      {
+        id: "global.primary",
+        when: function () { return hotkeyBtnEnabled("#generateBtn"); },
+        handler: function () { onGenerate(); },
+      },
+      {
+        id: "studio.buildReel",
+        when: function () { return hotkeyBtnEnabled("#buildReelBtn"); },
+        handler: function () { onBuildReel(); },
+      },
+      {
+        id: "studio.buildHighlights",
+        when: function () { return hotkeyBtnEnabled("#buildHighlightsBtn"); },
+        handler: function () { onBuildHighlights(); },
+      },
+      { id: "global.refresh", handler: function () { refreshSheetData(); } },
+      { id: "nav.next", handler: function () { return kbStep(1); } },
+      { id: "nav.prev", handler: function () { return kbStep(-1); } },
+      { id: "studio.moveRight", handler: function () { return kbStep(1); } },
+      { id: "studio.moveLeft", handler: function () { return kbStep(-1); } },
+      { id: "studio.moveDown", handler: function () { return kbStepVertical(1); } },
+      { id: "studio.moveUp", handler: function () { return kbStepVertical(-1); } },
+      { id: "studio.sendArtifacts", handler: function () { return kbSend(false); } },
+      { id: "studio.sendReel", handler: function () { return kbSend(true); } },
+    ]);
+
+    // Escape cascade: cancel an open highlights-parameter drawer first, then
+    // clear the keyboard cursor.
+    window.ClipgenHotkeys.registerEscape(function () {
+      if (cancelHighlightsDrawer()) return true;
+      return kbClearCursor();
+    });
+
     qs("#artifactFormat").addEventListener("change", function () {
       var tcGroup = qs("#titlecardGroup");
       if (tcGroup) {
         if (this.value === "clip") tcGroup.classList.remove("hidden");
         else tcGroup.classList.add("hidden");
       }
+      // Refresh the Generate tooltip so its noun tracks the selected format.
+      updateArtifactActions();
     });
 
     qs("#titlecardEnabled").addEventListener("change", persistTitlecardSettings);
@@ -3738,6 +3959,24 @@
   }
 
   var _highlightsBtnOrigHTML = "";
+
+  // Collapse the highlights duration drawer without running the job (Escape,
+  // mirroring the confirm-button flow in onBuildHighlights). Returns whether
+  // there was an open drawer to cancel.
+  function cancelHighlightsDrawer() {
+    var drawer = qs("#highlightsDurationDrawer");
+    if (!drawer || !drawer.classList.contains("open")) return false;
+    if (document.activeElement && drawer.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    drawer.classList.remove("open");
+    var btn = qs("#buildHighlightsBtn");
+    if (btn) {
+      btn.style.minWidth = "";
+      if (_highlightsBtnOrigHTML) btn.innerHTML = _highlightsBtnOrigHTML;
+    }
+    return true;
+  }
 
   function onBuildHighlights() {
     if (isAnyStudioJobRunning()) return;
@@ -4493,7 +4732,7 @@
         return document.querySelector('.preview-tab[data-tab="' + tabKey + '"]');
       }
       return {
-        id: "studio.tab-" + tabKey,
+        id: "studio:tab-" + tabKey,
         title: title,
         icon: icon,
         keywords: "tab show switch",
@@ -4508,7 +4747,7 @@
     window.ClipgenCommandPalette.register("studio", function () {
       return [
         {
-          id: "studio.generate",
+          id: "studio:generate",
           title: "Generate clips",
           icon: "play",
           keywords: "render build artifacts",
@@ -4524,7 +4763,7 @@
         tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
         tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
         {
-          id: "studio.artifact-log",
+          id: "studio:artifact-log",
           title: "Open Artifact Log",
           icon: "list-bullet",
           keywords: "history builds",
@@ -4620,6 +4859,7 @@
   STUDIO.saveQueues = saveQueues;
   STUDIO.setCardDragImage = setCardDragImage;
   STUDIO.ssClearPending = ssClearPending;
+  STUDIO.kbPaintCursor = kbPaintCursor;
 
   // Hub → studio-generate.js: the card painters + readNDJSONStream (shared with
   // the reel/build path), the artifact-status/result helpers, and the shared

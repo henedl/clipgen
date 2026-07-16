@@ -232,7 +232,12 @@
       close();
     }
     function onKey(ev) {
-      if (ev.key === "Escape") close();
+      if (ev.key !== "Escape") return;
+      // The picker owns this Escape: a host modal (e.g. Settings) must not
+      // also close underneath it.
+      ev.preventDefault();
+      ev.stopPropagation();
+      close();
     }
     // Defer attaching so the opening click doesn't immediately close it.
     var attachTimer = setTimeout(function () {
@@ -249,5 +254,9 @@
     return { close: close };
   }
 
-  window.ClipgenColorPicker = { open: open, close: close };
+  function isOpen() {
+    return _active !== null;
+  }
+
+  window.ClipgenColorPicker = { open: open, close: close, isOpen: isOpen };
 })();

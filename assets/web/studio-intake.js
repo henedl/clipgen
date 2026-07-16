@@ -543,6 +543,8 @@
     });
     attachQueueScrubbers(container);
     refreshIntakeCardStates();
+    // Re-renders wipe the hub's keyboard-cursor outline; repaint it.
+    if (STUDIO.kbPaintCursor) STUDIO.kbPaintCursor();
   }
 
   // ---- Screenspace intake: render cards, filters, and density timeline ----
@@ -1302,8 +1304,41 @@
     initIntakePanel(CO_INTAKE);
   }
 
+  // ---- Keyboard-cursor access (hub's kbStep/kbSend, keyed by preview tab) ----
+
+  function intakeCfgForTab(tab) {
+    if (tab === "intake") return SS_INTAKE;
+    if (tab === "transcript-intake") return TR_INTAKE;
+    if (tab === "composer-intake") return CO_INTAKE;
+    return null;
+  }
+
+  function intakeCardCount(tab) {
+    var cfg = intakeCfgForTab(tab);
+    return cfg ? cfg.filtered().length : 0;
+  }
+
+  function intakeCardAt(tab, idx) {
+    var cfg = intakeCfgForTab(tab);
+    if (!cfg) return null;
+    var container = qs(cfg.cardsSel);
+    return container ? container.children[idx] || null : null;
+  }
+
+  function intakeToggleAt(tab, idx, reel) {
+    var cfg = intakeCfgForTab(tab);
+    var cluster = cfg ? cfg.filtered()[idx] : null;
+    if (!cluster) return false;
+    if (reel) cfg.toggleReel(cluster);
+    else cfg.toggleArtifacts(cluster);
+    return true;
+  }
+
   // ---- Published to the hub (window.ClipgenStudio) ----
   STUDIO.initIntake = initIntake;
+  STUDIO.intakeCardCount = intakeCardCount;
+  STUDIO.intakeCardAt = intakeCardAt;
+  STUDIO.intakeToggleAt = intakeToggleAt;
   STUDIO.pollScreenspaceIntake = pollScreenspaceIntake;
   STUDIO.pollTranscriptIntake = pollTranscriptIntake;
   STUDIO.pollComposerIntake = pollComposerIntake;

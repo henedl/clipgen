@@ -9,7 +9,7 @@
  */
 
 // ---- Color conversion ----
-// HSV here uses OpenCV-style ranges to match screenspace.py: h 0–180, s/v 0–255.
+// HSV here uses OpenCV-style ranges to match screenspace_primitives.py: h 0–180, s/v 0–255.
 
 function rgbToHsv(r, g, b) {
   var rn = r / 255, gn = g / 255, bn = b / 255;
@@ -40,7 +40,8 @@ function hsvToRgb(h, s, v) {
 
 // hexToRgb / rgbToHex live in utils.js (loaded first); screenspace reaches them
 // via the scope chain. rgbToHsv / hsvToRgb stay here — they use OpenCV-style
-// ranges (h 0–180, s/v 0–255) to match screenspace.py, unlike any utils.js math.
+// ranges (h 0–180, s/v 0–255) to match screenspace_primitives.py, unlike any
+// utils.js math.
 
 // ---- Form input builders ----
 

@@ -113,8 +113,8 @@
 
   function startXrefPolling() {
     if (!state.xrefEligible || state.xrefPoller) return;
-    // createPoller runs loadCrossRefData once immediately (runImmediately default),
-    // then every 30s — matching the old explicit call + setInterval.
+    // createPoller runs loadCrossRefData once immediately (runImmediately
+    // default), then every 30s.
     state.xrefPoller = createPoller(loadCrossRefData, 30000);
     state.xrefPoller.start();
   }
@@ -485,7 +485,7 @@
         .catch(function () {});
     };
     // createPoller runs poll() once immediately (runImmediately default), then
-    // every 1.5s — matching the old explicit poll() + setInterval.
+    // every 1.5s.
     _modelHintPoller = createPoller(poll, 1500);
     _modelHintPoller.start();
   }
@@ -2635,7 +2635,7 @@
     window.ClipgenCommandPalette.register("transcripts", function () {
       var cmds = [
         {
-          id: "transcripts.search",
+          id: "transcripts:search",
           title: "Focus transcript search",
           icon: "magnifying-glass",
           keywords: "find text query",
@@ -2645,18 +2645,18 @@
           // call wins.
           run: function () { document.getElementById("searchInput").focus(); },
         },
-        clickCommand("transcripts.shortcuts", "Keyboard shortcuts", "command-line",
+        clickCommand("transcripts:shortcuts", "Keyboard shortcuts", "command-line",
           "cheatsheet keys help", "shortcutsBtn"),
-        clickCommand("transcripts.tab-summary", "Show Summary tab", "table-cells",
+        clickCommand("transcripts:tab-summary", "Show Summary tab", "table-cells",
           "panel agents", "tabBtnSummary"),
-        clickCommand("transcripts.tab-friction", "Show Friction tab", "table-cells",
+        clickCommand("transcripts:tab-friction", "Show Friction tab", "table-cells",
           "panel analysis moments", "tabBtnFriction"),
       ];
       // "Jump to … in Transcripts" = stays here and selects in place; the
       // palette's built-in provider adds the cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
-          id: "transcripts.p." + p.id,
+          id: "transcripts:p:" + p.id,
           title: "Jump to " + p.id + " in Transcripts",
           icon: "user",
           keywords: "participant select transcript",

@@ -1239,7 +1239,6 @@
       });
     }
     var table = P.createCoverageMatrix({ rows: rows });
-    table.classList.add("md-coverage-table-host");
     // Click participant cell → drill down
     table.addEventListener("click", function (ev) {
       var td = ev.target.closest && ev.target.closest("td.cg-cov-td-left");

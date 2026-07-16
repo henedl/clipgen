@@ -53,7 +53,7 @@
   // backed by a hidden input holding the mode string ("letters" | "off" |
   // "digits"). It folds easily-confused glyphs toward whichever canonical form
   // you pick before the fuzzy compare — see _normalize_ocr_text in
-  // screenspace.py. Off sits in the middle: digit→letter | off | letter→digit.
+  // screenspace_ocr.py. Off sits in the middle: digit→letter | off | letter→digit.
   var NORMALIZE_MODES = [
     { mode: "letters", icon: "language", desc: "Fold digits to letters before matching (0→o, 1→l, 5→s). For word targets that OCR may read as digits" },
     { mode: "off", icon: "no-symbol", desc: "No character folding" },
@@ -113,7 +113,7 @@
 
   // Two-state Color match-mode control: "average" (region's mean color) vs
   // "presence" (target color appears anywhere in the region, per-pixel). Backed
-  // by a hidden input holding the mode string. See ColorTool in screenspace.py.
+  // by a hidden input holding the mode string. See ColorTool in screenspace_tools.py.
   var COLOR_MODES = [
     { mode: "average", icon: "swatch", desc: "Match the region's average colour" },
     { mode: "presence", icon: "magnifying-glass-circle", desc: "Match when the target colour appears anywhere in the region (per-pixel)" },
@@ -1306,7 +1306,7 @@
         togglePinPolarity(pin.id);
       });
       meta.appendChild(dot);
-      var time = el("span", "pin-tray-time");
+      var time = el("span", "");
       time.textContent = formatTime(pin.timestamp, { decimals: 1 });
       meta.appendChild(time);
       if (pin.stale) {
@@ -3433,107 +3433,116 @@
   function initResultsPanel() { return SS.initResultsPanel && SS.initResultsPanel(); }
   function renderResults() { return SS.renderResults && SS.renderResults(); }
 
-  // ---- Keyboard shortcuts ----
+  // ---- Keyboard shortcuts (shared hotkeys.js registry) ----
+
+  function _seekBy(delta) {
+    if (!state.videoInfo) return;
+    loadFrame(clamp(state.currentTimestamp + delta, 0, Math.max(0, state.videoInfo.duration - 0.001)));
+  }
 
   function initKeyboard() {
-    function onKeyDown(e) {
-      // Don't capture when typing in inputs
-      var t = e.target;
-      if (t && t.matches && t.matches("input, textarea, select, [contenteditable=true]")) return;
+    window.ClipgenHotkeys.register([
+      {
+        id: "transport.playPause",
+        handler: function () {
+          if (state.videoPlaying) pauseVideo();
+          else playVideo();
+        },
+      },
+      // Arrows are the coarse seek; ,/. step a single frame (the page's
+      // pre-registry arrows were frame-steps — that role moved to ,/.).
+      { id: "transport.seekBack", handler: function () { _seekBy(-5); } },
+      { id: "transport.seekFwd", handler: function () { _seekBy(5); } },
+      { id: "transport.stepBack", handler: function () { _seekBy(-FRAME_STEP); } },
+      { id: "transport.stepFwd", handler: function () { _seekBy(FRAME_STEP); } },
+      {
+        id: "screenspace.blink",
+        repeat: false,
+        when: function () { return _overlayEligibleForActiveTool(); },
+        handler: function () {
+          state.overlayBlinkActive = true;
+          var curTs = Number(state.currentTimestamp || 0).toFixed(3);
+          if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
+            refreshModelView();
+          }
+          renderOverlay();
+        },
+        onRelease: function () {
+          if (state.overlayBlinkActive) {
+            state.overlayBlinkActive = false;
+            renderOverlay();
+          }
+        },
+      },
+      {
+        id: "global.primary",
+        when: function () {
+          var btn = qs("#runBtn");
+          return !!(btn && !btn.disabled);
+        },
+        handler: function () { qs("#runBtn").click(); },
+      },
+    ]);
 
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp - FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001)));
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        if (state.videoInfo) loadFrame(clamp(state.currentTimestamp + FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001)));
-      } else if (e.key === " ") {
-        e.preventDefault();
-        if (state.videoPlaying) {
-          pauseVideo();
-        } else {
-          playVideo();
-        }
-      } else if (e.key === "b" || e.key === "B") {
-        if (e.repeat) return;
-        if (e.metaKey || e.ctrlKey || e.altKey) return;
-        if (!_overlayEligibleForActiveTool()) return;
-        e.preventDefault();
-        state.overlayBlinkActive = true;
-        var curTs = Number(state.currentTimestamp || 0).toFixed(3);
-        if (!state.overlayImage || state.overlayImageTimestamp !== curTs || state.overlayImageTool !== state.activeWorkflow) {
-          refreshModelView();
-        }
+    // Back-out cascade: an open run-picker dropdown first, then the active
+    // pointer interaction, then the pending/active region, then the
+    // region-name modal.
+    window.ClipgenHotkeys.registerEscape(function () {
+      var openPicker = qs(".run-picker-panel:not(.hidden)");
+      if (openPicker) {
+        closeRunPicker();
+        return true;
+      }
+      var consumed = true;
+      if (state.pipetteActive) {
+        deactivatePipette();
+      } else if (state.draggingRegion) {
+        var orig = state.draggingRegion.origRegion;
+        state.regions[state.draggingRegion.name] = Object.assign({}, state.regions[state.draggingRegion.name], orig);
+        state.draggingRegion = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
         renderOverlay();
-      } else if (e.key === "Escape") {
-        if (state.pipetteActive) {
-          deactivatePipette();
-          return;
-        }
-        if (state.draggingRegion) {
-          var orig = state.draggingRegion.origRegion;
-          state.regions[state.draggingRegion.name] = Object.assign({}, state.regions[state.draggingRegion.name], orig);
-          state.draggingRegion = null;
-          document.body.style.cursor = "";
-          document.body.style.userSelect = "";
-          renderOverlay();
-        } else if (state.resizingRegion) {
-          var origR = state.resizingRegion.origRegion;
-          state.regions[state.resizingRegion.name] = Object.assign({}, state.regions[state.resizingRegion.name], origR);
-          state.resizingRegion = null;
-          document.body.style.cursor = "";
-          document.body.style.userSelect = "";
-          renderOverlay();
-        } else if (state.wandDragging) {
-          // Abort an in-progress wand scrub. It never sets pendingRegion until
-          // release, so nulling the state is a complete cancel; the satellite's
-          // cached frame ImageData is only read while wandDragging is truthy.
-          state.wandDragging = null;
-          invalidateOverlayRect();
-          document.body.style.cursor = "";
-          document.body.style.userSelect = "";
-          renderOverlay();
-          updateRegionButtons();
-        } else if (state.drawingRegion || state.drawingLasso) {
-          state.drawingRegion = null;
-          state.drawingLasso = null;
-          invalidateOverlayRect();
-          renderOverlay();
-          updateRegionButtons();
-        } else if (state.pendingRegion || state.activeRegion) {
-          state.pendingRegion = null;
-          state.activeRegion = null;
-          renderOverlay();
-          updateRegionButtons();
-          updateRunButton();
-        }
+      } else if (state.resizingRegion) {
+        var origR = state.resizingRegion.origRegion;
+        state.regions[state.resizingRegion.name] = Object.assign({}, state.regions[state.resizingRegion.name], origR);
+        state.resizingRegion = null;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        renderOverlay();
+      } else if (state.wandDragging) {
+        // Abort an in-progress wand scrub. It never sets pendingRegion until
+        // release, so nulling the state is a complete cancel; the satellite's
+        // cached frame ImageData is only read while wandDragging is truthy.
+        state.wandDragging = null;
+        invalidateOverlayRect();
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        renderOverlay();
+        updateRegionButtons();
+      } else if (state.drawingRegion || state.drawingLasso) {
+        state.drawingRegion = null;
+        state.drawingLasso = null;
+        invalidateOverlayRect();
+        renderOverlay();
+        updateRegionButtons();
+      } else if (state.pendingRegion || state.activeRegion) {
+        state.pendingRegion = null;
+        state.activeRegion = null;
+        renderOverlay();
+        updateRegionButtons();
+        updateRunButton();
+      } else {
+        consumed = false;
+      }
+      // Mirrors the pre-registry behavior: the region-name modal never
+      // survives an Escape press, whatever else was cancelled.
+      var modal = qs("#regionNameModal");
+      if (modal && !modal.classList.contains("hidden")) {
         hideRegionNameModal();
+        consumed = true;
       }
-    }
-
-    function onKeyUp(e) {
-      if (e.key === "b" || e.key === "B") {
-        if (state.overlayBlinkActive) {
-          state.overlayBlinkActive = false;
-          renderOverlay();
-        }
-      }
-    }
-
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("keyup", onKeyUp);
-    window.addEventListener("pagehide", function () {
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("keyup", onKeyUp);
-    });
-
-    // Defensive: clear blink state on window blur so a held key doesn't get
-    // stuck on if the user alt-tabs.
-    window.addEventListener("blur", function () {
-      if (state.overlayBlinkActive) {
-        state.overlayBlinkActive = false;
-        renderOverlay();
-      }
+      return consumed;
     });
   }
 
@@ -3782,7 +3791,7 @@
     window.ClipgenCommandPalette.register("screenspace", function () {
       var cmds = [
         {
-          id: "screenspace.run",
+          id: "screenspace:run",
           title: "Run analysis tool",
           icon: "play",
           keywords: "scan task queue start",
@@ -3798,7 +3807,7 @@
       // palette's built-in provider adds the cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
-          id: "screenspace.p." + p.id,
+          id: "screenspace:p:" + p.id,
           title: "Jump to " + p.id + " in Screenspace",
           icon: "user",
           keywords: "participant select video",
@@ -3922,6 +3931,7 @@
     apiGet("api/participants")
       .then(function (data) {
         if (!data.ok) return;
+        if (data.config) clipgenApplyConfig(data.config);
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
         // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
         // preload loop below already includes the ?v= cache-bust suffix.
