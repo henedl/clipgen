@@ -35,9 +35,11 @@ _endcard_lock = threading.Lock()
 def _x264_video_args() -> list[str]:
     """Shared libx264 output args for card generation and the card wrap.
 
-    A fast preset + explicit CRF: the wrap re-encodes the whole clip body, so the
-    preset is the main lever on titlecard generation time. Tuned via
-    config.TITLECARD_ENCODE_PRESET / TITLECARD_ENCODE_CRF.
+    A fast preset + explicit CRF: cards are always encoded with these args, and
+    the fallback wrap path (non-copy-safe body, or a failed copy concat)
+    re-encodes the whole clip with them too, so the preset is the main lever on
+    titlecard generation time there. Tuned via config.TITLECARD_ENCODE_PRESET /
+    TITLECARD_ENCODE_CRF.
     """
     return [
         "-c:v",

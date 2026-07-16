@@ -18,7 +18,7 @@ var CLIPGEN_DEV_TOKEN_TWEAK = false;
 
 // ---- Canonical config (mirror of config.py via utils.get_frontend_config)
 //
-// Source of truth: every API response (server.py /api/sheet-data) and every
+// Source of truth: every API response (server.py /api/sheet) and every
 // exported viewer payload (viewer.py finalize_*) embeds a `config` field.
 // Pages call
 // clipgenApplyConfig(payload) to overlay the live values onto these defaults.

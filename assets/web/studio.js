@@ -28,9 +28,10 @@
   var clusterIntakeEvents = window.ClipgenIntakeCluster.clusterIntakeEvents;
   var clusterTranscriptMarks = window.ClipgenIntakeCluster.clusterTranscriptMarks;
 
-  // Hub namespace for feature satellites (currently studio-intake.js). The hub
-  // publishes `state` + the helpers a satellite needs onto this at load (tail);
-  // satellites publish their entry points back, reached via the delegators above.
+  // Hub namespace for the feature satellites (studio-{intake,generate,trim,
+  // scrubber}.js). The hub publishes `state` + the helpers a satellite needs
+  // onto this at load (tail); satellites publish their entry points back,
+  // reached via same-named guarded delegators throughout the hub.
   var STUDIO = (window.ClipgenStudio = window.ClipgenStudio || {});
 
   // Build a mask-image icon span as an HTML string. Sizing comes from a
@@ -1375,7 +1376,7 @@
 
   function startJobStatusPoll() {
     if (state.jobStatusPoller) return;
-    // runImmediately is false to match the previous setInterval (first poll after 1s).
+    // runImmediately is false: the first poll fires after one interval (1s).
     state.jobStatusPoller = createPoller(pollJobStatus, 1000, { runImmediately: false });
     state.jobStatusPoller.start();
   }

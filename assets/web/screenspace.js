@@ -53,7 +53,7 @@
   // backed by a hidden input holding the mode string ("letters" | "off" |
   // "digits"). It folds easily-confused glyphs toward whichever canonical form
   // you pick before the fuzzy compare — see _normalize_ocr_text in
-  // screenspace.py. Off sits in the middle: digit→letter | off | letter→digit.
+  // screenspace_ocr.py. Off sits in the middle: digit→letter | off | letter→digit.
   var NORMALIZE_MODES = [
     { mode: "letters", icon: "language", desc: "Fold digits to letters before matching (0→o, 1→l, 5→s). For word targets that OCR may read as digits" },
     { mode: "off", icon: "no-symbol", desc: "No character folding" },
@@ -113,7 +113,7 @@
 
   // Two-state Color match-mode control: "average" (region's mean color) vs
   // "presence" (target color appears anywhere in the region, per-pixel). Backed
-  // by a hidden input holding the mode string. See ColorTool in screenspace.py.
+  // by a hidden input holding the mode string. See ColorTool in screenspace_tools.py.
   var COLOR_MODES = [
     { mode: "average", icon: "swatch", desc: "Match the region's average colour" },
     { mode: "presence", icon: "magnifying-glass-circle", desc: "Match when the target colour appears anywhere in the region (per-pixel)" },

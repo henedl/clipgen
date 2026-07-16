@@ -28,9 +28,8 @@
     taskTypeColor = SS.taskTypeColor,
     updateResultsCrumb = SS.updateResultsCrumb;
 
-  // Confidence bar mirrors the prototype's ConfBar: 4 px tall, hue-tinted fill,
-  // opacity ramps from 0.4 (low) to 1.0 (full) so high-confidence rows feel
-  // saturated while low ones recede.
+  // Confidence bar: 4 px tall, hue-tinted fill, opacity ramps from 0.4 (low)
+  // to 1.0 (full) so high-confidence rows feel saturated while low ones recede.
   function buildConfBar(value, type) {
     var v = Math.max(0, Math.min(1, Number(value) || 0));
     var bar = el("div", "result-bar");
