@@ -4485,6 +4485,9 @@
   // quick actions — Generate, preview-tab switchers, the Artifact Log.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.sheetData && state.sheetData.participants) || [];
+    });
     function tabCommand(tabKey, title, icon) {
       function tabEl() {
         return document.querySelector('.preview-tab[data-tab="' + tabKey + '"]');
@@ -4538,6 +4541,11 @@
     // createBtn does for primitives — needed for the bottom-strip toolbar
     // buttons that are written as static HTML).
     applyIconMasksIn(document);
+    // /studio/#tab=intake style deep links (command palette): seed the stored
+    // active tab so restoreStoredPreviewTab applies it — including its retry
+    // once a hidden intake tab is revealed by the pollers.
+    var hashTab = clipgenHashTab();
+    if (hashTab) setStoredUIStateField("studio", "activeTab", hashTab);
     setActiveTabAttr(state.activePreviewTab);
     bindSidebarToggle();
     initThemeToggle();

@@ -5,12 +5,18 @@
  * page after utils.js/topnav.js/settings-modal.js and before the page hub.
  *
  * Exposes exactly one global:
- *   window.ClipgenCommandPalette = { register, open, close, toggle }
+ *   window.ClipgenCommandPalette = { register, setParticipants, open, close, toggle }
  *
  * register(sourceId, providerOrArray) — pages contribute commands. A provider
  * is a function returning an array of commands, called on every open so
  * dynamic entries (participants, gated actions) stay fresh; a plain array is
  * wrapped in a constant provider. Re-registering a sourceId replaces it.
+ *
+ * setParticipants(fn) — pages hand over their participant-id list; the
+ * palette turns it into cross-page "Open Pxx in <Page>" commands for every
+ * #Pxx-hash destination except the current page. Wording convention:
+ * "Jump to … in <here>" stays on the page, "Open … in <there>" navigates,
+ * as do the "Go to <Page>" / "Open <Tab> in <Page>" nav commands.
  *
  * Command shape:
  *   {
@@ -26,10 +32,11 @@
  *     visible: fn|bool,          // false = omitted entirely
  *   }
  *
- * Built-in providers: page navigation (read from the rendered topnav, so it
- * inherits the enabled-surface filtering), global chrome actions (settings /
- * theme / start panel / tooltips), and the page's TopNav quick actions via
- * ClipgenTopNav.getQuickActions({ refresh: true }).
+ * Built-in providers: page navigation incl. cross-page tab deep links (read
+ * from the rendered topnav, so it inherits the enabled-surface filtering),
+ * global chrome actions (settings / theme / start panel / tooltips), the
+ * page's TopNav quick actions via ClipgenTopNav.getQuickActions({ refresh:
+ * true }), and the cross-page participant jumps from setParticipants.
  *
  * The overlay lifecycle rides openBlockingModal (utils.js): Escape, Tab trap,
  * backdrop click, restore-focus. Because openBlockingModal is a singleton,
@@ -52,7 +59,36 @@
     overview: "chart-bar",
   };
 
+  // Cross-page tab deep links, consumed as /PAGE/#tab=KEY by clipgenHashTab()
+  // on the receiving page (Studio + Overview route it through their stored
+  // active-tab restore; Transcripts clicks the panel-tab button).
+  var NAV_TABS = {
+    studio: [
+      { key: "intake", label: "Screenspace Intake" },
+      { key: "transcript-intake", label: "Transcript Intake" },
+      { key: "composer-intake", label: "Composer Intake" },
+    ],
+    transcripts: [
+      { key: "summary", label: "Summary" },
+      { key: "friction", label: "Friction" },
+    ],
+    overview: [
+      { key: "metadata", label: "Metadata" },
+      { key: "convergence", label: "Convergence" },
+      { key: "map", label: "Map" },
+    ],
+  };
+
+  // Pages that pre-select a participant from a /PAGE/#Pxx hash
+  // (clipgenHashParticipant in utils.js).
+  var PARTICIPANT_PAGES = [
+    { id: "transcripts", label: "Transcripts" },
+    { id: "screenspace", label: "Screenspace" },
+    { id: "composer", label: "Composer" },
+  ];
+
   var providers = []; // [{ id, fn }] in registration order
+  var participantSource = null; // page-set fn returning participant id strings
   var els = null;     // { overlay, panel, input, list, empty }
   var isOpen = false;
   var commands = [];  // prepared visible commands for the current open
@@ -75,6 +111,14 @@
     providers.push({ id: sourceId, fn: fn });
   }
 
+  // setParticipants(fn) — each hub hands the palette its participant-id list
+  // (a function returning an array of id strings, read on every open). Feeds
+  // the built-in cross-page "Open Pxx in <Page>" commands so participant
+  // jumps exist on every page, not just the ones that hold participants.
+  function setParticipants(fn) {
+    participantSource = typeof fn === "function" ? fn : null;
+  }
+
   // ---- Built-in providers ----
 
   function navCommands() {
@@ -94,8 +138,54 @@
           return function () { location.href = href; };
         })(tab.href),
       });
+      var pageTabs = NAV_TABS[frontend] || [];
+      for (var t = 0; t < pageTabs.length; t++) {
+        out.push({
+          id: "nav." + frontend + ".tab-" + pageTabs[t].key,
+          title: "Open " + pageTabs[t].label + " in " + tab.textContent,
+          icon: NAV_ICONS[frontend] || "arrow-right",
+          keywords: "navigate tab " + frontend,
+          section: "Navigate",
+          run: (function (href, key) {
+            return function () { location.href = href + "#tab=" + key; };
+          })(tab.href, pageTabs[t].key),
+        });
+      }
     }
     return out;
+  }
+
+  // Cross-page participant jumps ("Open P07 in Transcripts"). Same-page jumps
+  // ("Jump to P07 in <Page>") stay page-registered — they select in place
+  // instead of navigating.
+  function participantNavCommands() {
+    if (!participantSource) return [];
+    var pids = [];
+    try { pids = participantSource() || []; } catch (_) {}
+    var current = currentFrontend();
+    var out = [];
+    for (var i = 0; i < pids.length; i++) {
+      for (var d = 0; d < PARTICIPANT_PAGES.length; d++) {
+        var dest = PARTICIPANT_PAGES[d];
+        if (dest.id === current) continue;
+        out.push({
+          id: "nav.p." + dest.id + "." + pids[i],
+          title: "Open " + pids[i] + " in " + dest.label,
+          icon: "user-circle",
+          keywords: "participant navigate " + dest.id,
+          section: "Participants",
+          run: (function (destId, pid) {
+            return function () { location.href = "/" + destId + "/#" + pid; };
+          })(dest.id, pids[i]),
+        });
+      }
+    }
+    return out;
+  }
+
+  function currentFrontend() {
+    var active = document.querySelector('.topnav-tab[aria-current="page"]');
+    return active ? active.getAttribute("data-frontend") || "" : "";
   }
 
   function globalCommands() {
@@ -173,11 +263,14 @@
 
   function collectCommands() {
     var out = [];
+    // Participant nav runs last so its "Participants" section lands directly
+    // after the page's own participant jumps (the page provider lists them
+    // last) — the browse view then shows one contiguous Participants group.
     var sources = [
       { id: "nav", fn: navCommands },
       { id: "global", fn: globalCommands },
       { id: "quick-actions", fn: quickActionCommands },
-    ].concat(providers);
+    ].concat(providers, [{ id: "nav-participants", fn: participantNavCommands }]);
     for (var s = 0; s < sources.length; s++) {
       var list = [];
       try { list = sources[s].fn() || []; } catch (e) {
@@ -536,6 +629,7 @@
 
   window.ClipgenCommandPalette = {
     register: register,
+    setParticipants: setParticipants,
     open: open,
     close: close,
     toggle: toggle,

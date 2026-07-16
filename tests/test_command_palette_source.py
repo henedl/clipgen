@@ -129,6 +129,53 @@ def test_summon_chord_and_modal_guard():
     assert "var hasBlockingModal = function () {" in utils_src
 
 
+def test_cross_page_deep_links():
+    """Cross-page tab commands emit /PAGE/#tab=KEY hashes; every NAV_TABS
+    destination must actually consume them (clipgenHashTab), and every
+    participant destination must consume #Pxx (clipgenHashParticipant)."""
+    src = PALETTE_JS.read_text(encoding="utf-8")
+    assert "var NAV_TABS" in src
+    assert '"#tab=" + key' in src
+    utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert "var clipgenHashTab = function () {" in utils_src
+    tabs_block = src[src.index("var NAV_TABS") : src.index("var PARTICIPANT_PAGES")]
+    for dest in re.findall(r"^    (\w[\w-]*): \[", tabs_block, re.M):
+        page_src = (_WEB / f"{dest}.js").read_text(encoding="utf-8")
+        assert "clipgenHashTab()" in page_src, f"{dest}.js ignores #tab= deep links"
+    pages_block = src[src.index("var PARTICIPANT_PAGES") : src.index("var providers")]
+    dests = re.findall(r'id: "(\w+)"', pages_block)
+    assert sorted(dests) == ["composer", "screenspace", "transcripts"]
+    for dest in dests:
+        page_src = (_WEB / f"{dest}.js").read_text(encoding="utf-8")
+        assert "clipgenHashParticipant()" in page_src, (
+            f"{dest}.js ignores #Pxx deep links"
+        )
+
+
+def test_every_hub_feeds_participants():
+    """Cross-page participant jumps exist on every page: each hub must hand
+    its participant list to the palette via setParticipants."""
+    src = PALETTE_JS.read_text(encoding="utf-8")
+    assert "setParticipants: setParticipants," in src
+    for hub_js in HUB_PAGES.values():
+        hub_src = (_WEB / hub_js).read_text(encoding="utf-8")
+        assert "window.ClipgenCommandPalette.setParticipants(" in hub_src, (
+            f"{hub_js} does not feed participants to the palette"
+        )
+
+
+def test_stay_vs_leave_wording():
+    """Same-page participant commands say "Jump to … in <Page>" (stays);
+    cross-page ones say "Open … in <Page>" (navigates)."""
+    src = PALETTE_JS.read_text(encoding="utf-8")
+    assert '"Open " + pids[i] + " in " + dest.label' in src
+    for hub_js in ("screenspace.js", "transcripts.js", "composer.js"):
+        hub_src = (_WEB / hub_js).read_text(encoding="utf-8")
+        assert re.search(r'"Jump to " \+ p\.id \+ " in \w+"', hub_src), (
+            f"{hub_js} same-page jump lacks the 'in <Page>' suffix"
+        )
+
+
 def test_topnav_exposes_quick_actions_getter():
     """Auto-ingest depends on the additive ClipgenTopNav.getQuickActions."""
     src = (_WEB / "topnav.js").read_text(encoding="utf-8")

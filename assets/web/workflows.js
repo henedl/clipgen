@@ -846,6 +846,9 @@
   // quick actions — the toolbar's run/stop/new/fit/undo/redo buttons.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.context && state.context.participants) || [];
+    });
     function buttonCommand(id, title, icon, keywords, elId) {
       return {
         id: id,

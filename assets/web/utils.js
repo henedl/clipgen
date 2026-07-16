@@ -1597,6 +1597,15 @@ var clipgenHashParticipant = function () {
   return /^[A-Za-z][\w-]*$/.test(raw) ? raw : "";
 };
 
+// /overview/#tab=metadata style deep links (set by the command palette's
+// cross-page tab commands). Returns the tab key or "". Distinct from the
+// participant form above: the "=" never matches its token pattern, so the
+// two hash shapes can't collide.
+var clipgenHashTab = function () {
+  var m = /^#tab=([\w-]+)$/.exec(window.location.hash || "");
+  return m ? m[1] : "";
+};
+
 // ---- Per-page UI state (localStorage) ----
 
 var UI_STATE_STORAGE_KEY = "clipgen-ui-state";

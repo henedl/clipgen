@@ -2629,6 +2629,9 @@
         run: function () { document.getElementById(elId).click(); },
       };
     }
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.participants || []).map(function (p) { return p.id; });
+    });
     window.ClipgenCommandPalette.register("transcripts", function () {
       var cmds = [
         {
@@ -2649,22 +2652,16 @@
         clickCommand("transcripts.tab-friction", "Show Friction tab", "table-cells",
           "panel analysis moments", "tabBtnFriction"),
       ];
+      // "Jump to … in Transcripts" = stays here and selects in place; the
+      // palette's built-in provider adds the cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
           id: "transcripts.p." + p.id,
-          title: "Jump to " + p.id,
+          title: "Jump to " + p.id + " in Transcripts",
           icon: "user",
           keywords: "participant select transcript",
           section: "Participants",
           run: function () { selectParticipant(p.id); },
-        });
-        cmds.push({
-          id: "transcripts.p-ss." + p.id,
-          title: "Open " + p.id + " in Screenspace",
-          icon: "user-circle",
-          keywords: "participant screenspace video",
-          section: "Participants",
-          run: function () { location.href = "/screenspace/#" + p.id; },
         });
       });
       return cmds;
@@ -2687,6 +2684,13 @@
     initPipScroll();
     initPlayerKeyboard();
     initPanelTabs();
+    // /transcripts/#tab=friction style deep links (command palette). The
+    // participant hash form (#P07) is handled separately in loadParticipants.
+    var hashTab = clipgenHashTab();
+    if (hashTab === "summary" || hashTab === "friction") {
+      var hashTabBtn = qs(hashTab === "friction" ? "#tabBtnFriction" : "#tabBtnSummary");
+      if (hashTabBtn) hashTabBtn.click();
+    }
     initSummaryActions();
     initFriction();
     initFrictionHeatmapToggle();

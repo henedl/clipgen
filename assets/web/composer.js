@@ -1368,6 +1368,9 @@
         run: function () { qs("#" + elId).click(); },
       };
     }
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.participants || []).map(function (p) { return p.id; });
+    });
     window.ClipgenCommandPalette.register("composer", function () {
       var cmds = [
         buttonCommand("composer.generate", "Generate clips", "play",
@@ -1391,10 +1394,12 @@
         buttonCommand("composer.shortcuts", "Keyboard shortcuts", "command-line",
           "cheatsheet keys help", "coShortcutsBtn"),
       ];
+      // "Jump to … in Composer" = stays here and selects in place; the
+      // palette's built-in provider adds the cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
           id: "composer.p." + p.id,
-          title: "Jump to " + p.id,
+          title: "Jump to " + p.id + " in Composer",
           icon: "user",
           keywords: "participant select source",
           section: "Participants",
@@ -1500,12 +1505,16 @@
       state.participants = data.participants || [];
       populateParticipantSelect();
       return manifestLoaded.then(function () {
-        // Restore the last-worked-on participant; fall back to auto-select
-        // when there is only one.
+        // A /composer/#P07 hash (command palette / cross-page links) wins;
+        // otherwise restore the last-worked-on participant, falling back to
+        // auto-select when there is only one.
+        var hashPid = clipgenHashParticipant();
         var stored = getStoredUIState("composer").participant;
-        var initial = stored && findParticipant(stored)
-          ? stored
-          : state.participants.length === 1 ? state.participants[0].id : null;
+        var initial = hashPid && findParticipant(hashPid)
+          ? hashPid
+          : stored && findParticipant(stored)
+            ? stored
+            : state.participants.length === 1 ? state.participants[0].id : null;
         if (initial) {
           qs("#coParticipantSelect").value = initial;
           selectParticipant(initial);

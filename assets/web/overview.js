@@ -230,7 +230,9 @@
   }
 
   function restoreStoredTab() {
-    var stored = getStoredUIState("overview").activeTab;
+    // /overview/#tab=metadata style deep links (command palette) win over the
+    // stored tab; the hash stays in the URL so reloads keep the choice.
+    var stored = clipgenHashTab() || getStoredUIState("overview").activeTab;
     if (!stored || stored === state.activeTab) return;
     var tabs = qsa(".preview-tab");
     for (var i = 0; i < tabs.length; i++) {
@@ -280,6 +282,9 @@
   // actions, so this adds the tab switchers and the data refresh.
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.sheetData && state.sheetData.participants) || [];
+    });
     function tabCommand(tabKey, title, icon) {
       function tabEl() {
         return qs('.preview-tab[data-tab="' + tabKey + '"]');

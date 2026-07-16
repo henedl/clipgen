@@ -3776,6 +3776,9 @@
   // every palette open, so the list tracks state.participants).
   function initCommandPalette() {
     if (!window.ClipgenCommandPalette) return;
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.participants || []).map(function (p) { return p.id; });
+    });
     window.ClipgenCommandPalette.register("screenspace", function () {
       var cmds = [
         {
@@ -3791,10 +3794,12 @@
           run: function () { qs("#runBtn").click(); },
         },
       ];
+      // "Jump to … in Screenspace" = stays here and selects in place; the
+      // palette's built-in provider adds the cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
         cmds.push({
           id: "screenspace.p." + p.id,
-          title: "Jump to " + p.id,
+          title: "Jump to " + p.id + " in Screenspace",
           icon: "user",
           keywords: "participant select video",
           section: "Participants",
@@ -3803,14 +3808,6 @@
             sel.value = p.id;
             sel.dispatchEvent(new Event("change"));
           },
-        });
-        cmds.push({
-          id: "screenspace.p-tr." + p.id,
-          title: "Open " + p.id + " in Transcripts",
-          icon: "user-circle",
-          keywords: "participant transcript",
-          section: "Participants",
-          run: function () { location.href = "/transcripts/#" + p.id; },
         });
       });
       return cmds;
