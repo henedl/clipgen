@@ -1221,7 +1221,10 @@ var closeBlockingModal = function (overlayEl) {
 };
 
 // Whether any blocking modal is currently open. Consulted by the hotkeys.js
-// dispatcher so page hotkeys stay dead while a modal owns the keyboard.
+// dispatcher so page hotkeys stay dead while a modal owns the keyboard, and
+// by the command palette so opening on a chord never steals an existing
+// overlay's trap (openBlockingModal is a singleton — stealing would leave
+// the overlay visible with Escape/backdrop dismiss dead).
 var isBlockingModalOpen = function () {
   return _activeBlockingModal !== null;
 };
@@ -1600,6 +1603,15 @@ var clipgenHashParticipant = function () {
   if (!raw) return "";
   try { raw = decodeURIComponent(raw); } catch (_) {}
   return /^[A-Za-z][\w-]*$/.test(raw) ? raw : "";
+};
+
+// /overview/#tab=metadata style deep links (set by the command palette's
+// cross-page tab commands). Returns the tab key or "". Distinct from the
+// participant form above: the "=" never matches its token pattern, so the
+// two hash shapes can't collide.
+var clipgenHashTab = function () {
+  var m = /^#tab=([\w-]+)$/.exec(window.location.hash || "");
+  return m ? m[1] : "";
 };
 
 // ---- Per-page UI state (localStorage) ----

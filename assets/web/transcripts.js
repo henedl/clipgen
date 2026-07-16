@@ -2613,6 +2613,61 @@
     });
   }
 
+  // Command palette (command-palette.js): additions beyond the auto-ingested
+  // quick actions — search focus, cheatsheet, panel tabs, participant jumps
+  // (the provider runs on every palette open, so it tracks state.participants).
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    function clickCommand(id, title, icon, keywords, elId) {
+      return {
+        id: id,
+        title: title,
+        icon: icon,
+        keywords: keywords,
+        section: "Transcripts",
+        visible: function () { return !!document.getElementById(elId); },
+        run: function () { document.getElementById(elId).click(); },
+      };
+    }
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.participants || []).map(function (p) { return p.id; });
+    });
+    window.ClipgenCommandPalette.register("transcripts", function () {
+      var cmds = [
+        {
+          id: "transcripts:search",
+          title: "Focus transcript search",
+          icon: "magnifying-glass",
+          keywords: "find text query",
+          section: "Transcripts",
+          visible: function () { return !!document.getElementById("searchInput"); },
+          // Runs after the palette closes and restores focus, so this focus
+          // call wins.
+          run: function () { document.getElementById("searchInput").focus(); },
+        },
+        clickCommand("transcripts:shortcuts", "Keyboard shortcuts", "command-line",
+          "cheatsheet keys help", "shortcutsBtn"),
+        clickCommand("transcripts:tab-summary", "Show Summary tab", "table-cells",
+          "panel agents", "tabBtnSummary"),
+        clickCommand("transcripts:tab-friction", "Show Friction tab", "table-cells",
+          "panel analysis moments", "tabBtnFriction"),
+      ];
+      // "Jump to … in Transcripts" = stays here and selects in place; the
+      // palette's built-in provider adds the cross-page "Open … in <Page>".
+      (state.participants || []).forEach(function (p) {
+        cmds.push({
+          id: "transcripts:p:" + p.id,
+          title: "Jump to " + p.id + " in Transcripts",
+          icon: "user",
+          keywords: "participant select transcript",
+          section: "Participants",
+          run: function () { selectParticipant(p.id); },
+        });
+      });
+      return cmds;
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
     initTooltipToggle();
@@ -2629,11 +2684,19 @@
     initPipScroll();
     initPlayerKeyboard();
     initPanelTabs();
+    // /transcripts/#tab=friction style deep links (command palette). The
+    // participant hash form (#P07) is handled separately in loadParticipants.
+    var hashTab = clipgenHashTab();
+    if (hashTab === "summary" || hashTab === "friction") {
+      var hashTabBtn = qs(hashTab === "friction" ? "#tabBtnFriction" : "#tabBtnSummary");
+      if (hashTabBtn) hashTabBtn.click();
+    }
     initSummaryActions();
     initFriction();
     initFrictionHeatmapToggle();
     initTranscriptSettings();
     initTopNavActions();
+    initCommandPalette();
 
     // Pause every poller when tab is hidden; resume what was active on focus.
     // Without this, summary/citations/model-hint pollers (1.5–3 s cadence)

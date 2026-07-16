@@ -46,6 +46,7 @@
 
   var HOTKEY_CATALOG = [
     { id: "global.cheatsheet", section: "global", group: "", label: "Keyboard shortcuts", combos: ["?"] },
+    { id: "global.palette",   section: "global", group: "", label: "Command palette", combos: ["Mod+Shift+P", "Mod+K"] },
     { id: "global.primary",   section: "global", group: "", label: "Primary action (generate / run)", combos: ["G"] },
     { id: "global.refresh",   section: "global", group: "", label: "Refresh data", combos: ["R"] },
     { id: "global.search",    section: "global", group: "", label: "Focus search", combos: ["S"] },

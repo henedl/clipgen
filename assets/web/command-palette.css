@@ -1,0 +1,196 @@
+/* clipgen global command palette — command-palette.css
+ *
+ * Spotlight-style overlay: centered panel near the top, search input,
+ * scrollable grouped result list, footer key hints. Loaded by every hub
+ * page alongside command-palette.js. Sits at --z-overlay (above the
+ * settings modal chrome, below toasts).
+ */
+
+.cmdp-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh; /* layout offset, intentionally off the spacing scale */
+  z-index: var(--z-overlay);
+}
+
+.cmdp-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--color-backdrop);
+  opacity: 0.6;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+/* Self-contained: never rely on a page stylesheet defining .hidden. */
+.cmdp-overlay.hidden {
+  display: none !important;
+}
+
+.cmdp-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 560px; /* fixed panel width, same exception class as .settings-panel */
+  max-width: 92vw;
+  max-height: 60vh;
+  background: var(--color-surface);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  opacity: 0;
+  transform: translateY(-8px) scale(0.99);
+  transition:
+    opacity var(--duration-instant) ease-out,
+    transform var(--duration-instant) ease-out;
+}
+
+.cmdp-panel.is-in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* ---- Input row ---- */
+
+.cmdp-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.cmdp-search-icon {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  flex: 0 0 auto;
+  background-color: var(--color-text-dim);
+}
+
+.cmdp-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+
+.cmdp-input::placeholder {
+  color: var(--color-text-dim);
+}
+
+/* ---- Result list ---- */
+
+.cmdp-list {
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.cmdp-section {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  color: var(--color-text-dim);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cmdp-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cmdp-item.is-selected {
+  background: var(--color-accent-hover);
+}
+
+.cmdp-item[disabled] {
+  color: var(--color-text-dim);
+  cursor: default;
+}
+
+.cmdp-item-icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  flex: 0 0 auto;
+  background-color: currentColor;
+}
+
+.cmdp-item-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.cmdp-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmdp-item-subtitle {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmdp-item-hint,
+.cmdp-footer kbd {
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.cmdp-empty {
+  padding: var(--space-4);
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.cmdp-empty.hidden {
+  display: none !important;
+}
+
+/* ---- Footer ---- */
+
+.cmdp-footer {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+}
+
+.cmdp-footer span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}

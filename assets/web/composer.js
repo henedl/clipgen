@@ -1308,6 +1308,70 @@
     });
   }
 
+  // Command palette (command-palette.js): Composer registers no TopNav quick
+  // actions, so besides the built-in nav/global entries this is the page's
+  // whole palette — toolbar actions, lane toggles, participant jumps.
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    function buttonCommand(id, title, icon, keywords, elId) {
+      return {
+        id: id,
+        title: title,
+        icon: icon,
+        keywords: keywords,
+        section: "Composer",
+        enabled: function () {
+          var btn = qs("#" + elId);
+          return !!btn && !btn.disabled;
+        },
+        run: function () { qs("#" + elId).click(); },
+      };
+    }
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.participants || []).map(function (p) { return p.id; });
+    });
+    window.ClipgenCommandPalette.register("composer", function () {
+      var cmds = [
+        buttonCommand("composer:generate", "Generate clips", "play",
+          "cuts render build", "coGenerateBtn"),
+        buttonCommand("composer:export-shot", "Export screenshot", "arrow-down-tray",
+          "annotated frame image", "coExportShotBtn"),
+        buttonCommand("composer:export-gif", "Export GIF", "arrow-down-tray",
+          "annotated animation", "coExportGifBtn"),
+        buttonCommand("composer:export-burn", "Export burned clip", "arrow-down-tray",
+          "annotations video render", "coExportBurnBtn"),
+        buttonCommand("composer:undo", "Undo", "arrow-uturn-left",
+          "revert history", "coUndoBtn"),
+        buttonCommand("composer:redo", "Redo", "arrow-uturn-right",
+          "repeat history", "coRedoBtn"),
+        buttonCommand("composer:lane-sheet", "Toggle Sheet marker lane", "queue-list",
+          "timestamps markers", "coLaneSheet"),
+        buttonCommand("composer:lane-screenspace", "Toggle Screenspace marker lane", "queue-list",
+          "events markers", "coLaneScreenspace"),
+        buttonCommand("composer:lane-transcript", "Toggle Transcript marker lane", "queue-list",
+          "marks markers", "coLaneTranscript"),
+        buttonCommand("composer:shortcuts", "Keyboard shortcuts", "command-line",
+          "cheatsheet keys help", "coShortcutsBtn"),
+      ];
+      // "Jump to … in Composer" = stays here and selects in place; the
+      // palette's built-in provider adds the cross-page "Open … in <Page>".
+      (state.participants || []).forEach(function (p) {
+        cmds.push({
+          id: "composer:p:" + p.id,
+          title: "Jump to " + p.id + " in Composer",
+          icon: "user",
+          keywords: "participant select source",
+          section: "Participants",
+          run: function () {
+            qs("#coParticipantSelect").value = p.id;
+            selectParticipant(p.id);
+          },
+        });
+      });
+      return cmds;
+    });
+  }
+
   // ---- Boot ----
 
   function boot() {
@@ -1329,6 +1393,7 @@
     }
 
     state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+    initCommandPalette();
     initParticipantSelect();
     initVideo();
     initKeyboard();
@@ -1394,12 +1459,16 @@
       state.participants = data.participants || [];
       populateParticipantSelect();
       return manifestLoaded.then(function () {
-        // Restore the last-worked-on participant; fall back to auto-select
-        // when there is only one.
+        // A /composer/#P07 hash (command palette / cross-page links) wins;
+        // otherwise restore the last-worked-on participant, falling back to
+        // auto-select when there is only one.
+        var hashPid = clipgenHashParticipant();
         var stored = getStoredUIState("composer").participant;
-        var initial = stored && findParticipant(stored)
-          ? stored
-          : state.participants.length === 1 ? state.participants[0].id : null;
+        var initial = hashPid && findParticipant(hashPid)
+          ? hashPid
+          : stored && findParticipant(stored)
+            ? stored
+            : state.participants.length === 1 ? state.participants[0].id : null;
         if (initial) {
           qs("#coParticipantSelect").value = initial;
           selectParticipant(initial);

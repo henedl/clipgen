@@ -230,7 +230,9 @@
   }
 
   function restoreStoredTab() {
-    var stored = getStoredUIState("overview").activeTab;
+    // /overview/#tab=metadata style deep links (command palette) win over the
+    // stored tab; the hash stays in the URL so reloads keep the choice.
+    var stored = clipgenHashTab() || getStoredUIState("overview").activeTab;
     if (!stored || stored === state.activeTab) return;
     var tabs = qsa(".preview-tab");
     for (var i = 0; i < tabs.length; i++) {
@@ -276,6 +278,43 @@
 
   OV.syncTab = syncTab;
 
+  // Command palette (command-palette.js): Overview registers no TopNav quick
+  // actions, so this adds the tab switchers and the data refresh.
+  function initCommandPalette() {
+    if (!window.ClipgenCommandPalette) return;
+    window.ClipgenCommandPalette.setParticipants(function () {
+      return (state.sheetData && state.sheetData.participants) || [];
+    });
+    function tabCommand(tabKey, title, icon) {
+      function tabEl() {
+        return qs('.preview-tab[data-tab="' + tabKey + '"]');
+      }
+      return {
+        id: "overview:tab-" + tabKey,
+        title: title,
+        icon: icon,
+        keywords: "tab show switch",
+        section: "Overview",
+        visible: function () { return !!tabEl(); },
+        run: function () { tabEl().click(); },
+      };
+    }
+    window.ClipgenCommandPalette.register("overview", [
+      tabCommand("metadata", "Show Metadata tab", "table-cells"),
+      tabCommand("convergence", "Show Convergence tab", "arrows-pointing-in"),
+      tabCommand("map", "Show Map tab", "map"),
+      {
+        id: "overview:refresh",
+        title: "Refresh Overview data",
+        icon: "arrow-path",
+        keywords: "reload fetch update",
+        section: "Overview",
+        visible: function () { return !!qs("#ovRefresh"); },
+        run: function () { qs("#ovRefresh").click(); },
+      },
+    ]);
+  }
+
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -308,6 +347,7 @@
 
     ensureData();
     initTabs();
+    initCommandPalette();
     initHotkeys();
   });
 
