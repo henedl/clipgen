@@ -498,8 +498,10 @@
       var r = targets[k].rect;
       var left, top;
       if (targets[k].label) {
-        // Labeled action chip: to the right of the anchor, stacked downward.
+        // Labeled action chip: to the right of the anchor, stacked downward;
+        // flips to the anchor's left side when the viewport lacks room.
         left = r.right + 6;
+        if (left + sizes[k].w > window.innerWidth - 4) left = r.left - sizes[k].w - 6;
         top = r.top + targets[k].stack * (sizes[k].h + 4);
       } else {
         left = r.right - sizes[k].w + 6;

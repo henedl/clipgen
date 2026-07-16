@@ -174,7 +174,7 @@
 .hk-hint {
   position: absolute;
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-weight: 500;
   line-height: 1.6;
   padding: 0 var(--space-1-5);
@@ -193,6 +193,7 @@
 
 .hk-hint-label {
   margin-left: var(--space-1-5);
+  font-size: var(--text-2xs);
   opacity: 0.75;
 }
 
