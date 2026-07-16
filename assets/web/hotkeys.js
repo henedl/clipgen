@@ -323,7 +323,19 @@
       }
       return;
     }
-    if (blockingModalOpen()) return;
+    if (blockingModalOpen()) {
+      // The cheatsheet is our own blocking modal: its toggle combo passes
+      // back through so a second "?" press closes it (like the old per-page
+      // popovers). Everything else stays suppressed.
+      if (_sheetEl && !_sheetEl.classList.contains("hidden") && !isTypingTarget(e.target)) {
+        var sheetCombo = normalizeEvent(e);
+        if (sheetCombo && resolvedCombos("global.cheatsheet").indexOf(sheetCombo) !== -1) {
+          e.preventDefault();
+          closeCheatsheet();
+        }
+      }
+      return;
+    }
     var combo = normalizeEvent(e);
     if (!combo) return;
     var ids = _comboIndex[combo];
