@@ -1634,7 +1634,7 @@
     if (cur) {
       cur.classList.add("kb-cursor");
       if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
-      window.ClipgenHotkeys.showActionHints(kbActionHintEntries());
+      window.ClipgenHotkeys.showActionHints(cur, kbActionHintEntries());
     } else {
       window.ClipgenHotkeys.hideActionHints();
     }

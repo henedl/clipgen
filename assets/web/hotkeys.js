@@ -485,15 +485,48 @@
 
   // ---- Context action hints ----
   //
-  // A fixed bottom bar of "key — action" pairs that a page shows while its
-  // keyboard cursor/selection is active (e.g. Studio's cell/card browser:
-  // "↩ Send to Artifacts · ⇧↩ Send to Reel"). Entries are {id, label} — the
-  // combo resolves through the same override-aware pipeline as dispatch, the
-  // label is the page's short verb phrase for what the key does right now.
+  // A small bar of "key — action" pairs anchored to a page's keyboard-cursor
+  // element while it is active (e.g. Studio's cell/card browser: "↩ Send to
+  // Artifacts · ⇧↩ Send to Reel"). Entries are {id, label} — the combo
+  // resolves through the same override-aware pipeline as dispatch, the label
+  // is the page's short verb phrase for what the key does right now. Unlike
+  // the Alt chips the bar persists while the user browses, and the cursor's
+  // scrollIntoView scrolls under it, so it tracks its anchor on scroll/resize
+  // (rAF-throttled) instead of hiding.
 
   var _ctxBar = null;
+  var _ctxAnchor = null;
+  var _ctxRaf = 0;
 
-  function showActionHints(entries) {
+  function positionCtxBar() {
+    _ctxRaf = 0;
+    if (!_ctxBar || !_ctxAnchor) return;
+    var rect = _ctxAnchor.getBoundingClientRect();
+    var gone = rect.width === 0 && rect.height === 0; // detached / hidden anchor
+    if (gone || rect.bottom < 0 || rect.top > window.innerHeight ||
+        rect.right < 0 || rect.left > window.innerWidth) {
+      hideActionHints();
+      return;
+    }
+    var w = _ctxBar.offsetWidth;
+    var h = _ctxBar.offsetHeight;
+    var left = Math.max(4, Math.min(rect.left, window.innerWidth - w - 4));
+    var top = rect.bottom + 6;
+    if (top + h > window.innerHeight - 4) top = rect.top - h - 6; // flip above
+    _ctxBar.style.left = left + "px";
+    _ctxBar.style.top = Math.max(4, top) + "px";
+  }
+
+  function requestCtxReposition() {
+    if (_ctxRaf) return;
+    _ctxRaf = window.requestAnimationFrame(positionCtxBar);
+  }
+
+  function showActionHints(anchor, entries) {
+    if (!anchor) {
+      hideActionHints();
+      return;
+    }
     var frag = document.createDocumentFragment();
     var shown = 0;
     for (var n = 0; n < entries.length; n++) {
@@ -516,9 +549,24 @@
     _ctxBar.textContent = "";
     _ctxBar.appendChild(frag);
     _ctxBar.classList.remove("hidden");
+    if (!_ctxAnchor) {
+      window.addEventListener("scroll", requestCtxReposition, true);
+      window.addEventListener("resize", requestCtxReposition);
+    }
+    _ctxAnchor = anchor;
+    positionCtxBar();
   }
 
   function hideActionHints() {
+    if (_ctxAnchor) {
+      window.removeEventListener("scroll", requestCtxReposition, true);
+      window.removeEventListener("resize", requestCtxReposition);
+      _ctxAnchor = null;
+    }
+    if (_ctxRaf) {
+      window.cancelAnimationFrame(_ctxRaf);
+      _ctxRaf = 0;
+    }
     if (!_ctxBar) return;
     _ctxBar.classList.add("hidden");
     _ctxBar.textContent = "";

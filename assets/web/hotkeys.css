@@ -99,8 +99,7 @@
   gap: var(--space-1);
 }
 
-.hk-keys kbd,
-.hk-context kbd {
+.hk-keys kbd {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--fg);
@@ -187,24 +186,24 @@
 }
 
 /* ---- Context action hints ----------------------------------------------- */
-/* Fixed bottom-center bar shown by ClipgenHotkeys.showActionHints() while a
- * page's keyboard cursor is active: one keycap per entry with the action's
- * short label to its right. Panel-styled (not inverted) since it can linger
- * on screen while the user keeps browsing. */
+/* Bar shown by ClipgenHotkeys.showActionHints() while a page's keyboard
+ * cursor is active, anchored under (or above) the cursor element: one key
+ * per entry with the action's short label to its right. Same inverted
+ * --fg/--bg look as the Alt-hold .hk-hint chips so all hints read as one
+ * system; JS sets top/left. */
 
 .hk-context {
   position: fixed;
-  left: 50%;
-  bottom: var(--space-4);
-  transform: translateX(-50%);
   display: inline-flex;
   align-items: baseline;
-  gap: var(--space-5);
-  padding: var(--space-2) var(--space-4);
-  background: var(--color-surface);
-  border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  gap: var(--space-4);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--fg);
+  color: var(--bg);
+  box-shadow: var(--shadow-md);
   z-index: var(--z-toast);
   pointer-events: none;
   white-space: nowrap;
@@ -217,12 +216,16 @@
 .hk-context-item {
   display: inline-flex;
   align-items: baseline;
-  gap: var(--space-2);
+  gap: var(--space-1-5);
+}
+
+.hk-context kbd {
+  font-family: var(--font-mono);
+  font-weight: 500;
 }
 
 .hk-context-label {
-  font-size: var(--text-xs);
-  color: var(--fg-muted);
+  opacity: 0.75;
 }
 
 /* ---- Shared "?" cheatsheet button --------------------------------------- */
