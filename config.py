@@ -360,7 +360,9 @@ SECONDS_PER_MINUTE: int = 60
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
 # x264 settings for title/endcard generation and the card-wrap re-encode. The
-# wrap re-encodes the whole clip body, so the preset dominates titlecard time;
+# wrap stream-copies a copy-safe clip body (titlecards._body_is_copy_safe) and
+# re-encodes only the ~2s cards, so the preset dominates titlecard time only on
+# the fallback re-encode path (non-h264/exotic bodies, or a failed copy concat);
 # "veryfast" is several times quicker than libx264's "medium" default at
 # negligible quality cost for short research clips. Raise quality with a lower
 # CRF, or trade quality for speed with "superfast"/"ultrafast".

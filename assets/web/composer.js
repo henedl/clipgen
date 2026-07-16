@@ -875,7 +875,7 @@
       var item = el("div", "co-cut-item" + (cut.id === state.selectedCutId ? " selected" : ""));
 
       // Row 1: editable name (carried into generated clips as the event type;
-      // will also feed the Studio Composer-intake tab in P2) + delete button.
+      // also feeds the Studio Composer-intake tab's cards) + delete button.
       var nameRow = el("div", "co-cut-row");
       var name = el("input", "co-cut-name");
       name.type = "text";

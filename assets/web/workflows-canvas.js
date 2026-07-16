@@ -581,8 +581,9 @@
 
   // Lay the graph out left→right in dependency layers: a node sits one column
   // right of its deepest upstream node, stacked by current vertical order within
-  // the column. Bounded relaxation keeps it cycle-safe (M2 doesn't reject cycles
-  // yet). Resets the viewport so the tidied graph is visible from the origin.
+  // the column. Bounded relaxation keeps it cycle-safe (validation blocks Run on
+  // cycles, but Clean up can fire on an unvalidated graph). Resets the viewport
+  // so the tidied graph is visible from the origin.
   function autoArrange() {
     if (!state.ready) return;
     var nodes = state.nodes || [];

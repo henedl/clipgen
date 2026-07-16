@@ -113,8 +113,8 @@
 
   function startXrefPolling() {
     if (!state.xrefEligible || state.xrefPoller) return;
-    // createPoller runs loadCrossRefData once immediately (runImmediately default),
-    // then every 30s — matching the old explicit call + setInterval.
+    // createPoller runs loadCrossRefData once immediately (runImmediately
+    // default), then every 30s.
     state.xrefPoller = createPoller(loadCrossRefData, 30000);
     state.xrefPoller.start();
   }
@@ -485,7 +485,7 @@
         .catch(function () {});
     };
     // createPoller runs poll() once immediately (runImmediately default), then
-    // every 1.5s — matching the old explicit poll() + setInterval.
+    // every 1.5s.
     _modelHintPoller = createPoller(poll, 1500);
     _modelHintPoller.start();
   }
