@@ -412,6 +412,17 @@
   var _hintLayer = null;   // fixed .hk-hints container, kept for reuse
   var _hintsShown = false;
 
+  // Context action-hint providers: a page with a keyboard cursor registers a
+  // function returning {anchor, entries: [{id, label}]} (or null while no
+  // cursor is active). On Alt-hold, showHints() stacks one labeled chip per
+  // entry vertically to the right of the anchor (e.g. Studio's cell browser:
+  // "↩ Send to Artifacts" over "⇧↩ Send to Reel").
+  var _actionHintProviders = [];
+
+  function registerActionHints(fn) {
+    if (typeof fn === "function") _actionHintProviders.push(fn);
+  }
+
   function armHints() {
     if (_hintTimer !== null || _hintsShown) return;
     _hintTimer = window.setTimeout(showHints, HINT_DELAY_MS);
@@ -442,6 +453,20 @@
       if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) continue;
       targets.push({ rect: rect, text: formatCombo(combo) });
     }
+    for (var p = 0; p < _actionHintProviders.length; p++) {
+      var ctx = _actionHintProviders[p]();
+      if (!ctx || !ctx.anchor || !ctx.entries) continue;
+      var arect = ctx.anchor.getBoundingClientRect();
+      if (arect.width === 0 && arect.height === 0) continue;
+      if (arect.bottom < 0 || arect.top > window.innerHeight || arect.right < 0 || arect.left > window.innerWidth) continue;
+      var stack = 0;
+      for (var q = 0; q < ctx.entries.length; q++) {
+        var ccombos = resolvedCombos(ctx.entries[q].id);
+        if (!ccombos.length) continue; // user-disabled binding
+        targets.push({ rect: arect, text: formatCombo(ccombos[0]), label: ctx.entries[q].label, stack: stack });
+        stack++;
+      }
+    }
     if (!targets.length) return;
     if (!_hintLayer) {
       _hintLayer = el("div", "hk-hints hidden");
@@ -451,7 +476,15 @@
     var frag = document.createDocumentFragment();
     var chips = [];
     for (var c = 0; c < targets.length; c++) {
-      chips.push(frag.appendChild(el("span", "hk-hint", targets[c].text)));
+      var chip;
+      if (targets[c].label) {
+        chip = el("span", "hk-hint");
+        chip.appendChild(el("kbd", "", targets[c].text));
+        chip.appendChild(el("span", "hk-hint-label", targets[c].label));
+      } else {
+        chip = el("span", "hk-hint", targets[c].text);
+      }
+      chips.push(frag.appendChild(chip));
     }
     _hintLayer.appendChild(frag);
     _hintLayer.classList.remove("hidden");
@@ -463,8 +496,17 @@
     }
     for (var k = 0; k < chips.length; k++) {
       var r = targets[k].rect;
-      var left = Math.max(4, Math.min(r.right - sizes[k].w + 6, window.innerWidth - sizes[k].w - 4));
-      var top = Math.max(4, Math.min(r.top - sizes[k].h / 2, window.innerHeight - sizes[k].h - 4));
+      var left, top;
+      if (targets[k].label) {
+        // Labeled action chip: to the right of the anchor, stacked downward.
+        left = r.right + 6;
+        top = r.top + targets[k].stack * (sizes[k].h + 4);
+      } else {
+        left = r.right - sizes[k].w + 6;
+        top = r.top - sizes[k].h / 2;
+      }
+      left = Math.max(4, Math.min(left, window.innerWidth - sizes[k].w - 4));
+      top = Math.max(4, Math.min(top, window.innerHeight - sizes[k].h - 4));
       chips[k].style.left = left + "px";
       chips[k].style.top = top + "px";
     }
@@ -481,95 +523,6 @@
     window.removeEventListener("resize", disarmHints);
     _hintLayer.classList.add("hidden");
     _hintLayer.textContent = "";
-  }
-
-  // ---- Context action hints ----
-  //
-  // A small bar of "key — action" pairs anchored to a page's keyboard-cursor
-  // element while it is active (e.g. Studio's cell/card browser: "↩ Send to
-  // Artifacts · ⇧↩ Send to Reel"). Entries are {id, label} — the combo
-  // resolves through the same override-aware pipeline as dispatch, the label
-  // is the page's short verb phrase for what the key does right now. Unlike
-  // the Alt chips the bar persists while the user browses, and the cursor's
-  // scrollIntoView scrolls under it, so it tracks its anchor on scroll/resize
-  // (rAF-throttled) instead of hiding.
-
-  var _ctxBar = null;
-  var _ctxAnchor = null;
-  var _ctxRaf = 0;
-
-  function positionCtxBar() {
-    _ctxRaf = 0;
-    if (!_ctxBar || !_ctxAnchor) return;
-    var rect = _ctxAnchor.getBoundingClientRect();
-    var gone = rect.width === 0 && rect.height === 0; // detached / hidden anchor
-    if (gone || rect.bottom < 0 || rect.top > window.innerHeight ||
-        rect.right < 0 || rect.left > window.innerWidth) {
-      hideActionHints();
-      return;
-    }
-    var w = _ctxBar.offsetWidth;
-    var h = _ctxBar.offsetHeight;
-    var left = Math.max(4, Math.min(rect.left, window.innerWidth - w - 4));
-    var top = rect.bottom + 6;
-    if (top + h > window.innerHeight - 4) top = rect.top - h - 6; // flip above
-    _ctxBar.style.left = left + "px";
-    _ctxBar.style.top = Math.max(4, top) + "px";
-  }
-
-  function requestCtxReposition() {
-    if (_ctxRaf) return;
-    _ctxRaf = window.requestAnimationFrame(positionCtxBar);
-  }
-
-  function showActionHints(anchor, entries) {
-    if (!anchor) {
-      hideActionHints();
-      return;
-    }
-    var frag = document.createDocumentFragment();
-    var shown = 0;
-    for (var n = 0; n < entries.length; n++) {
-      var combos = resolvedCombos(entries[n].id);
-      if (!combos.length) continue; // unknown id or user-disabled binding
-      var item = el("span", "hk-context-item");
-      item.appendChild(el("kbd", "", formatCombo(combos[0])));
-      item.appendChild(el("span", "hk-context-label", entries[n].label));
-      frag.appendChild(item);
-      shown++;
-    }
-    if (!shown) {
-      hideActionHints();
-      return;
-    }
-    if (!_ctxBar) {
-      _ctxBar = el("div", "hk-context hidden");
-      document.body.appendChild(_ctxBar);
-    }
-    _ctxBar.textContent = "";
-    _ctxBar.appendChild(frag);
-    _ctxBar.classList.remove("hidden");
-    if (!_ctxAnchor) {
-      window.addEventListener("scroll", requestCtxReposition, true);
-      window.addEventListener("resize", requestCtxReposition);
-    }
-    _ctxAnchor = anchor;
-    positionCtxBar();
-  }
-
-  function hideActionHints() {
-    if (_ctxAnchor) {
-      window.removeEventListener("scroll", requestCtxReposition, true);
-      window.removeEventListener("resize", requestCtxReposition);
-      _ctxAnchor = null;
-    }
-    if (_ctxRaf) {
-      window.cancelAnimationFrame(_ctxRaf);
-      _ctxRaf = 0;
-    }
-    if (!_ctxBar) return;
-    _ctxBar.classList.add("hidden");
-    _ctxBar.textContent = "";
   }
 
   // ---- Shared "?" help button ----
@@ -695,7 +648,6 @@
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
     closeCheatsheet: closeCheatsheet,
-    showActionHints: showActionHints,
-    hideActionHints: hideActionHints
+    registerActionHints: registerActionHints
   };
 })();

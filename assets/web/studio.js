@@ -1045,8 +1045,8 @@
         });
       });
     }
-    // The keyboard cursor is per-surface: drop stale paint (and the context
-    // hint bar) when the cursor's surface is no longer the active tab.
+    // The keyboard cursor is per-surface: drop stale paint when the cursor's
+    // surface is no longer the active tab.
     kbPaintCursor();
   }
 
@@ -1634,16 +1634,14 @@
     if (cur) {
       cur.classList.add("kb-cursor");
       if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
-      window.ClipgenHotkeys.showActionHints(cur, kbActionHintEntries());
-    } else {
-      window.ClipgenHotkeys.hideActionHints();
     }
   }
 
-  // The context-hint bar under the cursor: what Enter / Shift+Enter would do
-  // to the selected cell right now. Sheet cells know their queue membership
-  // (findInQueue), so the verb flips between Send and Remove; intake cards
-  // keep the generic Send labels (membership lives in the satellite).
+  // Alt-hold context hints (via ClipgenHotkeys.registerActionHints): what
+  // Enter / Shift+Enter would do to the selected cell right now. Sheet cells
+  // know their queue membership (findInQueue), so the verb flips between
+  // Send and Remove; intake cards keep the generic Send labels (membership
+  // lives in the satellite).
   function kbActionHintEntries() {
     var artLabel = "Send to Artifacts";
     var reelLabel = "Send to Reel";
@@ -1755,7 +1753,6 @@
       var info = getCellInfo(td);
       if (reel) toggleReelCell(info);
       else toggleArtifactCell(info);
-      kbPaintCursor(); // refresh the hint bar's Send/Remove verbs
       return true;
     }
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
@@ -3428,6 +3425,14 @@
       { id: "studio.sendArtifacts", handler: function () { return kbSend(false); } },
       { id: "studio.sendReel", handler: function () { return kbSend(true); } },
     ]);
+
+    // Alt-hold hints for the keyboard cursor: labeled chips for the send
+    // actions, stacked to the right of the selected cell/card.
+    window.ClipgenHotkeys.registerActionHints(function () {
+      var cur = kbCursorEl();
+      if (!cur) return null;
+      return { anchor: cur, entries: kbActionHintEntries() };
+    });
 
     // Escape cascade: cancel an open highlights-parameter drawer first, then
     // clear the keyboard cursor.

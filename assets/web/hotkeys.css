@@ -185,46 +185,14 @@
   white-space: nowrap;
 }
 
-/* ---- Context action hints ----------------------------------------------- */
-/* Bar shown by ClipgenHotkeys.showActionHints() while a page's keyboard
- * cursor is active, anchored under (or above) the cursor element: one key
- * per entry with the action's short label to its right. Same inverted
- * --fg/--bg look as the Alt-hold .hk-hint chips so all hints read as one
- * system; JS sets top/left. */
-
-.hk-context {
-  position: fixed;
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-4);
-  font-size: var(--text-2xs);
-  line-height: 1.6;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  background: var(--fg);
-  color: var(--bg);
-  box-shadow: var(--shadow-md);
-  z-index: var(--z-toast);
-  pointer-events: none;
-  white-space: nowrap;
+/* Labeled variant (context action hints for the keyboard cursor): the key
+ * followed by a short verb phrase, e.g. "↩ Send to Artifacts". */
+.hk-hint kbd {
+  font: inherit;
 }
 
-.hk-context.hidden {
-  display: none;
-}
-
-.hk-context-item {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--space-1-5);
-}
-
-.hk-context kbd {
-  font-family: var(--font-mono);
-  font-weight: 500;
-}
-
-.hk-context-label {
+.hk-hint-label {
+  margin-left: var(--space-1-5);
   opacity: 0.75;
 }
 
