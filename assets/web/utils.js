@@ -65,6 +65,7 @@ var CLIPGEN_CONFIG = {
   composerAnnotationStrokeWidth: 0.004,
   composerAnnotationFontSize: 0.035,
   composerAnnotationSpanSeconds: 10.0,
+  hotkeyOverrides: {},
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -119,6 +120,12 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.gifFormat === "string") {
     CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
+  }
+  if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
+    CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;
+    if (window.ClipgenHotkeys) {
+      window.ClipgenHotkeys.applyOverrides(payload.hotkeyOverrides);
+    }
   }
 };
 
@@ -1211,6 +1218,12 @@ var closeBlockingModal = function (overlayEl) {
   if (_activeBlockingModal && _activeBlockingModal.el === overlayEl) {
     _activeBlockingModal.release();
   }
+};
+
+// Whether any blocking modal is currently open. Consulted by the hotkeys.js
+// dispatcher so page hotkeys stay dead while a modal owns the keyboard.
+var isBlockingModalOpen = function () {
+  return _activeBlockingModal !== null;
 };
 
 // ---- Mark categories ----

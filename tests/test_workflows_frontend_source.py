@@ -465,8 +465,12 @@ def test_copy_paste_duplicate_nodes():
     assert "function copySelection" in canvas
     assert "function pasteClipboard" in canvas
     assert "function duplicateSelection" in canvas
-    # Clipboard shortcuts gate on the cmd/ctrl modifier and skip text fields.
-    assert "e.metaKey || e.ctrlKey" in canvas
+    # Clipboard shortcuts route through the shared hotkey registry; the
+    # handlers return their function's boolean so an empty selection/clipboard
+    # declines the event and native copy/paste stays intact.
+    assert 'id: "workflows.copy"' in canvas
+    assert 'id: "workflows.paste"' in canvas
+    assert 'id: "workflows.duplicate"' in canvas
     # Paste delegates to the stashes satellite's published id-remap (late-bound).
     assert "WF.instantiateSubgraph" in canvas
     assert "WF.instantiateSubgraph = instantiateSubgraph" in stashes

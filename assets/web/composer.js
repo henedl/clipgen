@@ -1228,124 +1228,83 @@
     else closeLog();
   }
 
-  // ---- Keyboard (transcripts input-guard pattern) ----
+  // ---- Keyboard (shared hotkeys.js registry) ----
 
-  function shortcutsMenu() { return qs("#coShortcutsMenu"); }
-
-  function toggleShortcuts(force) {
-    var menu = shortcutsMenu();
-    var show = force !== undefined ? force : menu.classList.contains("hidden");
-    menu.classList.toggle("hidden", !show);
-    qs("#coShortcutsBtn").setAttribute("aria-expanded", show ? "true" : "false");
-  }
-
-  function onKeyDown(e) {
-    if (e.target.matches("input, textarea, select, [contenteditable=true]")) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    var handled = true;
-    switch (e.key) {
-      case " ":
-      case "k":
-        togglePlay();
-        break;
-      case "j":
-        seekVideo(state.playhead - 5);
-        break;
-      case "l":
-        seekVideo(state.playhead + 5);
-        break;
-      case ",":
-        seekVideo(state.playhead - 1);
-        break;
-      case ".":
-        seekVideo(state.playhead + 1);
-        break;
-      case "i":
-        setInPoint();
-        break;
-      case "o":
-        setOutPoint();
-        break;
-      case "[":
-        nudgeSelectedCut(e.shiftKey ? -1 : -0.1);
-        break;
-      case "]":
-        nudgeSelectedCut(e.shiftKey ? 1 : 0.1);
-        break;
-      case "x":
-      case "Backspace":
-        if (state.selectedAnnotationId) deleteAnnotation(state.selectedAnnotationId);
-        else if (state.selectedCutId) deleteCut(state.selectedCutId);
-        break;
-      case "v":
-        setAnnotateTool("select");
-        break;
-      case "t":
-        setAnnotateTool("text");
-        break;
-      case "d":
-        setAnnotateTool("draw");
-        break;
-      case "e":
-        setAnnotateTool("erase");
-        break;
-      case "1":
-      case "2":
-      case "3":
-        CO.toggleSource && CO.toggleSource(["sheet", "screenspace", "transcript"][Number(e.key) - 1]);
-        break;
-      case "`":
-        CO.toggleAllSources && CO.toggleAllSources();
-        break;
-      case "g":
-        onGenerate();
-        break;
-      case "?":
-        toggleShortcuts();
-        break;
-      case "Escape":
-        if (!shortcutsMenu().classList.contains("hidden")) toggleShortcuts(false);
-        else if (logOverlayVisible()) closeLog();
-        else if (state.pendingIn !== null) {
-          state.pendingIn = null;
-          updatePendingInfo();
-          renderPlayhead();
-        } else if (state.annTool !== "select") {
-          setAnnotateTool("select");
-        } else if (state.selectedAnnotationId) {
-          selectAnnotation(null);
-        } else if (state.selectedCutId) {
-          selectCut(null);
-        }
-        break;
-      default:
-        handled = false;
+  // j/k list-nav: select the next/previous cut (by start time) and move the
+  // playhead to its in point.
+  function selectAdjacentCut(delta) {
+    var cuts = participantCuts().slice().sort(function (a, b) { return a.start - b.start; });
+    if (!cuts.length) return;
+    var idx = -1;
+    for (var i = 0; i < cuts.length; i++) {
+      if (cuts[i].id === state.selectedCutId) { idx = i; break; }
     }
-    if (handled) e.preventDefault();
-  }
-
-  // Shift+[ / ] arrive as "{" / "}" on most layouts; route them to the nudge too.
-  function normalizeBracketKeys(e) {
-    if (e.key === "{") nudgeSelectedCut(-1);
-    else if (e.key === "}") nudgeSelectedCut(1);
-    else return false;
-    e.preventDefault();
-    return true;
+    var next = idx < 0 ? (delta > 0 ? 0 : cuts.length - 1) : idx + delta;
+    if (next < 0) next = 0;
+    if (next > cuts.length - 1) next = cuts.length - 1;
+    selectCut(cuts[next].id);
+    seekVideo(cuts[next].start);
   }
 
   function initKeyboard() {
-    document.addEventListener("keydown", function (e) {
-      if (e.target.matches("input, textarea, select, [contenteditable=true]")) return;
-      // Undo/redo take the modifier path; everything else is bare-key.
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "z" || e.key === "Z")) {
-        e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-        return;
+    window.ClipgenHotkeys.register([
+      { id: "transport.playPause", handler: function () { togglePlay(); } },
+      { id: "transport.seekBack", handler: function () { seekVideo(state.playhead - 5); } },
+      { id: "transport.seekFwd", handler: function () { seekVideo(state.playhead + 5); } },
+      { id: "transport.stepBack", handler: function () { seekVideo(state.playhead - 1); } },
+      { id: "transport.stepFwd", handler: function () { seekVideo(state.playhead + 1); } },
+      { id: "nav.next", handler: function () { selectAdjacentCut(1); } },
+      { id: "nav.prev", handler: function () { selectAdjacentCut(-1); } },
+      { id: "composer.setIn", handler: function () { setInPoint(); } },
+      { id: "composer.setOut", handler: function () { setOutPoint(); } },
+      { id: "composer.nudgeLeft", handler: function () { nudgeSelectedCut(-0.1); } },
+      { id: "composer.nudgeRight", handler: function () { nudgeSelectedCut(0.1); } },
+      { id: "composer.nudgeLeftBig", handler: function () { nudgeSelectedCut(-1); } },
+      { id: "composer.nudgeRightBig", handler: function () { nudgeSelectedCut(1); } },
+      {
+        id: "composer.deleteSelection",
+        when: function () { return !!(state.selectedAnnotationId || state.selectedCutId); },
+        handler: function () {
+          if (state.selectedAnnotationId) deleteAnnotation(state.selectedAnnotationId);
+          else deleteCut(state.selectedCutId);
+        },
+      },
+      { id: "composer.toolSelect", handler: function () { setAnnotateTool("select"); } },
+      { id: "composer.toolText", handler: function () { setAnnotateTool("text"); } },
+      { id: "composer.toolDraw", handler: function () { setAnnotateTool("draw"); } },
+      { id: "composer.toolErase", handler: function () { setAnnotateTool("erase"); } },
+      {
+        id: "composer.toggleSource",
+        handler: function (e, combo) {
+          var src = ["sheet", "screenspace", "transcript"][parseInt(combo, 10) - 1];
+          if (!src || !CO.toggleSource) return false;
+          CO.toggleSource(src);
+        },
+      },
+      {
+        id: "composer.toggleAllSources",
+        handler: function () { CO.toggleAllSources && CO.toggleAllSources(); },
+      },
+      { id: "global.primary", handler: function () { onGenerate(); } },
+      { id: "edit.undo", handler: function () { undo(); } },
+      { id: "edit.redo", handler: function () { redo(); } },
+      { id: "composer.note.zoomTimeline" },
+    ]);
+
+    // Back-out cascade, one level per press (order matters: overlay first,
+    // then pending in-point, then tool, then selections).
+    window.ClipgenHotkeys.registerEscape(function () {
+      if (logOverlayVisible()) { closeLog(); return true; }
+      if (state.pendingIn !== null) {
+        state.pendingIn = null;
+        updatePendingInfo();
+        renderPlayhead();
+        return true;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (normalizeBracketKeys(e)) return;
-      onKeyDown(e);
+      if (state.annTool !== "select") { setAnnotateTool("select"); return true; }
+      if (state.selectedAnnotationId) { selectAnnotation(null); return true; }
+      if (state.selectedCutId) { selectCut(null); return true; }
+      return false;
     });
   }
 
@@ -1393,13 +1352,8 @@
       if (e.target === qs("#logOverlay")) closeLog();
     });
     initSidebarTabs();
-    qs("#coShortcutsBtn").addEventListener("click", function () { toggleShortcuts(); });
-    document.addEventListener("click", function (e) {
-      var menu = shortcutsMenu();
-      if (!menu.classList.contains("hidden") &&
-          !menu.contains(e.target) && !qs("#coShortcutsBtn").contains(e.target)) {
-        toggleShortcuts(false);
-      }
+    qs("#coShortcutsBtn").addEventListener("click", function () {
+      window.ClipgenHotkeys.toggleCheatsheet();
     });
 
     // The two boot fetches run in parallel, but participant auto-select MUST

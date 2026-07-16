@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="topnav.css">
   <link rel="stylesheet" href="workflows.css">
   <link rel="stylesheet" href="settings-modal.css">
+  <link rel="stylesheet" href="hotkeys.css">
   <link rel="stylesheet" href="color-picker.css">
   <link rel="stylesheet" href="start-overlay.css">
 </head>
@@ -91,27 +92,11 @@
     <!-- Persistent cue that some blueprint is armed for auto-run, even one
          that isn't the active canvas (the button only reflects the active). -->
     <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
-    <!-- Keyboard/mouse shortcuts legend: a far-right ? popover (reuses the
-         run-menu toggle pattern). Static content — usable even before load. -->
-    <div class="wf-shortcuts-wrap">
-      <button id="wfShortcutsBtn" class="btn btn-small wf-icon-btn" type="button"
-              aria-haspopup="menu" aria-expanded="false"
-              aria-label="Keyboard shortcuts" title="Keyboard &amp; mouse shortcuts">
-        <span class="wf-btn-icon wf-shortcuts-icon" aria-hidden="true"></span>
-      </button>
-      <div id="wfShortcutsMenu" class="wf-shortcuts-menu cg-menu hidden" role="menu">
-        <div class="wf-shortcuts-title">Keyboard &amp; mouse</div>
-        <dl class="wf-shortcuts-list">
-          <div><dt>Undo / Redo</dt><dd><kbd>⌘Z</kbd> <kbd>⌘⇧Z</kbd></dd></div>
-          <div><dt>Copy / Paste / Duplicate</dt><dd><kbd>⌘C</kbd> <kbd>⌘V</kbd> <kbd>⌘D</kbd></dd></div>
-          <div><dt>Delete selection</dt><dd><kbd>Delete</kbd></dd></div>
-          <div><dt>Fit to view</dt><dd><kbd>F</kbd></dd></div>
-          <div><dt>Pan canvas</dt><dd>middle-drag</dd></div>
-          <div><dt>Zoom</dt><dd>scroll</dd></div>
-          <div><dt>Select</dt><dd>drag / shift-click</dd></div>
-        </dl>
-      </div>
-    </div>
+    <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
+    <button id="wfShortcutsBtn" class="btn btn-small wf-icon-btn" type="button"
+            aria-label="Keyboard shortcuts" title="Keyboard &amp; mouse shortcuts (?)">
+      <span class="wf-btn-icon wf-shortcuts-icon" aria-hidden="true"></span>
+    </button>
   </header>
   <main id="wfShell">
     <aside id="wfSidebar" aria-label="Node palette">
@@ -225,6 +210,7 @@
        Satellites load after the hub; -nodes before -canvas (the canvas reaches
        the nodes renderer via WF.* late-binding either way). -->
   <script src="utils.js" defer></script>
+  <script src="hotkeys.js" defer></script>
   <script src="export-actions.js" defer></script>
   <script src="topnav.js" defer></script>
   <script src="start-overlay.js" defer></script>

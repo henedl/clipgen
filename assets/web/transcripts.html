@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="topnav.css">
   <link rel="stylesheet" href="transcripts.css">
   <link rel="stylesheet" href="settings-modal.css">
+  <link rel="stylesheet" href="hotkeys.css">
   <link rel="stylesheet" href="color-picker.css">
   <link rel="stylesheet" href="start-overlay.css">
 </head>
@@ -208,30 +209,11 @@
 
   <div id="trTooltip" class="tr-tooltip hidden"></div>
 
-  <!-- Keyboard shortcuts cheatsheet (toggled by ? / the header button) -->
-  <div id="trShortcuts" class="shortcuts-overlay hidden">
-    <div class="shortcuts-card" role="dialog" aria-label="Keyboard shortcuts">
-      <div class="shortcuts-head">
-        <h3>Keyboard shortcuts</h3>
-        <button id="shortcutsClose" type="button" class="btn btn-small">Close</button>
-      </div>
-      <dl class="shortcuts-list">
-        <dt><kbd>Space</kbd></dt><dd>Play / pause</dd>
-        <dt><kbd>J</kbd> / <kbd>K</kbd></dt><dd>Next / previous segment</dd>
-        <dt><kbd>&darr;</kbd> / <kbd>&uarr;</kbd></dt><dd>Next / previous segment</dd>
-        <dt><kbd>N</kbd> / <kbd>P</kbd></dt><dd>Next / previous marked segment</dd>
-        <dt><kbd>M</kbd></dt><dd>Mark current segment (or edit its mark)</dd>
-        <dt><kbd>1</kbd>&ndash;<kbd>6</kbd></dt><dd>Mark current segment with category</dd>
-        <dt><kbd>,</kbd> / <kbd>.</kbd></dt><dd>Skip back / forward 5s</dd>
-        <dt><kbd>?</kbd></dt><dd>Toggle this help</dd>
-      </dl>
-    </div>
-  </div>
-
   <div id="toast" class="toast hidden"></div>
 
   <!-- Deps order: utils → chrome → settings → page hub → transcripts-*.js satellites -->
   <script src="utils.js" defer></script>
+  <script src="hotkeys.js" defer></script>
   <script src="export-actions.js" defer></script>
   <script src="topnav.js" defer></script>
   <script src="start-overlay.js" defer></script>

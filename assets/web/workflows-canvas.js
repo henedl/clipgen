@@ -506,61 +506,17 @@
     return copySelection() && pasteClipboard();
   }
 
-  function onKeyDown(e) {
-    if (!state.ready) return;
-    var t = e.target;
-    var inField =
-      t &&
-      (t.tagName === "INPUT" ||
-        t.tagName === "TEXTAREA" ||
-        t.tagName === "SELECT" ||
-        t.isContentEditable);
-    // Clipboard shortcuts — skipped while typing in a field so the browser's
-    // native Ctrl/Cmd+C/V/D still work there. Cmd on macOS, Ctrl elsewhere.
-    if ((e.metaKey || e.ctrlKey) && !inField) {
-      var k = (e.key || "").toLowerCase();
-      if (k === "c") {
-        if (copySelection()) e.preventDefault();
-        return;
-      }
-      if (k === "v") {
-        if (pasteClipboard()) e.preventDefault();
-        return;
-      }
-      if (k === "d") {
-        if (duplicateSelection()) e.preventDefault();
-        return;
-      }
-      // Undo / redo (hub owns the history stack; call late-bound). Cmd/Ctrl+Z
-      // undoes; add Shift to redo; Ctrl+Y is the common Windows redo.
-      if (k === "z") {
-        var ok = e.shiftKey ? WF.redo && WF.redo() : WF.undo && WF.undo();
-        if (ok) e.preventDefault();
-        return;
-      }
-      if (k === "y") {
-        if (WF.redo && WF.redo()) e.preventDefault();
-        return;
-      }
-    }
-    // Fit-to-view — bare "f" (no modifier), skipped while typing in a field so
-    // it doesn't hijack "f" in a param input.
-    if (!e.metaKey && !e.ctrlKey && !inField && (e.key === "f" || e.key === "F")) {
-      fitToView();
-      e.preventDefault();
-      return;
-    }
-    if (e.key !== "Delete" && e.key !== "Backspace") return;
-    if (inField) return;
+  function _canvasReady() {
+    return !!state.ready;
+  }
+
+  function deleteSelection() {
     // A selected wire takes priority over node selection (wires satellite owns
     // single-edge removal, shared with the floating × button).
     if (state.selectedEdge) {
-      e.preventDefault();
       if (WF.removeEdge) WF.removeEdge(state.selectedEdge);
       return;
     }
-    if (!state.selection.length) return;
-    e.preventDefault();
     var drop = {};
     state.selection.forEach(function (id) {
       drop[id] = true;
@@ -575,6 +531,38 @@
     state.selection = [];
     if (WF.renderAllNodes) WF.renderAllNodes();
     WF.scheduleSave();
+  }
+
+  // Clipboard/undo handlers return their function's boolean so a false (empty
+  // selection / empty clipboard / empty history) declines the event and native
+  // copy/paste stays intact. The hub owns the history stack; call late-bound.
+  function initCanvasHotkeys() {
+    window.ClipgenHotkeys.register([
+      { id: "workflows.copy", when: _canvasReady, handler: function () { return copySelection(); } },
+      { id: "workflows.paste", when: _canvasReady, handler: function () { return pasteClipboard(); } },
+      { id: "workflows.duplicate", when: _canvasReady, handler: function () { return duplicateSelection(); } },
+      { id: "edit.undo", when: _canvasReady, handler: function () { return !!(WF.undo && WF.undo()); } },
+      { id: "edit.redo", when: _canvasReady, handler: function () { return !!(WF.redo && WF.redo()); } },
+      { id: "workflows.fitView", when: _canvasReady, handler: function () { fitToView(); } },
+      {
+        id: "workflows.deleteSelection",
+        when: function () {
+          return _canvasReady() && !!(state.selectedEdge || state.selection.length);
+        },
+        handler: function () { deleteSelection(); },
+      },
+      {
+        id: "global.primary",
+        when: function () {
+          var btn = qs("#wfRunBtn");
+          return _canvasReady() && !!(btn && !btn.disabled);
+        },
+        handler: function () { qs("#wfRunBtn").click(); },
+      },
+      { id: "workflows.note.pan" },
+      { id: "workflows.note.zoom" },
+      { id: "workflows.note.select" },
+    ]);
   }
 
   // ---- Auto-arrange ("Clean up") ----
@@ -895,7 +883,7 @@
     canvas.addEventListener("drop", onDrop);
     canvas.addEventListener("mousedown", onCanvasMouseDown);
     canvas.addEventListener("wheel", onWheel, { passive: false });
-    document.addEventListener("keydown", onKeyDown);
+    initCanvasHotkeys();
     var minimap = qs("#wfMinimap");
     if (minimap) minimap.addEventListener("mousedown", onMinimapMouseDown);
     // Redraw the minimap when the tab returns to the foreground (it skips

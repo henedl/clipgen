@@ -1,0 +1,155 @@
+/* clipgen shared hotkey cheatsheet — hotkeys.css
+ *
+ * Styles for the auto-generated "?" shortcuts overlay built by hotkeys.js.
+ * Loaded by every frontend page and inlined into exported viewers, so it is
+ * fully self-contained (including its own .hidden rule — the generic .hidden
+ * utility is per-page CSS and cannot be assumed present).
+ */
+
+.hk-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+  background: rgba(10, 10, 11, 0.55);
+}
+
+.hk-overlay.hidden {
+  display: none;
+}
+
+.hk-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  width: 720px;
+  max-width: 92vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.hk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.hk-header h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.hk-close {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: var(--text-xl);
+  line-height: 1;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.hk-close:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.hk-body {
+  padding: var(--space-4) var(--space-5);
+  overflow-y: auto;
+  column-count: 2;
+  column-gap: var(--space-6);
+}
+
+.hk-section {
+  break-inside: avoid;
+  margin-bottom: var(--space-4);
+}
+
+.hk-section h3 {
+  margin: 0 0 var(--space-2) 0;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+}
+
+.hk-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+
+.hk-keys {
+  flex: 0 0 auto;
+  min-width: 5.5rem;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.hk-keys kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1-5);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.hk-or {
+  font-size: var(--text-2xs);
+  color: var(--fg-faint);
+}
+
+.hk-note {
+  font-size: var(--text-2xs);
+  font-style: italic;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.hk-label {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.hk-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.hk-footer kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--fg);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1-5);
+}
+
+.hk-footer-hint {
+  color: var(--fg-faint);
+}

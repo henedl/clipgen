@@ -308,5 +308,43 @@
 
     ensureData();
     initTabs();
+    initHotkeys();
   });
+
+  // ---- Hotkeys ----
+
+  function switchToTab(name) {
+    var tabs = qsa(".preview-tab");
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].dataset.tab === name) {
+        tabs[i].click();
+        return;
+      }
+    }
+  }
+
+  function initHotkeys() {
+    window.ClipgenHotkeys.register([
+      { id: "overview.tabMap", handler: function () { switchToTab("map"); } },
+      { id: "overview.tabConvergence", handler: function () { switchToTab("convergence"); } },
+      { id: "overview.tabMetadata", handler: function () { switchToTab("metadata"); } },
+      {
+        id: "global.refresh",
+        handler: function () {
+          var btn = qs("#ovRefresh");
+          if (btn) btn.click();
+        },
+      },
+      {
+        id: "global.search",
+        when: function () { return state.activeTab === "metadata"; },
+        handler: function () {
+          var input = qs("#mdSearchInput");
+          if (!input) return false;
+          input.focus();
+          input.select();
+        },
+      },
+    ]);
+  }
 })();
