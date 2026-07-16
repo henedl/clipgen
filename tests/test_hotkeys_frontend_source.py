@@ -222,6 +222,62 @@ def test_handwritten_cheatsheets_removed():
         )
 
 
+_DATA_HOTKEY_HTML_RE = re.compile(r'data-hotkey="([^"]+)"')
+_DATA_HOTKEY_JS_RE = re.compile(r'setAttribute\(\s*"data-hotkey",\s*"([^"]+)"\s*\)')
+
+
+def test_data_hotkey_values_exist_in_catalog(catalog):
+    """Every Alt-hint tag (data-hotkey attribute) must name a catalog action."""
+    known = {a["id"] for a in catalog if not a.get("note")}
+    unknown = []
+    for name in ALL_TEMPLATES:
+        html = (WEB / name).read_text(encoding="utf-8")
+        for action_id in _DATA_HOTKEY_HTML_RE.findall(html):
+            if action_id not in known:
+                unknown.append(f"{name}: {action_id}")
+    for path in _js_files():
+        for action_id in _DATA_HOTKEY_JS_RE.findall(path.read_text(encoding="utf-8")):
+            if action_id not in known:
+                unknown.append(f"{path.name}: {action_id}")
+    assert not unknown, (
+        f"data-hotkey tags reference ids missing from HOTKEY_CATALOG (the "
+        f"Alt-hold hint would silently never show): {unknown}"
+    )
+
+
+def test_every_template_has_help_button():
+    for name in ALL_TEMPLATES:
+        html = (WEB / name).read_text(encoding="utf-8")
+        assert "data-hotkeys-help" in html, (
+            f"{name} has no [data-hotkeys-help] cheatsheet button; every page "
+            f"carries the shared '?' button (wired by delegation in hotkeys.js)"
+        )
+
+
+def test_hotkeys_css_offline_safe():
+    css = (WEB / "hotkeys.css").read_text(encoding="utf-8")
+    assert 'url("icons/' not in css and "url('icons/" not in css, (
+        "hotkeys.css is inlined into exported viewers, which have no /icons/ "
+        "route — icons here must be data-URI masks"
+    )
+
+
+def test_per_page_help_wirings_removed():
+    removed = {
+        "workflows.js": "initShortcutsMenu",
+        # composer.js still names the button id in its palette command;
+        # only the click wiring must be gone.
+        "composer.js": 'qs("#coShortcutsBtn").addEventListener',
+        "transcripts-video.js": "initShortcutsOverlay",
+    }
+    for name, marker in removed.items():
+        src = (WEB / name).read_text(encoding="utf-8")
+        assert marker not in src, (
+            f"{name} still wires the cheatsheet button ({marker}); the "
+            f"[data-hotkeys-help] delegation in hotkeys.js replaces it"
+        )
+
+
 def test_coerce_hotkey_overrides():
     ok = server._coerce_hotkey_overrides(
         {"transport.playPause": "Space", "edit.redo": "Mod+Shift+Z Mod+Y"}

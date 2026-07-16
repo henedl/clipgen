@@ -29,22 +29,23 @@
     <!-- Undo / redo: the cut-edit stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
          state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
     <button id="coUndoBtn" class="btn btn-small btn-icon" type="button" disabled
-            aria-label="Undo" title="Undo (⌘Z)">
+            data-hotkey="edit.undo" aria-label="Undo" title="Undo (⌘Z)">
       <span class="co-btn-icon co-icon-undo" aria-hidden="true"></span>
     </button>
     <button id="coRedoBtn" class="btn btn-small btn-icon" type="button" disabled
-            aria-label="Redo" title="Redo (⌘⇧Z)">
+            data-hotkey="edit.redo" aria-label="Redo" title="Redo (⌘⇧Z)">
       <span class="co-btn-icon co-icon-redo" aria-hidden="true"></span>
     </button>
     <div class="co-toolbar-spacer"></div>
     <button id="coGenerateBtn" class="btn btn-small btn-primary" type="button" disabled
-            title="Generate clips from all cuts for this participant (G)">Generate clips</button>
+            data-hotkey="global.primary" title="Generate clips from all cuts for this participant (G)">Generate clips</button>
     <button id="coCancelBtn" class="btn btn-small hidden" type="button"
             title="Cancel generation">Cancel</button>
     <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
-    <button id="coShortcutsBtn" class="btn btn-small btn-icon" type="button"
+    <button id="coShortcutsBtn" class="btn btn-small hk-help-btn" type="button"
+            data-hotkeys-help data-hotkey="global.cheatsheet"
             aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
-      <span class="co-btn-icon co-icon-help" aria-hidden="true"></span>
+      <span class="hk-help-icon" aria-hidden="true"></span>
     </button>
   </header>
 
@@ -54,19 +55,19 @@
            exports. Floats over the stage's top-left. -->
       <div id="coAnnotateBar" class="hidden" role="toolbar" aria-label="Annotate">
         <button id="coToolSelect" class="co-tool-btn active" type="button"
-                data-tool="select" title="Select / move annotations (V)">
+                data-tool="select" data-hotkey="composer.toolSelect" title="Select / move annotations (V)">
           <span class="co-btn-icon co-icon-cursor" aria-hidden="true"></span>
         </button>
         <button id="coToolText" class="co-tool-btn" type="button"
-                data-tool="text" title="Add text (T). Click the video to place">
+                data-tool="text" data-hotkey="composer.toolText" title="Add text (T). Click the video to place">
           <span class="co-btn-icon co-icon-text" aria-hidden="true"></span>
         </button>
         <button id="coToolDraw" class="co-tool-btn" type="button"
-                data-tool="draw" title="Freehand draw (D)">
+                data-tool="draw" data-hotkey="composer.toolDraw" title="Freehand draw (D)">
           <span class="co-btn-icon co-icon-draw" aria-hidden="true"></span>
         </button>
         <button id="coToolErase" class="co-tool-btn" type="button"
-                data-tool="erase" title="Eraser (E). Click or drag over annotations">
+                data-tool="erase" data-hotkey="composer.toolErase" title="Eraser (E). Click or drag over annotations">
           <span class="co-btn-icon co-icon-erase" aria-hidden="true"></span>
         </button>
         <span class="co-toolbar-sep"></span>
@@ -126,17 +127,17 @@
     </div>
     <div id="coTimelineControls">
       <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
-              aria-label="Play/Pause" title="Play/Pause (Space)">
+              data-hotkey="transport.playPause" aria-label="Play/Pause" title="Play/Pause (Space)">
         <span id="coPlayIcon" class="co-btn-icon co-icon-play" aria-hidden="true"></span>
       </button>
       <span id="coTimeLabel" class="co-time">0:00 / 0:00</span>
       <span class="co-toolbar-sep"></span>
       <button id="coSetInBtn" class="btn btn-small btn-icon" type="button" disabled
-              title="Set in point at playhead (I)">
+              data-hotkey="composer.setIn" title="Set in point at playhead (I)">
         <span class="co-btn-icon co-icon-in" aria-hidden="true"></span>In
       </button>
       <button id="coSetOutBtn" class="btn btn-small btn-icon" type="button" disabled
-              title="Set out point to commit the cut (O)">
+              data-hotkey="composer.setOut" title="Set out point to commit the cut (O)">
         <span class="co-btn-icon co-icon-out" aria-hidden="true"></span>Out
       </button>
       <span id="coPendingInfo" class="co-pending-info" aria-live="polite"></span>
@@ -145,14 +146,17 @@
            the shared --stream-* tokens so lanes match the Convergence Browser. -->
       <div class="co-lane-pills" role="group" aria-label="Marker sources">
         <button id="coLaneSheet" class="co-lane-pill" type="button" data-source="sheet"
+                data-hotkey="composer.toggleSource" data-hotkey-combo="0"
                 aria-pressed="true" title="Toggle Sheet markers (1)">
           <span class="co-lane-dot" aria-hidden="true"></span>Sheet
         </button>
         <button id="coLaneScreenspace" class="co-lane-pill" type="button" data-source="screenspace"
+                data-hotkey="composer.toggleSource" data-hotkey-combo="1"
                 aria-pressed="true" title="Toggle Screenspace markers (2)">
           <span class="co-lane-dot" aria-hidden="true"></span>Screenspace
         </button>
         <button id="coLaneTranscript" class="co-lane-pill" type="button" data-source="transcript"
+                data-hotkey="composer.toggleSource" data-hotkey-combo="2"
                 aria-pressed="true" title="Toggle Transcript markers (3)">
           <span class="co-lane-dot" aria-hidden="true"></span>Transcript
         </button>

@@ -14,6 +14,11 @@
   <header id="pageHeader">
     <div id="pageHeaderTop">
       <h1><span class="brand-mark" aria-hidden="true"></span>clipgen <span class="header-light">Gallery</span></h1>
+      <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
+      <button id="shortcutsToggle" type="button" data-hotkeys-help data-hotkey="global.cheatsheet"
+              aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+        <span class="hk-help-icon" aria-hidden="true"></span>
+      </button>
       <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
         <span class="theme-toggle-icon theme-icon-sun"></span>
         <span class="theme-toggle-icon theme-icon-moon"></span>
@@ -40,9 +45,9 @@
 
   <div id="lightbox" class="hidden" role="dialog" aria-label="Image viewer">
     <button id="lightboxClose" type="button" aria-label="Close">&times;</button>
-    <button id="lightboxPrev" type="button" aria-label="Previous">&lsaquo;</button>
+    <button id="lightboxPrev" type="button" data-hotkey="gallery.prev" aria-label="Previous">&lsaquo;</button>
     <div id="lightboxContent"></div>
-    <button id="lightboxNext" type="button" aria-label="Next">&rsaquo;</button>
+    <button id="lightboxNext" type="button" data-hotkey="gallery.next" aria-label="Next">&rsaquo;</button>
     <div id="lightboxCaption"></div>
   </div>
 
