@@ -71,9 +71,14 @@ body {
 #sourceVideo:not(:empty)::before { content: "Source:"; font-weight: 600; }
 #generatedAt:not(:empty)::before { content: "Generated:"; font-weight: 600; }
 
-/* Theme Toggle */
+/* Theme Toggle + header shortcuts button */
 
-#themeToggle {
+#shortcutsToggle {
+  color: var(--color-text-dim);
+}
+
+#themeToggle,
+#shortcutsToggle {
   position: relative;
   width: 32px;
   height: 32px;
@@ -88,16 +93,19 @@ body {
   transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
 }
 
-#themeToggle:hover {
+#themeToggle:hover,
+#shortcutsToggle:hover {
   background: var(--color-surface);
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
 }
 
-#themeToggle:active {
+#themeToggle:active,
+#shortcutsToggle:active {
   transform: scale(0.96);
 }
 
-#themeToggle:focus-visible {
+#themeToggle:focus-visible,
+#shortcutsToggle:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }

@@ -803,15 +803,6 @@
     }
   }
 
-  // Keyboard/mouse shortcuts button — opens the shared hotkeys.js cheatsheet.
-  function initShortcutsMenu() {
-    var btn = qs("#wfShortcutsBtn");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      window.ClipgenHotkeys.toggleCheatsheet();
-    });
-  }
-
   // TopNav Quick Actions (mirrors Studio / Screenspace / Transcripts): blueprint
   // JSON import/export live here, off the toolbar. Export is gated on an active
   // blueprint; onBeforeOpen refreshes that state each time the menu opens.
@@ -953,7 +944,6 @@
         redo();
       });
     }
-    initShortcutsMenu();
     var cleanBtn = qs("#wfCleanUp");
     if (cleanBtn) {
       cleanBtn.addEventListener("click", function () {

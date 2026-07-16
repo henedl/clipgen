@@ -312,6 +312,16 @@
   }
 
   function onDocKeydown(e) {
+    if (e.key === "Alt") {
+      // Bare Alt (no other modifiers) arms the discoverability hints. The
+      // !ctrlKey gate keeps Windows AltGr (which arrives as Ctrl+Alt) from
+      // arming them.
+      if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.shiftKey) armHints();
+    } else if (_hintTimer !== null || _hintsShown) {
+      // Any other key while armed/shown means a real chord (Alt+Tab,
+      // Option-typing, an Alt+X hotkey) — not a discoverability hold.
+      disarmHints();
+    }
     if (e.defaultPrevented) return;
     if (e.key === "Escape") {
       // A blocking modal's own capture-phase trap owns Escape.
@@ -361,6 +371,13 @@
   }
 
   function onDocKeyup(e) {
+    if (e.key === "Alt" && (_hintTimer !== null || _hintsShown)) {
+      // Swallow the keyup when hints were shown so the Alt hold doesn't
+      // also focus the browser menubar (Firefox/Windows). A quick tap
+      // (released before the show delay) keeps native behavior.
+      if (_hintsShown) e.preventDefault();
+      disarmHints();
+    }
     if (!_held.length) return;
     var key = (e.key || "").length === 1 ? e.key.toUpperCase() : e.key;
     var remaining = [];
@@ -376,11 +393,150 @@
     // actions (Screenspace blink) never get stuck on.
     for (var n = 0; n < _held.length; n++) _held[n].attachment.onRelease(null);
     _held = [];
+    disarmHints();
   }
 
   document.addEventListener("keydown", onDocKeydown);
   document.addEventListener("keyup", onDocKeyup);
   window.addEventListener("blur", onWindowBlur);
+
+  // ---- Alt-hold hint chips ----
+  //
+  // Hold Alt for HINT_DELAY_MS and a small combo chip appears next to every
+  // visible control tagged data-hotkey="<catalog id>" (optionally
+  // data-hotkey-combo="<n>" to pick the Nth resolved combo). Release Alt,
+  // press any other key, scroll, resize, or blur the window and they vanish.
+
+  var HINT_DELAY_MS = 200;
+  var _hintTimer = null;   // pending show timeout id
+  var _hintLayer = null;   // fixed .hk-hints container, kept for reuse
+  var _hintsShown = false;
+
+  // Context action-hint providers: a page with a keyboard cursor registers a
+  // function returning {anchor, entries: [{id, label}]} (or null while no
+  // cursor is active). On Alt-hold, showHints() stacks one labeled chip per
+  // entry vertically to the right of the anchor (e.g. Studio's cell browser:
+  // "↩ Send to Artifacts" over "⇧↩ Send to Reel").
+  var _actionHintProviders = [];
+
+  function registerActionHints(fn) {
+    if (typeof fn === "function") _actionHintProviders.push(fn);
+  }
+
+  function armHints() {
+    if (_hintTimer !== null || _hintsShown) return;
+    _hintTimer = window.setTimeout(showHints, HINT_DELAY_MS);
+  }
+
+  function disarmHints() {
+    if (_hintTimer !== null) {
+      window.clearTimeout(_hintTimer);
+      _hintTimer = null;
+    }
+    hideHints();
+  }
+
+  function showHints() {
+    _hintTimer = null;
+    if (_hintsShown || blockingModalOpen() || isTypingTarget(document.activeElement)) return;
+    var nodes = document.querySelectorAll("[data-hotkey]");
+    // Read pass: measure every candidate before any DOM writes.
+    var targets = [];
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n];
+      if (node.disabled === true) continue;
+      var combos = resolvedCombos(node.getAttribute("data-hotkey"));
+      if (!combos.length) continue; // unknown id or user-disabled binding
+      var combo = combos[parseInt(node.getAttribute("data-hotkey-combo") || "0", 10)] || combos[0];
+      var rect = node.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) continue; // hidden (offsetParent is null inside fixed subheaders)
+      if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) continue;
+      targets.push({ rect: rect, text: formatCombo(combo) });
+    }
+    for (var p = 0; p < _actionHintProviders.length; p++) {
+      var ctx = _actionHintProviders[p]();
+      if (!ctx || !ctx.anchor || !ctx.entries) continue;
+      var arect = ctx.anchor.getBoundingClientRect();
+      if (arect.width === 0 && arect.height === 0) continue;
+      if (arect.bottom < 0 || arect.top > window.innerHeight || arect.right < 0 || arect.left > window.innerWidth) continue;
+      var stack = 0;
+      for (var q = 0; q < ctx.entries.length; q++) {
+        var ccombos = resolvedCombos(ctx.entries[q].id);
+        if (!ccombos.length) continue; // user-disabled binding
+        targets.push({ rect: arect, text: formatCombo(ccombos[0]), label: ctx.entries[q].label, stack: stack });
+        stack++;
+      }
+    }
+    if (!targets.length) return;
+    if (!_hintLayer) {
+      _hintLayer = el("div", "hk-hints hidden");
+      document.body.appendChild(_hintLayer);
+    }
+    // Write pass: batch all chips into one fragment.
+    var frag = document.createDocumentFragment();
+    var chips = [];
+    for (var c = 0; c < targets.length; c++) {
+      var chip;
+      if (targets[c].label) {
+        chip = el("span", "hk-hint");
+        chip.appendChild(el("kbd", "", targets[c].text));
+        chip.appendChild(el("span", "hk-hint-label", targets[c].label));
+      } else {
+        chip = el("span", "hk-hint", targets[c].text);
+      }
+      chips.push(frag.appendChild(chip));
+    }
+    _hintLayer.appendChild(frag);
+    _hintLayer.classList.remove("hidden");
+    // Second read pass (chip sizes), then one write pass placing each chip
+    // badge-style on its target's top-right corner, clamped into the viewport.
+    var sizes = [];
+    for (var m = 0; m < chips.length; m++) {
+      sizes.push({ w: chips[m].offsetWidth, h: chips[m].offsetHeight });
+    }
+    for (var k = 0; k < chips.length; k++) {
+      var r = targets[k].rect;
+      var left, top;
+      if (targets[k].label) {
+        // Labeled action chip: to the right of the anchor, stacked downward;
+        // flips to the anchor's left side when the viewport lacks room.
+        left = r.right + 6;
+        if (left + sizes[k].w > window.innerWidth - 4) left = r.left - sizes[k].w - 6;
+        top = r.top + targets[k].stack * (sizes[k].h + 4);
+      } else {
+        left = r.right - sizes[k].w + 6;
+        top = r.top - sizes[k].h / 2;
+      }
+      left = Math.max(4, Math.min(left, window.innerWidth - sizes[k].w - 4));
+      top = Math.max(4, Math.min(top, window.innerHeight - sizes[k].h - 4));
+      chips[k].style.left = left + "px";
+      chips[k].style.top = top + "px";
+    }
+    _hintsShown = true;
+    // Chips don't track their anchors; any viewport change just hides them.
+    window.addEventListener("scroll", disarmHints, true);
+    window.addEventListener("resize", disarmHints);
+  }
+
+  function hideHints() {
+    if (!_hintsShown) return;
+    _hintsShown = false;
+    window.removeEventListener("scroll", disarmHints, true);
+    window.removeEventListener("resize", disarmHints);
+    _hintLayer.classList.add("hidden");
+    _hintLayer.textContent = "";
+  }
+
+  // ---- Shared "?" help button ----
+  // Every page carries a [data-hotkeys-help] button (see hotkeys.css for the
+  // shared look). Delegation instead of a per-page init: no load-order
+  // assumptions, and JS-created buttons work automatically.
+
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var btn = t && t.closest ? t.closest("[data-hotkeys-help]") : null;
+    if (btn) toggleCheatsheet();
+  });
 
   // ---- Cheatsheet overlay ----
 
@@ -493,6 +649,7 @@
     formatCombo: formatCombo,
     comboConflicts: comboConflicts,
     toggleCheatsheet: toggleCheatsheet,
-    closeCheatsheet: closeCheatsheet
+    closeCheatsheet: closeCheatsheet,
+    registerActionHints: registerActionHints
   };
 })();

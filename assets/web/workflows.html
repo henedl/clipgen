@@ -47,11 +47,11 @@
     <!-- Undo / redo: the keyboard stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
          state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
     <button id="wfUndo" class="btn btn-small wf-icon-btn" type="button" disabled
-            aria-label="Undo" title="Undo (⌘Z)">
+            data-hotkey="edit.undo" aria-label="Undo" title="Undo (⌘Z)">
       <span class="wf-btn-icon wf-undo-icon" aria-hidden="true"></span>
     </button>
     <button id="wfRedo" class="btn btn-small wf-icon-btn" type="button" disabled
-            aria-label="Redo" title="Redo (⌘⇧Z)">
+            data-hotkey="edit.redo" aria-label="Redo" title="Redo (⌘⇧Z)">
       <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
     </button>
     <button id="wfCleanUp" class="btn btn-small btn-icon" type="button" disabled
@@ -59,7 +59,7 @@
       <span class="wf-label-icon wf-cleanup-icon" aria-hidden="true"></span>Clean up
     </button>
     <button id="wfFitView" class="btn btn-small wf-icon-btn" type="button" disabled
-            aria-label="Fit to view" title="Fit all nodes in view (F)">
+            data-hotkey="workflows.fitView" aria-label="Fit to view" title="Fit all nodes in view (F)">
       <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
     </button>
     <button id="wfSaveStash" class="btn btn-small btn-icon" type="button" disabled
@@ -68,6 +68,7 @@
     </button>
     <div class="wf-run-split">
       <button id="wfRunBtn" class="btn btn-small btn-primary" type="button" disabled
+              data-hotkey="global.primary"
               title="Run this workflow (set a Video Source to “All participants” to fan out)">Run</button>
       <button id="wfRunMenuBtn" class="btn btn-small btn-primary wf-run-caret"
               type="button" disabled aria-haspopup="menu" aria-expanded="false"
@@ -94,9 +95,10 @@
          that isn't the active canvas (the button only reflects the active). -->
     <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
     <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
-    <button id="wfShortcutsBtn" class="btn btn-small wf-icon-btn" type="button"
+    <button id="wfShortcutsBtn" class="btn btn-small hk-help-btn" type="button"
+            data-hotkeys-help data-hotkey="global.cheatsheet"
             aria-label="Keyboard shortcuts" title="Keyboard &amp; mouse shortcuts (?)">
-      <span class="wf-btn-icon wf-shortcuts-icon" aria-hidden="true"></span>
+      <span class="hk-help-icon" aria-hidden="true"></span>
     </button>
   </header>
   <main id="wfShell">

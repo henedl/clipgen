@@ -25,6 +25,11 @@
         <button id="scrubAudioToggle" type="button" aria-label="Toggle hover audio scrubbing" aria-pressed="false">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="6" width="1.6" height="4" rx="0.8"/><rect x="5" y="3.5" width="1.6" height="9" rx="0.8"/><rect x="8" y="5" width="1.6" height="6" rx="0.8"/><rect x="11" y="2.5" width="1.6" height="11" rx="0.8"/></svg>
         </button>
+        <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
+        <button id="shortcutsToggle" type="button" data-hotkeys-help data-hotkey="global.cheatsheet"
+                aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+          <span class="hk-help-icon" aria-hidden="true"></span>
+        </button>
         <button id="themeToggle" type="button" aria-label="Toggle dark mode" aria-pressed="false">
           <span class="theme-toggle-icon theme-icon-sun"></span>
           <span class="theme-toggle-icon theme-icon-moon"></span>

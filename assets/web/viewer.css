@@ -128,7 +128,9 @@ body {
 
 #themeToggle,
 #filmstripToggle,
-#screenspaceToggle {
+#screenspaceToggle,
+#scrubAudioToggle,
+#shortcutsToggle {
   position: relative;
   width: 32px;
   height: 32px;
@@ -148,7 +150,8 @@ body {
 #screenspaceToggle svg { width: 16px; height: 16px; }
 
 #filmstripToggle[aria-pressed="true"],
-#screenspaceToggle[aria-pressed="true"] {
+#screenspaceToggle[aria-pressed="true"],
+#scrubAudioToggle[aria-pressed="true"] {
   border-color: var(--color-accent);
   background: var(--color-selected);
   color: var(--color-accent);
@@ -156,20 +159,26 @@ body {
 
 #themeToggle:hover,
 #filmstripToggle:hover,
-#screenspaceToggle:hover {
+#screenspaceToggle:hover,
+#scrubAudioToggle:hover,
+#shortcutsToggle:hover {
   background: var(--color-surface);
   box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
 }
 
 #themeToggle:active,
 #filmstripToggle:active,
-#screenspaceToggle:active {
+#screenspaceToggle:active,
+#scrubAudioToggle:active,
+#shortcutsToggle:active {
   transform: scale(0.96);
 }
 
 #themeToggle:focus-visible,
 #filmstripToggle:focus-visible,
-#screenspaceToggle:focus-visible {
+#screenspaceToggle:focus-visible,
+#scrubAudioToggle:focus-visible,
+#shortcutsToggle:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }

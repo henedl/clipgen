@@ -32,7 +32,13 @@
       <button class="preview-tab hidden" data-tab="composer-intake">Composer Intake <span id="coIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
     </div>
     <div class="subheader-actions">
-      <button id="refreshSheet" class="cg-btn cg-btn-bare cg-btn-sm" title="Refresh sheet data from source"><span class="cg-btn-icon" data-icon="arrow-path"></span><span>Refresh</span></button>
+      <button id="refreshSheet" class="cg-btn cg-btn-bare cg-btn-sm" data-hotkey="global.refresh" title="Refresh sheet data from source"><span class="cg-btn-icon" data-icon="arrow-path"></span><span>Refresh</span></button>
+      <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
+      <button id="studioShortcutsBtn" type="button" class="btn btn-small hk-help-btn"
+              data-hotkeys-help data-hotkey="global.cheatsheet"
+              aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+        <span class="hk-help-icon" aria-hidden="true"></span>
+      </button>
     </div>
   </div>
 
@@ -154,7 +160,7 @@
           <span class="titlecard-label-unit">s</span>
         </label>
         <div class="bs-actions">
-          <button id="generateBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="play"></span><span>Generate</span></button>
+          <button id="generateBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-hotkey="global.primary" data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="play"></span><span>Generate</span></button>
           <button id="cancelGenerateBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
           <button id="stashArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
           <button id="clearArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-tooltip="Remove all queued artifacts"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
@@ -185,14 +191,14 @@
       <svg id="reelSpinner" class="title-spinner bs-spinner" width="12" height="12" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" opacity="0.25"/><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="20 15" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 7 7" to="360 7 7" dur="0.7s" repeatCount="indefinite"/></circle></svg>
       <div class="bs-actions">
         <div class="highlights-group">
-          <button id="buildHighlightsBtn" class="cg-btn cg-btn-solid cg-btn-sm" data-tooltip="Auto-select the best clips scored by severity, uniqueness, and keyword annotations."><span class="cg-btn-icon" data-icon="sparkles"></span><span>Find Highlights</span></button>
+          <button id="buildHighlightsBtn" class="cg-btn cg-btn-solid cg-btn-sm" data-hotkey="studio.buildHighlights" data-tooltip="Auto-select the best clips scored by severity, uniqueness, and keyword annotations."><span class="cg-btn-icon" data-icon="sparkles"></span><span>Find Highlights</span></button>
           <div id="highlightsDurationDrawer" class="highlights-drawer">
             <label class="highlights-drawer-label">Duration (s)
               <input id="highlightsDuration" type="number" min="10" step="10" value="180" class="highlights-drawer-input bs-input" data-tooltip="Target reel length in seconds">
             </label>
           </div>
         </div>
-        <button id="buildReelBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="play"></span><span>Build Reel</span></button>
+        <button id="buildReelBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-hotkey="studio.buildReel" data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="play"></span><span>Build Reel</span></button>
         <button id="cancelReelBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
         <span id="reelEtaText" class="job-eta cg-mono hidden" aria-live="polite"></span>
         <button id="stashReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>

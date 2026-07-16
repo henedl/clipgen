@@ -1417,9 +1417,6 @@
       if (e.target === qs("#logOverlay")) closeLog();
     });
     initSidebarTabs();
-    qs("#coShortcutsBtn").addEventListener("click", function () {
-      window.ClipgenHotkeys.toggleCheatsheet();
-    });
 
     // The two boot fetches run in parallel, but participant auto-select MUST
     // wait for the manifest: selectParticipant → loadMarkers → commitLane

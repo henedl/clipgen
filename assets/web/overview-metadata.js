@@ -810,6 +810,7 @@
     input.id = "mdSearchInput";
     input.className = "md-search-input";
     input.autocomplete = "off";
+    input.setAttribute("data-hotkey", "global.search");
     input.placeholder = "Search type, category, description, participant…";
     input.value = mdState.searchQuery || "";
     input.addEventListener("input", function () { onSearchInput(input); });

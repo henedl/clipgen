@@ -108,7 +108,6 @@ body[data-frontend="composer"] {
 .co-icon-pause { --co-icon: url("icons/pause.svg"); }
 .co-icon-in { --co-icon: url("icons/arrow-uturn-down.svg"); transform: rotate(90deg); }
 .co-icon-out { --co-icon: url("icons/arrow-uturn-up.svg"); transform: rotate(90deg); }
-.co-icon-help { --co-icon: url("icons/question-mark-circle.svg"); }
 .co-icon-undo { --co-icon: url("icons/arrow-uturn-left.svg"); }
 .co-icon-redo { --co-icon: url("icons/arrow-uturn-right.svg"); }
 .co-icon-fold-open { --co-icon: url("icons/chevron-down.svg"); }

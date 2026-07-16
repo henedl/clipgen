@@ -27,6 +27,14 @@
       </label>
       <span id="videoInfo" class="video-info"></span>
     </div>
+    <div class="subheader-actions">
+      <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
+      <button id="ssShortcutsBtn" type="button" class="btn btn-small hk-help-btn"
+              data-hotkeys-help data-hotkey="global.cheatsheet"
+              aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
+        <span class="hk-help-icon" aria-hidden="true"></span>
+      </button>
+    </div>
   </div>
 
   <main id="ssMain">
@@ -100,7 +108,7 @@
           <button id="toggleRegionsBtn" class="region-toggle-btn hidden" title="Toggle region visibility"></button>
           <button id="stashRegionsBtn" class="region-toggle-btn hidden" title="Stash all regions"></button>
           <span class="region-actions-sep"></span>
-          <button id="videoPlayBtn" class="region-toggle-btn" title="Play/Pause (Space)"></button>
+          <button id="videoPlayBtn" class="region-toggle-btn" data-hotkey="transport.playPause" title="Play/Pause (Space)"></button>
           <button id="videoMuteBtn" class="region-toggle-btn" title="Toggle mute"></button>
           <button id="videoSpeedBtn" class="region-toggle-btn video-speed-btn" title="Playback speed">1x</button>
           <span class="region-actions-sep"></span>
@@ -212,7 +220,7 @@
         <div id="workflowIntervalSlot"></div>
         <div id="runRegionPicker" class="run-picker-wrap"></div>
         <div id="runScanModePicker"></div>
-        <button id="runBtn" class="btn btn-primary btn-icon" disabled data-tooltip="Select a region first">
+        <button id="runBtn" class="btn btn-primary btn-icon" disabled data-hotkey="global.primary" data-tooltip="Select a region first">
           <span class="ss-task-icon ss-task-icon--play"></span>
           Run
         </button>

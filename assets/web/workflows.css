@@ -267,11 +267,6 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/arrow-uturn-right.svg");
 }
 
-.wf-shortcuts-icon {
-  mask-image: url("icons/question-mark-circle.svg");
-  -webkit-mask-image: url("icons/question-mark-circle.svg");
-}
-
 .wf-fit-icon {
   mask-image: url("icons/arrows-pointing-out.svg");
   -webkit-mask-image: url("icons/arrows-pointing-out.svg");

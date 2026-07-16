@@ -1045,6 +1045,9 @@
         });
       });
     }
+    // The keyboard cursor is per-surface: drop stale paint when the cursor's
+    // surface is no longer the active tab.
+    kbPaintCursor();
   }
 
   // ---- Queue persistence (sessionStorage) ----
@@ -1632,6 +1635,28 @@
       cur.classList.add("kb-cursor");
       if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
+  }
+
+  // Alt-hold context hints (via ClipgenHotkeys.registerActionHints): what
+  // Enter / Shift+Enter would do to the selected cell right now. Sheet cells
+  // know their queue membership (findInQueue), so the verb flips between
+  // Send and Remove; intake cards keep the generic Send labels (membership
+  // lives in the satellite).
+  function kbActionHintEntries() {
+    var artLabel = "Send to Artifacts";
+    var reelLabel = "Send to Reel";
+    if (_kbCursor && _kbCursor.surface === "sheet") {
+      if (findInQueue(state.artifactQueue, _kbCursor.participant, _kbCursor.row) >= 0) {
+        artLabel = "Remove from Artifacts";
+      }
+      if (findInQueue(state.reelQueue, _kbCursor.participant, _kbCursor.row) >= 0) {
+        reelLabel = "Remove from Reel";
+      }
+    }
+    return [
+      { id: "studio.sendArtifacts", label: artLabel },
+      { id: "studio.sendReel", label: reelLabel },
+    ];
   }
 
   function kbClearCursor() {
@@ -3400,6 +3425,14 @@
       { id: "studio.sendArtifacts", handler: function () { return kbSend(false); } },
       { id: "studio.sendReel", handler: function () { return kbSend(true); } },
     ]);
+
+    // Alt-hold hints for the keyboard cursor: labeled chips for the send
+    // actions, stacked to the right of the selected cell/card.
+    window.ClipgenHotkeys.registerActionHints(function () {
+      var cur = kbCursorEl();
+      if (!cur) return null;
+      return { anchor: cur, entries: kbActionHintEntries() };
+    });
 
     // Escape cascade: cancel an open highlights-parameter drawer first, then
     // clear the keyboard cursor.

@@ -587,7 +587,6 @@
     }
 
     initAutoFollowScrollPause();
-    initShortcutsOverlay();
 
     video.addEventListener("play", function () {
       state.videoPlaying = true;
@@ -914,15 +913,6 @@
         },
       },
     ]);
-  }
-
-  function initShortcutsOverlay() {
-    var btn = qs("#shortcutsBtn");
-    if (btn) {
-      btn.addEventListener("click", function () {
-        window.ClipgenHotkeys.toggleCheatsheet();
-      });
-    }
   }
 
   var _pendingSeekTime = null;
