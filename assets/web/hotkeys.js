@@ -32,7 +32,7 @@
   var HOTKEY_SECTIONS = [
     { id: "global",      label: "Everywhere",     pages: null },
     { id: "transport",   label: "Video playback", pages: ["composer", "screenspace", "transcripts"] },
-    { id: "nav",         label: "Navigation",     pages: ["composer", "transcripts", "viewer"] },
+    { id: "nav",         label: "Navigation",     pages: ["composer", "transcripts", "viewer", "studio"] },
     { id: "edit",        label: "Editing",        pages: ["composer", "workflows"] },
     { id: "studio",      label: "Studio",         pages: ["studio"] },
     { id: "composer",    label: "Composer",       pages: ["composer"] },
@@ -48,7 +48,7 @@
     { id: "global.cheatsheet", section: "global", group: "", label: "Keyboard shortcuts", combos: ["?"] },
     { id: "global.primary",   section: "global", group: "", label: "Primary action (generate / run)", combos: ["G"] },
     { id: "global.refresh",   section: "global", group: "", label: "Refresh data", combos: ["R"] },
-    { id: "global.search",    section: "global", group: "", label: "Focus search", combos: ["/"] },
+    { id: "global.search",    section: "global", group: "", label: "Focus search", combos: ["S"] },
 
     { id: "transport.playPause", section: "transport", group: "", label: "Play / pause", combos: ["Space"] },
     { id: "transport.seekBack",  section: "transport", group: "", label: "Seek back 5 s", combos: ["ArrowLeft"] },
@@ -64,6 +64,12 @@
 
     { id: "studio.buildReel",       section: "studio", group: "", label: "Build reel", combos: ["B"] },
     { id: "studio.buildHighlights", section: "studio", group: "", label: "Build highlights", combos: ["H"] },
+    { id: "studio.moveLeft",        section: "studio", group: "Selection", label: "Move selection left", combos: ["ArrowLeft"] },
+    { id: "studio.moveRight",       section: "studio", group: "Selection", label: "Move selection right", combos: ["ArrowRight"] },
+    { id: "studio.moveUp",          section: "studio", group: "Selection", label: "Move selection up", combos: ["ArrowUp"] },
+    { id: "studio.moveDown",        section: "studio", group: "Selection", label: "Move selection down", combos: ["ArrowDown"] },
+    { id: "studio.sendArtifacts",   section: "studio", group: "Selection", label: "Add / remove selection in work area", combos: ["Enter"] },
+    { id: "studio.sendReel",        section: "studio", group: "Selection", label: "Add / remove selection in reel", combos: ["Shift+Enter"] },
 
     { id: "composer.setIn",            section: "composer", group: "Cuts", label: "Set in point", combos: ["I"] },
     { id: "composer.setOut",           section: "composer", group: "Cuts", label: "Set out point", combos: ["O"] },
@@ -77,7 +83,7 @@
     { id: "composer.toolDraw",         section: "composer", group: "Annotate", label: "Draw tool", combos: ["D"] },
     { id: "composer.toolErase",        section: "composer", group: "Annotate", label: "Erase tool", combos: ["E"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
-    { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["`"] },
+    { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["0"] },
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
@@ -127,8 +133,10 @@
     var key = e.key;
     if (key === undefined || key === "Escape" || key === "Tab") return null;
     if (key === "Meta" || key === "Control" || key === "Alt" || key === "Shift") return null;
+    if (key === "Dead") return null; // dead key (e.g. ` or ´ on ISO layouts)
     var mod = IS_MAC ? e.metaKey : e.ctrlKey;
     var ctrl = IS_MAC && e.ctrlKey;
+    var alt = e.altKey;
     var name;
     var shift = false;
     if (key === " " || key === "Spacebar") {
@@ -143,6 +151,15 @@
         // Digit or punctuation: keep the produced character, drop Shift
         // ("?" and "{" are combos of their own, not Shift+/).
         name = key;
+        if (!/[0-9]/.test(key)) {
+          // Punctuation often *requires* Option/AltGr on ISO layouts
+          // (Option+8 = "[" on a German/Swedish Mac; AltGr arrives as
+          // Ctrl+Alt on Windows), so the producing modifiers are not part
+          // of the combo — the produced character is. Digits keep their
+          // modifiers; they never need AltGr.
+          alt = false;
+          if (!IS_MAC && e.altKey) mod = false;
+        }
       }
     } else {
       name = key; // ArrowLeft, Backspace, Enter, Delete, F1, ...
@@ -151,7 +168,7 @@
     var parts = [];
     if (mod) parts.push("Mod");
     if (ctrl) parts.push("Ctrl");
-    if (e.altKey) parts.push("Alt");
+    if (alt) parts.push("Alt");
     if (shift) parts.push("Shift");
     parts.push(name);
     return parts.join("+");

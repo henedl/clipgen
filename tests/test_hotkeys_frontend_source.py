@@ -175,8 +175,8 @@ def test_hotkeys_js_is_es5():
     assert not re.search(r"\b(let|const)\s", HOTKEYS_SRC), (
         "hotkeys.js must not use let/const"
     )
-    # Template literals: a bare backtick check would trip on the "`" combo
-    # (composer.toggleAllSources), so look for interpolation specifically.
+    # Template literals: a bare backtick check would trip on a backtick combo
+    # string in the catalog, so look for interpolation specifically.
     assert not re.search(r"`[^`\n]*\$\{", HOTKEYS_SRC), (
         "hotkeys.js must not use template literals"
     )
