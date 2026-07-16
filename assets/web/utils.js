@@ -1213,6 +1213,14 @@ var closeBlockingModal = function (overlayEl) {
   }
 };
 
+// Whether any blocking-modal trap is active. openBlockingModal is a
+// singleton, so anything that opens on a chord (the command palette) must
+// check this first — opening would release the existing overlay's trap and
+// leave it visible with Escape/backdrop dismiss dead.
+var hasBlockingModal = function () {
+  return _activeBlockingModal !== null;
+};
+
 // ---- Mark categories ----
 // Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
 // values are repopulated in place by setMarkCategories() once the page fetches

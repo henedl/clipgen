@@ -113,7 +113,10 @@ def test_css_toggle_completeness_and_tokens():
 def test_summon_chord_and_modal_guard():
     """The chord listener is capture-phase, handles both Cmd/Ctrl+Shift+P and
     Cmd/Ctrl+K (Firefox reserves Ctrl+Shift+P), and open() refuses to steal
-    the settings modal's openBlockingModal trap."""
+    an existing overlay's trap — both the settings modal (body.modal-open,
+    no openBlockingModal) and the openBlockingModal holders (Studio
+    gallery/status/confirm, Transcripts install dialog) that never set the
+    class."""
     src = PALETTE_JS.read_text(encoding="utf-8")
     assert re.search(r"addEventListener\(\s*\"keydown\",[\s\S]*?\}, true\)", src), (
         "summon chord listener is not capture-phase"
@@ -121,6 +124,9 @@ def test_summon_chord_and_modal_guard():
     assert 'k === "p"' in src
     assert 'k === "k"' in src
     assert 'classList.contains("modal-open")' in src
+    assert "hasBlockingModal()" in src
+    utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert "var hasBlockingModal = function () {" in utils_src
 
 
 def test_topnav_exposes_quick_actions_getter():

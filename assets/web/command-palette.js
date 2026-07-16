@@ -33,7 +33,8 @@
  *
  * The overlay lifecycle rides openBlockingModal (utils.js): Escape, Tab trap,
  * backdrop click, restore-focus. Because openBlockingModal is a singleton,
- * open() bails while the settings modal is up (body.modal-open).
+ * open() bails while another overlay is up (body.modal-open for the settings
+ * modal, hasBlockingModal() for everything that holds the shared trap).
  */
 
 (function () {
@@ -483,8 +484,12 @@
 
   function open() {
     if (isOpen) return;
-    // openBlockingModal is a singleton; don't steal the settings modal's trap.
+    // openBlockingModal is a singleton; never steal an existing trap. Two
+    // checks because the overlays split: the settings modal sets
+    // body.modal-open but doesn't use openBlockingModal, while Studio's
+    // gallery/status/confirm and Transcripts' install dialog do the reverse.
     if (document.body.classList.contains("modal-open")) return;
+    if (hasBlockingModal()) return;
     if (!els) buildDom();
     commands = collectCommands();
     els.input.value = "";
