@@ -71,6 +71,17 @@
     { id: "studio.moveDown",        section: "studio", group: "Selection", label: "Move selection down", combos: ["ArrowDown"] },
     { id: "studio.sendArtifacts",   section: "studio", group: "Selection", label: "Add / remove selection in work area", combos: ["Enter"] },
     { id: "studio.sendReel",        section: "studio", group: "Selection", label: "Add / remove selection in reel", combos: ["Shift+Enter"] },
+    { id: "studio.togglePanel",     section: "studio", group: "Panels", label: "Collapse / expand artifact & reel panel", combos: ["V"] },
+    { id: "studio.toggleSidebar",   section: "studio", group: "Panels", label: "Collapse / expand filter sidebar", combos: ["F"] },
+    { id: "studio.stashArtifacts",  section: "studio", group: "Queue", label: "Stash artifacts", combos: ["A"] },
+    { id: "studio.stashReel",       section: "studio", group: "Queue", label: "Stash reel", combos: ["Shift+A"] },
+    { id: "studio.clearArtifacts",  section: "studio", group: "Queue", label: "Clear artifacts", combos: ["C"] },
+    { id: "studio.clearReel",       section: "studio", group: "Queue", label: "Clear reel", combos: ["Shift+C"] },
+    { id: "studio.focusFilter",        section: "studio", group: "Selection", label: "Select filter list", combos: ["1"] },
+    { id: "studio.focusArtifacts",     section: "studio", group: "Selection", label: "Select artifact queue", combos: ["2"] },
+    { id: "studio.focusReel",          section: "studio", group: "Selection", label: "Select reel queue", combos: ["3"] },
+    { id: "studio.focusArtifactStash", section: "studio", group: "Selection", label: "Select stashed artifacts", combos: ["4"] },
+    { id: "studio.focusReelStash",     section: "studio", group: "Selection", label: "Select stashed reels", combos: ["5"] },
 
     { id: "composer.setIn",            section: "composer", group: "Cuts", label: "Set in point", combos: ["I"] },
     { id: "composer.setOut",           section: "composer", group: "Cuts", label: "Set out point", combos: ["O"] },
@@ -88,6 +99,9 @@
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
+    { id: "screenspace.togglePanel",   section: "screenspace", group: "Panels", label: "Collapse / expand bottom panel", combos: ["V"] },
+    { id: "screenspace.cycleToolPrev", section: "screenspace", group: "Tools", label: "Previous tool tab", combos: ["Z"] },
+    { id: "screenspace.cycleToolNext", section: "screenspace", group: "Tools", label: "Next tool tab", combos: ["X"] },
 
     { id: "transcripts.mark",         section: "transcripts", group: "Marks", label: "Mark active segment", combos: ["M"] },
     { id: "transcripts.nextMarked",   section: "transcripts", group: "Marks", label: "Next marked segment", combos: ["N"] },
@@ -182,10 +196,16 @@
     Backspace: "⌫", Delete: "Del", Enter: "↩", Space: "Space"
   };
 
-  function formatCombo(combo) {
+  // The symbol glyphs (mac modifier keys + arrows / enter / backspace) that
+  // render visually smaller than Latin letters/digits at the same point size,
+  // so they get bumped up via .hk-glyph in fillKeycap.
+  var _GLYPH_CHARS = { "⌘": 1, "⌃": 1, "⌥": 1, "⇧": 1, "←": 1, "→": 1, "↑": 1, "↓": 1, "⌫": 1, "↩": 1 };
+
+  // Combo string → array of display tokens, e.g. "Shift+A" → ["⇧", "A"] on
+  // macOS, ["Shift", "A"] on PC. "+" is the token separator; a literal "+" key
+  // arrives as empty split tokens and is re-joined into a "+" token.
+  function comboTokens(combo) {
     var tokens = combo.split("+");
-    // "Shift+Z" splits fine, but a literal "+" key would arrive as trailing
-    // empty tokens; re-join those into "+".
     var cleaned = [];
     for (var t = 0; t < tokens.length; t++) {
       if (tokens[t] === "" ) {
@@ -200,7 +220,26 @@
       if (isMod) out.push(IS_MAC ? _MAC_MODS[tok] : _PC_MODS[tok]);
       else out.push(_KEY_GLYPHS[tok] || tok);
     }
-    return out.join(IS_MAC ? "" : "+");
+    return out;
+  }
+
+  function formatCombo(combo) {
+    return comboTokens(combo).join(IS_MAC ? "" : "+");
+  }
+
+  // Render a combo into a key-cap element as DOM nodes, wrapping the small
+  // symbol glyphs in .hk-glyph so they read at a legible size beside letters.
+  // Used by the cheatsheet key-caps and the Alt-hold hint chips (the plain
+  // string formatCombo stays for the settings rebinder and elsewhere).
+  function fillKeycap(node, combo) {
+    var out = comboTokens(combo);
+    var sep = IS_MAC ? "" : "+";
+    for (var i = 0; i < out.length; i++) {
+      if (i > 0 && sep) node.appendChild(document.createTextNode(sep));
+      if (_GLYPH_CHARS[out[i]]) node.appendChild(el("span", "hk-glyph", out[i]));
+      else node.appendChild(document.createTextNode(out[i]));
+    }
+    return node;
   }
 
   function resolvedCombos(id) {
@@ -444,14 +483,17 @@
     var targets = [];
     for (var n = 0; n < nodes.length; n++) {
       var node = nodes[n];
-      if (node.disabled === true) continue;
+      // A disabled control still gets a chip, dimmed, so the shortcut stays
+      // discoverable while showing it is currently inert (e.g. "Stash" with an
+      // empty queue).
+      var dim = node.disabled === true;
       var combos = resolvedCombos(node.getAttribute("data-hotkey"));
       if (!combos.length) continue; // unknown id or user-disabled binding
       var combo = combos[parseInt(node.getAttribute("data-hotkey-combo") || "0", 10)] || combos[0];
       var rect = node.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue; // hidden (offsetParent is null inside fixed subheaders)
       if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) continue;
-      targets.push({ rect: rect, text: formatCombo(combo) });
+      targets.push({ rect: rect, combo: combo, dim: dim });
     }
     for (var p = 0; p < _actionHintProviders.length; p++) {
       var ctx = _actionHintProviders[p]();
@@ -463,7 +505,7 @@
       for (var q = 0; q < ctx.entries.length; q++) {
         var ccombos = resolvedCombos(ctx.entries[q].id);
         if (!ccombos.length) continue; // user-disabled binding
-        targets.push({ rect: arect, text: formatCombo(ccombos[0]), label: ctx.entries[q].label, stack: stack });
+        targets.push({ rect: arect, combo: ccombos[0], label: ctx.entries[q].label, stack: stack });
         stack++;
       }
     }
@@ -479,11 +521,13 @@
       var chip;
       if (targets[c].label) {
         chip = el("span", "hk-hint");
-        chip.appendChild(el("kbd", "", targets[c].text));
+        chip.appendChild(fillKeycap(el("kbd", ""), targets[c].combo));
         chip.appendChild(el("span", "hk-hint-label", targets[c].label));
       } else {
-        chip = el("span", "hk-hint", targets[c].text);
+        chip = el("span", "hk-hint");
+        fillKeycap(chip, targets[c].combo);
       }
+      if (targets[c].dim) chip.classList.add("hk-hint-dim");
       chips.push(frag.appendChild(chip));
     }
     _hintLayer.appendChild(frag);
@@ -597,7 +641,7 @@
           var combos = resolvedCombos(rows[r].id);
           for (var k = 0; k < combos.length; k++) {
             if (k > 0) keys.appendChild(el("span", "hk-or", "or"));
-            keys.appendChild(el("kbd", "", formatCombo(combos[k])));
+            keys.appendChild(fillKeycap(el("kbd", ""), combos[k]));
           }
         }
         row.appendChild(keys);

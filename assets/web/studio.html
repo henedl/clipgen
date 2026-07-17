@@ -46,7 +46,7 @@
   <!-- Sheet + preview tabs (screenspace/transcript/composer intake) -->
 
     <aside id="studioSidebar" class="cg-scroll-thin" data-open="true" aria-label="Sheet filters">
-      <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar" data-tooltip="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
+      <button id="studioSidebarToggle" type="button" aria-label="Toggle sidebar" data-hotkey="studio.toggleSidebar" data-tooltip="Toggle sidebar"><span class="studio-sidebar-toggle-icon" aria-hidden="true"></span></button>
       <section class="studio-sidebar-section" data-section="views">
         <header class="studio-sidebar-header">Views</header>
         <div class="studio-sidebar-body" data-target="views"></div>
@@ -133,7 +133,7 @@
 
   <div id="panelDivider">
   <!-- Split: sheet area vs bottom artifact/reel strip -->
-<div class="divider-handle"></div></div>
+<div class="divider-handle" data-hotkey="studio.togglePanel"></div></div>
 
   <!-- Bottom strip: artifact + reel queues, stashes, generation actions -->
   <div id="bottomPanel">
@@ -162,8 +162,8 @@
         <div class="bs-actions">
           <button id="generateBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-hotkey="global.primary" data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="play"></span><span>Generate</span></button>
           <button id="cancelGenerateBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
-          <button id="stashArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
-          <button id="clearArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-tooltip="Remove all queued artifacts"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
+          <button id="stashArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-hotkey="studio.stashArtifacts" data-tooltip="Add cells to the work area first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
+          <button id="clearArtifactsBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-hotkey="studio.clearArtifacts" data-tooltip="Remove all queued artifacts"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
         </div>
       </div>
       <div id="artifactsList" class="drop-target">
@@ -201,8 +201,8 @@
         <button id="buildReelBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-hotkey="studio.buildReel" data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="play"></span><span>Build Reel</span></button>
         <button id="cancelReelBtn" class="cg-btn cg-btn-bare cg-btn-sm hidden">Cancel</button>
         <span id="reelEtaText" class="job-eta cg-mono hidden" aria-live="polite"></span>
-        <button id="stashReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
-        <button id="clearReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-tooltip="Remove all clips from the reel"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
+        <button id="stashReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" disabled data-hotkey="studio.stashReel" data-tooltip="Add clips to the reel first"><span class="cg-btn-icon" data-icon="archive-box"></span><span>Stash</span></button>
+        <button id="clearReelBtn" class="cg-btn cg-btn-bare cg-btn-sm" data-hotkey="studio.clearReel" data-tooltip="Remove all clips from the reel"><span class="cg-btn-icon" data-icon="x-mark"></span><span>Clear</span></button>
       </div>
     </div>
     <div id="reelList" class="drop-target">

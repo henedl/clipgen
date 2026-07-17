@@ -2366,6 +2366,19 @@
     renderWorkflowParams();
   }
 
+  // Cycle the active tool tab by DOM order (the tool-cycle hotkeys). Reuses the
+  // tab's own click handler so the persist + param re-render + Run-button
+  // refresh all run through one path.
+  function cycleTool(delta) {
+    var tabs = qsa(".wf-tab");
+    if (!tabs.length) return;
+    var cur = 0;
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].classList.contains("active")) { cur = i; break; }
+    }
+    tabs[(cur + delta + tabs.length) % tabs.length].click();
+  }
+
   function renderIntervalSlot(inputId, min, max, def, step) {
     var slot = qs("#workflowIntervalSlot");
     if (!slot) return;
@@ -3482,6 +3495,9 @@
         },
         handler: function () { qs("#runBtn").click(); },
       },
+      { id: "screenspace.togglePanel", handler: function () { toggleBottomPanel(); } },
+      { id: "screenspace.cycleToolPrev", handler: function () { cycleTool(-1); } },
+      { id: "screenspace.cycleToolNext", handler: function () { cycleTool(1); } },
     ]);
 
     // Back-out cascade: an open run-picker dropdown first, then the active
