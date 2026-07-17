@@ -855,6 +855,22 @@
         run: function () { qs("#" + elId).click(); },
       };
     }
+    // Run-history status chips carry data-filter; click the matching chip so
+    // its handler sets state.runFilter and re-renders (initRunFilter).
+    function runFilterCommand(filter, title, icon) {
+      return {
+        id: "workflows:runs-" + filter,
+        title: title,
+        icon: icon,
+        keywords: "run history filter status " + filter,
+        section: "Workflows",
+        visible: function () { return !!qs("#wfRunFilter"); },
+        run: function () {
+          var btn = qs('#wfRunFilter .wf-run-filter-btn[data-filter="' + filter + '"]');
+          if (btn) btn.click();
+        },
+      };
+    }
     window.ClipgenCommandPalette.register("workflows", function () {
       var stopBtn = qs("#wfStopBtn");
       return [
@@ -877,6 +893,12 @@
           "revert history", "wfUndo"),
         buttonCommand("workflows:redo", "Redo", "arrow-uturn-right",
           "repeat history", "wfRedo"),
+        buttonCommand("workflows:cleanup", "Clean up canvas", "squares-2x2",
+          "arrange tidy layout auto", "wfCleanUp"),
+        buttonCommand("workflows:toggle-trigger", "Toggle auto-run on new video", "bolt",
+          "watch dir trigger arm", "wfTriggerBtn"),
+        runFilterCommand("all", "Show all runs", "bars-3"),
+        runFilterCommand("failed", "Show failed runs", "funnel"),
       ];
     });
   }

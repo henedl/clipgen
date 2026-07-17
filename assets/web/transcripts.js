@@ -2651,6 +2651,22 @@
           "panel agents", "tabBtnSummary"),
         clickCommand("transcripts:tab-friction", "Show Friction tab", "table-cells",
           "panel analysis moments", "tabBtnFriction"),
+        clickCommand("transcripts:toggle-video", "Toggle video panel", "video-camera",
+          "hide show collapse drawer player", "videoCollapseBtn"),
+        clickCommand("transcripts:toggle-captions", "Toggle captions", "language",
+          "subtitles cc text", "videoCcBtn"),
+        {
+          id: "transcripts:toggle-heatmap",
+          title: "Toggle friction heatmap",
+          icon: "sparkles",
+          keywords: "friction analysis overlay timeline",
+          section: "Transcripts",
+          enabled: function () {
+            var b = document.getElementById("frictionHeatmapBtn");
+            return !!b && !b.disabled;
+          },
+          run: function () { document.getElementById("frictionHeatmapBtn").click(); },
+        },
       ];
       // "Jump to … in Transcripts" = stays here and selects in place; the
       // palette's built-in provider adds the cross-page "Open … in <Page>".
