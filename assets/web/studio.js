@@ -933,14 +933,16 @@
     return row;
   }
 
+  function toggleSidebar() {
+    state.sidebarOpen = !state.sidebarOpen;
+    persistSidebarOpen();
+    renderSidebar();
+  }
+
   function bindSidebarToggle() {
     var btn = qs("#studioSidebarToggle");
     if (!btn) return;
-    btn.addEventListener("click", function () {
-      state.sidebarOpen = !state.sidebarOpen;
-      persistSidebarOpen();
-      renderSidebar();
-    });
+    btn.addEventListener("click", toggleSidebar);
   }
 
   function isParticipantHidden(pid) {
@@ -974,6 +976,9 @@
       tabs[i].addEventListener("click", function () {
         var target = this.dataset.tab;
         if (target === state.activePreviewTab) return;
+        // The queues/stashes are shared across tabs, so a cursor parked in one
+        // of those list regions would leave a stale outline behind — drop it.
+        if (_kbRegion) kbClearCursor();
         state.activePreviewTab = target;
         setStoredUIStateField("studio", "activeTab", target);
         var allTabs = qsa(".preview-tab");
@@ -1608,10 +1613,54 @@
   // (toggle in the reel). The cursor is logical state — re-renders repaint it
   // via kbPaintCursor() rather than keeping a live element reference.
 
-  var _kbCursor = null; // {surface: "sheet", participant, row} | {surface: <intake tab>, idx}
+  var _kbCursor = null; // {surface: "sheet", participant, row} | {surface: <intake tab | list surface>, idx}
+  var _kbRegion = null; // explicit list-surface override set by the jump hotkeys (kbJumpTo)
+
+  // Index-addressed list surfaces the cursor can jump into: the filter sidebar,
+  // the artifact/reel queues, and the two stash lists. Each names its item
+  // selector, how to reveal its container (ensure), what Enter does to the
+  // focused item (activate), and the Alt-hold verb. The sheet grid and intake
+  // card rows stay special-cased in the primitives below (stable participant/row
+  // addressing and satellite-owned cards respectively).
+  function kbActivateClick(el) { if (el) { el.click(); return true; } return false; }
+  function kbActivateRemove(el) {
+    var btn = el && el.querySelector(".queue-card-remove");
+    if (btn) { btn.click(); return true; }
+    return false;
+  }
+  function ensureSidebarOpen() { if (!state.sidebarOpen) toggleSidebar(); }
+  function ensureBottomOpen() { if (state.bottomCollapsed) toggleBottomPanel(); }
+
+  var KB_LIST_SURFACES = {
+    filter: { itemsSel: "#studioSidebar .studio-sidebar-row", ensure: ensureSidebarOpen, activate: kbActivateClick, verb: "Toggle filter", sheetOnly: true },
+    "artifact-queue": { itemsSel: "#artifactsList .queue-card", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
+    "reel-queue": { itemsSel: "#reelList .queue-card", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
+    "artifact-stash": { itemsSel: "#stashedArtifactsList .stash-card", ensure: ensureBottomOpen, activate: kbActivateClick, verb: "Recall to queue" },
+    "reel-stash": { itemsSel: "#stashedReelsList .stash-card", ensure: ensureBottomOpen, activate: kbActivateClick, verb: "Recall to queue" },
+  };
+
+  function kbListItems(surface) {
+    var cfg = KB_LIST_SURFACES[surface];
+    return cfg ? qsa(cfg.itemsSel) : [];
+  }
 
   function kbSurface() {
-    return state.activePreviewTab || "sheet";
+    return _kbRegion || state.activePreviewTab || "sheet";
+  }
+
+  // Jump the cursor to the first item of a named list surface (the focus
+  // hotkeys). Reveals the container first, and no-ops (declines the key) when
+  // the surface is off-tab or empty.
+  function kbJumpTo(region) {
+    var cfg = KB_LIST_SURFACES[region];
+    if (!cfg) return false;
+    if (cfg.sheetOnly && state.activePreviewTab !== "sheet") return false;
+    if (cfg.ensure) cfg.ensure();
+    if (!kbListItems(region).length) return false;
+    _kbRegion = region;
+    _kbCursor = { surface: region, idx: 0 };
+    kbPaintCursor();
+    return true;
   }
 
   function kbSheetCells() {
@@ -1623,6 +1672,9 @@
     if (_kbCursor.surface === "sheet") {
       return qs('#sheetGrid .ts-cell.valid-ts[data-participant="' + CSS.escape(_kbCursor.participant) +
                 '"][data-row="' + CSS.escape(String(_kbCursor.row)) + '"]');
+    }
+    if (KB_LIST_SURFACES[_kbCursor.surface]) {
+      return kbListItems(_kbCursor.surface)[_kbCursor.idx] || null;
     }
     return STUDIO.intakeCardAt ? STUDIO.intakeCardAt(_kbCursor.surface, _kbCursor.idx) : null;
   }
@@ -1643,6 +1695,10 @@
   // Send and Remove; intake cards keep the generic Send labels (membership
   // lives in the satellite).
   function kbActionHintEntries() {
+    if (_kbCursor && KB_LIST_SURFACES[_kbCursor.surface]) {
+      // Single Enter chip labeled with the list surface's primary action.
+      return [{ id: "studio.sendArtifacts", label: KB_LIST_SURFACES[_kbCursor.surface].verb }];
+    }
     var artLabel = "Send to Artifacts";
     var reelLabel = "Send to Reel";
     if (_kbCursor && _kbCursor.surface === "sheet") {
@@ -1660,8 +1716,9 @@
   }
 
   function kbClearCursor() {
-    if (!_kbCursor) return false;
+    if (!_kbCursor && !_kbRegion) return false;
     _kbCursor = null;
+    _kbRegion = null;
     kbPaintCursor();
     return true;
   }
@@ -1688,6 +1745,13 @@
         participant: td.getAttribute("data-participant"),
         row: parseInt(td.getAttribute("data-row"), 10),
       };
+    } else if (KB_LIST_SURFACES[surface]) {
+      var items = kbListItems(surface);
+      if (!items.length) return false;
+      var listIdx = _kbCursor && _kbCursor.surface === surface ? _kbCursor.idx + delta : (delta > 0 ? 0 : items.length - 1);
+      if (listIdx < 0) listIdx = 0;
+      if (listIdx > items.length - 1) listIdx = items.length - 1;
+      _kbCursor = { surface: surface, idx: listIdx };
     } else {
       var count = STUDIO.intakeCardCount ? STUDIO.intakeCardCount(surface) : 0;
       if (!count) return false;
@@ -1754,6 +1818,15 @@
       if (reel) toggleReelCell(info);
       else toggleArtifactCell(info);
       return true;
+    }
+    if (KB_LIST_SURFACES[surface]) {
+      // No artifact/reel distinction on these lists — Enter and Shift+Enter
+      // both fire the surface's primary action on the focused item. Repaint
+      // afterward: the action may rebuild the list (filter toggle) or shrink it
+      // (queue remove), and this keeps the outline on the item now at that index.
+      var acted = KB_LIST_SURFACES[surface].activate(kbCursorEl(), reel);
+      if (acted) kbPaintCursor();
+      return acted;
     }
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
   }
@@ -2106,7 +2179,7 @@
       );
     }
     var clearBtn = qs("#clearArtifactsBtn");
-    if (clearBtn) clearBtn.disabled = artLocked;
+    if (clearBtn) clearBtn.disabled = artLocked || n === 0;
     var stashBtn = qs("#stashArtifactsBtn");
     if (stashBtn) {
       stashBtn.disabled = artLocked || n === 0;
@@ -2149,7 +2222,7 @@
       );
     }
     var clearBtn = qs("#clearReelBtn");
-    if (clearBtn) clearBtn.disabled = reelLocked;
+    if (clearBtn) clearBtn.disabled = reelLocked || n === 0;
     var stashBtn = qs("#stashReelBtn");
     if (stashBtn) {
       stashBtn.disabled = reelLocked || n === 0;
@@ -3341,24 +3414,46 @@
 
   // ---- Buttons ----
 
+  // Empty the artifact / reel queue (also used by the Clear hotkeys). Cards
+  // animate out before the state commit so the queue drains visually.
+  function clearArtifacts() {
+    if (isArtifactQueueLocked()) return;
+    var cards = qsa("#artifactsList .queue-card");
+    var commit = function () {
+      var cleared = state.artifactQueue.slice();
+      for (var i = 0; i < cleared.length; i++) {
+        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
+      }
+      state.artifactQueue = [];
+      renderArtifactQueue();
+      for (var u = 0; u < cleared.length; u++) {
+        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
+      }
+    };
+    if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+    else commit();
+  }
+
+  function clearReel() {
+    if (isReelQueueLocked()) return;
+    var cards = qsa("#reelList .queue-card");
+    var commit = function () {
+      var cleared = state.reelQueue.slice();
+      for (var i = 0; i < cleared.length; i++) {
+        delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
+      }
+      state.reelQueue = [];
+      renderReelQueue();
+      for (var u = 0; u < cleared.length; u++) {
+        if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
+      }
+    };
+    if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
+    else commit();
+  }
+
   function bindButtons() {
-    qs("#clearArtifactsBtn").addEventListener("click", function () {
-      if (isArtifactQueueLocked()) return;
-      var cards = qsa("#artifactsList .queue-card");
-      var commit = function () {
-        var cleared = state.artifactQueue.slice();
-        for (var i = 0; i < cleared.length; i++) {
-          delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
-        }
-        state.artifactQueue = [];
-        renderArtifactQueue();
-        for (var u = 0; u < cleared.length; u++) {
-          if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
-        }
-      };
-      if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
-      else commit();
-    });
+    qs("#clearArtifactsBtn").addEventListener("click", clearArtifacts);
 
     qs("#addToReelBtn").addEventListener("click", function () {
       for (var i = 0; i < state.artifactQueue.length; i++) {
@@ -3366,23 +3461,7 @@
       }
     });
 
-    qs("#clearReelBtn").addEventListener("click", function () {
-      if (isReelQueueLocked()) return;
-      var cards = qsa("#reelList .queue-card");
-      var commit = function () {
-        var cleared = state.reelQueue.slice();
-        for (var i = 0; i < cleared.length; i++) {
-          delete state.cellResults[cellKey(cleared[i].participant, cleared[i].row)];
-        }
-        state.reelQueue = [];
-        renderReelQueue();
-        for (var u = 0; u < cleared.length; u++) {
-          if (cleared[u].row) updateSingleCellClass(cleared[u].participant, cleared[u].row);
-        }
-      };
-      if (cards.length && window.ClipgenMotion) ClipgenMotion.animateOutAll(cards, "delete").then(commit);
-      else commit();
-    });
+    qs("#clearReelBtn").addEventListener("click", clearReel);
 
     qs("#stashReelBtn").addEventListener("click", stashCurrentReel);
     qs("#stashArtifactsBtn").addEventListener("click", stashCurrentArtifacts);
@@ -3424,6 +3503,41 @@
       { id: "studio.moveUp", handler: function () { return kbStepVertical(-1); } },
       { id: "studio.sendArtifacts", handler: function () { return kbSend(false); } },
       { id: "studio.sendReel", handler: function () { return kbSend(true); } },
+      { id: "studio.togglePanel", handler: function () { toggleBottomPanel(); } },
+      {
+        id: "studio.toggleSidebar",
+        when: function () { return state.activePreviewTab === "sheet"; },
+        handler: function () { toggleSidebar(); },
+      },
+      {
+        id: "studio.stashArtifacts",
+        when: function () { return hotkeyBtnEnabled("#stashArtifactsBtn"); },
+        handler: function () { stashCurrentArtifacts(); },
+      },
+      {
+        id: "studio.stashReel",
+        when: function () { return hotkeyBtnEnabled("#stashReelBtn"); },
+        handler: function () { stashCurrentReel(); },
+      },
+      {
+        id: "studio.clearArtifacts",
+        when: function () { return hotkeyBtnEnabled("#clearArtifactsBtn"); },
+        handler: function () { clearArtifacts(); },
+      },
+      {
+        id: "studio.clearReel",
+        when: function () { return hotkeyBtnEnabled("#clearReelBtn"); },
+        handler: function () { clearReel(); },
+      },
+      {
+        id: "studio.focusFilter",
+        when: function () { return state.activePreviewTab === "sheet"; },
+        handler: function () { return kbJumpTo("filter"); },
+      },
+      { id: "studio.focusArtifacts", handler: function () { return kbJumpTo("artifact-queue"); } },
+      { id: "studio.focusReel", handler: function () { return kbJumpTo("reel-queue"); } },
+      { id: "studio.focusArtifactStash", handler: function () { return kbJumpTo("artifact-stash"); } },
+      { id: "studio.focusReelStash", handler: function () { return kbJumpTo("reel-stash"); } },
     ]);
 
     // Alt-hold hints for the keyboard cursor: labeled chips for the send

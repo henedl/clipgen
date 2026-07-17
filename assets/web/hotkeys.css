@@ -197,6 +197,23 @@
   opacity: 0.75;
 }
 
+/* Dimmed variant: the control the chip points at is currently disabled
+ * (e.g. "Stash" with an empty queue) — the shortcut still shows so it stays
+ * discoverable, faded to signal it is inert right now. */
+.hk-hint.hk-hint-dim {
+  opacity: 0.4;
+}
+
+/* Symbol glyphs (⇧ ⌘ ⌥ ⌃ ↩ ← → ↑ ↓ ⌫) render noticeably smaller than Latin
+ * letters/digits at the same point size; bump them so a cap like "⇧A" reads
+ * evenly. Applies wherever fillKeycap() renders a combo — the Alt-hold chips
+ * and the cheatsheet key-caps below. */
+.hk-glyph {
+  font-size: 1.5em;
+  line-height: 1;
+  vertical-align: -0.05em;
+}
+
 /* ---- Shared "?" cheatsheet button --------------------------------------- */
 /* Every page carries one (far right of the subheader / header). The icon is
  * a data-URI mask, not an /icons/-route reference, because this file is

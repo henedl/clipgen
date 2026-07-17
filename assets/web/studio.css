@@ -977,9 +977,12 @@ body.dragging .ts-cell:hover {
 }
 
 /* Keyboard cursor (arrows / j / k navigation) — an outline distinct from the
- * queued .selected background; also painted on the intake cards. */
+ * queued .selected background; also painted on the intake cards, the stash
+ * cards, and the sidebar filter rows the focus hotkeys jump into. */
 .ts-cell.kb-cursor,
-.queue-card.kb-cursor {
+.queue-card.kb-cursor,
+.stash-card.kb-cursor,
+.studio-sidebar-row.kb-cursor {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
