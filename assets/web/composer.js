@@ -1327,6 +1327,22 @@
         run: function () { qs("#" + elId).click(); },
       };
     }
+    // Left timeline-list tabs (Cuts / Sheet / Screen / Script) carry data-tab;
+    // click the matching tab so initSidebarTabs sets state.sidebarTab.
+    function listTabCommand(dataTab, title, icon) {
+      return {
+        id: "composer:list-" + dataTab,
+        title: title,
+        icon: icon,
+        keywords: "list panel sidebar timeline show " + dataTab,
+        section: "Composer",
+        visible: function () { return !!qs('.co-panel-tab[data-tab="' + dataTab + '"]'); },
+        run: function () {
+          var t = qs('.co-panel-tab[data-tab="' + dataTab + '"]');
+          if (t) t.click();
+        },
+      };
+    }
     window.ClipgenCommandPalette.setParticipants(function () {
       return (state.participants || []).map(function (p) { return p.id; });
     });
@@ -1352,6 +1368,19 @@
           "marks markers", "coLaneTranscript"),
         buttonCommand("composer:shortcuts", "Keyboard shortcuts", "command-line",
           "cheatsheet keys help", "coShortcutsBtn"),
+        listTabCommand("cuts", "Show Cuts list", "list-bullet"),
+        listTabCommand("sheet", "Show Sheet list", "table-cells"),
+        listTabCommand("screenspace", "Show Screenspace list", "queue-list"),
+        listTabCommand("transcript", "Show Transcript list", "queue-list"),
+        {
+          id: "composer:log",
+          title: "Toggle artifact log",
+          icon: "list-bullet",
+          keywords: "history builds panel drawer",
+          section: "Composer",
+          visible: function () { return !!document.getElementById("logBtn"); },
+          run: function () { document.getElementById("logBtn").click(); },
+        },
       ];
       // "Jump to … in Composer" = stays here and selects in place; the
       // palette's built-in provider adds the cross-page "Open … in <Page>".

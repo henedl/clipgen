@@ -537,6 +537,11 @@
   }
 
   function clearAllFilters() {
+    // Reset the source maps that back the category/keyword checkboxes too, not
+    // just the derived filter arrays — otherwise the sidebar rows would keep
+    // painting as active while the grid shows everything (state desync).
+    state.sidebarCategories = {};
+    state.sidebarKeywords = {};
     state.filters.categories = [];
     state.filters.severities = [];
     state.filters.keywords = [];
@@ -4777,6 +4782,27 @@
         run: function () { tabEl().click(); },
       };
     }
+    // Sidebar VIEWS (All / Highlights / Positive) drive state.filters.severities;
+    // replicate the sidebar row's mutate → persist → re-render sequence so the
+    // palette command has the exact same effect as clicking the row.
+    function applyFilterChange() {
+      persistSidebarFilters();
+      renderSidebar();
+      renderGrid();
+    }
+    function viewCommand(viewId, title, icon) {
+      return {
+        id: "studio:view-" + viewId,
+        title: title,
+        icon: icon,
+        keywords: "view filter severity rows sidebar",
+        section: "Studio",
+        visible: function () {
+          return !!(state.sheetData && state.sheetData.rows && state.sheetData.rows.length);
+        },
+        run: function () { applySidebarView(viewId); applyFilterChange(); },
+      };
+    }
     window.ClipgenCommandPalette.register("studio", function () {
       return [
         {
@@ -4795,6 +4821,27 @@
         tabCommand("intake", "Show Screenspace Intake tab", "rectangle-stack"),
         tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
         tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
+        {
+          id: "studio:clear-filters",
+          title: "Clear all filters",
+          icon: "x-mark",
+          keywords: "reset remove sidebar category severity keyword",
+          section: "Studio",
+          enabled: hasActiveFilters,
+          run: function () { clearAllFilters(); applyFilterChange(); },
+        },
+        viewCommand("all", "Show all rows", "bars-3"),
+        viewCommand("highlights", "Highlights only", "funnel"),
+        viewCommand("positive", "Positive only", "funnel"),
+        {
+          id: "studio:toggle-sidebar",
+          title: "Toggle filters sidebar",
+          icon: "adjustments-horizontal",
+          keywords: "show hide panel drawer collapse",
+          section: "Studio",
+          visible: function () { return !!document.getElementById("studioSidebarToggle"); },
+          run: function () { document.getElementById("studioSidebarToggle").click(); },
+        },
         {
           id: "studio:artifact-log",
           title: "Open Artifact Log",

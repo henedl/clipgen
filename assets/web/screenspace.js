@@ -3789,6 +3789,10 @@
       return (state.participants || []).map(function (p) { return p.id; });
     });
     window.ClipgenCommandPalette.register("screenspace", function () {
+      function clickIfPresent(sel) {
+        var btn = qs(sel);
+        if (btn) btn.click();
+      }
       var cmds = [
         {
           id: "screenspace:run",
@@ -3801,6 +3805,58 @@
             return !!btn && !btn.disabled;
           },
           run: function () { qs("#runBtn").click(); },
+        },
+        {
+          id: "screenspace:clear-task-filter",
+          title: "Clear task filter",
+          icon: "x-mark",
+          keywords: "reset show all queue completed failed",
+          section: "Screenspace",
+          enabled: function () { return !!state.taskFilter; },
+          // Click the active filter button; its handler toggles the filter off.
+          run: function () {
+            clickIfPresent(state.taskFilter === "failed"
+              ? "#taskFilterFailedBtn" : "#taskFilterDoneBtn");
+          },
+        },
+        {
+          id: "screenspace:toggle-info",
+          title: "Toggle info panel",
+          icon: "bars-3-bottom-left",
+          keywords: "collapse expand help drawer",
+          section: "Screenspace",
+          visible: function () { return !!qs("#ssInfoPanel"); },
+          run: function () {
+            var collapsed = qs("#ssInfoPanel").classList.contains("hidden");
+            clickIfPresent(collapsed ? "#ssInfoExpandBtn" : "#ssInfoCollapseBtn");
+          },
+        },
+        {
+          id: "screenspace:toggle-model-view",
+          title: "Toggle model view",
+          icon: "eye",
+          keywords: "preview preprocess collapse expand panel",
+          section: "Screenspace",
+          visible: function () { return !!qs("#modelViewToggle"); },
+          run: function () { qs("#modelViewToggle").click(); },
+        },
+        {
+          id: "screenspace:toggle-calibration",
+          title: "Toggle calibration panel",
+          icon: "adjustments-horizontal",
+          keywords: "ocr pins collapse expand panel",
+          section: "Screenspace",
+          visible: function () { return !!qs("#calibrationToggle"); },
+          run: function () { qs("#calibrationToggle").click(); },
+        },
+        {
+          id: "screenspace:toggle-bottom",
+          title: "Toggle bottom panel",
+          icon: "chevron-up-down",
+          keywords: "collapse expand results timeline drawer",
+          section: "Screenspace",
+          visible: function () { return !!qs("#bottomPanel"); },
+          run: function () { toggleBottomPanel(); },
         },
       ];
       // "Jump to … in Screenspace" = stays here and selects in place; the

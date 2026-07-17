@@ -312,6 +312,20 @@
         visible: function () { return !!qs("#ovRefresh"); },
         run: function () { qs("#ovRefresh").click(); },
       },
+      {
+        id: "overview:reset-offsets",
+        title: "Reset convergence offsets",
+        icon: "arrow-uturn-left",
+        keywords: "alignment convergence clear restore per-participant",
+        section: "Overview",
+        // The button (own confirm dialog) exists + is unhidden only on the
+        // Convergence tab once per-participant offsets have been set.
+        visible: function () {
+          var b = qs("#cvResetOffsetsBtn");
+          return !!b && !b.classList.contains("hidden");
+        },
+        run: function () { qs("#cvResetOffsetsBtn").click(); },
+      },
     ]);
   }
 
