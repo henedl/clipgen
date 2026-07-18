@@ -38,8 +38,8 @@
 
   var MODEL_VIEW_META = {
     color: "Downscaled region (≤64 px) with mean HSV vs. target swatch.",
-    change: "Gray-blur + abs-diff + thresholded mask (prev = 1 s earlier).",
-    similarity: "Gray-blurred region (≤256 px); reference appears once captured.",
+    change: "Gray-blur, colorized abs-diff, and changed pixels tinted on the frame (prev = 1 s earlier).",
+    similarity: "Gray-blurred region (≤256 px); reference and SSIM difference map appear once captured.",
     text: "Grayscale region fed to OCR.",
     numbers: "Grayscale region fed to OCR.",
     timelapse: "Region crop. FFmpeg encodes this unmodified.",
