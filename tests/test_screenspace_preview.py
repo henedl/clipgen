@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import screenspace_preview
+import screenspace_primitives
 
 
 @pytest.fixture
@@ -132,6 +133,12 @@ def test_build_overlay_layer_shape_matches_scope(
         # Use a slice that includes the gradient (non-zero std) so the
         # heatmap layer can be computed.
         params["template_image"] = synthetic_frame[10:50, 10:50].copy()
+    elif tool == "similarity":
+        # The SSIM-diff layer needs a region-sized reference crop.
+        params["reference_frame"] = prev_frame[
+            region["y"] : region["y"] + region["h"],
+            region["x"] : region["x"] + region["w"],
+        ].copy()
 
     img = screenspace_preview.build_overlay_layer(
         synthetic_frame, prev_frame, region, tool, layer, params
@@ -181,6 +188,90 @@ def test_overlay_change_mask_layer_suppressed_outside_polygon(
     assert np.count_nonzero(masked[:, 70:]) == 0
 
 
+def test_change_abs_diff_overlay_is_colorized(
+    synthetic_frame: np.ndarray, prev_frame: np.ndarray, region: dict[str, int]
+) -> None:
+    """The abs_diff layer is JET-colorized (not a plain grayscale image)."""
+    img = screenspace_preview.build_overlay_layer(
+        synthetic_frame, prev_frame, region, "change", "abs_diff", {}
+    )
+    assert img is not None
+    b, g, r = cv2.split(img)
+    # A grayscale image has identical channels; a colorized one does not.
+    assert not (np.array_equal(b, g) and np.array_equal(g, r))
+
+
+def test_overlay_change_changes_layer_suppressed_outside_polygon(
+    synthetic_frame: np.ndarray, prev_frame: np.ndarray
+) -> None:
+    """The on-frame 'changes' tint is gated to the region polygon.
+
+    Outside-polygon pixels keep the real (untinted) region content — the overlay
+    tints changed pixels rather than blacking out unchanged ones, so it doesn't
+    darken the live frame that ``renderOverlay`` composites it over.
+    """
+    rect = {"x": 60, "y": 40, "w": 120, "h": 80}
+    shaped = dict(rect, mask_points=[[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]]])
+    masked = screenspace_preview.build_overlay_layer(
+        synthetic_frame, prev_frame, shaped, "change", "changes", {}
+    )
+    untinted = screenspace_preview._clip_region_pixels(synthetic_frame, shaped)
+    assert masked is not None and untinted is not None
+    # Right half is outside the left-half polygon: no tint, equals the region.
+    assert np.array_equal(masked[:, 70:], untinted[:, 70:])
+    # Left half is inside the polygon and contains changed (moved-patch) pixels,
+    # which are tinted — so it differs from the untinted region.
+    assert not np.array_equal(masked[:, :55], untinted[:, :55])
+
+
+def test_overlay_ssim_diff_without_reference_is_noop_not_none(
+    synthetic_frame: np.ndarray, region: dict[str, int]
+) -> None:
+    """SSIM diff with no captured reference returns a valid layer (not None/500)."""
+    img = screenspace_preview.build_overlay_layer(
+        synthetic_frame, None, region, "similarity", "ssim_diff", {}
+    )
+    assert img is not None
+    assert img.shape[:2] == (region["h"], region["w"])
+
+
+def test_ssim_diff_map_returns_score_and_map(
+    synthetic_frame: np.ndarray, prev_frame: np.ndarray, region: dict[str, int]
+) -> None:
+    """ssim_diff_map returns a scalar score plus a <=256 per-pixel map."""
+    a = synthetic_frame[
+        region["y"] : region["y"] + region["h"],
+        region["x"] : region["x"] + region["w"],
+    ]
+    b = prev_frame[
+        region["y"] : region["y"] + region["h"],
+        region["x"] : region["x"] + region["w"],
+    ]
+    score, smap = screenspace_primitives.ssim_diff_map(a, b)
+    assert isinstance(score, float)
+    assert smap.ndim == 2
+    assert smap.shape[0] <= 256 and smap.shape[1] <= 256
+
+
+def test_similarity_preview_with_reference_shows_ssim(
+    synthetic_frame: np.ndarray, prev_frame: np.ndarray, region: dict[str, int]
+) -> None:
+    """The similarity composite adds an SSIM-diff panel when a reference exists."""
+    ref = prev_frame[
+        region["y"] : region["y"] + region["h"],
+        region["x"] : region["x"] + region["w"],
+    ].copy()
+    img = screenspace_preview.build_preview(
+        synthetic_frame, None, region, "similarity", {"reference_frame": ref}
+    )
+    assert img.ndim == 3 and img.shape[2] == 3 and img.size > 0
+    # Reference + SSIM panels widen the composite well beyond the single-panel case.
+    single = screenspace_preview.build_preview(
+        synthetic_frame, None, region, "similarity", {}
+    )
+    assert img.shape[1] > single.shape[1]
+
+
 def test_overlay_layer_excluded_tools_have_no_entry() -> None:
     """timelapse and inactivity are intentionally not overlay-eligible."""
     assert "timelapse" not in screenspace_preview.OVERLAY_LAYERS
@@ -206,23 +297,18 @@ def test_overlay_layer_no_region_returns_none(synthetic_frame: np.ndarray) -> No
 def test_overlay_change_without_prev_only_yields_gray_blur(
     synthetic_frame: np.ndarray, region: dict[str, int]
 ) -> None:
-    """change/abs_diff and change/mask need a previous frame; gray_blur does not."""
+    """change/abs_diff, mask and changes need a previous frame; gray_blur does not."""
     gray_blur = screenspace_preview.build_overlay_layer(
         synthetic_frame, None, region, "change", "gray_blur", {}
     )
     assert gray_blur is not None and gray_blur.shape[:2] == (region["h"], region["w"])
-    assert (
-        screenspace_preview.build_overlay_layer(
-            synthetic_frame, None, region, "change", "abs_diff", {}
-        )
-        is None
-    )
-    assert (
-        screenspace_preview.build_overlay_layer(
-            synthetic_frame, None, region, "change", "mask", {}
-        )
-        is None
-    )
+    for layer in ("abs_diff", "mask", "changes"):
+        assert (
+            screenspace_preview.build_overlay_layer(
+                synthetic_frame, None, region, "change", layer, {}
+            )
+            is None
+        ), f"{layer} should need a previous frame"
 
 
 def test_overlay_layer_encodes_at_native_resolution(
@@ -323,10 +409,16 @@ def test_overlay_layer_scope_helper() -> None:
 # when the region grows — a proxy for "arrows / edges actually got bigger".
 
 
-def _green_arrow_pixel_count(img: np.ndarray) -> int:
-    """Count BGR (40, 220, 40) arrow pixels."""
-    b, g, r = cv2.split(img)
-    return int(((g > 150) & (r < 100) & (b < 100)).sum())
+def _arrow_pixel_count(img: np.ndarray) -> int:
+    """Count colored arrow pixels.
+
+    Arrows are magnitude-colored (JET), so match any saturated pixel: the
+    gray-frame background has R==G==B (zero channel spread), whereas an arrow's
+    color has a wide spread between its max and min channel.
+    """
+    b, g, r = cv2.split(img.astype(np.int16))
+    spread = np.maximum(np.maximum(b, g), r) - np.minimum(np.minimum(b, g), r)
+    return int((spread > 40).sum())
 
 
 def test_overlay_flow_arrow_scales_with_region() -> None:
@@ -356,12 +448,12 @@ def test_overlay_flow_arrow_scales_with_region() -> None:
     assert small.shape[:2] == (small_region["h"], small_region["w"])
     assert large.shape[:2] == (large_region["h"], large_region["w"])
 
-    small_green = _green_arrow_pixel_count(small)
-    large_green = _green_arrow_pixel_count(large)
-    assert small_green > 0, "small region produced no arrows"
-    assert large_green > small_green * 4, (
+    small_arrows = _arrow_pixel_count(small)
+    large_arrows = _arrow_pixel_count(large)
+    assert small_arrows > 0, "small region produced no arrows"
+    assert large_arrows > small_arrows * 4, (
         f"larger region arrows should occupy substantially more pixels "
-        f"(small={small_green}, large={large_green})"
+        f"(small={small_arrows}, large={large_arrows})"
     )
 
 

@@ -1232,8 +1232,15 @@ def test_api_preview_layers_catalog(client) -> None:
     assert "inactivity" not in layers
     # Multi-layer tools list each layer with id/label/scope.
     change_layers = layers["change"]
-    assert {layer["id"] for layer in change_layers} == {"gray_blur", "abs_diff", "mask"}
+    assert {layer["id"] for layer in change_layers} == {
+        "changes",
+        "gray_blur",
+        "abs_diff",
+        "mask",
+    }
     assert all(layer["scope"] == "region" for layer in change_layers)
+    # The on-frame "changes" layer is listed first so it is the overlay default.
+    assert change_layers[0]["id"] == "changes"
     # Template's match heatmap is frame-scoped.
     template_layers = layers["template"]
     assert any(

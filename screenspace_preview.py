@@ -33,6 +33,11 @@ _MAX_WIDTH = 512
 _PANEL_GAP = 6
 _LABEL_HEIGHT = 16
 
+# Colormap for diff/magnitude visualizations (change diff, SSIM difference, flow
+# arrows). Python-only — not mirrored to JS. JET matches the template heatmap
+# path and _colorize_accumulator in screenspace_heatmap.py.
+_DIFF_COLORMAP = cv2.COLORMAP_JET
+
 
 def build_preview(
     frame: "np.ndarray",
@@ -88,11 +93,15 @@ def build_preview(
 OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
     "color": [("region", "Region (≤64 px)", "region")],
     "change": [
+        ("changes", "Changes on frame", "region"),
         ("gray_blur", "Gray blur", "region"),
         ("abs_diff", "Abs diff", "region"),
         ("mask", "Threshold mask", "region"),
     ],
-    "similarity": [("gray", "Current gray", "region")],
+    "similarity": [
+        ("gray", "Current gray", "region"),
+        ("ssim_diff", "SSIM diff", "region"),
+    ],
     "text": [("gray", "OCR input (gray)", "region")],
     "numbers": [("gray", "OCR input (gray)", "region")],
     "template": [("match_heatmap", "Match heatmap", "frame")],
@@ -160,6 +169,9 @@ def build_overlay_layer(
         gray = cv2.cvtColor(cv2.GaussianBlur(pixels, (k, k), 0), cv2.COLOR_BGR2GRAY)
         return _gray_to_bgr(gray)
 
+    if tool == "similarity" and layer == "ssim_diff":
+        return _overlay_ssim_diff(pixels, params)
+
     if tool in ("text", "numbers") and layer == "gray":
         if params.get("ocr_preprocess"):
             pixels = screenspace_ocr._preprocess_for_ocr(pixels)
@@ -208,8 +220,10 @@ def _overlay_change(
     )
     diff = cv2.absdiff(prev_gray, curr_gray)
     if layer == "abs_diff":
-        return _gray_to_bgr(diff)
-    if layer == "mask":
+        # Colorize the raw magnitude so faint change reads as color rather than a
+        # near-black grayscale image; keep static (zero) pixels black to blend.
+        return _colorize_diff(diff, keep_zero_black=True)
+    if layer in ("mask", "changes"):
         noise = int(params.get("noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD))
         _, mask = cv2.threshold(diff, noise, 255, cv2.THRESH_BINARY)
         mk = config.SCREENSPACE_MORPH_KERNEL
@@ -222,12 +236,49 @@ def _overlay_change(
             )
             if region_mask is not None:
                 mask_clean = cv2.bitwise_and(mask_clean, region_mask)
-        # Render mask as cyan-on-black so it reads against varying frame content
-        # when alpha-blended onto the live frame canvas.
-        out = np.zeros((mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8)
-        out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
-        return out
+        if layer == "mask":
+            # Render mask as cyan-on-black so it reads against varying frame
+            # content when alpha-blended onto the live frame canvas.
+            out = np.zeros(
+                (mask_clean.shape[0], mask_clean.shape[1], 3), dtype=np.uint8
+            )
+            out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
+            return out
+        # layer == "changes": tint the real region where it changed (same as the
+        # composite's "changes on frame" panel). Unchanged pixels keep the live
+        # frame so the default overlay does not darken it.
+        return _tint_changes(pixels, diff, mask_clean)
     return None
+
+
+def _overlay_ssim_diff(pixels: "np.ndarray", params: dict[str, Any]) -> "np.ndarray":
+    """Colorized SSIM dissimilarity map (region-native). Warm = dissimilar.
+
+    Similar (dissimilarity 0) stays black so it blends cleanly over the live
+    frame. Mirrors the Similarity scan's preprocessing via
+    ``screenspace_primitives.ssim_diff_map``. With no captured reference there is
+    nothing to diff, so returns the live region (a no-op overlay) rather than
+    ``None`` — which would 500 the preview route and leave the overlay stale.
+    """
+    ref = params.get("reference_frame")
+    if not (isinstance(ref, np.ndarray) and ref.size > 0):
+        return pixels.copy()
+    if ref.shape[:2] != pixels.shape[:2]:
+        ref = cv2.resize(
+            ref, (pixels.shape[1], pixels.shape[0]), interpolation=cv2.INTER_AREA
+        )
+    _score, smap = screenspace_primitives.ssim_diff_map(pixels, ref)
+    dis = np.clip((1.0 - smap) * 0.5, 0.0, 1.0)
+    colored = _colorize_diff((dis * 255).astype(np.uint8), keep_zero_black=True)
+    # ssim_diff_map runs at <=256; scale back to the region's native pixels so the
+    # overlay paints pixel-aligned to the frame.
+    if colored.shape[:2] != pixels.shape[:2]:
+        colored = cv2.resize(
+            colored,
+            (pixels.shape[1], pixels.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
+    return colored
 
 
 def _draw_flow_arrows(
@@ -276,13 +327,13 @@ def _draw_flow_arrows(
     if not samples or max_mag <= 0:
         return
     arrow_scale = max_arrow_len / max_mag
-    for vx, vy, fx, fy, _m in samples:
+    for vx, vy, fx, fy, m in samples:
         sx, sy = int(round(vx)), int(round(vy))
         ex = int(round(vx + fx * arrow_scale))
         ey = int(round(vy + fy * arrow_scale))
-        cv2.arrowedLine(
-            vis, (sx, sy), (ex, ey), (40, 220, 40), thickness, tipLength=0.3
-        )
+        # Color-code by magnitude: slow = blue, fast = red (JET).
+        color = _magnitude_color(m / max_mag)
+        cv2.arrowedLine(vis, (sx, sy), (ex, ey), color, thickness, tipLength=0.3)
 
 
 def _overlay_flow(
@@ -408,6 +459,50 @@ def _gray_to_bgr(gray: "np.ndarray") -> "np.ndarray":
     if gray.ndim == 3:
         return gray
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+
+def _colorize_diff(
+    gray: "np.ndarray", *, keep_zero_black: bool = False
+) -> "np.ndarray":
+    """Colorize a single-channel 0-255 magnitude map with JET → BGR uint8.
+
+    Uses a fixed 0-255 scale (no per-frame normalization) so the color reflects
+    the *absolute* change magnitude and faint diffs that read as near-black in
+    grayscale become visible color. With ``keep_zero_black``, exactly-zero
+    magnitudes are forced back to black (JET maps 0 to blue) so the layer
+    alpha-blends cleanly when painted over the live frame.
+    """
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+    colored = cv2.applyColorMap(gray, _DIFF_COLORMAP)
+    if keep_zero_black:
+        colored[gray == 0] = 0
+    return colored
+
+
+def _magnitude_color(t: float) -> tuple[int, int, int]:
+    """Map a normalized magnitude in [0, 1] to a BGR color via the diff colormap."""
+    v = int(round(max(0.0, min(1.0, t)) * 255))
+    bgr = cv2.applyColorMap(np.array([[v]], dtype=np.uint8), _DIFF_COLORMAP)[0, 0]
+    return int(bgr[0]), int(bgr[1]), int(bgr[2])
+
+
+def _tint_changes(
+    pixels: "np.ndarray", diff: "np.ndarray", mask_clean: "np.ndarray"
+) -> "np.ndarray":
+    """Region pixels with the changed pixels tinted warm (colorized magnitude).
+
+    Unchanged pixels keep the real frame content, so this reads as change in
+    context — and as an on-frame overlay it does not darken the live frame, which
+    ``renderOverlay`` alpha-blends whole at 0.7 (a black background would drop
+    unchanged areas to ~30% brightness).
+    """
+    out = pixels.copy()
+    sel = mask_clean > 0
+    if np.any(sel):
+        colored = _colorize_diff(diff, keep_zero_black=True)
+        out[sel] = (0.35 * pixels[sel] + 0.65 * colored[sel]).astype(np.uint8)
+    return out
 
 
 def _fit_width(img: "np.ndarray", target_w: int) -> "np.ndarray":
@@ -588,11 +683,15 @@ def _preview_change(
         denom = float(mask_clean.size)
     ratio = float(np.count_nonzero(mask_clean)) / denom if denom else 0.0
 
+    # "Changes on frame": tint the real region warm where the cleaned mask fired,
+    # so the change reads in context (colorized magnitude, not a bare binary mask).
+    changes = _tint_changes(pixels, diff, mask_clean)
+
     return _hstack_panels(
         [
             _label_panel(_fit_width(curr_gray, 160), "gray-blur"),
-            _label_panel(_fit_width(diff, 160), "abs-diff"),
-            _label_panel(_fit_width(mask_clean, 160), f"mask (ratio {ratio:.3f})"),
+            _label_panel(_fit_width(_colorize_diff(diff), 160), "abs-diff"),
+            _label_panel(_fit_width(changes, 160), f"changes (ratio {ratio:.3f})"),
         ]
     )
 
@@ -639,6 +738,20 @@ def _preview_similarity(
             cv2.GaussianBlur(ref_small, (k, k), 0), cv2.COLOR_BGR2GRAY
         )
         panels.append(_label_panel(_fit_width(ref_gray, 200), "reference gray"))
+
+        # SSIM difference map — visualize what the Similarity tool actually
+        # scores (warm = dissimilar). Reuses the scan's preprocessing.
+        ref_for_ssim = ref_frame
+        if ref_for_ssim.shape[:2] != pixels.shape[:2]:
+            ref_for_ssim = cv2.resize(
+                ref_for_ssim,
+                (pixels.shape[1], pixels.shape[0]),
+                interpolation=cv2.INTER_AREA,
+            )
+        score, smap = screenspace_primitives.ssim_diff_map(pixels, ref_for_ssim)
+        dis = np.clip((1.0 - smap) * 0.5, 0.0, 1.0)
+        heat = _colorize_diff((dis * 255).astype(np.uint8))
+        panels.append(_label_panel(_fit_width(heat, 200), f"SSIM diff ({score:.3f})"))
     return _hstack_panels(panels)
 
 

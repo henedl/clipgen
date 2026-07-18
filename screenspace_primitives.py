@@ -558,6 +558,29 @@ def compute_frame_diff(
     return float(np.count_nonzero(diff)) / float(diff.size)
 
 
+def _ssim_preprocess(
+    region_a: np.ndarray, region_b: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Shared SSIM front-end: resize the pair to <=256 px, blur, grayscale.
+
+    Single source of truth for the preprocessing used by both
+    ``regions_are_similar`` (scalar SSIM on the scan hot path) and
+    ``ssim_diff_map`` (per-pixel map for the Model view preview), so the preview
+    mirrors exactly what the scan scores.
+    """
+    max_dim = 256
+    h, w = region_a.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        region_a = cv2.resize(region_a, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        region_b = cv2.resize(region_b, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    k = config.SCREENSPACE_BLUR_KERNEL
+    a_gray = cv2.cvtColor(cv2.GaussianBlur(region_a, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    b_gray = cv2.cvtColor(cv2.GaussianBlur(region_b, (k, k), 0), cv2.COLOR_BGR2GRAY)
+    return a_gray, b_gray
+
+
 def regions_are_similar(
     region_a: np.ndarray,
     region_b: np.ndarray,
@@ -570,22 +593,29 @@ def regions_are_similar(
     """
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
-    max_dim = 256
-    h, w = region_a.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
-        region_a = cv2.resize(region_a, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        region_b = cv2.resize(region_b, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    k = config.SCREENSPACE_BLUR_KERNEL
-    a_blur = cv2.GaussianBlur(region_a, (k, k), 0)
-    b_blur = cv2.GaussianBlur(region_b, (k, k), 0)
-    a_gray = cv2.cvtColor(a_blur, cv2.COLOR_BGR2GRAY)
-    b_gray = cv2.cvtColor(b_blur, cv2.COLOR_BGR2GRAY)
+    a_gray, b_gray = _ssim_preprocess(region_a, region_b)
     from skimage.metrics import structural_similarity as ssim
 
     score = float(ssim(a_gray, b_gray))
     return score >= threshold, score
+
+
+def ssim_diff_map(
+    region_a: np.ndarray, region_b: np.ndarray
+) -> tuple[float, np.ndarray]:
+    """SSIM score plus the per-pixel structural-similarity map.
+
+    Runs ``structural_similarity(..., full=True)`` over the same <=256/blur/gray
+    preprocessing as ``regions_are_similar``. Preview-only (off the scan hot
+    path), so the extra full-map cost never touches per-frame scanning. Returns
+    ``(score, ssim_map)`` where ``ssim_map`` is float in roughly [-1, 1] at the
+    preprocessed (<=256 px) resolution (higher = more similar).
+    """
+    a_gray, b_gray = _ssim_preprocess(region_a, region_b)
+    from skimage.metrics import structural_similarity as ssim
+
+    score, smap = ssim(a_gray, b_gray, full=True)
+    return float(score), np.asarray(smap, dtype=np.float32)
 
 
 def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":

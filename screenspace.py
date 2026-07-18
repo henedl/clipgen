@@ -70,6 +70,7 @@ from screenspace_primitives import (
     region_masker,
     regions_are_similar,
     resolve_region_request,
+    ssim_diff_map,
 )
 from screenspace_ocr import (
     _preprocess_for_ocr,
