@@ -24,6 +24,7 @@ import os
 import shutil
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,15 +71,17 @@ _RUN_TERMINAL = {
     workflows.RUN_STATUS_CANCELLED,
 }
 
-# ---- Watch-dir trigger state (P6) ----
+# ---- Auto-run trigger state (P6 + W7 chaining) ----
 #
 # A single polling daemon thread (no extra dependency — mirrors the screenspace
-# worker's daemon posture) watches the input dir for newly-arrived participant
-# videos and auto-runs the armed blueprint, one single run per pid. ``_watch_seen``
-# is seeded at startup so pre-existing videos never fire; a pid must stat
-# identically across two consecutive polls (the partial-copy guard) before it
-# fires. The thread always runs (cheap glob + a few stats per tick) so the
-# seen-set stays current, meaning arming later never retro-fires the backlog.
+# worker's daemon posture) checks each trigger type's source while a blueprint
+# of that type is armed: the input dir for new participant videos, the
+# transcripts manifest for fresh ``transcribed_at`` stamps, and the screenspace
+# manifest for newly-completed tasks — one single run per arrival/completion.
+# Baselines are seeded at startup and re-seeded on arm so the pre-existing
+# backlog never fires; a new video must additionally stat identically across
+# two consecutive polls (the partial-copy guard). With nothing armed a tick
+# does no I/O at all.
 _watch_seen: set[str] = set()  # pids already accounted for (never fire again)
 _watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mtime)
 # Chaining-trigger baselines: completions already accounted for (never re-fire).
@@ -819,13 +822,70 @@ def _precompute_shared_nodes(
     return seeded
 
 
-def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
-    """Coordinator thread: run the blueprint once per participant, sequentially.
+def _run_batch_child(
+    run_id: str,
+    participant: str,
+    batch_id: str,
+    blueprint: dict[str, Any],
+    seed_results: dict[str, dict[str, Any]],
+    batch_cancel: threading.Event,
+) -> None:
+    """One batch child, start to finish (register → run → persist → evict).
 
-    Continue-on-error is mandatory — one bad participant must not sink the batch.
-    A cancel signals the in-flight child (via its runner) and short-circuits every
-    remaining child to ``cancelled``. Each child runner is evicted from ``_runs``
-    once persisted (its summary lives in the manifest thereafter).
+    Self-contained so the coordinator can run children sequentially or in a
+    thread pool: every shared-state touch is already behind ``_runs_lock`` /
+    ``_manifest_lock``, per-run sidecar dirs are keyed by run id, and
+    ``files.get_unique_filename`` reserves output paths atomically.
+    """
+    child_cancel = threading.Event()
+    if batch_cancel.is_set():
+        child_cancel.set()  # short-circuits run() to all-skipped + cancelled
+    ctx = _build_node_context(child_cancel)
+    child_bp = workflows.bind_participant(blueprint, participant)
+
+    def _on_child_update() -> None:
+        _notify_run_clients(run_id)
+        _notify_batch_clients(batch_id)
+
+    runner = workflows.WorkflowRunner(
+        run_id,
+        child_bp,
+        ctx,
+        on_update=_on_child_update,
+        participant=participant,
+        batch_id=batch_id,
+        # Every child gets its own deep copy: downstream executors mutate
+        # seeded values in place (files.prepare_clip adds `times` to sheet
+        # records), so one shared dict would cross-contaminate siblings —
+        # quasi-benign sequentially, an outright race with workers > 1.
+        seed_results=copy.deepcopy(seed_results),
+    )
+    with _runs_lock:
+        _runs[run_id] = runner
+    # A cancel that lands between the check above and run() still reaches this
+    # child: the cancel endpoint cancels every live runner tagged to the batch.
+    try:
+        runner.run()
+    except Exception as exc:  # belt-and-suspenders; run() catches per node
+        utils.error_print(f"workflow batch child {participant} crashed: {exc}")
+    _persist_run(runner.snapshot())
+    _notify_run_clients(run_id)
+    _notify_batch_clients(batch_id)
+    with _runs_lock:
+        _runs.pop(run_id, None)
+
+
+def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
+    """Coordinator thread: run the blueprint once per participant.
+
+    Sequential by default; ``config.WORKFLOWS_BATCH_WORKERS`` > 1 opts into a
+    thread pool over the children (clamped to 4 — heavy nodes serialize on
+    Whisper/ffmpeg/OCR anyway, so wide pools mostly add memory pressure).
+    Continue-on-error is mandatory — one bad participant must not sink the
+    batch. A cancel signals the in-flight children (via their runners) and
+    short-circuits every not-yet-started child to ``cancelled``. Each child
+    runner is evicted from ``_runs`` once persisted (its summary lives in the
+    manifest thereafter).
     """
     with _batches_lock:
         record = _batches.get(batch_id)
@@ -840,39 +900,31 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
         blueprint, _build_node_context(threading.Event())
     )
 
-    for run_id, participant in plan:
-        child_cancel = threading.Event()
-        if cancel_event.is_set():
-            child_cancel.set()  # short-circuits run() to all-skipped + cancelled
-        ctx = _build_node_context(child_cancel)
-        child_bp = workflows.bind_participant(blueprint, participant)
-
-        def _on_child_update(rid: str = run_id) -> None:
-            _notify_run_clients(rid)
-            _notify_batch_clients(batch_id)
-
-        runner = workflows.WorkflowRunner(
-            run_id,
-            child_bp,
-            ctx,
-            on_update=_on_child_update,
-            participant=participant,
-            batch_id=batch_id,
-            seed_results=seed_results,
-        )
-        with _runs_lock:
-            _runs[run_id] = runner
-        # A cancel that lands between the check above and run() still reaches this
-        # child: the cancel endpoint cancels every live runner tagged to the batch.
-        try:
-            runner.run()
-        except Exception as exc:  # belt-and-suspenders; run() catches per node
-            utils.error_print(f"workflow batch child {participant} crashed: {exc}")
-        _persist_run(runner.snapshot())
-        _notify_run_clients(run_id)
-        _notify_batch_clients(batch_id)
-        with _runs_lock:
-            _runs.pop(run_id, None)
+    workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
+    if workers == 1 or len(plan) <= 1:
+        for run_id, participant in plan:
+            _run_batch_child(
+                run_id, participant, batch_id, blueprint, seed_results, cancel_event
+            )
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(plan)),
+            thread_name_prefix=f"workflow-{batch_id}",
+        ) as pool:
+            futures = [
+                pool.submit(
+                    _run_batch_child,
+                    run_id,
+                    participant,
+                    batch_id,
+                    blueprint,
+                    seed_results,
+                    cancel_event,
+                )
+                for run_id, participant in plan
+            ]
+            for future in futures:
+                future.result()  # child bodies swallow their own errors
 
     with _batches_lock:
         _batches.pop(batch_id, None)

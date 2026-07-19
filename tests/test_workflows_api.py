@@ -1525,3 +1525,128 @@ def test_disarm_uses_blueprints_current_type(wf_client):
         "type": "scan_event",
         "enabled": False,
     }
+
+
+# ---- Parallel batch children (WORKFLOWS_BATCH_WORKERS) ----
+
+
+def test_batch_workers_run_children_concurrently(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setattr(config, "WORKFLOWS_BATCH_WORKERS", 2, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02", "P03"))
+
+    # An executor that parks until released, recording peak concurrency.
+    release = threading.Event()
+    lock = threading.Lock()
+    state = {"active": 0, "peak": 0}
+
+    def parked(ctx, inputs, params):
+        with lock:
+            state["active"] += 1
+            state["peak"] = max(state["peak"], state["active"])
+        release.wait(5.0)
+        with lock:
+            state["active"] -= 1
+        return {"video": {}, "participant": {"id": ""}}
+
+    monkeypatch.setitem(workflows.NODE_TYPES["video_source"], "execute", parked)
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    # Wait until two children are parked inside the executor simultaneously.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and state["peak"] < 2:
+        time.sleep(0.02)
+    release.set()
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "completed"
+    assert state["peak"] == 2  # two workers, three children — capped at the pool
+
+
+def test_batch_children_get_isolated_seed_copies(wf_client, monkeypatch):
+    # Downstream executors mutate seeded values in place; siblings must each get
+    # a pristine deep copy (a shared dict would cross-contaminate — a race with
+    # workers > 1, and quasi-benign-but-wrong even sequentially).
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02"))
+
+    seen: list[int] = []
+    orig = workflows.NODE_TYPES["video_source"]["execute"]
+
+    def mutating(ctx, inputs, params):
+        return orig(ctx, inputs, params)
+
+    monkeypatch.setattr(
+        workflows_server,
+        "_precompute_shared_nodes",
+        lambda blueprint, ctx: {"s": {"clips": {"records": [], "study": "s"}}},
+    )
+
+    def observing_make_clips(ctx, inputs, params):
+        clips = inputs.get("clips") or {}
+        records = clips.get("records")
+        # Record the length AT OBSERVATION TIME (not the live reference), then
+        # mutate — the next child must still observe a pristine copy.
+        seen.append(len(records) if isinstance(records, list) else -1)
+        if isinstance(records, list):
+            records.append("mutated")  # simulate prepare_clip-style mutation
+        return {"artifacts": {"artifacts": [], "study": "", "count": 0}}
+
+    monkeypatch.setitem(workflows.NODE_TYPES["video_source"], "execute", mutating)
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["make_clips"], "execute", observing_make_clips
+    )
+    bp_id = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {}},
+            {"id": "s", "type": "sheet_selection", "params": {"selector": "1"}},
+            {"id": "m", "type": "make_clips", "params": {}},
+        ],
+        edges=[{"from": "s", "fromPort": "clips", "to": "m", "toPort": "clips"}],
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "completed"
+    # Both children saw a pristine (empty) records list — the first child's
+    # mutation never leaked into the second's seed.
+    assert seen == [0, 0]
+
+
+def test_batch_cancel_with_parallel_workers(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    monkeypatch.setattr(config, "WORKFLOWS_BATCH_WORKERS", 2, raising=False)
+    _mock_participants(monkeypatch, ids=("P01", "P02", "P03", "P04"))
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def parked(ctx, inputs, params):
+        started.set()
+        release.wait(5.0)
+        if ctx.cancel_flag():
+            raise RuntimeError("cancelled mid-node")
+        return {"video": {}, "participant": {"id": ""}}
+
+    monkeypatch.setitem(workflows.NODE_TYPES["video_source"], "execute", parked)
+    bp_id = _make_blueprint(
+        wf_client, nodes=[{"id": "v", "type": "video_source", "params": {}}]
+    )
+    batch = wf_client.post(
+        "/workflows/api/batches", json={"blueprintId": bp_id}
+    ).get_json()["batch"]
+    assert started.wait(5.0)
+    assert (
+        wf_client.post(
+            f"/workflows/api/batches/{batch['id']}/cancel", json={}
+        ).status_code
+        == 200
+    )
+    release.set()
+    final = _wait_batch_terminal(wf_client, batch["id"])
+    assert final["status"] == "cancelled"

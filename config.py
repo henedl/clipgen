@@ -162,6 +162,12 @@ TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
 # stability window is 2x this (a file must stat identically across two polls).
 # Server-only — never mirrored to the frontend.
 WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
+# Concurrent participants per Workflows whole-study batch. 1 = sequential (the
+# default). Values >1 run child runs in a thread pool, multiplying peak
+# ffmpeg/Whisper/OCR/Ollama load — heavy graphs (Transcribe, Detect) serialize
+# on those shared resources anyway and rarely benefit past 2. The server clamps
+# to [1, 4]. Server-only — never mirrored to the frontend.
+WORKFLOWS_BATCH_WORKERS: int = 1
 CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
 COMPOSER_MANIFEST_FILENAME: str = (
     "composer_manifest.json"  # Composer cut pairs, trims, annotations, UI state
