@@ -321,3 +321,107 @@ def test_dedup_clips_untimed_record_does_not_reset_overlap_tracker():
     cats = [r["category"] for r in out["records"]]
     assert "drop" not in cats  # the later overlapping record is still merged away
     assert "keep" in cats and "untimed" in cats
+
+
+# ---- compound clause (combine / field2 / op2 / value2) ----
+
+
+def test_filter_events_and_clause_narrows():
+    env = _events((0.9, 1, 2), (0.9, 8, 9), (0.3, 1, 2))
+    out = _exec(
+        "filter_events",
+        {"in": env},
+        {
+            "field": "confidence",
+            "op": ">=",
+            "value": "0.8",
+            "combine": "AND",
+            "field2": "start",
+            "op2": "<",
+            "value2": "5",
+        },
+    )["out"]
+    # Only the high-confidence event that also starts before 5s survives.
+    assert [(e["confidence"], e["time_in"]) for e in out["events"]] == [(0.9, 1)]
+
+
+def test_filter_events_or_clause_widens():
+    env = _events((0.9, 1, 2), (0.3, 8, 9), (0.2, 1, 2))
+    out = _exec(
+        "filter_events",
+        {"in": env},
+        {
+            "field": "confidence",
+            "op": ">=",
+            "value": "0.8",
+            "combine": "OR",
+            "field2": "start",
+            "op2": ">=",
+            "value2": "5",
+        },
+    )["out"]
+    # High confidence OR late start; the low-confidence early event is dropped.
+    assert [(e["confidence"], e["time_in"]) for e in out["events"]] == [
+        (0.9, 1),
+        (0.3, 8),
+    ]
+
+
+def test_filter_combine_off_ignores_second_clause():
+    env = _events((0.9, 1, 2), (0.3, 5, 6))
+    out = _exec(
+        "filter_events",
+        {"in": env},
+        {
+            "field": "confidence",
+            "op": ">=",
+            "value": "0.8",
+            "combine": "off",
+            "field2": "start",
+            "op2": ">=",
+            "value2": "999",  # would kill everything if evaluated
+        },
+    )["out"]
+    assert [e["confidence"] for e in out["events"]] == [0.9]
+
+
+def test_filter_segments_mixed_text_and_numeric_clauses():
+    env = _segments(
+        (0, 10, "checkout was confusing"), (0, 1, "checkout ok"), (0, 10, "fine")
+    )
+    out = _exec(
+        "filter_segments",
+        {"in": env},
+        {
+            "field": "text",
+            "op": "contains",
+            "value": "checkout",
+            "combine": "AND",
+            "field2": "duration",
+            "op2": ">=",
+            "value2": "5",
+        },
+    )["out"]
+    assert [s["text"] for s in out["segments"]] == ["checkout was confusing"]
+
+
+def test_partition_compound_clause_is_complementary():
+    env = _events((0.9, 1, 2), (0.5, 8, 9), (0.2, 3, 4))
+    res = _exec(
+        "partition_events",
+        {"in": env},
+        {
+            "field": "confidence",
+            "op": ">=",
+            "value": "0.8",
+            "combine": "OR",
+            "field2": "start",
+            "op2": ">=",
+            "value2": "5",
+        },
+    )
+    matched = res["matched"]["events"]
+    unmatched = res["unmatched"]["events"]
+    assert len(matched) + len(unmatched) == 3
+    assert [e["confidence"] for e in matched] == [0.9, 0.5]
+    assert [e["confidence"] for e in unmatched] == [0.2]

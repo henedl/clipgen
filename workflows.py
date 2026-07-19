@@ -359,6 +359,28 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
+    "transcript_export": {
+        "id": "transcript_export",
+        "label": "Transcript Export",
+        "description": "Write a transcript file (Markdown, SRT, or VTT) from a transcript or segments.",
+        "domain": "transcript",
+        "category": "Transcript",
+        "inputs": [
+            {"name": "transcript", "type": "transcript", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "format",
+                "type": "enum",
+                "default": config.TRANSCRIBE_FORMAT,
+                "choices": ["md", "srt", "vtt"],
+                "label": "Format",
+            },
+        ],
+        "requires": [],
+    },
     # ---- Thinking (Ollama) ----
     "summarize": {
         "id": "summarize",
@@ -475,6 +497,27 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": "change",
                 "choices": ["template", "flow", "change"],
                 "label": "Style (needs matching upstream detector)",
+            },
+            {
+                "name": "output",
+                "type": "enum",
+                "default": "image",
+                "choices": ["image", "gif", "rolling_gif"],
+                "label": "Output",
+            },
+            {
+                "name": "frames",
+                "type": "number",
+                "default": 24,
+                "min": 2,
+                "label": "GIF frames",
+            },
+            {
+                "name": "window",
+                "type": "number",
+                "default": 6,
+                "min": 1,
+                "label": "Rolling window (frames)",
             },
         ],
         "requires": ["videoDir"],
@@ -632,6 +675,28 @@ NODE_TYPES: dict[str, NodeType] = {
             },
         ],
         "requires": ["videoDir"],
+    },
+    "data_export": {
+        "id": "data_export",
+        "label": "Data Export",
+        "description": "Export events and segments as analysis-ready JSON/CSV tables.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "events", "type": "events", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "format",
+                "type": "enum",
+                "default": "both",
+                "choices": ["both", "json", "csv"],
+                "label": "Format",
+            },
+        ],
+        "requires": [],
     },
     "timeline_viewer": {
         "id": "timeline_viewer",
@@ -1364,6 +1429,61 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        "id": "builtin_transcript_exports",
+        "name": "Transcribe → Transcript + Data Export",
+        "builtin": True,
+        "createdAt": "",
+        "nodes": [
+            {
+                "id": "s1",
+                "type": "video_source",
+                "params": {"participant": ""},
+                "position": {"x": 40, "y": 160},
+            },
+            {
+                "id": "s2",
+                "type": "transcribe",
+                "params": {"language": "auto"},
+                "position": {"x": 340, "y": 160},
+            },
+            {
+                "id": "s3",
+                "type": "transcript_export",
+                "params": {"format": config.TRANSCRIBE_FORMAT},
+                "position": {"x": 640, "y": 80},
+            },
+            {
+                "id": "s4",
+                "type": "data_export",
+                "params": {"format": "both"},
+                "position": {"x": 640, "y": 240},
+            },
+        ],
+        "edges": [
+            {
+                "id": "se1",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s2",
+                "toPort": "video",
+            },
+            {
+                "id": "se2",
+                "from": "s2",
+                "fromPort": "transcript",
+                "to": "s3",
+                "toPort": "transcript",
+            },
+            {
+                "id": "se3",
+                "from": "s2",
+                "fromPort": "segments",
+                "to": "s4",
+                "toPort": "segments",
+            },
+        ],
+    },
 ]
 
 
@@ -1564,6 +1684,62 @@ def _exec_find_word(
         "timeRange": {"ranges": ranges, "source": source},
         "timestamps": {"times": times, "source": source},
     }
+
+
+def _exec_transcript_export(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import files
+    import transcripts
+
+    transcript_in = inputs.get("transcript") or {}
+    seg_in = inputs.get("segments") or {}
+    src = transcript_in.get("source") or seg_in.get("source") or {}
+    study = str(src.get("study", "") or "")
+    fmt = str(params.get("format", "") or "") or config.TRANSCRIBE_FORMAT
+    if fmt not in ("md", "srt", "vtt"):
+        fmt = "md"
+
+    # Prefer the full transcript (carries language/model); a bare segments wire
+    # still exports, just with empty metadata.
+    if transcript_in.get("segments"):
+        base: dict[str, Any] = transcript_in
+    elif seg_in.get("segments"):
+        base = {
+            "segments": seg_in.get("segments"),
+            "language": "",
+            "model": "",
+            "source_file": str(src.get("source_filename", "") or ""),
+        }
+    else:
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No transcript or segments wired",
+        }
+    result = cast(
+        transcripts.TranscriptResult,
+        {
+            "segments": list(base.get("segments") or []),
+            "language": str(base.get("language", "") or ""),
+            "model": str(base.get("model", "") or ""),
+            "source_file": str(base.get("source_file", "") or ""),
+        },
+    )
+
+    participant = str(src.get("participant", "") or "")
+    stem = f"transcript_{participant}" if participant else "transcript"
+    ext = transcripts.get_transcript_extension(fmt)
+    output_path = files.get_unique_filename(f"{stem}{ext}", file_format=ext)
+    if not transcripts.write_transcript(result, output_path, fmt=fmt):
+        files.release_reservation(output_path)
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Transcript couldn't be written",
+        }
+    # "export" (not "transcript") — the viewer routes it to the Attachments
+    # pane's document card; "transcript" is a timeline card type there.
+    rec = _attachment_artifact("export", output_path, src, f"Transcript ({fmt})")
+    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
 # ---- Thinking (Ollama) ----
@@ -2227,24 +2403,52 @@ def _exec_heatmap(
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
     height = int(props.get("height", 0) or 0) or 1080
-    output_path = files.get_unique_filename("heatmap.png", file_format=".png")
-    if style == "template":
-        result = screenspace_heatmap.generate_template_heatmap(
-            results, width, height, output_path
-        )
-    elif style == "flow":
-        result = screenspace_heatmap.generate_flow_heatmap(
-            results, width, height, output_path
-        )
+    output = str(params.get("output", "image") or "image")
+    if output not in ("image", "gif", "rolling_gif"):
+        output = "image"
+    if output == "image":
+        output_path = files.get_unique_filename("heatmap.png", file_format=".png")
+        if style == "template":
+            result = screenspace_heatmap.generate_template_heatmap(
+                results, width, height, output_path
+            )
+        elif style == "flow":
+            result = screenspace_heatmap.generate_flow_heatmap(
+                results, width, height, output_path
+            )
+        else:
+            result = screenspace_heatmap.generate_change_heatmap(
+                results, width, height, output_path
+            )
+        failure_note = "Heatmap couldn't be generated"
     else:
-        result = screenspace_heatmap.generate_change_heatmap(
-            results, width, height, output_path
-        )
+        output_path = files.get_unique_filename("heatmap.gif", file_format=".gif")
+        num_frames = int(float(params.get("frames", 24) or 24))
+        if output == "gif":
+            result = screenspace_heatmap.generate_heatmap_gif(
+                results,
+                width,
+                height,
+                output_path,
+                heatmap_type=style,
+                num_frames=num_frames,
+            )
+        else:
+            result = screenspace_heatmap.generate_rolling_heatmap_gif(
+                results,
+                width,
+                height,
+                output_path,
+                heatmap_type=style,
+                num_frames=num_frames,
+                window_frames=int(float(params.get("window", 6) or 6)),
+            )
+        failure_note = "Not enough detector results for an animated heatmap"
     if not result:
         files.release_reservation(output_path)
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Heatmap couldn't be generated",
+            "__note__": failure_note,
         }
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
@@ -2303,6 +2507,93 @@ def _exec_build_reel(
         "artifacts": {"artifacts": reels, "study": study, "count": count},
         "manifest": {"path": None, "records": reels},
     }
+
+
+def _exec_data_export(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import data_export
+    import files
+
+    events_in = inputs.get("events") or {}
+    seg_in = inputs.get("segments") or {}
+    src = events_in.get("source") or seg_in.get("source") or {}
+    study = str(src.get("study", "") or "")
+    fmt = str(params.get("format", "both") or "both")
+    if fmt not in ("both", "json", "csv"):
+        fmt = "both"
+
+    participant = str(src.get("participant", "") or "")
+    suffix = f"_{participant}" if participant else ""
+    # (stem, rows, preferred CSV column order, description) per wired surface.
+    surfaces: list[tuple[str, list[dict[str, Any]], tuple[str, ...], str]] = []
+    events = list(events_in.get("events") or [])
+    if events:
+        surfaces.append(
+            (
+                f"export_events{suffix}",
+                data_export.build_screenspace_events(
+                    {"events": events}, include_excluded=True
+                ),
+                data_export.SCREENSPACE_EVENT_COLUMNS,
+                "Events export",
+            )
+        )
+    segments = list(seg_in.get("segments") or [])
+    if segments:
+        # build_transcript_segments reads a transcripts-manifest envelope;
+        # synthesize one around the wired segments.
+        manifest = {
+            "source_transcripts": {
+                (participant or "unknown"): {
+                    "segments": segments,
+                    "source_file": str(src.get("source_filename", "") or ""),
+                }
+            }
+        }
+        surfaces.append(
+            (
+                f"export_segments{suffix}",
+                data_export.build_transcript_segments(manifest),
+                data_export._TRANSCRIPT_SEGMENT_BASE_COLS,
+                "Segments export",
+            )
+        )
+    if not surfaces:
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No events or segments wired",
+        }
+
+    records: list[dict[str, Any]] = []
+    for stem, rows, columns, description in surfaces:
+        writes: list[tuple[str, str, str]] = []  # (extension, payload, label)
+        if fmt in ("both", "json"):
+            writes.append((".json", data_export.to_json(rows), "JSON"))
+        if fmt in ("both", "csv"):
+            writes.append(
+                (
+                    ".csv",
+                    data_export.to_csv(rows, preferred_column_order=columns),
+                    "CSV",
+                )
+            )
+        for ext, payload, label in writes:
+            output_path = files.get_unique_filename(f"{stem}{ext}", file_format=ext)
+            try:
+                Path(output_path).write_text(payload, encoding="utf-8")
+            except OSError:
+                files.release_reservation(output_path)
+                return {
+                    "artifacts": {"artifacts": [], "study": study, "count": 0},
+                    "__note__": "Export couldn't be written",
+                }
+            records.append(
+                _attachment_artifact(
+                    "export", output_path, src, f"{description} ({label})"
+                )
+            )
+    return {"artifacts": {"artifacts": records, "study": study, "count": len(records)}}
 
 
 def _exec_timeline_viewer(
@@ -2621,6 +2912,26 @@ def _eval_predicate(field_val: float | str | None, op: str, raw_value: Any) -> b
         return False
 
 
+def _eval_clauses(kind: str, item: Any, params: dict[str, Any]) -> bool:
+    """Evaluate the primary ``{field, op, value}`` clause plus the optional
+    second clause, combined with AND/OR when ``combine`` isn't "off"."""
+    meta = _COLLECTION_KINDS[kind]
+    field = str(params.get("field") or meta["fields"][0])
+    op = str(params.get("op") or ">=")
+    first = _eval_predicate(
+        _collection_field(kind, item, field), op, params.get("value")
+    )
+    combine = str(params.get("combine") or "off")
+    if combine not in ("AND", "OR"):
+        return first
+    field2 = str(params.get("field2") or meta["fields"][0])
+    op2 = str(params.get("op2") or ">=")
+    second = _eval_predicate(
+        _collection_field(kind, item, field2), op2, params.get("value2")
+    )
+    return (first and second) if combine == "AND" else (first or second)
+
+
 def _wrap_collection(
     kind: str, src_envelope: dict[str, Any], items: list[Any]
 ) -> dict[str, Any]:
@@ -2638,7 +2949,7 @@ def _wrap_collection(
 def _make_filter_executor(
     kind: str,
 ) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Keep items matching one ``{field, op, value}`` clause; same type in/out."""
+    """Keep items matching the clause(s) (see ``_eval_clauses``); same type in/out."""
     meta = _COLLECTION_KINDS[kind]
 
     def _exec(
@@ -2646,14 +2957,7 @@ def _make_filter_executor(
     ) -> dict[str, Any]:
         env = inputs.get("in") or {}
         items = list(env.get(meta["key"]) or [])
-        field = str(params.get("field") or meta["fields"][0])
-        op = str(params.get("op") or ">=")
-        value = params.get("value")
-        kept = [
-            it
-            for it in items
-            if _eval_predicate(_collection_field(kind, it, field), op, value)
-        ]
+        kept = [it for it in items if _eval_clauses(kind, it, params)]
         return {"out": _wrap_collection(kind, env, kept)}
 
     return _exec
@@ -2672,17 +2976,10 @@ def _make_partition_executor(
     ) -> dict[str, Any]:
         env = inputs.get("in") or {}
         items = list(env.get(meta["key"]) or [])
-        field = str(params.get("field") or meta["fields"][0])
-        op = str(params.get("op") or ">=")
-        value = params.get("value")
         matched: list[Any] = []
         unmatched: list[Any] = []
         for it in items:
-            target = (
-                matched
-                if _eval_predicate(_collection_field(kind, it, field), op, value)
-                else unmatched
-            )
+            target = matched if _eval_clauses(kind, it, params) else unmatched
             target.append(it)
         return {
             "matched": _wrap_collection(kind, env, matched),
@@ -2886,6 +3183,35 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "label": "Value",
             "required": True,
         },
+        # Optional second clause. "off" keeps the node single-clause; value2 is
+        # deliberately not required so validation stays quiet in that case.
+        {
+            "name": "combine",
+            "type": "enum",
+            "default": "off",
+            "choices": ["off", "AND", "OR"],
+            "label": "Second clause",
+        },
+        {
+            "name": "field2",
+            "type": "enum",
+            "default": meta["fields"][0],
+            "choices": list(meta["fields"]),
+            "label": "Field 2",
+        },
+        {
+            "name": "op2",
+            "type": "enum",
+            "default": ">=",
+            "choices": list(_COLLECTION_OPS),
+            "label": "Comparison 2",
+        },
+        {
+            "name": "value2",
+            "type": "string",
+            "default": "",
+            "label": "Value 2",
+        },
     ]
 
 
@@ -3074,6 +3400,8 @@ _EXECUTORS: dict[
     "time_range": _exec_time_range,
     "transcribe": _exec_transcribe,
     "find_word": _exec_find_word,
+    "transcript_export": _exec_transcript_export,
+    "data_export": _exec_data_export,
     "summarize": _exec_summarize,
     "citations": _exec_citations,
     "friction": _exec_friction,

@@ -85,14 +85,15 @@
 
   // Non-timeline artifact types: single output files surfaced in the Attachments
   // panel rather than on the timeline track.
-  var ATTACHMENT_TYPES = { timelapse: true, heatmap: true };
+  var ATTACHMENT_TYPES = { timelapse: true, heatmap: true, export: true };
 
   function isAttachmentType(a) {
     return !!ATTACHMENT_TYPES[a && a.type];
   }
 
   // Render the Attachments panel: heatmaps as <img>, timelapse mp4 as a looping
-  // <video>, timelapse gif as <img>. Hidden when there are no attachments.
+  // <video>, timelapse gif as <img>, document exports (json/csv/md/srt/vtt) as
+  // download-link cards. Hidden when there are no attachments.
   function renderAttachments(attachments) {
     var pane = qs("#attachmentsPane");
     var grid = qs("#attachmentsGrid");
@@ -111,7 +112,14 @@
       // loop; timelapse mp4s loop muted. Both render as a <video>.
       var isVideo =
         (a.type === "timelapse" || a.type === "reel") && /\.mp4$/i.test(a.file);
-      if (isVideo) {
+      var isDoc = /\.(json|csv|md|srt|vtt|txt)$/i.test(a.file || "");
+      if (isDoc) {
+        media = document.createElement("a");
+        media.className = "attachment-doc";
+        media.href = a.file;
+        media.setAttribute("download", "");
+        media.textContent = a.file;
+      } else if (isVideo) {
         media = document.createElement("video");
         media.controls = true;
         if (a.type === "timelapse") {

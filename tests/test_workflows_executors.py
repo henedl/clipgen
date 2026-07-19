@@ -7,6 +7,7 @@ ffmpeg paths run under ``config.DEBUGGING`` or with ffmpeg mocked; Ollama and
 Screenspace scans are monkeypatched so no model/subprocess/network is touched.
 """
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -934,3 +935,206 @@ def test_adapter_cliprecords_to_timerange():
     out = workflows.ADAPTERS[("clipRecords", "timeRange")](value)
     assert out["ranges"] == [(10.0, 20.0), (60.0, 65.0)]
     assert out["source"]["participant"] == "P01"
+
+
+# ---- transcript_export / data_export / animated heatmap ----
+
+_SRC = {
+    "participant": "P01",
+    "study": "study",
+    "source_filename": "study_P01.mp4",
+    "video_paths": ["study_P01.mp4"],
+}
+
+
+def _redirect_unique_filenames(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / Path(name).name),
+    )
+
+
+def test_transcript_export_writes_vtt(tmp_path, monkeypatch):
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    transcript = {
+        "segments": [{"start": 0.0, "end": 1.5, "text": "hello"}],
+        "language": "en",
+        "model": "base",
+        "source_file": "study_P01.mp4",
+        "source": _SRC,
+    }
+    out = _run(
+        "transcript_export",
+        _ctx(tmp_path),
+        {"transcript": transcript},
+        {"format": "vtt"},
+    )
+    arts = out["artifacts"]["artifacts"]
+    assert len(arts) == 1
+    assert arts[0]["type"] == "export"
+    assert arts[0]["start"] == 0 and arts[0]["end"] == 0
+    written = tmp_path / "transcript_P01.vtt"
+    text = written.read_text(encoding="utf-8")
+    assert text.startswith("WEBVTT")
+    assert "-->" in text and "hello" in text
+
+
+def test_transcript_export_falls_back_to_segments_wire(tmp_path, monkeypatch):
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    seg_in = {
+        "segments": [{"start": 0.0, "end": 2.0, "text": "from segments"}],
+        "source": _SRC,
+    }
+    out = _run(
+        "transcript_export", _ctx(tmp_path), {"segments": seg_in}, {"format": "md"}
+    )
+    assert out["artifacts"]["count"] == 1
+    assert "from segments" in (tmp_path / "transcript_P01.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_transcript_export_notes_when_nothing_wired(tmp_path):
+    out = _run("transcript_export", _ctx(tmp_path), {}, {"format": "md"})
+    assert out["artifacts"]["artifacts"] == []
+    assert "__note__" in out
+
+
+def test_data_export_events_json_and_csv(tmp_path, monkeypatch):
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    events_in = {
+        "events": [
+            {
+                "id": "ev1",
+                "participant": "P01",
+                "detector": "change",
+                "time_in": 1.0,
+                "time_out": 2.5,
+                "confidence": 0.9,
+                "metadata": {"magnitude": 0.4},
+            }
+        ],
+        "source": _SRC,
+        "raw_results": [],
+    }
+    out = _run("data_export", _ctx(tmp_path), {"events": events_in}, {"format": "both"})
+    arts = out["artifacts"]["artifacts"]
+    assert [a["type"] for a in arts] == ["export", "export"]
+    payload = json.loads((tmp_path / "export_events_P01.json").read_text())
+    assert payload["records"][0]["id"] == "ev1"
+    assert payload["records"][0]["magnitude"] == 0.4  # metadata hoisted
+    csv_text = (tmp_path / "export_events_P01.csv").read_text()
+    header = csv_text.splitlines()[0]
+    # Preferred column order leads the CSV header.
+    assert header.startswith("id,participant")
+    assert "magnitude" in header
+
+
+def test_data_export_segments_only_csv(tmp_path, monkeypatch):
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    seg_in = {
+        "segments": [{"start": 0.0, "end": 2.0, "text": "hi there"}],
+        "source": _SRC,
+    }
+    out = _run("data_export", _ctx(tmp_path), {"segments": seg_in}, {"format": "csv"})
+    assert out["artifacts"]["count"] == 1
+    csv_text = (tmp_path / "export_segments_P01.csv").read_text()
+    assert "hi there" in csv_text
+    assert "P01" in csv_text
+    assert not (tmp_path / "export_segments_P01.json").exists()
+
+
+def test_data_export_both_surfaces(tmp_path, monkeypatch):
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    events_in = {
+        "events": [{"id": "e", "time_in": 0, "time_out": 1}],
+        "source": _SRC,
+        "raw_results": [],
+    }
+    seg_in = {"segments": [{"start": 0, "end": 1, "text": "t"}], "source": _SRC}
+    out = _run(
+        "data_export",
+        _ctx(tmp_path),
+        {"events": events_in, "segments": seg_in},
+        {"format": "json"},
+    )
+    assert out["artifacts"]["count"] == 2
+    assert (tmp_path / "export_events_P01.json").exists()
+    assert (tmp_path / "export_segments_P01.json").exists()
+
+
+def test_data_export_notes_when_nothing_wired(tmp_path):
+    out = _run("data_export", _ctx(tmp_path), {}, {})
+    assert out["artifacts"]["artifacts"] == []
+    assert "__note__" in out
+
+
+def test_heatmap_rolling_gif_passes_window(tmp_path, monkeypatch):
+    import screenspace_heatmap
+
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 640, "height": 480}
+    )
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    called = {}
+
+    def fake_rolling(results, w, h, out_path, heatmap_type, num_frames, window_frames):
+        called["window_frames"] = window_frames
+        called["num_frames"] = num_frames
+        called["heatmap_type"] = heatmap_type
+        return out_path
+
+    monkeypatch.setattr(
+        screenspace_heatmap, "generate_rolling_heatmap_gif", fake_rolling
+    )
+    events_in = {"events": [], "source": _SRC, "raw_results": [{"change_grid": []}]}
+    out = _run(
+        "heatmap",
+        _ctx(tmp_path),
+        {"events": events_in},
+        {"style": "change", "output": "rolling_gif", "frames": 12, "window": 3},
+    )
+    assert called == {"window_frames": 3, "num_frames": 12, "heatmap_type": "change"}
+    assert out["artifacts"]["artifacts"][0]["file"] == "heatmap.gif"
+
+
+def test_heatmap_gif_none_releases_reservation(tmp_path, monkeypatch):
+    import screenspace_heatmap
+
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 640, "height": 480}
+    )
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    released = {}
+    monkeypatch.setattr(
+        files, "release_reservation", lambda p: released.setdefault("path", p)
+    )
+    monkeypatch.setattr(
+        screenspace_heatmap, "generate_heatmap_gif", lambda *a, **kw: None
+    )
+    events_in = {"events": [], "source": _SRC, "raw_results": [{"change_grid": []}]}
+    out = _run(
+        "heatmap",
+        _ctx(tmp_path),
+        {"events": events_in},
+        {"style": "change", "output": "gif"},
+    )
+    assert out["artifacts"]["artifacts"] == []
+    assert "animated heatmap" in out["__note__"]
+    assert released["path"].endswith("heatmap.gif")
+
+
+def test_heatmap_default_output_stays_image(tmp_path, monkeypatch):
+    import screenspace_heatmap
+
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 640, "height": 480}
+    )
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        screenspace_heatmap, "generate_change_heatmap", lambda r, w, h, p: p
+    )
+    events_in = {"events": [], "source": _SRC, "raw_results": [{"change_grid": []}]}
+    out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {"style": "change"})
+    assert out["artifacts"]["artifacts"][0]["file"] == "heatmap.png"

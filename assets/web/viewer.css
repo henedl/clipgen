@@ -87,6 +87,24 @@ body {
   color: var(--color-text-muted);
 }
 
+.attachment-doc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  padding: var(--space-3);
+  border: 1px dashed var(--color-panel-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  word-break: break-all;
+  text-decoration: none;
+}
+
+.attachment-doc:hover {
+  text-decoration: underline;
+}
+
 #pageHeaderTop {
   display: flex;
   align-items: center;
