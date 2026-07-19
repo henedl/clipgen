@@ -5,11 +5,20 @@
  * preloaded Images with lazy, debounced, viewport-filtered fetching so
  * renderTimeline stays a pure cache hit per frame), and the hover audio scrub
  * + waveform overlay (card-scrubber.js primitives — the viewer's pattern, not
- * attach(), because the bars are canvas rects, not DOM). The timeline reaches
- * this satellite late-bound via CO.drawMarkerThumbs / CO.scrubHoverMove /
- * CO.scrubHoverEnd (this file loads last); the hub calls initMarkerScrub /
- * resetScrubMedia through guarded delegators. Both toggles persist through
- * CO.persistLaneUi → PUT api/ui.
+ * attach(), because the bars are canvas rects, not DOM).
+ *
+ * Strips are zoom-adaptive: a bar is covered by TILES, each one sprite sheet
+ * whose per-frame duration comes from a power-of-two "slot seconds" ladder
+ * matched to the current px/sec (one slot ≈ a 16:9 frame at the bar's
+ * height). Zooming in crosses a ladder step and refetches finer tiles instead
+ * of stretching the same frames; panning reuses tiles (they are anchored to
+ * the bar's start, not the viewport). Only tiles intersecting the canvas
+ * viewport are fetched or drawn, so long bars cost nothing offscreen.
+ *
+ * The timeline reaches this satellite late-bound via CO.drawMarkerThumbs /
+ * CO.scrubHoverMove / CO.scrubHoverEnd (this file loads last); the hub calls
+ * initMarkerScrub / resetScrubMedia through guarded delegators. Both toggles
+ * persist through CO.persistLaneUi → PUT api/ui.
  */
 (function () {
   "use strict";
@@ -19,8 +28,12 @@
 
   var FETCH_DEBOUNCE_MS = 150; // quiet period after the last cache miss
   var FETCH_CONCURRENCY = 4;   // max in-flight sprite Images
-  var SPRITE_CACHE_MAX = 150;  // decoded sprite sheets kept (LRU by tick)
+  var SPRITE_CACHE_MAX = 150;  // decoded sprite tiles kept (LRU by tick)
   var MIN_THUMB_WIDTH = 24;    // bars narrower than this stay flat
+  var SLOT_ASPECT = 16 / 9;    // layout aspect per slot; draws cover-crop the
+                               // real frames, so a mismatch never distorts
+  var MIN_SLOT_SECONDS = 0.25; // density ladder bounds (powers of two)
+  var MAX_SLOT_SECONDS = 8192;
 
   var _sprites = {};      // mediaKey → {img, ready, failed, tick}
   var _spriteCount = 0;
@@ -81,7 +94,7 @@
   function startFetch(key, span) {
     var version = _mediaVersion;
     var img = new Image();
-    var entry = { img: img, ready: false, failed: false, tick: ++_tick };
+    var entry = { img: img, ready: false, failed: false, tick: ++_tick, span: span };
     _sprites[key] = entry;
     _spriteCount++;
     _inflight++;
@@ -129,54 +142,111 @@
     if (Object.keys(_wanted).length) armFetchTimer();
   }
 
-  // Called from renderTimeline for every visible marker/cut bar. Cache hit →
-  // draw and report true; miss → enqueue a lazy fetch and report false (the
-  // caller's flat bar stays). Must stay allocation-light: it runs per bar on
-  // every pan/zoom frame.
-  function drawMarkerThumbs(ctx, keyStem, start, end, x, y, w, h, tintColor) {
-    if (w < MIN_THUMB_WIDTH || end <= start || !state.participant) return false;
-    var key = mediaKey(keyStem, start, end);
-    var entry = _sprites[key];
-    if (!entry) {
-      // Don't enqueue mid-drag: every drag frame renders a different span and
-      // would leave a trail of junk keys to fetch after the drag commits.
-      if (!state.dragging) {
-        _wanted[key] = { start: start, end: end };
-        armFetchTimer();
-      }
-      return false;
-    }
-    if (!entry.ready) return false; // failed or still loading
-    entry.tick = ++_tick;
+  // Smallest ladder step (power of two × MIN_SLOT_SECONDS) covering slotDur.
+  // Snapping keeps tile keys stable across pans; only a zoom that crosses a
+  // doubling boundary produces new keys (and thus new fetches).
+  function quantizedSlotSeconds(slotDur) {
+    var d = MIN_SLOT_SECONDS;
+    while (d < slotDur && d < MAX_SLOT_SECONDS) d *= 2;
+    return d;
+  }
 
+  // Draw one cached tile's slots into the bar. Each slot cover-crops its
+  // frame (center crop to the slot's aspect) so frames are never stretched
+  // or squashed regardless of ladder rounding.
+  function drawTile(ctx, img, entrySpan, barGeom) {
     var cols = CLIPGEN_CONFIG.cardScrubberSpriteCols;
     var rows = CLIPGEN_CONFIG.cardScrubberSpriteRows;
     var frameCount = cols * rows;
-    var img = entry.img;
     var fw = img.width / cols;
     var fh = img.height / rows;
-    var aspect = fh > 0 ? fw / fh : 1;
-    // As many frames as fit at the bar's height, stretched slightly so the
-    // strip fills the full width, sampled evenly across the span.
-    var n = Math.max(1, Math.min(Math.floor(w / (h * aspect)), frameCount));
-    var slotW = w / n;
+    if (!fw || !fh) return false;
+    var span = entrySpan.end - entrySpan.start;
+    var D = barGeom.slotSeconds;
+    var i0 = Math.max(0, Math.floor((barGeom.tFrom - entrySpan.start) / D));
+    var t = entrySpan.start + i0 * D;
+    while (t < entrySpan.end && t < barGeom.tTo) {
+      var slotEnd = Math.min(t + D, entrySpan.end);
+      var mid = (t + slotEnd) / 2;
+      var f = Math.min(
+        frameCount - 1,
+        Math.max(0, Math.floor(((mid - entrySpan.start) / span) * frameCount))
+      );
+      var dx = barGeom.x + (t - barGeom.start) * barGeom.pxPerSec;
+      var dw = (slotEnd - t) * barGeom.pxPerSec;
+      var destAspect = dw / barGeom.h;
+      var srcW = Math.min(fw, fh * destAspect);
+      var srcH = Math.min(fh, fw / destAspect);
+      ctx.drawImage(
+        img,
+        (f % cols) * fw + (fw - srcW) / 2,
+        Math.floor(f / cols) * fh + (fh - srcH) / 2,
+        srcW, srcH,
+        dx, barGeom.y, dw, barGeom.h
+      );
+      t += D;
+    }
+    return true;
+  }
+
+  // Called from renderTimeline for every visible marker/cut bar. Cache hits
+  // draw immediately; missing tiles enqueue a lazy fetch and leave the flat
+  // bar showing. Must stay allocation-light: it runs per bar on every
+  // pan/zoom frame.
+  function drawMarkerThumbs(ctx, keyStem, start, end, x, y, w, h, tintColor) {
+    if (w < MIN_THUMB_WIDTH || end <= start || !state.participant) return false;
+    var frameCount =
+      CLIPGEN_CONFIG.cardScrubberSpriteCols * CLIPGEN_CONFIG.cardScrubberSpriteRows;
+    var pxPerSec = w / (end - start);
+    var D = quantizedSlotSeconds((h * SLOT_ASPECT) / pxPerSec);
+    var tileSpan = frameCount * D;
+
+    // Clip to the canvas viewport: offscreen stretches of a long bar are
+    // neither drawn nor fetched.
+    var visX1 = Math.max(x, 0);
+    var visX2 = Math.min(x + w, ctx.canvas.width);
+    if (visX2 <= visX1) return false;
+    var tFrom = start + (visX1 - x) / pxPerSec;
+    var tTo = start + (visX2 - x) / pxPerSec;
+    var n0 = Math.floor((tFrom - start) / tileSpan);
+    var n1 = Math.floor((tTo - start) / tileSpan);
+
+    var barGeom = {
+      start: start, x: x, y: y, h: h,
+      pxPerSec: pxPerSec, slotSeconds: D, tFrom: tFrom, tTo: tTo,
+    };
+    var barKey = mediaKey(keyStem, start, end) + "|" + D + "|";
+    var drew = false;
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
-    for (var i = 0; i < n; i++) {
-      var f = Math.min(frameCount - 1, Math.floor(((i + 0.5) / n) * frameCount));
-      ctx.drawImage(
-        img,
-        (f % cols) * fw, Math.floor(f / cols) * fh, fw, fh,
-        x + i * slotW, y, slotW, h
-      );
+    for (var n = n0; n <= n1; n++) {
+      var tileStart = start + n * tileSpan;
+      var tileEnd = Math.min(tileStart + tileSpan, end);
+      if (tileEnd <= tileStart) continue;
+      var key = barKey + n;
+      var entry = _sprites[key];
+      if (!entry) {
+        // Don't enqueue mid-drag: every drag frame renders a different span
+        // and would leave a trail of junk keys to fetch after the commit.
+        if (!state.dragging) {
+          _wanted[key] = { start: tileStart, end: tileEnd };
+          armFetchTimer();
+        }
+        continue;
+      }
+      if (!entry.ready) continue; // failed or still loading
+      entry.tick = ++_tick;
+      drew = drawTile(ctx, entry.img, entry.span, barGeom) || drew;
     }
-    // Light lane-color tint so source identity survives the imagery.
-    ctx.fillStyle = hexToRgba(tintColor, 0.18);
-    ctx.fillRect(x, y, w, h);
+    if (drew) {
+      // Light lane-color tint so source identity survives the imagery.
+      ctx.fillStyle = hexToRgba(tintColor, 0.18);
+      ctx.fillRect(visX1, y, visX2 - visX1, h);
+    }
     ctx.restore();
-    return true;
+    return drew;
   }
 
   // ---- Hover audio scrub + waveform ----

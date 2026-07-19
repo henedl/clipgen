@@ -713,8 +713,10 @@ def _scrub_media_response(participant: str, cache: MediaCache, kind: str) -> Any
         )
         media_bytes = cache.get_or_compute(
             cache_key,
+            # seek_frames: per-frame fast seeks keep the cost O(frames), not
+            # O(span) — timeline tiles can cover minutes of source video.
             lambda: video.extract_sprite_sheet_bytes(
-                video_path, local_start, duration, cols, rows
+                video_path, local_start, duration, cols, rows, seek_frames=True
             ),
         )
         mimetype = "image/jpeg"
@@ -739,7 +741,12 @@ def _scrub_media_response(participant: str, cache: MediaCache, kind: str) -> Any
 
 @composer_bp.route("/api/sprite/<participant>")
 def api_sprite(participant: str) -> Any:
-    """Tiled JPEG sprite sheet for a marker/cut span's thumbnail strip."""
+    """Tiled JPEG sprite sheet for one thumbnail-strip tile.
+
+    The client requests one sprite per zoom-density tile (a power-of-two
+    slot-seconds ladder), not per marker span, so zooming in refines the strip
+    with additional frames instead of stretching the same ones.
+    """
     return _scrub_media_response(participant, _sprite_cache, "sprite")
 
 
