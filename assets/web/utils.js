@@ -65,6 +65,7 @@ var CLIPGEN_CONFIG = {
   composerAnnotationStrokeWidth: 0.004,
   composerAnnotationFontSize: 0.035,
   composerAnnotationSpanSeconds: 10.0,
+  composerScrubMaxAudioSeconds: 180.0,
   hotkeyOverrides: {},
 };
 
@@ -120,6 +121,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.gifFormat === "string") {
     CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
+  }
+  if (typeof payload.composerScrubMaxAudioSeconds === "number") {
+    CLIPGEN_CONFIG.composerScrubMaxAudioSeconds = payload.composerScrubMaxAudioSeconds;
   }
   if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
     CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;

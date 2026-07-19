@@ -48,14 +48,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, request
+from flask import Blueprint, Response, request
 
 import config
 import files
 import pipeline
 import utils
 import video
-from server_utils import err, ok
+from server_utils import MediaCache, err, ok, parse_clip_window
 
 # ---- Module state (initialized by _init_composer_state) ----
 
@@ -97,7 +97,11 @@ def _manifest_path() -> Path:
 def _empty_manifest() -> dict[str, Any]:
     return {
         "cuts": [],
-        "ui": {"markerSources": {src: True for src in _MARKER_SOURCES}},
+        "ui": {
+            "markerSources": {src: True for src in _MARKER_SOURCES},
+            "markerThumbnails": False,
+            "markerAudioScrub": False,
+        },
     }
 
 
@@ -327,16 +331,28 @@ def api_trim_delete(key: str) -> Any:
 
 @composer_bp.route("/api/ui", methods=["PUT"])
 def api_ui_update() -> Any:
-    """Persist UI state (lane toggles + fold states) so it survives a restart.
+    """Persist UI state (lane toggles, fold states, media toggles) so it
+    survives a restart.
 
-    Body may carry ``markerSources`` (lane visibility) and/or ``laneFolds``
-    (True = the lane renders as one compact row); at least one is required.
+    Body may carry ``markerSources`` (lane visibility), ``laneFolds`` (True =
+    the lane renders as one compact row), and/or the boolean media toggles
+    ``markerThumbnails`` / ``markerAudioScrub``; at least one is required.
     """
     data = request.get_json(silent=True) or {}
     sources = data.get("markerSources")
     folds = data.get("laneFolds")
-    if not isinstance(sources, dict) and not isinstance(folds, dict):
-        return err("markerSources or laneFolds object is required")
+    thumbs = data.get("markerThumbnails")
+    scrub = data.get("markerAudioScrub")
+    if (
+        not isinstance(sources, dict)
+        and not isinstance(folds, dict)
+        and not isinstance(thumbs, bool)
+        and not isinstance(scrub, bool)
+    ):
+        return err(
+            "markerSources, laneFolds, markerThumbnails, "
+            "or markerAudioScrub is required"
+        )
     response: dict[str, Any] = {}
     with _manifest_lock:
         ui = _manifest.setdefault("ui", {})
@@ -349,6 +365,12 @@ def api_ui_update() -> Any:
             fold_lanes = (*_MARKER_SOURCES, "annotations")
             ui["laneFolds"] = {lane: bool(folds.get(lane, True)) for lane in fold_lanes}
             response["laneFolds"] = ui["laneFolds"]
+        if isinstance(thumbs, bool):
+            ui["markerThumbnails"] = thumbs
+            response["markerThumbnails"] = thumbs
+        if isinstance(scrub, bool):
+            ui["markerAudioScrub"] = scrub
+            response["markerAudioScrub"] = scrub
         _persist_locked()
     return ok(**response)
 
@@ -630,6 +652,105 @@ def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
         if part["offset"] <= t < part["offset"] + part["duration"]:
             return part
     return parts[-1]
+
+
+# ---- Scrubber media (sprite sheets / audio snippets) ----
+
+# Backs the marker/cut thumbnail strips + hover audio scrub on the timeline.
+# Same LRU + single-flight pattern as Studio's /api/sprite and /api/clip-audio,
+# but resolved against Composer's part model and with no spreadsheet dependency.
+_sprite_cache = MediaCache(128)
+_audio_cache = MediaCache(32)
+
+
+def _resolve_scrub_source(
+    participant: str, start_sec: float, duration: float
+) -> tuple[str, float, float] | None:
+    """Resolve ``(video_path, local_start, clamped_duration)`` for a global span.
+
+    A span straddling a part boundary samples only the owning part's tail
+    (hover preview only — the same tradeoff as Studio's sprite route). Returns
+    ``None`` when the participant has no probeable videos.
+    """
+    parts = _find_participant_parts(participant)
+    if not parts:
+        return None
+    part = _part_for_time(parts, start_sec)
+    local_start = max(0.0, start_sec - part["offset"])
+    clamped = min(duration, max(0.1, part["duration"] - local_start))
+    return part["path"], local_start, clamped
+
+
+def _scrub_media_response(participant: str, cache: MediaCache, kind: str) -> Any:
+    """Shared guts of the sprite / audio scrub routes (parse → resolve → cache)."""
+    window = parse_clip_window()
+    if window is None:
+        return err("Invalid time range")
+    start_sec, duration = window
+    if kind == "audio":
+        duration = min(duration, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
+
+    resolved = _resolve_scrub_source(participant, start_sec, duration)
+    if resolved is None:
+        return err("Source video not found", 404)
+    video_path, local_start, duration = resolved
+
+    try:
+        mtime = os.stat(video_path).st_mtime
+    except OSError:
+        mtime = 0.0
+
+    if kind == "sprite":
+        cols = config.STUDIO_SCRUBBER_SPRITE_COLS
+        rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
+        cache_key: tuple = (
+            video_path,
+            round(local_start, 3),
+            round(duration, 3),
+            cols,
+            rows,
+            mtime,
+        )
+        media_bytes = cache.get_or_compute(
+            cache_key,
+            lambda: video.extract_sprite_sheet_bytes(
+                video_path, local_start, duration, cols, rows
+            ),
+        )
+        mimetype = "image/jpeg"
+    else:
+        cache_key = (video_path, round(local_start, 3), round(duration, 3), mtime)
+        media_bytes = cache.get_or_compute(
+            cache_key,
+            lambda: video.extract_audio_segment_bytes(
+                video_path, local_start, duration
+            ),
+        )
+        mimetype = "audio/wav"
+
+    if media_bytes is None:
+        return err(f"{kind.capitalize()} extraction failed", 404)
+    return Response(
+        media_bytes,
+        mimetype=mimetype,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@composer_bp.route("/api/sprite/<participant>")
+def api_sprite(participant: str) -> Any:
+    """Tiled JPEG sprite sheet for a marker/cut span's thumbnail strip."""
+    return _scrub_media_response(participant, _sprite_cache, "sprite")
+
+
+@composer_bp.route("/api/audio/<participant>")
+def api_audio(participant: str) -> Any:
+    """Mono PCM WAV of a marker/cut span for the hover audio scrub.
+
+    Capped at ``config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS`` — markers can span
+    minutes, and the WAV is decoded whole in the browser's WebAudio context.
+    """
+    return _scrub_media_response(participant, _audio_cache, "audio")
 
 
 def _unlink_quiet(path: str | None) -> None:
