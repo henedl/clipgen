@@ -730,3 +730,42 @@ def test_resume_button_on_failed_runs():
     assert "resumeFromRunId" in runs
     # Resume is a single run even on a batch-fanout blueprint.
     assert "!targetNodeId && !resumeFromRunId && blueprintWantsBatch()" in runs
+
+
+# ---- Run history browser + dry-run preview (W6) ----
+
+
+def test_run_history_scope_toggle():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfRunScope"' in html
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "function setRunScope" in runs
+    assert "function fetchAllRuns" in runs
+    assert "function fmtRelTime" in runs
+    assert "function buildHistoryRow" in runs
+    # Click-through handshake: openBlueprint + consume on refresh.
+    assert "pendingFocusRunId" in runs
+    assert "function consumePendingFocus" in runs
+    # The all-scope list renders from its own store, never state.runs.
+    assert "state.allRuns" in runs
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-run-scope" in css
+    assert ".wf-history-row" in css
+
+
+def test_dry_run_preview():
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "function computeWouldRun" in validate
+    assert "WF.showRunPreview" in validate
+    assert "WF.clearRunPreview" in validate
+    assert "wf-preview-run" in validate
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    # Hover wiring lives on the split-button CONTAINER (a disabled button
+    # swallows mouse events).
+    assert '".wf-run-split"' in hub
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfPreviewChip"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-node.wf-preview-run" in css
+    assert ".wf-node.wf-preview-skip" in css
+    assert ".wf-preview-chip" in css

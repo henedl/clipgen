@@ -209,6 +209,113 @@
     return seen !== nodes.length;
   }
 
+  // ---- Dry-run preview (what would execute) ----
+
+  // Estimate the set of nodes a Run (or "Run to here" with targetNodeId) would
+  // execute: everything minus sticky notes, muted nodes, and nodes whose
+  // *required* data inputs are fed only by skipped producers (a JS mirror of the
+  // runner's _should_skip, minus gate evaluation — gates resolve at run time, so
+  // gated branches count as running). Bounded relaxation keeps it cycle-safe.
+  function computeWouldRun(targetNodeId) {
+    var nodes = (state.nodes || []).filter(function (n) {
+      return n.type !== "note";
+    });
+    var ids = {};
+    nodes.forEach(function (n) {
+      ids[n.id] = true;
+    });
+    var skip = {};
+    nodes.forEach(function (n) {
+      if (n.disabled) skip[n.id] = true;
+    });
+    var edges = state.edges || [];
+    for (var iter = 0; iter < nodes.length; iter++) {
+      var changed = false;
+      for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (skip[n.id]) continue;
+        var inputs = catalogType(n).inputs || [];
+        for (var p = 0; p < inputs.length; p++) {
+          var port = inputs[p];
+          if (port.optional || port.type === "control") continue;
+          var producers = edges.filter(function (e) {
+            return e.to === n.id && e.toPort === port.name && ids[e.from];
+          });
+          var allDead =
+            producers.length &&
+            producers.every(function (e) {
+              return skip[e.from];
+            });
+          if (allDead) {
+            skip[n.id] = true;
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (!changed) break;
+    }
+    var would = {};
+    nodes.forEach(function (n) {
+      if (!skip[n.id]) would[n.id] = true;
+    });
+    // "Run to here": intersect with the target's ancestors (inclusive) — a JS
+    // port of the runner's _ancestors_inclusive reverse walk.
+    if (targetNodeId && ids[targetNodeId]) {
+      var keep = {};
+      var stack = [targetNodeId];
+      while (stack.length) {
+        var nid = stack.pop();
+        if (keep[nid]) continue;
+        keep[nid] = true;
+        for (var e2 = 0; e2 < edges.length; e2++) {
+          if (edges[e2].to === nid && ids[edges[e2].from]) {
+            stack.push(edges[e2].from);
+          }
+        }
+      }
+      Object.keys(would).forEach(function (wid) {
+        if (!keep[wid]) delete would[wid];
+      });
+    }
+    return { ids: would, count: Object.keys(would).length, total: nodes.length };
+  }
+
+  // Toggle the preview classes on the canvas cards + the "N of M steps" chip.
+  // clearRunPreview removes ONLY its own classes — never the run-* tint set the
+  // runs satellite owns. (A renderAllNodes rebuild drops the preview classes;
+  // re-hovering Run re-applies them, which is fine for a hover-scoped cue.)
+  function showRunPreview(targetNodeId) {
+    if (!state.ready) return;
+    var plan = computeWouldRun(targetNodeId);
+    var cards = qsa("#wfWorld .wf-node");
+    for (var i = 0; i < cards.length; i++) {
+      var id = cards[i].getAttribute("data-node-id");
+      var isNote = cards[i].getAttribute("data-node-type") === "note";
+      cards[i].classList.toggle("wf-preview-run", !isNote && !!plan.ids[id]);
+      cards[i].classList.toggle("wf-preview-skip", !isNote && !plan.ids[id]);
+    }
+    var chip = qs("#wfPreviewChip");
+    if (chip) {
+      var steps = plan.count === 1 ? " step" : " steps";
+      chip.textContent =
+        plan.count === plan.total
+          ? plan.count + steps
+          : plan.count + " of " + plan.total + " steps";
+      chip.classList.toggle("hidden", !plan.total);
+    }
+  }
+
+  function clearRunPreview() {
+    var cards = qsa("#wfWorld .wf-node");
+    for (var i = 0; i < cards.length; i++) {
+      cards[i].classList.remove("wf-preview-run");
+      cards[i].classList.remove("wf-preview-skip");
+    }
+    var chip = qs("#wfPreviewChip");
+    if (chip) chip.classList.add("hidden");
+  }
+
   // ---- Aggregate + render ----
 
   function nodeLabel(node) {
@@ -301,4 +408,8 @@
   WF.nodeIssues = nodeIssues;
   WF.graphHasCycle = graphHasCycle;
   WF.refreshValidation = refreshValidation;
+  // Dry-run preview (hub wires the Run split-button hover to these).
+  WF.computeWouldRun = computeWouldRun;
+  WF.showRunPreview = showRunPreview;
+  WF.clearRunPreview = clearRunPreview;
 })();

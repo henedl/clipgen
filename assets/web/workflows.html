@@ -92,6 +92,8 @@
           Run to here
         </button>
       </div>
+      <!-- Dry-run preview readout, shown while hovering Run ("N of M steps"). -->
+      <span id="wfPreviewChip" class="wf-preview-chip hidden"></span>
     </div>
     <button id="wfStopBtn" class="btn btn-small hidden" type="button"
             title="Cancel the running workflow">Stop</button>
@@ -203,6 +205,12 @@
            Hidden when the graph is clean. Each row links to its node. -->
       <div id="wfValidation" class="wf-validation hidden"></div>
       <div class="wf-sidebar-header">Runs</div>
+      <!-- History scope: this blueprint's cards (default) vs a compact cross-
+           blueprint list (workflows-runs.js initRunScope → state.runScope). -->
+      <div id="wfRunScope" class="wf-run-scope" role="group" aria-label="Run history scope">
+        <button class="wf-run-scope-btn active" type="button" data-scope="blueprint">This blueprint</button>
+        <button class="wf-run-scope-btn" type="button" data-scope="all">All</button>
+      </div>
       <!-- Client-side status filter over the run/batch history (workflows-runs.js
            initRunFilter → state.runFilter). -->
       <div id="wfRunFilter" class="wf-run-filter" role="group" aria-label="Filter runs by status">

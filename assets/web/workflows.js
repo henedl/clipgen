@@ -36,6 +36,9 @@
     activeRunId: null, // the run currently streamed/polled, or null
     nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
     runFilter: "all", // run-history status filter (all|running|completed|failed)
+    runScope: "blueprint", // history scope: this blueprint | all (owned by -runs)
+    allRuns: [], // cross-blueprint history for the "All" scope (owned by -runs)
+    pendingFocusRunId: null, // history click-through handshake (owned by -runs)
     // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
     batches: [], // recent batch summaries (newest first)
     activeBatchId: null, // the batch currently streamed/polled, or null
@@ -268,6 +271,7 @@
     state.viewport = bp.viewport || (bp.viewport = { x: 0, y: 0, zoom: 1 });
     state.selection = [];
     state.selectedEdge = null;
+    if (WF.clearRunPreview) WF.clearRunPreview(); // stale preview classes
     resetHistory(); // history doesn't span blueprints
     syncToolbar();
     syncTriggerButton();
@@ -1142,7 +1146,31 @@
     var runBtn = qs("#wfRunBtn");
     if (runBtn) {
       runBtn.addEventListener("click", function () {
+        if (WF.clearRunPreview) WF.clearRunPreview();
         if (WF.startRun) WF.startRun();
+      });
+    }
+    // Dry-run preview: hovering the Run split-button highlights what would
+    // execute (mute/skip-aware). Bound on the CONTAINER, not the button — a
+    // disabled button swallows mouse events. "Run to here" previews the
+    // selected node's ancestor slice.
+    var runSplit = qs(".wf-run-split");
+    if (runSplit) {
+      runSplit.addEventListener("mouseenter", function () {
+        if (WF.showRunPreview) WF.showRunPreview(null);
+      });
+      runSplit.addEventListener("mouseleave", function () {
+        if (WF.clearRunPreview) WF.clearRunPreview();
+      });
+    }
+    var runToPreview = qs("#wfRunToItem");
+    if (runToPreview) {
+      runToPreview.addEventListener("mouseenter", function () {
+        var sel = state.selection || [];
+        if (WF.showRunPreview && sel.length === 1) WF.showRunPreview(sel[0]);
+      });
+      runToPreview.addEventListener("mouseleave", function () {
+        if (WF.clearRunPreview) WF.clearRunPreview();
       });
     }
     initRunMenu();

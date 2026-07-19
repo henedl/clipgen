@@ -282,6 +282,10 @@
   function refreshRuns() {
     var bpId = state.activeBlueprintId;
     if (!bpId) return;
+    // Keep the cross-blueprint list current too while it's the visible scope
+    // (the discover poller stays blueprint-scoped; "All" refreshes on toggle
+    // and on blueprint switches like this one).
+    if (state.runScope === "all") fetchAllRuns();
     stopTransport();
     stopBatchTransport();
     state.activeRunId = null;
@@ -337,8 +341,21 @@
         }
         renderRuns();
         annotateCanvas(findRun(state.activeRunId));
+        consumePendingFocus();
       })
       .catch(function () {});
+  }
+
+  // The cross-blueprint history's click-through handshake: the row sets
+  // pendingFocusRunId and opens the target blueprint; once refreshRuns has that
+  // blueprint's runs loaded, drill into the requested one (batch children are
+  // in state.runs too, so focusChild covers both). Cleared silently when the
+  // run has since been evicted from history.
+  function consumePendingFocus() {
+    var pf = state.pendingFocusRunId;
+    if (!pf) return;
+    state.pendingFocusRunId = null;
+    if (findRun(pf)) focusChild(pf);
   }
 
   function firstNonTerminal(list) {
@@ -363,6 +380,10 @@
       activeRunId: state.activeRunId,
       activeBatchId: state.activeBatchId,
       runFilter: state.runFilter,
+      runScope: state.runScope,
+      allRuns: (state.allRuns || []).map(function (r) {
+        return r.id + ":" + r.status;
+      }),
       reconnecting: _reconnecting,
       runs: (state.runs || []).map(function (r) {
         var ns = r.nodeStates || {};
@@ -783,6 +804,19 @@
     return Math.floor(s / 60) + "m " + (s % 60) + "s";
   }
 
+  // Compact relative time ("just now" / "5m ago" / "2h ago" / "3d ago") for the
+  // cross-blueprint history rows, where absolute clock times don't scan well.
+  function fmtRelTime(iso) {
+    if (!iso) return "";
+    var then = new Date(iso).getTime();
+    if (isNaN(then)) return "";
+    var s = Math.round((Date.now() - then) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  }
+
   function eventLabel(ev) {
     if (!ev || typeof ev !== "object") return String(ev);
     var t = ev.time_in != null ? fmtClock(ev.time_in) + "  " : "";
@@ -941,6 +975,49 @@
     return true;
   }
 
+  // One compact row of the cross-blueprint ("All") history list. Clicking a
+  // row opens its blueprint and drills into the run (pendingFocusRunId
+  // handshake); a run whose blueprint was deleted renders inert.
+  function buildHistoryRow(run) {
+    var bp = null;
+    var bps = state.blueprints || [];
+    for (var i = 0; i < bps.length; i++) {
+      if (bps[i].id === run.blueprintId) {
+        bp = bps[i];
+        break;
+      }
+    }
+    var row = el("div", "wf-history-row");
+    row.appendChild(
+      el("span", "wf-run-status wf-run-status-" + run.status, run.status),
+    );
+    var body = el("div", "wf-history-body");
+    body.appendChild(
+      el("span", "wf-history-bp", bp ? bp.name || "Untitled" : run.blueprintId),
+    );
+    var metaParts = [];
+    if (run.participant) metaParts.push(run.participant);
+    if (run.triggered) metaParts.push("triggered");
+    var rel = fmtRelTime(run.startedAt);
+    if (rel) metaParts.push(rel);
+    if (metaParts.length) {
+      body.appendChild(el("span", "wf-history-meta", metaParts.join(" · ")));
+    }
+    row.appendChild(body);
+    if (bp) {
+      row.classList.add("clickable");
+      row.title = "Open this blueprint and its run";
+      row.addEventListener("click", function () {
+        state.pendingFocusRunId = run.id;
+        setRunScope("blueprint");
+        if (WF.openBlueprint) WF.openBlueprint(bp);
+      });
+    } else {
+      row.title = "This run's blueprint no longer exists";
+    }
+    return row;
+  }
+
   function renderRuns() {
     renderOutputDir();
     var container = qs("#wfRuns");
@@ -950,6 +1027,27 @@
     _lastRunsFp = runsFingerprint();
     var prevScrollTop = container.scrollTop;
     container.innerHTML = "";
+    // "All" scope: a flat cross-blueprint list (batch children included as
+    // plain rows — they carry their participant). Rendered from state.allRuns,
+    // never state.runs, so canvas tinting / reattachment are untouched.
+    if (state.runScope === "all") {
+      var all = (state.allRuns || []).filter(function (r) {
+        return runMatchesFilter(r.status);
+      });
+      if (!all.length) {
+        container.appendChild(
+          el("p", "wf-empty-hint", "No runs in the history yet."),
+        );
+      } else {
+        var histFrag = document.createDocumentFragment();
+        all.forEach(function (run) {
+          histFrag.appendChild(buildHistoryRow(run));
+        });
+        container.appendChild(histFrag);
+        container.scrollTop = prevScrollTop;
+      }
+      return;
+    }
     // Batch children are surfaced inside their batch card, not as loose runs.
     var looseRuns = (state.runs || []).filter(function (r) {
       return !r.batchId;
@@ -987,6 +1085,45 @@
     });
     container.appendChild(frag);
     container.scrollTop = prevScrollTop;
+  }
+
+  // ---- Cross-blueprint history scope ----------------------------------------
+
+  // Fetch the unfiltered run history (the server already lists every blueprint's
+  // runs newest-first, capped at its history limit — no pagination needed).
+  function fetchAllRuns() {
+    apiGet("api/runs")
+      .then(function (res) {
+        state.allRuns = (res && res.runs) || [];
+        if (runsFingerprint() !== _lastRunsFp) renderRuns();
+      })
+      .catch(function () {});
+  }
+
+  function setRunScope(scope) {
+    state.runScope = scope === "all" ? "all" : "blueprint";
+    var host = qs("#wfRunScope");
+    if (host) {
+      var chips = host.querySelectorAll(".wf-run-scope-btn");
+      for (var i = 0; i < chips.length; i++) {
+        chips[i].classList.toggle(
+          "active",
+          chips[i].getAttribute("data-scope") === state.runScope,
+        );
+      }
+    }
+    if (state.runScope === "all") fetchAllRuns();
+    renderRuns();
+  }
+
+  function initRunScope() {
+    var host = qs("#wfRunScope");
+    if (!host) return;
+    host.addEventListener("click", function (e) {
+      var btn = e.target.closest(".wf-run-scope-btn");
+      if (!btn) return;
+      setRunScope(btn.getAttribute("data-scope"));
+    });
   }
 
   // Wire the status-filter chips above the run list (set state.runFilter, toggle
@@ -1110,6 +1247,7 @@
   function initRuns() {
     document.addEventListener("visibilitychange", onVisibility);
     initRunFilter();
+    initRunScope();
     setRunningUI(false);
     startDiscover();
   }
