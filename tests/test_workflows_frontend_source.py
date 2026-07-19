@@ -609,3 +609,60 @@ def test_theme_toggle_icons_styled():
     # Page CSS must NOT re-declare the base block (it was dead code overridden
     # by topnav.css's higher-specificity rule).
     assert "#themeToggle {" not in WORKFLOWS_CSS.read_text(encoding="utf-8")
+
+
+# ---- Canvas navigation & QoL (W2) ----
+
+
+def test_space_hold_pan_mode():
+    src = _workflows_js()
+    assert '"workflows.panMode"' in src
+    assert "function setPanMode" in src
+    assert "_spaceHeld" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-canvas.pan-mode" in css
+
+
+def test_wheel_splits_pan_and_zoom():
+    # Plain wheel / two-finger scroll pans; ctrl (pinch) or meta wheel zooms.
+    src = _workflows_js()
+    assert "!e.ctrlKey && !e.metaKey" in src
+
+
+def test_viewport_saves_skip_undo_history():
+    src = _workflows_js()
+    assert "function scheduleViewportSave" in src
+    assert "WF.scheduleViewportSave = scheduleViewportSave" in src
+    # Pan/zoom call sites route through the viewport-only save.
+    assert "WF.scheduleViewportSave()" in src
+
+
+def test_snap_toggle_and_alignment_guides():
+    src = _workflows_js()
+    assert "function applySnap" in src
+    assert "function toggleSnap" in src
+    assert "WF.toggleSnap" in src
+    assert "clipgenWfSnap" in src
+    assert "wf-align-guide" in src
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfSnapBtn"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-align-guide" in css
+    assert ".wf-snap-icon" in css
+
+
+def test_select_all_and_nudge_hotkeys():
+    src = _workflows_js()
+    assert '"workflows.selectAll"' in src
+    assert "function selectAllNodes" in src
+    assert "function nudgeSelection" in src
+    assert '"workflows.nudge"' in src
+
+
+def test_zoom_level_indicator_resets_to_100():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfZoomLevel"' in html
+    src = _workflows_js()
+    assert "#wfZoomLevel" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-zoom-level" in css

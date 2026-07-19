@@ -62,6 +62,11 @@
             data-hotkey="workflows.fitView" aria-label="Fit to view" title="Fit all nodes in view (F)">
       <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
     </button>
+    <button id="wfSnapBtn" class="btn btn-small wf-icon-btn" type="button" disabled
+            aria-pressed="false" aria-label="Snap to grid"
+            title="Snap dragged nodes to the grid and to neighboring cards">
+      <span class="wf-btn-icon wf-snap-icon" aria-hidden="true"></span>
+    </button>
     <button id="wfSaveStash" class="btn btn-small btn-icon" type="button" disabled
             title="Save the selected nodes as a reusable stash">
       <span class="wf-label-icon wf-stash-icon" aria-hidden="true"></span>Stash selection
@@ -157,6 +162,9 @@
                     aria-label="Zoom out" title="Zoom out">
               <span class="wf-btn-icon wf-zoomout-icon" aria-hidden="true"></span>
             </button>
+            <button id="wfZoomLevel" class="btn btn-small wf-zoom-level" type="button"
+                    data-hotkey="workflows.zoomReset"
+                    title="Reset zoom to 100% (0)">100%</button>
             <button id="wfMinimapFit" class="btn btn-small wf-icon-btn" type="button"
                     aria-label="Fit all nodes in view" title="Fit all nodes in view (F)">
               <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
@@ -168,7 +176,7 @@
         <div id="wfCanvasEmpty" class="wf-canvas-empty">
           <h1>Workflows</h1>
           <p>Drag nodes from the palette to chain clip, Screenspace, and transcript actions.</p>
-          <p class="wf-empty-sub">Drag to select, middle-drag to pan, scroll to zoom.</p>
+          <p class="wf-empty-sub">Drag to select, space-drag or scroll to pan, pinch or ⌘-scroll to zoom.</p>
           <!-- Built-in recipes, surfaced here so a fresh blueprint has a one-click
                starting point (the stashes satellite fills this on load). -->
           <div id="wfEmptyRecipes" class="wf-empty-recipes"></div>

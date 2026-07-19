@@ -272,6 +272,17 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/arrows-pointing-out.svg");
 }
 
+.wf-snap-icon {
+  mask-image: url("icons/hashtag.svg");
+  -webkit-mask-image: url("icons/hashtag.svg");
+}
+
+/* Snap toggle active state (mirrors the trigger button's armed treatment). */
+#wfSnapBtn.wf-snap-on {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
 /* Leading glyph for text toolbar buttons (icon + label), sm-sized like the
    trigger so it reads lighter than the md-sized icon-only buttons above. */
 .wf-label-icon {
@@ -352,8 +363,27 @@ body[data-frontend="workflows"] {
   background-size: var(--wf-grid-size) var(--wf-grid-size);
 }
 
+/* Space-hold pan mode: grab cursor invites the drag; grabbing while panning. */
+.wf-canvas.pan-mode {
+  cursor: grab;
+}
+
 .wf-canvas.panning {
   cursor: grabbing;
+}
+
+/* Alignment guide lines (inside #wfWorld, so they pan/zoom with the graph);
+   shown while a snapped drag aligns with a neighboring card's edge. */
+.wf-align-guide {
+  position: absolute;
+  background: var(--color-accent);
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: var(--z-float);
+}
+
+.wf-align-guide.hidden {
+  display: none;
 }
 
 /* Corner minimap + zoom controls, floated bottom-right over the canvas. The wrap
@@ -387,6 +417,14 @@ body[data-frontend="workflows"] {
   box-shadow: var(--shadow-md);
   background: color-mix(in srgb, var(--color-surface) 88%, transparent);
   cursor: pointer;
+}
+
+/* Zoom % readout between the minimap zoom buttons; click resets to 100%. */
+.wf-zoom-level {
+  font-variant-numeric: tabular-nums;
+  min-width: calc(var(--space-6) + var(--space-2));
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
 }
 
 .wf-zoomin-icon {

@@ -653,6 +653,24 @@
     if (WF.refreshValidation) WF.refreshValidation();
   }
 
+  // Debounced persist for viewport-only changes (pan/zoom/fit/minimap): same
+  // timer and PUT as scheduleSave, but no captureHistory/refreshValidation —
+  // the viewport isn't part of history snapshots, so panning must never push a
+  // no-op undo step (it used to). If a graph-edit burst was pending when the
+  // viewport timer wins the shared _saveTimer slot, settle the burst exactly as
+  // scheduleSave's callback would have.
+  function scheduleViewportSave() {
+    cancelSave();
+    setSaveStatus("saving");
+    _saveTimer = setTimeout(function () {
+      if (_snapPending) {
+        _baseline = cloneGraph();
+        _snapPending = false;
+      }
+      flushSave();
+    }, 600);
+  }
+
   // Persist the active blueprint now (also syncs working state back into the
   // in-memory blueprint so switching without a refetch stays correct). Returns
   // the PUT promise so callers that need the server up to date (e.g. starting a
@@ -743,6 +761,7 @@
       "#wfRedo",
       "#wfCleanUp",
       "#wfFitView",
+      "#wfSnapBtn",
       "#wfRunBtn",
       "#wfRunMenuBtn",
       "#wfSaveStash",
@@ -978,6 +997,22 @@
         if (WF.fitToView) WF.fitToView();
       });
     }
+    var snapBtn = qs("#wfSnapBtn");
+    if (snapBtn) {
+      snapBtn.addEventListener("click", function () {
+        if (WF.toggleSnap) WF.toggleSnap();
+      });
+    }
+    // Zoom % readout doubles as a reset-to-100% button (canvas satellite keeps
+    // its text current via writeViewport).
+    var zoomLevelBtn = qs("#wfZoomLevel");
+    if (zoomLevelBtn) {
+      zoomLevelBtn.addEventListener("click", function () {
+        if (WF.zoomAtCenter) {
+          WF.zoomAtCenter(1 / (state.viewport.zoom || 1));
+        }
+      });
+    }
     // Minimap zoom controls (in/out about the canvas centre + fit-to-content).
     var zoomInBtn = qs("#wfZoomIn");
     if (zoomInBtn) {
@@ -1036,6 +1071,7 @@
   // only — the batch rebinds each video_source to a real participant per run.)
   WF.ALL_PARTICIPANTS = "__all__";
   WF.scheduleSave = scheduleSave;
+  WF.scheduleViewportSave = scheduleViewportSave;
   WF.undo = undo;
   WF.redo = redo;
   WF.flushSave = flushSave; // runs satellite awaits this before POSTing a run
