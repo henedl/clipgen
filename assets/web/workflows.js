@@ -423,29 +423,40 @@
     scheduleSave();
   }
 
-  // ---- Watch-dir trigger (P6) -----------------------------------------------
-  // A single armed blueprint auto-runs when a new participant video lands in the
-  // input dir. Arming is single-active: the server disarms every other blueprint,
-  // mirrored client-side below so the toolbar hint is accurate without a refetch.
+  // ---- Auto-run triggers (P6 + chaining) ------------------------------------
+  // An armed blueprint auto-runs when its trigger source fires: a new video
+  // lands, a transcript completes, or a Screenspace scan completes. Arming is
+  // single-active PER TRIGGER TYPE (the server disarms same-type triggers on
+  // every other blueprint; mirrored client-side so the toolbar hint is accurate
+  // without a refetch). The button opens a small type-picker menu; the type
+  // list arrives via /api/catalog context (no duplicated constants).
+
+  var _triggerMenuCtl = null; // bindMenuToggle handle for the type picker
+
+  function triggerTypes() {
+    return (state.context && state.context.triggerTypes) || [];
+  }
+
+  function triggerTypeLabel(id) {
+    var types = triggerTypes();
+    for (var i = 0; i < types.length; i++) {
+      if (types[i].id === id) return types[i].label;
+    }
+    return id;
+  }
 
   function blueprintArmed(bp) {
-    return !!(
-      bp &&
-      bp.trigger &&
-      bp.trigger.type === "watch_dir" &&
-      bp.trigger.enabled
-    );
+    return !!(bp && bp.trigger && bp.trigger.enabled);
   }
 
-  function activeTriggerArmed() {
-    return blueprintArmed(findBlueprint(state.activeBlueprintId));
+  // The active blueprint's armed trigger type, or "" when disarmed.
+  function activeTriggerType() {
+    var bp = findBlueprint(state.activeBlueprintId);
+    return blueprintArmed(bp) ? String(bp.trigger.type || "") : "";
   }
 
-  function armedBlueprint() {
-    for (var i = 0; i < state.blueprints.length; i++) {
-      if (blueprintArmed(state.blueprints[i])) return state.blueprints[i];
-    }
-    return null;
+  function armedBlueprints() {
+    return (state.blueprints || []).filter(blueprintArmed);
   }
 
   function hasVideoSource() {
@@ -454,22 +465,23 @@
     });
   }
 
-  function toggleTrigger() {
+  function setTrigger(type, enabled) {
     var id = state.activeBlueprintId;
     if (!id) return;
-    var enabling = !activeTriggerArmed();
     apiPut("api/blueprints/" + encodeURIComponent(id) + "/trigger", {
-      enabled: enabling,
+      enabled: enabled,
+      type: type,
     })
       .then(function (res) {
         if (!res || !res.ok) {
           showToast((res && res.error) || "Couldn't update auto-run");
           return;
         }
-        // Single-active: enabling here disarmed every other blueprint server-side.
-        if (enabling) {
+        // Single-active per type: arming here disarmed same-type triggers on
+        // every other blueprint server-side — mirror that locally.
+        if (enabled) {
           state.blueprints.forEach(function (b) {
-            if (b.id !== id && b.trigger && b.trigger.type === "watch_dir") {
+            if (b.id !== id && b.trigger && b.trigger.type === type) {
               b.trigger.enabled = false;
             }
           });
@@ -485,10 +497,36 @@
       });
   }
 
+  // Rebuild the type-picker items (called from syncTriggerButton, so the
+  // active checkmark and labels are always current when the menu opens).
+  function rebuildTriggerMenu() {
+    var menu = qs("#wfTriggerMenu");
+    if (!menu) return;
+    menu.innerHTML = "";
+    var active = activeTriggerType();
+    triggerTypes().forEach(function (t) {
+      var item = el("button", "wf-run-menu-item", t.label);
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      if (t.id === active) item.classList.add("wf-trigger-item-active");
+      item.title =
+        t.id === active
+          ? "Turn auto-run off"
+          : "Auto-run this blueprint when: " + t.label.toLowerCase();
+      item.addEventListener("click", function () {
+        if (_triggerMenuCtl) _triggerMenuCtl.close();
+        // Clicking the armed type disarms it; any other type arms/moves it.
+        setTrigger(t.id, t.id !== active);
+      });
+      menu.appendChild(item);
+    });
+  }
+
   function syncTriggerButton() {
     var btn = qs("#wfTriggerBtn");
     if (!btn) return;
-    var armed = activeTriggerArmed();
+    var activeType = activeTriggerType();
+    var armed = !!activeType;
     var v = state.validation;
     var hasErrors = !!(v && v.errors && v.errors.length);
     var armable = !hasErrors && hasVideoSource();
@@ -497,33 +535,48 @@
     btn.classList.toggle("wf-trigger-armed", armed);
     btn.setAttribute("aria-pressed", armed ? "true" : "false");
     var label = btn.querySelector(".wf-trigger-label");
-    if (label) label.textContent = armed ? "Auto-running" : "Auto-run on new video";
-    var other = armedBlueprint();
+    if (label) {
+      label.textContent = armed
+        ? "Auto-run: " + triggerTypeLabel(activeType)
+        : "Auto-run";
+    }
     if (armed) {
       btn.title =
-        "Watching the input folder. New videos auto-run this blueprint. Click to stop.";
-    } else if (other) {
-      btn.title =
-        "Auto-run is armed on “" +
-        (other.name || "Untitled") +
-        "”. Click to move it here.";
+        "Auto-runs when: " +
+        triggerTypeLabel(activeType).toLowerCase() +
+        ". Open to change or turn off.";
     } else if (!hasVideoSource()) {
-      btn.title = "Add a Video Source node to enable auto-run on new videos";
+      btn.title = "Add a Video Source node to enable auto-run";
     } else if (hasErrors) {
       btn.title = "Fix the errors in the Issues panel to enable auto-run";
     } else {
       btn.title =
-        "Auto-run this blueprint when a new video lands in the input folder";
+        "Auto-run this blueprint when a video lands, a transcript completes, or a scan completes";
     }
-    // Persistent global cue: which blueprint (if any) is armed, even when it
-    // isn't the active canvas (the button only reflects the active blueprint).
+    rebuildTriggerMenu();
+    // Persistent global cue: which blueprints (if any) are armed — one per
+    // trigger type is possible — even when none is the active canvas.
     var hint = qs("#wfArmedHint");
     if (hint) {
-      var armedBp = armedBlueprint();
-      if (armedBp) {
-        hint.textContent = "⚡ Auto-run: " + (armedBp.name || "Untitled");
-        hint.title =
-          "“" + (armedBp.name || "Untitled") + "” runs automatically on new videos";
+      var armedList = armedBlueprints();
+      if (armedList.length) {
+        hint.textContent =
+          "⚡ Auto-run: " +
+          armedList
+            .map(function (b) {
+              return b.name || "Untitled";
+            })
+            .join(", ");
+        hint.title = armedList
+          .map(function (b) {
+            return (
+              "“" +
+              (b.name || "Untitled") +
+              "” runs when: " +
+              triggerTypeLabel(String(b.trigger.type || "")).toLowerCase()
+            );
+          })
+          .join(" · ");
         hint.classList.remove("hidden");
       } else {
         hint.classList.add("hidden");
@@ -1181,7 +1234,10 @@
       });
     }
     var triggerBtn = qs("#wfTriggerBtn");
-    if (triggerBtn) triggerBtn.addEventListener("click", toggleTrigger);
+    var triggerMenu = qs("#wfTriggerMenu");
+    if (triggerBtn && triggerMenu) {
+      _triggerMenuCtl = bindMenuToggle(triggerBtn, triggerMenu);
+    }
 
     var retryBtn = qs("#wfOverlayRetry");
     if (retryBtn) retryBtn.addEventListener("click", loadWorkspace);

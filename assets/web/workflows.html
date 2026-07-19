@@ -97,12 +97,16 @@
     </div>
     <button id="wfStopBtn" class="btn btn-small hidden" type="button"
             title="Cancel the running workflow">Stop</button>
-    <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
-            aria-pressed="false"
-            title="Auto-run this blueprint when a new video lands in the input folder">
-      <span class="wf-trigger-icon" aria-hidden="true"></span>
-      <span class="wf-trigger-label">Auto-run on new video</span>
-    </button>
+    <div class="wf-trigger-wrap">
+      <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
+              aria-pressed="false" aria-haspopup="menu" aria-expanded="false"
+              title="Auto-run this blueprint when a video lands, a transcript completes, or a scan completes">
+        <span class="wf-trigger-icon" aria-hidden="true"></span>
+        <span class="wf-trigger-label">Auto-run</span>
+      </button>
+      <!-- Trigger-type picker (items built from /api/catalog context). -->
+      <div id="wfTriggerMenu" class="wf-run-menu cg-menu hidden" role="menu"></div>
+    </div>
     <!-- Persistent cue that some blueprint is armed for auto-run, even one
          that isn't the active canvas (the button only reflects the active). -->
     <span id="wfArmedHint" class="wf-armed-hint hidden"></span>

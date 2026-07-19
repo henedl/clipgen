@@ -2175,3 +2175,16 @@ body[data-frontend="workflows"] {
   pointer-events: none;
   z-index: var(--z-float);
 }
+
+/* ---- Auto-run trigger type picker (W7) ---- */
+
+.wf-trigger-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* The armed type reads emphasized in the picker. */
+.wf-run-menu-item.wf-trigger-item-active {
+  color: var(--accent);
+  font-weight: 600;
+}

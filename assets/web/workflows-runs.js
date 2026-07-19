@@ -837,7 +837,9 @@
     // Auto-launched by the watch-dir trigger (P6) — a bolt chip distinguishes it
     // from a manual run (margin-right:auto keeps it hugging the status label).
     if (run.triggered) {
-      head.appendChild(el("span", "wf-run-triggered", "triggered"));
+      var trig = el("span", "wf-run-triggered", "triggered");
+      if (run.triggerType) trig.title = "Auto-run trigger: " + run.triggerType;
+      head.appendChild(trig);
     }
     // Live stream dropped for the active run — polling is covering the gap.
     if (_reconnecting && run.id === state.activeRunId && !isTerminal(run.status)) {

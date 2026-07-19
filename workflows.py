@@ -33,12 +33,17 @@ Manifest shape (``workflows_manifest.json`` in the output directory)::
         "runs":       [ {id, blueprintId, status, nodeStates, startedAt, completedAt} ]
     }
 
-``trigger`` holds the watch-dir auto-launch binding (P6): ``null`` (or
-``{"type": "watch_dir", "enabled": false}``) when disarmed, or
-``{"type": "watch_dir", "enabled": true}`` on the single armed blueprint. The
-directory watcher in ``workflows_server`` auto-runs the armed blueprint (one run
-per just-arrived participant). The ``type`` field leaves room for future trigger
-kinds (transcript_complete / scan_event chaining) without a schema migration.
+``trigger`` holds the auto-launch binding: ``null`` (or ``{"type": <t>,
+"enabled": false}``) when disarmed, or ``{"type": <t>, "enabled": true}`` on an
+armed blueprint, where ``<t>`` is one of ``TRIGGER_TYPES`` (``new_video`` /
+``transcript_complete`` / ``scan_event``). At most one blueprint is armed *per
+trigger type* (so a new-video pipeline can chain into a transcript-complete
+one). The watcher daemon in ``workflows_server`` fires the matching armed
+blueprint once per arriving participant/completion, bound via
+``bind_participant``. Feedback-loop note: the workflow ``transcribe`` node
+calls ``transcripts.transcribe_video`` directly and never writes the
+transcripts manifest, so a transcript-complete-triggered graph containing a
+Transcribe node cannot re-fire itself.
 """
 
 from __future__ import annotations
@@ -3547,6 +3552,19 @@ NODE_STATUS_SKIPPED = "skipped"
 # the runner filters them out so they never execute or appear in run snapshots.
 NOTE_NODE_TYPE = "note"
 
+# Auto-run trigger types: new_video (the original watch-dir P6 trigger) plus
+# the chaining triggers (a transcript or Screenspace scan completing fires an
+# armed blueprint for that participant). Served through /api/catalog context so
+# the frontend picker never duplicates the list; workflows_server's watcher
+# polls each type's source (input dir / transcripts manifest / screenspace
+# manifest) only while a blueprint of that type is armed.
+TRIGGER_TYPES: list[dict[str, str]] = [
+    {"id": "new_video", "label": "New video lands"},
+    {"id": "transcript_complete", "label": "Transcript completes"},
+    {"id": "scan_event", "label": "Screenspace scan completes"},
+]
+TRIGGER_TYPE_IDS = frozenset(t["id"] for t in TRIGGER_TYPES)
+
 _PROGRESS_NOTIFY_INTERVAL = (
     0.5  # seconds; throttle SSE notifies (copy screenspace_worker)
 )
@@ -3933,6 +3951,7 @@ class WorkflowRunner:
         participant: str = "",
         batch_id: str = "",
         triggered: bool = False,
+        trigger_type: str = "",
         target_node_id: str = "",
         seed_results: dict[str, dict[str, Any]] | None = None,
         seed_note: str = "",
@@ -3953,9 +3972,11 @@ class WorkflowRunner:
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
         self.batch_id = batch_id
-        # Watch-dir trigger (P6): True when this run was auto-launched by the
-        # directory watcher (surfaced as a badge in the run history).
+        # Auto-run triggers (P6 + chaining): True when this run was launched by
+        # the watcher (surfaced as a badge in the run history); ``trigger_type``
+        # records which trigger fired it (new_video / transcript_complete / …).
         self.triggered = triggered
+        self.trigger_type = trigger_type
         # Sticky notes are canvas annotations, not executable nodes — drop them
         # before node_states is built so they never run, fail as "No executor",
         # or pad the snapshot's node counts.
@@ -4293,6 +4314,7 @@ class WorkflowRunner:
             "batchId": self.batch_id,
             "participant": self.participant,
             "triggered": self.triggered,
+            "triggerType": self.trigger_type,
             "status": self.status,
             "nodeStates": node_states,
             "results": results,

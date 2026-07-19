@@ -45,6 +45,11 @@ def wf_client(tmp_path, monkeypatch):
     # Reset watch-dir trigger state (P6) so seen pids never leak across tests.
     monkeypatch.setattr(workflows_server, "_watch_seen", set())
     monkeypatch.setattr(workflows_server, "_watch_pending", {})
+    # Chaining-trigger baselines + mtime caches (W7).
+    monkeypatch.setattr(workflows_server, "_watch_transcript_baseline", {})
+    monkeypatch.setattr(workflows_server, "_watch_scan_seen", set())
+    monkeypatch.setattr(workflows_server, "_watch_transcript_cache", (-1.0, {}))
+    monkeypatch.setattr(workflows_server, "_watch_scan_cache", (-1.0, {}))
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
@@ -132,10 +137,20 @@ def test_catalog_returns_serializable_node_types(wf_client):
     assert all("execute" not in node for node in catalog)
     # Launch-context flags drive palette grey-out; participants populate the
     # Video-Source dropdown (reusing the videoDir discovery call).
-    assert set(data["context"]) == {"sheet", "videoDir", "participants", "outputDir"}
+    assert set(data["context"]) == {
+        "sheet",
+        "videoDir",
+        "participants",
+        "outputDir",
+        "triggerTypes",
+    }
     assert data["context"]["sheet"] is False  # fixture sets _sheet_context=None
     assert isinstance(data["context"]["participants"], list)
     assert isinstance(data["context"]["outputDir"], str)  # run panel shows it
+    # Auto-run trigger types flow through the catalog (no duplicated JS list).
+    assert [t["id"] for t in data["context"]["triggerTypes"]] == [
+        t["id"] for t in workflows.TRIGGER_TYPES
+    ]
 
 
 def test_catalog_serves_node_descriptions(wf_client):
@@ -1075,7 +1090,7 @@ def _record_launches(monkeypatch):
     """Replace _launch_run with a recorder so no real runner threads spawn."""
     calls = []
 
-    def _fake(blueprint, participant="", triggered=False):
+    def _fake(blueprint, participant="", triggered=False, **kwargs):
         calls.append((blueprint, participant, triggered))
         return {}
 
@@ -1099,7 +1114,7 @@ def test_trigger_arm_and_disarm_round_trip(wf_client):
     )
     assert res.status_code == 200
     assert res.get_json()["blueprint"]["trigger"] == {
-        "type": "watch_dir",
+        "type": "new_video",
         "enabled": True,
     }
     listed = wf_client.get("/workflows/api/blueprints").get_json()["blueprints"]
@@ -1232,7 +1247,7 @@ def test_watch_two_armed_is_ambiguous_and_skips(wf_client, monkeypatch):
     # watcher defends against an inconsistent manifest.
     for bid in (a, b):
         bp = next(x for x in workflows_server._manifest["blueprints"] if x["id"] == bid)
-        bp["trigger"] = {"type": "watch_dir", "enabled": True}
+        bp["trigger"] = {"type": "new_video", "enabled": True}
     _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
@@ -1366,3 +1381,147 @@ def test_node_result_endpoint_hides_resume_only_sidecars(wf_client, monkeypatch)
     assert (workflows.run_results_dir(base, run["id"]) / "v.json").exists()
     res = wf_client.get(f"/workflows/api/runs/{run['id']}/nodes/v/result")
     assert res.status_code == 404
+
+
+# ---- Chaining triggers (transcript_complete / scan_event) ----
+
+
+def _arm(client, bp_id, trigger_type):
+    return client.put(
+        f"/workflows/api/blueprints/{bp_id}/trigger",
+        json={"enabled": True, "type": trigger_type},
+    )
+
+
+def _write_transcripts_manifest(entries):
+    """Write a minimal transcripts manifest: {pid: transcribed_at}."""
+    utils.save_json_manifest(
+        config.TRANSCRIPTS_MANIFEST_FILENAME,
+        {
+            "source_transcripts": {
+                pid: {"segments": [], "transcribed_at": stamp}
+                for pid, stamp in entries.items()
+            }
+        },
+    )
+
+
+def _write_screenspace_manifest(tasks):
+    """Write a minimal screenspace manifest: [(task_id, participant, status)]."""
+    utils.save_json_manifest(
+        config.SCREENSPACE_MANIFEST_FILENAME,
+        {
+            "tasks": [
+                {"id": tid, "participant": pid, "status": status}
+                for tid, pid, status in tasks
+            ]
+        },
+    )
+
+
+def test_transcript_trigger_fires_once_per_completion(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    assert _arm(wf_client, bp, "transcript_complete").status_code == 200
+
+    _write_transcripts_manifest({"P05": "2026-07-19T10:00:00+00:00"})
+    workflows_server._watch_poll_once()
+    assert [(c[1], c[2]) for c in calls] == [("P05", True)]
+    # Same stamp again → no double fire.
+    workflows_server._watch_poll_once()
+    assert len(calls) == 1
+    # A re-transcription bumps the stamp → fires again for that participant.
+    _write_transcripts_manifest({"P05": "2026-07-19T11:00:00+00:00"})
+    workflows_server._watch_poll_once()
+    assert len(calls) == 2
+
+
+def test_transcript_trigger_arm_baselines_existing_backlog(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    _write_transcripts_manifest({"P01": "2026-07-19T09:00:00+00:00"})
+    bp = _video_source_blueprint(wf_client)
+    # Arming AFTER the transcript exists must not retro-fire it.
+    assert _arm(wf_client, bp, "transcript_complete").status_code == 200
+    workflows_server._watch_poll_once()
+    assert calls == []
+
+
+def test_scan_trigger_fires_per_completed_task(wf_client, monkeypatch):
+    calls = _record_launches(monkeypatch)
+    bp = _video_source_blueprint(wf_client)
+    assert _arm(wf_client, bp, "scan_event").status_code == 200
+
+    _write_screenspace_manifest([("t1", "P02", "completed"), ("t2", "P03", "running")])
+    workflows_server._watch_poll_once()
+    assert [(c[1], c[2]) for c in calls] == [("P02", True)]
+    # t2 completing later fires for its participant; t1 never re-fires.
+    _write_screenspace_manifest(
+        [("t1", "P02", "completed"), ("t2", "P03", "completed")]
+    )
+    workflows_server._watch_poll_once()
+    assert [(c[1], c[2]) for c in calls] == [("P02", True), ("P03", True)]
+
+
+def test_per_type_arming_is_independent(wf_client):
+    a = _video_source_blueprint(wf_client)
+    b = _video_source_blueprint(wf_client)
+    assert _arm(wf_client, a, "new_video").status_code == 200
+    assert _arm(wf_client, b, "transcript_complete").status_code == 200
+    listed = wf_client.get("/workflows/api/blueprints").get_json()["blueprints"]
+    by_id = {x["id"]: x for x in listed}
+    # Arming a different type does NOT disarm the other blueprint.
+    assert by_id[a]["trigger"] == {"type": "new_video", "enabled": True}
+    assert by_id[b]["trigger"] == {"type": "transcript_complete", "enabled": True}
+    # Same-type arming still steals: a second new_video blueprint disarms a's.
+    c = _video_source_blueprint(wf_client)
+    assert _arm(wf_client, c, "new_video").status_code == 200
+    listed = wf_client.get("/workflows/api/blueprints").get_json()["blueprints"]
+    by_id = {x["id"]: x for x in listed}
+    assert by_id[a]["trigger"]["enabled"] is False
+    assert by_id[b]["trigger"]["enabled"] is True
+    assert by_id[c]["trigger"]["enabled"] is True
+
+
+def test_unknown_trigger_type_rejected(wf_client):
+    bp = _video_source_blueprint(wf_client)
+    res = wf_client.put(
+        f"/workflows/api/blueprints/{bp}/trigger",
+        json={"enabled": True, "type": "full_moon"},
+    )
+    assert res.status_code == 400
+
+
+def test_transcript_markers_mtime_gate_skips_reparse(wf_client, monkeypatch):
+    bp = _video_source_blueprint(wf_client)
+    assert _arm(wf_client, bp, "transcript_complete").status_code == 200
+    _write_transcripts_manifest({"P01": "2026-07-19T09:00:00+00:00"})
+
+    parses = {"n": 0}
+    real_load = utils.load_json_manifest
+
+    def counting_load(filename, **kw):
+        if filename == config.TRANSCRIPTS_MANIFEST_FILENAME:
+            parses["n"] += 1
+        return real_load(filename, **kw)
+
+    monkeypatch.setattr(utils, "load_json_manifest", counting_load)
+    workflows_server._watch_poll_once()
+    first = parses["n"]
+    assert first >= 1
+    # Unchanged file → the next polls never re-parse it.
+    workflows_server._watch_poll_once()
+    workflows_server._watch_poll_once()
+    assert parses["n"] == first
+
+
+def test_disarm_uses_blueprints_current_type(wf_client):
+    bp = _video_source_blueprint(wf_client)
+    assert _arm(wf_client, bp, "scan_event").status_code == 200
+    # Disarm without echoing the type — the server disarms what's bound.
+    res = wf_client.put(
+        f"/workflows/api/blueprints/{bp}/trigger", json={"enabled": False}
+    )
+    assert res.get_json()["blueprint"]["trigger"] == {
+        "type": "scan_event",
+        "enabled": False,
+    }

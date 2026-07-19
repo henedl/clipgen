@@ -386,16 +386,21 @@ def test_lazy_node_results_and_rerun_present():
     assert ".wf-issue-warning" in css
 
 
-def test_watch_dir_trigger_toggle_and_badge():
-    """P6 watch-dir triggers: the toolbar toggle, its hub-owned PUT + single-active
-    mirror, the validate satellite re-gate, and the run-history triggered badge."""
+def test_auto_run_trigger_picker_and_badge():
+    """Auto-run triggers: the toolbar type-picker menu, its hub-owned PUT +
+    per-type single-active mirror, the validate satellite re-gate, and the
+    run-history triggered badge."""
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
     assert 'id="wfTriggerBtn"' in html
+    assert 'id="wfTriggerMenu"' in html
 
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
-    # Hub owns the toggle (touches state.blueprints + the dedicated trigger PUT).
+    # Hub owns the picker (touches state.blueprints + the dedicated trigger PUT);
+    # the type list flows from /api/catalog context, never a hardcoded JS list.
     assert "/trigger" in hub
-    assert "function toggleTrigger" in hub
+    assert "function setTrigger" in hub
+    assert "function rebuildTriggerMenu" in hub
+    assert "state.context.triggerTypes" in hub
     assert "WF.syncTriggerButton" in hub  # published for the validate satellite
     assert '"#wfTriggerBtn"' in hub  # gated alongside the other toolbar controls
 
