@@ -176,18 +176,21 @@ def test_runner_writes_node_result_sidecars(tmp_path, monkeypatch):
     )
     runner.run()
     rdir = workflows.run_results_dir(tmp_path, "run_test")
-    # Inspectable nodes (segments, summary) get a sidecar; the plumbing-only
-    # video source (video/participant ports) does not.
+    # Every node with JSON-safe output ports gets a sidecar now (resume needs
+    # them) — including the plumbing-only video source.
     assert (rdir / "t.json").exists()
     assert (rdir / "s.json").exists()
-    assert not (rdir / "v.json").exists()
-    # The snapshot flags which nodes have a fetchable result.
+    assert (rdir / "v.json").exists()
+    # hasResult still advertises only nodes with something the inspector can
+    # render — the video source's sidecar is resume-only.
     states = runner.snapshot()["nodeStates"]
     assert states["t"]["hasResult"] is True
     assert states["s"]["hasResult"] is True
     assert states["v"]["hasResult"] is False
-    # The sidecar holds the inspectable payload, JSON-loadable.
-    assert "summary" in json.loads((rdir / "s.json").read_text(encoding="utf-8"))
+    # The sidecar holds the payload plus its self-describing node type.
+    payload = json.loads((rdir / "s.json").read_text(encoding="utf-8"))
+    assert "summary" in payload
+    assert payload["__type__"] == "summarize"
 
 
 def test_inspectable_result_projects_and_filters_ports():
@@ -215,14 +218,42 @@ def test_write_node_sidecar_guards_and_empty_payload(tmp_path):
     assert not workflows.write_node_sidecar(
         tmp_path, "run_x", "../escape", "make_clips", arts
     )
-    # A node with no inspectable port writes nothing.
+    # A clipRecords producer has no JSON-safe port — writes nothing (gspread
+    # Cells never reach a sidecar; such nodes always re-run on resume).
     assert not workflows.write_node_sidecar(
+        tmp_path, "run_x", "sel", "sheet_selection", {"clips": {"records": ["x"]}}
+    )
+    # A plumbing-only video source IS persisted now (resume seeds need it),
+    # even though it has nothing inspectable.
+    assert workflows.write_node_sidecar(
         tmp_path, "run_x", "v", "video_source", {"video": {"participant": "P01"}}
     )
-    # A real inspectable payload writes a loadable sidecar.
+    # A real inspectable payload writes a loadable sidecar carrying __type__.
     assert workflows.write_node_sidecar(tmp_path, "run_x", "m", "make_clips", arts)
     written = workflows.run_results_dir(tmp_path, "run_x") / "m.json"
-    assert "artifacts" in json.loads(written.read_text(encoding="utf-8"))
+    loaded = json.loads(written.read_text(encoding="utf-8"))
+    assert "artifacts" in loaded
+    assert loaded["__type__"] == "make_clips"
+
+
+def test_inspectable_sidecar_view_hides_resume_only_ports():
+    # A transcribe sidecar persists transcript (resume-only) + segments
+    # (inspectable); the view keeps only the inspectable subset.
+    view = workflows.inspectable_sidecar_view(
+        {
+            "__type__": "transcribe",
+            "transcript": {"segments": [], "language": "en"},
+            "segments": {"segments": [{"text": "hi"}], "source": {}},
+        }
+    )
+    assert list(view.keys()) == ["segments"]
+    # A resume-only sidecar (video source) projects to nothing.
+    assert (
+        workflows.inspectable_sidecar_view(
+            {"__type__": "video_source", "video": {}, "participant": "P01"}
+        )
+        == {}
+    )
 
 
 def test_failed_node_skips_its_downstream(tmp_path, monkeypatch):
@@ -542,3 +573,154 @@ def test_note_nodes_are_ignored_by_runner(tmp_path, monkeypatch):
     snap = runner.snapshot()
     assert "memo" not in snap["nodeStates"]
     assert runner.node_states["v"]["status"] == "completed"
+
+
+# ---- Resume-from-failure (compute_resume_plan + seed ordering) ----
+
+
+def _chain_blueprint():
+    return {
+        "id": "bp",
+        "nodes": [
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "t", "type": "transcribe", "params": {}},
+            {"id": "s", "type": "summarize", "params": {}},
+        ],
+        "edges": [
+            {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+            {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+        ],
+    }
+
+
+_V_SIDECAR = {
+    "__type__": "video_source",
+    "video": {"participant": "P01", "video_paths": []},
+    "participant": "P01",
+}
+_T_SIDECAR = {
+    "__type__": "transcribe",
+    "transcript": {"segments": [], "language": "", "model": "", "source_file": ""},
+    "segments": {"segments": [], "source": {}},
+}
+
+
+def test_resume_plan_reruns_failed_node_and_descendants():
+    prior = {
+        "v": {"status": "completed"},
+        "t": {"status": "failed"},
+        "s": {"status": "completed"},
+    }
+    sidecars = {"v": _V_SIDECAR, "t": _T_SIDECAR}
+    seeds, _notes = workflows.compute_resume_plan(
+        _chain_blueprint(), prior, sidecars.get
+    )
+    # Only the pre-failure ancestor is reused; the failed node and everything
+    # downstream (even previously-completed) re-run with fresh inputs.
+    assert set(seeds) == {"v"}
+
+
+def test_resume_plan_missing_sidecar_degrades_to_full_rerun():
+    prior = {nid: {"status": "completed"} for nid in ("v", "t", "s")}
+    seeds, notes = workflows.compute_resume_plan(
+        _chain_blueprint(), prior, lambda nid: None
+    )
+    assert seeds == {}
+    assert notes  # "nothing reusable" degradation note
+
+
+def test_resume_plan_changed_node_type_invalidates_seed():
+    bp = _chain_blueprint()
+    prior = {nid: {"status": "completed"} for nid in ("v", "t", "s")}
+    # The sidecar says "t" was a transcribe run, but the blueprint now has a
+    # different type under that id — its seed (and its descendants) re-run.
+    sidecars = {"v": _V_SIDECAR, "t": {**_T_SIDECAR, "__type__": "find_word"}}
+    seeds, _notes = workflows.compute_resume_plan(bp, prior, sidecars.get)
+    assert set(seeds) == {"v"}
+
+
+def test_resume_plan_cliprecords_producer_always_reruns():
+    bp = {
+        "id": "bp",
+        "nodes": [
+            {"id": "sel", "type": "sheet_selection", "params": {}},
+            {"id": "m", "type": "make_clips", "params": {}},
+        ],
+        "edges": [{"from": "sel", "fromPort": "clips", "to": "m", "toPort": "clips"}],
+    }
+    prior = {"sel": {"status": "completed"}, "m": {"status": "failed"}}
+    # sheet_selection never gets a sidecar (gspread Cells) → loader has nothing.
+    seeds, _notes = workflows.compute_resume_plan(bp, prior, lambda nid: None)
+    assert seeds == {}
+
+
+def test_resume_plan_heatmap_pulls_events_ancestry_through_filter():
+    bp = {
+        "id": "bp",
+        "nodes": [
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "d", "type": "detect", "params": {"detector": "change"}},
+            {"id": "f", "type": "filter_events", "params": {}},
+            {"id": "h", "type": "heatmap", "params": {}},
+        ],
+        "edges": [
+            {"from": "v", "fromPort": "video", "to": "d", "toPort": "video"},
+            {"from": "d", "fromPort": "events", "to": "f", "toPort": "in"},
+            {"from": "f", "fromPort": "out", "to": "h", "toPort": "events"},
+        ],
+    }
+    prior = {
+        "v": {"status": "completed"},
+        "d": {"status": "completed"},
+        "f": {"status": "completed"},
+        "h": {"status": "failed"},
+    }
+    ev = {"__type__": "detect", "events": {"events": [], "source": {}}}
+    sidecars = {
+        "v": _V_SIDECAR,
+        "d": ev,
+        "f": {**ev, "__type__": "filter_events", "out": ev["events"]},
+    }
+    sidecars["f"].pop("events", None)
+    seeds, _notes = workflows.compute_resume_plan(bp, prior, sidecars.get)
+    # Sidecars project out raw_results, which the heatmap consumes — so its
+    # whole events ancestry re-runs (through the raw_results-preserving filter),
+    # leaving only the video source seeded.
+    assert set(seeds) == {"v"}
+
+
+def test_seeded_node_survives_skipped_parent(tmp_path):
+    # Resume semantics: a seed for a completed node is authoritative even when
+    # its (re-running) parent is muted/skipped in this run.
+    runner = workflows.WorkflowRunner(
+        "run_seed",
+        {
+            "id": "bp",
+            "nodes": [
+                {
+                    "id": "t",
+                    "type": "transcribe",
+                    "params": {},
+                    "disabled": True,  # parent skipped this run
+                },
+                {"id": "s", "type": "summarize", "params": {}},
+            ],
+            "edges": [
+                {
+                    "from": "t",
+                    "fromPort": "transcript",
+                    "to": "s",
+                    "toPort": "transcript",
+                },
+            ],
+        },
+        _ctx(tmp_path),
+        seed_results={"s": {"summary": {"text": "cached", "bullets": []}}},
+        seed_note="Reused from run run_prior",
+    )
+    runner.run()
+    assert runner.node_states["t"]["status"] == "skipped"
+    # Without the seed-before-skip ordering this would be "skipped" too.
+    assert runner.node_states["s"]["status"] == "completed"
+    assert runner.node_states["s"]["note"] == "Reused from run run_prior"
+    assert runner.status == "completed"

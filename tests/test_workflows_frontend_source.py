@@ -719,3 +719,14 @@ def test_notes_skip_validation_and_auto_arrange():
     canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
     # autoArrange leaves notes where the user put them.
     assert 'n.type !== "note"' in canvas
+
+
+# ---- Resume-from-failure (W5) ----
+
+
+def test_resume_button_on_failed_runs():
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "wf-run-resume" in runs
+    assert "resumeFromRunId" in runs
+    # Resume is a single run even on a batch-fanout blueprint.
+    assert "!targetNodeId && !resumeFromRunId && blueprintWantsBatch()" in runs

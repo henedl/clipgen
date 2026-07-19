@@ -170,15 +170,16 @@
     return batch && !isTerminal(batch.status);
   }
 
-  function startRun(targetNodeId) {
+  function startRun(targetNodeId, resumeFromRunId) {
     if (!state.ready || !state.activeBlueprintId) return;
     if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
     // Errors gate the run (the button is already disabled; this guards the
     // programmatic path). Warnings never block.
     if (state.validation && state.validation.errors.length) return;
     // A Video Source set to "All participants" makes Run fan out over the study —
-    // but a partial "run to here" is always a single run.
-    if (!targetNodeId && blueprintWantsBatch()) {
+    // but a partial "run to here" or a resume is always a single run (a resumed
+    // batch child keeps its participant binding server-side).
+    if (!targetNodeId && !resumeFromRunId && blueprintWantsBatch()) {
       startBatch();
       return;
     }
@@ -188,6 +189,7 @@
       .then(function () {
         var body = { blueprintId: state.activeBlueprintId };
         if (targetNodeId) body.targetNodeId = targetNodeId;
+        if (resumeFromRunId) body.resumeFromRunId = resumeFromRunId;
         return apiPost("api/runs", body);
       })
       .then(function (res) {
@@ -823,6 +825,22 @@
     // (no partial/memoized re-run; the engine just re-executes). Disabled while
     // a run/batch is in flight, mirroring the toolbar Run gate.
     if (isTerminal(run.status) && run.blueprintId === state.activeBlueprintId) {
+      // Resume a failed/cancelled run: the server reloads this run's completed
+      // node results from its sidecars and executes only what failed (plus
+      // everything downstream). Falls back to a full run when nothing is
+      // reusable (expired sidecars).
+      if (run.status === "failed" || run.status === "cancelled") {
+        var resume = el("button", "wf-run-rerun wf-run-resume", "Resume");
+        resume.type = "button";
+        resume.title =
+          "Re-run only the failed part, reusing this run's completed results";
+        resume.disabled = activeRunInFlight() || activeBatchInFlight();
+        resume.addEventListener("click", function (e) {
+          e.stopPropagation();
+          startRun(null, run.id);
+        });
+        head.appendChild(resume);
+      }
       var rerun = el("button", "wf-run-rerun", "Re-run");
       rerun.type = "button";
       rerun.disabled = activeRunInFlight() || activeBatchInFlight();

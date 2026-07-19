@@ -473,13 +473,16 @@ def _launch_run(
     participant: str = "",
     triggered: bool = False,
     target_node_id: str = "",
+    seed_results: dict[str, dict[str, Any]] | None = None,
+    seed_note: str = "",
 ) -> dict[str, Any]:
     """Create + spawn one run on a daemon thread; return the initial snapshot.
 
     Shared by ``POST /api/runs`` and the watch-dir trigger. The blueprint is
     assumed already validated (``topo_order``) and, for a triggered run, already
     participant-bound by the caller. ``target_node_id`` (P11) restricts the run to
-    that node and its ancestors.
+    that node and its ancestors. ``seed_results`` (resume) pre-completes nodes
+    whose output was reloaded from a prior run's sidecars.
     """
     run_id = "run_" + uuid.uuid4().hex[:8]
     cancel_event = threading.Event()
@@ -492,6 +495,8 @@ def _launch_run(
         participant=participant,
         triggered=triggered,
         target_node_id=target_node_id,
+        seed_results=seed_results,
+        seed_note=seed_note,
     )
     with _runs_lock:
         _runs[run_id] = runner
@@ -538,7 +543,60 @@ def api_run_create() -> Any:
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
         return err("Unknown target node")
-    return ok(run=_launch_run(blueprint, target_node_id=target))
+
+    # Optional resume: reload the prior run's completed-node sidecars as seeds
+    # and execute only what failed/changed (plus everything downstream of it).
+    # Resumes against the CURRENT blueprint — same semantics as Re-run; an
+    # edited graph simply seeds fewer nodes (compute_resume_plan invalidates
+    # changed/missing nodes). Sidecars are loaded into memory here, so a
+    # concurrent history-trim pruning the prior run's dir mid-flight is
+    # harmless.
+    participant = ""
+    seed_results: dict[str, dict[str, Any]] | None = None
+    seed_note = ""
+    resume_from = str(data.get("resumeFromRunId") or "")
+    if resume_from:
+        prior = _run_snapshot(resume_from)
+        if prior is None:
+            return err("Run to resume not found", 404)
+        if prior.get("status") in (
+            workflows.RUN_STATUS_QUEUED,
+            workflows.RUN_STATUS_RUNNING,
+        ):
+            return err("Run is still in progress")
+        # A batch child / triggered run keeps its participant binding.
+        participant = str(prior.get("participant") or "")
+        if participant:
+            blueprint = workflows.bind_participant(blueprint, participant)
+        results_dir = workflows.run_results_dir(
+            utils.get_effective_output_dir(), resume_from
+        )
+
+        def _load_sidecar(node_id: str) -> dict[str, Any] | None:
+            if node_id != os.path.basename(node_id) or node_id in (".", ".."):
+                return None
+            try:
+                loaded = json.loads(
+                    (results_dir / f"{node_id}.json").read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                return None
+            return loaded if isinstance(loaded, dict) else None
+
+        seed_results, _plan_notes = workflows.compute_resume_plan(
+            blueprint, prior.get("nodeStates") or {}, _load_sidecar
+        )
+        seed_note = f"Reused from run {resume_from}"
+
+    return ok(
+        run=_launch_run(
+            blueprint,
+            participant=participant,
+            target_node_id=target,
+            seed_results=seed_results,
+            seed_note=seed_note,
+        )
+    )
 
 
 def _merged_runs() -> dict[str, dict[str, Any]]:
@@ -594,7 +652,12 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return err("No result for node", 404)
-    return ok(result=payload)
+    # Sidecars persist every JSON-safe port for resume; the inspector renders
+    # only the inspectable subset (and never the __type__ marker).
+    view = workflows.inspectable_sidecar_view(payload)
+    if not view:
+        return err("No result for node", 404)
+    return ok(result=view)
 
 
 @workflows_bp.route("/api/runs/<run_id>/cancel", methods=["POST"])

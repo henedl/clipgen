@@ -1272,3 +1272,97 @@ def test_watch_multipart_fires_once(wf_client, monkeypatch):
     for _ in range(4):
         workflows_server._watch_poll_once()
     assert len(calls) == 1  # one entry per pid -> a single fire
+
+
+# ---- Resume-from-failure ----
+
+
+def test_resume_seeds_completed_nodes_and_reruns_failed(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+
+    calls = {"transcribe": 0, "summarize": 0}
+    real_transcribe = workflows.NODE_TYPES["transcribe"]["execute"]
+
+    def counting_transcribe(ctx, inputs, params):
+        calls["transcribe"] += 1
+        return real_transcribe(ctx, inputs, params)
+
+    def failing_summarize(ctx, inputs, params):
+        calls["summarize"] += 1
+        raise RuntimeError("ollama exploded")
+
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["transcribe"], "execute", counting_transcribe
+    )
+    monkeypatch.setitem(workflows.NODE_TYPES["summarize"], "execute", failing_summarize)
+
+    bp = _make_blueprint(
+        wf_client,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {"id": "t", "type": "transcribe", "params": {}},
+            {"id": "s", "type": "summarize", "params": {}},
+        ],
+        edges=[
+            {"from": "v", "fromPort": "video", "to": "t", "toPort": "video"},
+            {"from": "t", "fromPort": "transcript", "to": "s", "toPort": "transcript"},
+        ],
+    )
+    first = wf_client.post("/workflows/api/runs", json={"blueprintId": bp}).get_json()[
+        "run"
+    ]
+    failed = _wait_terminal(wf_client, first["id"])
+    assert failed["status"] == "failed"
+    assert calls == {"transcribe": 1, "summarize": 1}
+
+    # "Fix" summarize, then resume: the transcribe result is seeded from the
+    # prior run's sidecar (never re-executed); only summarize runs again.
+    def fixed_summarize(ctx, inputs, params):
+        calls["summarize"] += 1
+        assert inputs.get("transcript") is not None  # seeded upstream value
+        return {"summary": {"text": "ok", "bullets": []}}
+
+    monkeypatch.setitem(workflows.NODE_TYPES["summarize"], "execute", fixed_summarize)
+    resumed = wf_client.post(
+        "/workflows/api/runs",
+        json={"blueprintId": bp, "resumeFromRunId": first["id"]},
+    ).get_json()["run"]
+    final = _wait_terminal(wf_client, resumed["id"])
+    assert final["status"] == "completed"
+    assert calls == {"transcribe": 1, "summarize": 2}
+    # Seeded nodes carry the provenance note; the re-run node doesn't.
+    assert "Reused from run" in (final["nodeStates"]["t"]["note"] or "")
+    assert not final["nodeStates"]["s"]["note"]
+
+
+def test_resume_unknown_or_live_run_is_rejected(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    bp = _make_blueprint(
+        wf_client, nodes=[{"id": "m", "type": "make_clips", "params": {}}]
+    )
+    res = wf_client.post(
+        "/workflows/api/runs", json={"blueprintId": bp, "resumeFromRunId": "run_nope"}
+    )
+    assert res.status_code == 404
+
+
+def test_node_result_endpoint_hides_resume_only_sidecars(wf_client, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    bp = _make_blueprint(
+        wf_client,
+        nodes=[{"id": "v", "type": "video_source", "params": {"participant": "P01"}}],
+    )
+    run = wf_client.post("/workflows/api/runs", json={"blueprintId": bp}).get_json()[
+        "run"
+    ]
+    final = _wait_terminal(wf_client, run["id"])
+    # The video source has a (resume-only) sidecar on disk but nothing the
+    # inspector can render: hasResult is False and the endpoint 404s.
+    assert final["nodeStates"]["v"]["hasResult"] is False
+    base = utils.get_effective_output_dir()
+    assert (workflows.run_results_dir(base, run["id"]) / "v.json").exists()
+    res = wf_client.get(f"/workflows/api/runs/{run['id']}/nodes/v/result")
+    assert res.status_code == 404

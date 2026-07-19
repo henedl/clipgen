@@ -3682,10 +3682,9 @@ def _node_result_summary(result: Any) -> dict[str, Any]:
 # written to ``<output_dir>/workflow_runs/<run_id>/<node_id>.json`` so the
 # run-history UI can lazily fetch and render it after the runner is evicted.
 
-# Output port types worth persisting. Plumbing types (``clipRecords`` carrying
-# gspread ``Cell``s, raw ``video``/``region``/``timeRange`` handles, ``control``)
-# are dropped — both because they aren't useful to inspect and because excluding
-# ``clipRecords`` dodges serializing a non-JSON ``Cell``.
+# Output port types the run-history UI renders on row-expand. Plumbing types
+# (video/region/timeRange handles, control) are persisted for resume (below)
+# but hidden from the inspector.
 _INSPECTABLE_PORT_TYPES = frozenset(
     {
         "artifacts",
@@ -3697,6 +3696,23 @@ _INSPECTABLE_PORT_TYPES = frozenset(
         "manifest",
         "viewerHtml",
         "scalar",
+    }
+)
+
+# Output port types persisted in the sidecar — everything JSON-safe, so a
+# later resume (``compute_resume_plan``) can reload a completed node's outputs
+# verbatim. Only ``clipRecords`` is excluded: its records carry gspread
+# ``Cell`` objects that don't survive JSON, so clipRecords producers always
+# re-run on resume (cheap — one Sheets read).
+_SIDECAR_PORT_TYPES = _INSPECTABLE_PORT_TYPES | frozenset(
+    {
+        "transcript",
+        "timeRange",
+        "timestamps",
+        "video",
+        "participant",
+        "region",
+        "control",  # a gate's pass verdict is a JSON bool; resume needs it
     }
 )
 
@@ -3719,35 +3735,64 @@ def _project_inspectable(port_type: str, value: Any) -> Any:
     return value
 
 
-def _inspectable_result(node_type_id: str, result: Any) -> dict[str, Any]:
-    """Keep only the result ports whose declared type is inspectable (projected)."""
+def _filter_result_ports(
+    node_type_id: str, result: Any, allowed: frozenset[str]
+) -> dict[str, Any]:
+    """Keep only the result ports whose declared type is in ``allowed`` (projected)."""
     if not isinstance(result, dict):
         return {}
     node_type = NODE_TYPES.get(node_type_id)
     out_types = {p["name"]: p["type"] for p in (node_type or {}).get("outputs", [])}
-    inspectable: dict[str, Any] = {}
+    kept: dict[str, Any] = {}
     for port, val in result.items():
         ptype = out_types.get(port)
-        if ptype in _INSPECTABLE_PORT_TYPES:
-            inspectable[port] = _project_inspectable(ptype, val)
-    return inspectable
+        if ptype in allowed:
+            kept[port] = _project_inspectable(ptype, val)
+    return kept
+
+
+def _inspectable_result(node_type_id: str, result: Any) -> dict[str, Any]:
+    """The UI-inspectable projection of a node result."""
+    return _filter_result_ports(node_type_id, result, _INSPECTABLE_PORT_TYPES)
+
+
+def inspectable_sidecar_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored sidecar payload down to its UI-inspectable ports.
+
+    Sidecars persist every JSON-safe port (for resume) plus a self-describing
+    ``__type__`` key; the run-history inspector should render only the
+    inspectable subset, exactly as it did before the widening.
+    """
+    node_type_id = str(payload.get("__type__", "") or "")
+    out_types = {
+        p["name"]: p["type"]
+        for p in (NODE_TYPES.get(node_type_id) or {}).get("outputs", [])
+    }
+    return {
+        port: val
+        for port, val in payload.items()
+        if port != "__type__" and out_types.get(port) in _INSPECTABLE_PORT_TYPES
+    }
 
 
 def write_node_sidecar(
     output_dir: Path | str, run_id: str, node_id: str, node_type_id: str, result: Any
 ) -> bool:
-    """Atomically write a node's inspectable result to its run sidecar.
+    """Atomically write a node's JSON-safe result ports to its run sidecar.
 
-    Returns True iff a sidecar file now exists for this node (i.e. it had at
-    least one inspectable port). JSON-sanitizes via :func:`utils.sanitize_floats`
-    (non-finite floats / numpy scalars). A bad ``node_id`` (path separators) or
-    an empty inspectable payload writes nothing and returns False.
+    Persists every ``_SIDECAR_PORT_TYPES`` port plus a self-describing
+    ``__type__`` key (consumed by resume + the read-time inspectable filter).
+    Returns True iff a sidecar file now exists for this node. JSON-sanitizes via
+    :func:`utils.sanitize_floats` (non-finite floats / numpy scalars). A bad
+    ``node_id`` (path separators) or an empty payload writes nothing and
+    returns False.
     """
     if not node_id or node_id != os.path.basename(node_id) or node_id in (".", ".."):
         return False
-    payload = _inspectable_result(node_type_id, result)
+    payload = _filter_result_ports(node_type_id, result, _SIDECAR_PORT_TYPES)
     if not payload:
         return False
+    payload["__type__"] = node_type_id
     path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
     tmp = path.with_suffix(".json.tmp")
     try:
@@ -3765,6 +3810,109 @@ def write_node_sidecar(
         except OSError:
             pass
         return False
+
+
+# Collection nodes that pass an events value's ``raw_results`` through
+# unchanged (see ``_COLLECTION_KINDS["events"]["preserve"]`` / merge's concat).
+# The resume planner walks heatmap ancestry through these.
+_RAW_RESULTS_PRESERVING = frozenset(
+    {
+        "filter_events",
+        "partition_events",
+        "merge_events",
+        "limit_events",
+        "dedup_events",
+    }
+)
+
+
+def compute_resume_plan(
+    blueprint: dict[str, Any],
+    prior_node_states: dict[str, Any],
+    load_sidecar: Callable[[str], dict[str, Any] | None],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Plan a resume: which prior-run nodes can be reused as seeds vs. re-run.
+
+    Pure. ``load_sidecar(node_id)`` returns the stored sidecar payload (with
+    its ``__type__`` key) or None. Returns ``(seed_results, notes)`` where
+    ``seed_results`` feeds :class:`WorkflowRunner`'s ``seed_results`` and
+    ``notes`` carries human-readable degradation reasons.
+
+    A node re-runs when: it didn't complete in the prior run; its id/type
+    changed since (graph edited between runs); its sidecar is missing or
+    doesn't cover every declared output port (e.g. clipRecords producers,
+    which are never sidecar-persisted); OR any ancestor re-runs (fresh inputs
+    invalidate the cached output). Additionally, a re-running ``heatmap``
+    forces its completed events-ancestry to re-run too — sidecars project out
+    the heavy ``raw_results`` the heatmap consumes, so a seeded events
+    producer would make the resumed heatmap silently emit nothing.
+    """
+    nodes = [n for n in blueprint.get("nodes", []) if n.get("type") != NOTE_NODE_TYPE]
+    by_id = {n["id"]: n for n in nodes}
+    children: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+    parents: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+    for edge in blueprint.get("edges", []):
+        src, dst = edge.get("from"), edge.get("to")
+        if src in by_id and dst in by_id:
+            children[src].append(dst)
+            parents[dst].append(src)
+
+    notes: list[str] = []
+    rerun: set[str] = set()
+    seeds: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        nid = n["id"]
+        prior = prior_node_states.get(nid) or {}
+        if prior.get("status") != NODE_STATUS_COMPLETED:
+            rerun.add(nid)
+            continue
+        payload = load_sidecar(nid)
+        if not isinstance(payload, dict):
+            rerun.add(nid)
+            continue
+        if str(payload.get("__type__", "")) != str(n.get("type", "")):
+            rerun.add(nid)  # the node changed type since the prior run
+            continue
+        declared = (NODE_TYPES.get(str(n.get("type", ""))) or {}).get("outputs", [])
+        stored = {k: v for k, v in payload.items() if k != "__type__"}
+        if not declared or any(p["name"] not in stored for p in declared):
+            # Some output port wasn't persisted (non-JSON-safe type, or the
+            # executor omitted it) — downstream would see None; re-run instead.
+            rerun.add(nid)
+            continue
+        seeds[nid] = stored
+
+    def _close_under_descendants() -> None:
+        stack = list(rerun)
+        while stack:
+            for child in children.get(stack.pop(), []):
+                if child not in rerun:
+                    rerun.add(child)
+                    stack.append(child)
+
+    # Fixpoint: descendant closure and the heatmap raw_results rule feed each
+    # other (a forced ancestor invalidates its own seeded descendants).
+    while True:
+        before = len(rerun)
+        _close_under_descendants()
+        for n in nodes:
+            if n.get("type") != "heatmap" or n["id"] not in rerun:
+                continue
+            stack = list(parents.get(n["id"], []))
+            while stack:
+                pid = stack.pop()
+                if pid in rerun:
+                    continue
+                rerun.add(pid)
+                if by_id[pid].get("type") in _RAW_RESULTS_PRESERVING:
+                    stack.extend(parents.get(pid, []))
+        if len(rerun) == before:
+            break
+
+    seed_results = {nid: val for nid, val in seeds.items() if nid not in rerun}
+    if not seed_results:
+        notes.append("No prior results could be reused — running everything")
+    return seed_results, notes
 
 
 class WorkflowRunner:
@@ -3787,16 +3935,20 @@ class WorkflowRunner:
         triggered: bool = False,
         target_node_id: str = "",
         seed_results: dict[str, dict[str, Any]] | None = None,
+        seed_note: str = "",
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
         # Partial run (P11): when set, only this node and its transitive ancestors
         # execute; the rest are marked skipped. Empty → run the whole graph.
         self.target_node_id = target_node_id
-        # Pre-seeded results (P3 batch perf): {node_id: result} for participant-
-        # independent source nodes the batch coordinator computed once. A seeded
-        # node is stored as if it ran, skipping its (rate-limited) executor.
+        # Pre-seeded results: {node_id: result} for nodes whose output is
+        # already known — participant-independent sources a batch coordinator
+        # computed once (P3), or completed nodes reloaded from a prior run's
+        # sidecars on resume. A seeded node is stored as if it ran, skipping
+        # its executor. ``seed_note`` (resume) is surfaced on each seeded node.
         self._seed_results = seed_results or {}
+        self._seed_note = seed_note
         # Batch identity (P3): empty for a normal single run; a child run carries
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
@@ -4014,6 +4166,32 @@ class WorkflowRunner:
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 continue
+            # Seeded result (batch precompute or resume): the node's output is
+            # authoritatively known — store it as if it just ran, skipping its
+            # executor. Checked BEFORE the mute/skip gates: a resume seed for a
+            # completed node must survive even when a (re-run) parent upstream
+            # is currently marked skipped/muted — the prior run already proved
+            # this node's output. (Batch seeds are parentless sources, so the
+            # ordering change is behavior-neutral for them.)
+            if node_id in self._seed_results:
+                seeded = self._seed_results[node_id]
+                with self._lock:
+                    self._results[node_id] = seeded
+                if write_node_sidecar(
+                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
+                ) and _inspectable_result(node["type"], seeded):
+                    with self._lock:
+                        self._sidecars.add(node_id)
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_COMPLETED,
+                    progress=1.0,
+                    completed_at=_now_iso(),
+                    note=self._seed_note or None,
+                )
+                self._notify(force=True)
+                continue
+
             # A muted node is skipped intrinsically; _should_skip then propagates
             # SKIPPED to its whole downstream subtree (same as a blocking gate).
             if node.get("disabled"):
@@ -4025,27 +4203,6 @@ class WorkflowRunner:
             if self._should_skip(node_id):
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
-                )
-                self._notify(force=True)
-                continue
-
-            # Batch seed (P3 perf): a participant-independent source precomputed
-            # once by the batch coordinator — store it as if this node just ran,
-            # skipping its (rate-limited) executor for every child but the first.
-            if node_id in self._seed_results:
-                seeded = self._seed_results[node_id]
-                with self._lock:
-                    self._results[node_id] = seeded
-                if write_node_sidecar(
-                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
-                ):
-                    with self._lock:
-                        self._sidecars.add(node_id)
-                self._set_node(
-                    node_id,
-                    status=NODE_STATUS_COMPLETED,
-                    progress=1.0,
-                    completed_at=_now_iso(),
                 )
                 self._notify(force=True)
                 continue
@@ -4081,11 +4238,13 @@ class WorkflowRunner:
                     notes.append(str(exec_note))
                 with self._lock:
                     self._results[node_id] = result
-                # Persist the inspectable result so the run-history UI can fetch
-                # it on demand even after this runner is evicted from memory.
+                # Persist the JSON-safe result ports (resume reloads them; the
+                # run-history UI fetches the inspectable subset on demand even
+                # after this runner is evicted from memory). ``hasResult`` only
+                # advertises sidecars with something the inspector can render.
                 if write_node_sidecar(
                     self.ctx.output_dir, self.run_id, node_id, node["type"], result
-                ):
+                ) and _inspectable_result(node["type"], result):
                     with self._lock:
                         self._sidecars.add(node_id)
                 self._set_node(
