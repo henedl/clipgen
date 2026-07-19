@@ -3542,6 +3542,11 @@ NODE_STATUS_COMPLETED = "completed"
 NODE_STATUS_FAILED = "failed"
 NODE_STATUS_SKIPPED = "skipped"
 
+# Canvas-only sticky-note pseudo-node (frontend-created, not in NODE_TYPES).
+# Notes live in blueprint["nodes"] so they ride save/undo/copy/import for free;
+# the runner filters them out so they never execute or appear in run snapshots.
+NOTE_NODE_TYPE = "note"
+
 _PROGRESS_NOTIFY_INTERVAL = (
     0.5  # seconds; throttle SSE notifies (copy screenspace_worker)
 )
@@ -3799,7 +3804,12 @@ class WorkflowRunner:
         # Watch-dir trigger (P6): True when this run was auto-launched by the
         # directory watcher (surfaced as a badge in the run history).
         self.triggered = triggered
-        self.nodes = list(blueprint.get("nodes", []))
+        # Sticky notes are canvas annotations, not executable nodes — drop them
+        # before node_states is built so they never run, fail as "No executor",
+        # or pad the snapshot's node counts.
+        self.nodes = [
+            n for n in blueprint.get("nodes", []) if n.get("type") != NOTE_NODE_TYPE
+        ]
         self.edges = list(blueprint.get("edges", []))
         self.ctx = ctx
         self.on_update = on_update or (lambda: None)

@@ -612,6 +612,32 @@
     ArrowDown: [0, 1],
   };
 
+  // ---- Sticky notes ----
+
+  // Drop a fresh note pseudo-node at the viewport centre and focus its
+  // textarea so typing can start immediately. Notes live in state.nodes (the
+  // runner ignores them), so save/undo/copy/delete need no special casing.
+  function addNote() {
+    if (!state.ready) return;
+    var canvas = qs("#wfCanvas");
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var w = clientToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    var node = {
+      id: "n_" + randomId(),
+      type: "note",
+      params: { text: "" },
+      position: { x: Math.round(w.x - 90), y: Math.round(w.y - 50) },
+    };
+    state.nodes.push(node);
+    state.selection = [node.id];
+    state.selectedEdge = null;
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    WF.scheduleSave();
+    var ta = qs('.wf-node[data-node-id="' + node.id + '"] .wf-note-text');
+    if (ta) ta.focus();
+  }
+
   // ---- Zoom ----
 
   function onWheel(e) {
@@ -775,6 +801,7 @@
         when: _canvasReady,
         handler: function () { zoomAtCenter(1 / (state.viewport.zoom || 1)); },
       },
+      { id: "workflows.addNote", when: _canvasReady, handler: function () { addNote(); } },
       {
         id: "workflows.deleteSelection",
         when: function () {
@@ -805,7 +832,11 @@
   // so the tidied graph is visible from the origin.
   function autoArrange() {
     if (!state.ready) return;
-    var nodes = state.nodes || [];
+    // Sticky notes are free-floating annotations — leave them where the user
+    // put them and lay out only the executable cards.
+    var nodes = (state.nodes || []).filter(function (n) {
+      return n.type !== "note";
+    });
     if (!nodes.length) return;
     // Re-layout rebuilds every card and moves the source node, so cancel any
     // in-flight wire gesture rather than leave it armed with a stale highlight.
@@ -1141,6 +1172,8 @@
   WF.zoomAtCenter = zoomAtCenter;
   // Consumed by the hub's toolbar snap toggle.
   WF.toggleSnap = toggleSnap;
+  // Consumed by the hub's toolbar Note button + command palette.
+  WF.addNote = addNote;
   WF.renderMinimap = renderMinimap;
   // Consumed by the wires satellite (cursor→world for the in-flight wire; node
   // lookup for port endpoints).

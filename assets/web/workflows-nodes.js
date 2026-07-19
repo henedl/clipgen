@@ -420,7 +420,37 @@
     return wrap;
   }
 
+  // Sticky-note pseudo-node: a canvas annotation, not an executable card. It
+  // keeps the .wf-node class + data-node-id so drag/marquee/delete/copy/minimap
+  // all work untouched; the runner filters type "note" out server-side.
+  function renderNoteCard(node) {
+    var pos = node.position || { x: 0, y: 0 };
+    var card = el("div", "wf-node wf-note");
+    card.setAttribute("data-node-id", node.id);
+    card.setAttribute("data-node-type", "note");
+    card.style.left = (pos.x || 0) + "px";
+    card.style.top = (pos.y || 0) + "px";
+    if (state.selection && state.selection.indexOf(node.id) >= 0) {
+      card.classList.add("selected");
+    }
+    // Slim header as the labeled grab surface (the textarea itself is exempt
+    // from canvas drag via the param-control rule in onCanvasMouseDown).
+    card.appendChild(el("div", "wf-note-header", "Note"));
+    var ta = document.createElement("textarea");
+    ta.className = "wf-note-text";
+    ta.placeholder = "Write a note…";
+    ta.value = (node.params && node.params.text) || "";
+    ta.addEventListener("input", function () {
+      if (!node.params) node.params = {};
+      node.params.text = ta.value;
+      WF.scheduleSave(); // no re-render — typing must not rebuild the card
+    });
+    card.appendChild(ta);
+    return card;
+  }
+
   function renderNode(node) {
+    if (node.type === "note") return renderNoteCard(node);
     var type = state.catalogById[node.type] || {
       label: node.type,
       domain: "",

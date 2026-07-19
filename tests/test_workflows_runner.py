@@ -514,3 +514,31 @@ def test_snapshot_is_json_safe_and_summarized(tmp_path):
     json.dumps(snap)
     assert set(snap) >= {"id", "blueprintId", "status", "nodeStates", "results"}
     assert all("started_at" in ns for ns in snap["nodeStates"].values())
+
+
+# ---- Sticky-note pseudo-nodes (canvas annotations) ----
+
+
+def test_note_nodes_are_ignored_by_runner(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
+    runner = _runner(
+        tmp_path,
+        nodes=[
+            {"id": "v", "type": "video_source", "params": {"participant": "P01"}},
+            {
+                "id": "memo",
+                "type": "note",
+                "params": {"text": "remember to widen the region"},
+                "position": {"x": 10, "y": 10},
+            },
+        ],
+        edges=[],
+    )
+    runner.run()
+    assert runner.status == "completed"
+    # The note never enters node_states / the snapshot — no executor lookup,
+    # no "No executor for node type" failure, no padded node counts.
+    assert "memo" not in runner.node_states
+    snap = runner.snapshot()
+    assert "memo" not in snap["nodeStates"]
+    assert runner.node_states["v"]["status"] == "completed"

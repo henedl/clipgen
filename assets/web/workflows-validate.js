@@ -64,7 +64,11 @@
   // both the node-card cue (workflows-nodes.js) and the panel rows.
   function nodeIssues(node) {
     // A muted node never runs, so it can't block the run — report no issues.
-    if (node.disabled) return { errors: [], warnings: [] };
+    // Sticky notes are annotations, not executable nodes: same deal (kills the
+    // orphan/no-input warnings a port-less card would otherwise collect).
+    if (node.disabled || node.type === "note") {
+      return { errors: [], warnings: [] };
+    }
     var type = catalogType(node);
     var errors = [];
     var warnings = [];

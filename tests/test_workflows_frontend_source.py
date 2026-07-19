@@ -486,8 +486,8 @@ def test_node_mute_toggle():
     assert "node.disabled = !node.disabled" in nodes
     assert "wf-node-muted" in nodes
     assert ".wf-node-muted" in css
-    # A muted node must not block Run.
-    assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
+    # A muted node (or a sticky note) must not block Run.
+    assert 'if (node.disabled || node.type === "note")' in validate
 
 
 def test_validation_warns_on_node_with_no_inputs_wired():
@@ -694,3 +694,28 @@ def test_destructive_actions_confirm_first():
     # Blueprint delete and stash delete route through the confirm dialog.
     assert "Delete blueprint" in src
     assert "Delete stash" in src
+
+
+# ---- Sticky notes (W4) ----
+
+
+def test_note_pseudo_node_renderer():
+    src = _workflows_js()
+    assert 'node.type === "note"' in src
+    assert "function renderNoteCard" in src
+    assert "function addNote" in src
+    assert "WF.addNote" in src
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfAddNote"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-node.wf-note" in css
+    assert ".wf-note-text" in css
+    assert ".wf-note-icon" in css
+
+
+def test_notes_skip_validation_and_auto_arrange():
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert 'node.type === "note"' in validate
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    # autoArrange leaves notes where the user put them.
+    assert 'n.type !== "note"' in canvas

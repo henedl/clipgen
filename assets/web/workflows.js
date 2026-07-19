@@ -849,6 +849,7 @@
       "#wfUndo",
       "#wfRedo",
       "#wfCleanUp",
+      "#wfAddNote",
       "#wfFitView",
       "#wfSnapBtn",
       "#wfRunBtn",
@@ -1003,6 +1004,8 @@
           "repeat history", "wfRedo"),
         buttonCommand("workflows:cleanup", "Clean up canvas", "squares-2x2",
           "arrange tidy layout auto", "wfCleanUp"),
+        buttonCommand("workflows:add-note", "Add sticky note", "pencil-square",
+          "annotate comment canvas", "wfAddNote"),
         buttonCommand("workflows:toggle-trigger", "Toggle auto-run on new video", "bolt",
           "watch dir trigger arm", "wfTriggerBtn"),
         runFilterCommand("all", "Show all runs", "bars-3"),
@@ -1099,6 +1102,12 @@
     if (snapBtn) {
       snapBtn.addEventListener("click", function () {
         if (WF.toggleSnap) WF.toggleSnap();
+      });
+    }
+    var noteBtn = qs("#wfAddNote");
+    if (noteBtn) {
+      noteBtn.addEventListener("click", function () {
+        if (WF.addNote) WF.addNote();
       });
     }
     // Zoom % readout doubles as a reset-to-100% button (canvas satellite keeps

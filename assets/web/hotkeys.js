@@ -117,6 +117,7 @@
     { id: "workflows.panMode",         section: "workflows", group: "Canvas", label: "Pan canvas (hold + drag)", combos: ["Space"] },
     { id: "workflows.nudge",           section: "workflows", group: "Canvas", label: "Nudge selection (Shift = grid step)", combos: ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Shift+ArrowLeft", "Shift+ArrowRight", "Shift+ArrowUp", "Shift+ArrowDown"], rebindable: false, displayKeys: "←↑↓→" },
     { id: "workflows.zoomReset",       section: "workflows", group: "Canvas", label: "Reset zoom to 100%", combos: ["0"] },
+    { id: "workflows.addNote",         section: "workflows", group: "Canvas", label: "Add sticky note", combos: ["N"] },
     { id: "workflows.note.pan",        section: "workflows", group: "Canvas", label: "Pan canvas", note: "space-drag · middle-drag · two-finger scroll" },
     { id: "workflows.note.zoom",       section: "workflows", group: "Canvas", label: "Zoom canvas", note: "pinch · Ctrl/⌘ + scroll" },
     { id: "workflows.note.select",     section: "workflows", group: "Canvas", label: "Select nodes", note: "drag / shift-click" },
