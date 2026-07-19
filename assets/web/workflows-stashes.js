@@ -100,13 +100,25 @@
       item.appendChild(badge);
     } else {
       item.appendChild(iconButton("wf-stash-rename", "Rename stash", function () {
-        var name = window.prompt("Rename stash", stash.name);
-        if (name != null && name.trim() && name.trim() !== stash.name) {
-          renameStash(stash.id, name.trim());
-        }
+        WF.openPromptDialog({
+          title: "Rename stash",
+          initial: stash.name,
+          confirmLabel: "Rename",
+          onConfirm: function (name) {
+            name = (name || "").trim();
+            if (name && name !== stash.name) renameStash(stash.id, name);
+          },
+        });
       }));
       item.appendChild(iconButton("wf-stash-delete", "Delete stash", function () {
-        deleteStash(stash.id);
+        WF.openConfirmDialog({
+          title: "Delete stash “" + stash.name + "”?",
+          body: "This can't be undone.",
+          danger: true,
+          onConfirm: function () {
+            deleteStash(stash.id);
+          },
+        });
       }));
     }
 
@@ -173,24 +185,31 @@
         return JSON.parse(JSON.stringify(e));
       });
 
-    var name = window.prompt("Name this stash", "Stash");
-    if (name == null) return; // cancelled
-    name = name.trim() || "Stash";
-
-    apiPost("api/stashes", { name: name, nodes: nodes, edges: edges })
-      .then(function (res) {
-        if (!res || !res.stash) return;
-        // Insert after the leading built-ins so user stashes stay grouped below.
-        var arr = state.stashes || (state.stashes = []);
-        var idx = 0;
-        while (idx < arr.length && arr[idx].builtin) idx++;
-        arr.splice(idx, 0, res.stash);
-        renderStashPalette();
-        showToast("Saved stash “" + res.stash.name + "”");
-      })
-      .catch(function () {
-        showToast("Failed to save stash");
-      });
+    // Nodes/edges are captured above, before the dialog opens (the blocking
+    // modal keeps the selection from changing underneath it anyway).
+    WF.openPromptDialog({
+      title: "Name this stash",
+      initial: "Stash",
+      confirmLabel: "Save",
+      onConfirm: function (name) {
+        name = (name || "").trim() || "Stash";
+        apiPost("api/stashes", { name: name, nodes: nodes, edges: edges })
+          .then(function (res) {
+            if (!res || !res.stash) return;
+            // Insert after the leading built-ins so user stashes stay grouped
+            // below.
+            var arr = state.stashes || (state.stashes = []);
+            var idx = 0;
+            while (idx < arr.length && arr[idx].builtin) idx++;
+            arr.splice(idx, 0, res.stash);
+            renderStashPalette();
+            showToast("Saved stash “" + res.stash.name + "”");
+          })
+          .catch(function () {
+            showToast("Failed to save stash");
+          });
+      },
+    });
   }
 
   // Stamp a sub-graph (deep-cloned nodes + induced edges) onto the canvas with

@@ -1946,3 +1946,80 @@ body[data-frontend="workflows"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- Prompt / confirm dialogs (hub openPromptDialog / openConfirmDialog) ----
+   In-page replacements for window.prompt/confirm on the shared blocking-modal
+   primitive; shell modeled on hotkeys.css .hk-overlay / .hk-panel. */
+
+.wf-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+  background: rgba(10, 10, 11, 0.55);
+}
+
+.wf-dialog-overlay.hidden {
+  display: none;
+}
+
+.wf-dialog {
+  background: var(--color-surface);
+  border: 1px solid var(--color-panel-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  width: 360px;
+  max-width: 92vw;
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wf-dialog-title {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.wf-dialog-body {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.wf-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.wf-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-1-5) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.wf-dialog-input:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.wf-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Danger variant: the primary action is destructive. */
+.wf-dialog-danger .btn-primary {
+  background: var(--sev-high);
+  border-color: var(--sev-high);
+}

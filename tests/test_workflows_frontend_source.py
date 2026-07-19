@@ -666,3 +666,31 @@ def test_zoom_level_indicator_resets_to_100():
     assert "#wfZoomLevel" in src
     css = WORKFLOWS_CSS.read_text(encoding="utf-8")
     assert ".wf-zoom-level" in css
+
+
+# ---- Dialog polish (W3) ----
+
+
+def test_no_native_prompt_or_confirm():
+    src = _workflows_js()
+    assert "window.prompt" not in src
+    assert "window.confirm" not in src
+
+
+def test_dialogs_use_blocking_modal_primitive():
+    src = _workflows_js()
+    assert "function openPromptDialog" in src
+    assert "function openConfirmDialog" in src
+    assert "WF.openPromptDialog" in src
+    assert "WF.openConfirmDialog" in src
+    assert "openBlockingModal(" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-dialog-overlay" in css
+    assert ".wf-dialog-danger" in css
+
+
+def test_destructive_actions_confirm_first():
+    src = _workflows_js()
+    # Blueprint delete and stash delete route through the confirm dialog.
+    assert "Delete blueprint" in src
+    assert "Delete stash" in src

@@ -527,6 +527,95 @@
     }
   }
 
+  // ---- Dialogs (prompt / confirm) -------------------------------------------
+  // In-page replacements for the native prompt/confirm dialogs, built on the
+  // shared openBlockingModal primitive (focus trap + Escape + backdrop close +
+  // page-hotkey suppression). One lazily-built singleton overlay, refilled per
+  // open. Consumed here (delete blueprint) and by workflows-stashes.js.
+
+  var _dialogOverlay = null;
+
+  function openDialog(opts) {
+    if (!_dialogOverlay) {
+      _dialogOverlay = el("div", "wf-dialog-overlay hidden");
+      _dialogOverlay.appendChild(el("div", "wf-dialog"));
+      document.body.appendChild(_dialogOverlay);
+    }
+    var overlay = _dialogOverlay;
+    var box = overlay.querySelector(".wf-dialog");
+    box.innerHTML = "";
+    box.classList.toggle("wf-dialog-danger", !!opts.danger);
+    box.appendChild(el("div", "wf-dialog-title", opts.title || ""));
+    if (opts.body) box.appendChild(el("p", "wf-dialog-body", opts.body));
+    // Form-wrapped so Enter submits the prompt input natively.
+    var form = document.createElement("form");
+    var input = null;
+    if (opts.prompt) {
+      input = document.createElement("input");
+      input.type = "text";
+      input.className = "wf-dialog-input";
+      input.autocomplete = "off";
+      input.value = opts.initial || "";
+      form.appendChild(input);
+    }
+    var actions = el("div", "wf-dialog-actions");
+    var cancelBtn = el("button", "btn btn-small", "Cancel");
+    cancelBtn.type = "button";
+    cancelBtn.addEventListener("click", close);
+    var confirmBtn = el(
+      "button",
+      "btn btn-small btn-primary",
+      opts.confirmLabel || "OK"
+    );
+    confirmBtn.type = "submit";
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    form.appendChild(actions);
+    box.appendChild(form);
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var value = input ? input.value : null;
+      close();
+      opts.onConfirm(value);
+    });
+    function close() {
+      overlay.classList.add("hidden");
+      closeBlockingModal(overlay);
+    }
+    overlay.classList.remove("hidden");
+    openBlockingModal(overlay, {
+      trapFocus: true, // the input (when present) is first, so it gets focus
+      restoreFocus: true,
+      onEscape: close,
+      onBackdropClick: close,
+    });
+    if (input) input.select();
+  }
+
+  // openPromptDialog({title, initial, confirmLabel, onConfirm(value)})
+  function openPromptDialog(opts) {
+    openDialog({
+      title: opts.title,
+      prompt: true,
+      initial: opts.initial,
+      confirmLabel: opts.confirmLabel || "Save",
+      onConfirm: opts.onConfirm,
+    });
+  }
+
+  // openConfirmDialog({title, body, danger, confirmLabel, onConfirm()})
+  function openConfirmDialog(opts) {
+    openDialog({
+      title: opts.title,
+      body: opts.body,
+      danger: opts.danger,
+      confirmLabel: opts.confirmLabel || "Delete",
+      onConfirm: function () {
+        opts.onConfirm();
+      },
+    });
+  }
+
   // ---- Undo / redo ----------------------------------------------------------
   //
   // History is a stack of {nodes, edges} snapshots (the autosave shape; viewport
@@ -970,7 +1059,16 @@
     var delBtn = qs("#wfDeleteBlueprint");
     if (delBtn) {
       delBtn.addEventListener("click", function () {
-        deleteBlueprint(state.activeBlueprintId);
+        var bp = findBlueprint(state.activeBlueprintId);
+        if (!bp) return;
+        openConfirmDialog({
+          title: "Delete blueprint “" + (bp.name || "Untitled") + "”?",
+          body: "This can't be undone.",
+          danger: true,
+          onConfirm: function () {
+            deleteBlueprint(bp.id);
+          },
+        });
       });
     }
     var undoBtn = qs("#wfUndo");
@@ -1085,6 +1183,9 @@
   // Published for the nodes satellite's participant multi-select popover (same
   // outside-click/Escape toggle the run + shortcuts menus use).
   WF.bindMenuToggle = bindMenuToggle;
+  // In-page prompt/confirm dialogs (workflows-stashes.js consumes them).
+  WF.openPromptDialog = openPromptDialog;
+  WF.openConfirmDialog = openConfirmDialog;
 
   // Every workflows script loads with `defer` (see workflows.html), so this hub
   // runs at readyState "interactive" — after DOM parse but BEFORE DOMContentLoaded
