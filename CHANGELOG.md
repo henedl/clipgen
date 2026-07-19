@@ -2,6 +2,62 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.14 — 2026-07-18 — Screenspace
+**Colorized Change, SSIM, and Flow model-view previews**
+The Change diff preview is JET-colorized with an on-frame overlay that tints changed pixels without darkening the live frame; Similarity adds an SSIM difference map and score; Flow arrows are color-coded by magnitude.
+
+## v0.14.13 — 2026-07-17 — Core
+**Filter and panel commands in the palette**
+Filter clears, sidebar/panel toggles, and drawer actions across Studio, Screenspace, Transcripts, Composer, Workflows, and Overview are searchable in the command palette with visibility gates so only relevant commands surface.
+
+## v0.14.13 — 2026-07-17 — Studio
+**Region-aware keyboard navigation**
+Stash/clear hotkeys, filter-sidebar and artifact/reel panel collapse, and a region-aware cursor: `1`–`5` jump between the filter list, queues, and stash lists with Enter activating each target.
+
+## v0.14.13 — 2026-07-17 — Screenspace
+**Panel and tool-tab hotkeys**
+Collapse the bottom panel and cycle tool tabs from the keyboard; Alt-hold hint chips dim for disabled controls and combo glyphs render evenly in the cheatsheet.
+
+## v0.14.12 — 2026-07-16 — Core
+**Alt-hold shortcut hints**
+Hold Alt to see combo chips on tagged controls across every page; Studio shows action hints on the keyboard-browsed cell or card; a uniform "?" cheatsheet button replaces per-page help popovers.
+
+## v0.14.11 — 2026-07-16 — Core
+**Global command palette**
+Cmd+Shift+P or Cmd+K opens a Spotlight-style palette for page navigation, participant jumps, chrome actions, and recents across all six hub pages; deep links honor `#tab=` and `#P07` arrival hashes.
+
+## v0.14.10 — 2026-07-16 — Core
+**Rebindable hotkeys across all frontends**
+A shared hotkey registry unifies defaults (Space, j/k, g, seek, fine-step) and auto-generates the `?` cheatsheet; Settings → Hotkeys lets you rebind, with conflicts resolved per binding and overrides persisted across sessions.
+
+## v0.14.9 — 2026-07-15 — Studio
+**Content-aware tooltips**
+Queue action buttons and intake controls show context-aware tooltips that reflect card count, selected format, and state instead of stale nudges; Add-all buttons match the blue solid CTA style of Add-all to Reel.
+
+## v0.14.8 — 2026-07-15 — Core
+**Composer lane in Convergence and Metadata search**
+Convergence adds a per-participant Composer swim lane from cut pairs; Metadata gains a search box that highlights matches and scrolls to the target row; Detect boundaries moves to a Screenspace topnav quick action.
+
+## v0.14.7 — 2026-07-13 — Core
+**Five new Map visualizations**
+Color-by choropleth, shift-click pairwise compare arcs, direct-axes 5D scatter, session trajectories with replay comets, and auto-labeled cluster hulls on the Overview Map tab.
+
+## v0.14.2 — 2026-07-13 — Core
+**Annotated exports across recording parts**
+Composer burn and GIF exports stitch spans that cross a multi-part boundary into one continuous clip before the overlay pass, so annotations render correctly across seams.
+
+## v0.14.0 — 2026-07-13 — Core
+**Overview page with 3D similarity Map**
+A new Overview tab gathers cohort-level lenses: a 3D Map positions participants by PCA over sheet timestamps, transcript marks, and Screenspace events, with click-to-explain, session replay, and drill-down; Metadata and Convergence move here from Studio.
+
+## v0.13.61 — 2026-07-12 — Core
+**Composer — source-video cutting and annotations**
+A Composer page cuts source video with named in/out pairs, non-destructive marker trims, and canvas annotations; cuts and trims feed Studio Artifact/Reel queues, and annotated screenshot/GIF/burn exports render via overlay.
+
+## v0.13.61 — 2026-07-12 — Transcripts
+**Friction before Summary**
+Deterministic friction scores populate the heatmap, timeline band, and stat chips immediately; LLM-refined moments still require Summary, and search results drop cross-reference badges that crowded the narrow dropdown.
+
 ## v0.13.60 — 2026-07-10 — Screenspace
 **Live magic-wand tolerance scrub**
 Press-drag-release on the magic wand: horizontal drag scrubs flood-fill tolerance with a live contour preview on the canvas; release commits a new region or applies Shift/Alt boolean combine; Escape cancels mid-scrub.
