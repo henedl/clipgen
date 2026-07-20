@@ -162,6 +162,105 @@ def test_ui_requires_some_payload(co_client):
     assert resp.status_code == 400
 
 
+def test_ui_update_persists_media_toggles(co_client, tmp_path):
+    resp = co_client.put("/composer/api/ui", json={"markerThumbnails": True}).get_json()
+    assert resp["ok"] is True
+    assert resp["markerThumbnails"] is True
+    disk = _manifest_on_disk(tmp_path)["ui"]
+    assert disk["markerThumbnails"] is True
+    assert disk["markerAudioScrub"] is False  # empty-manifest default
+    # A thumbs-only PUT must not clobber the lane toggles.
+    assert disk["markerSources"] == {
+        "sheet": True,
+        "screenspace": True,
+        "transcript": True,
+    }
+
+    resp = co_client.put("/composer/api/ui", json={"markerAudioScrub": True}).get_json()
+    assert resp["markerAudioScrub"] is True
+    assert _manifest_on_disk(tmp_path)["ui"]["markerAudioScrub"] is True
+
+
+# ---- Scrubber media (sprite sheets / audio snippets) ----
+
+
+@pytest.fixture
+def scrub_calls(monkeypatch):
+    """Arg-capturing extractor fakes + fresh media caches for the scrub routes."""
+    calls = {"sprite": [], "audio": []}
+
+    def fake_sprite(path, start, duration, cols, rows, **kwargs):
+        calls["sprite"].append((path, start, duration, cols, rows))
+        return b"jpegbytes"
+
+    def fake_audio(path, start, duration):
+        calls["audio"].append((path, start, duration))
+        return b"wavbytes"
+
+    monkeypatch.setattr(video, "extract_sprite_sheet_bytes", fake_sprite)
+    monkeypatch.setattr(video, "extract_audio_segment_bytes", fake_audio)
+    monkeypatch.setattr(composer_server, "_sprite_cache", composer_server.MediaCache(8))
+    monkeypatch.setattr(composer_server, "_audio_cache", composer_server.MediaCache(8))
+    return calls
+
+
+def test_sprite_serves_with_cache_header(co_client, scrub_calls, tmp_path):
+    resp = co_client.get("/composer/api/sprite/P01?start=1&end=3")
+    assert resp.status_code == 200
+    assert resp.mimetype == "image/jpeg"
+    assert resp.headers["Cache-Control"] == "public, max-age=86400"
+    assert resp.data == b"jpegbytes"
+    (call,) = scrub_calls["sprite"]
+    assert call == (
+        str(tmp_path / "study_P01-1.mp4"),
+        1.0,
+        2.0,
+        config.STUDIO_SCRUBBER_SPRITE_COLS,
+        config.STUDIO_SCRUBBER_SPRITE_ROWS,
+    )
+
+
+def test_sprite_maps_global_time_into_part(co_client, scrub_calls, tmp_path):
+    resp = co_client.get("/composer/api/sprite/P01?start=15&end=18")
+    assert resp.status_code == 200
+    (call,) = scrub_calls["sprite"]
+    assert call[0] == str(tmp_path / "study_P01-2.mp4")
+    assert (call[1], call[2]) == (5.0, 3.0)
+
+
+def test_sprite_clamps_boundary_straddle(co_client, scrub_calls, tmp_path):
+    # A span crossing the 10 s part boundary samples only the owning part's tail.
+    resp = co_client.get("/composer/api/sprite/P01?start=8&end=15")
+    assert resp.status_code == 200
+    (call,) = scrub_calls["sprite"]
+    assert call[0] == str(tmp_path / "study_P01-1.mp4")
+    assert (call[1], call[2]) == (8.0, 2.0)
+
+
+def test_audio_serves_wav_and_caps_duration(co_client, scrub_calls, monkeypatch):
+    monkeypatch.setattr(config, "COMPOSER_SCRUB_MAX_AUDIO_SECONDS", 4.0)
+    resp = co_client.get("/composer/api/audio/P01?start=0&end=500")
+    assert resp.status_code == 200
+    assert resp.mimetype == "audio/wav"
+    assert resp.data == b"wavbytes"
+    (call,) = scrub_calls["audio"]
+    assert (call[1], call[2]) == (0.0, 4.0)
+
+
+def test_scrub_routes_reject_bad_input(co_client, scrub_calls):
+    assert co_client.get("/composer/api/sprite/P01").status_code == 400
+    assert co_client.get("/composer/api/sprite/P01?start=5&end=5").status_code == 400
+    assert co_client.get("/composer/api/sprite/P99?start=1&end=3").status_code == 404
+    assert co_client.get("/composer/api/audio/P99?start=1&end=3").status_code == 404
+    assert scrub_calls["sprite"] == [] and scrub_calls["audio"] == []
+
+
+def test_sprite_extraction_failure_404(co_client, scrub_calls, monkeypatch):
+    monkeypatch.setattr(video, "extract_sprite_sheet_bytes", lambda *a, **k: None)
+    resp = co_client.get("/composer/api/sprite/P01?start=1&end=3")
+    assert resp.status_code == 404
+
+
 def test_trims_round_trip_and_reset(co_client, tmp_path):
     key = "sheet:12:P01:0"
     resp = co_client.put(

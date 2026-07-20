@@ -916,6 +916,7 @@ def extract_sprite_sheet_bytes(
     rows: int,
     *,
     frame_width: int = 160,
+    seek_frames: bool = False,
 ) -> bytes | None:
     """Extract a single tiled JPEG sprite sheet for hover scrubbing.
 
@@ -925,6 +926,13 @@ def extract_sprite_sheet_bytes(
     frontend card scrubber maps cursor position to a frame and shifts
     ``background-position`` accordingly. Returns JPEG bytes or ``None`` on
     failure.
+
+    ``seek_frames=True`` grabs each frame with its own fast input-seek in a
+    thread pool and composites the grid with PIL, making the cost
+    O(frame_count) instead of O(duration): the default single-pass ``fps``
+    filter decodes the *entire* span to emit its frames, which takes seconds
+    on the minutes-long spans Composer's timeline tiles cover. Studio's short
+    clip sprites keep the single-pass default.
     """
     if config.DEBUGGING:
         config.debug_ic(input_file, start_seconds, duration_seconds, cols, rows)
@@ -932,6 +940,11 @@ def extract_sprite_sheet_bytes(
 
     if not Path(input_file).is_file():
         return None
+
+    if seek_frames:
+        return _extract_sprite_sheet_seek(
+            input_file, start_seconds, duration_seconds, cols, rows, frame_width
+        )
 
     frame_count = max(1, cols * rows)
     duration = max(0.1, duration_seconds)
@@ -967,6 +980,102 @@ def extract_sprite_sheet_bytes(
     if result.returncode != 0 or not result.stdout:
         return None
     return result.stdout
+
+
+def _extract_sprite_sheet_seek(
+    input_file: str,
+    start_seconds: float,
+    duration_seconds: float,
+    cols: int,
+    rows: int,
+    frame_width: int,
+) -> bytes | None:
+    """Seek-based sprite sheet: one fast ``-ss`` grab per frame, PIL composite.
+
+    Each frame decodes at most one GOP (keyframe seek + roll-forward), so a
+    ten-minute span costs the same as a ten-second one. Frame ``i`` samples the
+    *center* of its slot (``start + (i + 0.5) * step``) — indistinguishable
+    from the single-pass grid for the scrubber's purposes. Frames past EOF (or
+    individually failed grabs) reuse the previous frame so the grid stays
+    aligned; returns ``None`` only when every grab fails.
+    """
+    frame_count = max(1, cols * rows)
+    duration = max(0.1, duration_seconds)
+    step = duration / frame_count
+    start = max(0.0, start_seconds)
+    times = [start + (i + 0.5) * step for i in range(frame_count)]
+
+    def grab(ts: float) -> bytes | None:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            config.FFMPEG_LOGLEVEL,
+            "-ss",
+            str(ts),
+            "-i",
+            input_file,
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={frame_width}:-1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "-q:v",
+            "5",
+            "pipe:1",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=15)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0 or not result.stdout:
+            return None
+        return result.stdout
+
+    workers = min(8, os.cpu_count() or 4, frame_count)
+    if frame_count >= 2:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            grabs = list(pool.map(grab, times))
+    else:
+        grabs = [grab(times[0])]
+
+    # Deferred: keep PIL off the CLI's hot import path (video.py loads at startup).
+    from io import BytesIO
+
+    from PIL import Image
+
+    frames: list[Any] = []
+    fw = fh = 0
+    for data in grabs:
+        if data is None:
+            frames.append(None)
+            continue
+        try:
+            img = Image.open(BytesIO(data))
+            img.load()
+        except OSError:
+            frames.append(None)
+            continue
+        frames.append(img)
+        fw = max(fw, img.width)
+        fh = max(fh, img.height)
+    if not fw or not fh:
+        return None
+
+    sheet = Image.new("RGB", (cols * fw, rows * fh), (16, 16, 16))
+    last = None
+    for i in range(frame_count):
+        img = frames[i] if frames[i] is not None else last
+        if img is None:
+            continue
+        last = img
+        sheet.paste(img, ((i % cols) * fw, (i // cols) * fh))
+    out = BytesIO()
+    sheet.save(out, format="JPEG", quality=82)
+    return out.getvalue()
 
 
 def extract_audio_segment_bytes(

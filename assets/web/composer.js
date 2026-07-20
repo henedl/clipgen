@@ -33,6 +33,8 @@
     markers: { sheet: [], screenspace: [], transcript: [] },
     sourceToggles: { sheet: true, screenspace: true, transcript: true },
     laneFolds: { sheet: true, screenspace: true, transcript: true, annotations: true },
+    markerThumbnails: false, // thumbnail strips in marker/cut bars (persisted ui)
+    markerAudioScrub: false, // hover audio scrub + waveform on bars (persisted ui)
     sidebarTab: "cuts",     // "cuts" | "sheet" | "screenspace" | "transcript"
     zoom: 1,
     offset: 0,              // timeline pan offset (global seconds)
@@ -54,6 +56,7 @@
   function initAnnotate() { return CO.initAnnotate && CO.initAnnotate.apply(null, arguments); }
   function renderAnnotations() { return CO.renderAnnotations && CO.renderAnnotations.apply(null, arguments); }
   function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
+  function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
 
   // ---- API client ----
 
@@ -280,6 +283,9 @@
     state.zoom = 1;
     state.offset = 0;
     state.markers = { sheet: [], screenspace: [], transcript: [] };
+    // Drop cached sprites/audio + stop any playing snippet: they belong to the
+    // previous participant's video.
+    if (CO.resetScrubMedia) CO.resetScrubMedia();
     // Undo ops reference the previous participant's cuts — an undo fired after
     // a switch would invisibly mutate that other timeline. Drop the stacks.
     _undoStack.length = 0;
@@ -1285,6 +1291,14 @@
         id: "composer.toggleAllSources",
         handler: function () { CO.toggleAllSources && CO.toggleAllSources(); },
       },
+      {
+        id: "composer.toggleThumbs",
+        handler: function () { qs("#coThumbsToggle").click(); },
+      },
+      {
+        id: "composer.toggleScrubAudio",
+        handler: function () { qs("#coScrubAudioToggle").click(); },
+      },
       { id: "global.primary", handler: function () { onGenerate(); } },
       { id: "edit.undo", handler: function () { undo(); } },
       { id: "edit.redo", handler: function () { redo(); } },
@@ -1366,6 +1380,10 @@
           "events markers", "coLaneScreenspace"),
         buttonCommand("composer:lane-transcript", "Toggle Transcript marker lane", "queue-list",
           "marks markers", "coLaneTranscript"),
+        buttonCommand("composer:thumbs", "Toggle marker thumbnails", "photo",
+          "filmstrip sprites frames strips", "coThumbsToggle"),
+        buttonCommand("composer:scrub-audio", "Toggle marker audio scrub", "speaker-wave",
+          "waveform sound hover", "coScrubAudioToggle"),
         buttonCommand("composer:shortcuts", "Keyboard shortcuts", "command-line",
           "cheatsheet keys help", "coShortcutsBtn"),
         listTabCommand("cuts", "Show Cuts list", "list-bullet"),
@@ -1428,6 +1446,7 @@
     initKeyboard();
     initTimeline();
     initMarkerToggles();
+    initMarkerScrub();
     initAnnotate();
     qs("#coExportShotBtn").addEventListener("click", exportScreenshot);
     qs("#coExportGifBtn").addEventListener("click", function () { exportBurn(true); });
@@ -1472,6 +1491,13 @@
           }
         });
       }
+      if (typeof ui.markerThumbnails === "boolean") {
+        state.markerThumbnails = ui.markerThumbnails;
+      }
+      if (typeof ui.markerAudioScrub === "boolean") {
+        state.markerAudioScrub = ui.markerAudioScrub;
+      }
+      if (CO.syncScrubToggles) CO.syncScrubToggles();
       updateGenerateButton();
       renderCutList();
       if (CO.updateTimelineHeight) CO.updateTimelineHeight();

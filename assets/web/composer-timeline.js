@@ -19,6 +19,8 @@
   var CUT_TRACK_H = 26; // the single cuts track, directly under the ruler
   var LANE_GAP = 3;
   var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
+  var THUMB_ROW_H = 42; // marker sub-row with thumbnail strips (41px bar + 1px gap)
+  var THUMB_CUT_H = 42; // cuts track height with thumbnail strips
   var MAX_LANE_ROWS = 8; // unfold ceiling; denser overlaps collapse onto the last row
   var EDGE_SLOP = 5;    // px hit zone around a cut edge
   var MIN_CUT_SECONDS = 0.2;
@@ -64,6 +66,13 @@
     return neededRows(state.markers[source] || []);
   }
 
+  // Marker sub-row / cuts-track heights grow when thumbnail strips are on so
+  // each bar fits a recognizable frame; the annotations lane stays flat (its
+  // spans are drawings, not video content). Folded lanes grow too — their
+  // collapsed bars overdraw, which the user accepted for the fold tradeoff.
+  function laneRowH() { return state.markerThumbnails ? THUMB_ROW_H : ROW_H; }
+  function cutTrackH() { return state.markerThumbnails ? THUMB_CUT_H : CUT_TRACK_H; }
+
   // Annotation spans as packable {start, end, ann} entries for the lane.
   function annotationSpans() {
     var annotations = CO.participantAnnotations ? CO.participantAnnotations() : [];
@@ -80,7 +89,7 @@
   // updateTimelineHeight(), not vice versa.
   function layout() {
     var cutY = RULER_H + 2;
-    var y = cutY + CUT_TRACK_H + 4;
+    var y = cutY + cutTrackH() + 4;
     var spans = annotationSpans();
     var annRows = !spans.length
       ? 0
@@ -92,12 +101,12 @@
     var lanes = {};
     SOURCES.forEach(function (source) {
       var rows = laneRows(source);
-      lanes[source] = { y: y, rows: rows, h: rows * ROW_H };
-      if (rows) y += rows * ROW_H + LANE_GAP;
+      lanes[source] = { y: y, rows: rows, h: rows * laneRowH() };
+      if (rows) y += rows * laneRowH() + LANE_GAP;
     });
     return {
       cutY: cutY,
-      cutH: CUT_TRACK_H,
+      cutH: cutTrackH(),
       lanes: lanes,
       annotationsLane: annotationsLane,
       canvasH: y + 2,
@@ -250,6 +259,10 @@
       var selected = cut.id === state.selectedCutId;
       ctx.fillStyle = hexToRgba(tc.accent, selected ? 0.45 : 0.25);
       ctx.fillRect(x1, L.cutY, rw, L.cutH);
+      if (state.markerThumbnails && CO.drawMarkerThumbs) {
+        CO.drawMarkerThumbs(ctx, "cut:" + cut.id, cut.start, cut.end,
+          x1, L.cutY, rw, L.cutH, tc.accent);
+      }
       // Edge handles
       ctx.fillStyle = selected ? tc.accent : hexToRgba(tc.accent, 0.8);
       ctx.fillRect(x1 - 1, L.cutY, 3, L.cutH);
@@ -269,21 +282,26 @@
       var markers = state.markers[source] || [];
       if (!markers.length) return;
       var color = colors[source];
+      var rowH = laneRowH();
       assignRows(markers, lane.rows).forEach(function (m) {
         if (m.end < vis.start || m.start > vis.end) return;
         var x1 = tx(m.start);
         var x2 = tx(Math.max(m.end, m.start));
         var rw = Math.max(x2 - x1, 2);
-        var y = lane.y + m._row * ROW_H;
+        var y = lane.y + m._row * rowH;
         ctx.fillStyle = hexToRgba(color, 0.55);
-        ctx.fillRect(x1, y, rw, ROW_H - 1);
+        ctx.fillRect(x1, y, rw, rowH - 1);
+        if (state.markerThumbnails && CO.drawMarkerThumbs) {
+          CO.drawMarkerThumbs(ctx, m.key, m.start, m.end, x1, y, rw, rowH - 1, color);
+        }
         // Trimmed affordance: a solid underline in the lane color marks a
         // marker whose span deviates from its source (right-click resets).
+        // Drawn after any thumbnails so it stays visible on top.
         if (m.trimmed) {
           ctx.fillStyle = color;
-          ctx.fillRect(x1, y + ROW_H - 3, rw, 2);
+          ctx.fillRect(x1, y + rowH - 3, rw, 2);
         }
-        _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: ROW_H - 1, marker: m });
+        _hitRects.push({ x1: x1, x2: x1 + rw, y: y, h: rowH - 1, marker: m });
       });
     });
 
@@ -574,6 +592,7 @@
     canvas.addEventListener("pointerdown", function (e) {
       if (!state.duration) return;
       hideTooltip();
+      if (CO.scrubHoverEnd) CO.scrubHoverEnd();
       var edgeHit = hitTestCutEdge(e.clientX, e.clientY);
       var laneEdgeHit = edgeHit ? null : hitTestLaneEdge(e.clientX, e.clientY);
       if (edgeHit) {
@@ -655,7 +674,7 @@
 
     canvas.addEventListener("pointermove", function (e) {
       if (!drag) {
-        // Hover: edge cursor affordance + tooltip.
+        // Hover: edge cursor affordance + tooltip + opt-in audio scrub.
         if (!state.duration) return;
         var edge = hitTestCutEdge(e.clientX, e.clientY) ||
           hitTestLaneEdge(e.clientX, e.clientY);
@@ -663,6 +682,17 @@
         var hit = edge ? null : hitTest(e.clientX, e.clientY);
         if (hit) showTooltip(hit, e.clientX, e.clientY);
         else hideTooltip();
+        var span = hit && (hit.marker || hit.cut);
+        if (state.markerAudioScrub && span && span.end > span.start &&
+            CO.scrubHoverMove) {
+          var ts0 = xToTime(e.clientX);
+          var frac = clamp((ts0 - span.start) / (span.end - span.start), 0, 1);
+          CO.scrubHoverMove(hit.marker ? hit.marker.key : "cut:" + hit.cut.id,
+            span.start, span.end, frac,
+            { left: hit.x1, top: hit.y, width: hit.x2 - hit.x1, height: hit.h });
+        } else if (CO.scrubHoverEnd) {
+          CO.scrubHoverEnd();
+        }
         return;
       }
       var ts;
@@ -773,7 +803,10 @@
       }
     });
 
-    canvas.addEventListener("mouseleave", hideTooltip);
+    canvas.addEventListener("mouseleave", function () {
+      hideTooltip();
+      if (CO.scrubHoverEnd) CO.scrubHoverEnd();
+    });
 
     qs("#coZoomInBtn").addEventListener("click", function () {
       if (!state.duration) return;

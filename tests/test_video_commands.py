@@ -1289,3 +1289,51 @@ def test_batch_extract_screenshots_seeks_only_for_offset_grid(monkeypatch):
     # Zero-aligned grid -> no input seek (unchanged behavior).
     video._batch_extract_screenshots("in.mp4", [0, 10], 10)
     assert "-ss" not in captured["cmd"]
+
+
+def test_extract_sprite_sheet_seek_composites_grid(monkeypatch, tmp_path):
+    """seek_frames=True grabs one frame per slot center and tiles them with PIL."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    monkeypatch.setattr(video.config, "DEBUGGING", False)
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"x")  # existence check only; ffmpeg is stubbed
+
+    frame = BytesIO()
+    Image.new("RGB", (8, 6), (200, 30, 30)).save(frame, format="JPEG")
+    frame_bytes = frame.getvalue()
+
+    calls = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=frame_bytes)
+
+    monkeypatch.setattr(video.subprocess, "run", fake_run)
+
+    data = video.extract_sprite_sheet_bytes(
+        str(src), 10.0, 100.0, 2, 2, seek_frames=True
+    )
+    assert data is not None
+    sheet = Image.open(BytesIO(data))
+    assert sheet.size == (16, 12)  # 2x2 grid of 8x6 frames
+    # One fast input-seek per frame, sampled at slot centers (pool order varies).
+    seeks = sorted(float(c[c.index("-ss") + 1]) for c in calls)
+    assert seeks == [10.0 + (i + 0.5) * 25.0 for i in range(4)]
+
+
+def test_extract_sprite_sheet_seek_all_grabs_fail_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(video.config, "DEBUGGING", False)
+    src = tmp_path / "clip.mp4"
+    src.write_bytes(b"x")
+
+    def fake_run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(args=cmd, returncode=1, stdout=b"")
+
+    monkeypatch.setattr(video.subprocess, "run", fake_run)
+    assert (
+        video.extract_sprite_sheet_bytes(str(src), 0.0, 10.0, 2, 2, seek_frames=True)
+        is None
+    )
