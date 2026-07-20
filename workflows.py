@@ -79,6 +79,15 @@ def load_workflows_manifest() -> dict[str, Any]:
     # Backfill any missing top-level keys so callers can index unconditionally.
     base = empty_workflows_manifest()
     base.update({k: v for k, v in data.items() if k in base})
+    # A trigger whose type isn't in TRIGGER_TYPES (e.g. the pre-chaining
+    # "watch_dir") reads as disarmed: the watcher only fires known types, so
+    # keeping it enabled would render an armed toolbar state that never fires.
+    for blueprint in base.get("blueprints", []):
+        if not isinstance(blueprint, dict):
+            continue
+        trigger = blueprint.get("trigger")
+        if isinstance(trigger, dict) and trigger.get("type") not in TRIGGER_TYPE_IDS:
+            blueprint["trigger"] = None
     return base
 
 
@@ -2571,6 +2580,7 @@ def _exec_data_export(
         }
 
     records: list[dict[str, Any]] = []
+    written: list[str] = []
     for stem, rows, columns, description in surfaces:
         writes: list[tuple[str, str, str]] = []  # (extension, payload, label)
         if fmt in ("both", "json"):
@@ -2588,11 +2598,16 @@ def _exec_data_export(
             try:
                 Path(output_path).write_text(payload, encoding="utf-8")
             except OSError:
+                # All-or-nothing: also remove any files this node already wrote,
+                # so a half-bundle never orphans behind an artifact-less result.
                 files.release_reservation(output_path)
+                for prior in written:
+                    files.release_reservation(prior)
                 return {
                     "artifacts": {"artifacts": [], "study": study, "count": 0},
                     "__note__": "Export couldn't be written",
                 }
+            written.append(output_path)
             records.append(
                 _attachment_artifact(
                     "export", output_path, src, f"{description} ({label})"

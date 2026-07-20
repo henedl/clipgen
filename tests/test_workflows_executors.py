@@ -1138,3 +1138,30 @@ def test_heatmap_default_output_stays_image(tmp_path, monkeypatch):
     events_in = {"events": [], "source": _SRC, "raw_results": [{"change_grid": []}]}
     out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {"style": "change"})
     assert out["artifacts"]["artifacts"][0]["file"] == "heatmap.png"
+
+
+def test_data_export_partial_write_failure_rolls_back(tmp_path, monkeypatch):
+    # format "both" writes two files; if the second write fails, the first must
+    # not orphan behind an artifact-less failed result.
+    _redirect_unique_filenames(monkeypatch, tmp_path)
+    calls = {"n": 0}
+    real_write = Path.write_text
+
+    def flaky_write(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", flaky_write)
+    events_in = {
+        "events": [{"id": "e", "time_in": 0, "time_out": 1}],
+        "source": _SRC,
+        "raw_results": [],
+    }
+    out = _run("data_export", _ctx(tmp_path), {"events": events_in}, {"format": "both"})
+    assert out["artifacts"]["artifacts"] == []
+    assert "__note__" in out
+    # Neither the failed CSV nor the previously-written JSON remains.
+    assert not (tmp_path / "export_events_P01.json").exists()
+    assert not (tmp_path / "export_events_P01.csv").exists()

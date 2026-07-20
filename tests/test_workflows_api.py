@@ -1650,3 +1650,36 @@ def test_batch_cancel_with_parallel_workers(wf_client, monkeypatch):
     release.set()
     final = _wait_batch_terminal(wf_client, batch["id"])
     assert final["status"] == "cancelled"
+
+
+def test_legacy_trigger_types_load_as_disarmed(wf_client):
+    # A Phase-2 manifest can carry {"type": "watch_dir", "enabled": true}; the
+    # watcher only fires known TRIGGER_TYPES, so the loader must read unknown
+    # types as disarmed — an "armed" toolbar state that never fires is a lie.
+    utils.save_json_manifest(
+        config.WORKFLOWS_MANIFEST_FILENAME,
+        {
+            "blueprints": [
+                {
+                    "id": "bp_old",
+                    "name": "Old",
+                    "nodes": [],
+                    "edges": [],
+                    "trigger": {"type": "watch_dir", "enabled": True},
+                },
+                {
+                    "id": "bp_new",
+                    "name": "New",
+                    "nodes": [],
+                    "edges": [],
+                    "trigger": {"type": "scan_event", "enabled": True},
+                },
+            ],
+            "stashes": [],
+            "runs": [],
+        },
+    )
+    manifest = workflows.load_workflows_manifest()
+    by_id = {b["id"]: b for b in manifest["blueprints"]}
+    assert by_id["bp_old"]["trigger"] is None
+    assert by_id["bp_new"]["trigger"] == {"type": "scan_event", "enabled": True}
