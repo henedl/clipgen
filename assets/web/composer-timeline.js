@@ -165,6 +165,24 @@
     state.offset = clamp(state.offset, 0, Math.max(0, state.duration - visLen));
   }
 
+  // Pan the viewport minimally so *t* sits inside the visible window with a
+  // small edge margin. No-op when fully zoomed out (the whole timeline is
+  // visible) or while the user is mid pan/scrub drag (don't fight the gesture).
+  function revealTime(t) {
+    if (state.zoom <= 1 || !state.duration) return;
+    if (state.dragging) return;
+    var visLen = state.duration / state.zoom;
+    var margin = visLen * 0.12; // breathing room at the edges
+    var lo = state.offset + margin;
+    var hi = state.offset + visLen - margin;
+    if (t >= lo && t <= hi) return; // already comfortably in view
+    var target = t < lo ? t - margin : t - visLen + margin;
+    target = clamp(target, 0, Math.max(0, state.duration - visLen));
+    if (target === state.offset) return; // viewport already pinned — no redraw
+    state.offset = target;
+    renderTimeline();
+  }
+
   function sizeCanvases() {
     var canvas = canvasEl();
     _cachedRect = null;
@@ -591,6 +609,9 @@
 
     canvas.addEventListener("pointerdown", function (e) {
       if (!state.duration) return;
+      // Set early so the scrub branch's immediate seek sees an active drag and
+      // revealTime() no-ops (the clicked time is on-screen anyway).
+      state.dragging = true;
       hideTooltip();
       if (CO.scrubHoverEnd) CO.scrubHoverEnd();
       var edgeHit = hitTestCutEdge(e.clientX, e.clientY);
@@ -668,7 +689,6 @@
           if (ts !== null) CO.seekVideo(ts);
         }
       }
-      state.dragging = true;
       canvas.setPointerCapture(e.pointerId);
     });
 
@@ -829,6 +849,7 @@
 
   CO.initTimeline = initTimeline;
   CO.renderTimeline = renderTimeline;
+  CO.revealTime = revealTime;
   CO.renderPlayhead = renderPlayhead;
   CO.updateTimelineHeight = updateTimelineHeight;
   // Theme flips resample the --stream-* lane colors on the next render.

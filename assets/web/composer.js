@@ -35,6 +35,7 @@
     laneFolds: { sheet: true, screenspace: true, transcript: true, annotations: true },
     markerThumbnails: false, // thumbnail strips in marker/cut bars (persisted ui)
     markerAudioScrub: false, // hover audio scrub + waveform on bars (persisted ui)
+    followPlayhead: true,   // pan the zoomed timeline to keep the playhead in view (persisted ui)
     sidebarTab: "cuts",     // "cuts" | "sheet" | "screenspace" | "transcript"
     zoom: 1,
     offset: 0,              // timeline pan offset (global seconds)
@@ -50,6 +51,7 @@
 
   function renderTimeline() { return CO.renderTimeline && CO.renderTimeline.apply(null, arguments); }
   function renderPlayhead() { return CO.renderPlayhead && CO.renderPlayhead.apply(null, arguments); }
+  function revealTime() { return CO.revealTime && CO.revealTime.apply(null, arguments); }
   function initTimeline() { return CO.initTimeline && CO.initTimeline.apply(null, arguments); }
   function initMarkerToggles() { return CO.initMarkerToggles && CO.initMarkerToggles.apply(null, arguments); }
   function loadMarkers() { return CO.loadMarkers && CO.loadMarkers.apply(null, arguments); }
@@ -121,6 +123,7 @@
     } else {
       seekLocal(local);
     }
+    revealTime(g); // pan the zoomed camera to the seek target before drawing
     renderPlayhead();
     renderAnnotations();
     updateTimeLabel();
@@ -239,6 +242,7 @@
       if (_playheadRaf) return;
       _playheadRaf = requestAnimationFrame(function () {
         _playheadRaf = 0;
+        if (state.followPlayhead) revealTime(state.playhead);
         renderPlayhead();
         renderAnnotations(); // spans gate visibility against the playhead
       });
@@ -1496,6 +1500,9 @@
       }
       if (typeof ui.markerAudioScrub === "boolean") {
         state.markerAudioScrub = ui.markerAudioScrub;
+      }
+      if (typeof ui.followPlayhead === "boolean") {
+        state.followPlayhead = ui.followPlayhead;
       }
       if (CO.syncScrubToggles) CO.syncScrubToggles();
       updateGenerateButton();

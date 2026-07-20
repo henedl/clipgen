@@ -169,6 +169,7 @@ def test_ui_update_persists_media_toggles(co_client, tmp_path):
     disk = _manifest_on_disk(tmp_path)["ui"]
     assert disk["markerThumbnails"] is True
     assert disk["markerAudioScrub"] is False  # empty-manifest default
+    assert disk["followPlayhead"] is True  # empty-manifest default
     # A thumbs-only PUT must not clobber the lane toggles.
     assert disk["markerSources"] == {
         "sheet": True,
@@ -179,6 +180,10 @@ def test_ui_update_persists_media_toggles(co_client, tmp_path):
     resp = co_client.put("/composer/api/ui", json={"markerAudioScrub": True}).get_json()
     assert resp["markerAudioScrub"] is True
     assert _manifest_on_disk(tmp_path)["ui"]["markerAudioScrub"] is True
+
+    resp = co_client.put("/composer/api/ui", json={"followPlayhead": False}).get_json()
+    assert resp["followPlayhead"] is False
+    assert _manifest_on_disk(tmp_path)["ui"]["followPlayhead"] is False
 
 
 # ---- Scrubber media (sprite sheets / audio snippets) ----
