@@ -700,6 +700,17 @@ class ScreenspaceWorker:
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
+
+            def _visible_results(seq: Any) -> Any:
+                # Attention's visible results are the confirmed shifts only;
+                # the full per-sample stream (one entry per 0.5s, thousands on
+                # long videos) exists solely to feed heatmap dwell weighting
+                # and must never reach the results/timeline API — neither in
+                # the completed→heatmap-attached window nor while paused.
+                if task.get("type") == "attention" and isinstance(seq, list):
+                    return [r for r in seq if isinstance(r, dict) and r.get("shift")]
+                return seq
+
             # Inputs for deferred (lock-free) heatmap generation, captured under
             # the lock and consumed after it's released.
             heatmap_inputs: tuple[str, list[str], dict[str, Any]] | None = None
@@ -712,11 +723,14 @@ class ScreenspaceWorker:
                         # prepend the pre-pause carry-over (like the completed
                         # branch below) or a pause on a resumed scan drops the
                         # earlier results for good — the next resume re-seeds
-                        # _partial_results from t["result"].
+                        # _partial_results from t["result"]. For attention that
+                        # re-seed is shift-only, so a resumed scan's heatmap
+                        # under-accumulates the pre-pause segment (accepted;
+                        # see plans/ATTENTION-PLAN.md).
                         partial = t.get("_partial_results")
                         if partial and isinstance(result, list):
                             result = partial + result
-                        t["result"] = result
+                        t["result"] = _visible_results(result)
                     elif t.get("_cancelled") and not t.get("parameters", {}).get(
                         "detect_first"
                     ):
@@ -727,7 +741,7 @@ class ScreenspaceWorker:
                         if partial and isinstance(result, list):
                             result = partial + result
                         t["status"] = TASK_STATUS_COMPLETED
-                        t["result"] = result
+                        t["result"] = _visible_results(result)
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
                         t.pop("_progress_scale", None)
@@ -757,7 +771,9 @@ class ScreenspaceWorker:
                 )
                 # change_grid/saliency_grid are consumed only by heatmap
                 # generation; drop them so completed tasks don't retain
-                # per-frame grids in memory until dismissal.
+                # per-frame grids in memory until dismissal. Attention's
+                # shift-only t["result"] shares these dicts, so its visible
+                # entries are stripped by the same pass.
                 for r in result:
                     if isinstance(r, dict):
                         for key in _SERVER_ONLY_GRID_KEYS:
@@ -766,16 +782,6 @@ class ScreenspaceWorker:
                     t = self._tasks.get(task_id)
                     if t is not None:
                         t.update(attachments)
-                        if task_type == "attention":
-                            # The full sample stream existed only to feed the
-                            # heatmaps; the task's visible results are the
-                            # confirmed shifts (what the timeline/results panel
-                            # should show — one tick per shift, not per sample).
-                            t["result"] = [
-                                r
-                                for r in result
-                                if isinstance(r, dict) and r.get("shift")
-                            ]
                 # The task was already marked completed before these heatmap
                 # filenames were attached, so emit an SSE update now — otherwise
                 # the frontend (which may already have seen the completed task via

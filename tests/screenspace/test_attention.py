@@ -463,6 +463,93 @@ class TestAttentionToolParamMapping:
 
 
 class TestAttentionWorker:
+    def test_paused_task_stores_only_shifts(self, monkeypatch):
+        # Pausing must not expose the full per-sample stream: the paused
+        # t["result"] is what the results/timeline API serves (and what resume
+        # re-seeds _partial_results from), so it follows the shift-only
+        # contract the live on_result stream follows.
+        samples = _grid_results(6)
+        samples[3].update({"shift": True, "shift_distance": 0.5, "_confidence": 0.7})
+
+        def pausing_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            with self._lock:
+                self._tasks[task["id"]]["_paused_flag"] = True
+            return [dict(s) for s in samples]
+
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker, "_dispatch", pausing_dispatch
+        )
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "attention",
+            "P01",
+            "s_P01.mp4",
+            ["/v.mp4"],
+            "full_frame",
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+        )
+        worker.enqueue(task)
+        worker.start()
+        try:
+            import time
+
+            for _ in range(100):
+                t = worker.get_task(task["id"])
+                if t and t["status"] == screenspace.TASK_STATUS_PAUSED:
+                    break
+                time.sleep(0.05)
+            with worker._lock:
+                t = worker._tasks[task["id"]]
+                assert t["status"] == screenspace.TASK_STATUS_PAUSED
+                assert len(t["result"]) == 1
+                assert t["result"][0]["shift"] is True
+        finally:
+            worker.stop()
+
+    def test_completion_is_shift_only_even_with_heatmaps_disabled(
+        self, tmp_path, monkeypatch
+    ):
+        # The shift filter runs at result assignment (inside the completion
+        # lock), not as a post-heatmap afterthought — so the completed→heatmap
+        # window and the heatmaps-off path never expose per-sample rows.
+        import time
+
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(config, "SCREENSPACE_GENERATE_ATTENTION_HEATMAP", False)
+
+        samples = _grid_results(6)
+        samples[4].update({"shift": True, "shift_distance": 0.6, "_confidence": 0.8})
+
+        def fake_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            return [dict(s) for s in samples]
+
+        monkeypatch.setattr(screenspace.ScreenspaceWorker, "_dispatch", fake_dispatch)
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "attention",
+            "P01",
+            "s_P01.mp4",
+            ["/v.mp4"],
+            "full_frame",
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+        )
+        worker.enqueue(task)
+        worker.start()
+        try:
+            for _ in range(100):
+                t = worker.get_task(task["id"])
+                if t and t["status"] == "completed":
+                    break
+                time.sleep(0.05)
+            t = worker.get_task(task["id"])
+            assert t is not None
+            assert t["status"] == "completed"
+            assert len(t["result"]) == 1
+            assert t["result"][0]["shift"] is True
+            assert not t.get("heatmap")
+        finally:
+            worker.stop()
+
     def test_completion_filters_results_to_shifts_and_attaches_heatmaps(
         self, tmp_path, monkeypatch
     ):
