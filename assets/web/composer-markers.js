@@ -188,6 +188,7 @@
       laneFolds: state.laneFolds,
       markerThumbnails: state.markerThumbnails,
       markerAudioScrub: state.markerAudioScrub,
+      followPlayhead: state.followPlayhead,
     }).catch(function () {});
   }
 

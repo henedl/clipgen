@@ -101,6 +101,7 @@ def _empty_manifest() -> dict[str, Any]:
             "markerSources": {src: True for src in _MARKER_SOURCES},
             "markerThumbnails": False,
             "markerAudioScrub": False,
+            "followPlayhead": True,
         },
     }
 
@@ -335,23 +336,26 @@ def api_ui_update() -> Any:
     survives a restart.
 
     Body may carry ``markerSources`` (lane visibility), ``laneFolds`` (True =
-    the lane renders as one compact row), and/or the boolean media toggles
-    ``markerThumbnails`` / ``markerAudioScrub``; at least one is required.
+    the lane renders as one compact row), and/or the boolean toggles
+    ``markerThumbnails`` / ``markerAudioScrub`` / ``followPlayhead``; at least
+    one is required.
     """
     data = request.get_json(silent=True) or {}
     sources = data.get("markerSources")
     folds = data.get("laneFolds")
     thumbs = data.get("markerThumbnails")
     scrub = data.get("markerAudioScrub")
+    follow = data.get("followPlayhead")
     if (
         not isinstance(sources, dict)
         and not isinstance(folds, dict)
         and not isinstance(thumbs, bool)
         and not isinstance(scrub, bool)
+        and not isinstance(follow, bool)
     ):
         return err(
-            "markerSources, laneFolds, markerThumbnails, "
-            "or markerAudioScrub is required"
+            "markerSources, laneFolds, markerThumbnails, markerAudioScrub, "
+            "or followPlayhead is required"
         )
     response: dict[str, Any] = {}
     with _manifest_lock:
@@ -371,6 +375,9 @@ def api_ui_update() -> Any:
         if isinstance(scrub, bool):
             ui["markerAudioScrub"] = scrub
             response["markerAudioScrub"] = scrub
+        if isinstance(follow, bool):
+            ui["followPlayhead"] = follow
+            response["followPlayhead"] = follow
         _persist_locked()
     return ok(**response)
 

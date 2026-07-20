@@ -332,6 +332,10 @@
     if (scrub) {
       scrub.setAttribute("aria-pressed", state.markerAudioScrub ? "true" : "false");
     }
+    var follow = qs("#coFollowToggle");
+    if (follow) {
+      follow.setAttribute("aria-pressed", state.followPlayhead ? "true" : "false");
+    }
   }
 
   function initMarkerScrub() {
@@ -352,6 +356,14 @@
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();
         if (!state.markerAudioScrub) scrubHoverEnd();
+      });
+    }
+    var follow = qs("#coFollowToggle");
+    if (follow) {
+      follow.addEventListener("click", function () {
+        state.followPlayhead = !state.followPlayhead;
+        syncScrubToggles();
+        if (CO.persistLaneUi) CO.persistLaneUi();
       });
     }
     syncScrubToggles();

@@ -176,6 +176,14 @@
           <span class="co-lane-dot" aria-hidden="true"></span>Scrub
         </button>
       </div>
+      <!-- Camera toggle: when on, seeking/playback pans the zoomed timeline to
+           keep the playhead in view. Persists via PUT api/ui. -->
+      <div class="co-lane-pills" role="group" aria-label="Playback">
+        <button id="coFollowToggle" class="co-lane-pill co-media-pill" type="button"
+                aria-pressed="true" title="Follow the playhead: pan the zoomed timeline to keep it in view during playback">
+          <span class="co-lane-dot" aria-hidden="true"></span>Follow
+        </button>
+      </div>
       <span class="co-toolbar-sep"></span>
       <button id="coZoomInBtn" class="btn btn-small btn-icon" type="button"
               aria-label="Zoom in" title="Zoom in"></button>
