@@ -44,6 +44,7 @@ from screenspace_ocr import (
 )
 from screenspace_scans import (
     generate_timelapse,
+    scan_attention,
     scan_boundaries,
     scan_changes,
     scan_color,
@@ -89,6 +90,10 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
         if thr <= 0:
             return 1.0
         return max(0.0, min((dist - thr) / float(thr), 1.0))
+    elif tool_type == "attention":
+        # Shift events carry _confidence; backfilled/raw samples fall back to
+        # the peak strength.
+        return float(result.get("_confidence", result.get("peak_value", 1.0)))
     return 1.0
 
 
@@ -984,6 +989,44 @@ class BoundaryTool(AnalysisTool):
         )
 
 
+class AttentionTool(AnalysisTool):
+    name = "attention"
+    # The scanner controls its own pipe downscale and needs every sampled
+    # frame for dwell weighting (heatmap heat ∝ time on screen); the generic
+    # fast-scan phash-skip would drop exactly the static frames that matter.
+    supports_fast_scan = False
+    # Scan-only: full-frame with temporal state (EMA + shift confirmation), so
+    # it is neither a multitool step nor calibratable (no score_key); the
+    # pinned-frame strip and /api/calibrate correctly skip it.
+
+    def scan(
+        self,
+        video_path,
+        region,
+        params,
+        *,
+        task_id,
+        scan_mode,
+        on_progress,
+        cancel_flag,
+        on_result,
+        fast_opts,
+    ):
+        return scan_attention(
+            video_path,
+            region,
+            shift_threshold=params.get("shift_threshold", 0.0),
+            interval_seconds=params.get("interval", 0),
+            ema_alpha=params.get("ema_alpha", 0.0),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+        )
+
+
 class TimelapseTool(AnalysisTool):
     name = "timelapse"
     # Has its own ``sample_interval`` and produces a media file rather than
@@ -1081,6 +1124,7 @@ TOOLS: dict[str, AnalysisTool] = {
         SceneTool(),
         InactivityTool(),
         BoundaryTool(),
+        AttentionTool(),
         TimelapseTool(),
         MultitoolTool(),
     )

@@ -3,6 +3,8 @@
 import numpy as np
 
 import screenspace
+import screenspace_frames
+import screenspace_scans
 
 
 def _bright_patch_frame(w=160, h=120, px=120, py=80, size=20):
@@ -127,3 +129,102 @@ class TestSaliencyGrid:
         assert best["mag"] == 1.0
         assert 0.70 <= best["x"] <= 0.92
         assert 0.60 <= best["y"] <= 0.90
+
+
+def _run_scan(monkeypatch, frames, **kwargs):
+    """Drive scan_attention over a synthetic (ts, frame) sequence."""
+
+    def fake_scan(video_path, interval, callback, **_kw):
+        for ts, frame in frames:
+            if callback(ts, frame) is False:
+                break
+
+    monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
+    monkeypatch.setattr(
+        screenspace_frames, "_probe_video_meta", lambda p: (30.0, float(len(frames)))
+    )
+    streamed = []
+    results = screenspace.scan_attention(
+        "/fake.mp4",
+        None,
+        interval_seconds=1.0,
+        on_result=streamed.append,
+        **kwargs,
+    )
+    return results, streamed
+
+
+class TestScanAttention:
+    def _patch_at(self, px, py):
+        return _bright_patch_frame(w=160, h=120, px=px, py=py, size=20)
+
+    def test_jumping_patch_emits_one_confirmed_shift(self, monkeypatch):
+        frames = [(float(i), self._patch_at(10, 10)) for i in range(3)]
+        frames += [(float(i), self._patch_at(130, 90)) for i in range(3, 7)]
+        results, streamed = _run_scan(monkeypatch, frames, ema_alpha=1.0)
+
+        assert len(results) == len(frames)
+        for r in results:
+            assert "saliency_grid" in r
+            assert 0.0 <= r["peak_x"] <= 1.0
+            assert 0.0 <= r["peak_y"] <= 1.0
+
+        shifts = [r for r in results if r.get("shift")]
+        assert len(shifts) == 1
+        assert len(streamed) == 1
+        shift = shifts[0]
+        # Emitted on the frame where the jump began (confirmation back-stamps)
+        assert shift["timestamp"] == 3.0
+        # From the top-left patch to the bottom-right one
+        assert shift["from_x"] < 0.35 and shift["from_y"] < 0.45
+        assert shift["to_x"] > 0.65 and shift["to_y"] > 0.55
+        assert shift["shift_distance"] > 0.5
+        assert 0.05 <= shift["_confidence"] <= 1.0
+
+    def test_streamed_payload_omits_grid(self, monkeypatch):
+        frames = [(float(i), self._patch_at(10, 10)) for i in range(3)]
+        frames += [(float(i), self._patch_at(130, 90)) for i in range(3, 7)]
+        results, streamed = _run_scan(monkeypatch, frames, ema_alpha=1.0)
+        assert streamed
+        assert "saliency_grid" not in streamed[0]
+        assert streamed[0]["shift"] is True
+        # The returned result for the same frame keeps its grid
+        match = [r for r in results if r["timestamp"] == streamed[0]["timestamp"]]
+        assert match and "saliency_grid" in match[0]
+
+    def test_static_sequence_emits_no_shifts(self, monkeypatch):
+        frames = [(float(i), self._patch_at(70, 50)) for i in range(6)]
+        results, streamed = _run_scan(monkeypatch, frames)
+        assert len(results) == len(frames)
+        assert streamed == []
+        assert not any(r.get("shift") for r in results)
+
+    def test_single_sample_jump_is_not_confirmed(self, monkeypatch):
+        # Peak visits the far corner for one sample only, then returns: the
+        # confirm counter (default 2) must reject the blip.
+        frames = [(float(i), self._patch_at(10, 10)) for i in range(3)]
+        frames.append((3.0, self._patch_at(130, 90)))
+        frames += [(float(i), self._patch_at(10, 10)) for i in range(4, 7)]
+        _, streamed = _run_scan(monkeypatch, frames, ema_alpha=1.0)
+        assert streamed == []
+
+    def test_cancel_stops_scan(self, monkeypatch):
+        frames = [(float(i), self._patch_at(10, 10)) for i in range(10)]
+
+        def fake_scan(video_path, interval, callback, **_kw):
+            for ts, frame in frames:
+                if callback(ts, frame) is False:
+                    break
+
+        monkeypatch.setattr(screenspace_scans, "scan_video_full_frames", fake_scan)
+        monkeypatch.setattr(
+            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 10.0)
+        )
+        calls = [0]
+
+        def cancel():
+            calls[0] += 1
+            return calls[0] > 3
+
+        results = screenspace.scan_attention("/fake.mp4", cancel_flag=cancel)
+        assert len(results) < len(frames)

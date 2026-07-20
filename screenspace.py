@@ -102,6 +102,7 @@ from screenspace_frames import (
 )
 from screenspace_scans import (
     generate_timelapse,
+    scan_attention,
     scan_boundaries,
     scan_changes,
     scan_color,
@@ -123,6 +124,7 @@ from screenspace_heatmap import (
 from screenspace_tools import (
     TOOLS,
     AnalysisTool,
+    AttentionTool,
     BoundaryTool,
     ChangeTool,
     ColorTool,
