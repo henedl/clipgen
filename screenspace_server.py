@@ -96,6 +96,7 @@ _VALID_TASK_TYPES = (
     "scene",
     "inactivity",
     "boundary",
+    "attention",
 )
 _VALID_STEP_TYPES = (
     "color",
@@ -2132,12 +2133,13 @@ def api_tasks_create() -> FlaskResponse:
     if not data:
         return err("JSON body required")
 
-    # Boundary is full-frame only by contract: ignore any caller-supplied region
-    # so events and manifest metadata are never labeled with a region the scan
-    # didn't use (scan_boundaries always hashes the whole frame). Forcing it here
-    # — before validation and before task["region_ref"] is recorded — keeps the
-    # stored region_name/coords and region_ref consistently full-frame.
-    if (data.get("type") or "").strip() == "boundary":
+    # Boundary and Attention are full-frame only by contract: ignore any
+    # caller-supplied region so events and manifest metadata are never labeled
+    # with a region the scan didn't use (both scanners always analyze the whole
+    # frame). Forcing it here — before validation and before task["region_ref"]
+    # is recorded — keeps the stored region_name/coords and region_ref
+    # consistently full-frame.
+    if (data.get("type") or "").strip() in ("boundary", "attention"):
         data["region"] = ""
         data["region_ref"] = {"source": "full_frame"}
 

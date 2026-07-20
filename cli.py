@@ -389,7 +389,8 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help=(
             "Run a Screenspace analysis task headlessly. "
             "TYPE is one of color, change, similarity, text, numbers, timelapse, "
-            "template, flow, inactivity, scene. REGION is optional and must already "
+            "template, flow, inactivity, scene, attention. REGION is optional and must "
+            "already "
             "exist in the active manifest or in a stash (use --ss-list-regions / "
             "--ss-list-stashes); omit it (or pass 'full_frame') to scan the whole frame."
         ),
@@ -1349,6 +1350,7 @@ _SS_VALID_TASK_TYPES = (
     "flow",
     "inactivity",
     "scene",
+    "attention",
 )
 
 
@@ -1594,6 +1596,12 @@ def _ss_build_params(
             raise ValueError("inactivity task requires --ss-threshold FLOAT")
         params["threshold"] = args.ss_threshold
 
+    elif task_type == "attention":
+        # All knobs have config defaults; --ss-threshold optionally overrides
+        # the normalized peak-jump distance for shift events.
+        if args.ss_threshold is not None:
+            params["shift_threshold"] = args.ss_threshold
+
     params.setdefault("cv_resolution_scale", config.SCREENSPACE_CV_RESOLUTION_SCALE)
     return params
 
@@ -1791,6 +1799,13 @@ def _run_ss_task(args: argparse.Namespace) -> None:
             [f"Valid types: {', '.join(_SS_VALID_TASK_TYPES)}"],
         )
         sys.exit(1)
+    if task_type == "attention" and region_name != screenspace.FULL_FRAME_REGION_NAME:
+        # Attention is full-frame only by contract (mirrors the server's forced
+        # rewrite); a supplied region would mislabel events the scan ignores.
+        utils.warning_print(
+            f"attention is full-frame only; ignoring region {region_name!r}."
+        )
+        region_name = screenspace.FULL_FRAME_REGION_NAME
 
     manifest = screenspace.load_screenspace_manifest()
 

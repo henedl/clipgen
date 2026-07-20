@@ -650,6 +650,80 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
     assert persisted["status"] == "completed"
 
 
+def test_parse_ss_task_attention(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["clipgen.py", "--ss-task", "attention", "P01"],
+    )
+    args = cli.parse_arguments()
+    assert args.ss_task == ["attention", "P01"]
+
+
+def test_ss_build_params_attention_threshold_optional():
+    region = {"x": 0, "y": 0, "w": 100, "h": 100}
+    args = _ss_args(ss_threshold=0.2)
+    params = cli._ss_build_params(args, "attention", region, lambda ts: None)
+    assert params["shift_threshold"] == 0.2
+
+    args = _ss_args()
+    params = cli._ss_build_params(args, "attention", region, lambda ts: None)
+    assert "shift_threshold" not in params  # config default applies at scan time
+
+
+def test_ss_task_attention_forces_full_frame(monkeypatch, capsys):
+    """A named region on an attention task is ignored with a warning: the task
+    persists as full_frame (mirrors the server's forced rewrite)."""
+    fake_manifest = {
+        "regions": {
+            "hud": {
+                "x": 0.0,
+                "y": 0.0,
+                "w": 0.5,
+                "h": 0.5,
+                "source_width": 100,
+                "source_height": 100,
+            }
+        },
+        "stashes": [],
+        "tasks": [],
+        "events": [],
+    }
+
+    import screenspace
+    import video as video_mod
+
+    monkeypatch.setattr(screenspace, "load_screenspace_manifest", lambda: fake_manifest)
+    monkeypatch.setattr(
+        cli, "_ss_resolve_videos_for_participant", lambda pid: ["/tmp/fake.mp4"]
+    )
+    monkeypatch.setattr(
+        video_mod,
+        "probe_video_properties",
+        lambda p: {"width": 100, "height": 100},
+    )
+
+    saved_tasks: list[dict] = []
+
+    def fake_save(
+        regions, tasks, events, stashes=None, per_participant=None, pins=None
+    ):
+        saved_tasks.extend(tasks)
+        return None
+
+    monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
+    monkeypatch.setattr(screenspace, "ScreenspaceWorker", _FakeWorker)
+
+    args = _ss_args(ss_task=["attention", "P01", "hud"], ss_threshold=0.2)
+    cli._run_ss_task(args)
+
+    assert saved_tasks
+    persisted = saved_tasks[0]
+    assert persisted["type"] == "attention"
+    assert persisted["region"] == "full_frame"
+    assert persisted["parameters"]["shift_threshold"] == 0.2
+    assert "full-frame only" in capsys.readouterr().out
+
+
 # ---- scene flag path + manifest re-run (--ss-run-task) ----
 
 
