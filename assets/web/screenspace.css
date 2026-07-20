@@ -1372,6 +1372,202 @@ body[data-frontend="screenspace"] {
   border-bottom-color: var(--color-task-attention);
 }
 
+/* ── Grouped category tool nav (SCREENSPACE_GROUPED_TOOL_NAV) ─────────────
+ * Optional presentational alternative to the flat #workflowTabs row. The tabs
+ * stay in the DOM in both modes; .ss-grouped-tools on #workflowSection swaps
+ * which one is shown. Category selections delegate to a hidden tab's .click().
+ * Chips are equal-width (flex: 1) so positions/sizes stay stable for muscle
+ * memory; an active chip fills with its tool color and shows just the tool icon
+ * + name (the category name is dropped when active to stay compact). Structure
+ * is a wrapper (.ss-cat-chip) + button (.ss-cat-trigger) + sibling menu so menu
+ * items never nest inside a <button>. */
+#workflowCategories { display: none; }
+.ss-grouped-tools #workflowTabs { display: none; }
+.ss-grouped-tools #workflowCategories { display: flex; }
+
+.ss-cat-nav {
+  gap: var(--space-1);
+  flex-wrap: nowrap;
+  align-items: stretch;
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-1) 0;
+}
+
+/* Equal-width segments — a chip's size does not change with selection. Fixed
+ * max width (no flex-grow) so chips appear stable and left-packed; they shrink
+ * (flex-shrink) only when the row runs short of space. */
+.ss-cat-chip {
+  position: relative; /* anchor for .ss-cat-menu + z-index lift when open */
+  flex: 0 1 7rem;
+  min-width: 0;
+}
+.ss-cat-chip.open { z-index: var(--z-dropdown); } /* lift the menu above the action row */
+
+.ss-cat-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast), background-color var(--duration-fast),
+    border-color var(--duration-fast);
+}
+.ss-cat-chip:not(.active) .ss-cat-trigger:hover {
+  color: var(--color-text);
+  background: var(--color-surface-alt);
+}
+
+.ss-cat-text {
+  min-width: 0; /* allow the label to ellipsize when the chip shrinks */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Active chip: solid tool-color fill (--cat-fill from data-active-type below),
+ * with a contrast-safe ink. Dark-theme task colors are light (400-level), so
+ * dark ink reads on all of them; the light theme overrides sit further down. */
+.ss-cat-chip.active { --cat-ink: #14181f; }
+.ss-cat-chip.active .ss-cat-trigger {
+  background: var(--cat-fill, var(--color-selected));
+  border-color: var(--cat-fill, var(--color-border));
+  color: var(--cat-ink);
+  font-weight: 600;
+}
+
+/* The glyph holds a tool's mask-image icon (colored via background-color, so it
+ * tracks --cat-ink to contrast the fill). Empty (hidden) on resting chips —
+ * except the alwaysIcon chip (Multitool), which keeps its tool-colored icon. */
+.ss-cat-glyph {
+  display: inline-flex;
+  align-items: center;
+}
+.ss-cat-glyph:empty { display: none; }
+.ss-cat-glyph .ss-task-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
+  opacity: 1;
+  background-color: var(--cat-ink, var(--color-text));
+}
+.ss-cat-chip[data-always-icon] .ss-cat-glyph .ss-task-icon {
+  background-color: var(--color-task-multitool);
+}
+.ss-cat-chip[data-always-icon].active .ss-cat-glyph .ss-task-icon {
+  background-color: var(--cat-ink);
+}
+
+.ss-cat-chevron {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
+  margin-left: auto; /* push the caret to the chip's right edge (dropdown look) */
+  background: currentColor;
+  mask-image: url("/screenspace/icons/chevron-down.svg");
+  -webkit-mask-image: url("/screenspace/icons/chevron-down.svg");
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  opacity: 0.55;
+  transition: opacity var(--duration-fast), transform var(--duration-fast);
+}
+.ss-cat-chip:hover .ss-cat-chevron,
+.ss-cat-chip.active .ss-cat-chevron { opacity: 0.9; }
+.ss-cat-chip.open .ss-cat-chevron { transform: rotate(180deg); }
+
+/* Per-tool fill hue for the active chip (mirrors .wf-tab --wf-tab-hue map). */
+.ss-cat-chip[data-active-type="multitool"]  { --cat-fill: var(--color-task-multitool); }
+.ss-cat-chip[data-active-type="color"]      { --cat-fill: var(--color-task-color); }
+.ss-cat-chip[data-active-type="change"]     { --cat-fill: var(--color-task-change); }
+.ss-cat-chip[data-active-type="similarity"] { --cat-fill: var(--color-task-similarity); }
+.ss-cat-chip[data-active-type="text"]       { --cat-fill: var(--color-task-text); }
+.ss-cat-chip[data-active-type="numbers"]    { --cat-fill: var(--color-task-numbers); }
+.ss-cat-chip[data-active-type="timelapse"]  { --cat-fill: var(--color-task-timelapse); }
+.ss-cat-chip[data-active-type="template"]   { --cat-fill: var(--color-task-template); }
+.ss-cat-chip[data-active-type="flow"]       { --cat-fill: var(--color-task-flow); }
+.ss-cat-chip[data-active-type="scene"]      { --cat-fill: var(--color-task-scene); }
+.ss-cat-chip[data-active-type="inactivity"] { --cat-fill: var(--color-task-inactivity); }
+.ss-cat-chip[data-active-type="boundary"]   { --cat-fill: var(--color-task-boundary); }
+.ss-cat-chip[data-active-type="attention"]  { --cat-fill: var(--color-task-attention); }
+
+/* Light-theme task colors are darker (500/600-level): white ink reads better on
+ * the fills, except the light yellow (numbers). Icons/chevron follow --cat-ink. */
+html[data-theme="light"] .ss-cat-chip.active,
+.theme-light .ss-cat-chip.active {
+  --cat-ink: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+}
+html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
+.theme-light .ss-cat-chip.active[data-active-type="numbers"] {
+  --cat-ink: #14181f;
+  text-shadow: none;
+}
+
+/* Dropdown menu — clones the .rp-switcher-panel idiom. Driven by chip.open. */
+.ss-cat-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 11rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+  z-index: var(--z-dropdown);
+  display: none;
+}
+.ss-cat-chip.open .ss-cat-menu { display: block; }
+
+.ss-cat-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--color-text);
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+.ss-cat-item:hover { background: var(--color-surface-alt); }
+.ss-cat-item.active { background: var(--color-selected); }
+.ss-cat-item .ss-task-icon {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
+  background-color: var(--cat-item-hue, var(--color-text-dim));
+}
+
+/* Per-tool icon hue for menu items (mirrors the chip fill map). */
+.ss-cat-item[data-type="multitool"]  { --cat-item-hue: var(--color-task-multitool); }
+.ss-cat-item[data-type="color"]      { --cat-item-hue: var(--color-task-color); }
+.ss-cat-item[data-type="change"]     { --cat-item-hue: var(--color-task-change); }
+.ss-cat-item[data-type="similarity"] { --cat-item-hue: var(--color-task-similarity); }
+.ss-cat-item[data-type="text"]       { --cat-item-hue: var(--color-task-text); }
+.ss-cat-item[data-type="numbers"]    { --cat-item-hue: var(--color-task-numbers); }
+.ss-cat-item[data-type="timelapse"]  { --cat-item-hue: var(--color-task-timelapse); }
+.ss-cat-item[data-type="template"]   { --cat-item-hue: var(--color-task-template); }
+.ss-cat-item[data-type="flow"]       { --cat-item-hue: var(--color-task-flow); }
+.ss-cat-item[data-type="scene"]      { --cat-item-hue: var(--color-task-scene); }
+.ss-cat-item[data-type="inactivity"] { --cat-item-hue: var(--color-task-inactivity); }
+.ss-cat-item[data-type="boundary"]   { --cat-item-hue: var(--color-task-boundary); }
+.ss-cat-item[data-type="attention"]  { --cat-item-hue: var(--color-task-attention); }
+
 #workflowBody {
   display: flex;
   flex-direction: column;

@@ -355,6 +355,9 @@ SCREENSPACE_RESTORE_MARKERS_ON_EDIT: bool = (
     True  # restore In/Out timeline markers when editing a task
 )
 SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM: bool = False  # show the per-detection confidence-distribution histogram in the Results panel
+SCREENSPACE_GROUPED_TOOL_NAV: bool = (
+    True  # group the analysis tools into category dropdowns instead of a flat tab row
+)
 SCREENSPACE_GENERATE_TEMPLATE_HEATMAP: bool = (
     True  # generate detection heatmaps for Template tasks
 )
@@ -651,6 +654,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": "Show a confidence-distribution histogram above the Results list (for tools that have confidence scores). Lets you see where detections cluster before moving the certainty cutoff. Off by default.",
+    "SCREENSPACE_GROUPED_TOOL_NAV": "Group the analysis tools into category dropdowns (Difference, Detection, Classification, Attention, Utility) with a standalone Multitool chip, instead of a flat row of tool tabs. Easier to scan when picking a tool. On by default; turn off for the classic flat tab row.",
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Template tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
@@ -985,6 +989,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": {
         "tab": "Screenspace",
         "group": "Results Display",
+        "type": "bool",
+    },
+    "SCREENSPACE_GROUPED_TOOL_NAV": {
+        "tab": "Screenspace",
+        "group": "Tool Selection",
         "type": "bool",
     },
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": {

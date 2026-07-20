@@ -2635,6 +2635,23 @@ def test_api_settings_includes_screenspace_cv_resolution_scale(client):
     assert isinstance(s["value"], float)
 
 
+def test_api_settings_includes_grouped_tool_nav(client):
+    """GET /api/settings exposes the grouped tool-nav toggle, default on."""
+    import config
+
+    assert config.SCREENSPACE_GROUPED_TOOL_NAV is True
+    assert "SCREENSPACE_GROUPED_TOOL_NAV" in config.SETTINGS_DESCRIPTIONS
+    resp = client.get("/studio/api/settings")
+    data = resp.get_json()
+    by_name = {s["name"]: s for s in data["settings"]}
+    assert "SCREENSPACE_GROUPED_TOOL_NAV" in by_name
+    s = by_name["SCREENSPACE_GROUPED_TOOL_NAV"]
+    assert s["tab"] == "Screenspace"
+    assert s["type"] == "bool"
+    assert s["value"] is True
+    assert s["default"] is True
+
+
 def test_api_settings_includes_provider_field(client):
     """model_select settings include a provider field."""
     resp = client.get("/studio/api/settings")
