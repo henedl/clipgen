@@ -48,6 +48,7 @@
     scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",
     inactivity: "Region and pHash bit grid (white = 1, black = 0).",
     boundary: "Full frame; Auto/Scene/Hybrid use a content fingerprint vs. the current period, pHash compares consecutive samples.",
+    attention: "Full frame (\u2264256 px): spectral residual, Lab contrast, frame-diff motion, and the combined center-weighted saliency map.",
     multitool: "Preview of the first tool step.",
   };
 

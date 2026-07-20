@@ -304,7 +304,9 @@
     if (state.heatmapOverlay && state.heatmapOverlay._img) {
       var hm = state.heatmapOverlay;
       ctx.globalAlpha = 0.5;
-      if (hm.type === "template") {
+      if (hm.type === "template" || hm.type === "attention") {
+        // Frame-scoped heatmaps cover the whole canvas (attention's
+        // region_coords are {0,0,0,0} — the region branch would draw nothing).
         ctx.drawImage(hm._img, 0, 0, canvas.width, canvas.height);
       } else if (hm.type === "flow" || hm.type === "change") {
         var rPx = hm.region_coords;

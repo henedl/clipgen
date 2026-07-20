@@ -409,6 +409,13 @@
       row.appendChild(el("span", "result-score", "d:" + (r.distance !== undefined ? r.distance : "?")));
       // Scene label (Scene A/B/… — recurrence-aware for scene/hybrid metrics).
       if (r.scene_label) row.appendChild(el("span", "result-scene", r.scene_label));
+    } else if (task.type === "attention") {
+      // Attention rows are confirmed focus shifts; Δ is the normalized
+      // distance the predicted attention peak jumped.
+      row.dataset.timestamp = r.timestamp;
+      row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
+      row.appendChild(buildConfBar(r._confidence !== undefined ? r._confidence : 0, task.type));
+      row.appendChild(el("span", "result-score", "Δ" + (r.shift_distance !== undefined ? r.shift_distance.toFixed(2) : "?")));
     } else if (task.type === "multitool") {
       row.dataset.timestamp = r.timestamp;
       row.appendChild(el("span", "result-timestamp", formatTime(r.timestamp, { decimals: 1 })));
@@ -453,6 +460,7 @@
   var CONF_TASK_TYPES = {
     change: 1, similarity: 1, text: 1, numbers: 1, template: 1,
     scene: 1, flow: 1, multitool: 1, inactivity: 1, boundary: 1,
+    attention: 1,
   };
 
   function taskHasConfidence(task) {
@@ -472,6 +480,7 @@
     if (task.type === "multitool") return r.min_confidence;
     if (task.type === "inactivity") return Math.min((r.duration || 0) / 30, 1);
     if (task.type === "boundary") return r._confidence;
+    if (task.type === "attention") return r._confidence;
     return null;
   }
 
@@ -681,8 +690,8 @@
     countEl.textContent = "(" + results.length + ")";
     container.innerHTML = "";
 
-    // Heatmap artifact display (template, flow, change)
-    if (task.heatmap && (task.type === "template" || task.type === "flow" || task.type === "change")) {
+    // Heatmap artifact display (template, flow, change, attention)
+    if (task.heatmap && (task.type === "template" || task.type === "flow" || task.type === "change" || task.type === "attention")) {
       var heatmapSection = el("div", "heatmap-result");
       var heatmapLabel = el("div", "heatmap-label");
       // Clickable title collapses the section to cut visual noise (state persists

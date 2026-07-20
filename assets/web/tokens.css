@@ -38,6 +38,7 @@
  * TASK:       --color-task-multitool | --color-task-color | --color-task-change | --color-task-similarity
  *             --color-task-text | --color-task-numbers | --color-task-timelapse | --color-task-template
  *             --color-task-flow | --color-task-scene | --color-task-inactivity | --color-task-boundary
+ *             --color-task-attention
  * REGIONS:    --region-color-1..8 — palette cycled by Screenspace region index
  *
  * LAYOUT:     --layout-max-width | --layout-padding-x
@@ -203,6 +204,7 @@
   --color-task-scene:      #2dd4bf;
   --color-task-inactivity: #94a3b8;
   --color-task-boundary:   #e879f9;
+  --color-task-attention:  #a3e635;
 
   /* Stream colors — for metadata cross-stream visualisations
    * (sheet=yellow, screenspace=blue, transcript=green). Constant across
@@ -352,6 +354,7 @@ html[data-theme="light"],
   --color-task-scene:      #14b8a6;
   --color-task-inactivity: #64748b;
   --color-task-boundary:   #c026d3;
+  --color-task-attention:  #65a30d;
 
   --cat-quote:    #2563eb;
   --cat-insight:  #f97316;
