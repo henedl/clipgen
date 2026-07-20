@@ -69,6 +69,7 @@ from screenspace_primitives import (
     compute_spectral_residual,
     denormalize_region,
     extract_region,
+    face_detection_available,
     filter_matches_by_region_mask,
     mask_points_key,
     match_template,

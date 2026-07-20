@@ -35,6 +35,7 @@ from screenspace_primitives import (
     compute_phash,
     compute_saliency_map,
     compute_scene_fingerprint,
+    face_detection_available,
     filter_matches_by_region_mask,
     region_masker,
     saliency_grid_from_map,
@@ -1603,6 +1604,18 @@ def scan_attention(
         ema_alpha = config.SCREENSPACE_ATTENTION_EMA_ALPHA
     ema_alpha = min(1.0, ema_alpha)
     shift_confirm = max(1, config.SCREENSPACE_ATTENTION_SHIFT_CONFIRM)
+
+    wants_face = (
+        include_face
+        if include_face is not None
+        else config.SCREENSPACE_ATTENTION_FACE_CHANNEL
+    )
+    if wants_face and not face_detection_available():
+        utils.warning_print(
+            "Attention face channel is enabled but this OpenCV build has no "
+            "CascadeClassifier (removed in opencv-python 5.x); scanning "
+            "without the face channel."
+        )
 
     window = _resolve_scan_window(video_path, start_seconds, end_seconds)
     if window is None:

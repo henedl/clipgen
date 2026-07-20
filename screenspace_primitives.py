@@ -13,7 +13,14 @@ import statistics
 from typing import TYPE_CHECKING, Any, Callable
 
 import cv2
-import cv2.data  # cv2.data.haarcascades is a submodule attribute; ty needs the explicit import
+
+try:
+    # cv2.data.haarcascades is a submodule attribute; ty needs the explicit
+    # import. Absent on cv2 builds without the bundled cascade data (the face
+    # channel feature-detects it and degrades to a zeros map).
+    import cv2.data  # noqa: F401
+except ImportError:  # pragma: no cover - depends on the installed cv2 build
+    pass
 import numpy as np
 
 if TYPE_CHECKING:
@@ -1130,30 +1137,50 @@ def compute_motion_saliency(
     return cv2.GaussianBlur(diff, (9, 9), 2.5)
 
 
-_face_cascade: "cv2.CascadeClassifier | None" = None
+# Lazy Haar-cascade singleton. Typed Any because the legacy CascadeClassifier
+# API only exists on OpenCV 4.x wheels — opencv-python-headless 5.x removed it,
+# so it must never be named in annotations or called unguarded.
+_face_cascade: Any | None = None
 
 
-def _get_face_cascade() -> "cv2.CascadeClassifier":
-    """Lazy singleton for the bundled frontal-face Haar cascade."""
+def _get_face_cascade() -> Any | None:
+    """Lazy singleton for the bundled frontal-face Haar cascade.
+
+    Returns ``None`` when this cv2 build ships neither the legacy
+    ``CascadeClassifier`` API nor the bundled cascade data (removed in
+    opencv-python-headless 5.x); the face channel then degrades to a zeros
+    map and :func:`compute_saliency_map` leaves its weight out of the mix.
+    """
     global _face_cascade
     if _face_cascade is None:
-        _face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
+        cascade_cls = getattr(cv2, "CascadeClassifier", None)
+        haar_dir = getattr(getattr(cv2, "data", None), "haarcascades", None)
+        if cascade_cls is None or not haar_dir:
+            return None
+        _face_cascade = cascade_cls(haar_dir + "haarcascade_frontalface_default.xml")
     return _face_cascade
+
+
+def face_detection_available() -> bool:
+    """Whether this cv2 build supports the Haar face channel (OpenCV 4.x)."""
+    return _get_face_cascade() is not None
 
 
 def compute_face_saliency(gray: np.ndarray) -> np.ndarray:
     """Gaussian blobs at Haar face detections, float32 in [0, 1].
 
-    Zeros map when no faces are found. Opt-in via
+    Zeros map when no faces are found, and when the cv2 build has no
+    CascadeClassifier support at all. Opt-in via
     ``SCREENSPACE_ATTENTION_FACE_CHANNEL`` — Haar false-positives on UI
     avatars/icons distort the map on footage without a webcam PiP.
     """
-    faces = _get_face_cascade().detectMultiScale(
+    blobs = np.zeros(gray.shape[:2], dtype=np.float32)
+    cascade = _get_face_cascade()
+    if cascade is None:
+        return blobs
+    faces = cascade.detectMultiScale(
         gray, scaleFactor=1.1, minNeighbors=4, minSize=(12, 12)
     )
-    blobs = np.zeros(gray.shape[:2], dtype=np.float32)
     if len(faces) == 0:
         return blobs
     for x, y, w, h in faces:
@@ -1206,6 +1233,11 @@ def compute_saliency_map(
         center_bias = config.SCREENSPACE_ATTENTION_CENTER_BIAS
     if include_face is None:
         include_face = config.SCREENSPACE_ATTENTION_FACE_CHANNEL
+    if include_face and not face_detection_available():
+        # No CascadeClassifier in this cv2 build (opencv 5.x wheels): keep the
+        # face weight out of the denominator so the map isn't dimmed by a
+        # channel that can only ever contribute zeros.
+        include_face = False
 
     curr_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     combined = weights.get("spectral", 0.0) * compute_spectral_residual(curr_gray)

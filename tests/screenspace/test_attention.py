@@ -67,6 +67,40 @@ class TestChannels:
         assert blobs.shape == gray.shape
         assert float(blobs.max()) == 0.0
 
+    def test_face_saliency_degrades_without_cascade_api(self, monkeypatch):
+        # opencv-python 5.x wheels removed the legacy CascadeClassifier; the
+        # channel must degrade to a zeros map instead of raising.
+        import cv2
+
+        import screenspace_primitives
+
+        monkeypatch.setattr(screenspace_primitives, "_face_cascade", None)
+        monkeypatch.delattr(cv2, "CascadeClassifier", raising=False)
+        gray = np.full((60, 80), 128, dtype=np.uint8)
+        assert screenspace.face_detection_available() is False
+        blobs = screenspace.compute_face_saliency(gray)
+        assert blobs.shape == gray.shape
+        assert float(blobs.max()) == 0.0
+
+    def test_face_weight_left_out_of_mix_without_cascade_api(self, monkeypatch):
+        # With include_face forced on but no cascade support, the face weight
+        # must not join the denominator (a zeros-only channel would dim the
+        # whole map).
+        import cv2
+
+        import screenspace_primitives
+
+        frame = _bright_patch_frame()
+        with_face_off, _ = screenspace.compute_saliency_map(
+            frame, None, center_bias=0.0, include_face=False
+        )
+        monkeypatch.setattr(screenspace_primitives, "_face_cascade", None)
+        monkeypatch.delattr(cv2, "CascadeClassifier", raising=False)
+        with_face_on, _ = screenspace.compute_saliency_map(
+            frame, None, center_bias=0.0, include_face=True
+        )
+        assert np.array_equal(with_face_off, with_face_on)
+
 
 class TestSaliencyMap:
     def test_peak_lands_on_bright_patch(self):

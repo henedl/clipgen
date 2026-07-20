@@ -101,3 +101,9 @@ and whether the motion weight over-dominates on high-motion game footage.
   (dwell weighting: one unit of attention per sample).
 - `_backfill_missing_events` regenerates from `task["result"]` — the defensive
   shift filter in `generate_events_from_results` keeps that path event-correct.
+- opencv-python-headless 5.x wheels removed the legacy `cv2.CascadeClassifier`
+  (CI resolves 5.x; local lockfile has 4.x). The face channel feature-detects it
+  (`face_detection_available()`): degrades to a zeros map, keeps the face weight
+  out of the mix denominator, and `scan_attention` warns once when the channel
+  is requested but unsupported. Never name `cv2.CascadeClassifier` in
+  annotations or call it unguarded.
