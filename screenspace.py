@@ -78,6 +78,7 @@ from screenspace_primitives import (
     regions_are_similar,
     resolve_region_request,
     saliency_grid_from_map,
+    saliency_kwargs_from_params,
     saliency_peak,
     ssim_diff_map,
 )

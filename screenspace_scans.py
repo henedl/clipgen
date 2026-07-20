@@ -1566,6 +1566,9 @@ def scan_attention(
     interval_seconds: float = 0.0,
     *,
     ema_alpha: float = 0.0,
+    weights: dict[str, float] | None = None,
+    center_bias: float | None = None,
+    include_face: bool | None = None,
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     on_progress: Callable[[float], None] | None = None,
@@ -1628,7 +1631,13 @@ def scan_attention(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        combined, curr_gray = compute_saliency_map(pixels, prev_gray[0])
+        combined, curr_gray = compute_saliency_map(
+            pixels,
+            prev_gray[0],
+            weights=weights,
+            center_bias=center_bias,
+            include_face=include_face,
+        )
         prev_gray[0] = curr_gray
         prev_smoothed = smoothed[0]
         if prev_smoothed is not None and prev_smoothed.shape == combined.shape:

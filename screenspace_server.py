@@ -1122,17 +1122,21 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 if mask_points:
                     region_coords["mask_points"] = mask_points
 
-    # Prev frame for tools that consume a temporal pair
+    # Prev frame for tools that consume a temporal pair. Attention's motion
+    # channel compares at its own (shorter) sampling interval by default.
     prev_frame = None
-    if tool in ("change", "flow"):
+    if tool in ("change", "flow", "attention"):
+        default_gap = (
+            config.SCREENSPACE_ATTENTION_INTERVAL if tool == "attention" else 1.0
+        )
         prev_ts_raw = request.args.get("prev")
         if prev_ts_raw is not None:
             try:
                 prev_ts = float(prev_ts_raw)
             except ValueError:
-                prev_ts = max(0.0, ts - 1.0)
+                prev_ts = max(0.0, ts - default_gap)
         else:
-            prev_ts = max(0.0, ts - 1.0)
+            prev_ts = max(0.0, ts - default_gap)
         if prev_ts < ts:
             prev_frame = frame_at(prev_ts)
 
@@ -1160,6 +1164,22 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 params["magnitude_threshold"] = float(raw)
             except ValueError:
                 pass
+    elif tool == "attention":
+        # Channel-weight / center-bias overrides so the Model view tunes the
+        # same math the scan runs (saliency_kwargs_from_params on both paths).
+        for key in (
+            "weight_spectral",
+            "weight_contrast",
+            "weight_motion",
+            "weight_face",
+            "center_bias",
+        ):
+            raw = request.args.get(key)
+            if raw is not None:
+                try:
+                    params[key] = float(raw)
+                except ValueError:
+                    pass
     elif tool in ("text", "numbers"):
         raw = (request.args.get("ocr_preprocess") or "").strip().lower()
         if raw in ("1", "true", "yes", "on"):

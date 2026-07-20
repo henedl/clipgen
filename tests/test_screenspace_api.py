@@ -1982,6 +1982,54 @@ def test_preview_change_cache_reuses_decoded_frames_until_mtime_changes(
     ]
 
 
+def test_preview_attention_extracts_prev_frame_and_weights(
+    client, tmp_path, monkeypatch
+):
+    """The attention preview must feed the motion channel: a prev frame is
+    decoded at the attention sampling interval and weight overrides reach
+    build_preview as floats."""
+    video_file = tmp_path / "study_P06.mp4"
+    video_file.write_bytes(b"\x00original")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [{"id": "P06", "video_paths": [str(video_file)], "has_video": True}],
+    )
+
+    extracted = []
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+
+    def fake_extract(path, ts):
+        extracted.append(ts)
+        return frame
+
+    monkeypatch.setattr(
+        screenspace_server.video, "extract_frame_at_timestamp", fake_extract
+    )
+
+    seen = {}
+
+    def fake_build(frame, prev_frame, region, tool, params):
+        seen["prev_is_none"] = prev_frame is None
+        seen["params"] = params
+        return frame
+
+    monkeypatch.setattr(screenspace_preview, "build_preview", fake_build)
+    monkeypatch.setattr(screenspace_preview, "encode_png", lambda *a, **kw: b"png")
+
+    resp = client.get(
+        "/screenspace/api/preview/P06/1.0?tool=attention"
+        "&weight_motion=2.0&weight_face=0&center_bias=0.1"
+    )
+    assert resp.status_code == 200
+    assert seen["prev_is_none"] is False
+    # Default prev gap is the attention sampling interval, not change/flow's 1s.
+    assert extracted == [1.0, 1.0 - config.SCREENSPACE_ATTENTION_INTERVAL]
+    assert seen["params"]["weight_motion"] == 2.0
+    assert seen["params"]["weight_face"] == 0.0
+    assert seen["params"]["center_bias"] == 0.1
+
+
 def test_video_info_reprobes_on_mtime_change(client, tmp_path, monkeypatch):
     """info response carries current mtime as version and re-probes on change."""
     import video as video_mod

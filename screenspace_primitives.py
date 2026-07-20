@@ -1227,6 +1227,40 @@ def compute_saliency_map(
     return np.clip(combined, 0.0, 1.0).astype(np.float32), curr_gray
 
 
+_SALIENCY_WEIGHT_PARAMS = {
+    "spectral": "weight_spectral",
+    "contrast": "weight_contrast",
+    "motion": "weight_motion",
+    "face": "weight_face",
+}
+
+
+def saliency_kwargs_from_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Map task/preview parameter dicts onto :func:`compute_saliency_map` kwargs.
+
+    Shared by the tool layer and the preview builders so a per-task weight
+    override tunes the scan and the Model view identically. Absent keys fall
+    back to the ``SCREENSPACE_ATTENTION_*`` config defaults; a ``weight_face``
+    of 0 disables the face channel entirely (no checkbox needed).
+    """
+    kwargs: dict[str, Any] = {}
+    if any(pk in params for pk in _SALIENCY_WEIGHT_PARAMS.values()):
+        kwargs["weights"] = {
+            channel: float(
+                params.get(
+                    param_key,
+                    getattr(config, "SCREENSPACE_ATTENTION_WEIGHT_" + channel.upper()),
+                )
+            )
+            for channel, param_key in _SALIENCY_WEIGHT_PARAMS.items()
+        }
+    if "weight_face" in params:
+        kwargs["include_face"] = float(params["weight_face"]) > 0
+    if "center_bias" in params:
+        kwargs["center_bias"] = float(params["center_bias"])
+    return kwargs
+
+
 def saliency_grid_from_map(
     sal: np.ndarray, grid_n: int, min_mag: float
 ) -> list[dict[str, float]]:

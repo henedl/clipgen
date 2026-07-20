@@ -66,7 +66,7 @@ def build_preview(
     if tool == "inactivity":
         return _preview_inactivity(frame, region)
     if tool == "attention":
-        return _preview_attention(frame, prev_frame)
+        return _preview_attention(frame, prev_frame, params)
     if tool == "multitool":
         steps = params.get("steps") or []
         if steps:
@@ -200,7 +200,7 @@ def build_overlay_layer(
         return _overlay_template_heatmap(frame, params)
 
     if tool == "attention" and layer == "saliency_map":
-        return _overlay_attention_saliency(frame, prev_frame)
+        return _overlay_attention_saliency(frame, prev_frame, params)
 
     return None
 
@@ -1030,14 +1030,20 @@ def _saliency_to_bgr(sal: "np.ndarray", *, colorize: bool = False) -> "np.ndarra
 
 
 def _preview_attention(
-    frame: "np.ndarray", prev_frame: "np.ndarray | None"
+    frame: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    params: dict[str, Any] | None = None,
 ) -> "np.ndarray":
     small, prev_gray = _attention_working_frames(frame, prev_frame)
     curr_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
     spectral = screenspace_primitives.compute_spectral_residual(curr_gray)
     contrast = screenspace_primitives.compute_color_contrast(small)
-    combined, _ = screenspace_primitives.compute_saliency_map(small, prev_gray)
+    combined, _ = screenspace_primitives.compute_saliency_map(
+        small,
+        prev_gray,
+        **screenspace_primitives.saliency_kwargs_from_params(params or {}),
+    )
     _px, _py, peak_value = screenspace_primitives.saliency_peak(combined)
 
     if prev_gray is not None:
@@ -1063,11 +1069,17 @@ def _preview_attention(
 
 
 def _overlay_attention_saliency(
-    frame: "np.ndarray", prev_frame: "np.ndarray | None"
+    frame: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    params: dict[str, Any] | None = None,
 ) -> "np.ndarray":
     """Combined saliency map colorized and resized to native frame resolution."""
     small, prev_gray = _attention_working_frames(frame, prev_frame)
-    combined, _ = screenspace_primitives.compute_saliency_map(small, prev_gray)
+    combined, _ = screenspace_primitives.compute_saliency_map(
+        small,
+        prev_gray,
+        **screenspace_primitives.saliency_kwargs_from_params(params or {}),
+    )
     heat = _saliency_to_bgr(combined, colorize=True)
     fh, fw = frame.shape[:2]
     if heat.shape[:2] != (fh, fw):

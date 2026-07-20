@@ -56,6 +56,14 @@ so the timeline/results panel show one tick per shift, not per sample.
   viewer.js 16px eye icon for exports.
 - ✅ **Model view** — `_preview_attention` panel strip (input/spectral/contrast/motion/
   combined) + frame-scoped `saliency_map` overlay layer in `screenspace_preview.py`.
+  The preview route decodes a companion frame at the attention interval (the motion
+  panel was dead until `screenspace_server.py` added attention to the prev-frame
+  tuple) and both preview paths honor per-task weight overrides.
+- ✅ **Weight tuning interface** — per-task sliders (Spectral/Contrast/Motion/Faces
+  weights + Center bias; Faces at 0 disables the channel) flow as `weight_*` /
+  `center_bias` params through `saliency_kwargs_from_params()` into both the scan
+  and the live Model-view preview, so tuning is visual before committing a run.
+  Config defaults still apply when the params are absent (CLI/API callers).
 - ✅ **Tests** — `tests/screenspace/test_attention.py` (primitives, scan state machine,
   heatmaps, events, worker end-to-end) + API/CLI/preview suite extensions.
 

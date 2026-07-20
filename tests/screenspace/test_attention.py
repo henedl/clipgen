@@ -132,6 +132,49 @@ class TestSaliencyGrid:
         assert 0.60 <= best["y"] <= 0.90
 
 
+class TestSaliencyKwargsFromParams:
+    def test_empty_params_defer_to_config(self):
+        assert screenspace.saliency_kwargs_from_params({}) == {}
+
+    def test_partial_weights_fill_from_config(self):
+        kwargs = screenspace.saliency_kwargs_from_params({"weight_motion": 2.0})
+        assert kwargs["weights"]["motion"] == 2.0
+        assert kwargs["weights"]["spectral"] == (
+            config.SCREENSPACE_ATTENTION_WEIGHT_SPECTRAL
+        )
+        assert kwargs["weights"]["contrast"] == (
+            config.SCREENSPACE_ATTENTION_WEIGHT_CONTRAST
+        )
+        assert "include_face" not in kwargs
+        assert "center_bias" not in kwargs
+
+    def test_face_weight_zero_disables_channel(self):
+        kwargs = screenspace.saliency_kwargs_from_params({"weight_face": 0})
+        assert kwargs["include_face"] is False
+        kwargs = screenspace.saliency_kwargs_from_params({"weight_face": 0.8})
+        assert kwargs["include_face"] is True
+
+    def test_center_bias_passthrough(self):
+        kwargs = screenspace.saliency_kwargs_from_params({"center_bias": 0.5})
+        assert kwargs == {"center_bias": 0.5}
+
+    def test_weights_reach_saliency_map(self):
+        # Motion-only weights: a static bright patch scores ~zero without a
+        # prev frame, proving the override actually reaches the channel mix.
+        frame = _bright_patch_frame()
+        kwargs = screenspace.saliency_kwargs_from_params(
+            {
+                "weight_spectral": 0,
+                "weight_contrast": 0,
+                "weight_motion": 1.0,
+                "weight_face": 0,
+                "center_bias": 0,
+            }
+        )
+        sal, _ = screenspace.compute_saliency_map(frame, None, **kwargs)
+        assert float(sal.max()) == 0.0
+
+
 def _run_scan(monkeypatch, frames, **kwargs):
     """Drive scan_attention over a synthetic (ts, frame) sequence."""
 
@@ -359,6 +402,64 @@ class TestAttentionEvents:
         assert "Δ≥0.2" in screenspace.describe_task(
             "attention", "full_frame", {"shift_threshold": 0.2}
         )
+
+
+class TestAttentionToolParamMapping:
+    def test_scan_forwards_weight_params(self, monkeypatch):
+        import screenspace_tools
+
+        captured = {}
+
+        def fake_scan(video_path, region, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        monkeypatch.setattr(screenspace_tools, "scan_attention", fake_scan)
+        screenspace.TOOLS["attention"].scan(
+            "/v.mp4",
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+            {
+                "shift_threshold": 0.2,
+                "weight_motion": 2.0,
+                "weight_face": 0,
+                "center_bias": 0.1,
+            },
+            task_id="ss_x",
+            scan_mode="full",
+            on_progress=lambda _p: None,
+            cancel_flag=lambda: False,
+            on_result=None,
+            fast_opts=None,
+        )
+        assert captured["shift_threshold"] == 0.2
+        assert captured["weights"]["motion"] == 2.0
+        assert captured["include_face"] is False
+        assert captured["center_bias"] == 0.1
+
+    def test_scan_omits_saliency_kwargs_when_untuned(self, monkeypatch):
+        import screenspace_tools
+
+        captured = {}
+
+        def fake_scan(video_path, region, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        monkeypatch.setattr(screenspace_tools, "scan_attention", fake_scan)
+        screenspace.TOOLS["attention"].scan(
+            "/v.mp4",
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+            {},
+            task_id="ss_x",
+            scan_mode="full",
+            on_progress=lambda _p: None,
+            cancel_flag=lambda: False,
+            on_result=None,
+            fast_opts=None,
+        )
+        assert "weights" not in captured
+        assert "include_face" not in captured
+        assert "center_bias" not in captured
 
 
 class TestAttentionWorker:

@@ -35,6 +35,7 @@ from screenspace_primitives import (
     match_template,
     region_mask_for,
     regions_are_similar,
+    saliency_kwargs_from_params,
 )
 from screenspace_ocr import (
     _numbers_ocr_allowlist,
@@ -1024,6 +1025,9 @@ class AttentionTool(AnalysisTool):
             cancel_flag=cancel_flag,
             on_result=on_result,
             fast_opts=fast_opts,
+            # Per-task channel weights / center bias / face toggle (absent
+            # keys fall back to the SCREENSPACE_ATTENTION_* config defaults).
+            **saliency_kwargs_from_params(params),
         )
 
 

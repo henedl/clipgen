@@ -924,6 +924,11 @@
     attention: {
       "Sensitivity":      "How far the predicted focus must jump (as a fraction of the screen) to mark an attention shift. Raise it to mark only big jumps",
       "Smoothing":        "How quickly the attention map follows each new frame (1.0 = instant, lower = steadier but slower to react)",
+      "Spectral wt.":     "Weight of the 'unexpected detail' channel (spectral residual): odd shapes and busy areas that stand out from the scene",
+      "Contrast wt.":     "Weight of the color/brightness contrast channel: elements that differ strongly from their surroundings",
+      "Motion wt.":       "Weight of the motion channel: areas that changed since the previous sample. Usually the strongest pull on screens",
+      "Faces wt.":        "Weight of the face channel (webcam picture-in-picture). 0 turns face detection off; UI avatars can trigger false hits",
+      "Center bias":      "How much the map favors the screen center. 0 = no preference; photos-style footage tolerates more than UI recordings",
     },
   };
 
@@ -2278,7 +2283,7 @@
     scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles. This builds a timeline of which screen is showing (title, map, level, pause menu). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
     inactivity: "Finds stretches where your region barely changes for a while — loading screens, frozen states, or a player standing idle. It's the opposite of Change: it fires when nothing happens, not when something does. Set the minimum duration so brief pauses are ignored and only real stalls are reported.",
     boundary: "Scans the whole screen for period transitions: menu to gameplay, a level loading, a loading screen ending. Metric: Auto (recommended) uses a content fingerprint and only marks a change that holds for a moment and is backed by a hard cut, so camera motion and brief overlays don't fragment one continuous period; pHash is the simpler 'any big frame-to-frame jump' detector. Sensitivity tunes the hard-cut threshold; Min gap avoids clustered markers during fast action. After scanning, near-identical periods are merged and transient blips dissolved. These are orientation markers, not clip candidates; unlike Scene, it doesn't label the screens; it only marks where they change.",
-    attention: "Predicts where a viewer's eyes go on screen — no eye tracker needed. It scores every sampled frame for visual pull (high contrast, motion, unexpected detail) across the whole frame, then builds attention heatmaps: a static summary, an accumulation animation, and a rolling-window replay that plays like an eye-tracking gaze video. Timeline markers appear only at attention shifts, moments when the predicted focus jumps to a new part of the screen. Raise Sensitivity to mark only big jumps; raise Smoothing responsiveness if shifts feel sluggish. It predicts where attention should go from the visuals alone, so treat it as an approximation, not ground truth."
+    attention: "Predicts where a viewer is probably looking, with no eye-tracking hardware. It scores each sampled frame for what draws the eye (strong contrast, movement, unusual detail) and turns the whole scan into heatmaps: a static image, an accumulation animation, and a rolling replay similar to an eye-tracking gaze video. The timeline only gets a marker at an attention shift, when the predicted focus jumps to a different part of the screen. Raise Sensitivity so only big jumps count; raise Smoothing if shifts lag behind the action. The weight sliders control what counts as eye-catching, and the Model view re-renders live while you drag them. It works from the visuals alone, so treat the output as an informed guess about attention rather than a measurement."
   };
 
   var _toolInfoPinned = false;
@@ -2924,6 +2929,14 @@
       // smoothing (1.0 = follow each frame instantly).
       addParamRow(container, "Sensitivity", rangeInput("paramAttnShift", 0.05, 0.50, 0.15, 0.01), "paramAttnShiftVal");
       addParamRow(container, "Smoothing", rangeInput("paramAttnSmooth", 0.1, 1.0, 0.6, 0.05), "paramAttnSmoothVal");
+      // Channel weights (defaults mirror SCREENSPACE_ATTENTION_WEIGHT_*).
+      // Faces at 0 disables the Haar face channel entirely; the Model view
+      // re-renders live as these move, so tuning is visual.
+      addParamRow(container, "Spectral wt.", rangeInput("paramAttnWSpectral", 0, 2.0, 1.0, 0.05), "paramAttnWSpectralVal");
+      addParamRow(container, "Contrast wt.", rangeInput("paramAttnWContrast", 0, 2.0, 0.7, 0.05), "paramAttnWContrastVal");
+      addParamRow(container, "Motion wt.", rangeInput("paramAttnWMotion", 0, 2.0, 1.2, 0.05), "paramAttnWMotionVal");
+      addParamRow(container, "Faces wt.", rangeInput("paramAttnWFace", 0, 2.0, 0, 0.05), "paramAttnWFaceVal");
+      addParamRow(container, "Center bias", rangeInput("paramAttnCenterBias", 0, 1.0, 0.25, 0.05), "paramAttnCenterBiasVal");
       renderIntervalSlot("paramAttnInterval", 0.5, 60, 0.5, 0.5);
     }
 
@@ -3429,6 +3442,11 @@
     } else if (type === "attention") {
       params.shift_threshold = numberOrDefault((qs("#paramAttnShift") || {}).value, 0.15);
       params.ema_alpha = numberOrDefault((qs("#paramAttnSmooth") || {}).value, 0.6);
+      params.weight_spectral = numberOrDefault((qs("#paramAttnWSpectral") || {}).value, 1.0);
+      params.weight_contrast = numberOrDefault((qs("#paramAttnWContrast") || {}).value, 0.7);
+      params.weight_motion = numberOrDefault((qs("#paramAttnWMotion") || {}).value, 1.2);
+      params.weight_face = numberOrDefault((qs("#paramAttnWFace") || {}).value, 0);
+      params.center_bias = numberOrDefault((qs("#paramAttnCenterBias") || {}).value, 0.25);
       params.interval = numberOrDefault((qs("#paramAttnInterval") || {}).value, 0.5);
     }
     var labelEl = qs("#paramEventLabel");

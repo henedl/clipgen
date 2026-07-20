@@ -411,6 +411,18 @@
     } else if (tool === "numbers") {
       var np = qs("#paramNumOcrPreprocess");
       if (np && np.checked) out.ocr_preprocess = "1";
+    } else if (tool === "attention") {
+      var attnIds = {
+        weight_spectral: "paramAttnWSpectral",
+        weight_contrast: "paramAttnWContrast",
+        weight_motion: "paramAttnWMotion",
+        weight_face: "paramAttnWFace",
+        center_bias: "paramAttnCenterBias",
+      };
+      Object.keys(attnIds).forEach(function (key) {
+        var input = qs("#" + attnIds[key]);
+        if (input) out[key] = input.value;
+      });
     }
     return out;
   }
@@ -452,8 +464,14 @@
     if (regionStr) qsParts.push("region=" + regionStr);
     var maskStr = _regionMaskString();
     if (regionStr && maskStr) qsParts.push("mask=" + encodeURIComponent(maskStr));
-    if (tool === "change" || tool === "flow") {
-      var prevTs = Math.max(0, (state.currentTimestamp || 0) - 1);
+    if (tool === "change" || tool === "flow" || tool === "attention") {
+      // Attention's motion channel compares at its own sampling interval.
+      var prevGap = 1;
+      if (tool === "attention") {
+        var attnInterval = qs("#paramAttnInterval");
+        prevGap = attnInterval ? (parseFloat(attnInterval.value) || 0.5) : 0.5;
+      }
+      var prevTs = Math.max(0, (state.currentTimestamp || 0) - prevGap);
       qsParts.push("prev=" + prevTs.toFixed(3));
     }
     if (tool === "similarity" && state.referenceTimestamp != null) {
