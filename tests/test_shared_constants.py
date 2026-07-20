@@ -122,6 +122,10 @@ def test_clipgen_config_defaults_match_python():
         js_config["composerAnnotationSpanSeconds"]
         == py_config["composerAnnotationSpanSeconds"]
     )
+    assert (
+        js_config["composerScrubMaxAudioSeconds"]
+        == py_config["composerScrubMaxAudioSeconds"]
+    )
 
 
 def test_get_frontend_config_shape():
@@ -149,6 +153,7 @@ def test_get_frontend_config_shape():
         "composerAnnotationStrokeWidth",
         "composerAnnotationFontSize",
         "composerAnnotationSpanSeconds",
+        "composerScrubMaxAudioSeconds",
         "hotkeyOverrides",
     }
     assert isinstance(cfg["defaultDuration"], int)

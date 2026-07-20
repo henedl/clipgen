@@ -186,6 +186,8 @@
     CO.apiSend("PUT", "api/ui", {
       markerSources: state.sourceToggles,
       laneFolds: state.laneFolds,
+      markerThumbnails: state.markerThumbnails,
+      markerAudioScrub: state.markerAudioScrub,
     }).catch(function () {});
   }
 

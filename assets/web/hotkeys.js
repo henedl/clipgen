@@ -96,6 +96,8 @@
     { id: "composer.toolErase",        section: "composer", group: "Annotate", label: "Erase tool", combos: ["E"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
     { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["0"] },
+    { id: "composer.toggleThumbs",     section: "composer", group: "Marker lanes", label: "Toggle thumbnail strips", combos: ["F"] },
+    { id: "composer.toggleScrubAudio", section: "composer", group: "Marker lanes", label: "Toggle hover audio scrub", combos: ["W"] },
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },

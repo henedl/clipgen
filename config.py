@@ -180,6 +180,11 @@ COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
 COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
 COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height
 COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
+# Cap on the WAV extracted for Composer's marker/cut audio scrub — markers can
+# span minutes (unlike Studio clips). Mirrored to the frontend via
+# utils.get_frontend_config() so the client skips scrubbing longer spans and
+# hover fraction ↔ audio buffer stay aligned; do not hardcode this in JS.
+COMPOSER_SCRUB_MAX_AUDIO_SECONDS: float = 180.0
 # Data-source lanes shown (in order) per participant in the Convergence Browser.
 # Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
 # layout and per-lane offset keys stay in sync; do not hardcode this list in JS.

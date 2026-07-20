@@ -167,6 +167,10 @@ body[data-frontend="composer"] {
   opacity: 0.35;
 }
 
+/* Marker-media pills (thumbnails / audio scrub) reuse the lane-pill chrome
+   but light up accent-colored — they toggle layers, not stream lanes. */
+.co-media-pill { --co-lane-color: var(--accent); }
+
 /* ---- Shell: video stage + cuts rail ---- */
 
 #coShell {
@@ -563,6 +567,18 @@ body[data-frontend="composer"] {
 .co-lane-fold[data-source="screenspace"] { --co-lane-color: var(--stream-screenspace); }
 .co-lane-fold[data-source="transcript"] { --co-lane-color: var(--stream-transcript); }
 .co-lane-fold[data-source="annotations"] { --co-lane-color: var(--accent); }
+
+/* Hover waveform overlay: positioned by composer-scrub.js over the hovered
+   marker/cut bar (canvas-local px == wrapper-local px). Appended after the
+   canvases + rail so it paints on top; card-scrubber.js injects its
+   .waveform-canvas/.waveform-scrim children, which need this relative,
+   clipped host. */
+#coScrubWave {
+  position: absolute;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+}
 
 #coTimelineCanvas {
   cursor: crosshair;

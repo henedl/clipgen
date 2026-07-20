@@ -60,7 +60,6 @@ import sys
 import threading
 import time
 import webbrowser
-from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,7 +87,14 @@ import titlecards
 import utils
 import video
 import viewer
-from server_utils import err, json_endpoint, ok, parse_number_arg
+from server_utils import (
+    MediaCache,
+    err,
+    json_endpoint,
+    ok,
+    parse_clip_window,
+    parse_number_arg,
+)
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -258,60 +264,9 @@ def _coerce_mark_categories(value: Any) -> dict[str, dict[str, str]] | None:
     return cleaned
 
 
-class _MediaCache:
-    """Bounded-LRU byte cache with single-flight compute.
-
-    Fast path takes the main lock only for the dict get/reorder. On a miss, a
-    per-key lock serializes concurrent identical misses so the expensive
-    producer (ffmpeg) runs once, not once per waiting request — the others wake
-    to the freshly cached bytes. The producer runs holding no main lock.
-    """
-
-    def __init__(self, max_entries: int) -> None:
-        self._store: "OrderedDict[tuple, bytes]" = OrderedDict()
-        self._max = max_entries
-        self._lock = threading.Lock()
-        self._inflight: dict[tuple, threading.Lock] = {}
-
-    def get_or_compute(
-        self, key: tuple, compute: Callable[[], bytes | None]
-    ) -> bytes | None:
-        # Fast path: cache hit.
-        with self._lock:
-            cached = self._store.get(key)
-            if cached is not None:
-                self._store.move_to_end(key)
-                return cached
-            keylock = self._inflight.get(key)
-            if keylock is None:
-                keylock = threading.Lock()
-                self._inflight[key] = keylock
-
-        with keylock:
-            # Re-check: another thread may have produced it while we waited.
-            with self._lock:
-                cached = self._store.get(key)
-                if cached is not None:
-                    self._store.move_to_end(key)
-                    return cached
-
-            value = compute()  # expensive; no main lock held
-
-            with self._lock:
-                if value is not None:
-                    self._store[key] = value
-                    while len(self._store) > self._max:
-                        self._store.popitem(last=False)
-                # Drop our in-flight marker so the dict can't grow unbounded.
-                if self._inflight.get(key) is keylock:
-                    del self._inflight[key]
-            return value
-
-    def clear(self) -> None:
-        with self._lock:
-            self._store.clear()
-            self._inflight.clear()
-
+# Moved to server_utils.MediaCache (shared with the Composer scrubber routes);
+# the alias keeps the historical `server._MediaCache` name for tests.
+_MediaCache = MediaCache
 
 _thumbnail_cache = _MediaCache(_THUMBNAIL_CACHE_MAX)
 _sprite_cache = _MediaCache(_SPRITE_CACHE_MAX)
@@ -633,21 +588,6 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     )
 
 
-def _parse_clip_window() -> tuple[float, float] | None:
-    """Parse + validate the ``?start=&end=`` seconds shared by the scrubber
-    media routes. Returns ``(start_seconds, duration_seconds)`` or ``None`` when
-    the params are missing/non-numeric or the range is empty."""
-    try:
-        start_sec = max(0.0, float(request.args.get("start", "")))
-        end_sec = float(request.args.get("end", ""))
-    except (ValueError, TypeError):
-        return None
-    duration = end_sec - start_sec
-    if duration <= 0:
-        return None
-    return start_sec, duration
-
-
 def _resolve_clip_media_source(
     participant: str, start_sec: float
 ) -> tuple[Path, float] | None:
@@ -680,7 +620,7 @@ def api_sprite(participant: str) -> FlaskResponse:
     """
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
-    window = _parse_clip_window()
+    window = parse_clip_window()
     if window is None:
         return err("Invalid clip range")
     start_sec, duration = window
@@ -730,7 +670,7 @@ def api_clip_audio(participant: str) -> FlaskResponse:
     """
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
-    window = _parse_clip_window()
+    window = parse_clip_window()
     if window is None:
         return err("Invalid clip range")
     start_sec, duration = window
