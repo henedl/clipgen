@@ -537,6 +537,9 @@
     qsa(".wf-tab").forEach(function (t) { t.classList.remove("active"); });
     var targetTab = qs('.wf-tab[data-type="' + task.type + '"]');
     if (targetTab) targetTab.classList.add("active");
+    // This selection path moves the tab manually (no .click()), so mirror the
+    // change into the grouped category nav. Late-bound: the hub owns it.
+    if (SS.syncToolCategoryNav) SS.syncToolCategoryNav();
 
     // Select participant
     if (task.participant) {
