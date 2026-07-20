@@ -33,12 +33,17 @@ Manifest shape (``workflows_manifest.json`` in the output directory)::
         "runs":       [ {id, blueprintId, status, nodeStates, startedAt, completedAt} ]
     }
 
-``trigger`` holds the watch-dir auto-launch binding (P6): ``null`` (or
-``{"type": "watch_dir", "enabled": false}``) when disarmed, or
-``{"type": "watch_dir", "enabled": true}`` on the single armed blueprint. The
-directory watcher in ``workflows_server`` auto-runs the armed blueprint (one run
-per just-arrived participant). The ``type`` field leaves room for future trigger
-kinds (transcript_complete / scan_event chaining) without a schema migration.
+``trigger`` holds the auto-launch binding: ``null`` (or ``{"type": <t>,
+"enabled": false}``) when disarmed, or ``{"type": <t>, "enabled": true}`` on an
+armed blueprint, where ``<t>`` is one of ``TRIGGER_TYPES`` (``new_video`` /
+``transcript_complete`` / ``scan_event``). At most one blueprint is armed *per
+trigger type* (so a new-video pipeline can chain into a transcript-complete
+one). The watcher daemon in ``workflows_server`` fires the matching armed
+blueprint once per arriving participant/completion, bound via
+``bind_participant``. Feedback-loop note: the workflow ``transcribe`` node
+calls ``transcripts.transcribe_video`` directly and never writes the
+transcripts manifest, so a transcript-complete-triggered graph containing a
+Transcribe node cannot re-fire itself.
 """
 
 from __future__ import annotations
@@ -74,6 +79,15 @@ def load_workflows_manifest() -> dict[str, Any]:
     # Backfill any missing top-level keys so callers can index unconditionally.
     base = empty_workflows_manifest()
     base.update({k: v for k, v in data.items() if k in base})
+    # A trigger whose type isn't in TRIGGER_TYPES (e.g. the pre-chaining
+    # "watch_dir") reads as disarmed: the watcher only fires known types, so
+    # keeping it enabled would render an armed toolbar state that never fires.
+    for blueprint in base.get("blueprints", []):
+        if not isinstance(blueprint, dict):
+            continue
+        trigger = blueprint.get("trigger")
+        if isinstance(trigger, dict) and trigger.get("type") not in TRIGGER_TYPE_IDS:
+            blueprint["trigger"] = None
     return base
 
 
@@ -359,6 +373,28 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
+    "transcript_export": {
+        "id": "transcript_export",
+        "label": "Transcript Export",
+        "description": "Write a transcript file (Markdown, SRT, or VTT) from a transcript or segments.",
+        "domain": "transcript",
+        "category": "Transcript",
+        "inputs": [
+            {"name": "transcript", "type": "transcript", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "format",
+                "type": "enum",
+                "default": config.TRANSCRIBE_FORMAT,
+                "choices": ["md", "srt", "vtt"],
+                "label": "Format",
+            },
+        ],
+        "requires": [],
+    },
     # ---- Thinking (Ollama) ----
     "summarize": {
         "id": "summarize",
@@ -475,6 +511,27 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": "change",
                 "choices": ["template", "flow", "change"],
                 "label": "Style (needs matching upstream detector)",
+            },
+            {
+                "name": "output",
+                "type": "enum",
+                "default": "image",
+                "choices": ["image", "gif", "rolling_gif"],
+                "label": "Output",
+            },
+            {
+                "name": "frames",
+                "type": "number",
+                "default": 24,
+                "min": 2,
+                "label": "GIF frames",
+            },
+            {
+                "name": "window",
+                "type": "number",
+                "default": 6,
+                "min": 1,
+                "label": "Rolling window (frames)",
             },
         ],
         "requires": ["videoDir"],
@@ -632,6 +689,28 @@ NODE_TYPES: dict[str, NodeType] = {
             },
         ],
         "requires": ["videoDir"],
+    },
+    "data_export": {
+        "id": "data_export",
+        "label": "Data Export",
+        "description": "Export events and segments as analysis-ready JSON/CSV tables.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "events", "type": "events", "optional": True},
+            {"name": "segments", "type": "segments", "optional": True},
+        ],
+        "outputs": [{"name": "artifacts", "type": "artifacts"}],
+        "params": [
+            {
+                "name": "format",
+                "type": "enum",
+                "default": "both",
+                "choices": ["both", "json", "csv"],
+                "label": "Format",
+            },
+        ],
+        "requires": [],
     },
     "timeline_viewer": {
         "id": "timeline_viewer",
@@ -1364,6 +1443,61 @@ BUILTIN_STASHES: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        "id": "builtin_transcript_exports",
+        "name": "Transcribe → Transcript + Data Export",
+        "builtin": True,
+        "createdAt": "",
+        "nodes": [
+            {
+                "id": "s1",
+                "type": "video_source",
+                "params": {"participant": ""},
+                "position": {"x": 40, "y": 160},
+            },
+            {
+                "id": "s2",
+                "type": "transcribe",
+                "params": {"language": "auto"},
+                "position": {"x": 340, "y": 160},
+            },
+            {
+                "id": "s3",
+                "type": "transcript_export",
+                "params": {"format": config.TRANSCRIBE_FORMAT},
+                "position": {"x": 640, "y": 80},
+            },
+            {
+                "id": "s4",
+                "type": "data_export",
+                "params": {"format": "both"},
+                "position": {"x": 640, "y": 240},
+            },
+        ],
+        "edges": [
+            {
+                "id": "se1",
+                "from": "s1",
+                "fromPort": "video",
+                "to": "s2",
+                "toPort": "video",
+            },
+            {
+                "id": "se2",
+                "from": "s2",
+                "fromPort": "transcript",
+                "to": "s3",
+                "toPort": "transcript",
+            },
+            {
+                "id": "se3",
+                "from": "s2",
+                "fromPort": "segments",
+                "to": "s4",
+                "toPort": "segments",
+            },
+        ],
+    },
 ]
 
 
@@ -1564,6 +1698,62 @@ def _exec_find_word(
         "timeRange": {"ranges": ranges, "source": source},
         "timestamps": {"times": times, "source": source},
     }
+
+
+def _exec_transcript_export(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import files
+    import transcripts
+
+    transcript_in = inputs.get("transcript") or {}
+    seg_in = inputs.get("segments") or {}
+    src = transcript_in.get("source") or seg_in.get("source") or {}
+    study = str(src.get("study", "") or "")
+    fmt = str(params.get("format", "") or "") or config.TRANSCRIBE_FORMAT
+    if fmt not in ("md", "srt", "vtt"):
+        fmt = "md"
+
+    # Prefer the full transcript (carries language/model); a bare segments wire
+    # still exports, just with empty metadata.
+    if transcript_in.get("segments"):
+        base: dict[str, Any] = transcript_in
+    elif seg_in.get("segments"):
+        base = {
+            "segments": seg_in.get("segments"),
+            "language": "",
+            "model": "",
+            "source_file": str(src.get("source_filename", "") or ""),
+        }
+    else:
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No transcript or segments wired",
+        }
+    result = cast(
+        transcripts.TranscriptResult,
+        {
+            "segments": list(base.get("segments") or []),
+            "language": str(base.get("language", "") or ""),
+            "model": str(base.get("model", "") or ""),
+            "source_file": str(base.get("source_file", "") or ""),
+        },
+    )
+
+    participant = str(src.get("participant", "") or "")
+    stem = f"transcript_{participant}" if participant else "transcript"
+    ext = transcripts.get_transcript_extension(fmt)
+    output_path = files.get_unique_filename(f"{stem}{ext}", file_format=ext)
+    if not transcripts.write_transcript(result, output_path, fmt=fmt):
+        files.release_reservation(output_path)
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "Transcript couldn't be written",
+        }
+    # "export" (not "transcript") — the viewer routes it to the Attachments
+    # pane's document card; "transcript" is a timeline card type there.
+    rec = _attachment_artifact("export", output_path, src, f"Transcript ({fmt})")
+    return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
 # ---- Thinking (Ollama) ----
@@ -2227,24 +2417,52 @@ def _exec_heatmap(
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
     height = int(props.get("height", 0) or 0) or 1080
-    output_path = files.get_unique_filename("heatmap.png", file_format=".png")
-    if style == "template":
-        result = screenspace_heatmap.generate_template_heatmap(
-            results, width, height, output_path
-        )
-    elif style == "flow":
-        result = screenspace_heatmap.generate_flow_heatmap(
-            results, width, height, output_path
-        )
+    output = str(params.get("output", "image") or "image")
+    if output not in ("image", "gif", "rolling_gif"):
+        output = "image"
+    if output == "image":
+        output_path = files.get_unique_filename("heatmap.png", file_format=".png")
+        if style == "template":
+            result = screenspace_heatmap.generate_template_heatmap(
+                results, width, height, output_path
+            )
+        elif style == "flow":
+            result = screenspace_heatmap.generate_flow_heatmap(
+                results, width, height, output_path
+            )
+        else:
+            result = screenspace_heatmap.generate_change_heatmap(
+                results, width, height, output_path
+            )
+        failure_note = "Heatmap couldn't be generated"
     else:
-        result = screenspace_heatmap.generate_change_heatmap(
-            results, width, height, output_path
-        )
+        output_path = files.get_unique_filename("heatmap.gif", file_format=".gif")
+        num_frames = int(float(params.get("frames", 24) or 24))
+        if output == "gif":
+            result = screenspace_heatmap.generate_heatmap_gif(
+                results,
+                width,
+                height,
+                output_path,
+                heatmap_type=style,
+                num_frames=num_frames,
+            )
+        else:
+            result = screenspace_heatmap.generate_rolling_heatmap_gif(
+                results,
+                width,
+                height,
+                output_path,
+                heatmap_type=style,
+                num_frames=num_frames,
+                window_frames=int(float(params.get("window", 6) or 6)),
+            )
+        failure_note = "Not enough detector results for an animated heatmap"
     if not result:
         files.release_reservation(output_path)
         return {
             "artifacts": {"artifacts": [], "study": study, "count": 0},
-            "__note__": "Heatmap couldn't be generated",
+            "__note__": failure_note,
         }
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
@@ -2303,6 +2521,99 @@ def _exec_build_reel(
         "artifacts": {"artifacts": reels, "study": study, "count": count},
         "manifest": {"path": None, "records": reels},
     }
+
+
+def _exec_data_export(
+    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    import data_export
+    import files
+
+    events_in = inputs.get("events") or {}
+    seg_in = inputs.get("segments") or {}
+    src = events_in.get("source") or seg_in.get("source") or {}
+    study = str(src.get("study", "") or "")
+    fmt = str(params.get("format", "both") or "both")
+    if fmt not in ("both", "json", "csv"):
+        fmt = "both"
+
+    participant = str(src.get("participant", "") or "")
+    suffix = f"_{participant}" if participant else ""
+    # (stem, rows, preferred CSV column order, description) per wired surface.
+    surfaces: list[tuple[str, list[dict[str, Any]], tuple[str, ...], str]] = []
+    events = list(events_in.get("events") or [])
+    if events:
+        surfaces.append(
+            (
+                f"export_events{suffix}",
+                data_export.build_screenspace_events(
+                    {"events": events}, include_excluded=True
+                ),
+                data_export.SCREENSPACE_EVENT_COLUMNS,
+                "Events export",
+            )
+        )
+    segments = list(seg_in.get("segments") or [])
+    if segments:
+        # build_transcript_segments reads a transcripts-manifest envelope;
+        # synthesize one around the wired segments.
+        manifest = {
+            "source_transcripts": {
+                (participant or "unknown"): {
+                    "segments": segments,
+                    "source_file": str(src.get("source_filename", "") or ""),
+                }
+            }
+        }
+        surfaces.append(
+            (
+                f"export_segments{suffix}",
+                data_export.build_transcript_segments(manifest),
+                data_export._TRANSCRIPT_SEGMENT_BASE_COLS,
+                "Segments export",
+            )
+        )
+    if not surfaces:
+        return {
+            "artifacts": {"artifacts": [], "study": study, "count": 0},
+            "__note__": "No events or segments wired",
+        }
+
+    records: list[dict[str, Any]] = []
+    written: list[str] = []
+    for stem, rows, columns, description in surfaces:
+        writes: list[tuple[str, str, str]] = []  # (extension, payload, label)
+        if fmt in ("both", "json"):
+            writes.append((".json", data_export.to_json(rows), "JSON"))
+        if fmt in ("both", "csv"):
+            writes.append(
+                (
+                    ".csv",
+                    data_export.to_csv(rows, preferred_column_order=columns),
+                    "CSV",
+                )
+            )
+        for ext, payload, label in writes:
+            output_path = files.get_unique_filename(f"{stem}{ext}", file_format=ext)
+            try:
+                Path(output_path).write_text(payload, encoding="utf-8")
+            except OSError:
+                # All-or-nothing: also remove any files this node already wrote,
+                # so a half-bundle never orphans behind an artifact-less result.
+                files.release_reservation(output_path)
+                for prior in written:
+                    files.release_reservation(prior)
+                return {
+                    "artifacts": {"artifacts": [], "study": study, "count": 0},
+                    "__note__": "Export couldn't be written",
+                }
+            written.append(output_path)
+            records.append(
+                _attachment_artifact(
+                    "export", output_path, src, f"{description} ({label})"
+                )
+            )
+    return {"artifacts": {"artifacts": records, "study": study, "count": len(records)}}
 
 
 def _exec_timeline_viewer(
@@ -2621,6 +2932,26 @@ def _eval_predicate(field_val: float | str | None, op: str, raw_value: Any) -> b
         return False
 
 
+def _eval_clauses(kind: str, item: Any, params: dict[str, Any]) -> bool:
+    """Evaluate the primary ``{field, op, value}`` clause plus the optional
+    second clause, combined with AND/OR when ``combine`` isn't "off"."""
+    meta = _COLLECTION_KINDS[kind]
+    field = str(params.get("field") or meta["fields"][0])
+    op = str(params.get("op") or ">=")
+    first = _eval_predicate(
+        _collection_field(kind, item, field), op, params.get("value")
+    )
+    combine = str(params.get("combine") or "off")
+    if combine not in ("AND", "OR"):
+        return first
+    field2 = str(params.get("field2") or meta["fields"][0])
+    op2 = str(params.get("op2") or ">=")
+    second = _eval_predicate(
+        _collection_field(kind, item, field2), op2, params.get("value2")
+    )
+    return (first and second) if combine == "AND" else (first or second)
+
+
 def _wrap_collection(
     kind: str, src_envelope: dict[str, Any], items: list[Any]
 ) -> dict[str, Any]:
@@ -2638,7 +2969,7 @@ def _wrap_collection(
 def _make_filter_executor(
     kind: str,
 ) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Keep items matching one ``{field, op, value}`` clause; same type in/out."""
+    """Keep items matching the clause(s) (see ``_eval_clauses``); same type in/out."""
     meta = _COLLECTION_KINDS[kind]
 
     def _exec(
@@ -2646,14 +2977,7 @@ def _make_filter_executor(
     ) -> dict[str, Any]:
         env = inputs.get("in") or {}
         items = list(env.get(meta["key"]) or [])
-        field = str(params.get("field") or meta["fields"][0])
-        op = str(params.get("op") or ">=")
-        value = params.get("value")
-        kept = [
-            it
-            for it in items
-            if _eval_predicate(_collection_field(kind, it, field), op, value)
-        ]
+        kept = [it for it in items if _eval_clauses(kind, it, params)]
         return {"out": _wrap_collection(kind, env, kept)}
 
     return _exec
@@ -2672,17 +2996,10 @@ def _make_partition_executor(
     ) -> dict[str, Any]:
         env = inputs.get("in") or {}
         items = list(env.get(meta["key"]) or [])
-        field = str(params.get("field") or meta["fields"][0])
-        op = str(params.get("op") or ">=")
-        value = params.get("value")
         matched: list[Any] = []
         unmatched: list[Any] = []
         for it in items:
-            target = (
-                matched
-                if _eval_predicate(_collection_field(kind, it, field), op, value)
-                else unmatched
-            )
+            target = matched if _eval_clauses(kind, it, params) else unmatched
             target.append(it)
         return {
             "matched": _wrap_collection(kind, env, matched),
@@ -2886,6 +3203,35 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "label": "Value",
             "required": True,
         },
+        # Optional second clause. "off" keeps the node single-clause; value2 is
+        # deliberately not required so validation stays quiet in that case.
+        {
+            "name": "combine",
+            "type": "enum",
+            "default": "off",
+            "choices": ["off", "AND", "OR"],
+            "label": "Second clause",
+        },
+        {
+            "name": "field2",
+            "type": "enum",
+            "default": meta["fields"][0],
+            "choices": list(meta["fields"]),
+            "label": "Field 2",
+        },
+        {
+            "name": "op2",
+            "type": "enum",
+            "default": ">=",
+            "choices": list(_COLLECTION_OPS),
+            "label": "Comparison 2",
+        },
+        {
+            "name": "value2",
+            "type": "string",
+            "default": "",
+            "label": "Value 2",
+        },
     ]
 
 
@@ -3074,6 +3420,8 @@ _EXECUTORS: dict[
     "time_range": _exec_time_range,
     "transcribe": _exec_transcribe,
     "find_word": _exec_find_word,
+    "transcript_export": _exec_transcript_export,
+    "data_export": _exec_data_export,
     "summarize": _exec_summarize,
     "citations": _exec_citations,
     "friction": _exec_friction,
@@ -3214,6 +3562,24 @@ NODE_STATUS_COMPLETED = "completed"
 NODE_STATUS_FAILED = "failed"
 NODE_STATUS_SKIPPED = "skipped"
 
+# Canvas-only sticky-note pseudo-node (frontend-created, not in NODE_TYPES).
+# Notes live in blueprint["nodes"] so they ride save/undo/copy/import for free;
+# the runner filters them out so they never execute or appear in run snapshots.
+NOTE_NODE_TYPE = "note"
+
+# Auto-run trigger types: new_video (the original watch-dir P6 trigger) plus
+# the chaining triggers (a transcript or Screenspace scan completing fires an
+# armed blueprint for that participant). Served through /api/catalog context so
+# the frontend picker never duplicates the list; workflows_server's watcher
+# polls each type's source (input dir / transcripts manifest / screenspace
+# manifest) only while a blueprint of that type is armed.
+TRIGGER_TYPES: list[dict[str, str]] = [
+    {"id": "new_video", "label": "New video lands"},
+    {"id": "transcript_complete", "label": "Transcript completes"},
+    {"id": "scan_event", "label": "Screenspace scan completes"},
+]
+TRIGGER_TYPE_IDS = frozenset(t["id"] for t in TRIGGER_TYPES)
+
 _PROGRESS_NOTIFY_INTERVAL = (
     0.5  # seconds; throttle SSE notifies (copy screenspace_worker)
 )
@@ -3349,10 +3715,9 @@ def _node_result_summary(result: Any) -> dict[str, Any]:
 # written to ``<output_dir>/workflow_runs/<run_id>/<node_id>.json`` so the
 # run-history UI can lazily fetch and render it after the runner is evicted.
 
-# Output port types worth persisting. Plumbing types (``clipRecords`` carrying
-# gspread ``Cell``s, raw ``video``/``region``/``timeRange`` handles, ``control``)
-# are dropped — both because they aren't useful to inspect and because excluding
-# ``clipRecords`` dodges serializing a non-JSON ``Cell``.
+# Output port types the run-history UI renders on row-expand. Plumbing types
+# (video/region/timeRange handles, control) are persisted for resume (below)
+# but hidden from the inspector.
 _INSPECTABLE_PORT_TYPES = frozenset(
     {
         "artifacts",
@@ -3364,6 +3729,23 @@ _INSPECTABLE_PORT_TYPES = frozenset(
         "manifest",
         "viewerHtml",
         "scalar",
+    }
+)
+
+# Output port types persisted in the sidecar — everything JSON-safe, so a
+# later resume (``compute_resume_plan``) can reload a completed node's outputs
+# verbatim. Only ``clipRecords`` is excluded: its records carry gspread
+# ``Cell`` objects that don't survive JSON, so clipRecords producers always
+# re-run on resume (cheap — one Sheets read).
+_SIDECAR_PORT_TYPES = _INSPECTABLE_PORT_TYPES | frozenset(
+    {
+        "transcript",
+        "timeRange",
+        "timestamps",
+        "video",
+        "participant",
+        "region",
+        "control",  # a gate's pass verdict is a JSON bool; resume needs it
     }
 )
 
@@ -3386,35 +3768,64 @@ def _project_inspectable(port_type: str, value: Any) -> Any:
     return value
 
 
-def _inspectable_result(node_type_id: str, result: Any) -> dict[str, Any]:
-    """Keep only the result ports whose declared type is inspectable (projected)."""
+def _filter_result_ports(
+    node_type_id: str, result: Any, allowed: frozenset[str]
+) -> dict[str, Any]:
+    """Keep only the result ports whose declared type is in ``allowed`` (projected)."""
     if not isinstance(result, dict):
         return {}
     node_type = NODE_TYPES.get(node_type_id)
     out_types = {p["name"]: p["type"] for p in (node_type or {}).get("outputs", [])}
-    inspectable: dict[str, Any] = {}
+    kept: dict[str, Any] = {}
     for port, val in result.items():
         ptype = out_types.get(port)
-        if ptype in _INSPECTABLE_PORT_TYPES:
-            inspectable[port] = _project_inspectable(ptype, val)
-    return inspectable
+        if ptype in allowed:
+            kept[port] = _project_inspectable(ptype, val)
+    return kept
+
+
+def _inspectable_result(node_type_id: str, result: Any) -> dict[str, Any]:
+    """The UI-inspectable projection of a node result."""
+    return _filter_result_ports(node_type_id, result, _INSPECTABLE_PORT_TYPES)
+
+
+def inspectable_sidecar_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored sidecar payload down to its UI-inspectable ports.
+
+    Sidecars persist every JSON-safe port (for resume) plus a self-describing
+    ``__type__`` key; the run-history inspector should render only the
+    inspectable subset, exactly as it did before the widening.
+    """
+    node_type_id = str(payload.get("__type__", "") or "")
+    out_types = {
+        p["name"]: p["type"]
+        for p in (NODE_TYPES.get(node_type_id) or {}).get("outputs", [])
+    }
+    return {
+        port: val
+        for port, val in payload.items()
+        if port != "__type__" and out_types.get(port) in _INSPECTABLE_PORT_TYPES
+    }
 
 
 def write_node_sidecar(
     output_dir: Path | str, run_id: str, node_id: str, node_type_id: str, result: Any
 ) -> bool:
-    """Atomically write a node's inspectable result to its run sidecar.
+    """Atomically write a node's JSON-safe result ports to its run sidecar.
 
-    Returns True iff a sidecar file now exists for this node (i.e. it had at
-    least one inspectable port). JSON-sanitizes via :func:`utils.sanitize_floats`
-    (non-finite floats / numpy scalars). A bad ``node_id`` (path separators) or
-    an empty inspectable payload writes nothing and returns False.
+    Persists every ``_SIDECAR_PORT_TYPES`` port plus a self-describing
+    ``__type__`` key (consumed by resume + the read-time inspectable filter).
+    Returns True iff a sidecar file now exists for this node. JSON-sanitizes via
+    :func:`utils.sanitize_floats` (non-finite floats / numpy scalars). A bad
+    ``node_id`` (path separators) or an empty payload writes nothing and
+    returns False.
     """
     if not node_id or node_id != os.path.basename(node_id) or node_id in (".", ".."):
         return False
-    payload = _inspectable_result(node_type_id, result)
+    payload = _filter_result_ports(node_type_id, result, _SIDECAR_PORT_TYPES)
     if not payload:
         return False
+    payload["__type__"] = node_type_id
     path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
     tmp = path.with_suffix(".json.tmp")
     try:
@@ -3432,6 +3843,109 @@ def write_node_sidecar(
         except OSError:
             pass
         return False
+
+
+# Collection nodes that pass an events value's ``raw_results`` through
+# unchanged (see ``_COLLECTION_KINDS["events"]["preserve"]`` / merge's concat).
+# The resume planner walks heatmap ancestry through these.
+_RAW_RESULTS_PRESERVING = frozenset(
+    {
+        "filter_events",
+        "partition_events",
+        "merge_events",
+        "limit_events",
+        "dedup_events",
+    }
+)
+
+
+def compute_resume_plan(
+    blueprint: dict[str, Any],
+    prior_node_states: dict[str, Any],
+    load_sidecar: Callable[[str], dict[str, Any] | None],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Plan a resume: which prior-run nodes can be reused as seeds vs. re-run.
+
+    Pure. ``load_sidecar(node_id)`` returns the stored sidecar payload (with
+    its ``__type__`` key) or None. Returns ``(seed_results, notes)`` where
+    ``seed_results`` feeds :class:`WorkflowRunner`'s ``seed_results`` and
+    ``notes`` carries human-readable degradation reasons.
+
+    A node re-runs when: it didn't complete in the prior run; its id/type
+    changed since (graph edited between runs); its sidecar is missing or
+    doesn't cover every declared output port (e.g. clipRecords producers,
+    which are never sidecar-persisted); OR any ancestor re-runs (fresh inputs
+    invalidate the cached output). Additionally, a re-running ``heatmap``
+    forces its completed events-ancestry to re-run too — sidecars project out
+    the heavy ``raw_results`` the heatmap consumes, so a seeded events
+    producer would make the resumed heatmap silently emit nothing.
+    """
+    nodes = [n for n in blueprint.get("nodes", []) if n.get("type") != NOTE_NODE_TYPE]
+    by_id = {n["id"]: n for n in nodes}
+    children: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+    parents: dict[str, list[str]] = {n["id"]: [] for n in nodes}
+    for edge in blueprint.get("edges", []):
+        src, dst = edge.get("from"), edge.get("to")
+        if src in by_id and dst in by_id:
+            children[src].append(dst)
+            parents[dst].append(src)
+
+    notes: list[str] = []
+    rerun: set[str] = set()
+    seeds: dict[str, dict[str, Any]] = {}
+    for n in nodes:
+        nid = n["id"]
+        prior = prior_node_states.get(nid) or {}
+        if prior.get("status") != NODE_STATUS_COMPLETED:
+            rerun.add(nid)
+            continue
+        payload = load_sidecar(nid)
+        if not isinstance(payload, dict):
+            rerun.add(nid)
+            continue
+        if str(payload.get("__type__", "")) != str(n.get("type", "")):
+            rerun.add(nid)  # the node changed type since the prior run
+            continue
+        declared = (NODE_TYPES.get(str(n.get("type", ""))) or {}).get("outputs", [])
+        stored = {k: v for k, v in payload.items() if k != "__type__"}
+        if not declared or any(p["name"] not in stored for p in declared):
+            # Some output port wasn't persisted (non-JSON-safe type, or the
+            # executor omitted it) — downstream would see None; re-run instead.
+            rerun.add(nid)
+            continue
+        seeds[nid] = stored
+
+    def _close_under_descendants() -> None:
+        stack = list(rerun)
+        while stack:
+            for child in children.get(stack.pop(), []):
+                if child not in rerun:
+                    rerun.add(child)
+                    stack.append(child)
+
+    # Fixpoint: descendant closure and the heatmap raw_results rule feed each
+    # other (a forced ancestor invalidates its own seeded descendants).
+    while True:
+        before = len(rerun)
+        _close_under_descendants()
+        for n in nodes:
+            if n.get("type") != "heatmap" or n["id"] not in rerun:
+                continue
+            stack = list(parents.get(n["id"], []))
+            while stack:
+                pid = stack.pop()
+                if pid in rerun:
+                    continue
+                rerun.add(pid)
+                if by_id[pid].get("type") in _RAW_RESULTS_PRESERVING:
+                    stack.extend(parents.get(pid, []))
+        if len(rerun) == before:
+            break
+
+    seed_results = {nid: val for nid, val in seeds.items() if nid not in rerun}
+    if not seed_results:
+        notes.append("No prior results could be reused — running everything")
+    return seed_results, notes
 
 
 class WorkflowRunner:
@@ -3452,26 +3966,38 @@ class WorkflowRunner:
         participant: str = "",
         batch_id: str = "",
         triggered: bool = False,
+        trigger_type: str = "",
         target_node_id: str = "",
         seed_results: dict[str, dict[str, Any]] | None = None,
+        seed_note: str = "",
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
         # Partial run (P11): when set, only this node and its transitive ancestors
         # execute; the rest are marked skipped. Empty → run the whole graph.
         self.target_node_id = target_node_id
-        # Pre-seeded results (P3 batch perf): {node_id: result} for participant-
-        # independent source nodes the batch coordinator computed once. A seeded
-        # node is stored as if it ran, skipping its (rate-limited) executor.
+        # Pre-seeded results: {node_id: result} for nodes whose output is
+        # already known — participant-independent sources a batch coordinator
+        # computed once (P3), or completed nodes reloaded from a prior run's
+        # sidecars on resume. A seeded node is stored as if it ran, skipping
+        # its executor. ``seed_note`` (resume) is surfaced on each seeded node.
         self._seed_results = seed_results or {}
+        self._seed_note = seed_note
         # Batch identity (P3): empty for a normal single run; a child run carries
         # its participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
         self.batch_id = batch_id
-        # Watch-dir trigger (P6): True when this run was auto-launched by the
-        # directory watcher (surfaced as a badge in the run history).
+        # Auto-run triggers (P6 + chaining): True when this run was launched by
+        # the watcher (surfaced as a badge in the run history); ``trigger_type``
+        # records which trigger fired it (new_video / transcript_complete / …).
         self.triggered = triggered
-        self.nodes = list(blueprint.get("nodes", []))
+        self.trigger_type = trigger_type
+        # Sticky notes are canvas annotations, not executable nodes — drop them
+        # before node_states is built so they never run, fail as "No executor",
+        # or pad the snapshot's node counts.
+        self.nodes = [
+            n for n in blueprint.get("nodes", []) if n.get("type") != NOTE_NODE_TYPE
+        ]
         self.edges = list(blueprint.get("edges", []))
         self.ctx = ctx
         self.on_update = on_update or (lambda: None)
@@ -3676,6 +4202,32 @@ class WorkflowRunner:
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
                 )
                 continue
+            # Seeded result (batch precompute or resume): the node's output is
+            # authoritatively known — store it as if it just ran, skipping its
+            # executor. Checked BEFORE the mute/skip gates: a resume seed for a
+            # completed node must survive even when a (re-run) parent upstream
+            # is currently marked skipped/muted — the prior run already proved
+            # this node's output. (Batch seeds are parentless sources, so the
+            # ordering change is behavior-neutral for them.)
+            if node_id in self._seed_results:
+                seeded = self._seed_results[node_id]
+                with self._lock:
+                    self._results[node_id] = seeded
+                if write_node_sidecar(
+                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
+                ) and _inspectable_result(node["type"], seeded):
+                    with self._lock:
+                        self._sidecars.add(node_id)
+                self._set_node(
+                    node_id,
+                    status=NODE_STATUS_COMPLETED,
+                    progress=1.0,
+                    completed_at=_now_iso(),
+                    note=self._seed_note or None,
+                )
+                self._notify(force=True)
+                continue
+
             # A muted node is skipped intrinsically; _should_skip then propagates
             # SKIPPED to its whole downstream subtree (same as a blocking gate).
             if node.get("disabled"):
@@ -3687,27 +4239,6 @@ class WorkflowRunner:
             if self._should_skip(node_id):
                 self._set_node(
                     node_id, status=NODE_STATUS_SKIPPED, completed_at=_now_iso()
-                )
-                self._notify(force=True)
-                continue
-
-            # Batch seed (P3 perf): a participant-independent source precomputed
-            # once by the batch coordinator — store it as if this node just ran,
-            # skipping its (rate-limited) executor for every child but the first.
-            if node_id in self._seed_results:
-                seeded = self._seed_results[node_id]
-                with self._lock:
-                    self._results[node_id] = seeded
-                if write_node_sidecar(
-                    self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
-                ):
-                    with self._lock:
-                        self._sidecars.add(node_id)
-                self._set_node(
-                    node_id,
-                    status=NODE_STATUS_COMPLETED,
-                    progress=1.0,
-                    completed_at=_now_iso(),
                 )
                 self._notify(force=True)
                 continue
@@ -3743,11 +4274,13 @@ class WorkflowRunner:
                     notes.append(str(exec_note))
                 with self._lock:
                     self._results[node_id] = result
-                # Persist the inspectable result so the run-history UI can fetch
-                # it on demand even after this runner is evicted from memory.
+                # Persist the JSON-safe result ports (resume reloads them; the
+                # run-history UI fetches the inspectable subset on demand even
+                # after this runner is evicted from memory). ``hasResult`` only
+                # advertises sidecars with something the inspector can render.
                 if write_node_sidecar(
                     self.ctx.output_dir, self.run_id, node_id, node["type"], result
-                ):
+                ) and _inspectable_result(node["type"], result):
                     with self._lock:
                         self._sidecars.add(node_id)
                 self._set_node(
@@ -3796,6 +4329,7 @@ class WorkflowRunner:
             "batchId": self.batch_id,
             "participant": self.participant,
             "triggered": self.triggered,
+            "triggerType": self.trigger_type,
             "status": self.status,
             "nodeStates": node_states,
             "results": results,

@@ -115,8 +115,13 @@
     { id: "workflows.duplicate",       section: "workflows", group: "Clipboard", label: "Duplicate selection", combos: ["Mod+D"] },
     { id: "workflows.fitView",         section: "workflows", group: "Canvas", label: "Fit graph to view", combos: ["F"] },
     { id: "workflows.deleteSelection", section: "workflows", group: "Canvas", label: "Delete selected wire / nodes", combos: ["Delete", "Backspace"] },
-    { id: "workflows.note.pan",        section: "workflows", group: "Canvas", label: "Pan canvas", note: "middle-drag" },
-    { id: "workflows.note.zoom",       section: "workflows", group: "Canvas", label: "Zoom canvas", note: "scroll wheel" },
+    { id: "workflows.selectAll",       section: "workflows", group: "Canvas", label: "Select all nodes", combos: ["Mod+A"] },
+    { id: "workflows.panMode",         section: "workflows", group: "Canvas", label: "Pan canvas (hold + drag)", combos: ["Space"] },
+    { id: "workflows.nudge",           section: "workflows", group: "Canvas", label: "Nudge selection (Shift = grid step)", combos: ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Shift+ArrowLeft", "Shift+ArrowRight", "Shift+ArrowUp", "Shift+ArrowDown"], rebindable: false, displayKeys: "←↑↓→" },
+    { id: "workflows.zoomReset",       section: "workflows", group: "Canvas", label: "Reset zoom to 100%", combos: ["0"] },
+    { id: "workflows.addNote",         section: "workflows", group: "Canvas", label: "Add sticky note", combos: ["N"] },
+    { id: "workflows.note.pan",        section: "workflows", group: "Canvas", label: "Pan canvas", note: "space-drag · middle-drag · two-finger scroll" },
+    { id: "workflows.note.zoom",       section: "workflows", group: "Canvas", label: "Zoom canvas", note: "pinch · Ctrl/⌘ + scroll" },
     { id: "workflows.note.select",     section: "workflows", group: "Canvas", label: "Select nodes", note: "drag / shift-click" },
 
     { id: "overview.tabMap",         section: "overview", group: "Tabs", label: "Show Map tab", combos: ["1"] },
@@ -420,7 +425,14 @@
       disarmHints();
     }
     if (!_held.length) return;
-    var key = (e.key || "").length === 1 ? e.key.toUpperCase() : e.key;
+    // Normalize to the combo token the keydown stored as baseKey — Space's
+    // e.key is " ", which would never match "SPACE" without this.
+    var key =
+      e.key === " " || e.key === "Spacebar"
+        ? "SPACE"
+        : (e.key || "").length === 1
+          ? e.key.toUpperCase()
+          : e.key;
     var remaining = [];
     for (var n = 0; n < _held.length; n++) {
       if (_held[n].baseKey === key) _held[n].attachment.onRelease(e);

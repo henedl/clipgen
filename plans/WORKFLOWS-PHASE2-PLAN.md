@@ -6,6 +6,13 @@
 > **whole-study batch** (P3), authoring + run-history UX (P5), and a **narrow watch-dir trigger** (P6,
 > the final workstream). All open questions are resolved (see *Open questions*); remaining items are
 > demand-driven follow-ups noted inline per workstream.
+>
+> **Phase 3 shipped most of the inline deferrals** — see `plans/WORKFLOWS-PHASE3-PLAN.md`:
+> data/transcript export nodes, the heatmap rolling-GIF window, compound filter clauses, canvas
+> notes (the groups/comments deferral), resume-from-failure (the partial/memoized re-run this plan
+> cut), a dry-run preview, a cross-blueprint run-history view, `transcript_complete` / `scan_event`
+> trigger chaining, and opt-in parallel batch children. Still open: gallery-viewer node, compression
+> output, foreach/subgraph iteration, per-node cancel/retry.
 
 ## Context
 

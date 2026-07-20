@@ -26,6 +26,11 @@
   var _dragCursorX = 0;
   var _dragCursorY = 0;
   var _dragOffsets = null; // { nodeId: {x, y} } world offset from cursor grab point
+  var _dragAnchorId = null; // the grabbed node — snapping pins this one's corner
+  var _spaceHeld = false; // Space held → left-drag pans (workflows.panMode)
+  var _snapEnabled = false; // #wfSnapBtn toggle, persisted in localStorage
+  var SNAP_KEY = "clipgenWfSnap";
+  var SNAP_TOL = 8; // screen px within which a dragged edge snaps to a neighbor
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : v > hi ? hi : v;
@@ -82,6 +87,11 @@
     // The wire-delete button is screen-positioned, so reposition it when the
     // viewport changes (wires themselves move with the SVG transform).
     if (WF.refreshWireDelete) WF.refreshWireDelete();
+    // Zoom % readout beside the minimap zoom buttons (click resets to 100%).
+    // writeViewport is the single chokepoint every pan/zoom path funnels
+    // through, so the readout can never go stale.
+    var zoomLevel = qs("#wfZoomLevel");
+    if (zoomLevel) zoomLevel.textContent = Math.round(vp.zoom * 100) + "%";
     // Pan/zoom moved the viewport rectangle — redraw the minimap to match.
     renderMinimap();
   }
@@ -161,6 +171,13 @@
       return;
     }
     if (e.button !== 0) return;
+    // Space-hold turns left-drag into a pan (trackpad-friendly navigation);
+    // marquee keeps owning bare left-drag on empty canvas.
+    if (_spaceHeld) {
+      e.preventDefault();
+      startPan(e);
+      return;
+    }
     var t = e.target;
     if (!t || !t.closest) {
       startMarquee(e);
@@ -224,9 +241,10 @@
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       canvas.classList.remove("panning");
-      // Pan is a middle-button navigation gesture — it never changes the
-      // selection (deselect-on-empty-click is handled by left-click → marquee).
-      if (moved) WF.scheduleSave();
+      // Pan is a navigation gesture — it never changes the selection
+      // (deselect-on-empty-click is handled by left-click → marquee) and never
+      // lands on the undo stack (viewport-only save).
+      if (moved) WF.scheduleViewportSave();
     }
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
@@ -258,6 +276,7 @@
     _dragCursorY = e.clientY;
     var grab = clientToWorld(e.clientX, e.clientY);
     _dragOffsets = {};
+    _dragAnchorId = id;
     state.selection.forEach(function (sid) {
       var n = findNode(sid);
       if (n) {
@@ -282,6 +301,8 @@
       _draggingNode = false;
       _dragRect = null;
       _dragOffsets = null;
+      _dragAnchorId = null;
+      hideAlignGuides();
       if (moved) WF.scheduleSave();
     }
     document.addEventListener("mousemove", move);
@@ -338,6 +359,19 @@
         // read; mirrors clientToWorld's math.
         var curX = (_dragCursorX - _dragRect.left - vp.x) / vp.zoom;
         var curY = (_dragCursorY - _dragRect.top - vp.y) / vp.zoom;
+        // Snap the grabbed node's corner (alignment to neighbors first, else
+        // the grid) and translate the whole selection by the same delta.
+        var anchor = _dragAnchorId && _dragOffsets[_dragAnchorId];
+        if (_snapEnabled && anchor) {
+          var snap = applySnap(curX + anchor.x, curY + anchor.y);
+          curX += snap.x - (curX + anchor.x);
+          curY += snap.y - (curY + anchor.y);
+          if (snap.gx !== null || snap.gy !== null) {
+            updateAlignGuides(snap.gx, snap.gy);
+          } else {
+            hideAlignGuides();
+          }
+        }
         state.selection.forEach(function (sid) {
           var n = findNode(sid);
           var o = _dragOffsets[sid];
@@ -414,14 +448,214 @@
     if (WF.renderAllNodes) WF.renderAllNodes();
   }
 
+  // ---- Snap & alignment guides ----
+
+  // Snap a world point (the grabbed card's top-left corner): prefer aligning to
+  // another card's left/top edge within SNAP_TOL screen px (showing a guide
+  // line), else round to the background grid. Only consulted while the snap
+  // toggle is on.
+  function applySnap(x, y) {
+    var out = { x: x, y: y, gx: null, gy: null };
+    var tol = SNAP_TOL / (state.viewport.zoom || 1);
+    var selSet = {};
+    state.selection.forEach(function (id) {
+      selSet[id] = true;
+    });
+    var nodes = state.nodes || [];
+    var bestDx = tol;
+    var bestDy = tol;
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i];
+      if (selSet[n.id]) continue; // dragged cards can't snap to themselves
+      var nx = (n.position && n.position.x) || 0;
+      var ny = (n.position && n.position.y) || 0;
+      var dx = Math.abs(nx - x);
+      var dy = Math.abs(ny - y);
+      if (dx < bestDx) {
+        bestDx = dx;
+        out.x = nx;
+        out.gx = nx;
+      }
+      if (dy < bestDy) {
+        bestDy = dy;
+        out.y = ny;
+        out.gy = ny;
+      }
+    }
+    if (out.gx === null) out.x = Math.round(x / _gridBase) * _gridBase;
+    if (out.gy === null) out.y = Math.round(y / _gridBase) * _gridBase;
+    return out;
+  }
+
+  // The two guide lines live inside #wfWorld so they inherit the world
+  // transform; renderAllNodes preserves only the wire <svg>, so re-append
+  // whenever a rebuild dropped them.
+  var _guideV = null;
+  var _guideH = null;
+
+  function ensureGuide(which) {
+    var g = which === "v" ? _guideV : _guideH;
+    if (!g) {
+      g = el("div", "wf-align-guide hidden");
+      if (which === "v") _guideV = g;
+      else _guideH = g;
+    }
+    if (!g.parentNode) {
+      var world = qs("#wfWorld");
+      if (world) world.appendChild(g);
+    }
+    return g;
+  }
+
+  function updateAlignGuides(gx, gy) {
+    var canvas = qs("#wfCanvas");
+    var rect = _dragRect || (canvas && canvas.getBoundingClientRect());
+    if (!rect) return;
+    var vp = state.viewport;
+    // Visible world rect (span the guides across it) + 1 screen px thickness.
+    var wx = -vp.x / vp.zoom;
+    var wy = -vp.y / vp.zoom;
+    var ww = rect.width / vp.zoom;
+    var wh = rect.height / vp.zoom;
+    var thick = Math.max(1 / vp.zoom, 0.5);
+    var v = ensureGuide("v");
+    if (gx !== null) {
+      v.style.left = gx + "px";
+      v.style.top = wy + "px";
+      v.style.width = thick + "px";
+      v.style.height = wh + "px";
+      v.classList.remove("hidden");
+    } else {
+      v.classList.add("hidden");
+    }
+    var h = ensureGuide("h");
+    if (gy !== null) {
+      h.style.left = wx + "px";
+      h.style.top = gy + "px";
+      h.style.width = ww + "px";
+      h.style.height = thick + "px";
+      h.classList.remove("hidden");
+    } else {
+      h.classList.add("hidden");
+    }
+  }
+
+  function hideAlignGuides() {
+    if (_guideV) _guideV.classList.add("hidden");
+    if (_guideH) _guideH.classList.add("hidden");
+  }
+
+  function syncSnapButton() {
+    var btn = qs("#wfSnapBtn");
+    if (!btn) return;
+    btn.classList.toggle("wf-snap-on", _snapEnabled);
+    btn.setAttribute("aria-pressed", _snapEnabled ? "true" : "false");
+  }
+
+  function toggleSnap() {
+    _snapEnabled = !_snapEnabled;
+    try {
+      localStorage.setItem(SNAP_KEY, _snapEnabled ? "1" : "0");
+    } catch (e) {
+      /* private mode — the toggle still works for the session */
+    }
+    syncSnapButton();
+  }
+
+  // ---- Pan mode (Space hold) ----
+
+  function setPanMode(on) {
+    _spaceHeld = on;
+    var canvas = qs("#wfCanvas");
+    if (canvas) canvas.classList.toggle("pan-mode", on);
+  }
+
+  // ---- Select all / keyboard nudge ----
+
+  function selectAllNodes() {
+    var nodes = state.nodes || [];
+    if (!nodes.length) return false;
+    state.selectedEdge = null;
+    state.selection = nodes.map(function (n) {
+      return n.id;
+    });
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    return true;
+  }
+
+  // Move the selection by (dx, dy) world px with direct style writes (mirrors
+  // the drag flush — cheap under key repeat); the scheduleSave debounce
+  // coalesces a nudge burst into one undo step.
+  function nudgeSelection(dx, dy) {
+    if (!state.selection.length) return false;
+    state.selection.forEach(function (sid) {
+      var n = findNode(sid);
+      if (!n) return;
+      n.position.x = (n.position.x || 0) + dx;
+      n.position.y = (n.position.y || 0) + dy;
+      var card = qs('.wf-node[data-node-id="' + sid + '"]');
+      if (card) {
+        card.style.left = n.position.x + "px";
+        card.style.top = n.position.y + "px";
+      }
+    });
+    if (WF.renderWires) WF.renderWires();
+    renderMinimap();
+    WF.scheduleSave();
+    return true;
+  }
+
+  var _NUDGE_DIRS = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  };
+
+  // ---- Sticky notes ----
+
+  // Drop a fresh note pseudo-node at the viewport centre and focus its
+  // textarea so typing can start immediately. Notes live in state.nodes (the
+  // runner ignores them), so save/undo/copy/delete need no special casing.
+  function addNote() {
+    if (!state.ready) return;
+    var canvas = qs("#wfCanvas");
+    if (!canvas) return;
+    var rect = canvas.getBoundingClientRect();
+    var w = clientToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    var node = {
+      id: "n_" + randomId(),
+      type: "note",
+      params: { text: "" },
+      position: { x: Math.round(w.x - 90), y: Math.round(w.y - 50) },
+    };
+    state.nodes.push(node);
+    state.selection = [node.id];
+    state.selectedEdge = null;
+    if (WF.renderAllNodes) WF.renderAllNodes();
+    WF.scheduleSave();
+    var ta = qs('.wf-node[data-node-id="' + node.id + '"] .wf-note-text');
+    if (ta) ta.focus();
+  }
+
   // ---- Zoom ----
 
   function onWheel(e) {
     if (!state.ready) return;
     e.preventDefault();
+    var vp = state.viewport;
+    // Node-editor wheel convention: plain wheel / two-finger scroll pans;
+    // pinch (which browsers deliver as ctrl+wheel) or an explicit Ctrl/⌘+wheel
+    // zooms about the cursor.
+    if (!e.ctrlKey && !e.metaKey) {
+      vp.x -= e.deltaX;
+      vp.y -= e.deltaY;
+      applyViewport();
+      WF.scheduleViewportSave();
+      return;
+    }
     var canvas = qs("#wfCanvas");
     var rect = canvas.getBoundingClientRect();
-    var vp = state.viewport;
     var mx = e.clientX - rect.left;
     var my = e.clientY - rect.top;
     // World point under the cursor before the zoom.
@@ -433,7 +667,7 @@
     vp.x = mx - wx * vp.zoom;
     vp.y = my - wy * vp.zoom;
     applyViewport();
-    WF.scheduleSave();
+    WF.scheduleViewportSave();
   }
 
   // Zoom by `factor` about the canvas centre (the minimap +/- buttons; mirrors
@@ -453,7 +687,7 @@
     vp.x = cx - wx * vp.zoom;
     vp.y = cy - wy * vp.zoom;
     applyViewport();
-    WF.scheduleSave();
+    WF.scheduleViewportSave();
   }
 
   // ---- Keyboard ----
@@ -544,6 +778,30 @@
       { id: "edit.undo", when: _canvasReady, handler: function () { return !!(WF.undo && WF.undo()); } },
       { id: "edit.redo", when: _canvasReady, handler: function () { return !!(WF.redo && WF.redo()); } },
       { id: "workflows.fitView", when: _canvasReady, handler: function () { fitToView(); } },
+      { id: "workflows.selectAll", when: _canvasReady, handler: function () { return selectAllNodes(); } },
+      {
+        id: "workflows.panMode",
+        when: _canvasReady,
+        repeat: false,
+        handler: function () { setPanMode(true); },
+        onRelease: function () { setPanMode(false); },
+      },
+      {
+        id: "workflows.nudge",
+        when: function () { return _canvasReady() && !!state.selection.length; },
+        handler: function (e) {
+          var dir = _NUDGE_DIRS[e.key];
+          if (!dir) return false;
+          var step = e.shiftKey ? _gridBase : 1;
+          return nudgeSelection(dir[0] * step, dir[1] * step);
+        },
+      },
+      {
+        id: "workflows.zoomReset",
+        when: _canvasReady,
+        handler: function () { zoomAtCenter(1 / (state.viewport.zoom || 1)); },
+      },
+      { id: "workflows.addNote", when: _canvasReady, handler: function () { addNote(); } },
       {
         id: "workflows.deleteSelection",
         when: function () {
@@ -574,7 +832,11 @@
   // so the tidied graph is visible from the origin.
   function autoArrange() {
     if (!state.ready) return;
-    var nodes = state.nodes || [];
+    // Sticky notes are free-floating annotations — leave them where the user
+    // put them and lay out only the executable cards.
+    var nodes = (state.nodes || []).filter(function (n) {
+      return n.type !== "note";
+    });
     if (!nodes.length) return;
     // Re-layout rebuilds every card and moves the source node, so cancel any
     // in-flight wire gesture rather than leave it armed with a stale highlight.
@@ -709,7 +971,7 @@
     vp.x = rect.width / 2 - cx * zoom;
     vp.y = rect.height / 2 - cy * zoom;
     applyViewport();
-    WF.scheduleSave();
+    WF.scheduleViewportSave();
   }
 
   // ---- Minimap ----
@@ -859,7 +1121,7 @@
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       _mmDragging = false;
-      WF.scheduleSave();
+      WF.scheduleViewportSave();
     }
     document.addEventListener("mousemove", move);
     document.addEventListener("mouseup", up);
@@ -878,6 +1140,13 @@
     );
     var parsed = parseFloat(gridVar);
     if (parsed) _gridBase = parsed;
+
+    try {
+      _snapEnabled = localStorage.getItem(SNAP_KEY) === "1";
+    } catch (e) {
+      /* private mode — default off */
+    }
+    syncSnapButton();
 
     canvas.addEventListener("dragover", onDragOver);
     canvas.addEventListener("drop", onDrop);
@@ -901,6 +1170,10 @@
   WF.fitToView = fitToView;
   // Consumed by the hub's minimap zoom +/- buttons.
   WF.zoomAtCenter = zoomAtCenter;
+  // Consumed by the hub's toolbar snap toggle.
+  WF.toggleSnap = toggleSnap;
+  // Consumed by the hub's toolbar Note button + command palette.
+  WF.addNote = addNote;
   WF.renderMinimap = renderMinimap;
   // Consumed by the wires satellite (cursor→world for the in-flight wire; node
   // lookup for port endpoints).

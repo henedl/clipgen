@@ -58,9 +58,19 @@
             title="Auto-arrange the nodes">
       <span class="wf-label-icon wf-cleanup-icon" aria-hidden="true"></span>Clean up
     </button>
+    <button id="wfAddNote" class="btn btn-small wf-icon-btn" type="button" disabled
+            data-hotkey="workflows.addNote" aria-label="Add sticky note"
+            title="Add a sticky note to the canvas (N)">
+      <span class="wf-btn-icon wf-note-icon" aria-hidden="true"></span>
+    </button>
     <button id="wfFitView" class="btn btn-small wf-icon-btn" type="button" disabled
             data-hotkey="workflows.fitView" aria-label="Fit to view" title="Fit all nodes in view (F)">
       <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
+    </button>
+    <button id="wfSnapBtn" class="btn btn-small wf-icon-btn" type="button" disabled
+            aria-pressed="false" aria-label="Snap to grid"
+            title="Snap dragged nodes to the grid and to neighboring cards">
+      <span class="wf-btn-icon wf-snap-icon" aria-hidden="true"></span>
     </button>
     <button id="wfSaveStash" class="btn btn-small btn-icon" type="button" disabled
             title="Save the selected nodes as a reusable stash">
@@ -82,15 +92,21 @@
           Run to here
         </button>
       </div>
+      <!-- Dry-run preview readout, shown while hovering Run ("N of M steps"). -->
+      <span id="wfPreviewChip" class="wf-preview-chip hidden"></span>
     </div>
     <button id="wfStopBtn" class="btn btn-small hidden" type="button"
             title="Cancel the running workflow">Stop</button>
-    <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
-            aria-pressed="false"
-            title="Auto-run this blueprint when a new video lands in the input folder">
-      <span class="wf-trigger-icon" aria-hidden="true"></span>
-      <span class="wf-trigger-label">Auto-run on new video</span>
-    </button>
+    <div class="wf-trigger-wrap">
+      <button id="wfTriggerBtn" class="btn btn-small" type="button" disabled
+              aria-pressed="false" aria-haspopup="menu" aria-expanded="false"
+              title="Auto-run this blueprint when a video lands, a transcript completes, or a scan completes">
+        <span class="wf-trigger-icon" aria-hidden="true"></span>
+        <span class="wf-trigger-label">Auto-run</span>
+      </button>
+      <!-- Trigger-type picker (items built from /api/catalog context). -->
+      <div id="wfTriggerMenu" class="wf-run-menu cg-menu hidden" role="menu"></div>
+    </div>
     <!-- Persistent cue that some blueprint is armed for auto-run, even one
          that isn't the active canvas (the button only reflects the active). -->
     <span id="wfArmedHint" class="wf-armed-hint hidden"></span>
@@ -157,6 +173,9 @@
                     aria-label="Zoom out" title="Zoom out">
               <span class="wf-btn-icon wf-zoomout-icon" aria-hidden="true"></span>
             </button>
+            <button id="wfZoomLevel" class="btn btn-small wf-zoom-level" type="button"
+                    data-hotkey="workflows.zoomReset"
+                    title="Reset zoom to 100% (0)">100%</button>
             <button id="wfMinimapFit" class="btn btn-small wf-icon-btn" type="button"
                     aria-label="Fit all nodes in view" title="Fit all nodes in view (F)">
               <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
@@ -168,7 +187,7 @@
         <div id="wfCanvasEmpty" class="wf-canvas-empty">
           <h1>Workflows</h1>
           <p>Drag nodes from the palette to chain clip, Screenspace, and transcript actions.</p>
-          <p class="wf-empty-sub">Drag to select, middle-drag to pan, scroll to zoom.</p>
+          <p class="wf-empty-sub">Drag to select, space-drag or scroll to pan, pinch or ⌘-scroll to zoom.</p>
           <!-- Built-in recipes, surfaced here so a fresh blueprint has a one-click
                starting point (the stashes satellite fills this on load). -->
           <div id="wfEmptyRecipes" class="wf-empty-recipes"></div>
@@ -190,6 +209,12 @@
            Hidden when the graph is clean. Each row links to its node. -->
       <div id="wfValidation" class="wf-validation hidden"></div>
       <div class="wf-sidebar-header">Runs</div>
+      <!-- History scope: this blueprint's cards (default) vs a compact cross-
+           blueprint list (workflows-runs.js initRunScope → state.runScope). -->
+      <div id="wfRunScope" class="wf-run-scope" role="group" aria-label="Run history scope">
+        <button class="wf-run-scope-btn active" type="button" data-scope="blueprint">This blueprint</button>
+        <button class="wf-run-scope-btn" type="button" data-scope="all">All</button>
+      </div>
       <!-- Client-side status filter over the run/batch history (workflows-runs.js
            initRunFilter → state.runFilter). -->
       <div id="wfRunFilter" class="wf-run-filter" role="group" aria-label="Filter runs by status">

@@ -24,6 +24,7 @@ import os
 import shutil
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,17 +71,25 @@ _RUN_TERMINAL = {
     workflows.RUN_STATUS_CANCELLED,
 }
 
-# ---- Watch-dir trigger state (P6) ----
+# ---- Auto-run trigger state (P6 + W7 chaining) ----
 #
 # A single polling daemon thread (no extra dependency — mirrors the screenspace
-# worker's daemon posture) watches the input dir for newly-arrived participant
-# videos and auto-runs the armed blueprint, one single run per pid. ``_watch_seen``
-# is seeded at startup so pre-existing videos never fire; a pid must stat
-# identically across two consecutive polls (the partial-copy guard) before it
-# fires. The thread always runs (cheap glob + a few stats per tick) so the
-# seen-set stays current, meaning arming later never retro-fires the backlog.
+# worker's daemon posture) checks each trigger type's source while a blueprint
+# of that type is armed: the input dir for new participant videos, the
+# transcripts manifest for fresh ``transcribed_at`` stamps, and the screenspace
+# manifest for newly-completed tasks — one single run per arrival/completion.
+# Baselines are seeded at startup and re-seeded on arm so the pre-existing
+# backlog never fires; a new video must additionally stat identically across
+# two consecutive polls (the partial-copy guard). With nothing armed a tick
+# does no I/O at all.
 _watch_seen: set[str] = set()  # pids already accounted for (never fire again)
 _watch_pending: dict[str, tuple[int, float]] = {}  # pid -> last-poll (size, mtime)
+# Chaining-trigger baselines: completions already accounted for (never re-fire).
+_watch_transcript_baseline: dict[str, str] = {}  # pid -> transcribed_at stamp
+_watch_scan_seen: set[str] = set()  # completed screenspace task ids
+# mtime-gated parse caches so an unchanged manifest is never re-read per poll.
+_watch_transcript_cache: tuple[float, dict[str, str]] = (-1.0, {})
+_watch_scan_cache: tuple[float, dict[str, str]] = (-1.0, {})
 _watch_lock = threading.Lock()
 _watch_thread: threading.Thread | None = None
 _watch_stop = threading.Event()  # tests only; production never sets it
@@ -143,6 +152,9 @@ def api_catalog() -> Any:
             # Where a run's artifacts land — surfaced in the run panel so the
             # user knows where to find their clips/reels/viewers.
             "outputDir": str(utils.get_effective_output_dir()),
+            # Auto-run trigger types for the toolbar picker (no duplicated
+            # Python↔JS constants; workflows.TRIGGER_TYPES is the source).
+            "triggerTypes": workflows.TRIGGER_TYPES,
         },
     )
 
@@ -168,7 +180,9 @@ def api_blueprints_create() -> Any:
         "nodes": data.get("nodes", []),
         "edges": data.get("edges", []),
         "viewport": data.get("viewport", {"x": 0, "y": 0, "zoom": 1}),
-        "trigger": None,  # reserved for the deferred auto-launch phase
+        # Auto-run binding: null when never armed, else {"type": <TRIGGER_TYPES
+        # id>, "enabled": bool} — see api_blueprint_trigger.
+        "trigger": None,
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     with _manifest_lock:
@@ -210,17 +224,23 @@ def api_blueprints_delete(bp_id: str) -> Any:
 
 @workflows_bp.route("/api/blueprints/<bp_id>/trigger", methods=["PUT"])
 def api_blueprint_trigger(bp_id: str) -> Any:
-    """Arm/disarm the watch-dir auto-run trigger on a blueprint (P6).
+    """Arm/disarm an auto-run trigger on a blueprint (P6 + chaining).
 
-    A *single* blueprint may be armed at a time: arming one disables the watch-dir
-    trigger on every other (the dropbox-style "this graph runs automatically"
-    binding). Kept on its own endpoint so the debounced canvas autosave (the
-    generic ``PUT`` above, which never sends ``trigger``) can't clobber the armed
-    state. Arming requires a runnable graph — a passing DAG check and at least one
-    ``video_source`` node to bind the just-arrived participant onto.
+    ``type`` picks the trigger source: ``new_video`` (the watch-dir trigger),
+    ``transcript_complete``, or ``scan_event``. A *single* blueprint may be
+    armed **per trigger type**: arming one disables the same-type trigger on
+    every other, so a "new video → transcribe" pipeline and a "transcript done →
+    export" pipeline can chain. Kept on its own endpoint so the debounced canvas
+    autosave (the generic ``PUT`` above, which never sends ``trigger``) can't
+    clobber the armed state. Arming requires a runnable graph — a passing DAG
+    check and at least one ``video_source`` node to bind the firing participant
+    onto (uniform across trigger types).
     """
     data = request.get_json(silent=True) or {}
     enabled = bool(data.get("enabled"))
+    trigger_type = str(data.get("type") or "new_video")
+    if trigger_type not in workflows.TRIGGER_TYPE_IDS:
+        return err("Unknown trigger type")
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
         target = next((b for b in blueprints if b.get("id") == bp_id), None)
@@ -235,26 +255,35 @@ def api_blueprint_trigger(bp_id: str) -> Any:
                 return err("Add a Video Source node before arming auto-run")
             for b in blueprints:
                 if b is target:
-                    b["trigger"] = {"type": "watch_dir", "enabled": True}
+                    b["trigger"] = {"type": trigger_type, "enabled": True}
                 else:
-                    b["trigger"] = _disarmed_trigger(b.get("trigger"))
+                    b["trigger"] = _disarmed_trigger(b.get("trigger"), trigger_type)
         else:
-            target["trigger"] = {"type": "watch_dir", "enabled": False}
+            # Disarm whatever is currently bound on this blueprint (the client
+            # may not know its type); fall back to the requested type.
+            current = target.get("trigger")
+            off_type = (
+                str(current.get("type"))
+                if isinstance(current, dict) and current.get("type")
+                else trigger_type
+            )
+            target["trigger"] = {"type": off_type, "enabled": False}
         _persist_locked()
         result = copy.deepcopy(target)
-    # Re-baseline the seen-set when arming so the current backlog never retro-fires.
-    # The poll no longer maintains the seen-set while nothing is armed (it skips all
-    # work then), so this arm-time re-seed is what upholds the no-retro-fire promise.
+    # Re-baseline when arming so the current backlog (present videos, already-
+    # finished transcripts/scans) never retro-fires. The poll doesn't maintain
+    # baselines while nothing is armed (it skips all work then), so this
+    # arm-time re-seed is what upholds the no-retro-fire promise.
     if enabled:
         _seed_watch_seen()
     return ok(blueprint=result)
 
 
-def _disarmed_trigger(trigger: Any) -> Any:
-    """Force a watch-dir trigger off; leave any other trigger kind untouched."""
-    if isinstance(trigger, dict) and trigger.get("type") == "watch_dir":
-        return {"type": "watch_dir", "enabled": False}
-    return trigger  # room for future trigger types (transcript_complete, …)
+def _disarmed_trigger(trigger: Any, trigger_type: str) -> Any:
+    """Force a same-type trigger off; leave any other trigger type untouched."""
+    if isinstance(trigger, dict) and trigger.get("type") == trigger_type:
+        return {"type": trigger_type, "enabled": False}
+    return trigger
 
 
 # ---- Stash CRUD (M5: save/instantiate sub-graphs) ----
@@ -472,14 +501,18 @@ def _launch_run(
     blueprint: dict[str, Any],
     participant: str = "",
     triggered: bool = False,
+    trigger_type: str = "",
     target_node_id: str = "",
+    seed_results: dict[str, dict[str, Any]] | None = None,
+    seed_note: str = "",
 ) -> dict[str, Any]:
     """Create + spawn one run on a daemon thread; return the initial snapshot.
 
     Shared by ``POST /api/runs`` and the watch-dir trigger. The blueprint is
     assumed already validated (``topo_order``) and, for a triggered run, already
     participant-bound by the caller. ``target_node_id`` (P11) restricts the run to
-    that node and its ancestors.
+    that node and its ancestors. ``seed_results`` (resume) pre-completes nodes
+    whose output was reloaded from a prior run's sidecars.
     """
     run_id = "run_" + uuid.uuid4().hex[:8]
     cancel_event = threading.Event()
@@ -491,7 +524,10 @@ def _launch_run(
         on_update=lambda: _notify_run_clients(run_id),
         participant=participant,
         triggered=triggered,
+        trigger_type=trigger_type,
         target_node_id=target_node_id,
+        seed_results=seed_results,
+        seed_note=seed_note,
     )
     with _runs_lock:
         _runs[run_id] = runner
@@ -538,7 +574,60 @@ def api_run_create() -> Any:
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
         return err("Unknown target node")
-    return ok(run=_launch_run(blueprint, target_node_id=target))
+
+    # Optional resume: reload the prior run's completed-node sidecars as seeds
+    # and execute only what failed/changed (plus everything downstream of it).
+    # Resumes against the CURRENT blueprint — same semantics as Re-run; an
+    # edited graph simply seeds fewer nodes (compute_resume_plan invalidates
+    # changed/missing nodes). Sidecars are loaded into memory here, so a
+    # concurrent history-trim pruning the prior run's dir mid-flight is
+    # harmless.
+    participant = ""
+    seed_results: dict[str, dict[str, Any]] | None = None
+    seed_note = ""
+    resume_from = str(data.get("resumeFromRunId") or "")
+    if resume_from:
+        prior = _run_snapshot(resume_from)
+        if prior is None:
+            return err("Run to resume not found", 404)
+        if prior.get("status") in (
+            workflows.RUN_STATUS_QUEUED,
+            workflows.RUN_STATUS_RUNNING,
+        ):
+            return err("Run is still in progress")
+        # A batch child / triggered run keeps its participant binding.
+        participant = str(prior.get("participant") or "")
+        if participant:
+            blueprint = workflows.bind_participant(blueprint, participant)
+        results_dir = workflows.run_results_dir(
+            utils.get_effective_output_dir(), resume_from
+        )
+
+        def _load_sidecar(node_id: str) -> dict[str, Any] | None:
+            if node_id != os.path.basename(node_id) or node_id in (".", ".."):
+                return None
+            try:
+                loaded = json.loads(
+                    (results_dir / f"{node_id}.json").read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                return None
+            return loaded if isinstance(loaded, dict) else None
+
+        seed_results, _plan_notes = workflows.compute_resume_plan(
+            blueprint, prior.get("nodeStates") or {}, _load_sidecar
+        )
+        seed_note = f"Reused from run {resume_from}"
+
+    return ok(
+        run=_launch_run(
+            blueprint,
+            participant=participant,
+            target_node_id=target,
+            seed_results=seed_results,
+            seed_note=seed_note,
+        )
+    )
 
 
 def _merged_runs() -> dict[str, dict[str, Any]]:
@@ -594,7 +683,12 @@ def api_run_node_result(run_id: str, node_id: str) -> Any:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return err("No result for node", 404)
-    return ok(result=payload)
+    # Sidecars persist every JSON-safe port for resume; the inspector renders
+    # only the inspectable subset (and never the __type__ marker).
+    view = workflows.inspectable_sidecar_view(payload)
+    if not view:
+        return err("No result for node", 404)
+    return ok(result=view)
 
 
 @workflows_bp.route("/api/runs/<run_id>/cancel", methods=["POST"])
@@ -728,13 +822,70 @@ def _precompute_shared_nodes(
     return seeded
 
 
-def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
-    """Coordinator thread: run the blueprint once per participant, sequentially.
+def _run_batch_child(
+    run_id: str,
+    participant: str,
+    batch_id: str,
+    blueprint: dict[str, Any],
+    seed_results: dict[str, dict[str, Any]],
+    batch_cancel: threading.Event,
+) -> None:
+    """One batch child, start to finish (register → run → persist → evict).
 
-    Continue-on-error is mandatory — one bad participant must not sink the batch.
-    A cancel signals the in-flight child (via its runner) and short-circuits every
-    remaining child to ``cancelled``. Each child runner is evicted from ``_runs``
-    once persisted (its summary lives in the manifest thereafter).
+    Self-contained so the coordinator can run children sequentially or in a
+    thread pool: every shared-state touch is already behind ``_runs_lock`` /
+    ``_manifest_lock``, per-run sidecar dirs are keyed by run id, and
+    ``files.get_unique_filename`` reserves output paths atomically.
+    """
+    child_cancel = threading.Event()
+    if batch_cancel.is_set():
+        child_cancel.set()  # short-circuits run() to all-skipped + cancelled
+    ctx = _build_node_context(child_cancel)
+    child_bp = workflows.bind_participant(blueprint, participant)
+
+    def _on_child_update() -> None:
+        _notify_run_clients(run_id)
+        _notify_batch_clients(batch_id)
+
+    runner = workflows.WorkflowRunner(
+        run_id,
+        child_bp,
+        ctx,
+        on_update=_on_child_update,
+        participant=participant,
+        batch_id=batch_id,
+        # Every child gets its own deep copy: downstream executors mutate
+        # seeded values in place (files.prepare_clip adds `times` to sheet
+        # records), so one shared dict would cross-contaminate siblings —
+        # quasi-benign sequentially, an outright race with workers > 1.
+        seed_results=copy.deepcopy(seed_results),
+    )
+    with _runs_lock:
+        _runs[run_id] = runner
+    # A cancel that lands between the check above and run() still reaches this
+    # child: the cancel endpoint cancels every live runner tagged to the batch.
+    try:
+        runner.run()
+    except Exception as exc:  # belt-and-suspenders; run() catches per node
+        utils.error_print(f"workflow batch child {participant} crashed: {exc}")
+    _persist_run(runner.snapshot())
+    _notify_run_clients(run_id)
+    _notify_batch_clients(batch_id)
+    with _runs_lock:
+        _runs.pop(run_id, None)
+
+
+def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
+    """Coordinator thread: run the blueprint once per participant.
+
+    Sequential by default; ``config.WORKFLOWS_BATCH_WORKERS`` > 1 opts into a
+    thread pool over the children (clamped to 4 — heavy nodes serialize on
+    Whisper/ffmpeg/OCR anyway, so wide pools mostly add memory pressure).
+    Continue-on-error is mandatory — one bad participant must not sink the
+    batch. A cancel signals the in-flight children (via their runners) and
+    short-circuits every not-yet-started child to ``cancelled``. Each child
+    runner is evicted from ``_runs`` once persisted (its summary lives in the
+    manifest thereafter).
     """
     with _batches_lock:
         record = _batches.get(batch_id)
@@ -749,39 +900,31 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
         blueprint, _build_node_context(threading.Event())
     )
 
-    for run_id, participant in plan:
-        child_cancel = threading.Event()
-        if cancel_event.is_set():
-            child_cancel.set()  # short-circuits run() to all-skipped + cancelled
-        ctx = _build_node_context(child_cancel)
-        child_bp = workflows.bind_participant(blueprint, participant)
-
-        def _on_child_update(rid: str = run_id) -> None:
-            _notify_run_clients(rid)
-            _notify_batch_clients(batch_id)
-
-        runner = workflows.WorkflowRunner(
-            run_id,
-            child_bp,
-            ctx,
-            on_update=_on_child_update,
-            participant=participant,
-            batch_id=batch_id,
-            seed_results=seed_results,
-        )
-        with _runs_lock:
-            _runs[run_id] = runner
-        # A cancel that lands between the check above and run() still reaches this
-        # child: the cancel endpoint cancels every live runner tagged to the batch.
-        try:
-            runner.run()
-        except Exception as exc:  # belt-and-suspenders; run() catches per node
-            utils.error_print(f"workflow batch child {participant} crashed: {exc}")
-        _persist_run(runner.snapshot())
-        _notify_run_clients(run_id)
-        _notify_batch_clients(batch_id)
-        with _runs_lock:
-            _runs.pop(run_id, None)
+    workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
+    if workers == 1 or len(plan) <= 1:
+        for run_id, participant in plan:
+            _run_batch_child(
+                run_id, participant, batch_id, blueprint, seed_results, cancel_event
+            )
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(plan)),
+            thread_name_prefix=f"workflow-{batch_id}",
+        ) as pool:
+            futures = [
+                pool.submit(
+                    _run_batch_child,
+                    run_id,
+                    participant,
+                    batch_id,
+                    blueprint,
+                    seed_results,
+                    cancel_event,
+                )
+                for run_id, participant in plan
+            ]
+            for future in futures:
+                future.result()  # child bodies swallow their own errors
 
     with _batches_lock:
         _batches.pop(batch_id, None)
@@ -902,27 +1045,93 @@ def api_batch_stream(batch_id: str) -> Response:
 # ---- Watch-dir trigger watcher (P6) ----
 
 
-def _trigger_enabled(trigger: Any) -> bool:
-    """True if ``trigger`` is an armed watch-dir binding."""
+def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
+    """True if ``trigger`` is an armed binding of the given type."""
     return (
         isinstance(trigger, dict)
-        and trigger.get("type") == "watch_dir"
+        and trigger.get("type") == trigger_type
         and bool(trigger.get("enabled"))
     )
 
 
-def _seed_watch_seen() -> None:
-    """Record every currently-present participant so they never auto-fire.
+def _manifest_mtime(filename: str) -> float:
+    """The manifest file's mtime in the output dir, or 0.0 when absent."""
+    try:
+        return os.stat(Path(utils.get_effective_output_dir()) / filename).st_mtime
+    except OSError:
+        return 0.0
 
-    Only pids that already resolve to a video at startup are seeded; the watcher
-    fires only for pids that appear *after* this call.
+
+def _transcript_markers() -> dict[str, str]:
+    """``{pid: transcribed_at}`` for every transcribed participant.
+
+    mtime-gated: the (potentially large, all-segments) transcripts manifest is
+    re-parsed only when its file actually changed — a handful of times per
+    session, not once per poll tick.
     """
+    global _watch_transcript_cache  # noqa: PLW0603
+    mtime = _manifest_mtime(config.TRANSCRIPTS_MANIFEST_FILENAME)
+    if mtime == _watch_transcript_cache[0]:
+        return _watch_transcript_cache[1]
+    markers: dict[str, str] = {}
+    if mtime:
+        manifest = (
+            utils.load_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME, default={})
+            or {}
+        )
+        source = manifest.get("source_transcripts", {}) or {}
+        if isinstance(source, dict):
+            for pid, entry in source.items():
+                if isinstance(entry, dict) and entry.get("transcribed_at"):
+                    markers[str(pid)] = str(entry["transcribed_at"])
+    _watch_transcript_cache = (mtime, markers)
+    return markers
+
+
+def _scan_markers() -> dict[str, str]:
+    """``{task_id: participant}`` for every completed Screenspace task (mtime-gated)."""
+    global _watch_scan_cache  # noqa: PLW0603
+    mtime = _manifest_mtime(config.SCREENSPACE_MANIFEST_FILENAME)
+    if mtime == _watch_scan_cache[0]:
+        return _watch_scan_cache[1]
+    markers: dict[str, str] = {}
+    if mtime:
+        manifest = (
+            utils.load_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME, default={})
+            or {}
+        )
+        for task in manifest.get("tasks", []) or []:
+            if (
+                isinstance(task, dict)
+                and task.get("status") == "completed"
+                and task.get("id")
+            ):
+                markers[str(task["id"])] = str(task.get("participant", "") or "")
+    _watch_scan_cache = (mtime, markers)
+    return markers
+
+
+def _seed_watch_seen() -> None:
+    """Baseline every trigger source so the existing backlog never auto-fires.
+
+    Present videos, already-transcribed participants, and already-completed
+    scans are all recorded; the watcher fires only for arrivals/completions
+    that happen *after* this call.
+    """
+    global _watch_transcript_cache, _watch_scan_cache  # noqa: PLW0603
     with _watch_lock:
         _watch_seen.clear()
         _watch_pending.clear()
         for entry in utils.discover_participant_videos():
             if entry.get("has_video"):
                 _watch_seen.add(str(entry["id"]))
+        # Force a fresh parse (the cached mtime may predate this call).
+        _watch_transcript_cache = (-1.0, {})
+        _watch_scan_cache = (-1.0, {})
+        _watch_transcript_baseline.clear()
+        _watch_transcript_baseline.update(_transcript_markers())
+        _watch_scan_seen.clear()
+        _watch_scan_seen.update(_scan_markers())
 
 
 def _stat_first_video(video_paths: list[str]) -> tuple[int, float] | None:
@@ -936,49 +1145,47 @@ def _stat_first_video(video_paths: list[str]) -> tuple[int, float] | None:
     return (st.st_size, st.st_mtime)
 
 
-def _armed_blueprint_locked() -> dict[str, Any] | None:
-    """A deepcopy of the single armed blueprint, or ``None``. Caller holds lock.
+def _armed_blueprint_locked(trigger_type: str) -> dict[str, Any] | None:
+    """A deepcopy of the single armed blueprint of this type, or ``None``.
+    Caller holds lock.
 
-    Single-active is enforced on write (``api_blueprint_trigger``); this still
-    defends by returning ``None`` when zero or (defensively) more than one are
-    armed, so an inconsistent manifest never fans out unexpectedly.
+    Single-active-per-type is enforced on write (``api_blueprint_trigger``);
+    this still defends by returning ``None`` when zero or (defensively) more
+    than one are armed, so an inconsistent manifest never fans out unexpectedly.
     """
     armed = [
-        b for b in _manifest.get("blueprints", []) if _trigger_enabled(b.get("trigger"))
+        b
+        for b in _manifest.get("blueprints", [])
+        if _trigger_enabled(b.get("trigger"), trigger_type)
     ]
     return copy.deepcopy(armed[0]) if len(armed) == 1 else None
 
 
-def _maybe_fire_trigger(participant: str) -> None:
-    """Auto-run the armed blueprint for one just-arrived participant."""
+def _maybe_fire_trigger(participant: str, trigger_type: str) -> None:
+    """Auto-run this type's armed blueprint for one arrival/completion."""
     with _manifest_lock:
-        blueprint = _armed_blueprint_locked()
+        blueprint = _armed_blueprint_locked(trigger_type)
     if blueprint is None:
-        return  # disarmed/ambiguous — pid is already marked seen, won't refire
+        return  # disarmed/ambiguous — the marker is already baselined, won't refire
     bound = workflows.bind_participant(blueprint, participant)
     try:
         workflows.topo_order(bound.get("nodes", []), bound.get("edges", []))
     except workflows.WorkflowCycleError:
         utils.warning_print(
-            f"watch-dir trigger: armed blueprint has a cycle; skipping {participant}"
+            f"auto-run trigger: armed blueprint has a cycle; skipping {participant}"
         )
         return
-    _launch_run(bound, participant=participant, triggered=True)
+    _launch_run(
+        bound, participant=participant, triggered=True, trigger_type=trigger_type
+    )
 
 
-def _watch_poll_once() -> None:
-    """One watcher tick: detect newly-arrived, stable participants and fire each.
+def _poll_new_videos() -> None:
+    """The original watch-dir tick: fire on newly-arrived, stable participants.
 
-    Skips all work (no glob, no stats) unless exactly one blueprint is armed — the
-    common case, even in Studio/Screenspace/Transcripts launches where this daemon
-    also runs. The no-retro-fire guarantee is upheld by re-seeding the seen-set when
-    a blueprint is armed (``api_blueprint_trigger``), not by maintaining it here. A
-    pid still fires only after it stats identically across two consecutive polls
+    A pid fires only after it stats identically across two consecutive polls
     (the partial-copy guard).
     """
-    with _manifest_lock:
-        if _armed_blueprint_locked() is None:
-            return  # nothing (or ambiguously >1) armed → don't even glob the dir
     entries = {
         str(e["id"]): e
         for e in utils.discover_participant_videos()
@@ -1004,7 +1211,61 @@ def _watch_poll_once() -> None:
             else:
                 _watch_pending[pid] = stat
     for pid in fire:
-        _maybe_fire_trigger(pid)
+        _maybe_fire_trigger(pid, "new_video")
+
+
+def _poll_transcript_completions() -> None:
+    """Fire once per (participant, transcribed_at) the baseline hasn't seen.
+
+    A re-transcription bumps ``transcribed_at`` and fires again — deliberate:
+    the chained graph should re-process the fresh transcript. Workflow-launched
+    Transcribe nodes never write the transcripts manifest, so a triggered graph
+    can't re-fire itself.
+    """
+    markers = _transcript_markers()
+    fire: list[str] = []
+    with _watch_lock:
+        for pid, stamp in markers.items():
+            if _watch_transcript_baseline.get(pid) != stamp:
+                _watch_transcript_baseline[pid] = stamp
+                fire.append(pid)
+    for pid in fire:
+        _maybe_fire_trigger(pid, "transcript_complete")
+
+
+def _poll_scan_completions() -> None:
+    """Fire once per newly-completed Screenspace task (keyed by task id)."""
+    markers = _scan_markers()
+    fire: list[str] = []
+    with _watch_lock:
+        for task_id, pid in markers.items():
+            if task_id not in _watch_scan_seen:
+                _watch_scan_seen.add(task_id)
+                if pid:
+                    fire.append(pid)
+    for pid in fire:
+        _maybe_fire_trigger(pid, "scan_event")
+
+
+def _watch_poll_once() -> None:
+    """One watcher tick: check each trigger type's source, but only while a
+    blueprint of that type is armed — with nothing armed the tick does no I/O
+    (no glob, no stat, no manifest parse), the common case even in Studio /
+    Screenspace / Transcripts launches where this daemon also runs. The
+    no-retro-fire guarantee is upheld by re-baselining on arm
+    (``api_blueprint_trigger``), not by maintaining baselines here.
+    """
+    with _manifest_lock:
+        armed = {
+            t["id"]: _armed_blueprint_locked(t["id"]) is not None
+            for t in workflows.TRIGGER_TYPES
+        }
+    if armed.get("new_video"):
+        _poll_new_videos()
+    if armed.get("transcript_complete"):
+        _poll_transcript_completions()
+    if armed.get("scan_event"):
+        _poll_scan_completions()
 
 
 def _watch_loop() -> None:

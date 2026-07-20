@@ -386,16 +386,21 @@ def test_lazy_node_results_and_rerun_present():
     assert ".wf-issue-warning" in css
 
 
-def test_watch_dir_trigger_toggle_and_badge():
-    """P6 watch-dir triggers: the toolbar toggle, its hub-owned PUT + single-active
-    mirror, the validate satellite re-gate, and the run-history triggered badge."""
+def test_auto_run_trigger_picker_and_badge():
+    """Auto-run triggers: the toolbar type-picker menu, its hub-owned PUT +
+    per-type single-active mirror, the validate satellite re-gate, and the
+    run-history triggered badge."""
     html = WORKFLOWS_HTML.read_text(encoding="utf-8")
     assert 'id="wfTriggerBtn"' in html
+    assert 'id="wfTriggerMenu"' in html
 
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
-    # Hub owns the toggle (touches state.blueprints + the dedicated trigger PUT).
+    # Hub owns the picker (touches state.blueprints + the dedicated trigger PUT);
+    # the type list flows from /api/catalog context, never a hardcoded JS list.
     assert "/trigger" in hub
-    assert "function toggleTrigger" in hub
+    assert "function setTrigger" in hub
+    assert "function rebuildTriggerMenu" in hub
+    assert "state.context.triggerTypes" in hub
     assert "WF.syncTriggerButton" in hub  # published for the validate satellite
     assert '"#wfTriggerBtn"' in hub  # gated alongside the other toolbar controls
 
@@ -486,8 +491,8 @@ def test_node_mute_toggle():
     assert "node.disabled = !node.disabled" in nodes
     assert "wf-node-muted" in nodes
     assert ".wf-node-muted" in css
-    # A muted node must not block Run.
-    assert "if (node.disabled) return { errors: [], warnings: [] }" in validate
+    # A muted node (or a sticky note) must not block Run.
+    assert 'if (node.disabled || node.type === "note")' in validate
 
 
 def test_validation_warns_on_node_with_no_inputs_wired():
@@ -609,3 +614,163 @@ def test_theme_toggle_icons_styled():
     # Page CSS must NOT re-declare the base block (it was dead code overridden
     # by topnav.css's higher-specificity rule).
     assert "#themeToggle {" not in WORKFLOWS_CSS.read_text(encoding="utf-8")
+
+
+# ---- Canvas navigation & QoL (W2) ----
+
+
+def test_space_hold_pan_mode():
+    src = _workflows_js()
+    assert '"workflows.panMode"' in src
+    assert "function setPanMode" in src
+    assert "_spaceHeld" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-canvas.pan-mode" in css
+
+
+def test_wheel_splits_pan_and_zoom():
+    # Plain wheel / two-finger scroll pans; ctrl (pinch) or meta wheel zooms.
+    src = _workflows_js()
+    assert "!e.ctrlKey && !e.metaKey" in src
+
+
+def test_viewport_saves_skip_undo_history():
+    src = _workflows_js()
+    assert "function scheduleViewportSave" in src
+    assert "WF.scheduleViewportSave = scheduleViewportSave" in src
+    # Pan/zoom call sites route through the viewport-only save.
+    assert "WF.scheduleViewportSave()" in src
+
+
+def test_snap_toggle_and_alignment_guides():
+    src = _workflows_js()
+    assert "function applySnap" in src
+    assert "function toggleSnap" in src
+    assert "WF.toggleSnap" in src
+    assert "clipgenWfSnap" in src
+    assert "wf-align-guide" in src
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfSnapBtn"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-align-guide" in css
+    assert ".wf-snap-icon" in css
+
+
+def test_select_all_and_nudge_hotkeys():
+    src = _workflows_js()
+    assert '"workflows.selectAll"' in src
+    assert "function selectAllNodes" in src
+    assert "function nudgeSelection" in src
+    assert '"workflows.nudge"' in src
+
+
+def test_zoom_level_indicator_resets_to_100():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfZoomLevel"' in html
+    src = _workflows_js()
+    assert "#wfZoomLevel" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-zoom-level" in css
+
+
+# ---- Dialog polish (W3) ----
+
+
+def test_no_native_prompt_or_confirm():
+    src = _workflows_js()
+    assert "window.prompt" not in src
+    assert "window.confirm" not in src
+
+
+def test_dialogs_use_blocking_modal_primitive():
+    src = _workflows_js()
+    assert "function openPromptDialog" in src
+    assert "function openConfirmDialog" in src
+    assert "WF.openPromptDialog" in src
+    assert "WF.openConfirmDialog" in src
+    assert "openBlockingModal(" in src
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-dialog-overlay" in css
+    assert ".wf-dialog-danger" in css
+
+
+def test_destructive_actions_confirm_first():
+    src = _workflows_js()
+    # Blueprint delete and stash delete route through the confirm dialog.
+    assert "Delete blueprint" in src
+    assert "Delete stash" in src
+
+
+# ---- Sticky notes (W4) ----
+
+
+def test_note_pseudo_node_renderer():
+    src = _workflows_js()
+    assert 'node.type === "note"' in src
+    assert "function renderNoteCard" in src
+    assert "function addNote" in src
+    assert "WF.addNote" in src
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfAddNote"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-node.wf-note" in css
+    assert ".wf-note-text" in css
+    assert ".wf-note-icon" in css
+
+
+def test_notes_skip_validation_and_auto_arrange():
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert 'node.type === "note"' in validate
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    # autoArrange leaves notes where the user put them.
+    assert 'n.type !== "note"' in canvas
+
+
+# ---- Resume-from-failure (W5) ----
+
+
+def test_resume_button_on_failed_runs():
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "wf-run-resume" in runs
+    assert "resumeFromRunId" in runs
+    # Resume is a single run even on a batch-fanout blueprint.
+    assert "!targetNodeId && !resumeFromRunId && blueprintWantsBatch()" in runs
+
+
+# ---- Run history browser + dry-run preview (W6) ----
+
+
+def test_run_history_scope_toggle():
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfRunScope"' in html
+    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
+    assert "function setRunScope" in runs
+    assert "function fetchAllRuns" in runs
+    assert "function fmtRelTime" in runs
+    assert "function buildHistoryRow" in runs
+    # Click-through handshake: openBlueprint + consume on refresh.
+    assert "pendingFocusRunId" in runs
+    assert "function consumePendingFocus" in runs
+    # The all-scope list renders from its own store, never state.runs.
+    assert "state.allRuns" in runs
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-run-scope" in css
+    assert ".wf-history-row" in css
+
+
+def test_dry_run_preview():
+    validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
+    assert "function computeWouldRun" in validate
+    assert "WF.showRunPreview" in validate
+    assert "WF.clearRunPreview" in validate
+    assert "wf-preview-run" in validate
+    hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
+    # Hover wiring lives on the split-button CONTAINER (a disabled button
+    # swallows mouse events).
+    assert '".wf-run-split"' in hub
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    assert 'id="wfPreviewChip"' in html
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    assert ".wf-node.wf-preview-run" in css
+    assert ".wf-node.wf-preview-skip" in css
+    assert ".wf-preview-chip" in css
