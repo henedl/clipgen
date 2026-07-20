@@ -44,7 +44,7 @@ var CLIPGEN_CONFIG = {
   ignoredTimestampTokens: ["x"],
   screenspaceOcrMinConfidence: 0.7,
   screenspaceMultitoolMaxOffset: 30,
-  screenspaceMaskFallbackTools: ["similarity", "inactivity", "boundary", "timelapse"],
+  screenspaceMaskFallbackTools: ["similarity", "inactivity", "boundary", "timelapse", "attention"],
   frictionCategories: [
     { key: "hesitation",      label: "Hesitation" },
     { key: "confusion",       label: "Confusion" },

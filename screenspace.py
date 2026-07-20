@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
-Eleven analysis tools (passed as 'type' when creating a task):
+Thirteen analysis tools (passed as 'type' when creating a task):
   multitool   – chain multiple tools; each subsequent step only checks frames that passed previous steps
   color       – frames where a region's average HSV color matches a target within tolerance
   change      – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
@@ -13,6 +13,8 @@ Eleven analysis tools (passed as 'type' when creating a task):
   flow        – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
   scene       – classify frames by similarity to user-captured reference scenes
   inactivity  – detect spans of near-duplicate frames via perceptual hashing (loading screens, frozen states)
+  boundary    – segment the full frame into scene periods via hash/fingerprint shifts
+  attention   – predict where visual attention goes via a saliency composite (full-frame heatmaps + shift events)
 
 Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
 a background thread → results are timestamps or artifact files → state persisted to
@@ -56,10 +58,15 @@ from screenspace_primitives import (
     color_matches,
     color_present,
     compare_scene_fingerprints,
+    compute_color_contrast,
+    compute_face_saliency,
     compute_frame_diff,
+    compute_motion_saliency,
     compute_optical_flow,
     compute_phash,
+    compute_saliency_map,
     compute_scene_fingerprint,
+    compute_spectral_residual,
     denormalize_region,
     extract_region,
     filter_matches_by_region_mask,
@@ -70,6 +77,8 @@ from screenspace_primitives import (
     region_masker,
     regions_are_similar,
     resolve_region_request,
+    saliency_grid_from_map,
+    saliency_peak,
     ssim_diff_map,
 )
 from screenspace_ocr import (
