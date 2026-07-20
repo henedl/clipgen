@@ -104,6 +104,7 @@
     { id: "screenspace.togglePanel",   section: "screenspace", group: "Panels", label: "Collapse / expand bottom panel", combos: ["V"] },
     { id: "screenspace.cycleToolPrev", section: "screenspace", group: "Tools", label: "Previous tool tab", combos: ["Z"] },
     { id: "screenspace.cycleToolNext", section: "screenspace", group: "Tools", label: "Next tool tab", combos: ["X"] },
+    { id: "screenspace.selectTool",    section: "screenspace", group: "Tools", label: "Select tool / category by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
 
     { id: "transcripts.mark",         section: "transcripts", group: "Marks", label: "Mark active segment", combos: ["M"] },
     { id: "transcripts.nextMarked",   section: "transcripts", group: "Marks", label: "Next marked segment", combos: ["N"] },

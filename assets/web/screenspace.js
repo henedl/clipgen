@@ -27,7 +27,7 @@
   var SS_TASK_ICON_TYPES = {
     multitool: 1, color: 1, change: 1, similarity: 1, text: 1,
     numbers: 1, template: 1, flow: 1, scene: 1, inactivity: 1,
-    boundary: 1,
+    boundary: 1, timelapse: 1,
   };
 
   // Build a span that renders the task icon via mask-image (see .ss-task-icon
@@ -224,6 +224,9 @@
     outMarker: null,
     restoreMarkersOnEdit: true,
     showConfidenceHistogram: false,
+    // Grouped category tool nav (SCREENSPACE_GROUPED_TOOL_NAV). Init true to
+    // match the Python default before /api/settings resolves.
+    groupedToolNav: true,
     activeWorkflow: "color",
     referenceTimestamp: null,
     sceneReferences: [],
@@ -2333,7 +2336,13 @@
   // ---- Workflow tabs + params ----
 
   function initWorkflowTabs() {
-    qsa(".wf-tab").forEach(function (tab) {
+    qsa(".wf-tab").forEach(function (tab, i) {
+      // Alt-hold hint: tabs 1–9 map to the selectTool digit combos (the flat
+      // row's digit shortcuts). Tabs 10+ have no digit (only 9 combos exist).
+      if (i < 9) {
+        tab.setAttribute("data-hotkey", "screenspace.selectTool");
+        tab.setAttribute("data-hotkey-combo", String(i));
+      }
       tab.addEventListener("click", function () {
         hideToolInfoTooltip(true);
         state.activeWorkflow = tab.dataset.type;
@@ -2342,6 +2351,10 @@
         tab.classList.add("active");
         renderWorkflowParams();
         updateRunButton();
+        // Every selection path (tab click, category-delegated click, cycleTool,
+        // session restore) funnels through here, so this keeps the grouped
+        // category nav's active chip in sync however the tool was chosen.
+        syncToolCategoryNav();
       });
     });
     // Tool info icon in action row
@@ -2366,10 +2379,20 @@
     renderWorkflowParams();
   }
 
-  // Cycle the active tool tab by DOM order (the tool-cycle hotkeys). Reuses the
-  // tab's own click handler so the persist + param re-render + Run-button
-  // refresh all run through one path.
+  // Cycle the active tool (the Z/X hotkeys). Layout-aware: in grouped mode it
+  // walks the category order (left-to-right, tool-by-tool within a category) so
+  // the traversal matches what the user sees; in flat-tab mode it walks the tab
+  // DOM order. Both delegate to selectWorkflowType/.click() so the persist +
+  // param re-render + Run-button refresh run through the one existing path.
   function cycleTool(delta) {
+    if (state.groupedToolNav) {
+      var order = [];
+      TOOL_CATEGORIES.forEach(function (c) { order.push.apply(order, c.tools); });
+      var idx = order.indexOf(state.activeWorkflow);
+      if (idx === -1) idx = 0;
+      selectWorkflowType(order[(idx + delta + order.length) % order.length]);
+      return;
+    }
     var tabs = qsa(".wf-tab");
     if (!tabs.length) return;
     var cur = 0;
@@ -2377,6 +2400,249 @@
       if (tabs[i].classList.contains("active")) { cur = i; break; }
     }
     tabs[(cur + delta + tabs.length) % tabs.length].click();
+  }
+
+  // ---- Grouped category tool nav (SCREENSPACE_GROUPED_TOOL_NAV) ----
+  // An optional presentational layer over the flat .wf-tab row. The tabs stay
+  // in the DOM (hidden via CSS) in both modes; a category selection just
+  // delegates to the matching tab's .click(), so state, persistence, param
+  // rendering, cycleTool, and restore all run through the one existing path.
+  // Ordered source of truth for grouping + order. Every category renders as a
+  // dropdown (even single-tool ones, for a uniform look). Multitool is the lone
+  // standalone chip — a direct-select button (no dropdown), alwaysIcon so its
+  // icon shows even when unselected, since it is unlike the detector categories.
+  var TOOL_CATEGORIES = [
+    { label: "Multitool", tools: ["multitool"], alwaysIcon: true, standalone: true },
+    { label: "Difference", tools: ["change", "similarity", "inactivity"] },
+    { label: "Detection", tools: ["template", "color", "text", "numbers"] },
+    { label: "Classification", tools: ["scene", "boundary"] },
+    { label: "Attention", tools: ["flow"] },
+    { label: "Utility", tools: ["timelapse"] },
+  ];
+
+  // Heroicon basenames per tool — mirrors the .ss-task-icon--<type> mask map in
+  // screenspace.css. Used for the command-palette tool-switch entries (the chip
+  // glyphs use the CSS masks via buildTypeIcon, not these names).
+  var TOOL_ICON_NAMES = {
+    multitool: "wrench-screwdriver", color: "eye-dropper", change: "bolt",
+    similarity: "photo", text: "language", numbers: "hashtag",
+    template: "viewfinder-circle", flow: "arrows-right-left", scene: "squares-2x2",
+    inactivity: "pause-circle", boundary: "flag", timelapse: "forward",
+  };
+
+  var _catNavBuilt = false;
+  var _catOutsideBound = false;
+
+  function _toolLabel(type) {
+    return type ? type.charAt(0).toUpperCase() + type.slice(1) : "";
+  }
+
+  // Alt-hold digit hints for the category chips. While a dropdown is open the
+  // digits route into that menu's items (see handleToolDigit), so the chip
+  // hints are removed and the open menu's items carry the 1..N hints instead
+  // (items hold data-hotkey from build time and only render while visible).
+  function _setCatChipHints(enabled) {
+    qsa("#workflowCategories .ss-cat-chip").forEach(function (chip, i) {
+      var trig = chip.querySelector(".ss-cat-trigger");
+      if (!trig) return;
+      if (enabled && i < 9) {
+        trig.setAttribute("data-hotkey", "screenspace.selectTool");
+        trig.setAttribute("data-hotkey-combo", String(i));
+      } else {
+        trig.removeAttribute("data-hotkey");
+      }
+    });
+  }
+
+  function _refreshCatHints() {
+    _setCatChipHints(!qs("#workflowCategories .ss-cat-chip.open"));
+  }
+
+  function closeCatMenus(except) {
+    qsa("#workflowCategories .ss-cat-chip.open").forEach(function (chip) {
+      if (chip !== except) {
+        chip.classList.remove("open");
+        var trig = chip.querySelector(".ss-cat-trigger");
+        if (trig) trig.setAttribute("aria-expanded", "false");
+      }
+    });
+    _refreshCatHints();
+  }
+
+  function openCatMenu(chip) {
+    closeCatMenus(chip);
+    chip.classList.add("open");
+    var trig = chip.querySelector(".ss-cat-trigger");
+    if (trig) trig.setAttribute("aria-expanded", "true");
+    _refreshCatHints();
+  }
+
+  function toggleCatMenu(chip) {
+    if (chip.classList.contains("open")) closeCatMenus(null);
+    else openCatMenu(chip);
+  }
+
+  // Delegate to the hidden flat tab so the whole existing selection path runs
+  // (state.activeWorkflow, persistence, renderWorkflowParams, updateRunButton,
+  // and the syncToolCategoryNav() call at the tail of the tab handler).
+  function selectWorkflowType(type) {
+    var tab = qs('.wf-tab[data-type="' + type + '"]');
+    if (tab) tab.click();
+  }
+
+  function buildToolCategoryNav() {
+    var nav = qs("#workflowCategories");
+    if (!nav) return;
+    nav.innerHTML = "";
+    var frag = document.createDocumentFragment();
+    TOOL_CATEGORIES.forEach(function (cat) {
+      // Every category is a dropdown (uniform look); only the standalone
+      // Multitool is a direct-select chip.
+      var isDropdown = !cat.standalone;
+      // Wrapper (div) + trigger (button) + sibling menu — menu items must NOT
+      // nest inside a <button> (invalid HTML). Mirrors #exportEventsWrap.
+      var chip = el("div", "ss-cat-chip");
+      chip.setAttribute("data-cat", cat.label);
+      chip.setAttribute("data-tools", cat.tools.join(","));
+      if (cat.alwaysIcon) chip.setAttribute("data-always-icon", "");
+      var trigger = el("button", "ss-cat-trigger");
+      trigger.type = "button";
+      trigger.appendChild(el("span", "ss-cat-glyph"));
+      trigger.appendChild(el("span", "ss-cat-text"));
+      if (isDropdown) {
+        trigger.setAttribute("aria-haspopup", "menu");
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.appendChild(el("span", "ss-cat-chevron"));
+        trigger.addEventListener("click", function (e) {
+          e.stopPropagation();
+          toggleCatMenu(chip);
+        });
+        chip.appendChild(trigger);
+        var menu = el("div", "ss-cat-menu"); // visibility driven by chip.open
+        menu.setAttribute("role", "menu");
+        cat.tools.forEach(function (type, ti) {
+          var item = el("button", "ss-cat-item");
+          item.type = "button";
+          item.setAttribute("data-type", type);
+          item.setAttribute("role", "menuitem");
+          // Alt-hold hint: while the dropdown is open, digit ti+1 selects this
+          // item. Only rendered when the menu is visible (open chip).
+          if (ti < 9) {
+            item.setAttribute("data-hotkey", "screenspace.selectTool");
+            item.setAttribute("data-hotkey-combo", String(ti));
+          }
+          var icon = buildTypeIcon(type);
+          if (icon) item.appendChild(icon);
+          item.appendChild(el("span", "ss-cat-item-label", _toolLabel(type)));
+          item.addEventListener("click", function (e) {
+            e.stopPropagation();
+            closeCatMenus(null);
+            selectWorkflowType(type);
+          });
+          menu.appendChild(item);
+        });
+        chip.appendChild(menu);
+      } else {
+        // Direct-select chip (single-tool category or standalone Multitool).
+        trigger.addEventListener("click", function (e) {
+          e.stopPropagation();
+          closeCatMenus(null);
+          selectWorkflowType(cat.tools[0]);
+        });
+        chip.appendChild(trigger);
+      }
+      frag.appendChild(chip);
+    });
+    nav.appendChild(frag);
+    if (!_catOutsideBound) {
+      document.addEventListener("click", function () { closeCatMenus(null); });
+      _catOutsideBound = true;
+    }
+    syncToolCategoryNav();
+    _refreshCatHints();
+  }
+
+  // Reflect state.activeWorkflow in the category chips: the owning segment gets
+  // the solid tool-color fill (via data-active-type) and shows just the active
+  // tool's icon + name (the category name is dropped to keep chips compact and
+  // equally sized). Resting chips show the category name; the alwaysIcon chip
+  // (Multitool) keeps its icon even when resting.
+  function syncToolCategoryNav() {
+    var nav = qs("#workflowCategories");
+    if (!nav) return;
+    var active = state.activeWorkflow;
+    qsa("#workflowCategories .ss-cat-chip").forEach(function (chip) {
+      var tools = (chip.getAttribute("data-tools") || "").split(",");
+      var cat = chip.getAttribute("data-cat") || "";
+      var alwaysIcon = chip.hasAttribute("data-always-icon");
+      var isActive = tools.indexOf(active) !== -1;
+      var glyph = chip.querySelector(".ss-cat-glyph");
+      var text = chip.querySelector(".ss-cat-text");
+      chip.classList.toggle("active", isActive);
+      // Glyph: the active tool's icon when active; the (single) tool's icon on
+      // an alwaysIcon resting chip; empty otherwise.
+      var glyphType = isActive ? active : (alwaysIcon ? tools[0] : null);
+      if (glyph) {
+        glyph.innerHTML = "";
+        if (glyphType) {
+          var icon = buildTypeIcon(glyphType);
+          if (icon) glyph.appendChild(icon);
+        }
+      }
+      if (isActive) {
+        chip.setAttribute("data-active-type", active);
+        if (text) text.textContent = _toolLabel(active);
+      } else {
+        chip.removeAttribute("data-active-type");
+        if (text) text.textContent = cat;
+      }
+      chip.querySelectorAll(".ss-cat-item").forEach(function (item) {
+        item.classList.toggle("active", isActive && item.getAttribute("data-type") === active);
+      });
+    });
+  }
+
+  // Numeral hotkey (1–9) tool selection — ISO-friendly, works in both modes.
+  // Old tab mode: digit N selects the Nth tool tab. Grouped mode: digit N
+  // selects the Nth segment; a dropdown category opens and the next digit
+  // selects the Nth tool within it (hotkey → numeral); the standalone Multitool
+  // selects directly.
+  function handleToolDigit(n) {
+    if (!n || n < 1) return;
+    if (!state.groupedToolNav) {
+      var tabs = qsa(".wf-tab");
+      if (tabs[n - 1]) tabs[n - 1].click();
+      return;
+    }
+    var openChip = qs("#workflowCategories .ss-cat-chip.open");
+    if (openChip) {
+      var items = openChip.querySelectorAll(".ss-cat-item");
+      if (items[n - 1]) items[n - 1].click(); // selects + closes
+      return;
+    }
+    var chips = qsa("#workflowCategories .ss-cat-chip");
+    var chip = chips[n - 1];
+    if (!chip) return;
+    if (chip.querySelector(".ss-cat-menu")) openCatMenu(chip);
+    else selectWorkflowType((chip.getAttribute("data-tools") || "").split(",")[0]);
+  }
+
+  // Switch between the grouped category nav and the flat tab row based on
+  // state.groupedToolNav (SCREENSPACE_GROUPED_TOOL_NAV). Builds the category
+  // nav lazily on first enable.
+  function applyToolNavMode() {
+    var section = qs("#workflowSection");
+    if (!section) return;
+    var grouped = !!state.groupedToolNav;
+    if (grouped && !_catNavBuilt) {
+      buildToolCategoryNav();
+      _catNavBuilt = true;
+    }
+    section.classList.toggle("ss-grouped-tools", grouped);
+    var nav = qs("#workflowCategories");
+    if (nav) nav.setAttribute("aria-hidden", grouped ? "false" : "true");
+    if (grouped) syncToolCategoryNav();
+    else closeCatMenus(null);
   }
 
   function renderIntervalSlot(inputId, min, max, def, step) {
@@ -3498,12 +3764,22 @@
       { id: "screenspace.togglePanel", handler: function () { toggleBottomPanel(); } },
       { id: "screenspace.cycleToolPrev", handler: function () { cycleTool(-1); } },
       { id: "screenspace.cycleToolNext", handler: function () { cycleTool(1); } },
+      {
+        id: "screenspace.selectTool",
+        repeat: false,
+        handler: function (e, combo) { handleToolDigit(parseInt(combo, 10)); },
+      },
     ]);
 
     // Back-out cascade: an open run-picker dropdown first, then the active
     // pointer interaction, then the pending/active region, then the
     // region-name modal.
     window.ClipgenHotkeys.registerEscape(function () {
+      var openCat = qs("#workflowCategories .ss-cat-chip.open");
+      if (openCat) {
+        closeCatMenus(null);
+        return true;
+      }
       var openPicker = qs(".run-picker-panel:not(.hidden)");
       if (openPicker) {
         closeRunPicker();
@@ -3875,6 +4151,20 @@
           run: function () { toggleBottomPanel(); },
         },
       ];
+      // Switch-to-tool commands, one per analysis tool (grouped by category).
+      // run() delegates to selectWorkflowType so it works in both nav modes.
+      TOOL_CATEGORIES.forEach(function (cat) {
+        cat.tools.forEach(function (type) {
+          cmds.push({
+            id: "screenspace:tool-" + type,
+            title: "Switch to " + _toolLabel(type) + " tool",
+            icon: TOOL_ICON_NAMES[type] || "cube",
+            keywords: "tool detector select analysis " + cat.label.toLowerCase() + " " + type,
+            section: "Tools",
+            run: function () { selectWorkflowType(type); },
+          });
+        });
+      });
       // "Jump to … in Screenspace" = stays here and selects in place; the
       // palette's built-in provider adds the cross-page "Open … in <Page>".
       (state.participants || []).forEach(function (p) {
@@ -3920,6 +4210,9 @@
     if (markers !== undefined) state.restoreMarkersOnEdit = !!markers;
     var hist = pick("SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM");
     if (hist !== undefined) state.showConfidenceHistogram = !!hist;
+    var grouped = pick("SCREENSPACE_GROUPED_TOOL_NAV");
+    if (grouped !== undefined) state.groupedToolNav = !!grouped;
+    applyToolNavMode(); // switch tool nav mode (and re-sync the active chip)
   }
 
   function fetchScreenspaceSettings() {
@@ -3939,6 +4232,7 @@
     initRegionDrag();
     initTimeline();
     initWorkflowTabs();
+    applyToolNavMode(); // build/show the grouped nav immediately (default on)
     initModelView();
     initCalibration();
     initParamTooltips();
@@ -4134,6 +4428,9 @@
   SS.regionRefKey = regionRefKey;
   SS.regionRefLabel = regionRefLabel;
   SS.buildTypeIcon = buildTypeIcon;
+  // Grouped tool nav sync — the tasks satellite (restoreTaskToWorkflow) calls
+  // this late-bound after it moves the active .wf-tab manually.
+  SS.syncToolCategoryNav = syncToolCategoryNav;
   SS.iconSpan = iconSpan;
   SS.buildNormalizeControl = buildNormalizeControl;
   SS.buildColorModeControl = buildColorModeControl;
