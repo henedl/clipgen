@@ -66,6 +66,7 @@ body {
 .ss-task-icon--scene       { mask-image: url(icons/squares-2x2.svg);         -webkit-mask-image: url(icons/squares-2x2.svg); }
 .ss-task-icon--inactivity  { mask-image: url(icons/pause-circle.svg);        -webkit-mask-image: url(icons/pause-circle.svg); }
 .ss-task-icon--boundary    { mask-image: url(icons/flag.svg);                -webkit-mask-image: url(icons/flag.svg); }
+.ss-task-icon--attention   { mask-image: url(icons/eye.svg);                 -webkit-mask-image: url(icons/eye.svg); }
 /* timelapse/info/play have no task-queue entry but reuse this family for the workflow toolbar. */
 .ss-task-icon--timelapse   { mask-image: url(icons/forward.svg);             -webkit-mask-image: url(icons/forward.svg); }
 .ss-task-icon--info        { mask-image: url(icons/information-circle.svg);  -webkit-mask-image: url(icons/information-circle.svg); }
@@ -1291,6 +1292,7 @@ body[data-frontend="screenspace"] {
 .wf-tab[data-type="scene"]     { --wf-tab-hue: var(--color-task-scene); }
 .wf-tab[data-type="inactivity"]{ --wf-tab-hue: var(--color-task-inactivity); }
 .wf-tab[data-type="boundary"]  { --wf-tab-hue: var(--color-task-boundary); }
+.wf-tab[data-type="attention"] { --wf-tab-hue: var(--color-task-attention); }
 
 .wf-tab[data-type="multitool"]:hover,
 .wf-tab[data-type="multitool"].active {
@@ -1362,6 +1364,12 @@ body[data-frontend="screenspace"] {
 .wf-tab[data-type="boundary"].active {
   color: var(--color-task-boundary);
   border-bottom-color: var(--color-task-boundary);
+}
+
+.wf-tab[data-type="attention"]:hover,
+.wf-tab[data-type="attention"].active {
+  color: var(--color-task-attention);
+  border-bottom-color: var(--color-task-attention);
 }
 
 /* ── Grouped category tool nav (SCREENSPACE_GROUPED_TOOL_NAV) ─────────────
@@ -1489,6 +1497,7 @@ body[data-frontend="screenspace"] {
 .ss-cat-chip[data-active-type="scene"]      { --cat-fill: var(--color-task-scene); }
 .ss-cat-chip[data-active-type="inactivity"] { --cat-fill: var(--color-task-inactivity); }
 .ss-cat-chip[data-active-type="boundary"]   { --cat-fill: var(--color-task-boundary); }
+.ss-cat-chip[data-active-type="attention"]  { --cat-fill: var(--color-task-attention); }
 
 /* Light-theme task colors are darker (500/600-level): white ink reads better on
  * the fills, except the light yellow (numbers). Icons/chevron follow --cat-ink. */
@@ -1557,6 +1566,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 .ss-cat-item[data-type="scene"]      { --cat-item-hue: var(--color-task-scene); }
 .ss-cat-item[data-type="inactivity"] { --cat-item-hue: var(--color-task-inactivity); }
 .ss-cat-item[data-type="boundary"]   { --cat-item-hue: var(--color-task-boundary); }
+.ss-cat-item[data-type="attention"]  { --cat-item-hue: var(--color-task-attention); }
 
 #workflowBody {
   display: flex;

@@ -96,6 +96,7 @@ _VALID_TASK_TYPES = (
     "scene",
     "inactivity",
     "boundary",
+    "attention",
 )
 _VALID_STEP_TYPES = (
     "color",
@@ -1121,17 +1122,21 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 if mask_points:
                     region_coords["mask_points"] = mask_points
 
-    # Prev frame for tools that consume a temporal pair
+    # Prev frame for tools that consume a temporal pair. Attention's motion
+    # channel compares at its own (shorter) sampling interval by default.
     prev_frame = None
-    if tool in ("change", "flow"):
+    if tool in ("change", "flow", "attention"):
+        default_gap = (
+            config.SCREENSPACE_ATTENTION_INTERVAL if tool == "attention" else 1.0
+        )
         prev_ts_raw = request.args.get("prev")
         if prev_ts_raw is not None:
             try:
                 prev_ts = float(prev_ts_raw)
             except ValueError:
-                prev_ts = max(0.0, ts - 1.0)
+                prev_ts = max(0.0, ts - default_gap)
         else:
-            prev_ts = max(0.0, ts - 1.0)
+            prev_ts = max(0.0, ts - default_gap)
         if prev_ts < ts:
             prev_frame = frame_at(prev_ts)
 
@@ -1159,6 +1164,22 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 params["magnitude_threshold"] = float(raw)
             except ValueError:
                 pass
+    elif tool == "attention":
+        # Channel-weight / center-bias overrides so the Model view tunes the
+        # same math the scan runs (saliency_kwargs_from_params on both paths).
+        for key in (
+            "weight_spectral",
+            "weight_contrast",
+            "weight_motion",
+            "weight_face",
+            "center_bias",
+        ):
+            raw = request.args.get(key)
+            if raw is not None:
+                try:
+                    params[key] = float(raw)
+                except ValueError:
+                    pass
     elif tool in ("text", "numbers"):
         raw = (request.args.get("ocr_preprocess") or "").strip().lower()
         if raw in ("1", "true", "yes", "on"):
@@ -2132,12 +2153,13 @@ def api_tasks_create() -> FlaskResponse:
     if not data:
         return err("JSON body required")
 
-    # Boundary is full-frame only by contract: ignore any caller-supplied region
-    # so events and manifest metadata are never labeled with a region the scan
-    # didn't use (scan_boundaries always hashes the whole frame). Forcing it here
-    # — before validation and before task["region_ref"] is recorded — keeps the
-    # stored region_name/coords and region_ref consistently full-frame.
-    if (data.get("type") or "").strip() == "boundary":
+    # Boundary and Attention are full-frame only by contract: ignore any
+    # caller-supplied region so events and manifest metadata are never labeled
+    # with a region the scan didn't use (both scanners always analyze the whole
+    # frame). Forcing it here — before validation and before task["region_ref"]
+    # is recorded — keeps the stored region_name/coords and region_ref
+    # consistently full-frame.
+    if (data.get("type") or "").strip() in ("boundary", "attention"):
         data["region"] = ""
         data["region_ref"] = {"source": "full_frame"}
 

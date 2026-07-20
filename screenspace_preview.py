@@ -65,6 +65,8 @@ def build_preview(
         return _preview_scene(frame, region, params)
     if tool == "inactivity":
         return _preview_inactivity(frame, region)
+    if tool == "attention":
+        return _preview_attention(frame, prev_frame, params)
     if tool == "multitool":
         steps = params.get("steps") or []
         if steps:
@@ -107,6 +109,7 @@ OVERLAY_LAYERS: dict[str, list[tuple[str, str, str]]] = {
     "template": [("match_heatmap", "Match heatmap", "frame")],
     "flow": [("flow_vectors", "Flow vectors", "region")],
     "scene": [("edges", "Canny edges", "region")],
+    "attention": [("saliency_map", "Saliency map", "frame")],
 }
 
 
@@ -195,6 +198,9 @@ def build_overlay_layer(
 
     if tool == "template" and layer == "match_heatmap":
         return _overlay_template_heatmap(frame, params)
+
+    if tool == "attention" and layer == "saliency_map":
+        return _overlay_attention_saliency(frame, prev_frame, params)
 
     return None
 
@@ -992,6 +998,93 @@ def _preview_inactivity(
             _label_panel(_fit_width(grid_bgr, 160), f"pHash bits ({n}×{n})"),
         ]
     )
+
+
+def _attention_working_frames(
+    frame: "np.ndarray", prev_frame: "np.ndarray | None"
+) -> "tuple[np.ndarray, np.ndarray | None]":
+    """Downscale to the scan's working size; prev gray only when comparable."""
+    max_dim = config.SCREENSPACE_ATTENTION_WORKING_DIM
+    h, w = frame.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        size = (int(w * scale), int(h * scale))
+        small = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+    else:
+        small = frame
+    prev_gray = None
+    if prev_frame is not None and prev_frame.shape[:2] == frame.shape[:2]:
+        prev_small = cv2.resize(
+            prev_frame, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_AREA
+        )
+        prev_gray = cv2.cvtColor(prev_small, cv2.COLOR_BGR2GRAY)
+    return small, prev_gray
+
+
+def _saliency_to_bgr(sal: "np.ndarray", *, colorize: bool = False) -> "np.ndarray":
+    """Map a [0, 1] float saliency map to a displayable BGR uint8 image."""
+    img = np.clip(sal * 255.0, 0, 255).astype(np.uint8)
+    if colorize:
+        return cv2.applyColorMap(img, _DIFF_COLORMAP)
+    return _gray_to_bgr(img)
+
+
+def _preview_attention(
+    frame: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    params: dict[str, Any] | None = None,
+) -> "np.ndarray":
+    small, prev_gray = _attention_working_frames(frame, prev_frame)
+    curr_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    spectral = screenspace_primitives.compute_spectral_residual(curr_gray)
+    contrast = screenspace_primitives.compute_color_contrast(small)
+    combined, _ = screenspace_primitives.compute_saliency_map(
+        small,
+        prev_gray,
+        **screenspace_primitives.saliency_kwargs_from_params(params or {}),
+    )
+    _px, _py, peak_value = screenspace_primitives.saliency_peak(combined)
+
+    if prev_gray is not None:
+        motion = screenspace_primitives.compute_motion_saliency(prev_gray, curr_gray)
+        motion_panel = _label_panel(_fit_width(_saliency_to_bgr(motion), 160), "motion")
+    else:
+        motion_panel = _label_panel(
+            _placeholder("no prev frame", w=160, h=90), "motion"
+        )
+
+    return _hstack_panels(
+        [
+            _label_panel(_fit_width(small, 160), "input (≤256 px)"),
+            _label_panel(_fit_width(_saliency_to_bgr(spectral), 160), "spectral"),
+            _label_panel(_fit_width(_saliency_to_bgr(contrast), 160), "contrast"),
+            motion_panel,
+            _label_panel(
+                _fit_width(_saliency_to_bgr(combined, colorize=True), 160),
+                f"saliency (peak {peak_value:.2f})",
+            ),
+        ]
+    )
+
+
+def _overlay_attention_saliency(
+    frame: "np.ndarray",
+    prev_frame: "np.ndarray | None",
+    params: dict[str, Any] | None = None,
+) -> "np.ndarray":
+    """Combined saliency map colorized and resized to native frame resolution."""
+    small, prev_gray = _attention_working_frames(frame, prev_frame)
+    combined, _ = screenspace_primitives.compute_saliency_map(
+        small,
+        prev_gray,
+        **screenspace_primitives.saliency_kwargs_from_params(params or {}),
+    )
+    heat = _saliency_to_bgr(combined, colorize=True)
+    fh, fw = frame.shape[:2]
+    if heat.shape[:2] != (fh, fw):
+        heat = cv2.resize(heat, (fw, fh), interpolation=cv2.INTER_LINEAR)
+    return heat
 
 
 def encode_png(img: "np.ndarray", *, cap_width: bool = True) -> bytes:

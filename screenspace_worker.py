@@ -21,6 +21,7 @@ import utils
 import video
 from screenspace_tools import TOOLS
 from screenspace_heatmap import (
+    generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
@@ -41,17 +42,23 @@ from screenspace_manifest import (
 from screenspace_multitool import _multitool_has_offset
 from screenspace_frames import _probe_video_meta
 
+# Per-frame grid payloads consumed only by heatmap generation and never sent to
+# the client (unlike flow_grid, which the flow overlay needs). Stripped from
+# external reads and dropped from results once heatmaps are written.
+_SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")
+
 
 def _copy_task_for_read(
     task: dict[str, Any], include_results: bool = True
 ) -> dict[str, Any]:
-    """Deep-copy a task for external reads, omitting server-only ``change_grid``.
+    """Deep-copy a task for external reads, omitting server-only grid payloads.
 
-    ``change_grid`` is large per-frame data consumed once by heatmap generation
-    and never sent to the client (unlike ``flow_grid``, which the flow overlay
-    needs). Excluding it before the deep copy keeps progress-driven SSE reads
-    (~every 0.5s on long Change scans) from repeatedly duplicating per-frame
-    grids that are immediately discarded by the API layer.
+    ``change_grid``/``saliency_grid`` are large per-frame data consumed once by
+    heatmap generation and never sent to the client (unlike ``flow_grid``, which
+    the flow overlay needs). Excluding them before the deep copy keeps
+    progress-driven SSE reads (~every 0.5s on long Change/Attention scans) from
+    repeatedly duplicating per-frame grids that are immediately discarded by the
+    API layer.
 
     ``include_results=False`` drops the ever-growing ``result``/``_raw_results``
     lists entirely (reporting ``result_count`` instead), so status ticks stop
@@ -64,7 +71,7 @@ def _copy_task_for_read(
             seq = task.get(key)
             if isinstance(seq, list) and seq:
                 slim[key] = [
-                    {k: v for k, v in r.items() if k != "change_grid"}
+                    {k: v for k, v in r.items() if k not in _SERVER_ONLY_GRID_KEYS}
                     if isinstance(r, dict)
                     else r
                     for r in seq
@@ -291,7 +298,7 @@ class ScreenspaceWorker:
 
         Results are appended in scan order during a run (see ``_on_result``), so a
         count cursor yields exactly the new detections and keeps the live-results
-        fetch flat. Strips server-only ``change_grid`` like :func:`_copy_task_for_read`.
+        fetch flat. Strips server-only grid payloads like :func:`_copy_task_for_read`.
         Returns ``(tail, total)``, or ``None`` if the task is unknown.
         """
         with self._lock:
@@ -303,7 +310,7 @@ class ScreenspaceWorker:
             start = max(since, 0)
             tail = res[start:] if start < total else []
             stripped = [
-                {k: v for k, v in r.items() if k != "change_grid"}
+                {k: v for k, v in r.items() if k not in _SERVER_ONLY_GRID_KEYS}
                 if isinstance(r, dict)
                 else r
                 for r in tail
@@ -499,7 +506,7 @@ class ScreenspaceWorker:
         region_coords: dict[str, Any],
         results: list[dict[str, Any]],
     ) -> dict[str, str]:
-        """Generate heatmap artifacts for template, flow, or change tasks.
+        """Generate heatmap artifacts for template, flow, change, or attention tasks.
 
         Pure compute + file I/O — takes primitives instead of the task dict and
         returns the generated filenames keyed by attachment name, so it can run
@@ -511,6 +518,7 @@ class ScreenspaceWorker:
             "template": config.SCREENSPACE_GENERATE_TEMPLATE_HEATMAP,
             "flow": config.SCREENSPACE_GENERATE_FLOW_HEATMAP,
             "change": config.SCREENSPACE_GENERATE_CHANGE_HEATMAP,
+            "attention": config.SCREENSPACE_GENERATE_ATTENTION_HEATMAP,
         }
         if not heatmap_enabled.get(task_type, False):
             return {}
@@ -528,6 +536,21 @@ class ScreenspaceWorker:
             attachments.update(
                 self._write_heatmap_gifs(
                     task_id, results, fw, fh, "template", rolling=True
+                )
+            )
+        elif task_type == "attention":
+            # Full-frame tool: region_coords is {0,0,0,0}, so size to the video
+            # frame like template. The rolling GIF is the eye-tracking-style
+            # gaze-replay deliverable.
+            props = video.probe_video_properties(video_paths[0])
+            fw = props.get("width", 1920) if props else 1920
+            fh = props.get("height", 1080) if props else 1080
+            hp = generate_attention_heatmap(results, fw, fh, heatmap_path)
+            if hp:
+                attachments["heatmap"] = Path(hp).name
+            attachments.update(
+                self._write_heatmap_gifs(
+                    task_id, results, fw, fh, "attention", rolling=True
                 )
             )
         elif task_type in ("flow", "change"):
@@ -677,6 +700,17 @@ class ScreenspaceWorker:
 
         try:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
+
+            def _visible_results(seq: Any) -> Any:
+                # Attention's visible results are the confirmed shifts only;
+                # the full per-sample stream (one entry per 0.5s, thousands on
+                # long videos) exists solely to feed heatmap dwell weighting
+                # and must never reach the results/timeline API — neither in
+                # the completed→heatmap-attached window nor while paused.
+                if task.get("type") == "attention" and isinstance(seq, list):
+                    return [r for r in seq if isinstance(r, dict) and r.get("shift")]
+                return seq
+
             # Inputs for deferred (lock-free) heatmap generation, captured under
             # the lock and consumed after it's released.
             heatmap_inputs: tuple[str, list[str], dict[str, Any]] | None = None
@@ -689,11 +723,14 @@ class ScreenspaceWorker:
                         # prepend the pre-pause carry-over (like the completed
                         # branch below) or a pause on a resumed scan drops the
                         # earlier results for good — the next resume re-seeds
-                        # _partial_results from t["result"].
+                        # _partial_results from t["result"]. For attention that
+                        # re-seed is shift-only, so a resumed scan's heatmap
+                        # under-accumulates the pre-pause segment (accepted;
+                        # see plans/ATTENTION-PLAN.md).
                         partial = t.get("_partial_results")
                         if partial and isinstance(result, list):
                             result = partial + result
-                        t["result"] = result
+                        t["result"] = _visible_results(result)
                     elif t.get("_cancelled") and not t.get("parameters", {}).get(
                         "detect_first"
                     ):
@@ -704,7 +741,7 @@ class ScreenspaceWorker:
                         if partial and isinstance(result, list):
                             result = partial + result
                         t["status"] = TASK_STATUS_COMPLETED
-                        t["result"] = result
+                        t["result"] = _visible_results(result)
                         t["progress"] = 1.0
                         t.pop("_progress_offset", None)
                         t.pop("_progress_scale", None)
@@ -732,12 +769,15 @@ class ScreenspaceWorker:
                 attachments = self._generate_heatmap(
                     task_type, task_id, video_paths, region_coords, result
                 )
-                # change_grid is consumed only by heatmap generation; drop it so
-                # completed tasks don't retain per-frame grids in memory until
-                # dismissal.
+                # change_grid/saliency_grid are consumed only by heatmap
+                # generation; drop them so completed tasks don't retain
+                # per-frame grids in memory until dismissal. Attention's
+                # shift-only t["result"] shares these dicts, so its visible
+                # entries are stripped by the same pass.
                 for r in result:
                     if isinstance(r, dict):
-                        r.pop("change_grid", None)
+                        for key in _SERVER_ONLY_GRID_KEYS:
+                            r.pop(key, None)
                 with self._lock:
                     t = self._tasks.get(task_id)
                     if t is not None:

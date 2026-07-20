@@ -3,7 +3,8 @@
 
 Each scan sweeps a video via the frame-extraction drivers and applies one
 analysis primitive (color, change, similarity, text, numbers, timelapse,
-template, flow, scene, inactivity, boundary). Scans never call each other.
+template, flow, scene, inactivity, boundary, attention). Scans never call
+each other.
 Imports primitives, OCR helpers, and frame extractors from sibling modules.
 """
 
@@ -32,9 +33,13 @@ from screenspace_primitives import (
     compare_scene_fingerprints,
     compute_optical_flow,
     compute_phash,
+    compute_saliency_map,
     compute_scene_fingerprint,
+    face_detection_available,
     filter_matches_by_region_mask,
     region_masker,
+    saliency_grid_from_map,
+    saliency_peak,
 )
 from screenspace_ocr import (
     _VALID_OPERATORS,
@@ -1550,6 +1555,184 @@ def scan_boundaries(
         results.append(rd)
         if on_result:
             on_result(rd)
+    if on_progress:
+        on_progress(1.0)
+    return results
+
+
+def scan_attention(
+    video_path: str,
+    region: dict[str, int] | None = None,
+    shift_threshold: float = 0.0,
+    interval_seconds: float = 0.0,
+    *,
+    ema_alpha: float = 0.0,
+    weights: dict[str, float] | None = None,
+    center_bias: float | None = None,
+    include_face: bool | None = None,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+    fast_opts: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan the full frame for predicted visual attention (saliency).
+
+    Every sampled frame lands in the *returned* list carrying a
+    ``saliency_grid`` — that list feeds heatmap generation, where each frame
+    contributes one unit of dwell. ``on_result`` streams only *confirmed
+    attention shifts* (the EMA-smoothed saliency peak jumped at least
+    *shift_threshold* in normalized distance and persisted for
+    ``SCREENSPACE_ATTENTION_SHIFT_CONFIRM`` samples); the worker derives
+    events from that stream, so the timeline shows shifts, not every sample.
+
+    No phash-skip and no static-frame short-circuit, on purpose: a static
+    screen stared at for 30 s must accumulate 30 s of heat (dwell weighting),
+    and the EMA + shift-confirm counters assume uniform sampling.
+
+    Region is ignored (full-frame only); the parameter exists for signature
+    parity. Returns ``{timestamp, saliency_grid, peak_x, peak_y, peak_value}``
+    dicts; shift frames additionally carry ``shift``, ``shift_distance``,
+    ``_confidence``, and ``from_x/from_y/to_x/to_y``.
+    """
+    if shift_threshold <= 0:
+        shift_threshold = config.SCREENSPACE_ATTENTION_SHIFT_THRESHOLD
+    if interval_seconds <= 0:
+        interval_seconds = config.SCREENSPACE_ATTENTION_INTERVAL
+    if ema_alpha <= 0:
+        ema_alpha = config.SCREENSPACE_ATTENTION_EMA_ALPHA
+    ema_alpha = min(1.0, ema_alpha)
+    shift_confirm = max(1, config.SCREENSPACE_ATTENTION_SHIFT_CONFIRM)
+
+    wants_face = (
+        include_face
+        if include_face is not None
+        else config.SCREENSPACE_ATTENTION_FACE_CHANNEL
+    )
+    if wants_face and not face_detection_available():
+        utils.warning_print(
+            "Attention face channel is enabled but this OpenCV build has no "
+            "CascadeClassifier (removed in opencv-python 5.x); scanning "
+            "without the face channel."
+        )
+
+    window = _resolve_scan_window(video_path, start_seconds, end_seconds)
+    if window is None:
+        return []
+    vid_fps, vid_duration, end_seconds, total_range = window
+
+    # Downsize at the ffmpeg pipe without dropping frames (see docstring for
+    # why phash-skip is disabled); the saliency math runs at ≤ WORKING_DIM.
+    attention_opts = dict(fast_opts or {})
+    attention_opts.setdefault(
+        "max_region_dim", config.SCREENSPACE_ATTENTION_WORKING_DIM
+    )
+    attention_opts.pop("phash_skip", None)
+
+    results: list[dict[str, Any]] = []
+    prev_gray: list[np.ndarray | None] = [None]
+    smoothed: list[np.ndarray | None] = [None]
+    # Shift state machine: the last *emitted* focus plus a pending candidate
+    # that must persist near its anchor for shift_confirm samples.
+    last_emitted: list[tuple[float, float] | None] = [None]
+    pending: list[dict[str, Any] | None] = [None]
+
+    def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+        return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+    def _cb(ts: float, pixels: np.ndarray) -> bool | None:
+        if cancel_flag and cancel_flag():
+            return False
+        combined, curr_gray = compute_saliency_map(
+            pixels,
+            prev_gray[0],
+            weights=weights,
+            center_bias=center_bias,
+            include_face=include_face,
+        )
+        prev_gray[0] = curr_gray
+        prev_smoothed = smoothed[0]
+        if prev_smoothed is not None and prev_smoothed.shape == combined.shape:
+            combined = ema_alpha * combined + (1.0 - ema_alpha) * prev_smoothed
+        smoothed[0] = combined
+
+        peak_x, peak_y, peak_value = saliency_peak(combined)
+        rd: dict[str, Any] = {
+            "timestamp": round(ts, 2),
+            "saliency_grid": saliency_grid_from_map(
+                combined,
+                config.SCREENSPACE_ATTENTION_GRID,
+                config.SCREENSPACE_ATTENTION_GRID_MIN_MAG,
+            ),
+            "peak_x": peak_x,
+            "peak_y": peak_y,
+            "peak_value": peak_value,
+        }
+        results.append(rd)
+
+        peak = (peak_x, peak_y)
+        prev_focus = last_emitted[0]
+        if prev_focus is None:
+            last_emitted[0] = peak  # seed on the first sample; never an event
+        elif _dist(peak, prev_focus) < shift_threshold:
+            pending[0] = None
+        else:
+            cand = pending[0]
+            anchor: tuple[float, float] = cand["anchor"] if cand else peak
+            if cand is None or _dist(peak, anchor) > 0.5 * shift_threshold:
+                # New (or wandered-off) jump target: restart confirmation at
+                # this frame, remembering its result dict to stamp on emit.
+                new_cand: dict[str, Any] = {
+                    "count": 1,
+                    "anchor": peak,
+                    "peak_value": peak_value,
+                    "result": rd,
+                }
+                cand = new_cand
+                anchor = peak
+                pending[0] = cand
+            else:
+                cand["count"] += 1
+            if int(cand["count"]) >= shift_confirm:
+                shift_distance = _dist(anchor, prev_focus)
+                confidence = float(cand["peak_value"]) * min(
+                    1.0, shift_distance / (2.0 * shift_threshold)
+                )
+                confidence = round(max(0.05, min(1.0, confidence)), 4)
+                shift_rd: dict[str, Any] = cand["result"]
+                shift_rd.update(
+                    {
+                        "shift": True,
+                        "shift_distance": round(shift_distance, 4),
+                        "_confidence": confidence,
+                        "from_x": prev_focus[0],
+                        "from_y": prev_focus[1],
+                        "to_x": anchor[0],
+                        "to_y": anchor[1],
+                    }
+                )
+                if on_result:
+                    stream_rd = dict(shift_rd)
+                    stream_rd.pop("saliency_grid", None)
+                    on_result(stream_rd)
+                last_emitted[0] = anchor
+                pending[0] = None
+
+        if on_progress and total_range > 0:
+            on_progress((ts - start_seconds) / total_range)
+        return None
+
+    scan_video_full_frames(
+        video_path,
+        interval_seconds,
+        _cb,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
+        fps=vid_fps,
+        duration=vid_duration,
+        fast_opts=attention_opts,
+    )
     if on_progress:
         on_progress(1.0)
     return results

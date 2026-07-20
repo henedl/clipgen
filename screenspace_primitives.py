@@ -13,6 +13,14 @@ import statistics
 from typing import TYPE_CHECKING, Any, Callable
 
 import cv2
+
+try:
+    # cv2.data.haarcascades is a submodule attribute; ty needs the explicit
+    # import. Absent on cv2 builds without the bundled cascade data (the face
+    # channel feature-detects it and degrades to a zeros map).
+    import cv2.data  # noqa: F401
+except ImportError:  # pragma: no cover - depends on the installed cv2 build
+    pass
 import numpy as np
 
 if TYPE_CHECKING:
@@ -1071,3 +1079,262 @@ def _merge_timestamp_spans(
         }
     )
     return spans
+
+
+# ── Attention (computational saliency) ───────────────────────────────
+# Classic bottom-up composite (no learned model, no contrib modules):
+# spectral residual + Lab center-surround contrast + frame-diff motion
+# [+ optional Haar faces], multiplied by a center-weighted prior. The
+# per-frame map feeds the same grid/heatmap pipeline as flow/change.
+
+
+def compute_spectral_residual(gray: np.ndarray) -> np.ndarray:
+    """Spectral-residual saliency (Hou & Zhang 2007), float32 in [0, 1].
+
+    The log-amplitude spectrum minus its local average isolates the
+    "unexpected" frequency content; recombining it with the original phase
+    highlights the spatial locations responsible for it.
+    """
+    fft = np.fft.fft2(gray.astype(np.float32))
+    log_amp = np.log1p(np.abs(fft)).astype(np.float32)
+    phase = np.angle(fft)
+    residual = log_amp - cv2.blur(log_amp, (3, 3))
+    sal = np.abs(np.fft.ifft2(np.exp(residual) * np.exp(1j * phase))) ** 2
+    sal = cv2.GaussianBlur(sal.astype(np.float32), (9, 9), 2.5)
+    peak = float(sal.max())
+    return sal / peak if peak > 0 else sal
+
+
+def compute_color_contrast(bgr: np.ndarray) -> np.ndarray:
+    """Lab center-surround contrast, float32 in [0, 1].
+
+    Sum over L/a/b of |channel − wide Gaussian blur of channel|: bright/colored
+    elements that differ from their surround score high regardless of hue.
+    """
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    sigma = max(3.0, max(lab.shape[:2]) / 8.0)
+    contrast = np.zeros(lab.shape[:2], dtype=np.float32)
+    for ch in cv2.split(lab):
+        contrast += np.abs(ch - cv2.GaussianBlur(ch, (0, 0), sigma))
+    peak = float(contrast.max())
+    return contrast / peak if peak > 0 else contrast
+
+
+def compute_motion_saliency(
+    prev_gray: np.ndarray | None, curr_gray: np.ndarray
+) -> np.ndarray:
+    """Frame-diff motion map, float32 in [0, 1].
+
+    Deliberately absolute (scaled by 255, not per-frame max): a static frame
+    contributes ~zero motion instead of amplified sensor noise. Frame-diff
+    rather than Farneback flow — attention needs *where* changed, not
+    direction, at a fraction of the cost. Zeros when there is no comparable
+    previous frame (first frame, or a resolution change between videos).
+    """
+    if prev_gray is None or prev_gray.shape != curr_gray.shape:
+        return np.zeros(curr_gray.shape[:2], dtype=np.float32)
+    diff = cv2.absdiff(prev_gray, curr_gray).astype(np.float32) / 255.0
+    return cv2.GaussianBlur(diff, (9, 9), 2.5)
+
+
+# Lazy Haar-cascade singleton. Typed Any because the legacy CascadeClassifier
+# API only exists on OpenCV 4.x wheels — opencv-python-headless 5.x removed it,
+# so it must never be named in annotations or called unguarded.
+_face_cascade: Any | None = None
+
+
+def _get_face_cascade() -> Any | None:
+    """Lazy singleton for the bundled frontal-face Haar cascade.
+
+    Returns ``None`` when this cv2 build ships neither the legacy
+    ``CascadeClassifier`` API nor the bundled cascade data (removed in
+    opencv-python-headless 5.x); the face channel then degrades to a zeros
+    map and :func:`compute_saliency_map` leaves its weight out of the mix.
+    """
+    global _face_cascade
+    if _face_cascade is None:
+        cascade_cls = getattr(cv2, "CascadeClassifier", None)
+        haar_dir = getattr(getattr(cv2, "data", None), "haarcascades", None)
+        if cascade_cls is None or not haar_dir:
+            return None
+        _face_cascade = cascade_cls(haar_dir + "haarcascade_frontalface_default.xml")
+    return _face_cascade
+
+
+def face_detection_available() -> bool:
+    """Whether this cv2 build supports the Haar face channel (OpenCV 4.x)."""
+    return _get_face_cascade() is not None
+
+
+def compute_face_saliency(gray: np.ndarray) -> np.ndarray:
+    """Gaussian blobs at Haar face detections, float32 in [0, 1].
+
+    Zeros map when no faces are found, and when the cv2 build has no
+    CascadeClassifier support at all. Opt-in via
+    ``SCREENSPACE_ATTENTION_FACE_CHANNEL`` — Haar false-positives on UI
+    avatars/icons distort the map on footage without a webcam PiP.
+    """
+    blobs = np.zeros(gray.shape[:2], dtype=np.float32)
+    cascade = _get_face_cascade()
+    if cascade is None:
+        return blobs
+    faces = cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=4, minSize=(12, 12)
+    )
+    if len(faces) == 0:
+        return blobs
+    for x, y, w, h in faces:
+        cv2.ellipse(
+            blobs, (x + w // 2, y + h // 2), (w // 2, h // 2), 0, 0, 360, 1.0, -1
+        )
+    sigma = max(2.0, max(gray.shape[:2]) / 32.0)
+    blobs = cv2.GaussianBlur(blobs, (0, 0), sigma)
+    peak = float(blobs.max())
+    return blobs / peak if peak > 0 else blobs
+
+
+@functools.cache
+def _center_prior(shape: tuple[int, int], bias: float) -> np.ndarray:
+    """Center-weighted multiplicative prior: (1 − bias) + bias·gaussian.
+
+    Cached per (shape, bias); treat the returned array as read-only.
+    """
+    h, w = shape
+    ys = (np.arange(h, dtype=np.float32) - (h - 1) / 2.0) / max(1.0, 0.35 * h)
+    xs = (np.arange(w, dtype=np.float32) - (w - 1) / 2.0) / max(1.0, 0.35 * w)
+    gauss = np.exp(-0.5 * (ys[:, None] ** 2 + xs[None, :] ** 2))
+    return ((1.0 - bias) + bias * gauss).astype(np.float32)
+
+
+def compute_saliency_map(
+    bgr: np.ndarray,
+    prev_gray: np.ndarray | None,
+    *,
+    weights: dict[str, float] | None = None,
+    center_bias: float | None = None,
+    include_face: bool | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Combined saliency map for one frame.
+
+    Returns ``(map, curr_gray)`` — the caller rolls ``curr_gray`` forward as
+    the next frame's ``prev_gray``. The map is the weighted mean of the
+    enabled channels times the center prior, clipped to [0, 1]; it is NOT
+    re-normalized to max=1, so peak strength stays comparable across frames
+    (a static low-contrast screen genuinely pulls less attention).
+    """
+    if weights is None:
+        weights = {
+            "spectral": config.SCREENSPACE_ATTENTION_WEIGHT_SPECTRAL,
+            "contrast": config.SCREENSPACE_ATTENTION_WEIGHT_CONTRAST,
+            "motion": config.SCREENSPACE_ATTENTION_WEIGHT_MOTION,
+            "face": config.SCREENSPACE_ATTENTION_WEIGHT_FACE,
+        }
+    if center_bias is None:
+        center_bias = config.SCREENSPACE_ATTENTION_CENTER_BIAS
+    if include_face is None:
+        include_face = config.SCREENSPACE_ATTENTION_FACE_CHANNEL
+    if include_face and not face_detection_available():
+        # No CascadeClassifier in this cv2 build (opencv 5.x wheels): keep the
+        # face weight out of the denominator so the map isn't dimmed by a
+        # channel that can only ever contribute zeros.
+        include_face = False
+
+    curr_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    combined = weights.get("spectral", 0.0) * compute_spectral_residual(curr_gray)
+    combined += weights.get("contrast", 0.0) * compute_color_contrast(bgr)
+    combined += weights.get("motion", 0.0) * compute_motion_saliency(
+        prev_gray, curr_gray
+    )
+    total = (
+        weights.get("spectral", 0.0)
+        + weights.get("contrast", 0.0)
+        + weights.get("motion", 0.0)
+    )
+    if include_face:
+        combined += weights.get("face", 0.0) * compute_face_saliency(curr_gray)
+        total += weights.get("face", 0.0)
+    if total > 0:
+        combined /= total
+    combined *= _center_prior(combined.shape[:2], float(center_bias))
+    return np.clip(combined, 0.0, 1.0).astype(np.float32), curr_gray
+
+
+_SALIENCY_WEIGHT_PARAMS = {
+    "spectral": "weight_spectral",
+    "contrast": "weight_contrast",
+    "motion": "weight_motion",
+    "face": "weight_face",
+}
+
+
+def saliency_kwargs_from_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Map task/preview parameter dicts onto :func:`compute_saliency_map` kwargs.
+
+    Shared by the tool layer and the preview builders so a per-task weight
+    override tunes the scan and the Model view identically. Absent keys fall
+    back to the ``SCREENSPACE_ATTENTION_*`` config defaults; a ``weight_face``
+    of 0 disables the face channel entirely (no checkbox needed).
+    """
+    kwargs: dict[str, Any] = {}
+    if any(pk in params for pk in _SALIENCY_WEIGHT_PARAMS.values()):
+        kwargs["weights"] = {
+            channel: float(
+                params.get(
+                    param_key,
+                    getattr(config, "SCREENSPACE_ATTENTION_WEIGHT_" + channel.upper()),
+                )
+            )
+            for channel, param_key in _SALIENCY_WEIGHT_PARAMS.items()
+        }
+    if "weight_face" in params:
+        kwargs["include_face"] = float(params["weight_face"]) > 0
+    if "center_bias" in params:
+        kwargs["center_bias"] = float(params["center_bias"])
+    return kwargs
+
+
+def saliency_grid_from_map(
+    sal: np.ndarray, grid_n: int, min_mag: float
+) -> list[dict[str, float]]:
+    """Downsample a saliency map to sparse normalized grid cells.
+
+    Same ``{"x", "y", "mag"}`` cell shape as ``flow_grid``/``change_grid`` so
+    the heatmap pipeline consumes it unchanged. Per-frame normalized by the
+    grid max (dwell weighting: every sampled frame contributes one unit of
+    attention wherever it looked, however weak the frame's absolute saliency).
+    """
+    grid_n = max(1, int(grid_n))
+    cells = cv2.resize(sal, (grid_n, grid_n), interpolation=cv2.INTER_AREA)
+    peak = float(cells.max())
+    if peak <= 0:
+        return []
+    grid: list[dict[str, float]] = []
+    for gy in range(grid_n):
+        for gx in range(grid_n):
+            mag = float(cells[gy, gx]) / peak
+            if mag < min_mag:
+                continue
+            grid.append(
+                {
+                    "x": round((gx + 0.5) / grid_n, 3),
+                    "y": round((gy + 0.5) / grid_n, 3),
+                    "mag": round(mag, 3),
+                }
+            )
+    return grid
+
+
+def saliency_peak(sal: np.ndarray) -> tuple[float, float, float]:
+    """Locate the attention peak: (peak_x, peak_y, peak_value), coords 0-1.
+
+    The argmax runs on a blurred copy so a single hot pixel can't make the
+    peak jitter between frames.
+    """
+    h, w = sal.shape[:2]
+    blurred = cv2.GaussianBlur(sal, (0, 0), max(1.0, max(h, w) / 32.0))
+    _, peak_val, _, peak_loc = cv2.minMaxLoc(blurred)
+    return (
+        round((peak_loc[0] + 0.5) / w, 4),
+        round((peak_loc[1] + 0.5) / h, 4),
+        round(float(peak_val), 4),
+    )

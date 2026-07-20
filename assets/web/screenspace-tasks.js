@@ -66,6 +66,7 @@
     scene: "squares-2x2",
     inactivity: "pause-circle",
     boundary: "flag",
+    attention: "eye",
   };
 
   function sortTasks() {
@@ -95,6 +96,7 @@
     scene: "Scene",
     inactivity: "Inactivity",
     boundary: "Boundary",
+    attention: "Attention",
   };
 
   function selectableTasks() {

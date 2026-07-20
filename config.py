@@ -245,7 +245,8 @@ SCREENSPACE_MASK_FALLBACK_TOOLS: tuple[str, ...] = (
     "inactivity",
     "boundary",
     "timelapse",
-)  # tools that analyze a shaped region's bounding rect instead of its polygon (SSIM/phash are global, boundary is full-frame by design, timelapse is a pure ffmpeg crop)
+    "attention",
+)  # tools that analyze a shaped region's bounding rect instead of its polygon (SSIM/phash are global, boundary and attention are full-frame by design, timelapse is a pure ffmpeg crop)
 SCREENSPACE_PHASH_THRESHOLD: int = 15
 SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD: float = 2.0  # mean-abs-diff cutoff for skipping near-identical frames (Similarity/Text/Numbers/Scene scans)
 SCREENSPACE_TEMPLATE_MATCH_THRESHOLD: float = 0.70
@@ -310,6 +311,42 @@ SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = (
 )
 SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED: bool = True  # post-run: drop boundaries far below the session-median strength (threshold-portability mitigation)
 SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR: float = 0.5  # prune boundaries with entry distance below this fraction of the session median
+# Attention tool: classic bottom-up saliency composite (spectral residual +
+# Lab contrast + frame-diff motion [+ optional Haar faces], center-biased,
+# EMA-smoothed). Full-frame only; predicts where visual attention goes.
+SCREENSPACE_ATTENTION_INTERVAL: float = (
+    0.5  # default frame sampling interval for attention; also the heatmap's dwell unit
+)
+SCREENSPACE_ATTENTION_WORKING_DIM: int = (
+    256  # pipe downscale max-dim for saliency math (pushed to the ffmpeg pipe)
+)
+SCREENSPACE_ATTENTION_GRID: int = (
+    16  # cells per axis for the per-frame saliency_grid (mirrors CHANGE_HEATMAP_GRID)
+)
+SCREENSPACE_ATTENTION_GRID_MIN_MAG: float = (
+    0.15  # min normalized saliency for a grid cell to be recorded
+)
+SCREENSPACE_ATTENTION_SHIFT_THRESHOLD: float = (
+    0.15  # normalized distance the attention peak must jump to count as a shift
+)
+SCREENSPACE_ATTENTION_SHIFT_CONFIRM: int = (
+    2  # consecutive samples a jumped peak must persist before a shift event fires
+)
+SCREENSPACE_ATTENTION_EMA_ALPHA: float = (
+    0.6  # temporal smoothing of the saliency map (1.0 = no smoothing)
+)
+SCREENSPACE_ATTENTION_WEIGHT_SPECTRAL: float = 1.0  # spectral-residual channel weight
+SCREENSPACE_ATTENTION_WEIGHT_CONTRAST: float = (
+    0.7  # Lab center-surround contrast weight
+)
+SCREENSPACE_ATTENTION_WEIGHT_MOTION: float = (
+    1.2  # frame-diff motion weight (motion dominates attention on screens)
+)
+SCREENSPACE_ATTENTION_WEIGHT_FACE: float = (
+    0.8  # face-blob channel weight (when enabled)
+)
+SCREENSPACE_ATTENTION_FACE_CHANNEL: bool = False  # opt-in Haar face channel: false-positives on UI avatars/icons; slowest channel
+SCREENSPACE_ATTENTION_CENTER_BIAS: float = 0.25  # strength of the center-weighted prior (screens are less center-biased than photos)
 SCREENSPACE_CV_RESOLUTION_SCALE: float = (
     1.0  # multiplier applied to extracted region frames before CV analysis
     # (1.0 = no change; >1 sharper but slower and more memory; <1 faster but coarser)
@@ -329,6 +366,9 @@ SCREENSPACE_GENERATE_FLOW_HEATMAP: bool = (
 )
 SCREENSPACE_GENERATE_CHANGE_HEATMAP: bool = (
     True  # generate change heatmaps for Change tasks
+)
+SCREENSPACE_GENERATE_ATTENTION_HEATMAP: bool = (
+    True  # generate attention heatmaps for Attention tasks
 )
 SCREENSPACE_MAX_PINS: int = 12  # soft cap on calibration pins per participant — keeps synchronous calibration interactive
 SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS: float = 30.0  # bound (±) for a multitool step's offset window relative to the previous step's matched frame
@@ -618,6 +658,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_GENERATE_TEMPLATE_HEATMAP": "Generate detection heatmaps (static image plus accumulation and rolling-window animations) for Template tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
     "SCREENSPACE_GENERATE_FLOW_HEATMAP": "Generate motion heatmaps (static image plus accumulation animation) for Flow tasks. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": "Generate change heatmaps (static image plus accumulation and rolling-window animations) for Change tasks. Disable to skip heatmap generation when you don't need it. Useful on long videos where it adds processing time.",
+    "SCREENSPACE_GENERATE_ATTENTION_HEATMAP": "Generate attention heatmaps (static image plus accumulation and rolling-window animations) for Attention tasks. The rolling-window animation is the closest analog to an eye-tracking gaze replay. Disable to skip heatmap generation when you don't need it.",
     "SCREENSPACE_BOUNDARY_MERGE_THRESHOLD": "Boundary post-processing (Scene/Hybrid metrics): merge two periods whose content is at least this similar, removing the boundary between them. Higher = merge more aggressively (fewer boundaries); lower = keep more. Below the firing sensitivity by design.",
     "SCREENSPACE_BOUNDARY_TYPE_THRESHOLD": "Boundary scene labeling (Scene/Hybrid metrics): distinct scenes closer than this are grouped into one 'type', labeled Scene A1, A2, … (same letter, different number). Looser than the merge threshold. Higher = group more scenes per type; lower = more distinct type letters.",
     "SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED": "Boundary post-processing (Scene/Hybrid metrics): after merging, drop boundaries far weaker than the session's typical scene change. Adapts to each recording instead of a fixed threshold; disable to keep every detected boundary.",
@@ -966,6 +1007,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "type": "bool",
     },
     "SCREENSPACE_GENERATE_CHANGE_HEATMAP": {
+        "tab": "Screenspace",
+        "group": "Heatmaps",
+        "type": "bool",
+    },
+    "SCREENSPACE_GENERATE_ATTENTION_HEATMAP": {
         "tab": "Screenspace",
         "group": "Heatmaps",
         "type": "bool",

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
-Eleven analysis tools (passed as 'type' when creating a task):
+Thirteen analysis tools (passed as 'type' when creating a task):
   multitool   – chain multiple tools; each subsequent step only checks frames that passed previous steps
   color       – frames where a region's average HSV color matches a target within tolerance
   change      – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
@@ -13,6 +13,8 @@ Eleven analysis tools (passed as 'type' when creating a task):
   flow        – detect motion in a region via dense optical flow (cv2.calcOpticalFlowFarneback)
   scene       – classify frames by similarity to user-captured reference scenes
   inactivity  – detect spans of near-duplicate frames via perceptual hashing (loading screens, frozen states)
+  boundary    – segment the full frame into scene periods via hash/fingerprint shifts
+  attention   – predict where visual attention goes via a saliency composite (full-frame heatmaps + shift events)
 
 Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
 a background thread → results are timestamps or artifact files → state persisted to
@@ -28,7 +30,7 @@ their new homes:
   screenspace_ocr         – cached EasyOCR readers, number/text scoring helpers
   screenspace_frames      – ffmpeg-pipe frame extraction + ffprobe metadata
   screenspace_scans       – the eleven per-tool scan workflows
-  screenspace_heatmap     – template/flow/change heatmap PNG + cumulative/rolling GIF generation
+  screenspace_heatmap     – template/flow/change/attention heatmap PNG + cumulative/rolling GIF generation
   screenspace_tools       – AnalysisTool registry + per-frame dispatch
   screenspace_multitool   – multitool chaining + offset joining
   screenspace_manifest    – task/manifest persistence + event generation
@@ -56,12 +58,18 @@ from screenspace_primitives import (
     color_matches,
     color_present,
     compare_scene_fingerprints,
+    compute_color_contrast,
+    compute_face_saliency,
     compute_frame_diff,
+    compute_motion_saliency,
     compute_optical_flow,
     compute_phash,
+    compute_saliency_map,
     compute_scene_fingerprint,
+    compute_spectral_residual,
     denormalize_region,
     extract_region,
+    face_detection_available,
     filter_matches_by_region_mask,
     mask_points_key,
     match_template,
@@ -70,6 +78,9 @@ from screenspace_primitives import (
     region_masker,
     regions_are_similar,
     resolve_region_request,
+    saliency_grid_from_map,
+    saliency_kwargs_from_params,
+    saliency_peak,
     ssim_diff_map,
 )
 from screenspace_ocr import (
@@ -93,6 +104,7 @@ from screenspace_frames import (
 )
 from screenspace_scans import (
     generate_timelapse,
+    scan_attention,
     scan_boundaries,
     scan_changes,
     scan_color,
@@ -105,6 +117,7 @@ from screenspace_scans import (
     scan_text,
 )
 from screenspace_heatmap import (
+    generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
@@ -114,6 +127,7 @@ from screenspace_heatmap import (
 from screenspace_tools import (
     TOOLS,
     AnalysisTool,
+    AttentionTool,
     BoundaryTool,
     ChangeTool,
     ColorTool,

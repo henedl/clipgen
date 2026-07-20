@@ -53,6 +53,7 @@ ALL_TOOLS = [
     "flow",
     "scene",
     "inactivity",
+    "attention",
 ]
 
 
@@ -151,6 +152,18 @@ def test_build_overlay_layer_shape_matches_scope(
         assert img.shape[:2] == (region["h"], region["w"])
     elif scope == "frame":
         assert img.shape[:2] == synthetic_frame.shape[:2]
+
+
+def test_attention_preview_without_prev_still_encodes(
+    synthetic_frame: np.ndarray,
+) -> None:
+    """The motion panel degrades to a placeholder when no prev frame exists."""
+    img = screenspace_preview.build_preview(
+        synthetic_frame, None, None, "attention", {}
+    )
+    assert isinstance(img, np.ndarray)
+    assert img.size > 0
+    assert screenspace_preview.encode_png(img)
 
 
 def test_clip_region_pixels_dims_outside_shaped_mask(

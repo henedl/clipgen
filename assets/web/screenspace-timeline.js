@@ -669,6 +669,11 @@
     } else if (hit.task.type === "boundary") {
       if (r.scene_label) details.appendChild(el("span", "", "Enters: " + r.scene_label));
       if (r.distance !== undefined) details.appendChild(el("span", "", "Distance: " + r.distance));
+    } else if (hit.task.type === "attention") {
+      if (r.shift_distance !== undefined) details.appendChild(el("span", "", "Shift: \u0394" + r.shift_distance.toFixed(2)));
+      if (r.to_x !== undefined && r.to_y !== undefined) {
+        details.appendChild(el("span", "", "Focus: " + Math.round(r.to_x * 100) + "%, " + Math.round(r.to_y * 100) + "%"));
+      }
     }
     tip.appendChild(details);
 

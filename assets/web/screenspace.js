@@ -27,7 +27,7 @@
   var SS_TASK_ICON_TYPES = {
     multitool: 1, color: 1, change: 1, similarity: 1, text: 1,
     numbers: 1, template: 1, flow: 1, scene: 1, inactivity: 1,
-    boundary: 1, timelapse: 1,
+    boundary: 1, attention: 1, timelapse: 1,
   };
 
   // Build a span that renders the task icon via mask-image (see .ss-task-icon
@@ -923,6 +923,15 @@
     boundary: {
       "Sensitivity":      "Minimum frame-to-frame change to call a scene boundary (higher = only the biggest jumps)",
       "Min gap (s)":      "Suppress further boundaries for this long after one fires (avoids storms during fast action)",
+    },
+    attention: {
+      "Sensitivity":      "How far the predicted focus must jump (as a fraction of the screen) to mark an attention shift. Raise it to mark only big jumps",
+      "Smoothing":        "How quickly the attention map follows each new frame (1.0 = instant, lower = steadier but slower to react)",
+      "Spectral wt.":     "Weight of the 'unexpected detail' channel (spectral residual): odd shapes and busy areas that stand out from the scene",
+      "Contrast wt.":     "Weight of the color/brightness contrast channel: elements that differ strongly from their surroundings",
+      "Motion wt.":       "Weight of the motion channel: areas that changed since the previous sample. Usually the strongest pull on screens",
+      "Faces wt.":        "Weight of the face channel (webcam picture-in-picture). 0 turns face detection off; UI avatars can trigger false hits",
+      "Center bias":      "How much the map favors the screen center. 0 = no preference; photos-style footage tolerates more than UI recordings",
     },
   };
 
@@ -2276,7 +2285,8 @@
     flow: "Detects movement inside your region: a character running, an animation playing, or activity in one corner. Raise the strength threshold to ignore small or slow motion. Unlike Change (which fires on any pixel difference, including flicker) Flow responds only to real movement, so it stays steadier on noisy footage.",
     scene: "Capture and label several reference screens, then this tags each frame with whichever one it most resembles. This builds a timeline of which screen is showing (title, map, level, pause menu). It tolerates lighting and minor changes better than Similarity, and handles many screens at once where Similarity matches just one. Lower the Threshold if frames go untagged.",
     inactivity: "Finds stretches where your region barely changes for a while — loading screens, frozen states, or a player standing idle. It's the opposite of Change: it fires when nothing happens, not when something does. Set the minimum duration so brief pauses are ignored and only real stalls are reported.",
-    boundary: "Scans the whole screen for period transitions: menu to gameplay, a level loading, a loading screen ending. Metric: Auto (recommended) uses a content fingerprint and only marks a change that holds for a moment and is backed by a hard cut, so camera motion and brief overlays don't fragment one continuous period; pHash is the simpler 'any big frame-to-frame jump' detector. Sensitivity tunes the hard-cut threshold; Min gap avoids clustered markers during fast action. After scanning, near-identical periods are merged and transient blips dissolved. These are orientation markers, not clip candidates; unlike Scene, it doesn't label the screens; it only marks where they change."
+    boundary: "Scans the whole screen for period transitions: menu to gameplay, a level loading, a loading screen ending. Metric: Auto (recommended) uses a content fingerprint and only marks a change that holds for a moment and is backed by a hard cut, so camera motion and brief overlays don't fragment one continuous period; pHash is the simpler 'any big frame-to-frame jump' detector. Sensitivity tunes the hard-cut threshold; Min gap avoids clustered markers during fast action. After scanning, near-identical periods are merged and transient blips dissolved. These are orientation markers, not clip candidates; unlike Scene, it doesn't label the screens; it only marks where they change.",
+    attention: "Predicts where a viewer is probably looking, with no eye-tracking hardware. It scores each sampled frame for what draws the eye (strong contrast, movement, unusual detail) and turns the whole scan into heatmaps: a static image, an accumulation animation, and a rolling replay similar to an eye-tracking gaze video. The timeline only gets a marker at an attention shift, when the predicted focus jumps to a different part of the screen. Raise Sensitivity so only big jumps count; raise Smoothing if shifts lag behind the action. The weight sliders control what counts as eye-catching, and the Model view re-renders live while you drag them. It works from the visuals alone, so treat the output as an informed guess about attention rather than a measurement."
   };
 
   var _toolInfoPinned = false;
@@ -2416,7 +2426,7 @@
     { label: "Difference", tools: ["change", "similarity", "inactivity"] },
     { label: "Detection", tools: ["template", "color", "text", "numbers"] },
     { label: "Classification", tools: ["scene", "boundary"] },
-    { label: "Attention", tools: ["flow"] },
+    { label: "Attention", tools: ["flow", "attention"] },
     { label: "Utility", tools: ["timelapse"] },
   ];
 
@@ -2428,6 +2438,7 @@
     similarity: "photo", text: "language", numbers: "hashtag",
     template: "viewfinder-circle", flow: "arrows-right-left", scene: "squares-2x2",
     inactivity: "pause-circle", boundary: "flag", timelapse: "forward",
+    attention: "eye",
   };
 
   var _catNavBuilt = false;
@@ -3109,7 +3120,8 @@
     // the global region picker.
     if (regionPickerWrap) {
       regionPickerWrap.style.display =
-        type === "multitool" || type === "boundary" ? "none" : "";
+        type === "multitool" || type === "boundary" || type === "attention"
+          ? "none" : "";
     }
 
     if (type === "multitool") {
@@ -3178,12 +3190,29 @@
       addParamRow(container, "Min gap (s)", numberInput("paramBoundaryMinGap", 0.5, 60, 3.0, 0.5));
       renderIntervalSlot("paramBoundaryInterval", 0.5, 60, 1.0, 0.5);
     }
+    else if (type === "attention") {
+      // Normalized peak-jump distance for a shift event (fraction of the
+      // screen diagonal-ish; 0.15 default) and the EMA alpha for temporal
+      // smoothing (1.0 = follow each frame instantly).
+      addParamRow(container, "Sensitivity", rangeInput("paramAttnShift", 0.05, 0.50, 0.15, 0.01), "paramAttnShiftVal");
+      addParamRow(container, "Smoothing", rangeInput("paramAttnSmooth", 0.1, 1.0, 0.6, 0.05), "paramAttnSmoothVal");
+      // Channel weights (defaults mirror SCREENSPACE_ATTENTION_WEIGHT_*).
+      // Faces at 0 disables the Haar face channel entirely; the Model view
+      // re-renders live as these move, so tuning is visual.
+      addParamRow(container, "Spectral wt.", rangeInput("paramAttnWSpectral", 0, 2.0, 1.0, 0.05), "paramAttnWSpectralVal");
+      addParamRow(container, "Contrast wt.", rangeInput("paramAttnWContrast", 0, 2.0, 0.7, 0.05), "paramAttnWContrastVal");
+      addParamRow(container, "Motion wt.", rangeInput("paramAttnWMotion", 0, 2.0, 1.2, 0.05), "paramAttnWMotionVal");
+      addParamRow(container, "Faces wt.", rangeInput("paramAttnWFace", 0, 2.0, 0, 0.05), "paramAttnWFaceVal");
+      addParamRow(container, "Center bias", rangeInput("paramAttnCenterBias", 0, 1.0, 0.25, 0.05), "paramAttnCenterBiasVal");
+      renderIntervalSlot("paramAttnInterval", 0.5, 60, 0.5, 0.5);
+    }
 
     if (type !== "timelapse") {
       addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
-      // Boundary marks period transitions, not discrete detections, so "Detect
-      // first" (stop after the first hit) doesn't apply — omit it.
-      if (type !== "boundary") {
+      // Boundary marks period transitions and attention streams shift
+      // moments, not discrete detections, so "Detect first" (stop after the
+      // first hit) doesn't apply — omit it for both.
+      if (type !== "boundary" && type !== "attention") {
         var dfCb = document.createElement("input");
         dfCb.type = "checkbox";
         dfCb.id = "paramDetectFirst";
@@ -3316,12 +3345,13 @@
       }
     } else {
       var isTemplate = state.activeWorkflow === "template";
-      var isFullFrameTool = state.activeWorkflow === "boundary";
+      var isFullFrameTool = state.activeWorkflow === "boundary"
+        || state.activeWorkflow === "attention";
       var hasUploadedTemplate = !!state.uploadedTemplate;
       // Template scans full frames regardless of region selection; the region
       // (or uploaded image) only supplies the template patch.
       var templateMissingPatch = isTemplate && !hasRegion && !hasUploadedTemplate;
-      // Boundary is full-frame only — it needs no region at all.
+      // Boundary and Attention are full-frame only — they need no region at all.
       var nonTemplateMissingRegion = !isTemplate && !isFullFrameTool && !hasRegion;
       btn.disabled = nonTemplateMissingRegion || templateMissingPatch || !hasParticipants;
       if (templateMissingPatch) {
@@ -3349,9 +3379,9 @@
   function initRunButton() {
     qs("#runBtn").addEventListener("click", function () {
       var type = state.activeWorkflow;
-      // Boundary is full-frame only: always scan the whole frame, ignoring any
-      // selected region.
-      var isFullFrameTool = type === "boundary";
+      // Boundary and Attention are full-frame only: always scan the whole
+      // frame, ignoring any selected region.
+      var isFullFrameTool = type === "boundary" || type === "attention";
       var regions = isFullFrameTool
         ? [fullFrameRegionRef()]
         : (state.runRegions.length > 0
@@ -3676,6 +3706,15 @@
       // Auto ("") omits metric so the server applies its configured default.
       var boundaryMetric = (qs("#paramBoundaryMetric") || {}).value || "";
       if (boundaryMetric) params.metric = boundaryMetric;
+    } else if (type === "attention") {
+      params.shift_threshold = numberOrDefault((qs("#paramAttnShift") || {}).value, 0.15);
+      params.ema_alpha = numberOrDefault((qs("#paramAttnSmooth") || {}).value, 0.6);
+      params.weight_spectral = numberOrDefault((qs("#paramAttnWSpectral") || {}).value, 1.0);
+      params.weight_contrast = numberOrDefault((qs("#paramAttnWContrast") || {}).value, 0.7);
+      params.weight_motion = numberOrDefault((qs("#paramAttnWMotion") || {}).value, 1.2);
+      params.weight_face = numberOrDefault((qs("#paramAttnWFace") || {}).value, 0);
+      params.center_bias = numberOrDefault((qs("#paramAttnCenterBias") || {}).value, 0.25);
+      params.interval = numberOrDefault((qs("#paramAttnInterval") || {}).value, 0.5);
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
