@@ -120,6 +120,9 @@ def _describe(task_type: str, params: dict[str, Any]) -> str:
     elif task_type == "inactivity":
         if "min_duration" in params:
             return f"{label} ≥{_fmt_num(params['min_duration'])}s"
+    elif task_type == "attention":
+        if "shift_threshold" in params:
+            return f"{label} Δ≥{_fmt_num(params['shift_threshold'])}"
     elif task_type == "timelapse":
         speedup = params.get("speedup_factor")
         if speedup is not None:
@@ -260,7 +263,7 @@ def save_screenspace_manifest(
                 ]
         # Strip large per-frame heatmap grids from results (not needed on disk)
         if isinstance(ct.get("result"), list):
-            _grid_keys = ("flow_grid", "change_grid")
+            _grid_keys = ("flow_grid", "change_grid", "saliency_grid")
             ct["result"] = [
                 {k: v for k, v in r.items() if k not in _grid_keys}
                 for r in ct["result"]
@@ -315,6 +318,11 @@ def generate_events_from_results(
     task_type = task.get("type", "")
     if task_type == "timelapse":
         return []
+    if task_type == "attention":
+        # Events come from the shift-only on_result stream; this filter is
+        # defensive for regeneration paths (e.g. event backfill from
+        # task["result"]) that could hand us the full per-sample list.
+        raw_results = [r for r in raw_results if r.get("shift")]
     events: list[dict[str, Any]] = []
     for r in raw_results:
         ts = r.get("timestamp", r.get("start", 0.0))
@@ -343,6 +351,13 @@ def generate_events_from_results(
         elif task_type == "inactivity":
             metadata["duration"] = r.get("duration", 0.0)
             metadata["avg_distance"] = r.get("avg_distance", 0.0)
+        elif task_type == "attention":
+            metadata["shift_distance"] = r.get("shift_distance", 0.0)
+            metadata["from_x"] = r.get("from_x", 0.0)
+            metadata["from_y"] = r.get("from_y", 0.0)
+            metadata["to_x"] = r.get("to_x", r.get("peak_x", 0.0))
+            metadata["to_y"] = r.get("to_y", r.get("peak_y", 0.0))
+            metadata["peak_value"] = r.get("peak_value", 0.0)
         elif task_type == "boundary":
             metadata["distance"] = r.get("distance", 0.0)
             # Scene/hybrid metrics emit the period each boundary opens; absent

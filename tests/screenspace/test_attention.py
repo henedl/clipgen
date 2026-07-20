@@ -1,7 +1,8 @@
-"""Tests for the Attention tool: saliency primitives, scan, and events."""
+"""Tests for the Attention tool: saliency primitives, scan, heatmaps, events."""
 
 import numpy as np
 
+import config
 import screenspace
 import screenspace_frames
 import screenspace_scans
@@ -228,3 +229,204 @@ class TestScanAttention:
 
         results = screenspace.scan_attention("/fake.mp4", cancel_flag=cancel)
         assert len(results) < len(frames)
+
+
+def _grid_results(n=8):
+    """Synthetic per-frame results with a saliency_grid hot spot."""
+    return [
+        {
+            "timestamp": float(i),
+            "saliency_grid": [
+                {"x": 0.25, "y": 0.25, "mag": 1.0},
+                {"x": 0.75, "y": 0.75, "mag": 0.4},
+            ],
+            "peak_x": 0.25,
+            "peak_y": 0.25,
+            "peak_value": 0.8,
+        }
+        for i in range(n)
+    ]
+
+
+class TestAttentionHeatmap:
+    def test_static_png_generated(self, tmp_path):
+        out = str(tmp_path / "heatmap.png")
+        path = screenspace.generate_attention_heatmap(_grid_results(), 320, 240, out)
+        assert path == out
+        import cv2
+
+        img = cv2.imread(out)
+        assert img is not None
+        assert img.shape[:2] == (240, 320)
+
+    def test_empty_grids_yield_none(self, tmp_path):
+        out = str(tmp_path / "heatmap.png")
+        results = [{"timestamp": 0.0, "saliency_grid": []}]
+        assert screenspace.generate_attention_heatmap(results, 320, 240, out) is None
+
+    def test_cumulative_and_rolling_gifs(self, tmp_path):
+        cum = str(tmp_path / "cum.gif")
+        roll = str(tmp_path / "roll.gif")
+        assert (
+            screenspace.generate_heatmap_gif(
+                _grid_results(), 160, 120, cum, heatmap_type="attention"
+            )
+            == cum
+        )
+        assert (
+            screenspace.generate_rolling_heatmap_gif(
+                _grid_results(), 160, 120, roll, heatmap_type="attention"
+            )
+            == roll
+        )
+
+
+class TestAttentionEvents:
+    def _task(self):
+        return {
+            "id": "ss_attn0001",
+            "type": "attention",
+            "participant": "P01",
+            "region": "full_frame",
+            "parameters": {},
+        }
+
+    def _shift_result(self):
+        return {
+            "timestamp": 4.0,
+            "peak_x": 0.8,
+            "peak_y": 0.7,
+            "peak_value": 0.9,
+            "shift": True,
+            "shift_distance": 0.5,
+            "_confidence": 0.77,
+            "from_x": 0.2,
+            "from_y": 0.3,
+            "to_x": 0.8,
+            "to_y": 0.7,
+        }
+
+    def test_shift_metadata_and_confidence(self):
+        events = screenspace.generate_events_from_results(
+            self._task(), [self._shift_result()]
+        )
+        assert len(events) == 1
+        ev = events[0]
+        assert ev["detector"] == "attention"
+        assert ev["confidence"] == 0.77
+        assert ev["metadata"]["shift_distance"] == 0.5
+        assert ev["metadata"]["from_x"] == 0.2
+        assert ev["metadata"]["to_x"] == 0.8
+        assert ev["metadata"]["peak_value"] == 0.9
+
+    def test_non_shift_samples_filtered(self):
+        # Regeneration paths can hand the full per-sample list; only shift
+        # results may become events.
+        raw = _grid_results(5) + [self._shift_result()]
+        events = screenspace.generate_events_from_results(self._task(), raw)
+        assert len(events) == 1
+        assert events[0]["time_in"] == 4.0
+
+    def test_manifest_strips_saliency_grid(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        tasks = [
+            {
+                "id": "ss_attn1234",
+                "type": "attention",
+                "participant": "P01",
+                "status": "completed",
+                "result": [
+                    {
+                        "timestamp": 1.0,
+                        "peak_x": 0.5,
+                        "peak_y": 0.5,
+                        "peak_value": 0.6,
+                        "saliency_grid": [{"x": 0.5, "y": 0.5, "mag": 1.0}],
+                    }
+                ],
+            }
+        ]
+        path = screenspace.save_screenspace_manifest({}, tasks)
+        assert path is not None
+        loaded = screenspace.load_screenspace_manifest()
+        result = loaded["tasks"][0]["result"][0]
+        assert "saliency_grid" not in result
+        assert result["peak_value"] == 0.6
+
+    def test_describe_shows_threshold(self):
+        name = screenspace.describe_task("attention", "full_frame", {})
+        assert "Attention" in name
+        assert "Δ≥0.2" in screenspace.describe_task(
+            "attention", "full_frame", {"shift_threshold": 0.2}
+        )
+
+
+class TestAttentionWorker:
+    def test_completion_filters_results_to_shifts_and_attaches_heatmaps(
+        self, tmp_path, monkeypatch
+    ):
+        import time
+
+        import video
+
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            video,
+            "probe_video_properties",
+            lambda p: {"width": 320, "height": 240},
+        )
+
+        samples = _grid_results(6)
+        shift = {
+            "shift": True,
+            "shift_distance": 0.6,
+            "_confidence": 0.8,
+            "from_x": 0.25,
+            "from_y": 0.25,
+            "to_x": 0.75,
+            "to_y": 0.75,
+        }
+        samples[4].update(shift)
+
+        def fake_dispatch(self, task, on_progress, cancel_flag, on_result=None):
+            if on_result:
+                stream = {k: v for k, v in samples[4].items() if k != "saliency_grid"}
+                on_result(stream)
+            return [dict(s) for s in samples]
+
+        monkeypatch.setattr(screenspace.ScreenspaceWorker, "_dispatch", fake_dispatch)
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "attention",
+            "P01",
+            "s_P01.mp4",
+            ["/v.mp4"],
+            "full_frame",
+            {"x": 0, "y": 0, "w": 0, "h": 0},
+        )
+        worker.enqueue(task)
+        worker.start()
+        try:
+            for _ in range(100):
+                t = worker.get_task(task["id"])
+                if t and t["status"] == "completed" and t.get("heatmap"):
+                    break
+                time.sleep(0.05)
+            t = worker.get_task(task["id"])
+            assert t is not None
+            assert t["status"] == "completed"
+            # Post-heatmap: visible results are the confirmed shifts only
+            assert len(t["result"]) == 1
+            assert t["result"][0]["shift"] is True
+            assert "saliency_grid" not in t["result"][0]
+            # Heatmap artifacts were generated from the full sample stream
+            assert t.get("heatmap")
+            assert (tmp_path / t["heatmap"]).exists()
+            assert t.get("heatmap_gif")
+            assert t.get("heatmap_rolling_gif")
+            # Events derive from the shift-only on_result stream
+            events = t.get("_generated_events", [])
+            assert len(events) == 1
+            assert events[0]["detector"] == "attention"
+        finally:
+            worker.stop()

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Screenspace heatmap generation (pure cv2/PIL leaf).
 
-Template-, flow-, and change-match heatmap PNGs plus animated-GIF views: a
-cumulative accumulation and a rolling-window (recent-only, fading) variant.
+Template-, flow-, change-, and attention-heatmap PNGs plus animated-GIF views:
+a cumulative accumulation and a rolling-window (recent-only, fading) variant.
 No sibling-module dependencies.
 """
 
@@ -25,6 +25,15 @@ def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray
     normalized = (accumulator / max_val * 255).astype(np.uint8)
     normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
     return cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+
+
+# Heatmap types that accumulate sparse normalized {x, y, mag} grid cells at a
+# fixed 256×256 resolution (template accumulates match boxes frame-native).
+_GRID_KEYS: dict[str, str] = {
+    "flow": "flow_grid",
+    "change": "change_grid",
+    "attention": "saliency_grid",
+}
 
 
 def generate_template_heatmap(
@@ -112,6 +121,34 @@ def generate_change_heatmap(
     return output_path
 
 
+def generate_attention_heatmap(
+    results: list[dict[str, Any]],
+    frame_width: int,
+    frame_height: int,
+    output_path: str,
+) -> str | None:
+    """Generate a heatmap PNG from accumulated per-frame saliency grids.
+
+    Uses ``saliency_grid`` data (downsampled saliency maps, one per sampled
+    frame) so heat reflects predicted attention dwell across the whole scan —
+    the eye-tracking-style deliverable. Full-frame: sized to the video frame.
+    """
+    acc_size = 256
+    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
+    for r in results:
+        _accumulate_heatmap_result(accumulator, r, "attention")
+
+    if accumulator.max() == 0:
+        return None
+
+    heatmap = _colorize_accumulator(accumulator, accumulator.max())
+    heatmap = cv2.resize(
+        heatmap, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR
+    )
+    cv2.imwrite(output_path, heatmap)
+    return output_path
+
+
 def _accumulate_heatmap_result(
     accumulator: np.ndarray,
     result: dict[str, Any],
@@ -125,9 +162,8 @@ def _accumulate_heatmap_result(
             y2 = min(y + h, acc_h)
             x2 = min(x + w, acc_w)
             accumulator[y:y2, x:x2] += m.get("score", 1.0)
-    elif heatmap_type in ("flow", "change"):
-        grid_key = "flow_grid" if heatmap_type == "flow" else "change_grid"
-        for cell in result.get(grid_key, []):
+    elif heatmap_type in _GRID_KEYS:
+        for cell in result.get(_GRID_KEYS[heatmap_type], []):
             cx = int(cell["x"] * (acc_w - 1))
             cy = int(cell["y"] * (acc_h - 1))
             radius = max(1, acc_w // 16)
@@ -143,13 +179,14 @@ def _heatmap_frame_image(
 ) -> "Image.Image":
     """Colorize a heatmap accumulator into a PIL frame for animated GIFs.
 
-    Region-scoped heatmaps (flow, change) accumulate at a fixed resolution and
-    are resized to the requested frame size; template accumulates frame-native.
+    Grid-based heatmaps (flow, change, attention) accumulate at a fixed
+    resolution and are resized to the requested frame size; template
+    accumulates frame-native.
     """
     from PIL import Image
 
     colored = _colorize_accumulator(accumulator, global_max)
-    if heatmap_type in ("flow", "change"):
+    if heatmap_type in _GRID_KEYS:
         colored = cv2.resize(colored, (width, height), interpolation=cv2.INTER_LINEAR)
     rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
     return Image.fromarray(rgb)
@@ -191,7 +228,7 @@ def generate_heatmap_gif(
         return None
 
     acc_h, acc_w = height, width
-    if heatmap_type in ("flow", "change"):
+    if heatmap_type in _GRID_KEYS:
         acc_h = acc_w = 256
 
     # Pass 1: accumulate everything to find the shared ceiling. Accumulation is
@@ -255,7 +292,7 @@ def generate_rolling_heatmap_gif(
 
     window_frames = max(1, window_frames)
     acc_h, acc_w = height, width
-    if heatmap_type in ("flow", "change"):
+    if heatmap_type in _GRID_KEYS:
         acc_h = acc_w = 256
 
     def _accumulate_window(frame_idx: int) -> np.ndarray:

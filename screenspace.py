@@ -30,7 +30,7 @@ their new homes:
   screenspace_ocr         – cached EasyOCR readers, number/text scoring helpers
   screenspace_frames      – ffmpeg-pipe frame extraction + ffprobe metadata
   screenspace_scans       – the eleven per-tool scan workflows
-  screenspace_heatmap     – template/flow/change heatmap PNG + cumulative/rolling GIF generation
+  screenspace_heatmap     – template/flow/change/attention heatmap PNG + cumulative/rolling GIF generation
   screenspace_tools       – AnalysisTool registry + per-frame dispatch
   screenspace_multitool   – multitool chaining + offset joining
   screenspace_manifest    – task/manifest persistence + event generation
@@ -115,6 +115,7 @@ from screenspace_scans import (
     scan_text,
 )
 from screenspace_heatmap import (
+    generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
