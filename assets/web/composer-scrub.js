@@ -336,9 +336,12 @@
     // change (not click on the label) — a label click already flips the
     // checkbox natively; the handler aligns state and re-syncs it. Hotkeys
     // still route through label.click(), which forwards to the checkbox.
+    // blur() because a focused checkbox is a hotkeys.js typing target and
+    // would swallow every shortcut until focus moved elsewhere.
     var thumbs = qs("#coThumbsToggle input");
     if (thumbs) {
       thumbs.addEventListener("change", function () {
+        this.blur();
         state.markerThumbnails = !state.markerThumbnails;
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();
@@ -348,6 +351,7 @@
     var scrub = qs("#coScrubAudioToggle input");
     if (scrub) {
       scrub.addEventListener("change", function () {
+        this.blur();
         state.markerAudioScrub = !state.markerAudioScrub;
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();
@@ -357,6 +361,7 @@
     var follow = qs("#coFollowToggle input");
     if (follow) {
       follow.addEventListener("change", function () {
+        this.blur();
         state.followPlayhead = !state.followPlayhead;
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();

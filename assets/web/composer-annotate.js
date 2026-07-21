@@ -77,10 +77,20 @@
 
   // ---- Rendering ----
 
+  // Span edges round-trip through the server's round(…, 3): a span started
+  // at the un-rounded playhead can come back up to 0.5 ms LATER than it, so a
+  // strict comparison made a just-created annotation vanish on mouse-up about
+  // half the time. The tolerance also absorbs the <video> settling a frame
+  // shy of a requested seek when a span was snapped to a cut edge.
+  var SPAN_EPS = 0.005;
+
+  function spanContainsPlayhead(a) {
+    return a.span.start - SPAN_EPS <= state.playhead &&
+      state.playhead <= a.span.end + SPAN_EPS;
+  }
+
   function visibleAnnotations() {
-    return CO.participantAnnotations().filter(function (a) {
-      return a.span.start <= state.playhead && state.playhead <= a.span.end;
-    });
+    return CO.participantAnnotations().filter(spanContainsPlayhead);
   }
 
   // Rotated-frame math for shape annotations, shared by rendering, handles,
@@ -277,9 +287,7 @@
       CO.findAnnotation(state.selectedAnnotationId);
     if (!ann || ann.type !== "shape" || state.annHidden) return null;
     // Out-of-span shapes render nothing — their handles must not grab either.
-    if (ann.span.start > state.playhead || state.playhead > ann.span.end) {
-      return null;
-    }
+    if (!spanContainsPlayhead(ann)) return null;
     var canvas = canvasEl();
     var px = nx * canvas.width;
     var py = ny * canvas.height;
@@ -383,7 +391,10 @@
       return { start: cut.start, end: cut.end };
     }
     var span = CLIPGEN_CONFIG.composerAnnotationSpanSeconds;
-    var start = state.playhead;
+    // Back the start off by a few frames: the <video> can settle a frame
+    // before a requested seek and the server rounds span edges, so opening
+    // the span exactly at the playhead risks it starting just out of view.
+    var start = Math.max(0, state.playhead - 0.1);
     var end = Math.min(
       state.duration || start + span, start + span);
     return { start: start, end: Math.max(end, start + 0.5) };

@@ -217,9 +217,16 @@
   function initMarkerToggles() {
     // change (not click on the label) — a label click already flips the
     // checkbox natively; toggleSource then aligns state and re-syncs it.
+    // blur() because a focused checkbox is a hotkeys.js typing target and
+    // would swallow every shortcut until focus moved elsewhere.
     SOURCES.forEach(function (src) {
       var box = qs('.co-lane-check[data-source="' + src + '"] input');
-      if (box) box.addEventListener("change", function () { toggleSource(src); });
+      if (box) {
+        box.addEventListener("change", function () {
+          this.blur();
+          toggleSource(src);
+        });
+      }
     });
     syncSourcePills();
   }
