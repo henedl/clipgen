@@ -177,8 +177,8 @@
 
   function syncSourcePills() {
     SOURCES.forEach(function (src) {
-      var pill = qs('.co-lane-pill[data-source="' + src + '"]');
-      if (pill) pill.setAttribute("aria-pressed", state.sourceToggles[src] ? "true" : "false");
+      var box = qs('.co-lane-check[data-source="' + src + '"] input');
+      if (box) box.checked = !!state.sourceToggles[src];
     });
   }
 
@@ -215,9 +215,11 @@
   }
 
   function initMarkerToggles() {
+    // change (not click on the label) — a label click already flips the
+    // checkbox natively; toggleSource then aligns state and re-syncs it.
     SOURCES.forEach(function (src) {
-      var pill = qs('.co-lane-pill[data-source="' + src + '"]');
-      if (pill) pill.addEventListener("click", function () { toggleSource(src); });
+      var box = qs('.co-lane-check[data-source="' + src + '"] input');
+      if (box) box.addEventListener("change", function () { toggleSource(src); });
     });
     syncSourcePills();
   }

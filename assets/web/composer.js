@@ -28,6 +28,7 @@
     selectedAnnotationId: null,
     annTool: "select",      // "select" | "text" | "draw"
     annColor: "",           // filled from CLIPGEN_CONFIG at boot
+    annHidden: false,       // hide the annotation layer (B: hold to peek, tap to toggle)
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
     markers: { sheet: [], screenspace: [], transcript: [] },
@@ -353,6 +354,13 @@
   }
   CO.participantCuts = participantCuts;
 
+  // Chronological order — the cut list renders in this order and position+1 is
+  // the cut's index badge (list and timeline both number from here).
+  function sortedCuts() {
+    return participantCuts().slice().sort(function (a, b) { return a.start - b.start; });
+  }
+  CO.sortedCuts = sortedCuts;
+
   function findCut(id) {
     for (var i = 0; i < state.cuts.length; i++) {
       if (state.cuts[i].id === id) return state.cuts[i];
@@ -661,6 +669,7 @@
     if (CO.updateTimelineHeight) CO.updateTimelineHeight();
     renderTimeline();
     renderAnnotations();
+    renderCutList(); // cut items badge overlapping annotations
   }
   CO.refreshAnnotationViews = refreshAnnotationViews;
 
@@ -746,6 +755,27 @@
     renderAnnotations();
   }
   CO.selectAnnotation = selectAnnotation;
+
+  // Hide/reveal the whole annotation layer: the overlay skips drawing and the
+  // timeline lane dims. The #coToolHide button mirrors the state; its icon
+  // shows the action (eye-slash = will hide, eye = will reveal).
+  function setAnnotationsHidden(hidden) {
+    state.annHidden = !!hidden;
+    var btn = qs("#coToolHide");
+    if (btn) {
+      btn.setAttribute("aria-pressed", state.annHidden ? "true" : "false");
+      btn.title = (state.annHidden ? "Show" : "Hide") +
+        " annotations (B — hold to peek, tap to toggle)";
+      var icon = btn.querySelector(".co-btn-icon");
+      if (icon) {
+        icon.classList.toggle("co-icon-eye", state.annHidden);
+        icon.classList.toggle("co-icon-eye-slash", !state.annHidden);
+      }
+    }
+    renderAnnotations();
+    renderTimeline();
+  }
+  CO.setAnnotationsHidden = setAnnotationsHidden;
 
   // ---- Annotated exports (server PIL + ffmpeg overlay) ----
 
@@ -873,20 +903,23 @@
     if (state.sidebarTab !== "cuts") return;
     var list = qs("#coCutList");
     list.innerHTML = "";
-    var cuts = participantCuts();
+    var cuts = sortedCuts();
     if (!cuts.length) {
       var hint = el("p", "co-empty-hint");
       hint.innerHTML = "Press <kbd>I</kbd> then <kbd>O</kbd> to add a cut.";
       list.appendChild(hint);
       return;
     }
+    var anns = participantAnnotations();
     var frag = document.createDocumentFragment();
-    cuts.forEach(function (cut) {
+    cuts.forEach(function (cut, i) {
       var item = el("div", "co-cut-item" + (cut.id === state.selectedCutId ? " selected" : ""));
 
-      // Row 1: editable name (carried into generated clips as the event type;
-      // also feeds the Studio Composer-intake tab's cards) + delete button.
+      // Row 1: chronological index + editable name (carried into generated
+      // clips as the event type; also feeds the Studio Composer-intake tab's
+      // cards) + delete button.
       var nameRow = el("div", "co-cut-row");
+      nameRow.appendChild(el("span", "co-cut-index", String(i + 1)));
       var name = el("input", "co-cut-name");
       name.type = "text";
       name.autocomplete = "off";
@@ -902,6 +935,14 @@
         commitCutLabel(cut, name.value.trim());
       });
       nameRow.appendChild(name);
+      var hasAnn = anns.some(function (a) {
+        return a.span.start < cut.end && a.span.end > cut.start;
+      });
+      if (hasAnn) {
+        var annBadge = el("span", "co-btn-icon co-icon-draw co-cut-ann-badge");
+        annBadge.title = "Has annotations";
+        nameRow.appendChild(annBadge);
+      }
       if (cut._genStatus) {
         var okStatus = cut._genStatus === "ok";
         var statusIcon = el("span", "co-cut-status co-btn-icon " + cut._genStatus +
@@ -1243,7 +1284,7 @@
   // j/k list-nav: select the next/previous cut (by start time) and move the
   // playhead to its in point.
   function selectAdjacentCut(delta) {
-    var cuts = participantCuts().slice().sort(function (a, b) { return a.start - b.start; });
+    var cuts = sortedCuts();
     if (!cuts.length) return;
     var idx = -1;
     for (var i = 0; i < cuts.length; i++) {
@@ -1256,6 +1297,15 @@
     seekVideo(cuts[next].start);
   }
 
+  // One video frame in seconds, from the participant's probed frame rate.
+  function frameStep() {
+    var p = findParticipant(state.participant);
+    return p && p.fps ? 1 / p.fps : 1 / 30;
+  }
+
+  // B: tap toggles annotation hiding, hold peeks (inverts while held).
+  var _annHold = null; // {prev, at} while B is down
+
   function initKeyboard() {
     window.ClipgenHotkeys.register([
       { id: "transport.playPause", handler: function () { togglePlay(); } },
@@ -1263,6 +1313,26 @@
       { id: "transport.seekFwd", handler: function () { seekVideo(state.playhead + 5); } },
       { id: "transport.stepBack", handler: function () { seekVideo(state.playhead - 1); } },
       { id: "transport.stepFwd", handler: function () { seekVideo(state.playhead + 1); } },
+      { id: "composer.seekBackMid", handler: function () { seekVideo(state.playhead - 2.5); } },
+      { id: "composer.seekFwdMid", handler: function () { seekVideo(state.playhead + 2.5); } },
+      { id: "composer.stepBackFrame", handler: function () { seekVideo(state.playhead - frameStep()); } },
+      { id: "composer.stepFwdFrame", handler: function () { seekVideo(state.playhead + frameStep()); } },
+      {
+        id: "composer.holdHideAnnotations",
+        repeat: false,
+        handler: function () {
+          if (_annHold) return; // blur can swallow a keyup; don't restack
+          _annHold = { prev: state.annHidden, at: Date.now() };
+          setAnnotationsHidden(!_annHold.prev);
+        },
+        onRelease: function () {
+          if (!_annHold) return;
+          var hold = _annHold;
+          _annHold = null;
+          // A quick tap keeps the flip (toggle); a hold reverts it (peek).
+          if (Date.now() - hold.at >= 250) setAnnotationsHidden(hold.prev);
+        },
+      },
       { id: "nav.next", handler: function () { selectAdjacentCut(1); } },
       { id: "nav.prev", handler: function () { selectAdjacentCut(-1); } },
       { id: "composer.setIn", handler: function () { setInPoint(); } },
@@ -1452,6 +1522,9 @@
     initMarkerToggles();
     initMarkerScrub();
     initAnnotate();
+    qs("#coToolHide").addEventListener("click", function () {
+      setAnnotationsHidden(!state.annHidden);
+    });
     qs("#coExportShotBtn").addEventListener("click", exportScreenshot);
     qs("#coExportGifBtn").addEventListener("click", function () { exportBurn(true); });
     qs("#coExportBurnBtn").addEventListener("click", function () { exportBurn(false); });

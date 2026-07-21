@@ -140,7 +140,10 @@
     var h = canvas.height;
     ctx.clearRect(0, 0, w, h);
     _hitBoxes = [];
-    visibleAnnotations().forEach(function (ann) {
+    // Hidden layer: nothing drawn, nothing hit-testable (select/erase find
+    // nothing), but an in-flight stroke preview still renders below so the
+    // draw tool keeps working.
+    if (!state.annHidden) visibleAnnotations().forEach(function (ann) {
       var selected = ann.id === state.selectedAnnotationId;
       var box = drawAnnotation(ctx, ann, w, h, selected);
       if (!box) return;
@@ -195,6 +198,23 @@
   // ---- Tools ----
 
   function defaultSpan() {
+    // Creation-only: an annotation placed while the playhead sits inside a cut
+    // adopts that cut's span (the selected cut wins over an earlier overlap),
+    // so it travels with the clip. Span edits afterwards are free-form.
+    var cuts = (CO.participantCuts ? CO.participantCuts() : []).filter(function (c) {
+      return c.start <= state.playhead && state.playhead <= c.end;
+    });
+    if (cuts.length) {
+      var cut = null;
+      cuts.forEach(function (c) {
+        if (c.id === state.selectedCutId) cut = c;
+      });
+      if (!cut) {
+        cuts.sort(function (a, b) { return a.start - b.start; });
+        cut = cuts[0];
+      }
+      return { start: cut.start, end: cut.end };
+    }
     var span = CLIPGEN_CONFIG.composerAnnotationSpanSeconds;
     var start = state.playhead;
     var end = Math.min(
@@ -209,7 +229,7 @@
     canvas.classList.toggle("co-tool-text", tool === "text");
     canvas.classList.toggle("co-tool-draw", tool === "draw");
     canvas.classList.toggle("co-tool-erase", tool === "erase");
-    qsa(".co-tool-btn").forEach(function (btn) {
+    qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tool") === tool);
     });
     if (tool !== "text") hideTextInput();
@@ -258,33 +278,57 @@
     var canvas = canvasEl();
     var video = qs("#coVideo");
 
-    // Color swatches.
+    // Color swatches + custom-color picker. A picked color that matches no
+    // preset leaves every preset inactive; the picker button always shows the
+    // current color.
     var swatchHost = qs("#coAnnotateColors");
+
+    function applyAnnColor(color) {
+      state.annColor = color;
+      qsa(".co-color-swatch").forEach(function (s) {
+        s.classList.toggle("active", s.getAttribute("data-color") === color);
+      });
+      var custom = qs(".co-color-custom");
+      if (custom) custom.style.setProperty("--co-swatch-color", color);
+      // Recolor the selected annotation in place.
+      var ann = state.selectedAnnotationId &&
+        CO.findAnnotation(state.selectedAnnotationId);
+      if (ann && ann.style.color !== color) {
+        var before = JSON.parse(JSON.stringify(ann.style));
+        ann.style.color = color;
+        CO.commitAnnotationField(ann, "style", before);
+      }
+    }
+
     SWATCH_COLORS.forEach(function (color, idx) {
       var swatch = el("button", "co-color-swatch" + (idx === 0 ? " active" : ""));
       swatch.type = "button";
       swatch.title = "Annotation color " + color;
       swatch.setAttribute("aria-label", swatch.title);
+      swatch.setAttribute("data-color", color);
       swatch.style.setProperty("--co-swatch-color", color);
-      swatch.addEventListener("click", function () {
-        state.annColor = color;
-        qsa(".co-color-swatch").forEach(function (s) {
-          s.classList.toggle("active", s === swatch);
-        });
-        // Recolor the selected annotation in place.
-        var ann = state.selectedAnnotationId &&
-          CO.findAnnotation(state.selectedAnnotationId);
-        if (ann) {
-          var before = JSON.parse(JSON.stringify(ann.style));
-          ann.style.color = color;
-          CO.commitAnnotationField(ann, "style", before);
-        }
-      });
+      swatch.addEventListener("click", function () { applyAnnColor(color); });
       swatchHost.appendChild(swatch);
     });
 
-    // Tool buttons.
-    qsa(".co-tool-btn").forEach(function (btn) {
+    var custom = el("button", "co-color-swatch co-color-custom");
+    custom.type = "button";
+    custom.title = "Custom color…";
+    custom.setAttribute("aria-label", custom.title);
+    custom.style.setProperty("--co-swatch-color", state.annColor || SWATCH_COLORS[0]);
+    custom.appendChild(el("span", "co-btn-icon co-icon-eye-dropper"));
+    custom.addEventListener("click", function () {
+      window.ClipgenColorPicker.open({
+        anchor: custom,
+        value: state.annColor || SWATCH_COLORS[0],
+        swatches: SWATCH_COLORS,
+        onChange: applyAnnColor,
+      });
+    });
+    swatchHost.appendChild(custom);
+
+    // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
+    qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         setAnnotateTool(btn.getAttribute("data-tool"));
       });

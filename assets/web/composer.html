@@ -71,6 +71,11 @@
                 data-tool="erase" data-hotkey="composer.toolErase" title="Eraser (E). Click or drag over annotations">
           <span class="co-btn-icon co-icon-erase" aria-hidden="true"></span>
         </button>
+        <button id="coToolHide" class="co-tool-btn" type="button" aria-pressed="false"
+                data-hotkey="composer.holdHideAnnotations"
+                title="Hide annotations (B — hold to peek, tap to toggle)">
+          <span class="co-btn-icon co-icon-eye-slash" aria-hidden="true"></span>
+        </button>
         <span class="co-toolbar-sep"></span>
         <div id="coAnnotateColors" class="co-annotate-colors" role="group"
              aria-label="Annotation color"></div>
@@ -118,14 +123,6 @@
   </main>
 
   <section id="coTimelineSection" aria-label="Timeline">
-    <div id="coTimelineWrapper">
-      <canvas id="coTimelineCanvas"></canvas>
-      <canvas id="coPlayheadCanvas"></canvas>
-      <!-- Per-lane fold buttons, absolutely positioned over the canvas's left
-           edge (screenspace boundaryFlagRail pattern: rail ignores pointer
-           events, each button owns its own). -->
-      <div id="coLaneRail"></div>
-    </div>
     <div id="coTimelineControls">
       <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
               data-hotkey="transport.playPause" aria-label="Play/Pause" title="Play/Pause (Space)">
@@ -142,54 +139,67 @@
         <span class="co-btn-icon co-icon-out" aria-hidden="true"></span>Out
       </button>
       <span id="coPendingInfo" class="co-pending-info" aria-live="polite"></span>
-      <span class="co-toolbar-sep"></span>
-      <!-- Marker-lane toggles: one pill per data source (1/2/3). Colors come from
-           the shared --stream-* tokens so lanes match the Convergence Browser. -->
-      <div class="co-lane-pills" role="group" aria-label="Marker sources">
-        <button id="coLaneSheet" class="co-lane-pill" type="button" data-source="sheet"
-                data-hotkey="composer.toggleSource" data-hotkey-combo="0"
-                aria-pressed="true" title="Toggle Sheet markers (1)">
-          <span class="co-lane-dot" aria-hidden="true"></span>Sheet
-        </button>
-        <button id="coLaneScreenspace" class="co-lane-pill" type="button" data-source="screenspace"
-                data-hotkey="composer.toggleSource" data-hotkey-combo="1"
-                aria-pressed="true" title="Toggle Screenspace markers (2)">
-          <span class="co-lane-dot" aria-hidden="true"></span>Screenspace
-        </button>
-        <button id="coLaneTranscript" class="co-lane-pill" type="button" data-source="transcript"
-                data-hotkey="composer.toggleSource" data-hotkey-combo="2"
-                aria-pressed="true" title="Toggle Transcript markers (3)">
-          <span class="co-lane-dot" aria-hidden="true"></span>Transcript
-        </button>
+      <div class="co-controls-right">
+        <!-- Marker-lane toggles: one checkbox per data source (1/2/3). Colors
+             come from the shared --stream-* tokens so lanes match the
+             Convergence Browser. -->
+        <div class="co-lane-checks" role="group" aria-label="Marker sources">
+          <label id="coLaneSheet" class="co-lane-check" data-source="sheet"
+                 data-hotkey="composer.toggleSource" data-hotkey-combo="0"
+                 title="Toggle Sheet markers (1)">
+            <input type="checkbox" checked autocomplete="off">Sheet
+          </label>
+          <label id="coLaneScreenspace" class="co-lane-check" data-source="screenspace"
+                 data-hotkey="composer.toggleSource" data-hotkey-combo="1"
+                 title="Toggle Screenspace markers (2)">
+            <input type="checkbox" checked autocomplete="off">Screenspace
+          </label>
+          <label id="coLaneTranscript" class="co-lane-check" data-source="transcript"
+                 data-hotkey="composer.toggleSource" data-hotkey-combo="2"
+                 title="Toggle Transcript markers (3)">
+            <input type="checkbox" checked autocomplete="off">Transcript
+          </label>
+        </div>
+        <span class="co-toolbar-sep"></span>
+        <!-- Marker-media toggles: thumbnail strips in marker/cut bars, and
+             hover audio scrub + waveform. Both persist via PUT api/ui. -->
+        <div class="co-lane-checks" role="group" aria-label="Marker media">
+          <label id="coThumbsToggle" class="co-lane-check co-media-check"
+                 data-hotkey="composer.toggleThumbs"
+                 title="Toggle thumbnail strips on markers and cuts (F)">
+            <input type="checkbox" autocomplete="off">Thumbs
+          </label>
+          <label id="coScrubAudioToggle" class="co-lane-check co-media-check"
+                 data-hotkey="composer.toggleScrubAudio"
+                 title="Toggle hover audio scrub + waveform on markers and cuts (W)">
+            <input type="checkbox" autocomplete="off">Scrub
+          </label>
+        </div>
+        <!-- Camera toggle: when on, seeking/playback pans the zoomed timeline
+             to keep the playhead in view. Persists via PUT api/ui. -->
+        <div class="co-lane-checks" role="group" aria-label="Playback">
+          <label id="coFollowToggle" class="co-lane-check co-media-check"
+                 title="Follow the playhead: pan the zoomed timeline to keep it in view during playback">
+            <input type="checkbox" checked autocomplete="off">Follow
+          </label>
+        </div>
+        <span class="co-toolbar-sep"></span>
+        <button id="coZoomInBtn" class="btn btn-small btn-icon" type="button"
+                aria-label="Zoom in" title="Zoom in"></button>
+        <button id="coZoomOutBtn" class="btn btn-small btn-icon" type="button"
+                aria-label="Zoom out" title="Zoom out"></button>
+        <button id="coZoomResetBtn" class="btn btn-small" type="button">Reset</button>
       </div>
-      <!-- Marker-media toggles: thumbnail strips in marker/cut bars, and
-           hover audio scrub + waveform. Both persist via PUT api/ui. -->
-      <div class="co-lane-pills" role="group" aria-label="Marker media">
-        <button id="coThumbsToggle" class="co-lane-pill co-media-pill" type="button"
-                data-hotkey="composer.toggleThumbs"
-                aria-pressed="false" title="Toggle thumbnail strips on markers and cuts (F)">
-          <span class="co-lane-dot" aria-hidden="true"></span>Thumbs
-        </button>
-        <button id="coScrubAudioToggle" class="co-lane-pill co-media-pill" type="button"
-                data-hotkey="composer.toggleScrubAudio"
-                aria-pressed="false" title="Toggle hover audio scrub + waveform on markers and cuts (W)">
-          <span class="co-lane-dot" aria-hidden="true"></span>Scrub
-        </button>
-      </div>
-      <!-- Camera toggle: when on, seeking/playback pans the zoomed timeline to
-           keep the playhead in view. Persists via PUT api/ui. -->
-      <div class="co-lane-pills" role="group" aria-label="Playback">
-        <button id="coFollowToggle" class="co-lane-pill co-media-pill" type="button"
-                aria-pressed="true" title="Follow the playhead: pan the zoomed timeline to keep it in view during playback">
-          <span class="co-lane-dot" aria-hidden="true"></span>Follow
-        </button>
-      </div>
-      <span class="co-toolbar-sep"></span>
-      <button id="coZoomInBtn" class="btn btn-small btn-icon" type="button"
-              aria-label="Zoom in" title="Zoom in"></button>
-      <button id="coZoomOutBtn" class="btn btn-small btn-icon" type="button"
-              aria-label="Zoom out" title="Zoom out"></button>
-      <button id="coZoomResetBtn" class="btn btn-small" type="button">Reset</button>
+    </div>
+    <div id="coTimelineWrapper">
+      <canvas id="coTimelineCanvas"></canvas>
+      <canvas id="coPlayheadCanvas"></canvas>
+      <!-- Per-lane fold buttons, absolutely positioned over the canvas's left
+           edge (screenspace boundaryFlagRail pattern: rail ignores pointer
+           events, each button owns its own). -->
+      <div id="coLaneRail"></div>
+    </div>
+    <div id="coTimelineFooter">
       <span class="co-timeline-hint">scroll to zoom · drag to pan · drag cut edges to trim</span>
     </div>
   </section>

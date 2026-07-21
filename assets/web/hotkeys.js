@@ -83,6 +83,10 @@
     { id: "studio.focusArtifactStash", section: "studio", group: "Selection", label: "Select stashed artifacts", combos: ["4"] },
     { id: "studio.focusReelStash",     section: "studio", group: "Selection", label: "Select stashed reels", combos: ["5"] },
 
+    { id: "composer.seekBackMid",      section: "composer", group: "Playhead", label: "Seek back 2.5 s", combos: ["Shift+ArrowLeft"] },
+    { id: "composer.seekFwdMid",       section: "composer", group: "Playhead", label: "Seek forward 2.5 s", combos: ["Shift+ArrowRight"] },
+    { id: "composer.stepBackFrame",    section: "composer", group: "Playhead", label: "Frame step back", combos: ["Shift+,"] },
+    { id: "composer.stepFwdFrame",     section: "composer", group: "Playhead", label: "Frame step forward", combos: ["Shift+."] },
     { id: "composer.setIn",            section: "composer", group: "Cuts", label: "Set in point", combos: ["I"] },
     { id: "composer.setOut",           section: "composer", group: "Cuts", label: "Set out point", combos: ["O"] },
     { id: "composer.nudgeLeft",        section: "composer", group: "Cuts", label: "Nudge cut edge left (fine)", combos: ["["] },
@@ -94,6 +98,7 @@
     { id: "composer.toolText",         section: "composer", group: "Annotate", label: "Text tool", combos: ["T"] },
     { id: "composer.toolDraw",         section: "composer", group: "Annotate", label: "Draw tool", combos: ["D"] },
     { id: "composer.toolErase",        section: "composer", group: "Annotate", label: "Erase tool", combos: ["E"] },
+    { id: "composer.holdHideAnnotations", section: "composer", group: "Annotate", label: "Hide annotations (hold or tap)", combos: ["B"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
     { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["0"] },
     { id: "composer.toggleThumbs",     section: "composer", group: "Marker lanes", label: "Toggle thumbnail strips", combos: ["F"] },
@@ -166,7 +171,14 @@
       name = "Space";
       shift = e.shiftKey;
     } else if (key.length === 1) {
-      if (key.toUpperCase() !== key.toLowerCase()) {
+      if (e.shiftKey && (e.code === "Comma" || e.code === "Period")) {
+        // Shifted , / . resolve to layout-dependent characters ("<" on US,
+        // ";" on Swedish), so "Shift+," would never match below. The physical
+        // Comma/Period keys are layout-stable — map these two by e.code so
+        // frame-step combos work everywhere.
+        name = e.code === "Comma" ? "," : ".";
+        shift = true;
+      } else if (key.toUpperCase() !== key.toLowerCase()) {
         // A letter: uppercase base + explicit Shift.
         name = key.toUpperCase();
         shift = e.shiftKey;
