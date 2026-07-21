@@ -10,9 +10,11 @@ span overrides keyed by the frontend's marker key (``"sheet:12:P01:0"``,
 video-global seconds *after* the Convergence per-lane offset (the trim is
 against the video, so a later offset change doesn't move it). The source
 manifests (sheet / Screenspace / Transcripts) are never mutated. Phase 3 adds
-**annotations** — text labels and freehand strokes with a visibility span,
-geometry normalized 0..1 to the video frame (x/points/strokeWidth to width,
-y/fontSize to height) — plus export endpoints that render annotations with
+**annotations** — text labels, freehand strokes, and rotatable rect/ellipse
+shapes with a visibility span, geometry normalized 0..1 to the video frame
+(x/points/strokeWidth to width, y/fontSize to height; shape rotation in
+degrees clockwise, applied in pixel space) — plus export endpoints that
+render annotations with
 PIL (transparent RGBA overlay; no ffmpeg ``drawtext``, sidestepping the
 Homebrew libfreetype gotcha) and burn them into a screenshot, GIF, or video
 span via the ffmpeg ``overlay`` filter with span-relative
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import threading
 import uuid
@@ -384,7 +387,8 @@ def api_ui_update() -> Any:
 
 # ---- Annotations CRUD ----
 
-ANNOTATION_TYPES = ("text", "freehand")
+ANNOTATION_TYPES = ("text", "freehand", "shape")
+ANNOTATION_SHAPES = ("rect", "ellipse")
 
 
 def _clamp01(value: Any) -> float:
@@ -406,6 +410,24 @@ def _sanitize_annotation_geometry(
                 "x": round(_clamp01(geometry.get("x", 0)), 4),
                 "y": round(_clamp01(geometry.get("y", 0)), 4),
                 "text": text,
+            }
+        if ann_type == "shape":
+            # x/y = normalized center, w/h = normalized size, rotation in
+            # degrees clockwise around the center (matches ctx.rotate).
+            kind = str(geometry.get("shape") or "")
+            if kind not in ANNOTATION_SHAPES:
+                return None
+            w = float(geometry.get("w", 0))
+            h = float(geometry.get("h", 0))
+            if w <= 0 or h <= 0:
+                return None
+            return {
+                "shape": kind,
+                "x": round(_clamp01(geometry.get("x", 0)), 4),
+                "y": round(_clamp01(geometry.get("y", 0)), 4),
+                "w": max(round(min(w, 1.0), 4), 0.001),
+                "h": max(round(min(h, 1.0), 4), 0.001),
+                "rotation": round(float(geometry.get("rotation", 0) or 0.0) % 360.0, 2),
             }
         points = geometry.get("points")
         if not isinstance(points, list) or not points:
@@ -602,6 +624,63 @@ def _render_annotation_overlay(
                 draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
             elif points:
                 draw.line(points, fill=color, width=stroke, joint="curve")
+        elif ann.get("type") == "shape":
+            cx = float(geometry.get("x", 0)) * width
+            cy = float(geometry.get("y", 0)) * height
+            sw = float(geometry.get("w", 0)) * width
+            sh = float(geometry.get("h", 0)) * height
+            rotation = float(geometry.get("rotation", 0) or 0.0)
+            if sw < 1 or sh < 1:
+                continue
+            stroke = max(
+                1,
+                round(
+                    float(
+                        style.get(
+                            "strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH
+                        )
+                    )
+                    * width
+                ),
+            )
+            if geometry.get("shape") == "rect":
+                # Rotate the corners with the same transform the browser's
+                # ctx.rotate applies (y-down: positive = clockwise), so the
+                # burn-in matches the preview exactly. Closing through the
+                # second corner again keeps the start joint filled.
+                rad = math.radians(rotation)
+                cos_r, sin_r = math.cos(rad), math.sin(rad)
+                corners = [
+                    (cx + dx * cos_r - dy * sin_r, cy + dx * sin_r + dy * cos_r)
+                    for dx, dy in (
+                        (-sw / 2, -sh / 2),
+                        (sw / 2, -sh / 2),
+                        (sw / 2, sh / 2),
+                        (-sw / 2, sh / 2),
+                    )
+                ]
+                draw.line(
+                    corners + [corners[0], corners[1]],
+                    fill=color,
+                    width=stroke,
+                    joint="curve",
+                )
+            else:  # ellipse
+                box = [cx - sw / 2, cy - sh / 2, cx + sw / 2, cy + sh / 2]
+                if abs(rotation) < 0.01:
+                    draw.ellipse(box, outline=color, width=stroke)
+                else:
+                    # PIL can't stroke a rotated ellipse directly: draw it
+                    # axis-aligned on a temp layer and rotate that around the
+                    # center (Image.rotate's positive angle is counter-
+                    # clockwise, hence the negation for clockwise rotation).
+                    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                    ImageDraw.Draw(layer).ellipse(box, outline=color, width=stroke)
+                    layer = layer.rotate(
+                        -rotation, resample=Image.Resampling.BICUBIC, center=(cx, cy)
+                    )
+                    img = Image.alpha_composite(img, layer)
+                    draw = ImageDraw.Draw(img)
         elif ann.get("type") == "text":
             text = str(geometry.get("text") or "")
             if not text:

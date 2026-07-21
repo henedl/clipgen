@@ -324,43 +324,44 @@
   // ---- Toggles ----
 
   function syncScrubToggles() {
-    var thumbs = qs("#coThumbsToggle");
-    if (thumbs) {
-      thumbs.setAttribute("aria-pressed", state.markerThumbnails ? "true" : "false");
-    }
-    var scrub = qs("#coScrubAudioToggle");
-    if (scrub) {
-      scrub.setAttribute("aria-pressed", state.markerAudioScrub ? "true" : "false");
-    }
-    var follow = qs("#coFollowToggle");
-    if (follow) {
-      follow.setAttribute("aria-pressed", state.followPlayhead ? "true" : "false");
-    }
+    var thumbs = qs("#coThumbsToggle input");
+    if (thumbs) thumbs.checked = !!state.markerThumbnails;
+    var scrub = qs("#coScrubAudioToggle input");
+    if (scrub) scrub.checked = !!state.markerAudioScrub;
+    var follow = qs("#coFollowToggle input");
+    if (follow) follow.checked = !!state.followPlayhead;
   }
 
   function initMarkerScrub() {
-    var thumbs = qs("#coThumbsToggle");
+    // change (not click on the label) — a label click already flips the
+    // checkbox natively; the handler aligns state and re-syncs it. Hotkeys
+    // still route through label.click(), which forwards to the checkbox.
+    // blur() because a focused checkbox is a hotkeys.js typing target and
+    // would swallow every shortcut until focus moved elsewhere.
+    var thumbs = qs("#coThumbsToggle input");
     if (thumbs) {
-      thumbs.addEventListener("click", function () {
+      thumbs.addEventListener("change", function () {
+        this.blur();
         state.markerThumbnails = !state.markerThumbnails;
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();
-        if (CO.updateTimelineHeight) CO.updateTimelineHeight();
         if (CO.renderTimeline) CO.renderTimeline();
       });
     }
-    var scrub = qs("#coScrubAudioToggle");
+    var scrub = qs("#coScrubAudioToggle input");
     if (scrub) {
-      scrub.addEventListener("click", function () {
+      scrub.addEventListener("change", function () {
+        this.blur();
         state.markerAudioScrub = !state.markerAudioScrub;
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();
         if (!state.markerAudioScrub) scrubHoverEnd();
       });
     }
-    var follow = qs("#coFollowToggle");
+    var follow = qs("#coFollowToggle input");
     if (follow) {
-      follow.addEventListener("click", function () {
+      follow.addEventListener("change", function () {
+        this.blur();
         state.followPlayhead = !state.followPlayhead;
         syncScrubToggles();
         if (CO.persistLaneUi) CO.persistLaneUi();

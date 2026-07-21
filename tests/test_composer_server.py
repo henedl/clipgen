@@ -387,6 +387,85 @@ def test_annotation_freehand_and_validation(co_client):
     )
 
 
+def test_annotation_shape_crud_and_validation(co_client):
+    created = _make_annotation(
+        co_client,
+        type="shape",
+        geometry={
+            "shape": "rect",
+            "x": 1.4,  # clamps to 1.0
+            "y": 0.5,
+            "w": 0.3,
+            "h": 0.2,
+            "rotation": 405.0,  # normalizes mod 360
+        },
+    )
+    assert created["ok"] is True
+    geometry = created["annotation"]["geometry"]
+    assert geometry["shape"] == "rect"
+    assert geometry["x"] == 1.0
+    assert geometry["rotation"] == 45.0
+
+    # Unknown shape kind and degenerate sizes are rejected.
+    for bad in (
+        {"shape": "triangle", "x": 0.5, "y": 0.5, "w": 0.3, "h": 0.2},
+        {"shape": "ellipse", "x": 0.5, "y": 0.5, "w": 0, "h": 0.2},
+    ):
+        assert (
+            co_client.post(
+                "/composer/api/annotations",
+                json={
+                    "participant": "P01",
+                    "type": "shape",
+                    "span": {"start": 1, "end": 5},
+                    "geometry": bad,
+                },
+            ).status_code
+            == 400
+        )
+
+
+def test_render_annotation_overlay_draws_shapes():
+    overlay = composer_server._render_annotation_overlay(
+        [
+            {
+                "type": "shape",
+                "geometry": {
+                    "shape": "rect",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.5,
+                    "h": 0.5,
+                    "rotation": 0.0,
+                },
+                "style": {"color": "#ff0000", "strokeWidth": 0.01},
+            },
+            {
+                "type": "shape",
+                "geometry": {
+                    "shape": "ellipse",
+                    "x": 0.25,
+                    "y": 0.25,
+                    "w": 0.3,
+                    "h": 0.2,
+                    "rotation": 30.0,
+                },
+                "style": {"color": "#00ff00", "strokeWidth": 0.01},
+            },
+        ],
+        640,
+        360,
+    )
+    assert overlay.mode == "RGBA"
+    # Rect edge midpoint (left edge at x=0.25*640=160, mid-height) is stroked.
+    assert overlay.getpixel((160, 180))[3] > 0
+    # Center of the rect stays unfilled (outline-only).
+    assert overlay.getpixel((320, 180))[3] == 0
+    # The rotated ellipse drew something in its quadrant.
+    region = overlay.crop((60, 30, 260, 150))
+    assert region.getchannel("A").getextrema()[1] > 0
+
+
 def test_render_annotation_overlay_draws_pixels():
     overlay = composer_server._render_annotation_overlay(
         [

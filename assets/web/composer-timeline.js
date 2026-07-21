@@ -66,12 +66,12 @@
     return neededRows(state.markers[source] || []);
   }
 
-  // Marker sub-row / cuts-track heights grow when thumbnail strips are on so
-  // each bar fits a recognizable frame; the annotations lane stays flat (its
-  // spans are drawings, not video content). Folded lanes grow too — their
-  // collapsed bars overdraw, which the user accepted for the fold tradeoff.
-  function laneRowH() { return state.markerThumbnails ? THUMB_ROW_H : ROW_H; }
-  function cutTrackH() { return state.markerThumbnails ? THUMB_CUT_H : CUT_TRACK_H; }
+  // Marker sub-rows and the cuts track always use their large (thumb-sized)
+  // heights so each bar can fit a recognizable frame; the Thumbs toggle only
+  // controls whether thumbnails are drawn, not the geometry. Only the
+  // annotations lane stays flat (its spans are drawings, not video content).
+  function laneRowH() { return THUMB_ROW_H; }
+  function cutTrackH() { return THUMB_CUT_H; }
 
   // Annotation spans as packable {start, end, ann} entries for the lane.
   function annotationSpans() {
@@ -269,6 +269,11 @@
     ctx.strokeStyle = tc.border;
     ctx.lineWidth = 1;
     ctx.strokeRect(0.5, L.cutY - 0.5, w - 1, L.cutH + 1);
+    // Chronological numbering shared with the cut list's index badges.
+    var cutIndexById = {};
+    if (CO.sortedCuts) {
+      CO.sortedCuts().forEach(function (c, i) { cutIndexById[c.id] = i + 1; });
+    }
     CO.participantCuts().forEach(function (cut) {
       if (cut.end < vis.start || cut.start > vis.end) return;
       var x1 = tx(cut.start);
@@ -288,6 +293,21 @@
       if (selected) {
         ctx.strokeStyle = tc.accent;
         ctx.strokeRect(x1 + 0.5, L.cutY + 0.5, rw - 1, L.cutH - 1);
+      }
+      // Index badge, top-left (skipped on slivers too narrow to carry it).
+      var cutIdx = cutIndexById[cut.id];
+      if (cutIdx && rw >= 18) {
+        var label = String(cutIdx);
+        ctx.font = "600 9px " + tc.fontMono;
+        var bw = ctx.measureText(label).width + 6;
+        ctx.fillStyle = hexToRgba(tc.accent, 0.9);
+        ctx.fillRect(x1 + 2, L.cutY + 2, bw, 11);
+        ctx.fillStyle = tc.bg;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, x1 + 2 + bw / 2, L.cutY + 8);
+        ctx.textAlign = "start";
+        ctx.textBaseline = "alphabetic";
       }
       _hitRects.push({ x1: x1, x2: x2, y: L.cutY, h: L.cutH, cut: cut });
     });
@@ -323,9 +343,12 @@
       });
     });
 
-    // Annotations lane (accent-colored spans; selection matches the overlay)
+    // Annotations lane (accent-colored spans; selection matches the overlay).
+    // Dimmed — not skipped — while the layer is hidden, so the spans stay
+    // findable and draggable.
     var annLane = L.annotationsLane;
     if (annLane.rows) {
+      var annDim = state.annHidden ? 0.3 : 1;
       assignRows(annotationSpans(), annLane.rows).forEach(function (entry) {
         if (entry.end < vis.start || entry.start > vis.end) return;
         var ax1 = tx(entry.start);
@@ -334,10 +357,10 @@
         var ay = annLane.y + entry._row * ROW_H;
         var annSelected = entry.ann.id === state.selectedAnnotationId;
         var annColor = (entry.ann.style && entry.ann.style.color) || tc.accent;
-        ctx.fillStyle = hexToRgba(annColor, annSelected ? 0.8 : 0.5);
+        ctx.fillStyle = hexToRgba(annColor, (annSelected ? 0.8 : 0.5) * annDim);
         ctx.fillRect(ax1, ay, arw, ROW_H - 1);
         if (annSelected) {
-          ctx.strokeStyle = annColor;
+          ctx.strokeStyle = hexToRgba(annColor, annDim);
           ctx.lineWidth = 1;
           ctx.strokeRect(ax1 + 0.5, ay + 0.5, arw - 1, ROW_H - 2);
         }
@@ -680,7 +703,17 @@
           // Click a marker → seek to its in point (same as the cut track).
           drag = { type: "marker", marker: markerHit.marker, startX: e.clientX, moved: false };
         } else if (annHit) {
-          drag = { type: "annotation", ann: annHit.annotation, startX: e.clientX, moved: false };
+          // Whole-span translate, mirroring the cut-body drag; a no-move
+          // release stays a click (select + seek).
+          drag = {
+            type: "annotation",
+            ann: annHit.annotation,
+            startX: e.clientX,
+            origStart: annHit.annotation.span.start,
+            origEnd: annHit.annotation.span.end,
+            moved: false,
+          };
+          CO.selectAnnotation(annHit.annotation.id);
         } else if (state.zoom > 1) {
           drag = { type: "pan", startX: e.clientX, startOffset: state.offset, moved: false };
         } else {
@@ -769,7 +802,20 @@
         state.offset = clamp(drag.startOffset - (dx / rect2.width) * visLen2,
           0, Math.max(0, state.duration - visLen2));
         scheduleRender();
-      } else if (drag.type === "marker" || drag.type === "annotation") {
+      } else if (drag.type === "annotation") {
+        // Translate the whole visibility span, preserving its length.
+        var visLenA = state.duration / state.zoom;
+        var rectA = getRect();
+        var dtA = ((e.clientX - drag.startX) / rectA.width) * visLenA;
+        if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
+        if (!drag.moved) return;
+        var spanLen = drag.origEnd - drag.origStart;
+        var annStart = clamp(drag.origStart + dtA, 0, state.duration - spanLen);
+        drag.ann.span.start = annStart;
+        drag.ann.span.end = annStart + spanLen;
+        canvas.classList.add("co-drag-body");
+        scheduleRender();
+      } else if (drag.type === "marker") {
         if (Math.abs(e.clientX - drag.startX) > 3) drag.moved = true;
       } else if (drag.type === "scrub") {
         drag.moved = true;
@@ -801,17 +847,41 @@
       } else if (d.type === "ann-edge" && !d.moved) {
         d.ann.span.start = d.beforeSpan.start;
         d.ann.span.end = d.beforeSpan.end;
+      } else if (d.type === "annotation" && d.moved) {
+        CO.commitAnnotationField(d.ann, "span",
+          { start: d.origStart, end: d.origEnd });
       } else if (d.type === "body" && !d.moved) {
         CO.seekVideo(d.cut.start);
       } else if (d.type === "marker" && !d.moved) {
         CO.seekVideo(d.marker.start);
       } else if (d.type === "annotation" && !d.moved) {
-        CO.selectAnnotation(d.ann.id);
         CO.seekVideo(d.ann.span.start);
       }
     }
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", endDrag);
+
+    // Double-click on empty timeline space sets the pending in point, then a
+    // second double-click commits the out point (config-gated; the preceding
+    // single clicks already scrubbed the playhead to the clicked time).
+    canvas.addEventListener("dblclick", function (e) {
+      if (!CLIPGEN_CONFIG.composerDoubleClickCuts) return;
+      if (!state.duration || !state.participant) return;
+      if (hitTestCutEdge(e.clientX, e.clientY) ||
+          hitTestLaneEdge(e.clientX, e.clientY) ||
+          hitTestCutBody(e.clientX, e.clientY) ||
+          hitTest(e.clientX, e.clientY)) {
+        return; // clicks on cuts/markers/annotations keep their own semantics
+      }
+      var ts = xToTime(e.clientX);
+      if (ts === null) return;
+      if (CO.seekVideo) CO.seekVideo(ts);
+      if (state.pendingIn === null) {
+        if (CO.setInPoint) CO.setInPoint();
+      } else if (CO.setOutPoint) {
+        CO.setOutPoint();
+      }
+    });
 
     // Right-click a trimmed marker to reset its trim (tooltip advertises this).
     canvas.addEventListener("contextmenu", function (e) {
