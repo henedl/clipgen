@@ -897,6 +897,7 @@ def get_frontend_config() -> dict[str, Any]:
         "composerAnnotationFontSize": config.COMPOSER_ANNOTATION_FONT_SIZE,
         "composerAnnotationSpanSeconds": config.COMPOSER_ANNOTATION_SPAN_SECONDS,
         "composerScrubMaxAudioSeconds": config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS,
+        "composerDoubleClickCuts": config.COMPOSER_DOUBLE_CLICK_CUTS,
         "hotkeyOverrides": dict(config.HOTKEY_OVERRIDES),
     }
 

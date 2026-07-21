@@ -1,12 +1,14 @@
 /* clipgen Composer — annotate satellite.
  *
  * The visual annotation layer: a canvas positioned over the <video>'s content
- * box (letterbox-aware) that live-renders text labels and freehand strokes
- * whose visibility span contains the playhead. Owns the tool state machine
- * (select / text / draw), pointer capture for drawing and text placement, the
- * positioned text <input>, the color swatches, and screen↔normalized
- * coordinate mapping (geometry is normalized 0..1 to the frame so the browser
- * preview matches the server's PIL burn-in at any resolution).
+ * box (letterbox-aware) that live-renders text labels, freehand strokes, and
+ * rotatable rect/ellipse shapes whose visibility span contains the playhead.
+ * Owns the tool state machine (select / text / draw / rect / ellipse), pointer
+ * capture for drawing, text placement, shape drag-create and corner/rotation
+ * handles, the positioned text <input>, the color swatches + picker, and
+ * screen↔normalized coordinate mapping (geometry is normalized 0..1 to the
+ * frame so the browser preview matches the server's PIL burn-in at any
+ * resolution; shape rotation is degrees clockwise, applied in pixel space).
  *
  * CRUD + undo/redo live in the hub (CO.createAnnotation / deleteAnnotation /
  * commitAnnotationField / selectAnnotation); this file only draws and
@@ -28,6 +30,11 @@
   var _dragging = null; // {ann, startNx, startNy, origGeometry, moved}
   var _pendingText = null; // {x, y} normalized, while the text input is open
   var _erasing = null; // ids already deleted this eraser gesture (dedupe)
+  var _shaping = null; // {x0, y0, x1, y1} normalized, while drag-creating a shape
+  var _shapeEdit = null; // {ann, mode:"resize"|"rotate", corner, orig} handle drag
+
+  var SHAPE_HANDLE_R = 4;    // corner/rotation handle radius, canvas px
+  var SHAPE_ROT_OFFSET = 18; // rotation handle stem length above the top edge
 
   function canvasEl() { return qs("#coAnnotateCanvas"); }
 
@@ -76,9 +83,58 @@
     });
   }
 
+  // Rotated-frame math for shape annotations, shared by rendering, handles,
+  // and hit tests. All outputs in canvas px; rotation is degrees clockwise
+  // (the canvas y-down ctx.rotate convention — the server mirrors it).
+  function shapeFrame(ann, w, h) {
+    var g = ann.geometry;
+    var rad = ((g.rotation || 0) * Math.PI) / 180;
+    var cos = Math.cos(rad);
+    var sin = Math.sin(rad);
+    var cx = g.x * w;
+    var cy = g.y * h;
+    var hw = (g.w * w) / 2;
+    var hh = (g.h * h) / 2;
+    function pt(dx, dy) {
+      return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+    }
+    return {
+      cx: cx, cy: cy, hw: hw, hh: hh, rad: rad, cos: cos, sin: sin,
+      corners: [pt(-hw, -hh), pt(hw, -hh), pt(hw, hh), pt(-hw, hh)],
+      topMid: pt(0, -hh),
+      rotHandle: pt(0, -hh - SHAPE_ROT_OFFSET),
+    };
+  }
+
   function drawAnnotation(ctx, ann, w, h, selected) {
     var style = ann.style || {};
     var color = style.color || CLIPGEN_CONFIG.composerAnnotationColor;
+    if (ann.type === "shape") {
+      var frame = shapeFrame(ann, w, h);
+      var shapeStroke = Math.max(1,
+        (style.strokeWidth || CLIPGEN_CONFIG.composerAnnotationStrokeWidth) * w);
+      ctx.save();
+      ctx.translate(frame.cx, frame.cy);
+      ctx.rotate(frame.rad);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = shapeStroke;
+      if (ann.geometry.shape === "ellipse") {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, frame.hw, frame.hh, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(-frame.hw, -frame.hh, frame.hw * 2, frame.hh * 2);
+      }
+      ctx.restore();
+      var cxs = frame.corners.map(function (p) { return p[0]; });
+      var cys = frame.corners.map(function (p) { return p[1]; });
+      return {
+        x1: Math.min.apply(null, cxs) - shapeStroke,
+        y1: Math.min.apply(null, cys) - shapeStroke,
+        x2: Math.max.apply(null, cxs) + shapeStroke,
+        y2: Math.max.apply(null, cys) + shapeStroke,
+      };
+    }
     if (ann.type === "freehand") {
       var points = (ann.geometry.points || []).map(function (p) {
         return [p[0] * w, p[1] * h];
@@ -153,6 +209,9 @@
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
         ctx.setLineDash([]);
+        if (ann.type === "shape" && state.annTool === "select") {
+          drawShapeHandles(ctx, ann, w, h);
+        }
       }
       _hitBoxes.push({ box: box, ann: ann });
     });
@@ -170,6 +229,114 @@
       }
       ctx.stroke();
     }
+    // In-flight shape-draft preview.
+    if (_shaping) {
+      var sx = Math.min(_shaping.x0, _shaping.x1) * w;
+      var sy = Math.min(_shaping.y0, _shaping.y1) * h;
+      var sw = Math.abs(_shaping.x1 - _shaping.x0) * w;
+      var sh = Math.abs(_shaping.y1 - _shaping.y0) * h;
+      ctx.strokeStyle = state.annColor;
+      ctx.lineWidth = Math.max(1, CLIPGEN_CONFIG.composerAnnotationStrokeWidth * w);
+      if (state.annTool === "ellipse") {
+        ctx.beginPath();
+        ctx.ellipse(sx + sw / 2, sy + sh / 2, sw / 2, sh / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(sx, sy, sw, sh);
+      }
+    }
+  }
+
+  // Corner squares + a stemmed rotation knob for the selected shape.
+  function drawShapeHandles(ctx, ann, w, h) {
+    var frame = shapeFrame(ann, w, h);
+    var accent = getCSSVar("--color-accent", "#1d4f72");
+    var bg = getCSSVar("--bg", "#0d0e10");
+    var r = SHAPE_HANDLE_R;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(frame.topMid[0], frame.topMid[1]);
+    ctx.lineTo(frame.rotHandle[0], frame.rotHandle[1]);
+    ctx.stroke();
+    frame.corners.forEach(function (p) {
+      ctx.fillStyle = bg;
+      ctx.fillRect(p[0] - r, p[1] - r, r * 2, r * 2);
+      ctx.strokeRect(p[0] - r + 0.5, p[1] - r + 0.5, r * 2 - 1, r * 2 - 1);
+    });
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.arc(frame.rotHandle[0], frame.rotHandle[1], r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Handle hit test for the SELECTED shape only (handles render only there).
+  function hitTestShapeHandle(nx, ny) {
+    var ann = state.selectedAnnotationId &&
+      CO.findAnnotation(state.selectedAnnotationId);
+    if (!ann || ann.type !== "shape" || state.annHidden) return null;
+    // Out-of-span shapes render nothing — their handles must not grab either.
+    if (ann.span.start > state.playhead || state.playhead > ann.span.end) {
+      return null;
+    }
+    var canvas = canvasEl();
+    var px = nx * canvas.width;
+    var py = ny * canvas.height;
+    var frame = shapeFrame(ann, canvas.width, canvas.height);
+    var slop = SHAPE_HANDLE_R + 3;
+    if (Math.abs(px - frame.rotHandle[0]) <= slop &&
+        Math.abs(py - frame.rotHandle[1]) <= slop) {
+      return { ann: ann, mode: "rotate" };
+    }
+    for (var i = 0; i < 4; i++) {
+      if (Math.abs(px - frame.corners[i][0]) <= slop &&
+          Math.abs(py - frame.corners[i][1]) <= slop) {
+        return { ann: ann, mode: "resize", corner: i };
+      }
+    }
+    return null;
+  }
+
+  // Apply a handle drag to the shape's geometry (mutates in place; the orig
+  // snapshot backs the undoable commit on pointer-up).
+  function updateShapeEdit(pos, e) {
+    var canvas = canvasEl();
+    var w = canvas.width;
+    var h = canvas.height;
+    var g = _shapeEdit.ann.geometry;
+    var orig = _shapeEdit.orig;
+    var px = pos.x * w;
+    var py = pos.y * h;
+    var cx = orig.x * w;
+    var cy = orig.y * h;
+    if (_shapeEdit.mode === "rotate") {
+      // The knob sits at local -y, so the pointer angle needs a +90° bias.
+      var deg = (Math.atan2(py - cy, px - cx) * 180) / Math.PI + 90;
+      if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+      g.rotation = ((deg % 360) + 360) % 360;
+      return;
+    }
+    // Corner resize in the shape's local (rotated) frame; the corner opposite
+    // the grabbed one stays fixed.
+    var rad = ((orig.rotation || 0) * Math.PI) / 180;
+    var cos = Math.cos(rad);
+    var sin = Math.sin(rad);
+    var dx = px - cx;
+    var dy = py - cy;
+    var lx = dx * cos + dy * sin;  // R(-θ)·(pointer − center)
+    var ly = -dx * sin + dy * cos;
+    var signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]][_shapeEdit.corner];
+    var fx = -signs[0] * (orig.w * w) / 2;
+    var fy = -signs[1] * (orig.h * h) / 2;
+    var newW = Math.max(Math.abs(lx - fx), 8);
+    var newH = Math.max(Math.abs(ly - fy), 8);
+    var mx = (lx + fx) / 2;
+    var my = (ly + fy) / 2;
+    g.x = clamp((cx + mx * cos - my * sin) / w, 0, 1);
+    g.y = clamp((cy + mx * sin + my * cos) / h, 0, 1);
+    g.w = Math.min(newW / w, 1);
+    g.h = Math.min(newH / h, 1);
   }
 
   // Delete whatever sits under the eraser, once per annotation per gesture
@@ -229,6 +396,7 @@
     canvas.classList.toggle("co-tool-text", tool === "text");
     canvas.classList.toggle("co-tool-draw", tool === "draw");
     canvas.classList.toggle("co-tool-erase", tool === "erase");
+    canvas.classList.toggle("co-tool-shape", tool === "rect" || tool === "ellipse");
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
       btn.classList.toggle("active", btn.getAttribute("data-tool") === tool);
     });
@@ -358,7 +526,10 @@
       if (!state.participant) return;
       var pos = eventToNormalized(e);
       if (!pos) return;
-      if (state.annTool === "draw") {
+      if (state.annTool === "rect" || state.annTool === "ellipse") {
+        _shaping = { x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y };
+        canvas.setPointerCapture(e.pointerId);
+      } else if (state.annTool === "draw") {
         _drawing = { points: [[pos.x, pos.y]] };
         canvas.setPointerCapture(e.pointerId);
       } else if (state.annTool === "text") {
@@ -372,6 +543,18 @@
         canvas.setPointerCapture(e.pointerId);
         eraseAt(pos);
       } else {
+        // Shape handles win over body hits — they extend past the outline.
+        var handle = hitTestShapeHandle(pos.x, pos.y);
+        if (handle) {
+          _shapeEdit = {
+            ann: handle.ann,
+            mode: handle.mode,
+            corner: handle.corner,
+            orig: JSON.parse(JSON.stringify(handle.ann.geometry)),
+          };
+          canvas.setPointerCapture(e.pointerId);
+          return;
+        }
         var ann = hitTestAnnotation(pos.x, pos.y);
         CO.selectAnnotation(ann ? ann.id : null);
         if (ann) {
@@ -390,7 +573,14 @@
     canvas.addEventListener("pointermove", function (e) {
       var pos = eventToNormalized(e);
       if (!pos) return;
-      if (_drawing) {
+      if (_shaping) {
+        _shaping.x1 = pos.x;
+        _shaping.y1 = pos.y;
+        renderAnnotations();
+      } else if (_shapeEdit) {
+        updateShapeEdit(pos, e);
+        renderAnnotations();
+      } else if (_drawing) {
         var last = _drawing.points[_drawing.points.length - 1];
         // Thin out near-duplicate samples; keeps stored strokes compact.
         if (Math.abs(pos.x - last[0]) + Math.abs(pos.y - last[1]) > 0.003) {
@@ -406,7 +596,7 @@
         if (!_dragging.moved) return;
         var geometry = _dragging.ann.geometry;
         var orig = _dragging.origGeometry;
-        if (_dragging.ann.type === "text") {
+        if (_dragging.ann.type === "text" || _dragging.ann.type === "shape") {
           geometry.x = clamp(orig.x + dx, 0, 1);
           geometry.y = clamp(orig.y + dy, 0, 1);
         } else {
@@ -424,6 +614,39 @@
       }
       if (_erasing) {
         _erasing = null;
+        return;
+      }
+      if (_shaping) {
+        var draft = _shaping;
+        _shaping = null;
+        // Reject accidental clicks: the drag must span a visible size.
+        if (Math.abs(draft.x1 - draft.x0) * canvas.width >= 6 &&
+            Math.abs(draft.y1 - draft.y0) * canvas.height >= 6) {
+          CO.createAnnotation({
+            participant: state.participant,
+            type: "shape",
+            span: defaultSpan(),
+            geometry: {
+              shape: state.annTool === "ellipse" ? "ellipse" : "rect",
+              x: (draft.x0 + draft.x1) / 2,
+              y: (draft.y0 + draft.y1) / 2,
+              w: Math.abs(draft.x1 - draft.x0),
+              h: Math.abs(draft.y1 - draft.y0),
+              rotation: 0,
+            },
+            style: { color: state.annColor },
+          });
+          setAnnotateTool("select");
+        }
+        renderAnnotations(); // clear the draft preview
+        return;
+      }
+      if (_shapeEdit) {
+        var edit = _shapeEdit;
+        _shapeEdit = null;
+        if (JSON.stringify(edit.ann.geometry) !== JSON.stringify(edit.orig)) {
+          CO.commitAnnotationField(edit.ann, "geometry", edit.orig);
+        }
         return;
       }
       if (_drawing) {

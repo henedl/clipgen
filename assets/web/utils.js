@@ -66,6 +66,7 @@ var CLIPGEN_CONFIG = {
   composerAnnotationFontSize: 0.035,
   composerAnnotationSpanSeconds: 10.0,
   composerScrubMaxAudioSeconds: 180.0,
+  composerDoubleClickCuts: true,
   hotkeyOverrides: {},
 };
 
@@ -124,6 +125,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.composerScrubMaxAudioSeconds === "number") {
     CLIPGEN_CONFIG.composerScrubMaxAudioSeconds = payload.composerScrubMaxAudioSeconds;
+  }
+  if (typeof payload.composerDoubleClickCuts === "boolean") {
+    CLIPGEN_CONFIG.composerDoubleClickCuts = payload.composerDoubleClickCuts;
   }
   if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
     CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;

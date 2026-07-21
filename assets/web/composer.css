@@ -267,6 +267,24 @@ body[data-frontend="composer"] {
   color: var(--fg);
 }
 
+/* Shape-tool glyphs: plain outline square/circle (Heroicons has no bare
+   circle, so both are CSS outlines for a matched pair — not icon masks). */
+.co-shape-glyph {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  box-sizing: border-box;
+}
+
+.co-shape-rect {
+  border-radius: 2px;
+}
+
+.co-shape-ellipse {
+  border-radius: 50%;
+}
+
 .co-annotate-colors {
   display: flex;
   gap: var(--space-1);
@@ -314,6 +332,7 @@ body[data-frontend="composer"] {
 #coAnnotateCanvas.co-tool-text { cursor: text; }
 #coAnnotateCanvas.co-tool-draw { cursor: crosshair; }
 #coAnnotateCanvas.co-tool-erase { cursor: cell; }
+#coAnnotateCanvas.co-tool-shape { cursor: crosshair; }
 
 #coAnnotateText {
   position: absolute;

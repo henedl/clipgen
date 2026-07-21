@@ -861,6 +861,28 @@
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", endDrag);
 
+    // Double-click on empty timeline space sets the pending in point, then a
+    // second double-click commits the out point (config-gated; the preceding
+    // single clicks already scrubbed the playhead to the clicked time).
+    canvas.addEventListener("dblclick", function (e) {
+      if (!CLIPGEN_CONFIG.composerDoubleClickCuts) return;
+      if (!state.duration || !state.participant) return;
+      if (hitTestCutEdge(e.clientX, e.clientY) ||
+          hitTestLaneEdge(e.clientX, e.clientY) ||
+          hitTestCutBody(e.clientX, e.clientY) ||
+          hitTest(e.clientX, e.clientY)) {
+        return; // clicks on cuts/markers/annotations keep their own semantics
+      }
+      var ts = xToTime(e.clientX);
+      if (ts === null) return;
+      if (CO.seekVideo) CO.seekVideo(ts);
+      if (state.pendingIn === null) {
+        if (CO.setInPoint) CO.setInPoint();
+      } else if (CO.setOutPoint) {
+        CO.setOutPoint();
+      }
+    });
+
     // Right-click a trimmed marker to reset its trim (tooltip advertises this).
     canvas.addEventListener("contextmenu", function (e) {
       var hit = hitTest(e.clientX, e.clientY);

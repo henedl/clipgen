@@ -52,8 +52,9 @@
 
   <main id="coShell">
     <section id="coStage" aria-label="Video">
-      <!-- Annotation toolbar: tools (V/T/D), color swatches, span-gated
-           exports. Floats over the stage's top-left. -->
+      <!-- Annotation toolbar: tools (V/T/D/U/C + eraser), hide toggle, color
+           swatches + picker, span-gated exports. Floats over the stage's
+           top-left. -->
       <div id="coAnnotateBar" class="hidden" role="toolbar" aria-label="Annotate">
         <button id="coToolSelect" class="co-tool-btn active" type="button"
                 data-tool="select" data-hotkey="composer.toolSelect" title="Select / move annotations (V)">
@@ -66,6 +67,14 @@
         <button id="coToolDraw" class="co-tool-btn" type="button"
                 data-tool="draw" data-hotkey="composer.toolDraw" title="Freehand draw (D)">
           <span class="co-btn-icon co-icon-draw" aria-hidden="true"></span>
+        </button>
+        <button id="coToolRect" class="co-tool-btn" type="button"
+                data-tool="rect" data-hotkey="composer.toolRect" title="Rectangle (U). Drag on the video to place">
+          <span class="co-shape-glyph co-shape-rect" aria-hidden="true"></span>
+        </button>
+        <button id="coToolEllipse" class="co-tool-btn" type="button"
+                data-tool="ellipse" data-hotkey="composer.toolEllipse" title="Circle (C). Drag on the video to place">
+          <span class="co-shape-glyph co-shape-ellipse" aria-hidden="true"></span>
         </button>
         <button id="coToolErase" class="co-tool-btn" type="button"
                 data-tool="erase" data-hotkey="composer.toolErase" title="Eraser (E). Click or drag over annotations">

@@ -200,6 +200,17 @@
       " / " + formatTime(state.duration, { decimals: 0 });
   }
 
+  // The footer hint advertises double-click cuts only while the setting is on
+  // (config at boot; the Settings modal's onSave re-syncs it live).
+  function updateTimelineHint() {
+    var hint = qs(".co-timeline-hint");
+    if (!hint) return;
+    hint.textContent = "scroll to zoom · drag to pan · drag cut edges to trim" +
+      (CLIPGEN_CONFIG.composerDoubleClickCuts
+        ? " · double-click to set in/out"
+        : "");
+  }
+
   // Subheader source readout: duration · resolution · fps (Screenspace's
   // video-info format). Resolution/fps ride along on the participant record;
   // duration may firm up later for single-part participants (loadedmetadata).
@@ -382,6 +393,7 @@
     updatePendingInfo();
     renderPlayhead();
   }
+  CO.setInPoint = setInPoint;
 
   // Raw appliers — perform the API call + local state update, no undo
   // recording. User actions wrap these and record an op; undo/redo replay
@@ -605,6 +617,7 @@
       })
       .catch(opFailed);
   }
+  CO.setOutPoint = setOutPoint;
 
   function deleteCut(id) {
     var cut = findCut(id);
@@ -1353,6 +1366,8 @@
       { id: "composer.toolText", handler: function () { setAnnotateTool("text"); } },
       { id: "composer.toolDraw", handler: function () { setAnnotateTool("draw"); } },
       { id: "composer.toolErase", handler: function () { setAnnotateTool("erase"); } },
+      { id: "composer.toolRect", handler: function () { setAnnotateTool("rect"); } },
+      { id: "composer.toolEllipse", handler: function () { setAnnotateTool("ellipse"); } },
       {
         id: "composer.toggleSource",
         handler: function (e, combo) {
@@ -1509,11 +1524,26 @@
     var settingsBtn = qs("#settingsBtn");
     if (settingsBtn && typeof window.openSettingsModal === "function") {
       settingsBtn.addEventListener("click", function () {
-        window.openSettingsModal({});
+        // Saved/reset settings apply live on this page: re-sync the mirrored
+        // config flag and the footer hint that advertises it.
+        function syncComposerSettings(settings) {
+          (settings || []).forEach(function (s) {
+            if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
+              CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
+            }
+          });
+          updateTimelineHint();
+        }
+        window.openSettingsModal({
+          initialTab: "Composer",
+          onSave: function (_applied, settings) { syncComposerSettings(settings); },
+          onReset: function (_scope, settings) { syncComposerSettings(settings); },
+        });
       });
     }
 
     state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+    updateTimelineHint();
     initCommandPalette();
     initParticipantSelect();
     initVideo();
@@ -1588,6 +1618,7 @@
     apiGet("api/participants").then(function (data) {
       if (!data.ok) return;
       if (data.config) clipgenApplyConfig(data.config);
+      updateTimelineHint(); // the double-click hint follows the fetched config
       state.participants = data.participants || [];
       populateParticipantSelect();
       return manifestLoaded.then(function () {

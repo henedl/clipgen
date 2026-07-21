@@ -98,6 +98,8 @@
     { id: "composer.toolText",         section: "composer", group: "Annotate", label: "Text tool", combos: ["T"] },
     { id: "composer.toolDraw",         section: "composer", group: "Annotate", label: "Draw tool", combos: ["D"] },
     { id: "composer.toolErase",        section: "composer", group: "Annotate", label: "Erase tool", combos: ["E"] },
+    { id: "composer.toolRect",         section: "composer", group: "Annotate", label: "Rectangle tool", combos: ["U"] },
+    { id: "composer.toolEllipse",      section: "composer", group: "Annotate", label: "Circle tool", combos: ["C"] },
     { id: "composer.holdHideAnnotations", section: "composer", group: "Annotate", label: "Hide annotations (hold or tap)", combos: ["B"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
     { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["0"] },

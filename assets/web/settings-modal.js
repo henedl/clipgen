@@ -14,6 +14,7 @@
     "Hotkeys",
     "Video & Clips",
     "Screenspace",
+    "Composer",
     "Transcription",
     "Summaries",
     "CLI",
