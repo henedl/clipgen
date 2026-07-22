@@ -38,6 +38,7 @@
     markerAudioScrub: false, // hover audio scrub + waveform on bars (persisted ui)
     followPlayhead: true,   // pan the zoomed timeline to keep the playhead in view (persisted ui)
     sidebarTab: "cuts",     // "cuts" | "sheet" | "screenspace" | "transcript"
+    sidebarOpen: true,      // right timelines panel collapsed/expanded (localStorage)
     zoom: 1,
     offset: 0,              // timeline pan offset (global seconds)
     dragging: false,        // timeline satellite sets during pan/edge drags
@@ -1082,6 +1083,48 @@
     });
   }
 
+  // ---- Right timelines panel: collapse/expand (browser-local, like Studio) ----
+
+  var SIDEBAR_OPEN_KEY = "clipgen-composer-sidebar-open";
+
+  function applySidebarOpen() {
+    var panel = qs("#coCutPanel");
+    if (panel) panel.setAttribute("data-open", state.sidebarOpen ? "true" : "false");
+    var btn = qs("#coCutPanelToggle");
+    if (btn) btn.setAttribute("aria-expanded", state.sidebarOpen ? "true" : "false");
+  }
+
+  function readPersistedSidebarOpen() {
+    try {
+      var stored = localStorage.getItem(SIDEBAR_OPEN_KEY);
+      if (stored !== null) state.sidebarOpen = stored !== "false";
+    } catch (_) {}
+    // Apply before first paint so a persisted-collapsed panel shows collapsed
+    // immediately; the flex-basis transition is gated on `.tx-ready` (added
+    // after first paint below), so the initial open→collapsed flip never
+    // animates. Mirrors studio.js readPersistedSidebarOpen.
+    applySidebarOpen();
+    var panel = qs("#coCutPanel");
+    if (!panel) return;
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        panel.classList.add("tx-ready");
+      });
+    });
+  }
+
+  function toggleSidebar() {
+    state.sidebarOpen = !state.sidebarOpen;
+    try {
+      localStorage.setItem(SIDEBAR_OPEN_KEY, state.sidebarOpen ? "true" : "false");
+    } catch (_) {}
+    applySidebarOpen();
+  }
+
+  // Run synchronously at script load (composer.js is deferred, so #coCutPanel
+  // already exists) rather than in boot(): sets data-open before first paint.
+  readPersistedSidebarOpen();
+
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
 
   function readNDJSONStream(response, onLine) {
@@ -1388,6 +1431,7 @@
         id: "composer.toggleScrubAudio",
         handler: function () { qs("#coScrubAudioToggle").click(); },
       },
+      { id: "composer.toggleSidebar", handler: function () { toggleSidebar(); } },
       { id: "global.primary", handler: function () { onGenerate(); } },
       { id: "edit.undo", handler: function () { undo(); } },
       { id: "edit.redo", handler: function () { redo(); } },
@@ -1473,6 +1517,8 @@
           "filmstrip sprites frames strips", "coThumbsToggle"),
         buttonCommand("composer:scrub-audio", "Toggle marker audio scrub", "speaker-wave",
           "waveform sound hover", "coScrubAudioToggle"),
+        buttonCommand("composer:toggle-sidebar", "Toggle timelines sidebar", "adjustments-horizontal",
+          "show hide panel drawer collapse", "coCutPanelToggle"),
         buttonCommand("composer:shortcuts", "Keyboard shortcuts", "command-line",
           "cheatsheet keys help", "coShortcutsBtn"),
         listTabCommand("cuts", "Show Cuts list", "list-bullet"),
@@ -1571,6 +1617,7 @@
     qs("#logOverlay").addEventListener("click", function (e) {
       if (e.target === qs("#logOverlay")) closeLog();
     });
+    qs("#coCutPanelToggle").addEventListener("click", toggleSidebar);
     initSidebarTabs();
 
     // The two boot fetches run in parallel, but participant auto-select MUST

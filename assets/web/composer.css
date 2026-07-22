@@ -396,6 +396,65 @@ body[data-frontend="composer"] {
   flex-direction: column;
 }
 
+/* Collapse to a thin strip (the toggle stays visible). Transition is gated on
+ * `.tx-ready`, added by composer.js after the first paint, so a persisted-
+ * collapsed panel appears collapsed instantly instead of animating open→closed
+ * on load (mirrors #studioSidebar). */
+#coCutPanel.tx-ready {
+  transition: flex-basis 180ms ease-out;
+}
+#coCutPanel.tx-ready .co-panel-toggle-icon {
+  transition: transform 180ms ease-out;
+}
+#coCutPanel[data-open="false"] {
+  flex-basis: 32px;
+  width: 32px;
+}
+#coCutPanel[data-open="false"] .co-panel-tabs,
+#coCutPanel[data-open="false"] #coCutList {
+  display: none;
+}
+
+#coCutPanelToggle {
+  align-self: flex-start;
+  width: 22px;
+  height: 22px;
+  margin: var(--space-2) var(--space-2) var(--space-1);
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
+  flex-shrink: 0;
+}
+#coCutPanelToggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.co-panel-toggle-icon {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  background-color: currentColor;
+  mask-image: url("icons/chevron-double-right.svg");
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-image: url("icons/chevron-double-right.svg");
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  /* Transition added by `#coCutPanel.tx-ready` rule above. */
+}
+#coCutPanel[data-open="false"] .co-panel-toggle-icon {
+  transform: rotate(180deg);
+}
+
 .co-panel-tabs {
   display: flex;
   gap: var(--space-1);

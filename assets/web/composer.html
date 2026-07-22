@@ -112,9 +112,11 @@
       </div>
     </section>
 
-    <aside id="coCutPanel" aria-label="Timelines">
+    <aside id="coCutPanel" aria-label="Timelines" data-open="true">
       <!-- One tab per timeline: the Composer cuts plus the three read-only
            marker sources. Every list item seeks the playhead to its in point. -->
+      <button id="coCutPanelToggle" type="button" aria-label="Toggle timelines sidebar"
+              aria-expanded="true" title="Collapse / expand timelines (F)" data-hotkey="composer.toggleSidebar"><span class="co-panel-toggle-icon" aria-hidden="true"></span></button>
       <div class="co-panel-tabs" role="tablist" aria-label="Timeline lists">
         <button class="co-panel-tab active" type="button" role="tab"
                 aria-selected="true" data-tab="cuts">Cuts</button>
@@ -175,7 +177,7 @@
         <div class="co-lane-checks" role="group" aria-label="Marker media">
           <label id="coThumbsToggle" class="co-lane-check co-media-check"
                  data-hotkey="composer.toggleThumbs"
-                 title="Toggle thumbnail strips on markers and cuts (F)">
+                 title="Toggle thumbnail strips on markers and cuts (S)">
             <input type="checkbox" autocomplete="off" tabindex="-1">Thumbs
           </label>
           <label id="coScrubAudioToggle" class="co-lane-check co-media-check"
