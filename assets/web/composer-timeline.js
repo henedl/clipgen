@@ -16,6 +16,7 @@
   var state = CO.state;
 
   var RULER_H = 18;
+  var STEP_TRACK_H = 8; // minor/major tick strip just under the timestamps
   var CUT_TRACK_H = 26; // the single cuts track, directly under the ruler
   var LANE_GAP = 3;
   var ROW_H = 15;       // one marker sub-row (14px bar + 1px gap)
@@ -29,6 +30,7 @@
   var _hitRects = [];          // marker + cut hover rects, rebuilt per render
   var _cachedRect = null;
   var _laneColors = null;
+  var _chromeColors = null;
 
   function laneColors() {
     if (!_laneColors) {
@@ -39,6 +41,18 @@
       };
     }
     return _laneColors;
+  }
+
+  // Subtle timeline chrome: alternating-row stripe fill + minor step-track tick
+  // color. Cached like laneColors() and re-sampled on theme flips.
+  function chromeColors() {
+    if (!_chromeColors) {
+      _chromeColors = {
+        stripe: getCSSVar("--co-timeline-stripe", "rgba(255,255,255,0.02)"),
+        grid: getCSSVar("--co-timeline-grid", "rgba(255,255,255,0.06)"),
+      };
+    }
+    return _chromeColors;
   }
 
   function canvasEl() { return qs("#coTimelineCanvas"); }
@@ -88,7 +102,7 @@
   // unfolds to its minimal packed row count. The strip's height follows via
   // updateTimelineHeight(), not vice versa.
   function layout() {
-    var cutY = RULER_H + 2;
+    var cutY = RULER_H + STEP_TRACK_H + 2;
     var y = cutY + cutTrackH() + 4;
     var spans = annotationSpans();
     var annRows = !spans.length
@@ -225,6 +239,27 @@
     return sorted;
   }
 
+  // Minor + major tick marks in the step-track strip under the timestamps.
+  // Minors are subdivided only while they stay legible (>= ~8px apart), so the
+  // ruler declutters automatically as the view zooms out.
+  function drawStepTrack(ctx, tx, vis, interval, w, chrome, tc) {
+    var majorPx = (interval / vis.len) * w;
+    var minorDiv = majorPx / 5 >= 8 ? 5 : majorPx / 2 >= 8 ? 2 : 1;
+    if (minorDiv > 1) {
+      var minorInt = interval / minorDiv;
+      ctx.fillStyle = chrome.grid;
+      for (var t = Math.ceil(vis.start / minorInt) * minorInt;
+           t <= vis.end + 1e-6; t += minorInt) {
+        ctx.fillRect(Math.round(tx(t)), RULER_H, 1, 3);
+      }
+    }
+    ctx.fillStyle = tc.textDim;
+    for (var T = Math.ceil(vis.start / interval) * interval;
+         T <= vis.end + 1e-6; T += interval) {
+      ctx.fillRect(Math.round(tx(T)), RULER_H, 1, 7);
+    }
+  }
+
   function renderTimeline() {
     var canvas = canvasEl();
     if (!canvas.width || !canvas.height) return;
@@ -250,25 +285,46 @@
 
     var vis = visWindow();
     function tx(t) { return timeToX(t, w); }
+    var L = layout();
+    var interval = niceTimeInterval(vis.len, { maxTicks: 20 });
+    var chrome = chromeColors();
 
+    // Subtle alternating row bands, ledger-style: fill every other lane band
+    // (cuts → annotations → each visible source lane) under the content.
+    var bands = [{ y: L.cutY, h: L.cutH }];
+    if (L.annotationsLane.rows) {
+      bands.push({ y: L.annotationsLane.y, h: L.annotationsLane.h });
+    }
+    SOURCES.forEach(function (source) {
+      var lane = L.lanes[source];
+      if (lane.rows) bands.push({ y: lane.y, h: lane.h });
+    });
+    ctx.fillStyle = chrome.stripe;
+    bands.forEach(function (b, i) {
+      if (i % 2 === 1) ctx.fillRect(0, b.y, w, b.h);
+    });
+
+    // Step track: minor + major tick marks just under the timestamps (a
+    // video-editor-style ruler), instead of full-height gridlines that clutter
+    // the lanes. Majors align with the ruler labels; minors subdivide them.
+    drawStepTrack(ctx, tx, vis, interval, w, chrome, tc);
+
+    // Labels only — the ruler's own ticks are suppressed (tickHeight 0) so the
+    // step track owns the tick marks.
     drawTimelineRuler(ctx, {
       visStart: vis.start,
       visEnd: vis.end,
-      interval: niceTimeInterval(vis.len, { maxTicks: 20 }),
+      interval: interval,
       timeToX: tx,
       colors: { border: tc.border, textDim: tc.textDim, fontMono: tc.fontMono },
-      tickHeight: 8,
-      labelY: RULER_H - 2,
+      tickHeight: 0,
+      labelY: RULER_H - 6,
       format: formatDuration,
     });
 
-    var L = layout();
-
     // Cuts track — the single working track for all in/out pairs, directly
-    // under the ruler so committed cuts land visibly on the timeline.
-    ctx.strokeStyle = tc.border;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, L.cutY - 0.5, w - 1, L.cutH + 1);
+    // under the ruler so committed cuts land visibly on the timeline. Its
+    // boundary reads from the alternating band, so no separator outline.
     // Chronological numbering shared with the cut list's index badges.
     var cutIndexById = {};
     if (CO.sortedCuts) {
@@ -355,7 +411,7 @@
         var ax2 = tx(entry.end);
         var arw = Math.max(ax2 - ax1, 2);
         var ay = annLane.y + entry._row * ROW_H;
-        var annSelected = entry.ann.id === state.selectedAnnotationId;
+        var annSelected = CO.isAnnotationSelected(entry.ann.id);
         var annColor = (entry.ann.style && entry.ann.style.color) || tc.accent;
         ctx.fillStyle = hexToRgba(annColor, (annSelected ? 0.8 : 0.5) * annDim);
         ctx.fillRect(ax1, ay, arw, ROW_H - 1);
@@ -384,14 +440,15 @@
     if (!state.duration) return;
     var frag = document.createDocumentFragment();
 
-    function foldButton(source, laneY) {
+    function foldButton(source, laneY, laneH) {
       var folded = !!state.laneFolds[source];
       var btn = el("button", "co-lane-fold");
       btn.type = "button";
       btn.setAttribute("data-source", source);
       btn.title = (folded ? "Unfold " : "Fold ") + source + " lane";
       btn.setAttribute("aria-label", btn.title);
-      btn.style.top = laneY + "px";
+      // Vertically center in the lane (CSS translateY(-50%) does the rest).
+      btn.style.top = (laneY + laneH / 2) + "px";
       btn.appendChild(el("span",
         "co-btn-icon " + (folded ? "co-icon-fold-closed" : "co-icon-fold-open")));
       btn.addEventListener("click", function (e) {
@@ -407,10 +464,11 @@
     SOURCES.forEach(function (source) {
       var lane = L.lanes[source];
       if (!lane.rows) return;
-      frag.appendChild(foldButton(source, lane.y));
+      frag.appendChild(foldButton(source, lane.y, lane.h));
     });
     if (L.annotationsLane.rows) {
-      frag.appendChild(foldButton("annotations", L.annotationsLane.y));
+      frag.appendChild(
+        foldButton("annotations", L.annotationsLane.y, L.annotationsLane.h));
     }
     rail.appendChild(frag);
   }
@@ -922,6 +980,6 @@
   CO.revealTime = revealTime;
   CO.renderPlayhead = renderPlayhead;
   CO.updateTimelineHeight = updateTimelineHeight;
-  // Theme flips resample the --stream-* lane colors on the next render.
-  CO.invalidateLaneColors = function () { _laneColors = null; };
+  // Theme flips resample the --stream-* lane + chrome colors on the next render.
+  CO.invalidateLaneColors = function () { _laneColors = null; _chromeColors = null; };
 })();

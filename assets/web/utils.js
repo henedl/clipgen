@@ -63,6 +63,7 @@ var CLIPGEN_CONFIG = {
   gifFormat: ".gif",
   composerAnnotationColor: "#f05a3c",
   composerAnnotationStrokeWidth: 0.004,
+  composerAnnotationStrokeStyle: "solid",
   composerAnnotationFontSize: 0.035,
   composerAnnotationSpanSeconds: 10.0,
   composerScrubMaxAudioSeconds: 180.0,

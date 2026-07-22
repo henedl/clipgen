@@ -389,6 +389,7 @@ def api_ui_update() -> Any:
 
 ANNOTATION_TYPES = ("text", "freehand", "shape")
 ANNOTATION_SHAPES = ("rect", "ellipse")
+ANNOTATION_STROKE_STYLES = ("solid", "dashed", "dotted")
 
 
 def _clamp01(value: Any) -> float:
@@ -453,9 +454,14 @@ def _sanitize_annotation_style(style: Any) -> dict[str, Any]:
             return default
         return value if value > 0 else default
 
+    stroke_style = str(style.get("strokeStyle") or "").lower()
+    if stroke_style not in ANNOTATION_STROKE_STYLES:
+        stroke_style = config.COMPOSER_ANNOTATION_STROKE_STYLE
+
     return {
         "color": str(style.get("color") or config.COMPOSER_ANNOTATION_COLOR),
         "strokeWidth": _num("strokeWidth", config.COMPOSER_ANNOTATION_STROKE_WIDTH),
+        "strokeStyle": stroke_style,
         "fontSize": _num("fontSize", config.COMPOSER_ANNOTATION_FONT_SIZE),
     }
 
@@ -585,6 +591,83 @@ def _parse_hex_color(value: str) -> tuple[int, int, int, int]:
         return (240, 90, 60, 255)  # config default's RGB
 
 
+def _sample_polyline(
+    pts: list[tuple[float, float]], spacing: float
+) -> list[tuple[float, float]]:
+    """Points spaced ~*spacing* px along the polyline (endpoints included)."""
+    result = [pts[0]]
+    next_at = spacing
+    dist = 0.0
+    for i in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        seg = math.hypot(x1 - x0, y1 - y0)
+        if seg <= 0:
+            continue
+        ux, uy = (x1 - x0) / seg, (y1 - y0) / seg
+        while next_at <= dist + seg:
+            t = next_at - dist
+            result.append((x0 + ux * t, y0 + uy * t))
+            next_at += spacing
+        dist += seg
+    result.append(pts[-1])
+    return result
+
+
+def _dash_segments(
+    pts: list[tuple[float, float]], on: float, off: float
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """(a, b) endpoint pairs for the 'on' runs of a dashed polyline.
+
+    ``pos`` carries the arc length across polyline vertices so the dash pattern
+    stays continuous around corners (the same look ``ctx.setLineDash`` gives).
+    """
+    period = on + off
+    segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    pos = 0.0
+    for i in range(len(pts) - 1):
+        (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+        seg = math.hypot(x1 - x0, y1 - y0)
+        if seg <= 0:
+            continue
+        ux, uy = (x1 - x0) / seg, (y1 - y0) / seg
+        d = 0.0
+        while d < seg:
+            phase = pos % period
+            if phase < on:
+                run = min(on - phase, seg - d)
+                segs.append(
+                    (
+                        (x0 + ux * d, y0 + uy * d),
+                        (x0 + ux * (d + run), y0 + uy * (d + run)),
+                    )
+                )
+            else:
+                run = min(period - phase, seg - d)
+            d += run
+            pos += run
+    return segs
+
+
+def _dash_polyline(
+    draw: Any,
+    points: list[tuple[float, float]],
+    color: Any,
+    width: int,
+    style: str,
+) -> None:
+    """Stroke a polyline dashed/dotted — PIL has no native dash support."""
+    pts = [(float(x), float(y)) for (x, y) in points]
+    if len(pts) < 2:
+        return
+    if style == "dotted":
+        r = max(1.0, width / 2.0)
+        for cx, cy in _sample_polyline(pts, max(2.0, width * 2.0)):
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
+        return
+    for a, b in _dash_segments(pts, max(1.0, width * 2.5), max(1.0, width * 2.0)):
+        draw.line([a, b], fill=color, width=width, joint="curve")
+
+
 def _render_annotation_overlay(
     annotations: list[dict[str, Any]], width: int, height: int
 ) -> Any:
@@ -618,12 +701,16 @@ def _render_annotation_overlay(
                     * width
                 ),
             )
+            stroke_style = str(style.get("strokeStyle") or "solid")
             if len(points) == 1:
                 x, y = points[0]
                 r = max(stroke, 2)
                 draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
             elif points:
-                draw.line(points, fill=color, width=stroke, joint="curve")
+                if stroke_style == "solid":
+                    draw.line(points, fill=color, width=stroke, joint="curve")
+                else:
+                    _dash_polyline(draw, points, color, stroke, stroke_style)
         elif ann.get("type") == "shape":
             cx = float(geometry.get("x", 0)) * width
             cy = float(geometry.get("y", 0)) * height
@@ -643,6 +730,7 @@ def _render_annotation_overlay(
                     * width
                 ),
             )
+            stroke_style = str(style.get("strokeStyle") or "solid")
             if geometry.get("shape") == "rect":
                 # Rotate the corners with the same transform the browser's
                 # ctx.rotate applies (y-down: positive = clockwise), so the
@@ -659,13 +747,37 @@ def _render_annotation_overlay(
                         (-sw / 2, sh / 2),
                     )
                 ]
-                draw.line(
-                    corners + [corners[0], corners[1]],
-                    fill=color,
-                    width=stroke,
-                    joint="curve",
+                if stroke_style == "solid":
+                    draw.line(
+                        corners + [corners[0], corners[1]],
+                        fill=color,
+                        width=stroke,
+                        joint="curve",
+                    )
+                else:
+                    _dash_polyline(
+                        draw, corners + [corners[0]], color, stroke, stroke_style
+                    )
+            elif stroke_style != "solid":
+                # Dashed/dotted ellipse: sample the (rotated) perimeter as a
+                # polygon and dash-walk it — PIL can't dash an ellipse outline,
+                # and this also handles rotation without the composite trick.
+                a, b = sw / 2, sh / 2
+                perim = math.pi * (
+                    3 * (a + b) - math.sqrt(max(0.0, (3 * a + b) * (a + 3 * b)))
                 )
-            else:  # ellipse
+                n = max(48, int(perim / max(1.0, stroke * 2)))
+                rad = math.radians(rotation)
+                cos_r, sin_r = math.cos(rad), math.sin(rad)
+                poly = []
+                for k in range(n + 1):
+                    th = 2 * math.pi * k / n
+                    ex, ey = a * math.cos(th), b * math.sin(th)
+                    poly.append(
+                        (cx + ex * cos_r - ey * sin_r, cy + ex * sin_r + ey * cos_r)
+                    )
+                _dash_polyline(draw, poly, color, stroke, stroke_style)
+            else:  # solid ellipse
                 box = [cx - sw / 2, cy - sh / 2, cx + sw / 2, cy + sh / 2]
                 if abs(rotation) < 0.01:
                     draw.ellipse(box, outline=color, width=stroke)

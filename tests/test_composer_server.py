@@ -492,6 +492,90 @@ def test_render_annotation_overlay_draws_pixels():
     assert region.getchannel("A").getextrema()[1] > 0
 
 
+def test_render_annotation_overlay_dashed_freehand_has_gaps():
+    overlay = composer_server._render_annotation_overlay(
+        [
+            {
+                "type": "freehand",
+                "geometry": {"points": [[0.1, 0.5], [0.9, 0.5]]},
+                "style": {
+                    "color": "#ff0000",
+                    "strokeWidth": 0.01,
+                    "strokeStyle": "dashed",
+                },
+            }
+        ],
+        640,
+        360,
+    )
+    row_alpha = [overlay.getpixel((x, 180))[3] for x in range(70, 570)]
+    assert max(row_alpha) > 0  # dashes were drawn
+    assert min(row_alpha) == 0  # ...with gaps between them (not a solid line)
+
+
+def test_render_annotation_overlay_dashed_dotted_shapes_draw():
+    # Rotated dashed rect + rotated dotted ellipse must render without error and
+    # put down some pixels (the dash/perimeter-polygon paths, not the solid ones).
+    overlay = composer_server._render_annotation_overlay(
+        [
+            {
+                "type": "shape",
+                "geometry": {
+                    "shape": "rect",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.6,
+                    "h": 0.6,
+                    "rotation": 15.0,
+                },
+                "style": {
+                    "color": "#ff0000",
+                    "strokeWidth": 0.008,
+                    "strokeStyle": "dashed",
+                },
+            },
+            {
+                "type": "shape",
+                "geometry": {
+                    "shape": "ellipse",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "w": 0.5,
+                    "h": 0.3,
+                    "rotation": 40.0,
+                },
+                "style": {
+                    "color": "#00ff00",
+                    "strokeWidth": 0.008,
+                    "strokeStyle": "dotted",
+                },
+            },
+        ],
+        640,
+        360,
+    )
+    assert overlay.mode == "RGBA"
+    assert overlay.getchannel("A").getextrema()[1] > 0
+
+
+def test_sanitize_annotation_style_stroke_style():
+    assert (
+        composer_server._sanitize_annotation_style({"strokeStyle": "dashed"})[
+            "strokeStyle"
+        ]
+        == "dashed"
+    )
+    # Unknown value falls back to the configured default.
+    assert (
+        composer_server._sanitize_annotation_style({"strokeStyle": "zigzag"})[
+            "strokeStyle"
+        ]
+        == config.COMPOSER_ANNOTATION_STROKE_STYLE
+    )
+    # Missing → default.
+    assert composer_server._sanitize_annotation_style({})["strokeStyle"] == "solid"
+
+
 def test_annotation_windows_split_by_visibility():
     anns = [
         {"span": {"start": 0.0, "end": 10.0}, "id": "a"},

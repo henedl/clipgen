@@ -9,11 +9,14 @@
  * screen↔normalized coordinate mapping (geometry is normalized 0..1 to the
  * frame so the browser preview matches the server's PIL burn-in at any
  * resolution; shape rotation is degrees clockwise, applied in pixel space).
+ * Multi-select (shift-click + marquee), the stroke width/style menus, and
+ * hold-Shift proportion locking live here too.
  *
- * CRUD + undo/redo live in the hub (CO.createAnnotation / deleteAnnotation /
- * commitAnnotationField / selectAnnotation); this file only draws and
- * captures gestures. CLIPGEN_CONFIG / qs / el / clamp are ambient utils.js
- * globals.
+ * CRUD + undo/redo + selection live in the hub (CO.createAnnotation /
+ * deleteAnnotation / commitAnnotationField(Group) / selectAnnotation /
+ * selectedAnnotations / …); this file only draws and captures gestures.
+ * CLIPGEN_CONFIG / qs / qsa / el / clamp / getCSSVar / hexToRgba are ambient
+ * utils.js globals.
  */
 (function () {
   "use strict";
@@ -25,13 +28,19 @@
     "#f05a3c", "#f0b429", "#3ecf8e", "#38bdf8", "#a78bfa", "#f8fafc",
   ];
 
+  // Stroke width presets (fraction of frame width; 0.004 == the config default).
+  // The menu labels each as Math.round(v * 1000) — a stable weight number.
+  var STROKE_WIDTHS = [0.002, 0.004, 0.006, 0.010, 0.016];
+  var STROKE_STYLES = ["solid", "dashed", "dotted"];
+
   var _hitBoxes = [];  // screen-space bboxes from the last render (topmost last)
   var _drawing = null; // {points: [[nx, ny], ...]} while a stroke is captured
-  var _dragging = null; // {ann, startNx, startNy, origGeometry, moved}
+  var _dragging = null; // {anns:[{ann, orig}], startX, startY, moved} group move
   var _pendingText = null; // {x, y} normalized, while the text input is open
   var _erasing = null; // ids already deleted this eraser gesture (dedupe)
   var _shaping = null; // {x0, y0, x1, y1} normalized, while drag-creating a shape
   var _shapeEdit = null; // {ann, mode:"resize"|"rotate", corner, orig} handle drag
+  var _marquee = null; // {x0, y0, x1, y1, additive} normalized box-select drag
 
   var SHAPE_HANDLE_R = 4;    // corner/rotation handle radius, canvas px
   var SHAPE_ROT_OFFSET = 18; // rotation handle stem length above the top edge
@@ -116,6 +125,21 @@
     };
   }
 
+  // Configure ctx dash + line cap for a stroke style, scaling the pattern to
+  // the stroke width so it holds at any resolution (mirrors the server's PIL
+  // dash segmentation). Solid clears the dash and leaves the cap untouched.
+  function applyDashForStyle(ctx, strokeStyle, strokePx) {
+    if (strokeStyle === "dashed") {
+      ctx.setLineDash([strokePx * 2.5, strokePx * 2]);
+      ctx.lineCap = "butt";
+    } else if (strokeStyle === "dotted") {
+      ctx.setLineDash([strokePx * 0.6, strokePx * 1.8]);
+      ctx.lineCap = "round";
+    } else {
+      ctx.setLineDash([]);
+    }
+  }
+
   function drawAnnotation(ctx, ann, w, h, selected) {
     var style = ann.style || {};
     var color = style.color || CLIPGEN_CONFIG.composerAnnotationColor;
@@ -128,6 +152,7 @@
       ctx.rotate(frame.rad);
       ctx.strokeStyle = color;
       ctx.lineWidth = shapeStroke;
+      applyDashForStyle(ctx, style.strokeStyle, shapeStroke);
       if (ann.geometry.shape === "ellipse") {
         ctx.beginPath();
         ctx.ellipse(0, 0, frame.hw, frame.hh, 0, 0, Math.PI * 2);
@@ -157,6 +182,7 @@
       ctx.lineWidth = stroke;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
+      applyDashForStyle(ctx, style.strokeStyle, stroke);
       if (points.length === 1) {
         ctx.beginPath();
         ctx.arc(points[0][0], points[0][1], Math.max(stroke, 2), 0, Math.PI * 2);
@@ -167,6 +193,7 @@
         for (var i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
         ctx.stroke();
       }
+      ctx.setLineDash([]);
       var xs = points.map(function (p) { return p[0]; });
       var ys = points.map(function (p) { return p[1]; });
       return {
@@ -209,8 +236,9 @@
     // Hidden layer: nothing drawn, nothing hit-testable (select/erase find
     // nothing), but an in-flight stroke preview still renders below so the
     // draw tool keeps working.
+    var soleShape = CO.singleSelectedAnnotation();
     if (!state.annHidden) visibleAnnotations().forEach(function (ann) {
-      var selected = ann.id === state.selectedAnnotationId;
+      var selected = CO.isAnnotationSelected(ann.id);
       var box = drawAnnotation(ctx, ann, w, h, selected);
       if (!box) return;
       if (selected) {
@@ -219,25 +247,28 @@
         ctx.setLineDash([4, 3]);
         ctx.strokeRect(box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1);
         ctx.setLineDash([]);
-        if (ann.type === "shape" && state.annTool === "select") {
+        // Resize/rotate handles only for a single selected shape.
+        if (ann.type === "shape" && state.annTool === "select" && ann === soleShape) {
           drawShapeHandles(ctx, ann, w, h);
         }
       }
       _hitBoxes.push({ box: box, ann: ann });
     });
-    // In-flight stroke preview.
+    // In-flight stroke preview — matches the current tool's width + style.
     if (_drawing && _drawing.points.length) {
-      var stroke = Math.max(1, CLIPGEN_CONFIG.composerAnnotationStrokeWidth * w);
+      var stroke = Math.max(1, state.annStrokeWidth * w);
       ctx.strokeStyle = state.annColor;
       ctx.lineWidth = stroke;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
+      applyDashForStyle(ctx, state.annStrokeStyle, stroke);
       ctx.beginPath();
       ctx.moveTo(_drawing.points[0][0] * w, _drawing.points[0][1] * h);
       for (var i = 1; i < _drawing.points.length; i++) {
         ctx.lineTo(_drawing.points[i][0] * w, _drawing.points[i][1] * h);
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     }
     // In-flight shape-draft preview.
     if (_shaping) {
@@ -245,8 +276,10 @@
       var sy = Math.min(_shaping.y0, _shaping.y1) * h;
       var sw = Math.abs(_shaping.x1 - _shaping.x0) * w;
       var sh = Math.abs(_shaping.y1 - _shaping.y0) * h;
+      var draftStroke = Math.max(1, state.annStrokeWidth * w);
       ctx.strokeStyle = state.annColor;
-      ctx.lineWidth = Math.max(1, CLIPGEN_CONFIG.composerAnnotationStrokeWidth * w);
+      ctx.lineWidth = draftStroke;
+      applyDashForStyle(ctx, state.annStrokeStyle, draftStroke);
       if (state.annTool === "ellipse") {
         ctx.beginPath();
         ctx.ellipse(sx + sw / 2, sy + sh / 2, sw / 2, sh / 2, 0, 0, Math.PI * 2);
@@ -254,7 +287,38 @@
       } else {
         ctx.strokeRect(sx, sy, sw, sh);
       }
+      ctx.setLineDash([]);
     }
+    // Box-select marquee: dashed rect + a faint highlight on the shapes it
+    // currently covers (a live preview of what mouse-up will select).
+    if (_marquee) {
+      var mx1 = Math.min(_marquee.x0, _marquee.x1) * w;
+      var my1 = Math.min(_marquee.y0, _marquee.y1) * h;
+      var mw = Math.abs(_marquee.x1 - _marquee.x0) * w;
+      var mh = Math.abs(_marquee.y1 - _marquee.y0) * h;
+      var mAccent = getCSSVar("--color-accent", "#1d4f72");
+      ctx.fillStyle = hexToRgba(mAccent, 0.1);
+      ctx.fillRect(mx1, my1, mw, mh);
+      ctx.strokeStyle = mAccent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(mx1 + 0.5, my1 + 0.5, mw, mh);
+      ctx.setLineDash([]);
+      marqueeHits(mx1, my1, mx1 + mw, my1 + mh).forEach(function (hb) {
+        ctx.strokeStyle = hexToRgba(mAccent, 0.7);
+        ctx.strokeRect(hb.box.x1, hb.box.y1,
+          hb.box.x2 - hb.box.x1, hb.box.y2 - hb.box.y1);
+      });
+    }
+  }
+
+  // Hit boxes (canvas px) intersecting a marquee rect — the on-screen, in-span
+  // annotations box-select covers.
+  function marqueeHits(rx1, ry1, rx2, ry2) {
+    return _hitBoxes.filter(function (hb) {
+      return hb.box.x1 <= rx2 && hb.box.x2 >= rx1 &&
+        hb.box.y1 <= ry2 && hb.box.y2 >= ry1;
+    });
   }
 
   // Corner squares + a stemmed rotation knob for the selected shape.
@@ -283,8 +347,7 @@
 
   // Handle hit test for the SELECTED shape only (handles render only there).
   function hitTestShapeHandle(nx, ny) {
-    var ann = state.selectedAnnotationId &&
-      CO.findAnnotation(state.selectedAnnotationId);
+    var ann = CO.singleSelectedAnnotation();
     if (!ann || ann.type !== "shape" || state.annHidden) return null;
     // Out-of-span shapes render nothing — their handles must not grab either.
     if (!spanContainsPlayhead(ann)) return null;
@@ -337,6 +400,14 @@
     var signs = [[-1, -1], [1, -1], [1, 1], [-1, 1]][_shapeEdit.corner];
     var fx = -signs[0] * (orig.w * w) / 2;
     var fy = -signs[1] * (orig.h * h) / 2;
+    // Shift locks the original visual aspect ratio: snap the moving corner so
+    // the opposite (fixed) corner stays put and w/h keep their pixel ratio.
+    if (e.shiftKey && orig.h > 0 && orig.w > 0) {
+      var aspect = (orig.w * w) / (orig.h * h);
+      var side = Math.max(Math.abs(lx - fx), Math.abs(ly - fy) * aspect);
+      lx = fx + (lx - fx >= 0 ? 1 : -1) * side;
+      ly = fy + (ly - fy >= 0 ? 1 : -1) * (side / aspect);
+    }
     var newW = Math.max(Math.abs(lx - fx), 8);
     var newH = Math.max(Math.abs(ly - fy), 8);
     var mx = (lx + fx) / 2;
@@ -400,6 +471,15 @@
     return { start: start, end: Math.max(end, start + 0.5) };
   }
 
+  // Style for a newly drawn shape/freehand — the current toolbar defaults.
+  function newStyle() {
+    return {
+      color: state.annColor,
+      strokeWidth: state.annStrokeWidth,
+      strokeStyle: state.annStrokeStyle,
+    };
+  }
+
   function setAnnotateTool(tool) {
     if (!state.participant) return;
     state.annTool = tool;
@@ -451,6 +531,92 @@
     setAnnotateTool("select");
   }
 
+  // ---- Stroke width / style controls ----
+
+  // Scale a frame-fraction stroke width to a small on-chip pixel weight (1..5)
+  // for the trigger + menu sample lines.
+  function strokeDisplayPx(frac) {
+    return Math.max(1, Math.min(5, Math.round((frac * 1000) / 3)));
+  }
+
+  // Apply a style patch to the current selection as one undo step. Stroke
+  // width/style only touch shapes + freehand; color applies to every type.
+  // Annotations already carrying the patched value are skipped (no no-op undo).
+  function applyStyleToSelection(patch) {
+    var strokeOnly =
+      patch.strokeWidth !== undefined || patch.strokeStyle !== undefined;
+    var edits = [];
+    CO.selectedAnnotations().forEach(function (a) {
+      if (strokeOnly && a.type !== "shape" && a.type !== "freehand") return;
+      a.style = a.style || {};
+      var changed = Object.keys(patch).some(function (k) {
+        return a.style[k] !== patch[k];
+      });
+      if (!changed) return;
+      var before = JSON.parse(JSON.stringify(a.style));
+      Object.keys(patch).forEach(function (k) { a.style[k] = patch[k]; });
+      edits.push({ ann: a, before: before });
+    });
+    if (edits.length) CO.commitAnnotationFieldGroup("style", edits);
+  }
+
+  // Minimal popover menu (no generic primitive exists): one row per option, each
+  // drawing a sample line. Click-outside / Escape closes; only one open at once.
+  var _strokeMenuCleanup = null;
+
+  function closeStrokeMenu() {
+    if (_strokeMenuCleanup) _strokeMenuCleanup();
+  }
+
+  function openStrokeMenu(anchor, items, current, onPick) {
+    closeStrokeMenu();
+    var menu = el("div", "co-stroke-menu");
+    items.forEach(function (item) {
+      var row = el("button",
+        "co-stroke-option" + (item.value === current ? " active" : ""));
+      row.type = "button";
+      if (item.title) row.title = item.title;
+      var line = el("span", "co-stroke-sample");
+      item.style(line);
+      row.appendChild(line);
+      if (item.label != null) {
+        var lbl = el("span", "co-stroke-label");
+        lbl.textContent = item.label;
+        row.appendChild(lbl);
+      }
+      row.addEventListener("click", function () {
+        closeStrokeMenu();
+        onPick(item.value);
+      });
+      menu.appendChild(row);
+    });
+    document.body.appendChild(menu);
+    var r = anchor.getBoundingClientRect();
+    menu.style.left = Math.round(r.left) + "px";
+    menu.style.top = Math.round(r.bottom + 4) + "px";
+    anchor.setAttribute("aria-expanded", "true");
+
+    function onDocDown(ev) {
+      if (menu.contains(ev.target) || anchor.contains(ev.target)) return;
+      closeStrokeMenu();
+    }
+    function onKey(ev) {
+      if (ev.key === "Escape") { ev.stopPropagation(); closeStrokeMenu(); }
+    }
+    // Defer the outside-click listener so the opening click doesn't close it.
+    setTimeout(function () {
+      document.addEventListener("pointerdown", onDocDown, true);
+    }, 0);
+    document.addEventListener("keydown", onKey, true);
+    _strokeMenuCleanup = function () {
+      document.removeEventListener("pointerdown", onDocDown, true);
+      document.removeEventListener("keydown", onKey, true);
+      if (menu.parentNode) menu.parentNode.removeChild(menu);
+      anchor.setAttribute("aria-expanded", "false");
+      _strokeMenuCleanup = null;
+    };
+  }
+
   // ---- Init ----
 
   function initAnnotate() {
@@ -469,14 +635,8 @@
       });
       var custom = qs(".co-color-custom");
       if (custom) custom.style.setProperty("--co-swatch-color", color);
-      // Recolor the selected annotation in place.
-      var ann = state.selectedAnnotationId &&
-        CO.findAnnotation(state.selectedAnnotationId);
-      if (ann && ann.style.color !== color) {
-        var before = JSON.parse(JSON.stringify(ann.style));
-        ann.style.color = color;
-        CO.commitAnnotationField(ann, "style", before);
-      }
+      // Recolor the current selection (all selected, any type) in one step.
+      applyStyleToSelection({ color: color });
     }
 
     SWATCH_COLORS.forEach(function (color, idx) {
@@ -505,6 +665,66 @@
       });
     });
     swatchHost.appendChild(custom);
+
+    // Stroke width + style menus. Like the color control, each sets the default
+    // for new annotations and retro-applies to the current selection.
+    function updateStrokeTriggers() {
+      var wp = qs(".co-stroke-width-preview");
+      if (wp) {
+        wp.style.borderTopWidth = strokeDisplayPx(state.annStrokeWidth) + "px";
+        wp.style.borderTopStyle = "solid";
+      }
+      var sp = qs(".co-stroke-style-preview");
+      if (sp) {
+        sp.style.borderTopWidth = "2px";
+        sp.style.borderTopStyle = state.annStrokeStyle;  // solid | dashed | dotted
+      }
+    }
+
+    function applyAnnStrokeWidth(v) {
+      state.annStrokeWidth = v;
+      updateStrokeTriggers();
+      applyStyleToSelection({ strokeWidth: v });
+    }
+
+    function applyAnnStrokeStyle(s) {
+      state.annStrokeStyle = s;
+      updateStrokeTriggers();
+      applyStyleToSelection({ strokeStyle: s });
+    }
+
+    var widthBtn = qs("#coStrokeWidthBtn");
+    if (widthBtn) widthBtn.addEventListener("click", function () {
+      openStrokeMenu(widthBtn, STROKE_WIDTHS.map(function (v) {
+        var weight = Math.round(v * 1000);
+        return {
+          value: v,
+          label: String(weight),
+          title: "Stroke weight " + weight,
+          style: function (line) {
+            line.style.borderTopWidth = strokeDisplayPx(v) + "px";
+            line.style.borderTopStyle = "solid";
+          },
+        };
+      }), state.annStrokeWidth, applyAnnStrokeWidth);
+    });
+
+    var styleBtn = qs("#coStrokeStyleBtn");
+    if (styleBtn) styleBtn.addEventListener("click", function () {
+      openStrokeMenu(styleBtn, STROKE_STYLES.map(function (s) {
+        return {
+          value: s,
+          label: s.charAt(0).toUpperCase() + s.slice(1),
+          title: s + " stroke",
+          style: function (line) {
+            line.style.borderTopWidth = "2px";
+            line.style.borderTopStyle = s;
+          },
+        };
+      }), state.annStrokeStyle, applyAnnStrokeStyle);
+    });
+
+    updateStrokeTriggers();
 
     // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
@@ -567,15 +787,29 @@
           return;
         }
         var ann = hitTestAnnotation(pos.x, pos.y);
-        CO.selectAnnotation(ann ? ann.id : null);
         if (ann) {
-          _dragging = {
-            ann: ann,
-            startX: pos.x,
-            startY: pos.y,
-            origGeometry: JSON.parse(JSON.stringify(ann.geometry)),
-            moved: false,
-          };
+          if (e.shiftKey) {
+            // Toggle this annotation in/out of the selection; no drag.
+            CO.toggleAnnotationSelection(ann.id);
+          } else {
+            // Plain click keeps an existing multi-selection (so the whole group
+            // can be dragged); otherwise it selects just this one.
+            if (!CO.isAnnotationSelected(ann.id)) CO.selectAnnotation(ann.id);
+            _dragging = {
+              anns: CO.selectedAnnotations().map(function (a) {
+                return { ann: a, orig: JSON.parse(JSON.stringify(a.geometry)) };
+              }),
+              clickedId: ann.id,
+              startX: pos.x,
+              startY: pos.y,
+              moved: false,
+            };
+            canvas.setPointerCapture(e.pointerId);
+          }
+        } else {
+          // Empty space: box-select. Additive with Shift, else clears first.
+          _marquee = { x0: pos.x, y0: pos.y, x1: pos.x, y1: pos.y, additive: e.shiftKey };
+          if (!e.shiftKey) CO.selectAnnotation(null);
           canvas.setPointerCapture(e.pointerId);
         }
       }
@@ -585,11 +819,26 @@
       var pos = eventToNormalized(e);
       if (!pos) return;
       if (_shaping) {
-        _shaping.x1 = pos.x;
-        _shaping.y1 = pos.y;
+        // Shift retains proportions: equalize the pixel extents so a rect draws
+        // square and an ellipse draws circular (canvas box matches frame aspect).
+        if (e.shiftKey) {
+          var canvas2 = canvasEl();
+          var dxPx = (pos.x - _shaping.x0) * canvas2.width;
+          var dyPx = (pos.y - _shaping.y0) * canvas2.height;
+          var side = Math.max(Math.abs(dxPx), Math.abs(dyPx));
+          _shaping.x1 = clamp(_shaping.x0 + (dxPx < 0 ? -1 : 1) * side / canvas2.width, 0, 1);
+          _shaping.y1 = clamp(_shaping.y0 + (dyPx < 0 ? -1 : 1) * side / canvas2.height, 0, 1);
+        } else {
+          _shaping.x1 = pos.x;
+          _shaping.y1 = pos.y;
+        }
         renderAnnotations();
       } else if (_shapeEdit) {
         updateShapeEdit(pos, e);
+        renderAnnotations();
+      } else if (_marquee) {
+        _marquee.x1 = pos.x;
+        _marquee.y1 = pos.y;
         renderAnnotations();
       } else if (_drawing) {
         var last = _drawing.points[_drawing.points.length - 1];
@@ -605,16 +854,18 @@
         var dy = pos.y - _dragging.startY;
         if (Math.abs(dx) + Math.abs(dy) > 0.004) _dragging.moved = true;
         if (!_dragging.moved) return;
-        var geometry = _dragging.ann.geometry;
-        var orig = _dragging.origGeometry;
-        if (_dragging.ann.type === "text" || _dragging.ann.type === "shape") {
-          geometry.x = clamp(orig.x + dx, 0, 1);
-          geometry.y = clamp(orig.y + dy, 0, 1);
-        } else {
-          geometry.points = orig.points.map(function (p) {
-            return [clamp(p[0] + dx, 0, 1), clamp(p[1] + dy, 0, 1)];
-          });
-        }
+        _dragging.anns.forEach(function (entry) {
+          var geometry = entry.ann.geometry;
+          var orig = entry.orig;
+          if (entry.ann.type === "text" || entry.ann.type === "shape") {
+            geometry.x = clamp(orig.x + dx, 0, 1);
+            geometry.y = clamp(orig.y + dy, 0, 1);
+          } else {
+            geometry.points = orig.points.map(function (p) {
+              return [clamp(p[0] + dx, 0, 1), clamp(p[1] + dy, 0, 1)];
+            });
+          }
+        });
         renderAnnotations();
       }
     });
@@ -625,6 +876,30 @@
       }
       if (_erasing) {
         _erasing = null;
+        return;
+      }
+      if (_marquee) {
+        var m = _marquee;
+        _marquee = null;
+        var canvas3 = canvasEl();
+        var rx1 = Math.min(m.x0, m.x1) * canvas3.width;
+        var ry1 = Math.min(m.y0, m.y1) * canvas3.height;
+        var rx2 = Math.max(m.x0, m.x1) * canvas3.width;
+        var ry2 = Math.max(m.y0, m.y1) * canvas3.height;
+        var hitIds = marqueeHits(rx1, ry1, rx2, ry2).map(function (hb) {
+          return hb.ann.id;
+        });
+        if (m.additive) {
+          // Union with the existing selection.
+          hitIds.forEach(function (id) {
+            if (!CO.isAnnotationSelected(id)) CO.toggleAnnotationSelection(id);
+          });
+        } else {
+          // A near-zero drag is a click on empty space (selection already
+          // cleared on pointerdown); a real drag replaces the selection.
+          CO.setAnnotationSelection(hitIds);
+        }
+        renderAnnotations();
         return;
       }
       if (_shaping) {
@@ -645,7 +920,7 @@
               h: Math.abs(draft.y1 - draft.y0),
               rotation: 0,
             },
-            style: { color: state.annColor },
+            style: newStyle(),
           });
           setAnnotateTool("select");
         }
@@ -669,14 +944,20 @@
             type: "freehand",
             span: defaultSpan(),
             geometry: { points: points },
-            style: { color: state.annColor },
+            style: newStyle(),
           });
         }
       } else if (_dragging) {
         var d = _dragging;
         _dragging = null;
         if (d.moved) {
-          CO.commitAnnotationField(d.ann, "geometry", d.origGeometry);
+          CO.commitAnnotationFieldGroup("geometry", d.anns.map(function (entry) {
+            return { ann: entry.ann, before: entry.orig };
+          }));
+        } else if (d.anns.length > 1) {
+          // A plain click (no drag) on a member of a multi-selection collapses
+          // the selection to just that annotation.
+          CO.selectAnnotation(d.clickedId);
         }
       }
     }

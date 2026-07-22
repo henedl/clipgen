@@ -89,6 +89,20 @@
         <div id="coAnnotateColors" class="co-annotate-colors" role="group"
              aria-label="Annotation color"></div>
         <span class="co-toolbar-sep"></span>
+        <div id="coAnnotateStroke" class="co-annotate-stroke" role="group"
+             aria-label="Stroke">
+          <button id="coStrokeWidthBtn" class="co-tool-btn co-stroke-trigger"
+                  type="button" aria-haspopup="true" aria-expanded="false"
+                  title="Stroke width">
+            <span class="co-stroke-preview co-stroke-width-preview" aria-hidden="true"></span>
+          </button>
+          <button id="coStrokeStyleBtn" class="co-tool-btn co-stroke-trigger"
+                  type="button" aria-haspopup="true" aria-expanded="false"
+                  title="Stroke style">
+            <span class="co-stroke-preview co-stroke-style-preview" aria-hidden="true"></span>
+          </button>
+        </div>
+        <span class="co-toolbar-sep"></span>
         <button id="coExportShotBtn" class="btn btn-small" type="button"
                 title="Export an annotated screenshot at the playhead">Shot</button>
         <button id="coExportGifBtn" class="btn btn-small" type="button"

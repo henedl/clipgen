@@ -25,9 +25,11 @@
     cuts: [],               // all cuts from the composer manifest (all participants)
     trims: {},              // marker key → {start, end} span overrides
     annotations: [],        // all annotation records (all participants)
-    selectedAnnotationId: null,
+    selectedAnnotationIds: [], // multi-select: ids of the selected annotations
     annTool: "select",      // "select" | "text" | "draw"
     annColor: "",           // filled from CLIPGEN_CONFIG at boot
+    annStrokeWidth: 0,      // default stroke width for new shapes/strokes (boot)
+    annStrokeStyle: "solid", // default stroke style: solid | dashed | dotted (boot)
     annHidden: false,       // hide the annotation layer (B: hold to peek, tap to toggle)
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
@@ -296,7 +298,7 @@
     state.playing = false;
     state.pendingIn = null;
     state.selectedCutId = null;
-    state.selectedAnnotationId = null;
+    state.selectedAnnotationIds = [];
     state.zoom = 1;
     state.offset = 0;
     state.markers = { sheet: [], screenspace: [], transcript: [] };
@@ -566,6 +568,11 @@
       payload[op.field] = isUndo ? op.before : op.after;
       return applyAnnPatch(op.id, payload);
     }
+    if (op.type === "ann-group") {
+      // Sub-ops are independent per-annotation edits/deletes; apply them all in
+      // the same direction (order-independent) and resolve when the last lands.
+      return Promise.all(op.ops.map(function (sub) { return applyOp(sub, isUndo); }));
+    }
     // edit
     return applyTimes(op.id, isUndo ? op.before : op.after);
   }
@@ -701,7 +708,8 @@
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not delete annotation");
         state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
-        if (state.selectedAnnotationId === id) state.selectedAnnotationId = null;
+        state.selectedAnnotationIds = state.selectedAnnotationIds.filter(
+          function (sid) { return sid !== id; });
         refreshAnnotationViews();
       });
   }
@@ -722,7 +730,7 @@
   function createAnnotation(record) {
     return applyAnnCreate(record).then(function (ann) {
       recordOp({ type: "ann-create", annotation: ann });
-      state.selectedAnnotationId = ann.id;
+      state.selectedAnnotationIds = [ann.id];
       renderAnnotations();
       return ann;
     }).catch(opFailed);
@@ -763,12 +771,104 @@
   }
   CO.commitAnnotationField = commitAnnotationField;
 
-  function selectAnnotation(id) {
-    state.selectedAnnotationId = id;
+  // Batch commit of *field* ("style" or "geometry") across many annotations —
+  // each ann[field] is already mutated; *before* is the pre-edit value. Records
+  // one undo step so a group style change / group move undoes atomically, and
+  // rolls every edit back if any patch is rejected.
+  function commitAnnotationFieldGroup(field, edits) {
+    if (!edits.length) return Promise.resolve();
+    var ops = edits.map(function (e) {
+      return {
+        type: "ann-edit",
+        id: e.ann.id,
+        field: field,
+        before: e.before,
+        after: JSON.parse(JSON.stringify(e.ann[field])),
+      };
+    });
+    var patches = edits.map(function (e) {
+      var payload = {};
+      payload[field] = e.ann[field];
+      return applyAnnPatch(e.ann.id, payload);
+    });
+    return Promise.all(patches).then(function () {
+      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+    }, function (error) {
+      edits.forEach(function (e) {
+        var ann = findAnnotation(e.ann.id);
+        if (ann) ann[field] = JSON.parse(JSON.stringify(e.before));
+      });
+      refreshAnnotationViews();
+      opFailed(error);
+    });
+  }
+  CO.commitAnnotationFieldGroup = commitAnnotationFieldGroup;
+
+  // Delete every selected annotation as a single undo step.
+  function deleteSelectedAnnotations() {
+    var snapshots = selectedAnnotations().map(function (ann) {
+      return JSON.parse(JSON.stringify(ann));
+    });
+    if (!snapshots.length) return;
+    Promise.all(snapshots.map(function (snap) {
+      return applyAnnDelete(snap.id);
+    })).then(function () {
+      var ops = snapshots.map(function (snap) {
+        return { type: "ann-delete", annotation: snap };
+      });
+      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+    }).catch(opFailed);
+  }
+  CO.deleteSelectedAnnotations = deleteSelectedAnnotations;
+
+  // ---- Selection (multi-select) ----
+
+  function isAnnotationSelected(id) {
+    return state.selectedAnnotationIds.indexOf(id) !== -1;
+  }
+  CO.isAnnotationSelected = isAnnotationSelected;
+
+  // Live records for the current selection, dropping any stale ids.
+  function selectedAnnotations() {
+    var out = [];
+    state.selectedAnnotationIds.forEach(function (id) {
+      var ann = findAnnotation(id);
+      if (ann) out.push(ann);
+    });
+    return out;
+  }
+  CO.selectedAnnotations = selectedAnnotations;
+
+  // The record iff exactly one annotation is selected — gates the single-shape
+  // resize/rotate handles (group resize is not supported).
+  function singleSelectedAnnotation() {
+    var sel = selectedAnnotations();
+    return sel.length === 1 ? sel[0] : null;
+  }
+  CO.singleSelectedAnnotation = singleSelectedAnnotation;
+
+  function setAnnotationSelection(ids) {
+    state.selectedAnnotationIds = (ids || []).slice();
     renderTimeline();
     renderAnnotations();
   }
+  CO.setAnnotationSelection = setAnnotationSelection;
+
+  // Single-select convenience (kept for click-to-select / clear callers).
+  function selectAnnotation(id) {
+    setAnnotationSelection(id ? [id] : []);
+  }
   CO.selectAnnotation = selectAnnotation;
+
+  function toggleAnnotationSelection(id) {
+    if (!id) return;
+    setAnnotationSelection(
+      isAnnotationSelected(id)
+        ? state.selectedAnnotationIds.filter(function (s) { return s !== id; })
+        : state.selectedAnnotationIds.concat([id])
+    );
+  }
+  CO.toggleAnnotationSelection = toggleAnnotationSelection;
 
   // Hide/reveal the whole annotation layer: the overlay skips drawing and the
   // timeline lane dims. The #coToolHide button mirrors the state; its icon
@@ -800,7 +900,7 @@
     // annotation's own visibility span.
     var cut = state.selectedCutId && findCut(state.selectedCutId);
     if (cut) return { start: cut.start, end: cut.end };
-    var ann = state.selectedAnnotationId && findAnnotation(state.selectedAnnotationId);
+    var ann = selectedAnnotations()[0];
     if (ann) return { start: ann.span.start, end: ann.span.end };
     return null;
   }
@@ -1399,9 +1499,9 @@
       { id: "composer.nudgeRightBig", handler: function () { nudgeSelectedCut(1); } },
       {
         id: "composer.deleteSelection",
-        when: function () { return !!(state.selectedAnnotationId || state.selectedCutId); },
+        when: function () { return !!(state.selectedAnnotationIds.length || state.selectedCutId); },
         handler: function () {
-          if (state.selectedAnnotationId) deleteAnnotation(state.selectedAnnotationId);
+          if (state.selectedAnnotationIds.length) deleteSelectedAnnotations();
           else deleteCut(state.selectedCutId);
         },
       },
@@ -1449,7 +1549,7 @@
         return true;
       }
       if (state.annTool !== "select") { setAnnotateTool("select"); return true; }
-      if (state.selectedAnnotationId) { selectAnnotation(null); return true; }
+      if (state.selectedAnnotationIds.length) { selectAnnotation(null); return true; }
       if (state.selectedCutId) { selectCut(null); return true; }
       return false;
     });
@@ -1589,6 +1689,8 @@
     }
 
     state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+    state.annStrokeWidth = CLIPGEN_CONFIG.composerAnnotationStrokeWidth;
+    state.annStrokeStyle = CLIPGEN_CONFIG.composerAnnotationStrokeStyle;
     updateTimelineHint();
     initCommandPalette();
     initParticipantSelect();
