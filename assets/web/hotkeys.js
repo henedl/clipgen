@@ -103,8 +103,9 @@
     { id: "composer.holdHideAnnotations", section: "composer", group: "Annotate", label: "Hide annotations (hold or tap)", combos: ["B"] },
     { id: "composer.toggleSource",     section: "composer", group: "Marker lanes", label: "Toggle marker lane 1–3", combos: ["1", "2", "3"], rebindable: false, displayKeys: "1–3" },
     { id: "composer.toggleAllSources", section: "composer", group: "Marker lanes", label: "Toggle all marker lanes", combos: ["0"] },
-    { id: "composer.toggleThumbs",     section: "composer", group: "Marker lanes", label: "Toggle thumbnail strips", combos: ["F"] },
+    { id: "composer.toggleThumbs",     section: "composer", group: "Marker lanes", label: "Toggle thumbnail strips", combos: ["S"] },
     { id: "composer.toggleScrubAudio", section: "composer", group: "Marker lanes", label: "Toggle hover audio scrub", combos: ["W"] },
+    { id: "composer.toggleSidebar",    section: "composer", group: "Panels", label: "Collapse / expand timelines sidebar", combos: ["F"] },
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
