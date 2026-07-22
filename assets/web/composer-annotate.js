@@ -604,11 +604,14 @@
       if (ev.key === "Escape") { ev.stopPropagation(); closeStrokeMenu(); }
     }
     // Defer the outside-click listener so the opening click doesn't close it.
-    setTimeout(function () {
+    // Track the timer so a close before it fires (fast reopen / immediate
+    // Escape) can cancel it — otherwise the listener orphans on document.
+    var openTimer = setTimeout(function () {
       document.addEventListener("pointerdown", onDocDown, true);
     }, 0);
     document.addEventListener("keydown", onKey, true);
     _strokeMenuCleanup = function () {
+      clearTimeout(openTimer);
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
       if (menu.parentNode) menu.parentNode.removeChild(menu);

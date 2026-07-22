@@ -774,24 +774,25 @@
   // Batch commit of *field* ("style" or "geometry") across many annotations —
   // each ann[field] is already mutated; *before* is the pre-edit value. Records
   // one undo step so a group style change / group move undoes atomically, and
-  // rolls every edit back if any patch is rejected.
+  // rolls every edit back if any patch is rejected. Each op's *after* is taken
+  // from the PATCH response (the server-sanitized value), like the single-
+  // annotation path — a partial local object can't reset backfilled defaults.
   function commitAnnotationFieldGroup(field, edits) {
     if (!edits.length) return Promise.resolve();
-    var ops = edits.map(function (e) {
-      return {
-        type: "ann-edit",
-        id: e.ann.id,
-        field: field,
-        before: e.before,
-        after: JSON.parse(JSON.stringify(e.ann[field])),
-      };
-    });
     var patches = edits.map(function (e) {
       var payload = {};
       payload[field] = e.ann[field];
-      return applyAnnPatch(e.ann.id, payload);
+      return applyAnnPatch(e.ann.id, payload).then(function (saved) {
+        return {
+          type: "ann-edit",
+          id: e.ann.id,
+          field: field,
+          before: e.before,
+          after: JSON.parse(JSON.stringify(saved[field])),
+        };
+      });
     });
-    return Promise.all(patches).then(function () {
+    return Promise.all(patches).then(function (ops) {
       recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
     }, function (error) {
       edits.forEach(function (e) {
