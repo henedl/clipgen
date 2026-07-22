@@ -178,6 +178,7 @@ COMPOSER_MANIFEST_FILENAME: str = (
 # frontend via utils.get_frontend_config() — do not hardcode these in JS.
 COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
 COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
+COMPOSER_ANNOTATION_STROKE_STYLE: str = "solid"  # solid | dashed | dotted
 COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height
 COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
 # Double-click the Composer timeline to set the pending in point, then again

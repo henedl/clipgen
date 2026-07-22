@@ -9,6 +9,16 @@
 :root {
   --co-timeline-height: 160px;
   --co-panel-width: 280px;
+  /* Subtle timeline chrome (canvas-drawn): alternating-row stripe + minor
+     step-track tick. Dark-first defaults; light overrides below. */
+  --co-timeline-stripe: rgba(255, 255, 255, 0.022);
+  --co-timeline-grid: rgba(255, 255, 255, 0.09);
+}
+
+html[data-theme="light"],
+html.theme-light {
+  --co-timeline-stripe: rgba(0, 0, 0, 0.03);
+  --co-timeline-grid: rgba(0, 0, 0, 0.12);
 }
 
 .hidden {
@@ -316,6 +326,69 @@ body[data-frontend="composer"] {
   width: 10px;
   height: 10px;
   background-color: var(--bg);
+}
+
+/* Stroke width + style triggers (open the co-stroke-menu popover). */
+.co-annotate-stroke {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* Sample-line chip inside a trigger; border-top set by JS to reflect the
+   current stroke width / dash style. */
+.co-stroke-preview {
+  display: block;
+  width: 16px;
+  border-top: 2px solid currentColor;
+}
+
+/* Stroke popover (composer-annotate.js openStrokeMenu), fixed-positioned. */
+.co-stroke-menu {
+  position: fixed;
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 120px;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+}
+
+.co-stroke-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+
+.co-stroke-option:hover {
+  background: var(--bg-hover);
+}
+
+.co-stroke-option.active {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+}
+
+.co-stroke-sample {
+  flex: 1;
+  min-width: 48px;
+  border-top: 2px solid currentColor;
+}
+
+.co-stroke-label {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
 }
 
 #coAnnotateCanvas {
@@ -687,6 +760,9 @@ body[data-frontend="composer"] {
 .co-lane-fold {
   position: absolute;
   left: var(--space-1);
+  /* JS sets top to the lane's vertical center; this pulls the button back up
+     by half its height so it sits centered in the track. */
+  transform: translateY(-50%);
   pointer-events: auto;
   display: flex;
   align-items: center;

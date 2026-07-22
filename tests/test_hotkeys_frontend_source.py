@@ -35,6 +35,7 @@ KEYDOWN_ALLOWLIST = {
     "utils.js",  # openBlockingModal focus trap + frontend switcher
     "settings-modal.js",  # hotkey recorder (capture-phase, recording only)
     "color-picker.js",
+    "composer-annotate.js",  # stroke-menu popover Escape (capture-phase, while open)
     "studio-trim.js",
     "topnav.js",
     "workflows.js",  # bindMenuToggle (run split-button menu)

@@ -115,6 +115,10 @@ def test_clipgen_config_defaults_match_python():
         == py_config["composerAnnotationStrokeWidth"]
     )
     assert (
+        js_config["composerAnnotationStrokeStyle"]
+        == py_config["composerAnnotationStrokeStyle"]
+    )
+    assert (
         js_config["composerAnnotationFontSize"]
         == py_config["composerAnnotationFontSize"]
     )
@@ -152,6 +156,7 @@ def test_get_frontend_config_shape():
         "gifFormat",
         "composerAnnotationColor",
         "composerAnnotationStrokeWidth",
+        "composerAnnotationStrokeStyle",
         "composerAnnotationFontSize",
         "composerAnnotationSpanSeconds",
         "composerScrubMaxAudioSeconds",
