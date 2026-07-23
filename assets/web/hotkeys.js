@@ -41,7 +41,9 @@
     { id: "workflows",   label: "Workflows",      pages: ["workflows"] },
     { id: "overview",    label: "Overview",       pages: ["overview"] },
     { id: "viewer",      label: "Viewer",         pages: ["viewer"] },
-    { id: "gallery",     label: "Gallery",        pages: ["gallery"] }
+    { id: "gallery",     label: "Gallery",        pages: ["gallery"] },
+    { id: "start",       label: "Start launcher", pages: [] },
+    { id: "settings",    label: "Settings",       pages: [] }
   ];
 
   var HOTKEY_CATALOG = [
@@ -140,7 +142,16 @@
     { id: "overview.zoneNext",       section: "overview", group: "Convergence", label: "Next convergence zone", combos: ["ArrowRight"] },
 
     { id: "gallery.prev", section: "gallery", group: "", label: "Previous image", combos: ["ArrowLeft"] },
-    { id: "gallery.next", section: "gallery", group: "", label: "Next image", combos: ["ArrowRight"] }
+    { id: "gallery.next", section: "gallery", group: "", label: "Next image", combos: ["ArrowRight"] },
+
+    { id: "start.tabGoogle",    section: "start", group: "Spreadsheet", label: "Use Google Sheets",     combos: ["G"] },
+    { id: "start.tabExcel",     section: "start", group: "Spreadsheet", label: "Use Excel file",        combos: ["E"] },
+    { id: "start.tabNone",      section: "start", group: "Spreadsheet", label: "No spreadsheet",         combos: ["N"] },
+    { id: "start.browseInput",  section: "start", group: "Folders",     label: "Browse input folder",    combos: ["I"] },
+    { id: "start.browseOutput", section: "start", group: "Folders",     label: "Browse output folder",   combos: ["O"] },
+    { id: "start.confirm",      section: "start", group: "",            label: "Open workspace",         combos: ["Mod+Enter"] },
+
+    { id: "settings.tab", section: "settings", group: "", label: "Switch settings tab by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" }
   ];
 
   // ---- Internal state ----
@@ -152,7 +163,7 @@
   for (i = 0; i < HOTKEY_SECTIONS.length; i++) SECTIONS_BY_ID[HOTKEY_SECTIONS[i].id] = HOTKEY_SECTIONS[i];
 
   var _overrides = {};        // action id -> combo string ("" = disabled)
-  var _attachments = {};      // action id -> [{handler, when, onRelease, repeat, allowInInput}]
+  var _attachments = {};      // action id -> [{handler, when, onRelease, repeat, allowInInput, inModal}]
   var _attachOrder = [];      // action ids in first-registration order
   var _comboIndex = {};       // combo string -> [action id] (attach order)
   var _escapeHandlers = [];   // [fn(e) -> true if consumed]
@@ -338,7 +349,8 @@
           when: spec.when || null,
           onRelease: spec.onRelease || null,
           repeat: spec.repeat !== false,
-          allowInInput: !!spec.allowInInput
+          allowInInput: !!spec.allowInInput,
+          inModal: !!spec.inModal
         });
       }
     }
@@ -396,11 +408,12 @@
       }
       return;
     }
-    if (blockingModalOpen()) {
+    var modalOpen = blockingModalOpen();
+    if (modalOpen && _sheetEl && !_sheetEl.classList.contains("hidden")) {
       // The cheatsheet is our own blocking modal: its toggle combo passes
       // back through so a second "?" press closes it (like the old per-page
-      // popovers). Everything else stays suppressed.
-      if (_sheetEl && !_sheetEl.classList.contains("hidden") && !isTypingTarget(e.target)) {
+      // popovers). Everything else stays suppressed while it owns the keyboard.
+      if (!isTypingTarget(e.target)) {
         var sheetCombo = normalizeEvent(e);
         if (sheetCombo && resolvedCombos("global.cheatsheet").indexOf(sheetCombo) !== -1) {
           e.preventDefault();
@@ -409,6 +422,9 @@
       }
       return;
     }
+    // A non-cheatsheet blocking modal (start launcher / settings) is open: fall
+    // through, but the loop below only fires attachments flagged inModal — the
+    // modal's own keyboard nav. Background page hotkeys stay dead.
     var combo = normalizeEvent(e);
     if (!combo) return;
     var ids = _comboIndex[combo];
@@ -418,6 +434,7 @@
       var atts = _attachments[ids[n]] || [];
       for (var a = 0; a < atts.length; a++) {
         var att = atts[a];
+        if (modalOpen && !att.inModal) continue;
         if (typing && !att.allowInInput) continue;
         if (e.repeat && !att.repeat) continue;
         if (att.when && !att.when()) continue;
@@ -507,8 +524,15 @@
 
   function showHints() {
     _hintTimer = null;
-    if (_hintsShown || blockingModalOpen() || isTypingTarget(document.activeElement)) return;
-    var nodes = document.querySelectorAll("[data-hotkey]");
+    if (_hintsShown || isTypingTarget(document.activeElement)) return;
+    // When a modal owns the keyboard, scope hints to its own [data-hotkey]
+    // controls (so background-page chips never float over the modal). A modal
+    // we can't scope (bare body.modal-open with no registered root) suppresses
+    // hints entirely, exactly as before.
+    var modalRoot = (typeof getActiveModalRoot === "function") ? getActiveModalRoot() : null;
+    if (blockingModalOpen() && !modalRoot) return;
+    var scope = modalRoot || document;
+    var nodes = scope.querySelectorAll("[data-hotkey]");
     // Read pass: measure every candidate before any DOM writes.
     var targets = [];
     for (var n = 0; n < nodes.length; n++) {
@@ -525,7 +549,9 @@
       if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) continue;
       targets.push({ rect: rect, combo: combo, dim: dim });
     }
-    for (var p = 0; p < _actionHintProviders.length; p++) {
+    // Context action-hint providers anchor to background-page controls, so skip
+    // them while a modal owns the keyboard.
+    for (var p = 0; !modalRoot && p < _actionHintProviders.length; p++) {
       var ctx = _actionHintProviders[p]();
       if (!ctx || !ctx.anchor || !ctx.entries) continue;
       var arect = ctx.anchor.getBoundingClientRect();

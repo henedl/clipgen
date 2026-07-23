@@ -1163,6 +1163,15 @@ var _TRAP_FOCUSABLE =
   'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 var _activeBlockingModal = null;
 
+// The DOM root of the modal currently owning the keyboard. hotkeys.js reads this
+// to scope Alt-hold discoverability hints to that modal's own [data-hotkey]
+// controls (so background-page chips never leak over an open modal). Set
+// automatically by openBlockingModal; self-managed modals that only toggle
+// body.modal-open (e.g. settings-modal.js) set/clear it explicitly.
+var _activeModalRoot = null;
+var setActiveModalRoot = function (el) { _activeModalRoot = el || null; };
+var getActiveModalRoot = function () { return _activeModalRoot; };
+
 var openBlockingModal = function (overlayEl, opts) {
   opts = opts || {};
   if (!overlayEl) return null;
@@ -1197,6 +1206,12 @@ var openBlockingModal = function (overlayEl, opts) {
     } else if (!ev.shiftKey && document.activeElement === last) {
       ev.preventDefault();
       first.focus();
+    } else if (f.indexOf(document.activeElement) === -1) {
+      // Focus is parked outside the cycle (e.g. a tabindex="-1" panel used as
+      // initialFocus). Pull it back in so Tab/Shift+Tab can't escape to the
+      // page behind the modal.
+      ev.preventDefault();
+      (ev.shiftKey ? last : first).focus();
     }
   }
   function onClick(ev) {
@@ -1209,6 +1224,7 @@ var openBlockingModal = function (overlayEl, opts) {
     document.removeEventListener("keydown", onKey, true);
     overlayEl.removeEventListener("click", onClick);
     _activeBlockingModal = null;
+    if (_activeModalRoot === overlayEl) _activeModalRoot = null;
     if (prevFocus && prevFocus.focus) prevFocus.focus();
   }
 
@@ -1217,9 +1233,11 @@ var openBlockingModal = function (overlayEl, opts) {
   if (opts.onBackdropClick) overlayEl.addEventListener("click", onClick);
   if (opts.trapFocus) {
     var initial = visibleFocusable();
-    if (initial.length) initial[0].focus();
+    var target = opts.initialFocus || initial[0];
+    if (target && target.focus) target.focus();
   }
   _activeBlockingModal = trap;
+  _activeModalRoot = overlayEl;
   return trap;
 };
 

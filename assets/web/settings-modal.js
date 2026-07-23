@@ -195,6 +195,11 @@
 
     _root.classList.remove("hidden");
     document.body.classList.add("modal-open");
+    // Let hotkeys.js scope Alt-hold hints to this modal's controls. This modal
+    // rolls its own Escape/focus (bubble-phase, so capture-phase owners like the
+    // hotkey recorder win first), so it can't rely on openBlockingModal to set
+    // the active-modal root — do it explicitly.
+    if (typeof setActiveModalRoot === "function") setActiveModalRoot(_root);
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
     requestAnimationFrame(function () {
@@ -206,6 +211,10 @@
 
   function _close() {
     if (!_root || _root.classList.contains("hidden")) return;
+    // Release the active-modal root immediately; the showHints() guard keeps
+    // hints suppressed through the fade-out (body.modal-open lingers until the
+    // exit timer), so no background chips leak.
+    if (typeof setActiveModalRoot === "function") setActiveModalRoot(null);
     // A hotkey recording capture-listener must never outlive the modal.
     _hkStopRecording();
     // Dismiss the inline color popover; it lives on document.body at --z-toast
@@ -1144,6 +1153,12 @@
       tabBtn.type = "button";
       tabBtn.setAttribute("role", "tab");
       tabBtn.setAttribute("data-tab", name);
+      // Alt-hold reveals a number chip on the first nine tabs; the shared
+      // settings.tab hotkey (1–9) switches to the corresponding tab.
+      if (j < 9) {
+        tabBtn.setAttribute("data-hotkey", "settings.tab");
+        tabBtn.setAttribute("data-hotkey-combo", String(j));
+      }
       if (name === _activeTab) {
         tabBtn.classList.add("is-active");
         tabBtn.setAttribute("aria-selected", "true");
@@ -1229,6 +1244,24 @@
     e.preventDefault();
     _close();
   });
+
+  // Digit 1–9 switches settings tabs while the modal owns the keyboard (inModal
+  // so page hotkeys stay dead; when-gated to this modal being open). The tab
+  // buttons carry data-hotkey="settings.tab" so Alt-hold reveals the chips.
+  if (window.ClipgenHotkeys) {
+    window.ClipgenHotkeys.register([{
+      id: "settings.tab",
+      inModal: true,
+      when: function () { return !!_root && !_root.classList.contains("hidden"); },
+      handler: function (e, combo) {
+        var n = parseInt(combo, 10);
+        if (!_tabsEl || isNaN(n)) return;
+        var btns = _tabsEl.querySelectorAll(".settings-tab");
+        var btn = btns[n - 1];
+        if (btn) btn.click();
+      }
+    }]);
+  }
 
   window.openSettingsModal = function (options) {
     _opts = options || {};
