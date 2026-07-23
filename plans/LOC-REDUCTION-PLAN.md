@@ -204,15 +204,16 @@ above — parametrize/shared-helper refactors keep the guard rails, they only re
   tokens.css is stripped, so it must stay self-contained (its header says so). Unlike `.cg-menu`
   this primitive sets `display: flex`; each adopter's hide mechanism out-cascades it
   (screenspace `.hidden !important`; the others use compound `.x.hidden` rules).
-  ⚠️ Needs a browser check: open/close all four modals in light+dark.
+  Browser-checked (2026-07-23): all four modals open/close correctly.
 - [x] **C2. `createSeekCoalescer` in `utils.js`** — **Done (~−55).** The pending-seek /
   loadedmetadata-deferral / RAF-coalesce scaffolding moved to a utils.js factory
   (`getVideo`/`onDeferred`/`applySeek` hooks keep the page differences: transcripts re-dispatches
   through `seekVideo` and auto-plays after a seek write; composer stays paused).
   `cancelPendingSeek`/`seekLocal`/`_seekLocal` remain as thin wrappers so all call sites and the
   `TS.cancelPendingSeek` publication are unchanged. viewer.js's partial third instance left
-  as-is (structurally divergent). ⚠️ Needs a browser check: rapid scrub + seek-before-metadata +
-  part switching on Composer and Transcripts.
+  as-is (structurally divergent). Browser-checked (2026-07-23): scrub + part switching good;
+  the seek-before-metadata deferral path is impractical to trigger manually and rests on the
+  scaffolding being a verbatim logic move.
 
 ## D. Owner-decision deletions
 
