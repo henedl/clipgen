@@ -13,7 +13,6 @@ from typing import Any, NamedTuple
 import openpyxl
 from openpyxl.utils.exceptions import InvalidFileException
 
-import config
 import utils
 
 
@@ -113,28 +112,47 @@ class ExcelSheetAdapter:
         return max(len(row) for row in self._data)
 
 
-def _get_worksheet_from_workbook(wb: Any) -> Any:
-    """Pick worksheet by config.WORKSHEET_PRIORITY, else active/first."""
+def _get_worksheet_from_workbook(wb: Any, preferred_name: str | None = None) -> Any:
+    """Pick worksheet: preferred_name, else config.WORKSHEET_PRIORITY, else first."""
     sheet_names = wb.sheetnames
     utils.debug_print(f"Available worksheets: {sheet_names}")
-    for priority_name in config.WORKSHEET_PRIORITY:
-        if priority_name in sheet_names:
-            utils.standard_print(f"Using worksheet: {priority_name}")
-            return wb[priority_name]
-    if sheet_names:
-        first = wb[sheet_names[0]]
-        utils.standard_print(
-            f"No matching worksheet found. Using first worksheet: {first.title}"
-        )
-        return first
-    raise ValueError("Workbook contains no worksheets")
+    chosen = utils.pick_worksheet_title(sheet_names, preferred_name)
+    if chosen is None:
+        raise ValueError("Workbook contains no worksheets")
+    utils.standard_print(f"Using worksheet: {chosen}")
+    return wb[chosen]
 
 
-def open_excel_workbook(path: str) -> ExcelSheetAdapter | None:
+def list_worksheet_titles(path: str) -> tuple[list[str], str]:
+    """Return ``(titles, recommended)`` for an .xlsx without loading cell data.
+
+    Opens the workbook read-only just for its sheet names, so the Start
+    overlay's worksheet dropdown is cheap to populate. ``recommended`` is the
+    priority auto-pick (empty string when the workbook has no worksheets).
+    """
+    path = str(Path(path).resolve())
+    if not Path(path).is_file():
+        utils.error_print(f"Excel file not found: {path}")
+        return [], ""
+    try:
+        wb = openpyxl.load_workbook(path, read_only=True)
+        titles = list(wb.sheetnames)
+        wb.close()
+    except (OSError, zipfile.BadZipFile, InvalidFileException) as e:
+        utils.error_print(f"Could not read worksheets from {path}: {e}")
+        return [], ""
+    return titles, utils.pick_worksheet_title(titles) or ""
+
+
+def open_excel_workbook(
+    path: str, worksheet_name: str | None = None
+) -> ExcelSheetAdapter | None:
     """Load an .xlsx file and return an ExcelSheetAdapter for the chosen worksheet.
 
     Args:
         path: Path to the .xlsx file.
+        worksheet_name: A worksheet title chosen by the user; falls back to the
+            priority auto-pick when unset or absent from the workbook.
 
     Returns:
         ExcelSheetAdapter, or None on error (prints error).
@@ -145,7 +163,7 @@ def open_excel_workbook(path: str) -> ExcelSheetAdapter | None:
         return None
     try:
         wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
-        ws = _get_worksheet_from_workbook(wb)
+        ws = _get_worksheet_from_workbook(wb, worksheet_name)
         adapter = ExcelSheetAdapter(ws, path)
         wb.close()
         return adapter

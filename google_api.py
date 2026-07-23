@@ -47,14 +47,19 @@ def _call_with_api_retry(fn: Callable[[], _T], operation: str) -> _T:
     raise RuntimeError(f"Google API {operation} failed after retries")
 
 
-def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
-    """Get a worksheet from a spreadsheet using priority-based name matching.
+def get_worksheet(
+    spreadsheet: gspread.Spreadsheet, preferred_name: str | None = None
+) -> gspread.Worksheet:
+    """Get a worksheet from a spreadsheet.
 
-    Tries to find a worksheet matching names in WORKSHEET_PRIORITY order.
-    If no match is found, returns the first worksheet (index 0).
+    Honors an explicit *preferred_name* when it exists in the spreadsheet,
+    otherwise falls back to ``config.WORKSHEET_PRIORITY`` order, then the first
+    worksheet (index 0). Selection logic is shared with the Excel path via
+    ``utils.pick_worksheet_title``.
 
     Args:
         spreadsheet: A gspread Spreadsheet object
+        preferred_name: A worksheet title chosen by the user, if any
 
     Returns:
         A gspread Worksheet object
@@ -62,33 +67,56 @@ def get_worksheet(spreadsheet: gspread.Spreadsheet) -> gspread.Worksheet:
     import gspread
 
     # Get all worksheet titles from the spreadsheet
-    worksheets = spreadsheet.worksheets()
-    worksheet_titles = [ws.title for ws in worksheets]
+    worksheet_titles = [ws.title for ws in spreadsheet.worksheets()]
 
     utils.debug_print(f"Available worksheets: {worksheet_titles}")
 
-    # Try each name in priority order
-    for priority_name in config.WORKSHEET_PRIORITY:
-        if priority_name in worksheet_titles:
-            utils.standard_print(f"Using worksheet: {priority_name}")
-            return spreadsheet.worksheet(priority_name)
+    chosen = utils.pick_worksheet_title(worksheet_titles, preferred_name)
+    if chosen is None:
+        # Empty spreadsheet - shouldn't happen but handle it.
+        raise gspread.WorksheetNotFound("Spreadsheet contains no worksheets")
+    utils.standard_print(f"Using worksheet: {chosen}")
+    return spreadsheet.worksheet(chosen)
 
-    # No match found - use first worksheet
-    if worksheets:
-        first_sheet = worksheets[0]
-        utils.standard_print(
-            f"No matching worksheet found. Using first worksheet: {first_sheet.title}"
-        )
-        return first_sheet
 
-    # This shouldn't happen, but handle empty spreadsheet case
-    raise gspread.WorksheetNotFound("Spreadsheet contains no worksheets")
+def get_all_spreadsheet_meta(connection: gspread.Client) -> list[dict[str, str]]:
+    """Return metadata for all accessible Google Spreadsheets.
+
+    ``list_spreadsheet_files()`` already carries ``id``/``name``/``createdTime``/
+    ``modifiedTime`` for every file in a single (paged) Drive call, so exposing
+    the last-edit time costs no extra API round-trips. Retries on transient
+    Google API errors (429, 5xx) with exponential backoff.
+
+    Args:
+        connection: Google client connection object
+
+    Returns:
+        List of ``{"name", "id", "modifiedTime"}`` dicts (newest fields empty
+        when Drive omits them).
+    """
+
+    def fetch() -> list[dict[str, str]]:
+        spreadsheet_files = list(connection.list_spreadsheet_files())
+        metas: list[dict[str, str]] = []
+        for doc in spreadsheet_files:
+            utils.debug_print(str(doc))
+            metas.append(
+                {
+                    "name": doc.get("name", ""),
+                    "id": doc.get("id", ""),
+                    "modifiedTime": doc.get("modifiedTime", ""),
+                }
+            )
+        return metas
+
+    return _call_with_api_retry(fetch, "list_spreadsheet_files")
 
 
 def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
     """Returns list of all accessible Google Spreadsheet names.
 
-    Retries on transient Google API errors (429, 5xx) with exponential backoff.
+    Thin wrapper over :func:`get_all_spreadsheet_meta` for callers (the CLI
+    selectors) that only need bare names.
 
     Args:
         connection: Google client connection object
@@ -96,14 +124,7 @@ def get_all_spreadsheets(connection: gspread.Client) -> list[str]:
     Returns:
         List of spreadsheet name strings
     """
-
-    def fetch() -> list[str]:
-        spreadsheet_files = list(connection.list_spreadsheet_files())
-        for doc in spreadsheet_files:
-            utils.debug_print(str(doc))
-        return [doc["name"] for doc in spreadsheet_files]
-
-    return _call_with_api_retry(fetch, "list_spreadsheet_files")
+    return [m["name"] for m in get_all_spreadsheet_meta(connection)]
 
 
 def get_sheet_values(sheet: Any) -> list[list[str]]:

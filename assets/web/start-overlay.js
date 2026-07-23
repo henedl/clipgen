@@ -29,6 +29,8 @@
   var GOOGLE_POLL_TIMEOUT_MS = 90 * 1000;
   var GOOGLE_POLL_INTERVAL_MS = 1500;
   var GOOGLE_POLL_RETRY_MS = 2500;
+  // Wait for typing to settle before fetching worksheets for a pasted URL/name.
+  var WORKSHEET_PASTE_DEBOUNCE_MS = 600;
 
   function sessionDismissed() {
     try { return sessionStorage.getItem(DISMISSED_KEY) === "1"; } catch (_) { return false; }
@@ -67,6 +69,10 @@
     excelFiles: [],
     statusData: null,
     recentProjects: [],
+    worksheetsCache: {},      // "type|id_or_path" -> { worksheets, recommended }
+    worksheetReqVer: 0,       // rejects stale worksheet fetches
+    worksheetLoading: false,  // a worksheet fetch is in flight (gates Confirm)
+    wsPasteTimer: null,       // debounce for paste-driven worksheet loads
     // Baseline = the (input, output, sheet selection, tab) snapshot at the
     // moment the overlay opened (or when a recent project was clicked).
     // Drives the .is-loaded / .is-dirty glow on the path-input and
@@ -172,6 +178,12 @@
     els.excelPickerLabel = root.querySelector('[data-role="excel-picker-label"]');
     els.excelPickerMenu = root.querySelector('[data-role="excel-picker-menu"]');
     els.excelPaste = root.querySelector("#startExcelPaste");
+    els.worksheetSection = root.querySelector('[data-role="worksheet-section"]');
+    els.worksheetLoading = root.querySelector('[data-role="worksheet-loading"]');
+    els.worksheetPicker = root.querySelector('[data-role="worksheet-picker"]');
+    els.worksheetPickerTrigger = root.querySelector('[data-role="worksheet-picker-trigger"]');
+    els.worksheetPickerLabel = root.querySelector('[data-role="worksheet-picker-label"]');
+    els.worksheetPickerMenu = root.querySelector('[data-role="worksheet-picker-menu"]');
 
     els.extrasTabs = root.querySelectorAll(".extras-tabs__tab");
     els.extrasPanels = {
@@ -230,6 +242,10 @@
       e.stopPropagation();
       togglePicker("excel");
     });
+    on(els.worksheetPickerTrigger, "click", function (e) {
+      e.stopPropagation();
+      togglePicker("worksheet");
+    });
 
     on(document, "click", function (e) {
       // Bail when the overlay isn't open — the listener stays bound for the
@@ -249,18 +265,24 @@
     on(els.googlePaste, "input", function () {
       var v = (els.googlePaste.value || "").trim();
       if (v) {
-        setSelection({ type: "google", id_or_path: v, label: parseLabelFromGoogleInput(v) });
+        var sel = { type: "google", id_or_path: v, label: parseLabelFromGoogleInput(v) };
+        setSelection(sel);
+        scheduleWorksheetLoad(sel);
       } else if (state.selection && state.selection.type === "google") {
         renderGoogleList(state.googleSheets || []);
+        hideWorksheetSection();
       }
     });
 
     on(els.excelPaste, "input", function () {
       var v = (els.excelPaste.value || "").trim();
       if (v) {
-        setSelection({ type: "excel", id_or_path: v, label: v.split("/").pop() || v });
+        var sel = { type: "excel", id_or_path: v, label: v.split("/").pop() || v };
+        setSelection(sel);
+        scheduleWorksheetLoad(sel);
       } else if (state.selection && state.selection.type === "excel") {
         renderExcelList(state.excelFiles || []);
+        hideWorksheetSection();
       }
     });
 
@@ -355,12 +377,39 @@
 
   // ---- Sheet picker (Google + Excel dropdowns) ----
 
+  var PICKER_KINDS = ["google", "excel", "worksheet"];
+
+  function pickerRefs(kind) {
+    if (kind === "google") {
+      return {
+        menu: els.googlePickerMenu,
+        trigger: els.googlePickerTrigger,
+        label: els.googlePickerLabel,
+        placeholder: "Select a Google Sheet…",
+      };
+    }
+    if (kind === "excel") {
+      return {
+        menu: els.excelPickerMenu,
+        trigger: els.excelPickerTrigger,
+        label: els.excelPickerLabel,
+        placeholder: "Select an Excel file…",
+      };
+    }
+    return {
+      menu: els.worksheetPickerMenu,
+      trigger: els.worksheetPickerTrigger,
+      label: els.worksheetPickerLabel,
+      placeholder: "Select a worksheet…",
+    };
+  }
+
   function togglePicker(kind) {
-    var menu = kind === "google" ? els.googlePickerMenu : els.excelPickerMenu;
-    if (!menu) return;
-    if (menu.classList.contains("hidden")) {
-      // Close the other picker before opening this one.
-      closePicker(kind === "google" ? "excel" : "google");
+    var refs = pickerRefs(kind);
+    if (!refs.menu) return;
+    if (refs.menu.classList.contains("hidden")) {
+      // Close the sibling pickers before opening this one.
+      PICKER_KINDS.forEach(function (k) { if (k !== kind) closePicker(k); });
       openPicker(kind);
     } else {
       closePicker(kind);
@@ -368,21 +417,19 @@
   }
 
   function openPicker(kind) {
-    var menu = kind === "google" ? els.googlePickerMenu : els.excelPickerMenu;
-    var trigger = kind === "google" ? els.googlePickerTrigger : els.excelPickerTrigger;
-    if (!menu || !trigger) return;
-    menu.classList.remove("hidden");
-    trigger.setAttribute("aria-expanded", "true");
-    liftSectionForPicker(trigger, true);
+    var refs = pickerRefs(kind);
+    if (!refs.menu || !refs.trigger) return;
+    refs.menu.classList.remove("hidden");
+    refs.trigger.setAttribute("aria-expanded", "true");
+    liftSectionForPicker(refs.trigger, true);
   }
 
   function closePicker(kind) {
-    var menu = kind === "google" ? els.googlePickerMenu : els.excelPickerMenu;
-    var trigger = kind === "google" ? els.googlePickerTrigger : els.excelPickerTrigger;
-    if (!menu || !trigger) return;
-    menu.classList.add("hidden");
-    trigger.setAttribute("aria-expanded", "false");
-    liftSectionForPicker(trigger, false);
+    var refs = pickerRefs(kind);
+    if (!refs.menu || !refs.trigger) return;
+    refs.menu.classList.add("hidden");
+    refs.trigger.setAttribute("aria-expanded", "false");
+    liftSectionForPicker(refs.trigger, false);
   }
 
   function liftSectionForPicker(trigger, on) {
@@ -400,18 +447,21 @@
         els.excelPickerMenu && !els.excelPickerMenu.classList.contains("hidden")) {
       closePicker("excel");
     }
+    if (els.worksheetPicker && !els.worksheetPicker.contains(e.target) &&
+        els.worksheetPickerMenu && !els.worksheetPickerMenu.classList.contains("hidden")) {
+      closePicker("worksheet");
+    }
   }
 
   function updatePickerLabel(kind, label) {
-    var labelEl = kind === "google" ? els.googlePickerLabel : els.excelPickerLabel;
-    var trigger = kind === "google" ? els.googlePickerTrigger : els.excelPickerTrigger;
-    if (!labelEl || !trigger) return;
+    var refs = pickerRefs(kind);
+    if (!refs.label || !refs.trigger) return;
     if (label) {
-      labelEl.textContent = label;
-      trigger.classList.remove("is-placeholder");
+      refs.label.textContent = label;
+      refs.trigger.classList.remove("is-placeholder");
     } else {
-      labelEl.textContent = kind === "google" ? "Select a Google Sheet…" : "Select an Excel file…";
-      trigger.classList.add("is-placeholder");
+      refs.label.textContent = refs.placeholder;
+      refs.trigger.classList.add("is-placeholder");
     }
   }
 
@@ -430,6 +480,12 @@
     if (name === "none") {
       // Clear any sheet selection — user is opting out.
       state.selection = null;
+      hideWorksheetSection();
+    } else if (state.selection && state.selection.type === name) {
+      // Re-show the worksheet dropdown for a selection already on this tab.
+      loadWorksheets(state.selection);
+    } else {
+      hideWorksheetSection();
     }
     clearSheetError();
     applyFieldStates();
@@ -462,8 +518,155 @@
       highlightExcelSelection(sel.id_or_path);
       updatePickerLabel("excel", sel.label || sel.id_or_path);
     }
+    // A fresh spreadsheet identity resets the worksheet choice; bump the
+    // request version so any in-flight worksheet fetch for the prior selection
+    // is ignored, then reset the dropdown (loadWorksheets re-shows it for 2+
+    // tabs).
+    state.worksheetReqVer++;
+    hideWorksheetSection();
     clearSheetError();
     applyFieldStates();
+  }
+
+  // Pick a spreadsheet from a dropdown (or recent restore) and populate its
+  // worksheet dropdown.
+  function selectSpreadsheet(sel) {
+    setSelection(sel);
+    loadWorksheets(sel);
+  }
+
+  // ---- Worksheet dropdown ----
+
+  function scheduleWorksheetLoad(sel) {
+    if (state.wsPasteTimer) clearTimeout(state.wsPasteTimer);
+    state.wsPasteTimer = setTimeout(function () {
+      state.wsPasteTimer = null;
+      // Only load if this is still the active selection.
+      if (state.selection && state.selection.type === sel.type &&
+          state.selection.id_or_path === sel.id_or_path) {
+        loadWorksheets(state.selection);
+      }
+    }, WORKSHEET_PASTE_DEBOUNCE_MS);
+  }
+
+  function loadWorksheets(sel) {
+    if (!sel || (sel.type !== "google" && sel.type !== "excel") || !sel.id_or_path) {
+      hideWorksheetSection();
+      return;
+    }
+    var key = sel.type + "|" + sel.id_or_path;
+    var reqVer = ++state.worksheetReqVer;
+    var cached = state.worksheetsCache[key];
+    if (cached) {
+      applyWorksheets(sel, cached, reqVer);
+      return;
+    }
+    // Fetching a spreadsheet's tabs can be slow (Google opens it server-side).
+    // Show a spinner and hold the Confirm button until we know the tab list, so
+    // the user can't Open before choosing (or seeing) a worksheet.
+    showWorksheetLoading();
+    apiGet("/api/spreadsheets/worksheets?type=" + encodeURIComponent(sel.type) +
+           "&id_or_path=" + encodeURIComponent(sel.id_or_path))
+      .then(function (r) {
+        var data = {
+          worksheets: (r && r.worksheets) || [],
+          recommended: (r && r.recommended) || "",
+        };
+        state.worksheetsCache[key] = data;
+        applyWorksheets(sel, data, reqVer);
+      })
+      .catch(function () {
+        // On failure just hide the section; the server auto-picks on open.
+        if (reqVer === state.worksheetReqVer) hideWorksheetSection();
+      });
+  }
+
+  function applyWorksheets(sel, data, reqVer) {
+    if (reqVer !== state.worksheetReqVer) return;               // stale fetch
+    if (!state.selection || state.selection.type !== sel.type ||
+        state.selection.id_or_path !== sel.id_or_path) return;   // selection moved
+    if (state.activeTab !== sel.type) return;                    // tab switched away
+    var titles = data.worksheets || [];
+    var preferred = data.recommended || (titles.length ? titles[0] : "");
+    // Keep a remembered worksheet (recent-project / current-session restore)
+    // when still valid.
+    var want = (sel.worksheet && titles.indexOf(sel.worksheet) >= 0)
+      ? sel.worksheet : preferred;
+    if (titles.length > 1) {
+      state.selection.worksheet = want;
+      renderWorksheetList(titles);
+      showWorksheetList(want);
+    } else {
+      // 0-1 tabs: nothing to choose — record the single tab (if any) so the
+      // sheet-card dirty state matches what will open, then hide the section.
+      state.selection.worksheet = titles.length === 1 ? titles[0] : "";
+      hideWorksheetSection();
+    }
+    applyFieldStates();
+  }
+
+  function renderWorksheetList(titles) {
+    if (!els.worksheetPickerMenu) return;
+    els.worksheetPickerMenu.innerHTML = "";
+    titles.forEach(function (title) {
+      var option = el("button", "sheet-picker__option");
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.setAttribute("data-worksheet", title);
+      option.appendChild(el("span", "sheet-picker__option-main", title));
+      option.addEventListener("click", function () {
+        if (state.selection) state.selection.worksheet = title;
+        setWorksheetSelection(title);
+        closePicker("worksheet");
+        // Reflect the tab change in the sheet-card dirty glow.
+        applyFieldStates();
+      });
+      els.worksheetPickerMenu.appendChild(option);
+    });
+  }
+
+  function setWorksheetSelection(title) {
+    updatePickerLabel("worksheet", title);
+    if (!els.worksheetPickerMenu) return;
+    var items = els.worksheetPickerMenu.querySelectorAll(".sheet-picker__option");
+    Array.prototype.forEach.call(items, function (item) {
+      item.classList.toggle("is-selected", item.getAttribute("data-worksheet") === title);
+    });
+  }
+
+  function showWorksheetLoading() {
+    state.worksheetLoading = true;
+    if (els.worksheetSection) setHidden(els.worksheetSection, false);
+    if (els.worksheetLoading) setHidden(els.worksheetLoading, false);
+    if (els.worksheetPicker) setHidden(els.worksheetPicker, true);
+    updateConfirmEnabled();
+  }
+
+  function showWorksheetList(selected) {
+    state.worksheetLoading = false;
+    if (els.worksheetLoading) setHidden(els.worksheetLoading, true);
+    if (els.worksheetPicker) setHidden(els.worksheetPicker, false);
+    if (els.worksheetSection) setHidden(els.worksheetSection, false);
+    setWorksheetSelection(selected);
+    updateConfirmEnabled();
+  }
+
+  function hideWorksheetSection() {
+    state.worksheetLoading = false;
+    if (els.worksheetSection) setHidden(els.worksheetSection, true);
+    if (els.worksheetLoading) setHidden(els.worksheetLoading, true);
+    if (els.worksheetPicker) setHidden(els.worksheetPicker, false);
+    closePicker("worksheet");
+    updateConfirmEnabled();
+  }
+
+  // The Confirm ("Open workspace") button waits while worksheets are being
+  // fetched so a fast click can't open the recommended tab before the user
+  // sees (or picks) one. confirm() manages the in-flight open flag itself.
+  function updateConfirmEnabled() {
+    if (!els.confirmBtn) return;
+    els.confirmBtn.disabled = state.confirmInFlight || state.worksheetLoading;
+    els.confirmBtn.title = state.worksheetLoading ? "Checking worksheets…" : "";
   }
 
   // ---- Data loading ----
@@ -572,6 +775,19 @@
     return Math.floor(days / 365) + "y ago";
   }
 
+  // Accepts an ISO-8601 string (Google modifiedTime) or epoch-seconds number
+  // (Excel st_mtime) and returns an "Edited …" label, or "" when unavailable.
+  function formatEdited(value) {
+    var when;
+    if (typeof value === "number") {
+      if (!value) return "";
+      when = formatWhen(new Date(value * 1000).toISOString());
+    } else {
+      when = formatWhen(value);
+    }
+    return when ? "Edited " + when : "";
+  }
+
   function restoreProject(project) {
     if (!project) return;
     els.inputDir.value = project.input || "";
@@ -579,10 +795,11 @@
     var sheet = project.spreadsheet;
     if (sheet && sheet.type && sheet.id_or_path) {
       setTab(sheet.type);
-      setSelection({
+      selectSpreadsheet({
         type: sheet.type,
         id_or_path: sheet.id_or_path,
         label: sheet.label || sheet.id_or_path,
+        worksheet: sheet.worksheet || "",
       });
       if (sheet.type === "google" && els.googlePaste) {
         els.googlePaste.value = sheet.id_or_path;
@@ -606,9 +823,7 @@
       input: els.inputDir.value || "",
       output: els.outputDir.value || "",
       sheetTab: state.activeTab,
-      sheetKey: state.selection
-        ? state.selection.type + "|" + state.selection.id_or_path
-        : "",
+      sheetKey: selectionKey(state.selection),
     };
   }
 
@@ -639,12 +854,18 @@
     return "dirty";
   }
 
+  // Identity of a selection for dirty-state tracking: includes the worksheet
+  // so switching tabs on the same spreadsheet reads as "dirty" (a different
+  // tab would open).
+  function selectionKey(sel) {
+    if (!sel) return "";
+    return sel.type + "|" + sel.id_or_path + "|" + (sel.worksheet || "");
+  }
+
   function sheetState() {
     var card = root && root.querySelector(".sheet-card");
     if (card && card.classList.contains("has-error")) return "error";
-    var currentKey = state.selection
-      ? state.selection.type + "|" + state.selection.id_or_path
-      : "";
+    var currentKey = selectionKey(state.selection);
     var sameKey = currentKey === state.baseline.sheetKey;
     var sameTab = state.activeTab === state.baseline.sheetTab;
     if (sameKey && sameTab) {
@@ -817,9 +1038,11 @@
       option.setAttribute("role", "option");
       option.setAttribute("data-id", sheet.name);
       option.appendChild(el("span", "sheet-picker__option-main", sheet.name));
+      var edited = formatEdited(sheet.modifiedTime);
+      if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
       option.addEventListener("click", function () {
         if (els.googlePaste) els.googlePaste.value = "";
-        setSelection({ type: "google", id_or_path: sheet.name, label: sheet.name });
+        selectSpreadsheet({ type: "google", id_or_path: sheet.name, label: sheet.name });
         closePicker("google");
       });
       els.googlePickerMenu.appendChild(option);
@@ -865,9 +1088,11 @@
       option.setAttribute("data-path", f.path);
       option.appendChild(el("span", "sheet-picker__option-main", f.name));
       option.appendChild(el("span", "sheet-picker__option-sub", f.path));
+      var edited = formatEdited(f.modified);
+      if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
       option.addEventListener("click", function () {
         if (els.excelPaste) els.excelPaste.value = "";
-        setSelection({ type: "excel", id_or_path: f.path, label: f.name });
+        selectSpreadsheet({ type: "excel", id_or_path: f.path, label: f.name });
         closePicker("excel");
       });
       els.excelPickerMenu.appendChild(option);
@@ -980,6 +1205,11 @@
     // Cmd/Ctrl+Enter shortcut bypasses that path. Two simultaneous flights
     // would race the server-side _swap_worksheet.
     if (state.confirmInFlight) return;
+    // Hold off while the worksheet list is loading so we never post a
+    // selection whose worksheet field isn't settled yet (which would open the
+    // priority tab instead of the dropdown default). The button is disabled in
+    // this state; this also blocks the Cmd/Ctrl+Enter shortcut.
+    if (state.worksheetLoading) return;
     state.confirmInFlight = true;
 
     var inputVal = (els.inputDir.value || "").trim();
@@ -1005,10 +1235,10 @@
 
     function releaseConfirm() {
       state.confirmInFlight = false;
-      els.confirmBtn.disabled = false;
+      updateConfirmEnabled();
     }
 
-    els.confirmBtn.disabled = true;
+    updateConfirmEnabled();
     dirsPromise.then(function (res) {
       if (!res.ok) {
         var errors = (res.body && res.body.errors) || {};
@@ -1170,12 +1400,15 @@
     var s = state.statusData || {};
     if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
       // Seed the picker so the current session shows as "loaded" without the
-      // user needing to re-select. Activate the correct tab + selection.
+      // user needing to re-select. Activate the correct tab + selection, and
+      // restore the loaded worksheet so re-confirming can't silently switch to
+      // the priority tab (and the dropdown reflects the active tab).
       setTab(s.spreadsheet_type);
-      setSelection({
+      selectSpreadsheet({
         type: s.spreadsheet_type,
         id_or_path: s.spreadsheet_id_or_path,
         label: s.spreadsheet_label || s.spreadsheet_id_or_path,
+        worksheet: s.spreadsheet_worksheet || "",
       });
       if (s.spreadsheet_type === "google" && els.googlePaste) {
         // Match against the open Google sheet list if possible; otherwise show

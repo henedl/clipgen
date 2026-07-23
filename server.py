@@ -3090,6 +3090,7 @@ def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
                 "type": "excel",
                 "id_or_path": path,
                 "label": Path(path).name,
+                "worksheet": getattr(worksheet, "title", ""),
             }
     except Exception:
         pass
@@ -3099,7 +3100,12 @@ def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
     title = getattr(parent, "title", "") if parent is not None else ""
     if not title:
         return None
-    return {"type": "google", "id_or_path": title, "label": title}
+    return {
+        "type": "google",
+        "id_or_path": title,
+        "label": title,
+        "worksheet": getattr(worksheet, "title", ""),
+    }
 
 
 def _spreadsheet_label() -> str:
@@ -3290,6 +3296,7 @@ def build_combined_app(
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
                 "spreadsheet_id_or_path": (meta or {}).get("id_or_path", ""),
+                "spreadsheet_worksheet": (meta or {}).get("worksheet", ""),
                 "input_dir": str(utils.get_effective_input_dir()),
                 "output_dir": str(utils.get_effective_output_dir()),
                 "videos_in_input": len(utils.discover_participant_videos()),
@@ -3386,12 +3393,18 @@ def build_combined_app(
     @combined.route("/api/spreadsheets/excel", methods=["GET"])
     def api_spreadsheets_excel() -> Response:
         input_dir = Path(utils.get_effective_input_dir())
-        files_list: list[dict[str, str]] = []
+        files_list: list[dict[str, Any]] = []
         if input_dir.is_dir():
             for p in sorted(input_dir.glob("*.xlsx")):
                 if p.name.startswith("~$"):
                     continue
-                files_list.append({"path": str(p), "name": p.name})
+                try:
+                    modified = p.stat().st_mtime
+                except OSError:
+                    modified = 0.0
+                files_list.append(
+                    {"path": str(p), "name": p.name, "modified": modified}
+                )
         return ok(input_dir=str(input_dir), files=files_list)
 
     @combined.route("/api/spreadsheets/google", methods=["GET"])
@@ -3406,7 +3419,7 @@ def build_combined_app(
         import google_api
 
         try:
-            names = google_api.get_all_spreadsheets(_google_auth.client)
+            metas = google_api.get_all_spreadsheet_meta(_google_auth.client)
         except Exception as exc:
             return ok(
                 authenticated=True,
@@ -3414,12 +3427,54 @@ def build_combined_app(
                 auth_error=str(exc),
                 sheets=[],
             )
+        # id stays the name so the open-by-name path is unchanged; modifiedTime
+        # (Drive ISO-8601) powers the "Edited …" sub-line in the picker.
         return ok(
             authenticated=True,
             auth_in_flight=False,
             auth_error="",
-            sheets=[{"name": n, "id": n} for n in names],
+            sheets=[
+                {
+                    "name": m["name"],
+                    "id": m["name"],
+                    "modifiedTime": m.get("modifiedTime", ""),
+                }
+                for m in metas
+            ],
         )
+
+    @combined.route("/api/spreadsheets/worksheets", methods=["GET"])
+    def api_spreadsheets_worksheets() -> Response:
+        """List a spreadsheet's worksheet titles for the Start overlay dropdown.
+
+        Query params: ``type`` ('google'|'excel') and ``id_or_path``. Returns
+        ``{worksheets: [titles…], recommended: "<title>"}``. ``recommended`` is
+        the priority auto-pick the open path would use when no tab is chosen.
+        Fetched once per selection; the client caches by ``type|id_or_path``.
+        """
+        type_ = (request.args.get("type") or "").strip()
+        id_or_path = (request.args.get("id_or_path") or "").strip()
+        if type_ not in ("google", "excel") or not id_or_path:
+            return err("Required: type ('google'|'excel') and id_or_path")
+
+        titles: list[str] = []
+        recommended = ""
+        try:
+            if type_ == "excel":
+                import excel_io
+
+                titles, recommended = excel_io.list_worksheet_titles(id_or_path)
+            else:
+                if _google_auth.client is None:
+                    return err("Not authenticated with Google.")
+                import clipgen as _clipgen
+
+                titles, recommended = _clipgen.list_worksheet_titles(
+                    _google_auth.client, id_or_path
+                )
+        except Exception as exc:
+            return err(str(exc), 500)
+        return ok(worksheets=titles, recommended=recommended)
 
     @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
     def api_spreadsheets_google_auth() -> FlaskResponse:
@@ -3460,6 +3515,7 @@ def build_combined_app(
         data = request.get_json(silent=True) or {}
         type_ = data.get("type", "")
         id_or_path = (data.get("id_or_path") or "").strip()
+        worksheet = (data.get("worksheet") or "").strip() or None
         if type_ not in ("google", "excel") or not id_or_path:
             return err("Required: type ('google'|'excel') and id_or_path")
 
@@ -3476,7 +3532,9 @@ def build_combined_app(
             if type_ == "excel":
                 import excel_io
 
-                new_ws = excel_io.open_excel_workbook(id_or_path)
+                new_ws = excel_io.open_excel_workbook(
+                    id_or_path, worksheet_name=worksheet
+                )
                 label = Path(id_or_path).name
             else:
                 if _google_auth.client is None:
@@ -3490,12 +3548,15 @@ def build_combined_app(
                     "https://"
                 ):
                     new_ws = _clipgen.open_spreadsheet_by_url(
-                        _google_auth.client, id_or_path
+                        _google_auth.client, id_or_path, worksheet_name=worksheet
                     )
                 else:
                     doc_list = google_api.get_all_spreadsheets(_google_auth.client)
                     new_ws = _clipgen.open_spreadsheet_by_name(
-                        _google_auth.client, doc_list, id_or_path
+                        _google_auth.client,
+                        doc_list,
+                        id_or_path,
+                        worksheet_name=worksheet,
                     )
                 if new_ws is not None:
                     parent = getattr(new_ws, "spreadsheet", None)
@@ -3510,17 +3571,28 @@ def build_combined_app(
         if _sheet_context is None:
             return err("Could not parse the spreadsheet", 500)
 
-        start_settings.record_recent_spreadsheet(type_, id_or_path, label)
+        # Record the worksheet actually loaded (title after auto-pick fallback)
+        # so recent-projects can restore the exact tab, not just the request.
+        loaded_worksheet = getattr(new_ws, "title", "") or (worksheet or "")
+        start_settings.record_recent_spreadsheet(
+            type_, id_or_path, label, loaded_worksheet
+        )
         start_settings.record_project_session(
             str(utils.get_effective_input_dir()),
             str(utils.get_effective_output_dir()),
-            {"type": type_, "id_or_path": id_or_path, "label": label},
+            {
+                "type": type_,
+                "id_or_path": id_or_path,
+                "label": label,
+                "worksheet": loaded_worksheet,
+            },
         )
         global _active_sheet_meta
         _active_sheet_meta = {
             "type": type_,
             "id_or_path": id_or_path,
             "label": label,
+            "worksheet": loaded_worksheet,
         }
         return ok(
             sheet_loaded=True,
