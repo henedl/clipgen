@@ -159,6 +159,7 @@
     var resetAll = el("button", "btn btn-small settings-reset-all");
     resetAll.type = "button";
     resetAll.textContent = "Reset all to defaults";
+    resetAll.setAttribute("data-hotkey", "settings.resetAll");
     resetAll.addEventListener("click", function () { _resetAll(); });
     var status = el("span", "settings-save-status");
     footer.appendChild(resetAll);
@@ -1197,6 +1198,7 @@
 
       var resetTabBtn = el("button", "btn btn-small settings-tab-reset", "Reset this tab");
       resetTabBtn.type = "button";
+      resetTabBtn.setAttribute("data-hotkey", "settings.resetTab");
       resetTabBtn.addEventListener("click", _makeTabResetHandler(name));
       panel.appendChild(resetTabBtn);
 
@@ -1446,7 +1448,11 @@
         }
       },
       { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
-      { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } }
+      { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } },
+      // Reset hotkeys reuse the buttons' handlers (unconfirmed, like the
+      // buttons). R resets the active tab; Shift+R resets everything.
+      { id: "settings.resetTab", inModal: true, when: _isModalOpen, handler: function () { _resetTab(_activeTab); } },
+      { id: "settings.resetAll", inModal: true, when: _isModalOpen, handler: function () { _resetAll(); } }
     ]);
   }
 

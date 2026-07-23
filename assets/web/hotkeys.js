@@ -153,7 +153,9 @@
 
     { id: "settings.tab",       section: "settings", group: "", label: "Switch settings tab by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
     { id: "settings.cyclePrev", section: "settings", group: "", label: "Previous settings tab", combos: ["Z"] },
-    { id: "settings.cycleNext", section: "settings", group: "", label: "Next settings tab", combos: ["X"] }
+    { id: "settings.cycleNext", section: "settings", group: "", label: "Next settings tab", combos: ["X"] },
+    { id: "settings.resetTab",  section: "settings", group: "", label: "Reset this tab to defaults", combos: ["R"] },
+    { id: "settings.resetAll",  section: "settings", group: "", label: "Reset all settings to defaults", combos: ["Shift+R"] }
   ];
 
   // ---- Internal state ----
