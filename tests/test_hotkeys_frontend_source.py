@@ -18,13 +18,13 @@ These tests keep that contract honest:
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 
 import server
 
-WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
+from _frontend_source import WEB
+
 HOTKEYS_SRC = (WEB / "hotkeys.js").read_text(encoding="utf-8")
 
 # Files allowed to attach document-level keydown listeners: the dispatcher

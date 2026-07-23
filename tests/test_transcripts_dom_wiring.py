@@ -13,14 +13,13 @@ has no JS DOM harness), but it catches HTML/JS drift for the elements that the
 render flow assumes exist.
 """
 
-from pathlib import Path
+from _frontend_source import concat_js, read
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
-_HTML = (_WEB / "transcripts.html").read_text("utf-8")
+_HTML = read("transcripts.html")
 # The page script is a hub (transcripts.js) plus feature satellites
 # (transcripts-{corrections,search,video,pills,agents}.js); the friction/summary
 # element IDs live in the agents satellite, so read all of them together.
-_JS = "".join(p.read_text("utf-8") for p in sorted(_WEB.glob("transcripts*.js")))
+_JS = concat_js("transcripts")
 
 # Static element IDs the page script references via qs("#...") that must be
 # present in transcripts.html. Dynamically-created nodes are intentionally

@@ -12,7 +12,9 @@ from pathlib import Path
 import config
 import utils
 
-JS_PATH = Path(__file__).resolve().parent.parent / "assets" / "web" / "utils.js"
+from _frontend_source import WEB
+
+JS_PATH = WEB / "utils.js"
 
 
 def _js_source() -> str:

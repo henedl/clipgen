@@ -6,11 +6,10 @@ from ``assets/web/_head.html``. Exported viewers stay self-contained and must
 not gain the marker.
 """
 
-from pathlib import Path
-
 import utils
 
-WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
+from _frontend_source import WEB
+
 HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
 LIVE_PAGES = ("studio.html", "screenspace.html", "transcripts.html", "workflows.html")
 EXPORT_PAGES = ("viewer.html", "gallery.html", "timeline-viewer.html")

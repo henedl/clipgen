@@ -29,11 +29,10 @@ checklist item in agents/skills/carve-satellite/SKILL.md.
 """
 
 import re
-from pathlib import Path
 
 import pytest
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
+from _frontend_source import WEB as _WEB
 
 # Each group is a hub + satellites discovered by glob; the hub file has no "-"
 # and so sorts last. Only IIFE-wrapped files are part of the carve (shared

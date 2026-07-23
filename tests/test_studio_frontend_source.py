@@ -1,20 +1,16 @@
 """Static regression checks for Studio frontend sources."""
 
-from pathlib import Path
+from _frontend_source import WEB as _WEB
+from _frontend_source import concat_js
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
 STUDIO_CSS = _WEB / "studio.css"
 STUDIO_HTML = _WEB / "studio.html"
 
 
 def _studio_js() -> str:
-    # Studio is a hub (studio.js) + feature satellites (studio-*.js). Concatenate
-    # all of them so assertions stay valid wherever a function lives. Satellites
-    # sort before the hub ("-" < "."), so each src.index(a)..src.index(b) slice
-    # below still resolves within the single file that owns both anchors.
-    return "".join(
-        p.read_text(encoding="utf-8") for p in sorted(_WEB.glob("studio*.js"))
-    )
+    # Studio is a hub (studio.js) + feature satellites (studio-*.js): read the
+    # whole group so assertions stay valid wherever a function lives.
+    return concat_js("studio")
 
 
 def test_studio_selection_requires_valid_timestamp_cells():

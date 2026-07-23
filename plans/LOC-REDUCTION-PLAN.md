@@ -178,14 +178,22 @@ above — parametrize/shared-helper refactors keep the guard rails, they only re
 
 ## B. Test-suite boilerplate dedup (all cases/assertions preserved)
 
-- [ ] **B1. Parametrize `test_cli_screenspace_args.py`** — pure-function valid/raises clusters +
-  the uniform argv-parse cluster, following `test_cli_args.py`'s existing idiom. (~80–150)
-- [ ] **B2. Shared `tests/_frontend_source.py`** — `WEB` path (11 files), glob-concat (5 files),
-  ES5 checks, `_strip_comments`. (~40–60)
-- [ ] **B3. `SheetContext` builder in `conftest.py`** — dedup the three `_make_context()` copies
-  (`test_selectors`, `test_spreadsheet_generation`, `test_files_and_artifacts`). (~15–25)
-- [ ] **B4 (stretch). Blueprint-client fixture envelope** — only the app/test_client/teardown
-  envelope; per-module seed data stays. Skip if teardown semantics get fiddly. (~20)
+- [x] **B1. Parametrize `test_cli_screenspace_args.py`** — **Done (−37).** Argv-parse cluster
+  (7 cases), flag-conflict exits (2), mode-conflict exits (3), scene-ref/conversion valid+raises
+  (8) collapsed into 5 parametrized tests; all 49 original cases preserved (same test count).
+  **Learning:** ruff-format's one-element-per-line list expansion eats most parametrize savings —
+  the win only materialized after expressing each argv case as a single space-split string.
+  Estimates for parametrize refactors here must be made against *formatted* code.
+- [x] **B2. Shared `tests/_frontend_source.py`** — **Done (~−45).** `WEB`, `concat_js(prefix)`,
+  `read(name)`, `strip_comments`, `assert_es5` adopted across the 11 frontend source-test files.
+- [x] **B3. `SheetContext` builder in `conftest.py`** — **Done (~−55).** Plain
+  `make_sheet_context()` helper (not a fixture; imported `from conftest import ...`); the
+  `test_selectors` / `test_files_and_artifacts` copies deleted outright (all call sites pass by
+  keyword), `test_spreadsheet_generation` keeps its thin sheet/cells-defaults wrapper.
+- [x] **B4 (stretch). Blueprint-client fixture envelope** — **Skipped (investigated).** The
+  shareable envelope is only ~3 lines/file (Flask app + register_blueprint + test_client); the
+  fixture bulk is genuinely per-module seed state interleaved between construction and yield.
+  ~10 real lines against a new abstraction with teardown subtleties — not worth it.
 
 ## C. Medium-risk dedup (needs browser check)
 
