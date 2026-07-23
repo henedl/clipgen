@@ -1,11 +1,12 @@
 # Backend god-file splits — deferred plan
 
-> **Status: not started.** Designed during the 2026-07 backend refactor pass; the hygiene/consolidation
-> stages of that pass shipped separately (dead config constants, truncation consolidation,
-> `server_utils.make_debounced_persist`). This file holds the three fully-designed god-file splits
-> that were deliberately deferred, plus the items surveyed and skipped. Line numbers reference the
-> tree as of that pass — re-verify before executing, but the seams and traps were verified against
-> real code and tests, not just outlines.
+> **Status: Split 1 (workflows) done, 2026-07-23.** Designed during the 2026-07 backend refactor
+> pass; the hygiene/consolidation stages of that pass shipped separately (dead config constants,
+> truncation consolidation, `server_utils.make_debounced_persist`). This file holds the three
+> fully-designed god-file splits that were deliberately deferred, plus the items surveyed and
+> skipped. Line numbers reference the tree as of that pass — re-verify before executing, but the
+> seams and traps were verified against real code and tests, not just outlines. Splits 2 (cli) and
+> 3 (utils) remain open.
 
 ## Context
 
@@ -19,7 +20,14 @@ gate green: `uv run ruff format --check && uv run ruff check --fix && uv run ty 
 
 Recommended order (lowest risk first): workflows → cli → utils.
 
-## Split 1: workflows.py → workflows_catalog.py + workflows_runner.py (facade)
+## Split 1: workflows.py → workflows_catalog.py + workflows_runner.py (facade) — **Done (2026-07-23)**
+
+> Landed as designed, with two drift adjustments: the runner sibling also took the
+> post-design additions (`compute_resume_plan`, `TRIGGER_TYPES`/`TRIGGER_TYPE_IDS`,
+> `inspectable_sidecar_view`, `NOTE_NODE_TYPE`), and `workflows_server`'s attribute
+> surface had grown to 22 names — all covered by the facade. Zero workflows test
+> edits, as predicted. Result: workflows.py 4338 → ~2030 (executors + wiring +
+> facade), catalog ~1600, runner ~830.
 
 Import DAG: `workflows_catalog` → `workflows_runner` → `workflows` (facade + executors + wiring).
 

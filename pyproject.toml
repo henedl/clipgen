@@ -40,7 +40,7 @@ py-modules = [
     "server_utils", "spreadsheet", "start_settings", "thinking_agents",
     "titlecards",
     "transcripts", "transcripts_server", "utils", "video", "viewer",
-    "workflows", "workflows_server",
+    "workflows", "workflows_catalog", "workflows_runner", "workflows_server",
 ]
 
 [tool.uv]
