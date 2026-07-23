@@ -74,7 +74,7 @@ Opt-in via `--composer`; no spreadsheet required. Served at `/composer/` by the 
 
 ## Artifact Manifest ([viewer.py](viewer.py))
 
-Opt-in via `--manifest` or `config.MANIFEST_ENABLED`. Writes `clipgen_manifest.json` alongside artifacts. Key functions: `save_manifest`, `load_manifest_artifacts`, `load_manifest_reels`. Consumed by `--regenerate` and standalone `--viewer`.
+Opt-in via `--manifest` or `config.MANIFEST_ENABLED`. Writes `clipgen_manifest.json` alongside artifacts. Key functions: `save_manifest`, `load_manifest_artifacts`, `load_manifest_both` (reels are its second return value). Consumed by `--regenerate` and standalone `--viewer`.
 
 ## Transcription ([transcripts.py](transcripts.py))
 
