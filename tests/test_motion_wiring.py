@@ -54,7 +54,12 @@ def test_motion_loaded_after_utils_on_both_pages():
 
 
 def test_motion_wired_at_mutation_sites():
-    studio = (_WEB / "studio.js").read_text(encoding="utf-8")
+    # Studio's mutation sites are spread across the hub + its satellites (the
+    # stash sites live in studio-stash.js), so read the whole studio*.js group —
+    # same convention as test_studio_frontend_source.py.
+    studio = "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(_WEB.glob("studio*.js"))
+    )
     ss_overlay = (_WEB / "screenspace-overlay-interaction.js").read_text(
         encoding="utf-8"
     )
