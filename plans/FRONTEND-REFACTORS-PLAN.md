@@ -77,9 +77,17 @@ otherwise late-bind `NS.fn(...)`).
     re-aliased the same way in the satellite (the wiring guard caught the missing alias).
   - **Load order**: after `studio-trim.js` (uses its `STUDIO.buildCellOverrides`), before
     `studio-intake.js`.
+- [x] **stash** — Done (2026-07-23) as `studio-stash.js` (~377 lines; hub 5086 → 4778). The
+  `renderQueue` coupling resolved cleanly: the stash configs hold the hub's already-published
+  `STUDIO.renderReelQueue`/`renderArtifactQueue` refs, and the queue rerender flows via
+  `cfg.renderQueue()`. The two hub drop-target callbacks (which wrote `_justStashedId`) moved
+  into the satellite as late-bound `STUDIO.stashDropReel`/`.stashDropArtifacts`; hub keeps 6
+  same-named delegators (loadStashes, loadArtifactStashes, stashCurrentReel,
+  stashCurrentArtifacts, revealEmptyStashAreas, hideEmptyStashAreas) and newly publishes
+  `isReelQueueLocked`/`isArtifactQueueLocked`/`cellKey`/`updateSingleCellClass`/
+  `ssEnqueueThumbCustom`.
 - [ ] _Defer:_ **build** (`4136–4615`, reel/timeline/gallery interleaved — needs a separate
-  reel-vs-viewer split first) and **stash** (`3240–3523`, coupled to `renderQueue`). Re-evaluate
-  after A1–A3.
+  reel-vs-viewer split first). Re-evaluate.
 
 ### Screenspace (`window.ClipgenScreenspace` / SS)
 
