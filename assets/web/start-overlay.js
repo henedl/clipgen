@@ -286,15 +286,21 @@
       }
     });
 
-    on(document, "keydown", function (e) {
-      if (!state.open) return;
-      if (e.key === "Escape") {
-        close();
-      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        confirm();
-      }
-    });
+    // Keyboard: Escape (close) and Tab containment are owned by the shared
+    // blocking-modal trap (see open()); the rest are shared-registry hotkeys so
+    // holding Alt reveals them and they list in the "?" cheatsheet. Gated by
+    // inModal + `when` so they fire only while the launcher owns the keyboard.
+    if (window.ClipgenHotkeys) {
+      var isOpen = function () { return state.open; };
+      ClipgenHotkeys.register([
+        { id: "start.tabGoogle",    inModal: true, when: isOpen, handler: function () { setTab("google"); } },
+        { id: "start.tabExcel",     inModal: true, when: isOpen, handler: function () { setTab("excel"); } },
+        { id: "start.tabNone",      inModal: true, when: isOpen, handler: function () { setTab("none"); } },
+        { id: "start.browseInput",  inModal: true, when: isOpen, handler: function () { browseFolder("input"); } },
+        { id: "start.browseOutput", inModal: true, when: isOpen, handler: function () { browseFolder("output"); } },
+        { id: "start.confirm",      inModal: true, allowInInput: true, when: isOpen, handler: function () { confirm(); } }
+      ]);
+    }
   }
 
   function parseLabelFromGoogleInput(s) {
@@ -1307,6 +1313,20 @@
     if (state.open) return;
     state.open = true;
     show(root, true);
+    // Register as the shared blocking modal: Escape closes, Tab is trapped
+    // inside, and hotkeys.js scopes Alt-hold hints to this overlay's controls.
+    // initialFocus is the panel (tabindex="-1") so focus lands on a non-typing
+    // element — the reveal-hints and letter shortcuts work immediately, and the
+    // trap pulls Tab back into the cycle from there. restoreFocus returns focus
+    // to the launch trigger on dismiss (else it stays stuck on the hidden panel).
+    if (typeof openBlockingModal === "function") {
+      openBlockingModal(root, {
+        onEscape: close,
+        trapFocus: true,
+        initialFocus: els.panel,
+        restoreFocus: true
+      });
+    }
     runIntro();
     refresh();
   }
@@ -1321,7 +1341,14 @@
     root.style.setProperty("--host-blur", "0px");
     root.style.setProperty("--veil-alpha", "0");
     setTimeout(function () {
-      if (!state.open) show(root, false);
+      // Guard against a re-open during the fade (open() flips state.open back).
+      if (state.open) return;
+      show(root, false);
+      // Release the blocking modal only once the overlay is actually hidden.
+      // The start overlay never sets body.modal-open, so blockingModalOpen()
+      // tracks this trap; releasing it early would re-activate page hotkeys and
+      // background Alt-hint chips while the launcher is still fading out.
+      if (typeof closeBlockingModal === "function") closeBlockingModal(root);
     }, 460);
   }
 

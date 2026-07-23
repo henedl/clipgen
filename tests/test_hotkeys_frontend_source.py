@@ -40,7 +40,6 @@ KEYDOWN_ALLOWLIST = {
     "topnav.js",
     "workflows.js",  # bindMenuToggle (run split-button menu)
     "workflows-wires.js",  # armed-wire Escape (attached only while armed)
-    "start-overlay.js",
 }
 
 _DOC_KEYDOWN_RE = re.compile(
@@ -231,7 +230,9 @@ def test_data_hotkey_values_exist_in_catalog(catalog):
     """Every Alt-hint tag (data-hotkey attribute) must name a catalog action."""
     known = {a["id"] for a in catalog if not a.get("note")}
     unknown = []
-    for name in ALL_TEMPLATES:
+    # ALL_TEMPLATES plus start-overlay.html, a mounted fragment (not a full page,
+    # so it stays out of ALL_TEMPLATES) that carries its own data-hotkey tags.
+    for name in ALL_TEMPLATES + ["start-overlay.html"]:
         html = (WEB / name).read_text(encoding="utf-8")
         for action_id in _DATA_HOTKEY_HTML_RE.findall(html):
             if action_id not in known:
@@ -277,6 +278,24 @@ def test_per_page_help_wirings_removed():
             f"{name} still wires the cheatsheet button ({marker}); the "
             f"[data-hotkeys-help] delegation in hotkeys.js replaces it"
         )
+
+
+def test_start_overlay_is_a_blocking_modal():
+    """The start launcher must register as a blocking modal.
+
+    hotkeys.js scopes Alt-hold hints (and suppresses page hotkeys) via
+    blockingModalOpen(); a launcher that only toggled its own `hidden` class
+    would let background-page hint chips float over the modal (the original
+    bug). Guard the openBlockingModal wiring so it can't silently regress.
+    """
+    src = (WEB / "start-overlay.js").read_text(encoding="utf-8")
+    assert "openBlockingModal(" in src, (
+        "start-overlay.js must open via openBlockingModal so blockingModalOpen() "
+        "is true while the launcher owns the keyboard"
+    )
+    assert "closeBlockingModal(" in src, (
+        "start-overlay.js must release the blocking modal on close"
+    )
 
 
 def test_coerce_hotkey_overrides():

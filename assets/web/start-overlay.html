@@ -1,6 +1,6 @@
 <div class="start-overlay hidden" id="startOverlay" role="dialog" aria-modal="true" aria-labelledby="startOverlayTitle">
   <div class="start-overlay-backdrop" data-role="backdrop"></div>
-  <div class="start-panel" data-role="panel">
+  <div class="start-panel" data-role="panel" tabindex="-1">
 
     <button type="button" class="panel-close" data-role="close" aria-label="Close">
       <span class="so-icon so-icon--sm" data-icon="x-mark"></span>
@@ -52,7 +52,7 @@
             <button type="button" class="path-input__btn path-input__btn--icon" data-role="input-recents-toggle" aria-label="Recent input folders" title="Recent input folders">
               <span class="so-icon so-icon--sm" data-icon="clock"></span>
             </button>
-            <button type="button" class="path-input__btn path-input__btn--browse" data-role="input-browse">Browse…</button>
+            <button type="button" class="path-input__btn path-input__btn--browse" data-role="input-browse" data-hotkey="start.browseInput">Browse…</button>
           </div>
           <div class="recent-pop cg-menu hidden" data-role="input-recents-list" role="menu"></div>
         </div>
@@ -70,7 +70,7 @@
             <button type="button" class="path-input__btn path-input__btn--icon" data-role="output-recents-toggle" aria-label="Recent output folders" title="Recent output folders">
               <span class="so-icon so-icon--sm" data-icon="clock"></span>
             </button>
-            <button type="button" class="path-input__btn path-input__btn--browse" data-role="output-browse">Browse…</button>
+            <button type="button" class="path-input__btn path-input__btn--browse" data-role="output-browse" data-hotkey="start.browseOutput">Browse…</button>
           </div>
           <div class="recent-pop cg-menu hidden" data-role="output-recents-list" role="menu"></div>
         </div>
@@ -82,20 +82,20 @@
           <div class="sheet-card__tabs" role="tablist">
             <!-- Intentional inline SVG (icon convention exception): brand/file-type glyphs (Google Sheets, Excel)
                  have no Heroicon equivalent; a generic mask-image icon would lose the recognizable mark. -->
-            <button type="button" class="sheet-card__tab is-active" data-tab="google" role="tab" aria-selected="true">
+            <button type="button" class="sheet-card__tab is-active" data-tab="google" role="tab" aria-selected="true" data-hotkey="start.tabGoogle">
               <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
                 <path fill="currentColor" d="M8 6.5v2.4h3.4c-.15.85-.6 1.57-1.27 2.05v1.7h2.05c1.2-1.1 1.9-2.73 1.9-4.65 0-.45-.04-.88-.12-1.3l-5.95-.2zM4.45 8c0-.5.08-.97.23-1.4L2.6 5.05A6 6 0 0 0 8 14a5.7 5.7 0 0 0 3.95-1.45L9.9 10.85c-.55.37-1.25.6-2.04.6-1.55 0-2.86-1.05-3.33-2.45z M2.6 5.05L4.68 6.6c.47-1.4 1.78-2.45 3.32-2.45.85 0 1.62.3 2.22.85l1.8-1.8A5.95 5.95 0 0 0 2.6 5.05z"/>
               </svg>
               <span>Google Sheets</span>
             </button>
-            <button type="button" class="sheet-card__tab" data-tab="excel" role="tab" aria-selected="false">
+            <button type="button" class="sheet-card__tab" data-tab="excel" role="tab" aria-selected="false" data-hotkey="start.tabExcel">
               <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
                 <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
                 <path d="M2 6.5h12M5.5 2.5v11M9.5 2.5v11" stroke="currentColor" stroke-width="1.2"/>
               </svg>
               <span>Excel file</span>
             </button>
-            <button type="button" class="sheet-card__tab" data-tab="none" role="tab" aria-selected="false">
+            <button type="button" class="sheet-card__tab" data-tab="none" role="tab" aria-selected="false" data-hotkey="start.tabNone">
               <span>No spreadsheet</span>
             </button>
           </div>
@@ -370,7 +370,7 @@
           <input type="checkbox" id="startPersistEnabled" checked>
           <span>Remember my choices across launches</span>
         </label>
-        <button type="button" class="so-btn so-btn--primary so-btn--lg" data-role="confirm">
+        <button type="button" class="so-btn so-btn--primary so-btn--lg" data-role="confirm" data-hotkey="start.confirm">
           <span>Open workspace</span>
           <span class="so-icon so-icon--sm" data-icon="arrow-right"></span>
         </button>
