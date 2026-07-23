@@ -134,19 +134,18 @@
         <div id="timelineSeek">
           <input id="timestampInput" type="text" placeholder="0:00" spellcheck="false" autocomplete="off">
           <div id="timelineStepBtns">
-            <button id="framePrev" class="btn btn-small btn-icon" title="Step back 1s"></button>
-            <button id="frameNext" class="btn btn-small btn-icon" title="Step forward 1s"></button>
+            <button id="framePrev" class="btn btn-small btn-icon" data-hotkey="transport.seekBack" title="Step back 5s (←; Shift+← for 1s)"></button>
+            <button id="frameNext" class="btn btn-small btn-icon" data-hotkey="transport.seekFwd" title="Step forward 5s (→; Shift+→ for 1s)"></button>
           </div>
         </div>
       </div>
       <div id="timelineControls">
         <button id="zoomInBtn" class="btn btn-small btn-icon"></button>
         <button id="zoomOutBtn" class="btn btn-small btn-icon"></button>
-        <button id="zoomResetBtn" class="btn btn-small">Reset</button>
         <button id="amplitudeGraphBtn" class="btn btn-small btn-icon" title="Toggle amplitude graph" aria-label="Toggle amplitude graph"><span class="amplitude-btn-icon"></span></button>
         <span class="timeline-sep"></span>
-        <button id="setInBtn" class="btn btn-small">Set In</button>
-        <button id="setOutBtn" class="btn btn-small">Set Out</button>
+        <button id="setInBtn" class="btn btn-small" data-hotkey="screenspace.setIn" title="Set in marker (I)">Set In</button>
+        <button id="setOutBtn" class="btn btn-small" data-hotkey="screenspace.setOut" title="Set out marker (O)">Set Out</button>
         <button id="clearMarkersBtn" class="btn btn-small hidden">Clear Markers</button>
         <span id="markerInfo" class="marker-info"></span>
         <div id="timelineLegend"></div>

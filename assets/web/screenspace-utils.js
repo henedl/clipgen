@@ -51,8 +51,11 @@ function rangeInput(id, min, max, value, step) {
   inp.id = id;
   inp.min = min;
   inp.max = max;
-  inp.value = value;
+  // Set step BEFORE value: a range input snaps its value to the current step,
+  // and step defaults to 1 until assigned — so a fractional value set first
+  // (e.g. 0.7 with step 1) rounds to a whole step (→ 1.0) and sticks.
   if (step) inp.step = step;
+  inp.value = value;
   return inp;
 }
 
@@ -62,8 +65,8 @@ function numberInput(id, min, max, value, step) {
   inp.id = id;
   inp.min = min;
   inp.max = max;
-  inp.value = value;
   if (step) inp.step = step;
+  inp.value = value;
   return inp;
 }
 

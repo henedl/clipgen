@@ -1638,8 +1638,8 @@
 
   var KB_LIST_SURFACES = {
     filter: { itemsSel: "#studioSidebar .studio-sidebar-row", ensure: ensureSidebarOpen, activate: kbActivateClick, verb: "Toggle filter", sheetOnly: true },
-    "artifact-queue": { itemsSel: "#artifactsList .queue-card", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
-    "reel-queue": { itemsSel: "#reelList .queue-card", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
+    "artifact-queue": { itemsSel: "#artifactsList .queue-card", ghostSel: "#artifactsList .queue-card-ghost", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
+    "reel-queue": { itemsSel: "#reelList .queue-card", ghostSel: "#reelList .queue-card-ghost", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
     "artifact-stash": { itemsSel: "#stashedArtifactsList .stash-card", ensure: ensureBottomOpen, activate: kbActivateClick, verb: "Recall to queue" },
     "reel-stash": { itemsSel: "#stashedReelsList .stash-card", ensure: ensureBottomOpen, activate: kbActivateClick, verb: "Recall to queue" },
   };
@@ -1653,6 +1653,17 @@
     return _kbRegion || state.activePreviewTab || "sheet";
   }
 
+  // Briefly double-pulse an empty queue's ghost card, acknowledging the focus
+  // hotkey while signaling there's nothing to select. Remove-then-reflow so a
+  // repeat keypress replays the animation.
+  function pulseGhost(sel) {
+    var ghost = qs(sel);
+    if (!ghost) return;
+    ghost.classList.remove("queue-card-ghost-pulse");
+    void ghost.offsetWidth;
+    ghost.classList.add("queue-card-ghost-pulse");
+  }
+
   // Jump the cursor to the first item of a named list surface (the focus
   // hotkeys). Reveals the container first, and no-ops (declines the key) when
   // the surface is off-tab or empty.
@@ -1661,7 +1672,10 @@
     if (!cfg) return false;
     if (cfg.sheetOnly && state.activePreviewTab !== "sheet") return false;
     if (cfg.ensure) cfg.ensure();
-    if (!kbListItems(region).length) return false;
+    if (!kbListItems(region).length) {
+      if (cfg.ghostSel) pulseGhost(cfg.ghostSel);
+      return false;
+    }
     _kbRegion = region;
     _kbCursor = { surface: region, idx: 0 };
     kbPaintCursor();

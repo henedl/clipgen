@@ -42,7 +42,8 @@ var CLIPGEN_CONFIG = {
     { id: "key", token: "!key" },
   ],
   ignoredTimestampTokens: ["x"],
-  screenspaceOcrMinConfidence: 0.7,
+  screenspaceOcrMinConfidence: 0.6,
+  screenspaceOcrFuzzyThreshold: 0.75,
   screenspaceMultitoolMaxOffset: 30,
   screenspaceMaskFallbackTools: ["similarity", "inactivity", "boundary", "timelapse", "attention"],
   frictionCategories: [
@@ -90,6 +91,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.screenspaceOcrMinConfidence === "number") {
     CLIPGEN_CONFIG.screenspaceOcrMinConfidence = payload.screenspaceOcrMinConfidence;
+  }
+  if (typeof payload.screenspaceOcrFuzzyThreshold === "number") {
+    CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold = payload.screenspaceOcrFuzzyThreshold;
   }
   if (typeof payload.screenspaceMultitoolMaxOffset === "number") {
     CLIPGEN_CONFIG.screenspaceMultitoolMaxOffset = payload.screenspaceMultitoolMaxOffset;

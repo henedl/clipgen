@@ -881,6 +881,7 @@ def get_frontend_config() -> dict[str, Any]:
         "annotations": annotations,
         "ignoredTimestampTokens": sorted(get_ignored_timestamp_tokens()),
         "screenspaceOcrMinConfidence": config.SCREENSPACE_OCR_MIN_CONFIDENCE,
+        "screenspaceOcrFuzzyThreshold": config.SCREENSPACE_OCR_FUZZY_THRESHOLD,
         "screenspaceMultitoolMaxOffset": config.SCREENSPACE_MULTITOOL_MAX_OFFSET_SECONDS,
         "screenspaceMaskFallbackTools": list(config.SCREENSPACE_MASK_FALLBACK_TOOLS),
         "frictionCategories": friction_categories,

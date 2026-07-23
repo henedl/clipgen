@@ -1366,6 +1366,27 @@ body.dragging #sheetMain {
   box-sizing: border-box;
 }
 
+/* Focus hotkeys (2 / 3) landing on an empty queue: a quick, faint double-pulse
+   of the ghost card acknowledges the key while signaling there's nothing to
+   select. */
+@keyframes queue-ghost-pulse {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: var(--color-accent-highlight);
+  }
+}
+.queue-card-ghost-pulse {
+  animation: queue-ghost-pulse 200ms ease-in-out 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .queue-card-ghost-pulse {
+    animation: none;
+  }
+}
+
 /* Shared card base (artifact + reel) */
 
 .queue-card {

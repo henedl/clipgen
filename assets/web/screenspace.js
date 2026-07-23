@@ -19,7 +19,8 @@
 (function () {
   "use strict";
 
-  var FRAME_STEP = 1.0;
+  var FRAME_STEP = 1.0; // fine step (,/. and Shift+arrow)
+  var SEEK_STEP = 5.0; // coarse step (arrows + the timeline step buttons)
   var VIDEO_SPEEDS = [0.5, 1, 2, 3, 5];
 
   var TASK_COLORS = DETECTOR_COLORS;
@@ -1619,13 +1620,13 @@
 
     qs("#framePrev").addEventListener("click", function () {
       if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp - FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
+      var ts = clamp(state.currentTimestamp - SEEK_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
       loadFrame(ts);
     });
 
     qs("#frameNext").addEventListener("click", function () {
       if (!state.videoInfo) return;
-      var ts = clamp(state.currentTimestamp + FRAME_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
+      var ts = clamp(state.currentTimestamp + SEEK_STEP, 0, Math.max(0, state.videoInfo.duration - 0.001));
       loadFrame(ts);
     });
   }
@@ -2855,8 +2856,8 @@
 
   function renderTextParams(container) {
     addParamRow(container, "Search text", textInput("paramTextSearch", "Enter text to find..."));
-    addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, 0.80, 0.01), "paramTextFuzzyVal");
-    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.7), 0.01), "paramTextOcrConfVal");
+    addParamRow(container, "Fuzzy Thr.", rangeInput("paramTextFuzzy", 0.50, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold, 0.75), 0.01), "paramTextFuzzyVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramTextOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramTextOcrConfVal");
     renderIntervalSlot("paramTextInterval", 0.5, 60, 2.0, 0.5);
     var langRow = el("div", "param-row");
     langRow.appendChild(el("span", "param-label", "Language"));
@@ -2923,7 +2924,7 @@
     rangeCtrl.appendChild(numberInput("paramNumMax", -999999, 999999, 100, 1));
     numRangeRow.appendChild(rangeCtrl);
     container.appendChild(numRangeRow);
-    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.7), 0.01), "paramNumOcrConfVal");
+    addParamRow(container, "Min OCR conf.", rangeInput("paramNumOcrConf", 0.00, 1.00, numberOrDefault(CLIPGEN_CONFIG.screenspaceOcrMinConfidence, 0.6), 0.01), "paramNumOcrConfVal");
     var ppCb = document.createElement("input");
     ppCb.type = "checkbox";
     ppCb.id = "paramNumOcrPreprocess";
@@ -3502,7 +3503,7 @@
         toast("Step " + (idx + 1) + ": enter a search string");
         return null;
       }
-      p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, 0.80);
+      p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold);
       p.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       p.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
       p.ocr_normalize = (qs("#paramTextOcrNormalize" + sfx) || {}).value || "off";
@@ -3624,7 +3625,7 @@
         toast("Enter a search string");
         return null;
       }
-      params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, 0.80);
+      params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold);
       params.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
       params.ocr_preprocess = !!((qs("#paramTextOcrPreprocess") || {}).checked);
       params.ocr_normalize = (qs("#paramTextOcrNormalize") || {}).value || "off";
@@ -3769,10 +3770,16 @@
       },
       // Arrows are the coarse seek; ,/. step a single frame (the page's
       // pre-registry arrows were frame-steps — that role moved to ,/.).
-      { id: "transport.seekBack", handler: function () { _seekBy(-5); } },
-      { id: "transport.seekFwd", handler: function () { _seekBy(5); } },
+      { id: "transport.seekBack", handler: function () { _seekBy(-SEEK_STEP); } },
+      { id: "transport.seekFwd", handler: function () { _seekBy(SEEK_STEP); } },
       { id: "transport.stepBack", handler: function () { _seekBy(-FRAME_STEP); } },
       { id: "transport.stepFwd", handler: function () { _seekBy(FRAME_STEP); } },
+      // Shift+arrow mirrors the ,/. fine step so the 1 s / 5 s pair is discoverable
+      // from the arrow keys alone (screenspace-scoped to avoid Composer's Shift+arrow).
+      { id: "screenspace.stepBackFine", handler: function () { _seekBy(-FRAME_STEP); } },
+      { id: "screenspace.stepFwdFine", handler: function () { _seekBy(FRAME_STEP); } },
+      { id: "screenspace.setIn", handler: function () { if (SS.setInMark) SS.setInMark(); } },
+      { id: "screenspace.setOut", handler: function () { if (SS.setOutMark) SS.setOutMark(); } },
       {
         id: "screenspace.blink",
         repeat: false,
