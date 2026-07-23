@@ -3543,6 +3543,20 @@
       { id: "studio.focusReel", handler: function () { return kbJumpTo("reel-queue"); } },
       { id: "studio.focusArtifactStash", handler: function () { return kbJumpTo("artifact-stash"); } },
       { id: "studio.focusReelStash", handler: function () { return kbJumpTo("reel-stash"); } },
+      {
+        id: "studio.selectTab",
+        handler: function (e, combo) {
+          // Shift+1…4 → the Nth preview tab by fixed position (Sheet, Screenspace
+          // Intake, Transcript Intake, Composer Intake). No-op if that tab is
+          // still hidden (its data source hasn't appeared). Fixed positions keep
+          // the Alt-hint chip (data-hotkey-combo) in sync with the action.
+          // Routing through .click() reuses initPreviewTabs' switch + persistence.
+          var n = parseInt(combo.replace("Shift+", ""), 10);
+          if (isNaN(n)) return;
+          var tab = qsa(".preview-tab")[n - 1];
+          if (tab && !tab.classList.contains("hidden")) tab.click();
+        },
+      },
     ]);
 
     // Alt-hold hints for the keyboard cursor: labeled chips for the send

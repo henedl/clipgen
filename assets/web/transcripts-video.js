@@ -894,8 +894,16 @@
       { id: "transcripts.mark", when: _segmentsReady, handler: function () { _markActiveSegment(null); } },
       {
         id: "transcripts.markCategory",
-        when: _segmentsReady,
+        // Active when segments are ready OR the participant-options dropdown is
+        // open (so digits can run its agent rows even before a transcript exists).
+        when: function () {
+          return _segmentsReady() || (_hotkeysActive() && TS.isPillMenuOpen && TS.isPillMenuOpen());
+        },
         handler: function (e, combo) {
+          // While the dropdown is open, 1–4 run its agent rows instead of marking.
+          if (TS.isPillMenuOpen && TS.isPillMenuOpen()) {
+            return TS.triggerPillOption(parseInt(combo, 10));
+          }
           var catKeys = Object.keys(MARK_CATEGORIES);
           var ci = parseInt(combo, 10) - 1;
           if (isNaN(ci) || ci < 0 || ci >= catKeys.length) return false;
@@ -912,7 +920,61 @@
           input.select();
         },
       },
+      {
+        id: "transcripts.cyclePartPrev",
+        when: _hotkeysActive,
+        handler: function () { if (TS.cycleParticipant) TS.cycleParticipant(-1); },
+      },
+      {
+        id: "transcripts.cyclePartNext",
+        when: _hotkeysActive,
+        handler: function () { if (TS.cycleParticipant) TS.cycleParticipant(1); },
+      },
+      {
+        id: "transcripts.pillMenu",
+        when: function () { return _hotkeysActive() && !!state.selectedParticipant; },
+        handler: function () {
+          if (TS.togglePillOptions) TS.togglePillOptions(state.selectedParticipant);
+        },
+      },
+      {
+        id: "transcripts.toggleCaptions",
+        when: _hotkeysActive,
+        handler: function () {
+          var btn = qs("#videoCcBtn");
+          if (btn) btn.click();
+        },
+      },
+      { id: "transcripts.speedDown", when: _hotkeysActive, handler: function () { _stepSpeed(-1); } },
+      { id: "transcripts.speedUp", when: _hotkeysActive, handler: function () { _stepSpeed(1); } },
+      {
+        id: "transcripts.fullscreen",
+        when: _hotkeysActive,
+        handler: function () { _toggleVideoFullscreen(); },
+      },
     ]);
+  }
+
+  // Step the playback rate one stop along VIDEO_SPEEDS (clamped at the ends).
+  function _stepSpeed(delta) {
+    var idx = VIDEO_SPEEDS.indexOf(state.videoPlaybackRate);
+    if (idx === -1) idx = VIDEO_SPEEDS.indexOf(1);
+    var ni = idx + delta;
+    if (ni < 0) ni = 0;
+    if (ni >= VIDEO_SPEEDS.length) ni = VIDEO_SPEEDS.length - 1;
+    if (ni === idx) return;
+    state.videoPlaybackRate = VIDEO_SPEEDS[ni];
+    applyPlaybackRate();
+  }
+
+  function _toggleVideoFullscreen() {
+    var v = qs("#videoPlayer");
+    if (!v) return;
+    if (document.fullscreenElement) {
+      if (document.exitFullscreen) document.exitFullscreen();
+    } else if (v.requestFullscreen) {
+      v.requestFullscreen();
+    }
   }
 
   var _pendingSeekTime = null;
