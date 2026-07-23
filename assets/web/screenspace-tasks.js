@@ -656,7 +656,7 @@
       setInputValue("#paramSimInterval", numberOrDefault(params.interval, 1.0));
     } else if (task.type === "text") {
       setInputValue("#paramTextSearch", params.search_string || "");
-      setInputValue("#paramTextFuzzy", numberOrDefault(params.fuzzy_threshold, 0.80));
+      setInputValue("#paramTextFuzzy", numberOrDefault(params.fuzzy_threshold, CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold));
       setInputValue("#paramTextOcrConf", numberOrDefault(params.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence));
       var textPpEl = qs("#paramTextOcrPreprocess");
       if (textPpEl) textPpEl.checked = !!params.ocr_preprocess;

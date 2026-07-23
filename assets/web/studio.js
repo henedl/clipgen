@@ -1638,8 +1638,8 @@
 
   var KB_LIST_SURFACES = {
     filter: { itemsSel: "#studioSidebar .studio-sidebar-row", ensure: ensureSidebarOpen, activate: kbActivateClick, verb: "Toggle filter", sheetOnly: true },
-    "artifact-queue": { itemsSel: "#artifactsList .queue-card", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
-    "reel-queue": { itemsSel: "#reelList .queue-card", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
+    "artifact-queue": { itemsSel: "#artifactsList .queue-card", ghostSel: "#artifactsList .queue-card-ghost", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
+    "reel-queue": { itemsSel: "#reelList .queue-card", ghostSel: "#reelList .queue-card-ghost", ensure: ensureBottomOpen, activate: kbActivateRemove, verb: "Remove" },
     "artifact-stash": { itemsSel: "#stashedArtifactsList .stash-card", ensure: ensureBottomOpen, activate: kbActivateClick, verb: "Recall to queue" },
     "reel-stash": { itemsSel: "#stashedReelsList .stash-card", ensure: ensureBottomOpen, activate: kbActivateClick, verb: "Recall to queue" },
   };
@@ -1653,6 +1653,17 @@
     return _kbRegion || state.activePreviewTab || "sheet";
   }
 
+  // Briefly double-pulse an empty queue's ghost card, acknowledging the focus
+  // hotkey while signaling there's nothing to select. Remove-then-reflow so a
+  // repeat keypress replays the animation.
+  function pulseGhost(sel) {
+    var ghost = qs(sel);
+    if (!ghost) return;
+    ghost.classList.remove("queue-card-ghost-pulse");
+    void ghost.offsetWidth;
+    ghost.classList.add("queue-card-ghost-pulse");
+  }
+
   // Jump the cursor to the first item of a named list surface (the focus
   // hotkeys). Reveals the container first, and no-ops (declines the key) when
   // the surface is off-tab or empty.
@@ -1661,7 +1672,10 @@
     if (!cfg) return false;
     if (cfg.sheetOnly && state.activePreviewTab !== "sheet") return false;
     if (cfg.ensure) cfg.ensure();
-    if (!kbListItems(region).length) return false;
+    if (!kbListItems(region).length) {
+      if (cfg.ghostSel) pulseGhost(cfg.ghostSel);
+      return false;
+    }
     _kbRegion = region;
     _kbCursor = { surface: region, idx: 0 };
     kbPaintCursor();
@@ -1834,6 +1848,21 @@
       return acted;
     }
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
+  }
+
+  // Backspace / Delete remove the focused card when the cursor sits on a queue
+  // surface. Returns false elsewhere so Backspace keeps its default (browser
+  // back); on a queue surface it always consumes the key.
+  function kbRemoveCard() {
+    var surface = kbSurface();
+    if (surface !== "artifact-queue" && surface !== "reel-queue") return false;
+    if (!_kbCursor || _kbCursor.surface !== surface) return false;
+    var el = kbCursorEl();
+    if (el) {
+      KB_LIST_SURFACES[surface].activate(el, false);
+      kbPaintCursor();
+    }
+    return true;
   }
 
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
@@ -3195,6 +3224,7 @@
       { id: "studio.moveUp", handler: function () { return kbStepVertical(-1); } },
       { id: "studio.sendArtifacts", handler: function () { return kbSend(false); } },
       { id: "studio.sendReel", handler: function () { return kbSend(true); } },
+      { id: "studio.removeCard", repeat: false, handler: function () { return kbRemoveCard(); } },
       { id: "studio.togglePanel", handler: function () { toggleBottomPanel(); } },
       {
         id: "studio.toggleSidebar",

@@ -213,7 +213,7 @@
     c1.appendChild(searchIn);
     r1.appendChild(c1);
     body.appendChild(r1);
-    _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, numberOrDefault(init.fuzzy_threshold, 0.80), 0.01);
+    _mtAddNumberRow(body, "Fuzzy", "paramTextFuzzy" + sfx, 0.50, 1.00, numberOrDefault(init.fuzzy_threshold, CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold), 0.01);
     _mtAddNumberRow(body, "Min OCR", "paramTextOcrConf" + sfx, 0.00, 1.00, numberOrDefault(init.ocr_confidence_threshold, CLIPGEN_CONFIG.screenspaceOcrMinConfidence), 0.01);
     _mtAddCheckboxRow(body, "Enhance ROI", "paramTextOcrPreprocess" + sfx, init.ocr_preprocess);
     var nr = el("div", "param-row");

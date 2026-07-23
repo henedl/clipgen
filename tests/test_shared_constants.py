@@ -86,6 +86,10 @@ def test_clipgen_config_defaults_match_python():
         == py_config["screenspaceOcrMinConfidence"]
     )
     assert (
+        js_config["screenspaceOcrFuzzyThreshold"]
+        == py_config["screenspaceOcrFuzzyThreshold"]
+    )
+    assert (
         js_config["screenspaceMultitoolMaxOffset"]
         == py_config["screenspaceMultitoolMaxOffset"]
     )
@@ -143,6 +147,7 @@ def test_get_frontend_config_shape():
         "annotations",
         "ignoredTimestampTokens",
         "screenspaceOcrMinConfidence",
+        "screenspaceOcrFuzzyThreshold",
         "screenspaceMultitoolMaxOffset",
         "screenspaceMaskFallbackTools",
         "frictionCategories",
@@ -184,6 +189,8 @@ def test_get_frontend_config_shape():
     )
     assert isinstance(cfg["screenspaceOcrMinConfidence"], float)
     assert cfg["screenspaceOcrMinConfidence"] == config.SCREENSPACE_OCR_MIN_CONFIDENCE
+    assert isinstance(cfg["screenspaceOcrFuzzyThreshold"], float)
+    assert cfg["screenspaceOcrFuzzyThreshold"] == config.SCREENSPACE_OCR_FUZZY_THRESHOLD
     assert isinstance(cfg["screenspaceMultitoolMaxOffset"], float)
     assert (
         cfg["screenspaceMultitoolMaxOffset"]

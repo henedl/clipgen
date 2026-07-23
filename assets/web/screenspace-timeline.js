@@ -194,23 +194,8 @@
       clampTimelineOffset();
       renderTimeline();
     });
-    qs("#zoomResetBtn").addEventListener("click", function () {
-      state.timelineZoom = 1;
-      state.timelineOffset = 0;
-      renderTimeline();
-    });
-    qs("#setInBtn").addEventListener("click", function () {
-      state.inMarker = state.currentTimestamp;
-      if (state.outMarker !== null && state.inMarker > state.outMarker) state.outMarker = null;
-      updateMarkerInfo();
-      renderTimeline();
-    });
-    qs("#setOutBtn").addEventListener("click", function () {
-      state.outMarker = state.currentTimestamp;
-      if (state.inMarker !== null && state.outMarker < state.inMarker) state.inMarker = null;
-      updateMarkerInfo();
-      renderTimeline();
-    });
+    qs("#setInBtn").addEventListener("click", setInMark);
+    qs("#setOutBtn").addEventListener("click", setOutMark);
     qs("#clearMarkersBtn").addEventListener("click", function () {
       state.inMarker = null;
       state.outMarker = null;
@@ -254,6 +239,21 @@
     var dur = state.videoInfo.duration;
     var visLen = dur / state.timelineZoom;
     return state.timelineOffset + frac * visLen;
+  }
+
+  // In/out markers — shared by the toolbar buttons and the i/o hotkeys.
+  function setInMark() {
+    state.inMarker = state.currentTimestamp;
+    if (state.outMarker !== null && state.inMarker > state.outMarker) state.outMarker = null;
+    updateMarkerInfo();
+    renderTimeline();
+  }
+
+  function setOutMark() {
+    state.outMarker = state.currentTimestamp;
+    if (state.inMarker !== null && state.outMarker < state.inMarker) state.inMarker = null;
+    updateMarkerInfo();
+    renderTimeline();
   }
 
   function updateMarkerInfo() {
@@ -730,4 +730,6 @@
   SS.renderTimeline = renderTimeline;
   SS.renderPlayhead = renderPlayhead;
   SS.updateMarkerInfo = updateMarkerInfo;
+  SS.setInMark = setInMark;
+  SS.setOutMark = setOutMark;
 })();

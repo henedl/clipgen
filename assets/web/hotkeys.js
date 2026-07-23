@@ -73,6 +73,7 @@
     { id: "studio.moveDown",        section: "studio", group: "Selection", label: "Move selection down", combos: ["ArrowDown"] },
     { id: "studio.sendArtifacts",   section: "studio", group: "Selection", label: "Add / remove selection in work area", combos: ["Enter"] },
     { id: "studio.sendReel",        section: "studio", group: "Selection", label: "Add / remove selection in reel", combos: ["Shift+Enter"] },
+    { id: "studio.removeCard",      section: "studio", group: "Selection", label: "Remove focused queue card", combos: ["Backspace", "Delete"] },
     { id: "studio.togglePanel",     section: "studio", group: "Panels", label: "Collapse / expand artifact & reel panel", combos: ["V"] },
     { id: "studio.toggleSidebar",   section: "studio", group: "Panels", label: "Collapse / expand filter sidebar", combos: ["F"] },
     { id: "studio.stashArtifacts",  section: "studio", group: "Queue", label: "Stash artifacts", combos: ["A"] },
@@ -112,6 +113,10 @@
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
+    { id: "screenspace.stepBackFine", section: "screenspace", group: "Transport", label: "Fine step back 1 s", combos: ["Shift+ArrowLeft"] },
+    { id: "screenspace.stepFwdFine",  section: "screenspace", group: "Transport", label: "Fine step forward 1 s", combos: ["Shift+ArrowRight"] },
+    { id: "screenspace.setIn",  section: "screenspace", group: "Marks", label: "Set in marker", combos: ["I"] },
+    { id: "screenspace.setOut", section: "screenspace", group: "Marks", label: "Set out marker", combos: ["O"] },
     { id: "screenspace.togglePanel",   section: "screenspace", group: "Panels", label: "Collapse / expand bottom panel", combos: ["V"] },
     { id: "screenspace.toggleInfoPanel", section: "screenspace", group: "Panels", label: "Collapse / expand participant details", combos: ["F"] },
     { id: "screenspace.cycleToolPrev", section: "screenspace", group: "Tools", label: "Previous tool tab", combos: ["Z"] },
@@ -549,6 +554,20 @@
     hideHints();
   }
 
+  // True when another element covers the control's center — so a hint chip would
+  // otherwise float over whatever now sits on top (e.g. a dragged-up bottom panel
+  // covering the video controls). The .hk-hints layer is pointer-events:none, so
+  // it never registers as the occluder. elementFromPoint wants viewport coords,
+  // so clamp the sample point into the visible box.
+  function isOccluded(node, rect) {
+    if (!document.elementFromPoint) return false;
+    var cx = Math.min(Math.max(rect.left + rect.width / 2, 1), window.innerWidth - 1);
+    var cy = Math.min(Math.max(rect.top + rect.height / 2, 1), window.innerHeight - 1);
+    var hit = document.elementFromPoint(cx, cy);
+    if (!hit) return false;
+    return hit !== node && !node.contains(hit) && !hit.contains(node);
+  }
+
   function showHints() {
     _hintTimer = null;
     if (_hintsShown || isTypingTarget(document.activeElement)) return;
@@ -574,6 +593,7 @@
       var rect = node.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue; // hidden (offsetParent is null inside fixed subheaders)
       if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) continue;
+      if (isOccluded(node, rect)) continue; // covered by another panel (e.g. a dragged-up bottom panel over the video controls)
       targets.push({ rect: rect, combo: combo, dim: dim });
     }
     // Context action-hint providers anchor to background-page controls, so skip
