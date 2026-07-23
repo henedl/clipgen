@@ -267,6 +267,11 @@ body[data-frontend="workflows"] {
   -webkit-mask-image: url("icons/arrow-uturn-right.svg");
 }
 
+.wf-rename-icon {
+  mask-image: url("icons/pencil-square.svg");
+  -webkit-mask-image: url("icons/pencil-square.svg");
+}
+
 .wf-fit-icon {
   mask-image: url("icons/arrows-pointing-out.svg");
   -webkit-mask-image: url("icons/arrows-pointing-out.svg");
@@ -983,14 +988,6 @@ body[data-frontend="workflows"] {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-radius: var(--radius-sm);
   white-space: nowrap;
-}
-
-/* Output-folder line above the run list. */
-.wf-output-dir {
-  padding: 0 var(--space-4) var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--fg-faint);
-  word-break: break-all;
 }
 
 /* Run-history chip marking an auto-launched (triggered) run. */
@@ -2030,16 +2027,23 @@ body[data-frontend="workflows"] {
 }
 
 /* ---- Sticky notes (canvas annotations; type "note" pseudo-nodes) ----
-   Paper-yellow tint derived from the severity palette so it adapts to both
-   themes; keeps the .wf-node base (drag/selection/shadow) but drops the
-   card chrome (ports/params). */
+   Paper-yellow tint derived from the severity palette. On dark (the default
+   theme) 14% amber over the near-black surface read too dim, so the default
+   uses a stronger amber share over a warm dark base; light keeps the pale
+   pinned value below. Keeps the .wf-node base (drag/selection/shadow) but
+   drops the card chrome (ports/params). */
 
 .wf-node.wf-note {
-  --wf-note-bg: color-mix(in srgb, var(--severity-medium) 14%, var(--color-surface));
+  --wf-note-bg: color-mix(in srgb, var(--severity-medium) 34%, #26241a);
   width: var(--wf-node-width-wide);
   background: var(--wf-note-bg);
   border-style: dashed;
   padding: var(--space-2) var(--space-3) var(--space-3);
+}
+
+html[data-theme="light"] .wf-node.wf-note,
+.theme-light .wf-node.wf-note {
+  --wf-note-bg: color-mix(in srgb, var(--severity-medium) 14%, var(--color-surface));
 }
 
 .wf-note-header {

@@ -653,6 +653,20 @@
   }
 
 
+  // Move the selection to the previous/next participant in the sidebar order,
+  // wrapping around. Bound to Z / X (see transcripts-video.js).
+  function cycleParticipant(delta) {
+    var list = state.participants;
+    if (!list || list.length < 2) return;
+    var idx = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === state.selectedParticipant) { idx = i; break; }
+    }
+    if (idx === -1) idx = 0;
+    var next = list[(idx + delta + list.length) % list.length];
+    if (next && next.id !== state.selectedParticipant) selectParticipant(next.id);
+  }
+
   function selectParticipant(pid) {
     state.participantReqVer++;
     _stopSummaryPoll();
@@ -2799,6 +2813,7 @@
   TS.loadTranscript = loadTranscript; // corrections, search, agents
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
   TS.selectParticipant = selectParticipant; // search, pills
+  TS.cycleParticipant = cycleParticipant; // video (Z/X participant cycle)
   // Accumulated streaming segments for the currently-streamed participant. The
   // status poll no longer carries partial_segments, so search reads them here.
   TS.streamingSegmentsFor = function (pid) {

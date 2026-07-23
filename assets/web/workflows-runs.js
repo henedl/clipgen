@@ -951,21 +951,6 @@
     return card;
   }
 
-  // Show where artifacts land (from the catalog context) above the run list, so a
-  // user always knows where to find their clips/reels/viewers.
-  function renderOutputDir() {
-    var host = qs("#wfOutputDir");
-    if (!host) return;
-    var dir = (state.context && state.context.outputDir) || "";
-    if (!dir) {
-      host.classList.add("hidden");
-      return;
-    }
-    host.textContent = "Outputs → " + dir;
-    host.title = dir;
-    host.classList.remove("hidden");
-  }
-
   // Client-side run-history filter (state.runFilter). "running" spans every
   // non-terminal status; "failed" also folds in cancelled (both are red ends).
   function runMatchesFilter(status) {
@@ -1021,7 +1006,6 @@
   }
 
   function renderRuns() {
-    renderOutputDir();
     var container = qs("#wfRuns");
     if (!container) return;
     // Every render refreshes the dirty-check baseline so the SSE/poll handlers

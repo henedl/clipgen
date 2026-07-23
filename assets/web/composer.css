@@ -114,6 +114,21 @@ body[data-frontend="composer"] {
   vertical-align: -2px;
 }
 
+/* Compact square icon button — matches Workflows' .wf-icon-btn (undo/redo
+   pair). Overrides .btn-small's wider horizontal padding for a tight square. */
+.co-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+}
+
+.co-icon-btn .co-btn-icon {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  vertical-align: 0;
+}
+
 .co-icon-play { --co-icon: url("icons/play.svg"); }
 .co-icon-pause { --co-icon: url("icons/pause.svg"); }
 .co-icon-in { --co-icon: url("icons/arrow-uturn-down.svg"); transform: rotate(90deg); }

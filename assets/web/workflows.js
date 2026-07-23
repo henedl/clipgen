@@ -250,10 +250,9 @@
 
   function syncToolbar() {
     var sel = qs("#wfBlueprintSelect");
-    var nameInput = qs("#wfBlueprintName");
-    var bp = findBlueprint(state.activeBlueprintId);
+    // The blueprint name is shown as the selected <option> (renamed via the
+    // modal), so there's nothing else to sync here.
     if (sel && state.activeBlueprintId) sel.value = state.activeBlueprintId;
-    if (nameInput) nameInput.value = (bp && bp.name) || "";
   }
 
   // Make `bp` the active canvas. Flushes the outgoing blueprint's pending save
@@ -274,14 +273,27 @@
     if (WF.clearRunPreview) WF.clearRunPreview(); // stale preview classes
     resetHistory(); // history doesn't span blueprints
     syncToolbar();
-    syncTriggerButton();
-    if (WF.renderAllNodes) WF.renderAllNodes();
-    if (WF.applyViewport) WF.applyViewport();
-    // Refresh the run panel for the newly-active blueprint (reattaches to an
-    // in-flight run if one survived a reload).
-    if (WF.refreshRuns) WF.refreshRuns();
-    // Validate the freshly-loaded graph (gates Run, populates the Issues panel).
-    if (WF.refreshValidation) WF.refreshValidation();
+    // A corrupt blueprint (e.g. a node missing its `type`) must not hard-fail the
+    // whole page. Without this guard a render throw propagates to loadWorkspace,
+    // which shows the error overlay and disables the ENTIRE toolbar — leaving no
+    // way to switch to, or delete, the offending blueprint. Isolating the
+    // render/validation keeps the blueprint-management controls usable so the
+    // user can always recover (delete it, or pick/create another).
+    try {
+      syncTriggerButton();
+      if (WF.renderAllNodes) WF.renderAllNodes();
+      if (WF.applyViewport) WF.applyViewport();
+      // Refresh the run panel for the newly-active blueprint (reattaches to an
+      // in-flight run if one survived a reload).
+      if (WF.refreshRuns) WF.refreshRuns();
+      // Validate the freshly-loaded graph (gates Run, populates the Issues panel).
+      if (WF.refreshValidation) WF.refreshValidation();
+    } catch (err) {
+      if (window.console && console.error) {
+        console.error("Failed to render blueprint " + bp.id, err);
+      }
+      showToast("This blueprint couldn't be loaded — delete it or pick another");
+    }
   }
 
   function loadBlueprints() {
@@ -421,6 +433,35 @@
       }
     }
     scheduleSave();
+  }
+
+  // Rename the active blueprint via the shared prompt modal (mirrors Stash).
+  function openRenameDialog() {
+    var bp = findBlueprint(state.activeBlueprintId);
+    if (!bp) return;
+    openPromptDialog({
+      title: "Rename blueprint",
+      initial: bp.name || "",
+      confirmLabel: "Save",
+      onConfirm: function (v) {
+        renameActive((v || "").trim() || "Untitled");
+      },
+    });
+  }
+
+  // Confirm-then-delete the active blueprint (shared by the toolbar button and
+  // the Mod+Shift+Backspace hotkey).
+  function requestDeleteBlueprint() {
+    var bp = findBlueprint(state.activeBlueprintId);
+    if (!bp) return;
+    openConfirmDialog({
+      title: "Delete blueprint “" + (bp.name || "Untitled") + "”?",
+      body: "This can't be undone.",
+      danger: true,
+      onConfirm: function () {
+        deleteBlueprint(bp.id);
+      },
+    });
   }
 
   // ---- Auto-run triggers (P6 + chaining) ------------------------------------
@@ -900,7 +941,7 @@
   function setToolbarDisabled(disabled) {
     [
       "#wfBlueprintSelect",
-      "#wfBlueprintName",
+      "#wfRenameBlueprint",
       "#wfNewBlueprint",
       "#wfDeleteBlueprint",
       "#wfUndo",
@@ -1095,12 +1136,8 @@
         openBlueprint(findBlueprint(sel.value));
       });
     }
-    var nameInput = qs("#wfBlueprintName");
-    if (nameInput) {
-      nameInput.addEventListener("input", function () {
-        renameActive(nameInput.value);
-      });
-    }
+    var renameBtn = qs("#wfRenameBlueprint");
+    if (renameBtn) renameBtn.addEventListener("click", openRenameDialog);
     var paletteSearch = qs("#wfPaletteSearch");
     if (paletteSearch) {
       paletteSearch.addEventListener("input", renderPalette);
@@ -1117,20 +1154,7 @@
     buildQuickActions();
     initCommandPalette();
     var delBtn = qs("#wfDeleteBlueprint");
-    if (delBtn) {
-      delBtn.addEventListener("click", function () {
-        var bp = findBlueprint(state.activeBlueprintId);
-        if (!bp) return;
-        openConfirmDialog({
-          title: "Delete blueprint “" + (bp.name || "Untitled") + "”?",
-          body: "This can't be undone.",
-          danger: true,
-          onConfirm: function () {
-            deleteBlueprint(bp.id);
-          },
-        });
-      });
-    }
+    if (delBtn) delBtn.addEventListener("click", requestDeleteBlueprint);
     var undoBtn = qs("#wfUndo");
     if (undoBtn) {
       undoBtn.addEventListener("click", function () {
@@ -1167,6 +1191,35 @@
         if (WF.addNote) WF.addNote();
       });
     }
+
+    // Blueprint / canvas action hotkeys (the canvas-editing hotkeys — undo/redo,
+    // copy/paste, nudge, etc. — register separately in workflows-canvas.js). All
+    // gate on canvas readiness; page hotkeys are auto-suppressed while typing or
+    // while a modal is open.
+    function _blueprintReady() {
+      return !!state.ready;
+    }
+    window.ClipgenHotkeys.register([
+      { id: "workflows.cleanUp", when: _blueprintReady, handler: function () { if (WF.autoArrange) WF.autoArrange(); } },
+      { id: "workflows.toggleSnap", when: _blueprintReady, handler: function () { if (WF.toggleSnap) WF.toggleSnap(); } },
+      {
+        id: "workflows.stash",
+        when: function () { return _blueprintReady() && !!(state.selection && state.selection.length); },
+        handler: function () { if (WF.saveSelectionAsStash) WF.saveSelectionAsStash(); },
+      },
+      { id: "workflows.newBlueprint", when: _blueprintReady, handler: function () { createBlueprint(); } },
+      { id: "workflows.renameBlueprint", when: _blueprintReady, handler: function () { openRenameDialog(); } },
+      {
+        id: "workflows.focusSelector",
+        when: _blueprintReady,
+        handler: function () { var s = qs("#wfBlueprintSelect"); if (s) s.focus(); },
+      },
+      {
+        id: "workflows.deleteBlueprint",
+        when: function () { return _blueprintReady() && !!state.activeBlueprintId; },
+        handler: function () { requestDeleteBlueprint(); },
+      },
+    ]);
     // Zoom % readout doubles as a reset-to-100% button (canvas satellite keeps
     // its text current via writeViewport).
     var zoomLevelBtn = qs("#wfZoomLevel");

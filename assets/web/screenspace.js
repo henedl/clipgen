@@ -3801,6 +3801,15 @@
         handler: function () { qs("#runBtn").click(); },
       },
       { id: "screenspace.togglePanel", handler: function () { toggleBottomPanel(); } },
+      {
+        id: "screenspace.toggleInfoPanel",
+        when: function () { return !!qs("#ssInfoPanel"); },
+        handler: function () {
+          var collapsed = qs("#ssInfoPanel").classList.contains("hidden");
+          var btn = qs(collapsed ? "#ssInfoExpandBtn" : "#ssInfoCollapseBtn");
+          if (btn) btn.click();
+        },
+      },
       { id: "screenspace.cycleToolPrev", handler: function () { cycleTool(-1); } },
       { id: "screenspace.cycleToolNext", handler: function () { cycleTool(1); } },
       {

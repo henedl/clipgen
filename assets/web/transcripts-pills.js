@@ -714,9 +714,33 @@
     });
   }
 
+  function isPillMenuOpen() {
+    return state.pillOptionsOpen !== null;
+  }
+
+  // Agent rows in the open participant dropdown, in display order. The digit
+  // hotkeys (1–4) map onto these while the dropdown is open (the branch lives in
+  // transcripts-video.js's markCategory handler).
+  var PILL_AGENT_ORDER = ["transcription", "summary", "citations", "friction"];
+
+  function triggerPillOption(n) {
+    if (state.pillOptionsOpen === null) return false;
+    var agent = PILL_AGENT_ORDER[n - 1];
+    if (!agent) return false;
+    var pane = document.querySelector("body > .pill-options");
+    if (!pane) return false;
+    var row = pane.querySelector('.pill-options-agent-row[data-agent="' + agent + '"]');
+    var btn = row && row.querySelector(".pill-agent-btn");
+    if (!btn || btn.hasAttribute("disabled")) return false;
+    btn.click();
+  }
+
   // ---- Published back to the hub (loadParticipants/selectParticipant/poller
   // render pills; boot wires the listeners) ----
   TS.renderPills = renderPills;
   TS.initPillOutsideClick = initPillOutsideClick;
   TS.initPillWheelScroll = initPillWheelScroll;
+  TS.togglePillOptions = togglePillOptions; // video (O hotkey)
+  TS.isPillMenuOpen = isPillMenuOpen; // video (digit branch)
+  TS.triggerPillOption = triggerPillOption; // video (1–4 while dropdown open)
 })();

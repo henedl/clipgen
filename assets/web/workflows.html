@@ -29,16 +29,24 @@
        whole window above the three-pane shell, not just the canvas column. -->
   <header id="wfToolbar">
     <label class="wf-toolbar-label" for="wfBlueprintSelect">Blueprint</label>
-    <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled></select>
-    <input id="wfBlueprintName" type="text" autocomplete="off"
-           aria-label="Blueprint name" placeholder="Untitled" disabled />
+    <select id="wfBlueprintSelect" aria-label="Active blueprint" disabled
+            data-hotkey="workflows.focusSelector"></select>
+    <!-- Rename opens a naming modal (mirrors Stash); the name is shown as the
+         selected <option>, so there's no inline name input. -->
+    <button id="wfRenameBlueprint" class="btn btn-small wf-icon-btn" type="button" disabled
+            data-hotkey="workflows.renameBlueprint" aria-label="Rename blueprint"
+            title="Rename blueprint (⇧E)">
+      <span class="wf-btn-icon wf-rename-icon" aria-hidden="true"></span>
+    </button>
     <!-- Debounced-autosave status: "Saving…" while the timer is armed, "Saved"
          once the PUT resolves, "Save failed" on error (hub setSaveStatus). -->
     <span id="wfSaveStatus" class="wf-save-status" aria-live="polite"></span>
-    <button id="wfNewBlueprint" class="btn btn-small btn-icon" type="button" disabled>
+    <button id="wfNewBlueprint" class="btn btn-small btn-icon" type="button" disabled
+            data-hotkey="workflows.newBlueprint">
       <span class="wf-label-icon wf-new-icon" aria-hidden="true"></span>New
     </button>
-    <button id="wfDeleteBlueprint" class="btn btn-small btn-icon" type="button" disabled>
+    <button id="wfDeleteBlueprint" class="btn btn-small btn-icon" type="button" disabled
+            data-hotkey="workflows.deleteBlueprint">
       <span class="wf-label-icon wf-delete-icon" aria-hidden="true"></span>Delete
     </button>
     <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
@@ -55,7 +63,7 @@
       <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
     </button>
     <button id="wfCleanUp" class="btn btn-small btn-icon" type="button" disabled
-            title="Auto-arrange the nodes">
+            data-hotkey="workflows.cleanUp" title="Auto-arrange the nodes (L)">
       <span class="wf-label-icon wf-cleanup-icon" aria-hidden="true"></span>Clean up
     </button>
     <button id="wfAddNote" class="btn btn-small wf-icon-btn" type="button" disabled
@@ -69,11 +77,13 @@
     </button>
     <button id="wfSnapBtn" class="btn btn-small wf-icon-btn" type="button" disabled
             aria-pressed="false" aria-label="Snap to grid"
-            title="Snap dragged nodes to the grid and to neighboring cards">
+            data-hotkey="workflows.toggleSnap"
+            title="Snap dragged nodes to the grid and to neighboring cards (⇧G)">
       <span class="wf-btn-icon wf-snap-icon" aria-hidden="true"></span>
     </button>
     <button id="wfSaveStash" class="btn btn-small btn-icon" type="button" disabled
-            title="Save the selected nodes as a reusable stash">
+            data-hotkey="workflows.stash"
+            title="Save the selected nodes as a reusable stash (⇧S)">
       <span class="wf-label-icon wf-stash-icon" aria-hidden="true"></span>Stash selection
     </button>
     <div class="wf-run-split">
@@ -223,8 +233,6 @@
         <button class="wf-run-filter-btn" type="button" data-filter="completed">Done</button>
         <button class="wf-run-filter-btn" type="button" data-filter="failed">Failed</button>
       </div>
-      <!-- Where a run's clips/reels/viewers land (from the catalog context). -->
-      <div id="wfOutputDir" class="wf-output-dir hidden"></div>
       <div id="wfRuns" class="wf-runs">
         <p class="wf-empty-hint">Press Run to execute this workflow. Per-node progress
           and results appear here.</p>

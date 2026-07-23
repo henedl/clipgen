@@ -86,8 +86,10 @@ def test_page_loads_satellites_after_hub_with_toolbar():
     assert 'id="wfWorld"' in html
     assert 'id="wfToolbar"' in html
     assert 'id="wfBlueprintSelect"' in html
-    # Per code-review rule: text inputs need autocomplete off.
-    assert 'id="wfBlueprintName"' in html
+    # The blueprint name is edited via a rename modal (icon button), not an
+    # inline text input; the name shows as the selected <option>.
+    assert 'id="wfRenameBlueprint"' in html
+    # Per code-review rule: text inputs need autocomplete off (palette search).
     assert 'autocomplete="off"' in html
 
 
@@ -108,6 +110,20 @@ def test_canvas_is_gated_until_a_blueprint_is_active():
     assert "if (!state.ready) return" in src
     assert 'setCanvasState("ready")' in src
     assert 'setCanvasState("error")' in src
+
+
+def test_open_blueprint_isolates_render_failures():
+    """A corrupt blueprint (e.g. a node missing its `type`) must not hard-fail the
+    whole page: a render throw would otherwise reach loadWorkspace's catch, show
+    the error overlay, and disable the entire toolbar — locking the user out with
+    no way to switch to or delete the offending blueprint. openBlueprint isolates
+    the render/validation so the blueprint-management controls stay usable."""
+    src = _workflows_js()
+    start = src.index("function openBlueprint(")
+    body = src[start : start + 2200]
+    assert "try {" in body and "catch" in body
+    assert "WF.renderAllNodes" in body
+    assert "couldn't be loaded" in body
 
 
 def test_hub_and_satellites_publish_canvas_hooks():
@@ -533,14 +549,12 @@ def test_multitool_steps_and_heatmap_styles_derived_from_catalog():
     assert '"ss_" + (' in validate  # derived from the style name
 
 
-def test_run_panel_surfaces_output_dir_and_armed_hint():
-    """The run panel shows where artifacts land; the toolbar shows a persistent cue
-    when any blueprint (even a non-active one) is armed for auto-run."""
+def test_toolbar_surfaces_armed_hint():
+    """The toolbar shows a persistent cue when any blueprint (even a non-active
+    one) is armed for auto-run."""
     html = (_WEB / "workflows.html").read_text(encoding="utf-8")
-    runs = (_WEB / "workflows-runs.js").read_text(encoding="utf-8")
     hub = (_WEB / "workflows.js").read_text(encoding="utf-8")
-    assert 'id="wfOutputDir"' in html and 'id="wfArmedHint"' in html
-    assert "renderOutputDir" in runs
+    assert 'id="wfArmedHint"' in html
     assert "wfArmedHint" in hub
 
 

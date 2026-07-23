@@ -84,6 +84,7 @@
     { id: "studio.focusReel",          section: "studio", group: "Selection", label: "Select reel queue", combos: ["3"] },
     { id: "studio.focusArtifactStash", section: "studio", group: "Selection", label: "Select stashed artifacts", combos: ["4"] },
     { id: "studio.focusReelStash",     section: "studio", group: "Selection", label: "Select stashed reels", combos: ["5"] },
+    { id: "studio.selectTab",          section: "studio", group: "Tabs", label: "Switch preview tab by number", combos: ["Shift+1", "Shift+2", "Shift+3", "Shift+4"], rebindable: false, displayKeys: "⇧1–4" },
 
     { id: "composer.seekBackMid",      section: "composer", group: "Playhead", label: "Seek back 2.5 s", combos: ["Shift+ArrowLeft"] },
     { id: "composer.seekFwdMid",       section: "composer", group: "Playhead", label: "Seek forward 2.5 s", combos: ["Shift+ArrowRight"] },
@@ -112,6 +113,7 @@
 
     { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
     { id: "screenspace.togglePanel",   section: "screenspace", group: "Panels", label: "Collapse / expand bottom panel", combos: ["V"] },
+    { id: "screenspace.toggleInfoPanel", section: "screenspace", group: "Panels", label: "Collapse / expand participant details", combos: ["F"] },
     { id: "screenspace.cycleToolPrev", section: "screenspace", group: "Tools", label: "Previous tool tab", combos: ["Z"] },
     { id: "screenspace.cycleToolNext", section: "screenspace", group: "Tools", label: "Next tool tab", combos: ["X"] },
     { id: "screenspace.selectTool",    section: "screenspace", group: "Tools", label: "Select tool / category by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
@@ -120,6 +122,13 @@
     { id: "transcripts.nextMarked",   section: "transcripts", group: "Marks", label: "Next marked segment", combos: ["N"] },
     { id: "transcripts.prevMarked",   section: "transcripts", group: "Marks", label: "Previous marked segment", combos: ["P"] },
     { id: "transcripts.markCategory", section: "transcripts", group: "Marks", label: "Mark with category 1–9", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
+    { id: "transcripts.cyclePartPrev",  section: "transcripts", group: "Participants", label: "Previous participant", combos: ["Z"] },
+    { id: "transcripts.cyclePartNext",  section: "transcripts", group: "Participants", label: "Next participant", combos: ["X"] },
+    { id: "transcripts.pillMenu",       section: "transcripts", group: "Participants", label: "Open participant options (then 1–4)", combos: ["O"] },
+    { id: "transcripts.toggleCaptions", section: "transcripts", group: "Playback", label: "Toggle captions", combos: ["C"] },
+    { id: "transcripts.speedDown",      section: "transcripts", group: "Playback", label: "Slower playback", combos: ["Shift+,"] },
+    { id: "transcripts.speedUp",        section: "transcripts", group: "Playback", label: "Faster playback", combos: ["Shift+."] },
+    { id: "transcripts.fullscreen",     section: "transcripts", group: "Playback", label: "Toggle fullscreen video", combos: ["F"] },
 
     { id: "workflows.copy",            section: "workflows", group: "Clipboard", label: "Copy selected nodes", combos: ["Mod+C"] },
     { id: "workflows.paste",           section: "workflows", group: "Clipboard", label: "Paste nodes", combos: ["Mod+V"] },
@@ -130,10 +139,17 @@
     { id: "workflows.panMode",         section: "workflows", group: "Canvas", label: "Pan canvas (hold + drag)", combos: ["Space"] },
     { id: "workflows.nudge",           section: "workflows", group: "Canvas", label: "Nudge selection (Shift = grid step)", combos: ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Shift+ArrowLeft", "Shift+ArrowRight", "Shift+ArrowUp", "Shift+ArrowDown"], rebindable: false, displayKeys: "←↑↓→" },
     { id: "workflows.zoomReset",       section: "workflows", group: "Canvas", label: "Reset zoom to 100%", combos: ["0"] },
+    { id: "workflows.toggleSnap",      section: "workflows", group: "Canvas", label: "Toggle snap to grid", combos: ["Shift+G"] },
     { id: "workflows.addNote",         section: "workflows", group: "Canvas", label: "Add sticky note", combos: ["N"] },
     { id: "workflows.note.pan",        section: "workflows", group: "Canvas", label: "Pan canvas", note: "space-drag · middle-drag · two-finger scroll" },
     { id: "workflows.note.zoom",       section: "workflows", group: "Canvas", label: "Zoom canvas", note: "pinch · Ctrl/⌘ + scroll" },
     { id: "workflows.note.select",     section: "workflows", group: "Canvas", label: "Select nodes", note: "drag / shift-click" },
+    { id: "workflows.cleanUp",         section: "workflows", group: "Blueprint", label: "Clean up layout", combos: ["L"] },
+    { id: "workflows.stash",           section: "workflows", group: "Blueprint", label: "Stash selection", combos: ["Shift+S"] },
+    { id: "workflows.newBlueprint",    section: "workflows", group: "Blueprint", label: "New blueprint", combos: ["Shift+N"] },
+    { id: "workflows.renameBlueprint", section: "workflows", group: "Blueprint", label: "Rename blueprint", combos: ["Shift+E"] },
+    { id: "workflows.focusSelector",   section: "workflows", group: "Blueprint", label: "Focus blueprint selector", combos: ["Shift+B"] },
+    { id: "workflows.deleteBlueprint", section: "workflows", group: "Blueprint", label: "Delete blueprint", combos: ["Mod+Shift+Backspace"] },
 
     { id: "overview.tabMap",         section: "overview", group: "Tabs", label: "Show Map tab", combos: ["1"] },
     { id: "overview.tabConvergence", section: "overview", group: "Tabs", label: "Show Convergence tab", combos: ["2"] },
@@ -195,6 +211,13 @@
         // Comma/Period keys are layout-stable — map these two by e.code so
         // frame-step combos work everywhere.
         name = e.code === "Comma" ? "," : ".";
+        shift = true;
+      } else if (e.shiftKey && /^Digit[0-9]$/.test(e.code)) {
+        // Shifted digits resolve to layout-dependent symbols ("!" on US,
+        // "&" on French), so "Shift+1" would never match below. The physical
+        // DigitN keys are layout-stable — map by e.code so numbered combos
+        // (e.g. Studio's Shift+1…4 tab switch) work everywhere.
+        name = e.code.charAt(5);
         shift = true;
       } else if (key.toUpperCase() !== key.toLowerCase()) {
         // A letter: uppercase base + explicit Shift.
