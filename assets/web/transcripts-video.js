@@ -977,21 +977,21 @@
     }
   }
 
-  var _pendingSeekTime = null;
-  var _seekRaf = 0;
-  var _pendingSeekListener = null;
+  // Deferred/coalesced seek scaffolding (createSeekCoalescer, utils.js). A seek
+  // deferred on loadedmetadata re-dispatches through seekVideo (hoisted below).
+  var _seek = createSeekCoalescer(
+    function () { return qs("#videoPlayer"); },
+    function (t) { seekVideo(t); },
+    function (video, t) {
+      video.currentTime = t;
+      if (video.paused) video.play();
+    }
+  );
 
   // Cancel an in-flight/deferred seek. Called by the hub's selectParticipant
   // when switching participants so a pending seek can't land on the new video.
   function cancelPendingSeek() {
-    var video = qs("#videoPlayer");
-    _pendingSeekTime = null;
-    cancelAnimationFrame(_seekRaf);
-    _seekRaf = 0;
-    if (_pendingSeekListener) {
-      if (video) video.removeEventListener("loadedmetadata", _pendingSeekListener);
-      _pendingSeekListener = null;
-    }
+    _seek.cancel();
   }
 
   function seekVideo(time) {
@@ -1014,40 +1014,7 @@
   }
 
   function _seekLocal(time) {
-    var video = qs("#videoPlayer");
-    if (!video || !video.src) return;
-
-    // Remove any previous deferred-seek listener
-    if (_pendingSeekListener) {
-      video.removeEventListener("loadedmetadata", _pendingSeekListener);
-      _pendingSeekListener = null;
-    }
-
-    // If metadata hasn't loaded yet, defer the seek
-    if (video.readyState < 1) {
-      _pendingSeekTime = time;
-      _pendingSeekListener = function () {
-        video.removeEventListener("loadedmetadata", _pendingSeekListener);
-        _pendingSeekListener = null;
-        var t = _pendingSeekTime;
-        _pendingSeekTime = null;
-        if (t !== null) seekVideo(t);
-      };
-      video.addEventListener("loadedmetadata", _pendingSeekListener);
-      return;
-    }
-
-    // Coalesce rapid seeks into one per animation frame
-    _pendingSeekTime = time;
-    cancelAnimationFrame(_seekRaf);
-    _seekRaf = requestAnimationFrame(function () {
-      var t = _pendingSeekTime;
-      _pendingSeekTime = null;
-      _seekRaf = 0;
-      if (t === null) return;
-      video.currentTime = t;
-      if (video.paused) video.play();
-    });
+    _seek.seek(time);
   }
 
   // ---- Video sync ----

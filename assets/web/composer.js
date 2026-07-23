@@ -100,19 +100,15 @@
   }
   CO.videoGlobalTime = videoGlobalTime;
 
-  var _pendingSeekTime = null;
-  var _seekRaf = 0;
-  var _pendingSeekListener = null;
+  // Deferred/coalesced seek scaffolding (createSeekCoalescer, utils.js).
+  var _seek = createSeekCoalescer(
+    function () { return qs("#coVideo"); },
+    function (t) { seekLocal(t); },
+    function (video, t) { video.currentTime = t; }
+  );
 
   function cancelPendingSeek() {
-    var video = qs("#coVideo");
-    _pendingSeekTime = null;
-    cancelAnimationFrame(_seekRaf);
-    _seekRaf = 0;
-    if (_pendingSeekListener) {
-      if (video) video.removeEventListener("loadedmetadata", _pendingSeekListener);
-      _pendingSeekListener = null;
-    }
+    _seek.cancel();
   }
 
   function seekVideo(time) {
@@ -135,36 +131,7 @@
   CO.seekVideo = seekVideo;
 
   function seekLocal(time) {
-    var video = qs("#coVideo");
-    if (!video || !video.src) return;
-
-    if (_pendingSeekListener) {
-      video.removeEventListener("loadedmetadata", _pendingSeekListener);
-      _pendingSeekListener = null;
-    }
-    // Metadata not loaded yet: defer the seek until it is.
-    if (video.readyState < 1) {
-      _pendingSeekTime = time;
-      _pendingSeekListener = function () {
-        video.removeEventListener("loadedmetadata", _pendingSeekListener);
-        _pendingSeekListener = null;
-        var t = _pendingSeekTime;
-        _pendingSeekTime = null;
-        if (t !== null) seekLocal(t);
-      };
-      video.addEventListener("loadedmetadata", _pendingSeekListener);
-      return;
-    }
-    // Coalesce rapid seeks into one per animation frame.
-    _pendingSeekTime = time;
-    cancelAnimationFrame(_seekRaf);
-    _seekRaf = requestAnimationFrame(function () {
-      var t = _pendingSeekTime;
-      _pendingSeekTime = null;
-      _seekRaf = 0;
-      if (t === null) return;
-      video.currentTime = t;
-    });
+    _seek.seek(time);
   }
 
   function switchToPart(i, localTime, resume) {

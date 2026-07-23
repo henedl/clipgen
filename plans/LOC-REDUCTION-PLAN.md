@@ -197,13 +197,22 @@ above — parametrize/shared-helper refactors keep the guard rails, they only re
 
 ## C. Medium-risk dedup (needs browser check)
 
-- [ ] **C1. `.cg-modal-overlay` in `tokens.css`** — the fixed/inset-0/flex-center/z-modal shell
-  shared by 5 modal overlays (screenspace `.modal-overlay`, transcripts `.modal`, workflows
-  `.wf-dialog-overlay`, `.hk-overlay`, settings-modal). Background stays per-page; gallery/viewer
-  excluded (tokens.css is export-stripped). (~20–30)
-- [ ] **C2. `createSeekCoalescer` in `utils.js`** — the pending-seek/RAF-coalesce/loadedmetadata
-  scaffolding duplicated between `composer.js` and `transcripts-video.js`. viewer.js's partial
-  third instance stays (structurally divergent). (~30–40)
+- [x] **C1. `.cg-modal-overlay` in `tokens.css`** — **Done (~−15), 4 adopters not 5.** The
+  fixed/inset-0/flex-center/z-modal shell adopted by screenspace `.modal-overlay`, transcripts
+  `.modal` (×2 modals), workflows `.wf-dialog-overlay`, and `.settings-overlay`; backdrop stays
+  per-page. **`.hk-overlay` excluded** — hotkeys.css is inlined into exported viewers where
+  tokens.css is stripped, so it must stay self-contained (its header says so). Unlike `.cg-menu`
+  this primitive sets `display: flex`; each adopter's hide mechanism out-cascades it
+  (screenspace `.hidden !important`; the others use compound `.x.hidden` rules).
+  ⚠️ Needs a browser check: open/close all four modals in light+dark.
+- [x] **C2. `createSeekCoalescer` in `utils.js`** — **Done (~−55).** The pending-seek /
+  loadedmetadata-deferral / RAF-coalesce scaffolding moved to a utils.js factory
+  (`getVideo`/`onDeferred`/`applySeek` hooks keep the page differences: transcripts re-dispatches
+  through `seekVideo` and auto-plays after a seek write; composer stays paused).
+  `cancelPendingSeek`/`seekLocal`/`_seekLocal` remain as thin wrappers so all call sites and the
+  `TS.cancelPendingSeek` publication are unchanged. viewer.js's partial third instance left
+  as-is (structurally divergent). ⚠️ Needs a browser check: rapid scrub + seek-before-metadata +
+  part switching on Composer and Transcripts.
 
 ## D. Owner-decision deletions
 
