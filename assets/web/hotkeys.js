@@ -621,6 +621,12 @@
     for (var m = 0; m < chips.length; m++) {
       sizes.push({ w: chips[m].offsetWidth, h: chips[m].offsetHeight });
     }
+    // Corner badges anchor to the anchor's vertical CENTER (minus a fixed
+    // half-height) rather than its top edge, so controls of different heights
+    // sharing a centered row — e.g. a <select> among icon buttons — still get
+    // level chips. For a standard ~24 px control this still straddles the top
+    // edge as before.
+    var BADGE_RAISE = 12;
     for (var k = 0; k < chips.length; k++) {
       var r = targets[k].rect;
       var left, top;
@@ -632,12 +638,37 @@
         top = r.top + targets[k].stack * (sizes[k].h + 4);
       } else {
         left = r.right - sizes[k].w + 6;
-        top = r.top - sizes[k].h / 2;
+        top = r.top + r.height / 2 - BADGE_RAISE - sizes[k].h / 2;
       }
       left = Math.max(4, Math.min(left, window.innerWidth - sizes[k].w - 4));
       top = Math.max(4, Math.min(top, window.innerHeight - sizes[k].h - 4));
       chips[k].style.left = left + "px";
       chips[k].style.top = top + "px";
+    }
+    // De-overlap corner badges: adjacent narrow buttons (e.g. undo ⌘Z / redo
+    // ⌘⇧Z) yield chips wider than the buttons, so their badges collide. Spread
+    // any colliding badge rightward to sit just past the previous one, so a
+    // tight cluster reads as a row of chips. Labeled action chips already stack
+    // downward, so they're excluded.
+    var order = [];
+    for (var bi = 0; bi < chips.length; bi++) {
+      if (!targets[bi].label) order.push(bi);
+    }
+    order.sort(function (a, b2) {
+      return parseFloat(chips[a].style.left) - parseFloat(chips[b2].style.left);
+    });
+    for (var s2 = 1; s2 < order.length; s2++) {
+      var cur = order[s2];
+      var prev = order[s2 - 1];
+      var pRight = parseFloat(chips[prev].style.left) + sizes[prev].w;
+      var pTop = parseFloat(chips[prev].style.top);
+      var cLeft = parseFloat(chips[cur].style.left);
+      var cTop = parseFloat(chips[cur].style.top);
+      var sameRow = cTop < pTop + sizes[prev].h && cTop + sizes[cur].h > pTop;
+      if (sameRow && cLeft < pRight + 4) {
+        var nl = Math.min(pRight + 4, window.innerWidth - sizes[cur].w - 4);
+        if (nl > cLeft) chips[cur].style.left = nl + "px";
+      }
     }
     _hintsShown = true;
     // Chips don't track their anchors; any viewport change just hides them.

@@ -1144,9 +1144,14 @@
     var runBtn = qs("#wfRunBtn");
     if (runBtn) {
       runBtn.disabled = blocked;
-      runBtn.title = hasErrors
-        ? "Fix the errors in the Issues panel to run"
-        : "Run this workflow (set a Video Source to “All participants” to fan out)";
+      // Custom [data-tooltip] (not native title) so it doesn't double up with the
+      // singleton tooltip; the message is contextual (error vs ready state).
+      runBtn.setAttribute(
+        "data-tooltip",
+        hasErrors
+          ? "Fix the errors in the Issues panel to run"
+          : "Run this workflow (set a Video Source to “All participants” to fan out)",
+      );
     }
     // The Run split-button caret opens the more-options menu (same gate as Run).
     var caret = qs("#wfRunMenuBtn");

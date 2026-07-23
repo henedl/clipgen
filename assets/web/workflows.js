@@ -581,18 +581,24 @@
         ? "Auto-run: " + triggerTypeLabel(activeType)
         : "Auto-run";
     }
+    // Custom [data-tooltip] (not native title) so it doesn't double up with the
+    // singleton tooltip; the message is contextual (armed / blocked / ready).
     if (armed) {
-      btn.title =
+      btn.setAttribute(
+        "data-tooltip",
         "Auto-runs when: " +
-        triggerTypeLabel(activeType).toLowerCase() +
-        ". Open to change or turn off.";
+          triggerTypeLabel(activeType).toLowerCase() +
+          ". Open to change or turn off.",
+      );
     } else if (!hasVideoSource()) {
-      btn.title = "Add a Video Source node to enable auto-run";
+      btn.setAttribute("data-tooltip", "Add a Video Source node to enable auto-run");
     } else if (hasErrors) {
-      btn.title = "Fix the errors in the Issues panel to enable auto-run";
+      btn.setAttribute("data-tooltip", "Fix the errors in the Issues panel to enable auto-run");
     } else {
-      btn.title =
-        "Auto-run this blueprint when a video lands, a transcript completes, or a scan completes";
+      btn.setAttribute(
+        "data-tooltip",
+        "Auto-run this blueprint when a video lands, a transcript completes, or a scan completes",
+      );
     }
     rebuildTriggerMenu();
     // Persistent global cue: which blueprints (if any) are armed — one per
