@@ -126,14 +126,21 @@ def record_recent_output(path: str) -> None:
     save_start_settings(settings)
 
 
-def record_recent_spreadsheet(type_: str, id_or_path: str, label: str) -> None:
+def record_recent_spreadsheet(
+    type_: str, id_or_path: str, label: str, worksheet: str = ""
+) -> None:
     """Record a spreadsheet selection as last/recent."""
     settings = load_start_settings()
     if not settings.get("persist_enabled", True):
         return
     if type_ not in ("google", "excel") or not id_or_path:
         return
-    entry = {"type": type_, "id_or_path": id_or_path, "label": label or id_or_path}
+    entry = {
+        "type": type_,
+        "id_or_path": id_or_path,
+        "label": label or id_or_path,
+        "worksheet": worksheet,
+    }
     settings["last_spreadsheet"] = entry
     settings["recent_spreadsheets"] = _prepend_dedup(
         settings.get("recent_spreadsheets", []),

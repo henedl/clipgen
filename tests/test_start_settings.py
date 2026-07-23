@@ -110,13 +110,14 @@ def test_record_recent_output_persists(settings_file):
 def test_record_recent_spreadsheet_keyed_on_type_and_id(settings_file):
     start_settings.record_recent_spreadsheet("excel", "/a.xlsx", "A")
     start_settings.record_recent_spreadsheet("google", "MyStudy", "MyStudy")
-    start_settings.record_recent_spreadsheet("excel", "/a.xlsx", "A renamed")
+    start_settings.record_recent_spreadsheet("excel", "/a.xlsx", "A renamed", "Data")
     settings = start_settings.load_start_settings()
     assert len(settings["recent_spreadsheets"]) == 2
     assert settings["recent_spreadsheets"][0] == {
         "type": "excel",
         "id_or_path": "/a.xlsx",
         "label": "A renamed",
+        "worksheet": "Data",
     }
 
 

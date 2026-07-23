@@ -279,6 +279,119 @@ def test_sessions_record_rejects_missing_spreadsheet_id(client, tmp_path):
     assert "id_or_path" in body["error"]
 
 
+# ---------- /api/spreadsheets/excel + /worksheets --------------------------
+
+
+def _write_workbook(path, titles):
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    wb.active.title = titles[0]
+    for t in titles[1:]:
+        wb.create_sheet(t)
+    wb.save(path)
+    wb.close()
+
+
+def test_excel_list_includes_modified(client, tmp_path):
+    """Each .xlsx entry carries a numeric file-modified time for the picker."""
+    _write_workbook(tmp_path / "in" / "study.xlsx", ["Sheet1"])
+    resp = client.get("/api/spreadsheets/excel")
+    body = resp.get_json()
+    assert body["ok"] is True
+    names = [f["name"] for f in body["files"]]
+    assert "study.xlsx" in names
+    entry = next(f for f in body["files"] if f["name"] == "study.xlsx")
+    assert isinstance(entry["modified"], (int, float))
+    assert entry["modified"] > 0
+
+
+def test_worksheets_route_excel(client, tmp_path):
+    """The worksheets route lists an .xlsx's tabs + the priority recommendation."""
+    wb_path = tmp_path / "in" / "multi.xlsx"
+    _write_workbook(wb_path, ["Intro", "Data", "Extra"])
+    resp = client.get(
+        "/api/spreadsheets/worksheets",
+        query_string={"type": "excel", "id_or_path": str(wb_path)},
+    )
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["worksheets"] == ["Intro", "Data", "Extra"]
+    assert body["recommended"] == "Data"
+
+
+def test_worksheets_route_rejects_bad_type(client):
+    resp = client.get(
+        "/api/spreadsheets/worksheets",
+        query_string={"type": "bogus", "id_or_path": "x"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_worksheets_route_google_requires_auth(client):
+    resp = client.get(
+        "/api/spreadsheets/worksheets",
+        query_string={"type": "google", "id_or_path": "My Study"},
+    )
+    assert resp.get_json()["ok"] is False
+
+
+def _write_valid_workbook(path, tabs):
+    """Write an .xlsx whose every tab has a minimal valid clipgen layout."""
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    for i, (title, pid) in enumerate(tabs):
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = title
+        ws["A1"] = "Study"
+        ws["A2"] = "ID"
+        ws["B2"] = pid
+        ws["D2"] = "Observation"
+        ws["E2"] = "Category"
+        ws["A3"] = "1"
+        ws["B3"] = "00:10-00:20"
+        ws["D3"] = "Obs"
+        ws["E3"] = "CatA"
+    wb.save(path)
+    wb.close()
+
+
+def test_open_excel_with_worksheet_reflected_in_status(client, tmp_path):
+    """Opening a chosen tab loads it and surfaces it via /api/status."""
+    wb_path = tmp_path / "in" / "multi.xlsx"
+    _write_valid_workbook(
+        wb_path, [("Intro", "P01"), ("Data", "P02"), ("Extra", "P03")]
+    )
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": str(wb_path), "worksheet": "Extra"},
+    )
+    assert resp.get_json()["ok"] is True
+    st = client.get("/api/status").get_json()
+    assert st["spreadsheet_worksheet"] == "Extra"
+    assert st["spreadsheet_label"].endswith("(Extra)")
+    # Confirm the Extra tab's data actually loaded (its participant is P03).
+    sheet = client.get("/studio/api/sheet").get_json()
+    assert sheet["participants"] == ["P03"]
+
+
+def test_open_excel_without_worksheet_uses_priority_tab(client, tmp_path):
+    """No worksheet field → priority auto-pick ("Data"), not the first tab."""
+    wb_path = tmp_path / "in" / "multi.xlsx"
+    _write_valid_workbook(
+        wb_path, [("Intro", "P01"), ("Data", "P02"), ("Extra", "P03")]
+    )
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": str(wb_path)},
+    )
+    assert resp.get_json()["ok"] is True
+    st = client.get("/api/status").get_json()
+    assert st["spreadsheet_worksheet"] == "Data"
+
+
 # ---------- /api/spreadsheets/google + /auth -------------------------------
 
 
@@ -294,17 +407,25 @@ def test_google_list_unauthenticated(client):
 
 
 def test_google_list_authenticated(client, monkeypatch):
-    """With a cached client, names come from google_api.get_all_spreadsheets."""
+    """Sheet metadata (incl. modifiedTime) comes from get_all_spreadsheet_meta."""
     server._google_auth.client = object()  # stand-in
     import google_api
 
     monkeypatch.setattr(
-        google_api, "get_all_spreadsheets", lambda _c: ["Alpha", "Beta"]
+        google_api,
+        "get_all_spreadsheet_meta",
+        lambda _c: [
+            {"name": "Alpha", "id": "a", "modifiedTime": "2026-07-20T10:00:00Z"},
+            {"name": "Beta", "id": "b", "modifiedTime": ""},
+        ],
     )
     resp = client.get("/api/spreadsheets/google")
     body = resp.get_json()
     assert body["authenticated"] is True
     assert [s["name"] for s in body["sheets"]] == ["Alpha", "Beta"]
+    # id stays the name (open-by-name contract), modifiedTime flows through.
+    assert body["sheets"][0]["id"] == "Alpha"
+    assert body["sheets"][0]["modifiedTime"] == "2026-07-20T10:00:00Z"
 
 
 def test_google_list_surfaces_api_error(client, monkeypatch):
@@ -314,7 +435,7 @@ def test_google_list_surfaces_api_error(client, monkeypatch):
     def _boom(_c):
         raise RuntimeError("rate limited")
 
-    monkeypatch.setattr(google_api, "get_all_spreadsheets", _boom)
+    monkeypatch.setattr(google_api, "get_all_spreadsheet_meta", _boom)
     resp = client.get("/api/spreadsheets/google")
     body = resp.get_json()
     assert body["authenticated"] is True

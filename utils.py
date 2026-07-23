@@ -961,6 +961,27 @@ def safe_cell_a1(row: int | None, col: int | None) -> str:
         return ""
 
 
+def pick_worksheet_title(
+    titles: list[str], preferred_name: str | None = None
+) -> str | None:
+    """Choose a worksheet title from *titles*.
+
+    Precedence: an explicit *preferred_name* if it is present in *titles*, else
+    the first ``config.WORKSHEET_PRIORITY`` entry that matches, else the first
+    title, else ``None`` when *titles* is empty. Shared by the Google
+    (``google_api.get_worksheet``) and Excel (``excel_io``) pickers so the
+    auto-selection rule lives in exactly one place.
+    """
+    if preferred_name and preferred_name in titles:
+        return preferred_name
+    for priority_name in config.WORKSHEET_PRIORITY:
+        if priority_name in titles:
+            return priority_name
+    if titles:
+        return titles[0]
+    return None
+
+
 def _resolve_segment_source_fields(
     clip: "ClipRecord",
     base_video: str,

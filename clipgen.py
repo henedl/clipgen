@@ -148,12 +148,16 @@ _STANDARD_MODES = {
 # ---- Spreadsheet opening and selection ----
 
 
-def _open_worksheet(open_callable: Callable[[], Any], error_context: str) -> Any | None:
+def _open_worksheet(
+    open_callable: Callable[[], Any],
+    error_context: str,
+    worksheet_name: str | None = None,
+) -> Any | None:
     """Try to open a worksheet via a callable; catch gspread errors and print a consistent message."""
     import gspread
 
     try:
-        return google_api.get_worksheet(open_callable())
+        return google_api.get_worksheet(open_callable(), preferred_name=worksheet_name)
     except (
         gspread.SpreadsheetNotFound,
         gspread.exceptions.APIError,
@@ -164,12 +168,18 @@ def _open_worksheet(open_callable: Callable[[], Any], error_context: str) -> Any
 
 
 def open_spreadsheet_by_url(
-    gspread_client: Any, url: str, *, use_spinner: bool = False
+    gspread_client: Any,
+    url: str,
+    *,
+    use_spinner: bool = False,
+    worksheet_name: str | None = None,
 ) -> Any | None:
     """Open a spreadsheet by URL."""
 
     def open_fn() -> Any | None:
-        return _open_worksheet(lambda: gspread_client.open_by_url(url), "by URL")
+        return _open_worksheet(
+            lambda: gspread_client.open_by_url(url), "by URL", worksheet_name
+        )
 
     if use_spinner:
         return utils.run_with_spinner("Opening document by URL...", open_fn)
@@ -177,7 +187,12 @@ def open_spreadsheet_by_url(
 
 
 def open_spreadsheet_by_index(
-    gspread_client: Any, doc_list: list[str], index: int, *, use_spinner: bool = False
+    gspread_client: Any,
+    doc_list: list[str],
+    index: int,
+    *,
+    use_spinner: bool = False,
+    worksheet_name: str | None = None,
 ) -> Any | None:
     """Open a spreadsheet by 1-based index number from the document list."""
     if index < 1 or index > len(doc_list):
@@ -191,7 +206,7 @@ def open_spreadsheet_by_index(
 
     def open_fn() -> Any | None:
         return _open_worksheet(
-            lambda: gspread_client.open(doc_name), f"at index {index}"
+            lambda: gspread_client.open(doc_name), f"at index {index}", worksheet_name
         )
 
     if use_spinner:
@@ -206,6 +221,7 @@ def open_spreadsheet_by_name(
     *,
     use_spinner: bool = False,
     prompt_prefix: str = "No exact match found. Did you mean",
+    worksheet_name: str | None = None,
 ) -> Any | None:
     """Open a spreadsheet by name search against the document list."""
     chosen_index = google_api.find_spreadsheet_by_name(name, doc_list)
@@ -223,11 +239,45 @@ def open_spreadsheet_by_name(
         utils.standard_print(f"Opening document: {matched_name}")
 
     def open_fn() -> Any | None:
-        return _open_worksheet(lambda: gspread_client.open(matched_name), f"'{name}'")
+        return _open_worksheet(
+            lambda: gspread_client.open(matched_name), f"'{name}'", worksheet_name
+        )
 
     if use_spinner:
         return utils.run_with_spinner(f"Opening document: {matched_name}...", open_fn)
     return open_fn()
+
+
+def list_worksheet_titles(
+    gspread_client: Any, id_or_path: str
+) -> tuple[list[str], str]:
+    """Return ``(titles, recommended)`` for a Google spreadsheet by URL or name.
+
+    Resolves the spreadsheet non-interactively (no fuzzy-match prompt) so the
+    Start overlay's worksheet dropdown can list a spreadsheet's tabs before it
+    is opened. ``recommended`` is the priority auto-pick. Returns ``([], "")``
+    when the name can't be resolved or a gspread error occurs.
+    """
+    import gspread
+
+    try:
+        if id_or_path.startswith(config.COMMAND_HTTP_PREFIX):
+            ss = gspread_client.open_by_url(id_or_path)
+        else:
+            doc_list = google_api.get_all_spreadsheets(gspread_client)
+            chosen_index = google_api.find_spreadsheet_by_name(id_or_path, doc_list)
+            if chosen_index < 0:
+                return [], ""
+            ss = gspread_client.open(doc_list[chosen_index].strip())
+        titles = [ws.title for ws in ss.worksheets()]
+    except (
+        gspread.SpreadsheetNotFound,
+        gspread.exceptions.APIError,
+        gspread.exceptions.GSpreadException,
+    ) as e:
+        utils.error_print(f"Could not list worksheets for '{id_or_path}': {e}")
+        return [], ""
+    return titles, utils.pick_worksheet_title(titles) or ""
 
 
 def _handle_spreadsheet_command(
