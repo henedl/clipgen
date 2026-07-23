@@ -146,6 +146,7 @@ from screenspace_tools import (
 )
 from screenspace_multitool import scan_multitool, score_multitool_frame
 from screenspace_manifest import (
+    TASK_BINARY_KEYS,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_FAILED,
@@ -160,5 +161,6 @@ from screenspace_manifest import (
     generate_events_from_results,
     load_screenspace_manifest,
     save_screenspace_manifest,
+    strip_task_param_binaries,
 )
 from screenspace_worker import ScreenspaceWorker

@@ -1145,6 +1145,37 @@ var createSSEStream = function (url, opts) {
   return es;
 };
 
+// ---- NDJSON streaming reader ----
+// Drain a fetch Response body line-by-line, calling onLine(trimmedLine) for each
+// non-empty newline-delimited chunk. Returns a Promise that resolves when the
+// stream is fully drained. Guards against responses without a streamable body
+// (e.g. older browsers, or unexpected non-streaming responses that the caller
+// should have caught with response.ok before reaching here).
+var readNDJSONStream = function (response, onLine) {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    return Promise.reject(new Error("Streaming response not supported"));
+  }
+  var reader = response.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = "";
+  function pump() {
+    return reader.read().then(function (result) {
+      if (result.done) {
+        if (buffer.trim()) onLine(buffer.trim());
+        return;
+      }
+      buffer += decoder.decode(result.value, { stream: true });
+      var lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].trim()) onLine(lines[i].trim());
+      }
+      return pump();
+    });
+  }
+  return pump();
+};
+
 // ---- Blocking modal lifecycle (Escape / backdrop / optional focus trap) ----
 // Shared lifecycle for blocking overlays: closes on Escape, optionally on
 // backdrop click, optionally traps Tab/Shift+Tab inside the overlay and restores

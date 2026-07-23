@@ -1227,31 +1227,7 @@
   readPersistedSidebarOpen();
 
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
-
-  function readNDJSONStream(response, onLine) {
-    if (!response.body || typeof response.body.getReader !== "function") {
-      return Promise.reject(new Error("Streaming response not supported"));
-    }
-    var reader = response.body.getReader();
-    var decoder = new TextDecoder();
-    var buffer = "";
-    function pump() {
-      return reader.read().then(function (result) {
-        if (result.done) {
-          if (buffer.trim()) onLine(buffer.trim());
-          return;
-        }
-        buffer += decoder.decode(result.value, { stream: true });
-        var lines = buffer.split("\n");
-        buffer = lines.pop();
-        for (var i = 0; i < lines.length; i++) {
-          if (lines[i].trim()) onLine(lines[i].trim());
-        }
-        return pump();
-      });
-    }
-    return pump();
-  }
+  // readNDJSONStream is an ambient utils.js global.
 
   var _generateAbort = null;
 

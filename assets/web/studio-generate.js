@@ -6,14 +6,14 @@
  * handler (onCancelGenerate), and the per-cell card index helper.
  *
  * Reaches hub-owned pieces through window.ClipgenStudio (STUDIO): the card-state
- * painters (setCardQueued/clearCardStatus/setCardResult) and readNDJSONStream are
- * shared with the reel/build path and stay in the hub; setArtifactGenerating /
- * showResult / revealStatusOverlay / updateGenerateProgress / stampLog likewise;
- * the _generateEtaTracker + _studioEtaTicker objects are shared elapsed-time
+ * painters (setCardQueued/clearCardStatus/setCardResult) are shared with the
+ * reel/build path and stay in the hub; setArtifactGenerating / showResult /
+ * revealStatusOverlay / updateGenerateProgress / stampLog likewise; the
+ * _generateEtaTracker + _studioEtaTicker objects are shared elapsed-time
  * infrastructure (also driven by job-status polling and the reel/build flows);
  * buildCellOverrides lives in studio-trim.js (reached via STUDIO). isIntakeSource
- * is a hub helper. apiPost / qs / setButtonProgress / clipgenPluralUnit are
- * ambient utils.js / primitives.js globals (scope chain).
+ * is a hub helper. apiPost / qs / readNDJSONStream / setButtonProgress /
+ * clipgenPluralUnit are ambient utils.js / primitives.js globals (scope chain).
  *
  * The hub keeps same-named onGenerate/onCancelGenerate delegators for the button
  * wiring. Loaded by studio.html after studio.js and studio-trim.js (whose
@@ -33,7 +33,6 @@
   var setArtifactGenerating = STUDIO.setArtifactGenerating,
     showResult = STUDIO.showResult,
     revealStatusOverlay = STUDIO.revealStatusOverlay,
-    readNDJSONStream = STUDIO.readNDJSONStream,
     setCardQueued = STUDIO.setCardQueued,
     clearCardStatus = STUDIO.clearCardStatus,
     setCardResult = STUDIO.setCardResult,
