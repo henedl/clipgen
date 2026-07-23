@@ -160,6 +160,19 @@
   padding-left: var(--space-3);
 }
 
+/* Keyboard list cursor: the highlighted row for arrow-key navigation. The
+   inset ring is the focus affordance, so the default outline on the
+   (programmatically focused) row is suppressed to avoid a double ring. */
+.settings-row.is-nav-selected {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+.settings-row:focus {
+  outline: none;
+}
+
 .settings-label {
   flex: 1;
   min-width: 0;

@@ -151,7 +151,9 @@
     { id: "start.browseOutput", section: "start", group: "Folders",     label: "Browse output folder",   combos: ["O"] },
     { id: "start.confirm",      section: "start", group: "",            label: "Open workspace",         combos: ["Mod+Enter"] },
 
-    { id: "settings.tab", section: "settings", group: "", label: "Switch settings tab by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" }
+    { id: "settings.tab",       section: "settings", group: "", label: "Switch settings tab by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
+    { id: "settings.cyclePrev", section: "settings", group: "", label: "Previous settings tab", combos: ["Z"] },
+    { id: "settings.cycleNext", section: "settings", group: "", label: "Next settings tab", combos: ["X"] }
   ];
 
   // ---- Internal state ----

@@ -1202,6 +1202,7 @@
 
       _panelsEl.appendChild(panel);
     }
+    _resetNavCursor(true);
   }
 
   function _makeTabClickHandler(name) {
@@ -1231,7 +1232,171 @@
       if (p.getAttribute("data-tab") === name) p.classList.remove("hidden");
       else p.classList.add("hidden");
     }
+    // Park the keyboard cursor on the new panel's first row so arrow nav
+    // continues seamlessly after a tab switch.
+    _resetNavCursor(true);
   }
+
+  // ---- Keyboard list navigation (arrow-key cursor over setting rows) --------
+  // Up/Down (and Tab/Shift+Tab) move a highlighted cursor over the visible rows
+  // of the active tab; Left/Right toggle a bool (off/on), cycle a select, or
+  // step a number; Enter opens a text/number field for editing (Esc or Enter on
+  // a single-line field returns to the cursor). The listener runs in the capture
+  // phase so edit-mode Esc is caught before the modal-close listener below. It
+  // stays inert while the modal is closed, while the hotkey recorder or color
+  // picker owns the keyboard, or when focus sits outside the settings list.
+  var _navRow = null;
+
+  function _navPanel() {
+    return _panelsEl ? _panelsEl.querySelector(".settings-tab-panel:not(.hidden)") : null;
+  }
+
+  function _navRows() {
+    var panel = _navPanel();
+    if (!panel) return [];
+    return Array.prototype.filter.call(
+      panel.querySelectorAll(".settings-row"),
+      function (r) { return r.offsetParent !== null; }
+    );
+  }
+
+  function _selectNavRow(row, focus) {
+    var rows = _navRows();
+    for (var i = 0; i < rows.length; i++) {
+      var on = rows[i] === row;
+      rows[i].classList.toggle("is-nav-selected", on);
+      rows[i].tabIndex = on ? 0 : -1;
+    }
+    _navRow = row || null;
+    if (row && focus !== false) {
+      row.focus();
+      if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // Reset the cursor to the active panel's first row (called after render / tab
+  // switch). Only steals focus when the modal is actually open.
+  function _resetNavCursor(focus) {
+    var rows = _navRows();
+    _selectNavRow(rows.length ? rows[0] : null, !!focus && _isModalOpen());
+  }
+
+  function _moveNav(delta) {
+    var rows = _navRows();
+    if (!rows.length) return false;
+    var idx = _navRow ? rows.indexOf(_navRow) : -1;
+    var next = idx === -1 ? (delta < 0 ? rows.length - 1 : 0) : idx + delta;
+    if (next < 0 || next >= rows.length) return false; // boundary: fall through
+    _selectNavRow(rows[next]);
+    return true;
+  }
+
+  function _fireChange(node) {
+    node.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function _isEditableField(t) {
+    if (!t || !t.tagName) return false;
+    if (t.tagName === "TEXTAREA" || t.tagName === "SELECT") return true;
+    if (t.tagName === "INPUT") {
+      var ty = (t.type || "text").toLowerCase();
+      return ty !== "checkbox" && ty !== "radio" && ty !== "button" && ty !== "submit";
+    }
+    return false;
+  }
+
+  // Left/Right on the selected row: toggle a bool (off/on), cycle a select, or
+  // step a number. Routes through a change event so the existing per-control
+  // handlers persist the value.
+  function _actuateNav(row, dir) {
+    if (!row) return;
+    var control = row.querySelector(".settings-control");
+    if (!control) return;
+    var cb = control.querySelector("input.settings-toggle");
+    if (cb) { cb.checked = dir > 0; _fireChange(cb); return; }
+    var sel = control.querySelector("select");
+    if (sel && !sel.disabled && sel.options.length) {
+      var n = sel.options.length;
+      sel.selectedIndex = ((sel.selectedIndex + dir) % n + n) % n;
+      _fireChange(sel);
+      return;
+    }
+    var num = control.querySelector('input[type="number"]');
+    if (num) {
+      var step = parseFloat(num.step);
+      if (isNaN(step)) step = 1;
+      var cur = parseFloat(num.value);
+      if (isNaN(cur)) cur = 0;
+      num.value = cur + dir * step;
+      _fireChange(num); // the float handler re-clamps to min/max
+      return;
+    }
+  }
+
+  // Enter on the selected row: toggle a bool, else focus the first editable
+  // field (text / number / textarea / select) to start typing.
+  function _editNav(row) {
+    if (!row) return;
+    var control = row.querySelector(".settings-control");
+    if (!control) return;
+    var cb = control.querySelector("input.settings-toggle");
+    if (cb) { cb.checked = !cb.checked; _fireChange(cb); return; }
+    var field = control.querySelector(
+      'input[type="text"], input[type="number"], textarea, select'
+    );
+    if (field) {
+      field.focus();
+      if (field.select) { try { field.select(); } catch (e) {} }
+    }
+  }
+
+  function _navActive() {
+    return _isModalOpen() && !_hkRecordCleanup &&
+      !(window.ClipgenColorPicker && window.ClipgenColorPicker.isOpen && window.ClipgenColorPicker.isOpen());
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (!_navActive()) return;
+    var t = e.target;
+
+    // Edit mode: focus is in a text/number/select field. Esc (and Enter on a
+    // single-line field) return to the cursor; every other key is native.
+    if (_isEditableField(t) && _panelsEl && _panelsEl.contains(t)) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation(); // beat the modal-close (bubble) listener below
+        _selectNavRow(t.closest ? t.closest(".settings-row") : _navRow);
+      } else if (e.key === "Enter" && t.tagName !== "TEXTAREA") {
+        e.preventDefault();
+        e.stopPropagation();
+        _fireChange(t);
+        _selectNavRow(t.closest ? t.closest(".settings-row") : _navRow);
+      }
+      return;
+    }
+
+    // Nav mode: only while focus is within the settings list.
+    var inPanel = (_panelsEl && _panelsEl.contains(t)) || (_navRow && t === _navRow);
+    if (!inPanel) return;
+    // Sync the cursor to wherever focus actually landed (e.g. a clicked toggle).
+    var here = t && t.closest ? t.closest(".settings-row") : null;
+    if (here && here !== _navRow) _selectNavRow(here, false);
+
+    switch (e.key) {
+      case "ArrowDown": e.preventDefault(); _moveNav(1); break;
+      case "ArrowUp":   e.preventDefault(); _moveNav(-1); break;
+      case "Tab":
+        // Move rows; at the list edges fall through to native Tab so focus can
+        // still leave the list (tab strip / footer).
+        if (_moveNav(e.shiftKey ? -1 : 1)) e.preventDefault();
+        break;
+      case "ArrowLeft":  e.preventDefault(); _actuateNav(_navRow, -1); break;
+      case "ArrowRight": e.preventDefault(); _actuateNav(_navRow, 1); break;
+      case "Enter":      e.preventDefault(); _editNav(_navRow); break;
+      // Space is left to the browser so it still scrolls the settings list.
+      default: break;
+    }
+  }, true);
 
   // Escape closes the modal. Bubble-phase so capture-phase owners layered on
   // top win first: the hotkey recorder stops propagation (Esc = cancel
@@ -1245,22 +1410,44 @@
     _close();
   });
 
-  // Digit 1–9 switches settings tabs while the modal owns the keyboard (inModal
-  // so page hotkeys stay dead; when-gated to this modal being open). The tab
-  // buttons carry data-hotkey="settings.tab" so Alt-hold reveals the chips.
+  function _isModalOpen() {
+    return !!_root && !_root.classList.contains("hidden");
+  }
+
+  // Move the active tab by delta (wrapping), mirroring Screenspace's Z/X tool
+  // cycling. Reuses the tab buttons' click path so aria/active state stays right.
+  function _cycleTab(delta) {
+    if (!_tabsEl) return;
+    var btns = _tabsEl.querySelectorAll(".settings-tab");
+    if (!btns.length) return;
+    var cur = 0;
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].classList.contains("is-active")) { cur = i; break; }
+    }
+    btns[((cur + delta) % btns.length + btns.length) % btns.length].click();
+  }
+
+  // Tab hotkeys, active only while the modal owns the keyboard (inModal so page
+  // hotkeys stay dead; when-gated to this modal being open). Digit 1–9 jumps to
+  // a tab (buttons carry data-hotkey="settings.tab" so Alt-hold reveals chips);
+  // Z/X cycle prev/next like Screenspace's tool tabs.
   if (window.ClipgenHotkeys) {
-    window.ClipgenHotkeys.register([{
-      id: "settings.tab",
-      inModal: true,
-      when: function () { return !!_root && !_root.classList.contains("hidden"); },
-      handler: function (e, combo) {
-        var n = parseInt(combo, 10);
-        if (!_tabsEl || isNaN(n)) return;
-        var btns = _tabsEl.querySelectorAll(".settings-tab");
-        var btn = btns[n - 1];
-        if (btn) btn.click();
-      }
-    }]);
+    window.ClipgenHotkeys.register([
+      {
+        id: "settings.tab",
+        inModal: true,
+        when: _isModalOpen,
+        handler: function (e, combo) {
+          var n = parseInt(combo, 10);
+          if (!_tabsEl || isNaN(n)) return;
+          var btns = _tabsEl.querySelectorAll(".settings-tab");
+          var btn = btns[n - 1];
+          if (btn) btn.click();
+        }
+      },
+      { id: "settings.cyclePrev", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(-1); } },
+      { id: "settings.cycleNext", inModal: true, when: _isModalOpen, handler: function () { _cycleTab(1); } }
+    ]);
   }
 
   window.openSettingsModal = function (options) {
