@@ -30,16 +30,16 @@
     <!-- Undo / redo: the cut-edit stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
          state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
     <button id="coUndoBtn" class="btn btn-small co-icon-btn" type="button" disabled
-            data-hotkey="edit.undo" aria-label="Undo" title="Undo (⌘Z)">
+            data-hotkey="edit.undo" aria-label="Undo" title="Undo">
       <span class="co-btn-icon co-icon-undo" aria-hidden="true"></span>
     </button>
     <button id="coRedoBtn" class="btn btn-small co-icon-btn" type="button" disabled
-            data-hotkey="edit.redo" aria-label="Redo" title="Redo (⌘⇧Z)">
+            data-hotkey="edit.redo" aria-label="Redo" title="Redo">
       <span class="co-btn-icon co-icon-redo" aria-hidden="true"></span>
     </button>
     <div class="co-toolbar-spacer"></div>
     <button id="coGenerateBtn" class="btn btn-small btn-primary" type="button" disabled
-            data-hotkey="global.primary" title="Generate clips from all cuts for this participant (G)">Generate clips</button>
+            data-hotkey="global.primary" title="Generate clips from all cuts for this participant">Generate clips</button>
     <button id="coCancelBtn" class="btn btn-small hidden" type="button"
             title="Cancel generation">Cancel</button>
     <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
@@ -57,32 +57,32 @@
            top-left. -->
       <div id="coAnnotateBar" class="hidden" role="toolbar" aria-label="Annotate">
         <button id="coToolSelect" class="co-tool-btn active" type="button"
-                data-tool="select" data-hotkey="composer.toolSelect" title="Select / move annotations (V)">
+                data-tool="select" data-hotkey="composer.toolSelect" title="Select / move annotations">
           <span class="co-btn-icon co-icon-cursor" aria-hidden="true"></span>
         </button>
         <button id="coToolText" class="co-tool-btn" type="button"
-                data-tool="text" data-hotkey="composer.toolText" title="Add text (T). Click the video to place">
+                data-tool="text" data-hotkey="composer.toolText" title="Add text. Click the video to place">
           <span class="co-btn-icon co-icon-text" aria-hidden="true"></span>
         </button>
         <button id="coToolDraw" class="co-tool-btn" type="button"
-                data-tool="draw" data-hotkey="composer.toolDraw" title="Freehand draw (D)">
+                data-tool="draw" data-hotkey="composer.toolDraw" title="Freehand draw">
           <span class="co-btn-icon co-icon-draw" aria-hidden="true"></span>
         </button>
         <button id="coToolRect" class="co-tool-btn" type="button"
-                data-tool="rect" data-hotkey="composer.toolRect" title="Rectangle (U). Drag on the video to place">
+                data-tool="rect" data-hotkey="composer.toolRect" title="Rectangle. Drag on the video to place">
           <span class="co-shape-glyph co-shape-rect" aria-hidden="true"></span>
         </button>
         <button id="coToolEllipse" class="co-tool-btn" type="button"
-                data-tool="ellipse" data-hotkey="composer.toolEllipse" title="Circle (C). Drag on the video to place">
+                data-tool="ellipse" data-hotkey="composer.toolEllipse" title="Circle. Drag on the video to place">
           <span class="co-shape-glyph co-shape-ellipse" aria-hidden="true"></span>
         </button>
         <button id="coToolErase" class="co-tool-btn" type="button"
-                data-tool="erase" data-hotkey="composer.toolErase" title="Eraser (E). Click or drag over annotations">
+                data-tool="erase" data-hotkey="composer.toolErase" title="Eraser. Click or drag over annotations">
           <span class="co-btn-icon co-icon-erase" aria-hidden="true"></span>
         </button>
         <button id="coToolHide" class="co-tool-btn" type="button" aria-pressed="false"
                 data-hotkey="composer.holdHideAnnotations"
-                title="Hide annotations (B — hold to peek, tap to toggle)">
+                title="Hide annotations (hold to peek, tap to toggle)">
           <span class="co-btn-icon co-icon-eye-slash" aria-hidden="true"></span>
         </button>
         <span class="co-toolbar-sep"></span>
@@ -130,7 +130,7 @@
       <!-- One tab per timeline: the Composer cuts plus the three read-only
            marker sources. Every list item seeks the playhead to its in point. -->
       <button id="coCutPanelToggle" type="button" aria-label="Toggle timelines sidebar"
-              aria-expanded="true" title="Collapse / expand timelines (F)" data-hotkey="composer.toggleSidebar"><span class="co-panel-toggle-icon" aria-hidden="true"></span></button>
+              aria-expanded="true" title="Collapse / expand timelines" data-hotkey="composer.toggleSidebar"><span class="co-panel-toggle-icon" aria-hidden="true"></span></button>
       <div class="co-panel-tabs" role="tablist" aria-label="Timeline lists">
         <button class="co-panel-tab active" type="button" role="tab"
                 aria-selected="true" data-tab="cuts">Cuts</button>
@@ -150,17 +150,17 @@
   <section id="coTimelineSection" aria-label="Timeline">
     <div id="coTimelineControls">
       <button id="coPlayBtn" class="btn btn-small btn-icon" type="button" disabled
-              data-hotkey="transport.playPause" aria-label="Play/Pause" title="Play/Pause (Space)">
+              data-hotkey="transport.playPause" aria-label="Play/Pause" title="Play/Pause">
         <span id="coPlayIcon" class="co-btn-icon co-icon-play" aria-hidden="true"></span>
       </button>
       <span id="coTimeLabel" class="co-time">0:00 / 0:00</span>
       <span class="co-toolbar-sep"></span>
       <button id="coSetInBtn" class="btn btn-small btn-icon" type="button" disabled
-              data-hotkey="composer.setIn" title="Set in point at playhead (I)">
+              data-hotkey="composer.setIn" title="Set in point at playhead">
         <span class="co-btn-icon co-icon-in" aria-hidden="true"></span>In
       </button>
       <button id="coSetOutBtn" class="btn btn-small btn-icon" type="button" disabled
-              data-hotkey="composer.setOut" title="Set out point to commit the cut (O)">
+              data-hotkey="composer.setOut" title="Set out point to commit the cut">
         <span class="co-btn-icon co-icon-out" aria-hidden="true"></span>Out
       </button>
       <span id="coPendingInfo" class="co-pending-info" aria-live="polite"></span>
@@ -171,17 +171,17 @@
         <div class="co-lane-checks" role="group" aria-label="Marker sources">
           <label id="coLaneSheet" class="co-lane-check" data-source="sheet"
                  data-hotkey="composer.toggleSource" data-hotkey-combo="0"
-                 title="Toggle Sheet markers (1)">
+                 title="Toggle Sheet markers">
             <input type="checkbox" checked autocomplete="off" tabindex="-1">Sheet
           </label>
           <label id="coLaneScreenspace" class="co-lane-check" data-source="screenspace"
                  data-hotkey="composer.toggleSource" data-hotkey-combo="1"
-                 title="Toggle Screenspace markers (2)">
+                 title="Toggle Screenspace markers">
             <input type="checkbox" checked autocomplete="off" tabindex="-1">Screenspace
           </label>
           <label id="coLaneTranscript" class="co-lane-check" data-source="transcript"
                  data-hotkey="composer.toggleSource" data-hotkey-combo="2"
-                 title="Toggle Transcript markers (3)">
+                 title="Toggle Transcript markers">
             <input type="checkbox" checked autocomplete="off" tabindex="-1">Transcript
           </label>
         </div>
@@ -191,12 +191,12 @@
         <div class="co-lane-checks" role="group" aria-label="Marker media">
           <label id="coThumbsToggle" class="co-lane-check co-media-check"
                  data-hotkey="composer.toggleThumbs"
-                 title="Toggle thumbnail strips on markers and cuts (S)">
+                 title="Toggle thumbnail strips on markers and cuts">
             <input type="checkbox" autocomplete="off" tabindex="-1">Thumbs
           </label>
           <label id="coScrubAudioToggle" class="co-lane-check co-media-check"
                  data-hotkey="composer.toggleScrubAudio"
-                 title="Toggle hover audio scrub + waveform on markers and cuts (W)">
+                 title="Toggle hover audio scrub + waveform on markers and cuts">
             <input type="checkbox" autocomplete="off" tabindex="-1">Scrub
           </label>
         </div>

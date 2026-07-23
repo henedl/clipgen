@@ -35,18 +35,18 @@
          selected <option>, so there's no inline name input. -->
     <button id="wfRenameBlueprint" class="btn btn-small wf-icon-btn" type="button" disabled
             data-hotkey="workflows.renameBlueprint" aria-label="Rename blueprint"
-            data-tooltip="Rename blueprint (⇧E)">
+            data-tooltip="Rename blueprint">
       <span class="wf-btn-icon wf-rename-icon" aria-hidden="true"></span>
     </button>
     <!-- Debounced-autosave status: "Saving…" while the timer is armed, "Saved"
          once the PUT resolves, "Save failed" on error (hub setSaveStatus). -->
     <span id="wfSaveStatus" class="wf-save-status" aria-live="polite"></span>
     <button id="wfNewBlueprint" class="btn btn-small btn-icon" type="button" disabled
-            data-hotkey="workflows.newBlueprint" data-tooltip="New blueprint (⇧N)">
+            data-hotkey="workflows.newBlueprint" data-tooltip="New blueprint">
       <span class="wf-label-icon wf-new-icon" aria-hidden="true"></span>New
     </button>
     <button id="wfDeleteBlueprint" class="btn btn-small btn-icon" type="button" disabled
-            data-hotkey="workflows.deleteBlueprint" data-tooltip="Delete blueprint (⌘⇧⌫)">
+            data-hotkey="workflows.deleteBlueprint" data-tooltip="Delete blueprint">
       <span class="wf-label-icon wf-delete-icon" aria-hidden="true"></span>Delete
     </button>
     <!-- Blueprint JSON import/export live in the TopNav Quick Actions menu;
@@ -55,11 +55,11 @@
     <!-- Undo / redo: the keyboard stack (⌘Z/⌘⇧Z) surfaced as buttons; disabled
          state tracks the hub's _undoStack/_redoStack via syncUndoButtons(). -->
     <button id="wfUndo" class="btn btn-small wf-icon-btn" type="button" disabled
-            data-hotkey="edit.undo" aria-label="Undo" data-tooltip="Undo (⌘Z)">
+            data-hotkey="edit.undo" aria-label="Undo" data-tooltip="Undo">
       <span class="wf-btn-icon wf-undo-icon" aria-hidden="true"></span>
     </button>
     <button id="wfRedo" class="btn btn-small wf-icon-btn" type="button" disabled
-            data-hotkey="edit.redo" aria-label="Redo" data-tooltip="Redo (⌘⇧Z)">
+            data-hotkey="edit.redo" aria-label="Redo" data-tooltip="Redo">
       <span class="wf-btn-icon wf-redo-icon" aria-hidden="true"></span>
     </button>
     <!-- Blueprint controls above stay left-aligned; this flexible spacer pushes
@@ -67,18 +67,18 @@
     <div class="wf-toolbar-spacer"></div>
     <button id="wfCleanUp" class="btn btn-small wf-icon-btn" type="button" disabled
             data-hotkey="workflows.cleanUp" aria-label="Clean up layout"
-            data-tooltip="Auto-arrange the nodes (L)">
+            data-tooltip="Auto-arrange the nodes">
       <span class="wf-btn-icon wf-cleanup-icon" aria-hidden="true"></span>
     </button>
     <button id="wfSnapBtn" class="btn btn-small wf-icon-btn" type="button" disabled
             aria-pressed="false" aria-label="Snap to grid"
             data-hotkey="workflows.toggleSnap"
-            data-tooltip="Snap dragged nodes to the grid and to neighboring cards (⇧G)">
+            data-tooltip="Snap dragged nodes to the grid and to neighboring cards">
       <span class="wf-btn-icon wf-snap-icon" aria-hidden="true"></span>
     </button>
     <button id="wfSaveStash" class="btn btn-small btn-icon" type="button" disabled
             data-hotkey="workflows.stash"
-            data-tooltip="Stash the current selection as a reusable node group — the whole set of nodes on the canvas, or just the few you've selected (⇧S)">
+            data-tooltip="Stash the current selection as a reusable node group — the whole set of nodes on the canvas, or just the few you've selected">
       <span class="wf-label-icon wf-stash-icon" aria-hidden="true"></span>Stash
     </button>
     <div class="wf-run-split">
@@ -118,7 +118,7 @@
     <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
     <button id="wfShortcutsBtn" class="btn btn-small hk-help-btn" type="button"
             data-hotkeys-help data-hotkey="global.cheatsheet"
-            aria-label="Keyboard shortcuts" data-tooltip="Keyboard &amp; mouse shortcuts (?)">
+            aria-label="Keyboard shortcuts" data-tooltip="Keyboard &amp; mouse shortcuts">
       <span class="hk-help-icon" aria-hidden="true"></span>
     </button>
   </header>
@@ -128,7 +128,7 @@
         <span>Nodes</span>
         <button id="wfAddNote" class="btn btn-small wf-icon-btn" type="button" disabled
                 data-hotkey="workflows.addNote" aria-label="Add sticky note"
-                data-tooltip="Add a sticky note to the canvas (N)">
+                data-tooltip="Add a sticky note to the canvas">
           <span class="wf-btn-icon wf-note-icon" aria-hidden="true"></span>
         </button>
       </div>
@@ -187,10 +187,10 @@
             </button>
             <button id="wfZoomLevel" class="btn btn-small wf-zoom-level" type="button"
                     data-hotkey="workflows.zoomReset"
-                    data-tooltip="Reset zoom to 100% (0)">100%</button>
+                    data-tooltip="Reset zoom to 100%">100%</button>
             <button id="wfMinimapFit" class="btn btn-small wf-icon-btn" type="button"
                     data-hotkey="workflows.fitView"
-                    aria-label="Fit all nodes in view" data-tooltip="Fit all nodes in view (F)">
+                    aria-label="Fit all nodes in view" data-tooltip="Fit all nodes in view">
               <span class="wf-btn-icon wf-fit-icon" aria-hidden="true"></span>
             </button>
           </div>
