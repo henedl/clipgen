@@ -1,9 +1,10 @@
 import json
-from pathlib import Path
 
 import viewer
 
-_VIEWER_JS = Path(__file__).resolve().parent.parent / "assets" / "web" / "viewer.js"
+from _frontend_source import WEB
+
+_VIEWER_JS = WEB / "viewer.js"
 
 
 def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):

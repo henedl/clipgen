@@ -2,8 +2,7 @@
 """Tests for the programmatic friction scorer (friction.py).
 
 Pure deterministic engine — no Ollama, no I/O. Covers phrase matching per
-category, the score formula, candidate selection, stats aggregation, and
-rolling-window smoothing.
+category, the score formula, candidate selection, and stats aggregation.
 """
 
 import config
@@ -139,18 +138,3 @@ class TestComputeStats:
         stats = friction.compute_stats(scored, duration_seconds=0.0)
         assert stats["markers_per_minute"] == 0.0
         assert stats["total_markers"] == 2
-
-
-class TestSmoothScores:
-    def test_centered_window_with_edges(self):
-        scored = [{"score": s} for s in [0.0, 1.0, 0.0, 0.0, 0.0]]
-        smoothed = friction.smooth_scores(scored, window=3)
-        assert smoothed == [0.5, 0.3333, 0.3333, 0.0, 0.0]
-
-    def test_window_one_returns_raw(self):
-        scores = [0.1, 0.7, 0.4]
-        scored = [{"score": s} for s in scores]
-        assert friction.smooth_scores(scored, window=1) == scores
-
-    def test_empty_input(self):
-        assert friction.smooth_scores([], window=5) == []

@@ -1,9 +1,11 @@
 # LOC-reduction opportunities — plan
 
-Status: **in progress** (2026-07-01). Items **1 (1a + 1b)**, **2**, **3**, and **4** landed (see
-check-marks below); item **5** still open. Investigation targets for genuinely *reducing* total
-lines of code (not relocating them). Each item is sized as one or more focused `refactor:`
-commits. Check items off and add a "Done" note as they land (per AGENTS.md plan-maintenance rule).
+Status: **pass 1 complete; pass 2 in progress** (2026-07-23). Items **1 (1a + 1b)**, **2**, **3**,
+**4**, and **5** are closed (see check-marks below); a second sweep (three parallel exploration
+agents over Python / JS / CSS+tests) found the remaining items tracked in **Pass 2** at the bottom.
+Investigation targets for genuinely *reducing* total lines of code (not relocating them). Each
+item is sized as one or more focused `refactor:` commits. Check items off and add a "Done" note
+as they land (per AGENTS.md plan-maintenance rule).
 
 ## Framing
 
@@ -135,17 +137,100 @@ The CSS audit flagged more repeated blocks across the page stylesheets:
 `PERFORMANCE.md` notes the "load-on-startup, save-after-mutation" JSON-manifest shape recurs for
 clipgen / screenspace / transcripts / workflows / stashes / settings.
 
-- [ ] **5. Audit whether the manifest implementations are truly parallel.** If so, a small
-  load/save helper could dedup them. **Confirm they're not subtly different first** — manifests have
-  different schemas and mutation semantics; only the I/O envelope is a candidate, and forcing a
-  shared abstraction over diverging shapes would be net-negative.
+- [x] **5. Audit whether the manifest implementations are truly parallel.** — **Investigated &
+  closed (2026-07-23): not duplication.** All manifest loaders already delegate to
+  `utils.load_json_manifest`/`save_json_manifest`; the per-domain wrappers each add genuinely
+  distinct logic (transcripts mtime-cache, workflows key-backfill + trigger sanitize, screenspace
+  binary-strip). No shared abstraction to extract.
 
 ## Suggested order
 
 1. ~~**1a** (response helpers — biggest, safest win).~~ ✓ 2. ~~**1b** + **2** (decorator + arg
    parsing, building on 1a).~~ ✓ 3. ~~**3a/3b** (JS dedup; 3c descoped — factories already
    shared).~~ ✓ 4. ~~**4** (CSS `.cg-menu` + `.cg-scroll-thin`; icon/badge descoped).~~ ✓
-   5. **5** only after the investigation confirms it's worthwhile.
+   5. ~~**5** only after the investigation confirms it's worthwhile.~~ ✓ (closed, not worthwhile)
 
 Quantify before committing to a tier: a duplication scan (jscpd for JS/CSS, a `pylint`-style
 duplicate-code pass for Python) would put hard block counts behind each item.
+
+---
+
+# Pass 2 (2026-07-23)
+
+Second sweep after items 1–5 closed. Scope decision: mechanical **test-suite** dedup that
+preserves every case/assertion is now in scope (supersedes the "Do NOT chase the test suite" note
+above — parametrize/shared-helper refactors keep the guard rails, they only remove boilerplate).
+
+## A. Mechanical dedup (safe)
+
+- [x] **A1. `readNDJSONStream` → `utils.js`.** — **Done.** Byte-identical copies deleted from
+  `studio.js` and `composer.js`; single ambient definition in `utils.js` (non-IIFE, inlined into
+  exports). The `STUDIO.readNDJSONStream` export/import pair is gone;
+  `test_studio_frontend_source.py` now asserts the utils.js definition + no raw `.getReader()`
+  in studio sources. (~−50)
+- [x] **A2. Delete dead `server._resolve_source_video`.** — **Done.** Zero callers. (~−5)
+- [x] **A3. `viewer._sanitize_event_metadata` → `utils.sanitize_floats`.** — **Done.** The viewer
+  helper was a strict subset (sanitize_floats also normalizes numpy scalars — more correct for
+  screenspace-derived events); `import math` dropped too. (~−12)
+- [x] **A4. Screenspace task-binary-strip dedup.** — **Done.** One `TASK_BINARY_KEYS` +
+  `strip_task_param_binaries()` in `screenspace_manifest.py` (re-exported via the facade), used
+  by both `save_screenspace_manifest` and `screenspace_server._clean_task`. (~−25)
+
+## B. Test-suite boilerplate dedup (all cases/assertions preserved)
+
+- [x] **B1. Parametrize `test_cli_screenspace_args.py`** — **Done (−37).** Argv-parse cluster
+  (7 cases), flag-conflict exits (2), mode-conflict exits (3), scene-ref/conversion valid+raises
+  (8) collapsed into 5 parametrized tests; all 49 original cases preserved (same test count).
+  **Learning:** ruff-format's one-element-per-line list expansion eats most parametrize savings —
+  the win only materialized after expressing each argv case as a single space-split string.
+  Estimates for parametrize refactors here must be made against *formatted* code.
+- [x] **B2. Shared `tests/_frontend_source.py`** — **Done (~−45).** `WEB`, `concat_js(prefix)`,
+  `read(name)`, `strip_comments`, `assert_es5` adopted across the 11 frontend source-test files.
+- [x] **B3. `SheetContext` builder in `conftest.py`** — **Done (~−55).** Plain
+  `make_sheet_context()` helper (not a fixture; imported `from conftest import ...`); the
+  `test_selectors` / `test_files_and_artifacts` copies deleted outright (all call sites pass by
+  keyword), `test_spreadsheet_generation` keeps its thin sheet/cells-defaults wrapper.
+- [x] **B4 (stretch). Blueprint-client fixture envelope** — **Skipped (investigated).** The
+  shareable envelope is only ~3 lines/file (Flask app + register_blueprint + test_client); the
+  fixture bulk is genuinely per-module seed state interleaved between construction and yield.
+  ~10 real lines against a new abstraction with teardown subtleties — not worth it.
+
+## C. Medium-risk dedup (needs browser check)
+
+- [x] **C1. `.cg-modal-overlay` in `tokens.css`** — **Done (~−15), 4 adopters not 5.** The
+  fixed/inset-0/flex-center/z-modal shell adopted by screenspace `.modal-overlay`, transcripts
+  `.modal` (×2 modals), workflows `.wf-dialog-overlay`, and `.settings-overlay`; backdrop stays
+  per-page. **`.hk-overlay` excluded** — hotkeys.css is inlined into exported viewers where
+  tokens.css is stripped, so it must stay self-contained (its header says so). Unlike `.cg-menu`
+  this primitive sets `display: flex`; each adopter's hide mechanism out-cascades it
+  (screenspace `.hidden !important`; the others use compound `.x.hidden` rules).
+  Browser-checked (2026-07-23): all four modals open/close correctly.
+- [x] **C2. `createSeekCoalescer` in `utils.js`** — **Done (~−55).** The pending-seek /
+  loadedmetadata-deferral / RAF-coalesce scaffolding moved to a utils.js factory
+  (`getVideo`/`onDeferred`/`applySeek` hooks keep the page differences: transcripts re-dispatches
+  through `seekVideo` and auto-plays after a seek write; composer stays paused).
+  `cancelPendingSeek`/`seekLocal`/`_seekLocal` remain as thin wrappers so all call sites and the
+  `TS.cancelPendingSeek` publication are unchanged. viewer.js's partial third instance left
+  as-is (structurally divergent). Browser-checked (2026-07-23): scrub + part switching good;
+  the seek-before-metadata deferral path is impractical to trigger manually and rests on the
+  scaffolding being a verbatim logic move.
+
+## D. Owner-decision deletions
+
+- [x] **D1. `viewer.load_manifest_reels` / `friction.smooth_scores`** — **Both deleted (~−40).**
+  `load_manifest_reels` was a 3-line convenience over `load_manifest_both` used only by
+  `test_manifest.py` (call sites switched to `load_manifest_both()[1]`; the empty-file test now
+  asserts on `load_manifest_both`). `smooth_scores` was never wired to a route — the transcripts
+  timeline band does its own smoothing client-side in `transcripts-video.js` (EMA over the shared
+  friction state), so the Python rolling mean was duplicate intent; its `TestSmoothScores` class
+  went with it and the friction.py / ARCHITECTURE.md docs now point at the client-side smoothing.
+
+## Pass-2 dead ends (verified, don't re-chase)
+
+Delegator loop-generation (blocked: `test_frontend_satellite_wiring.py` requires literal
+`function NAME` text); theme-toggle CSS dedup (gallery/viewer copies must survive export
+stripping); `confirm()` y/n helper (case-sensitivity semantics diverge between interactive.py
+and clipgen.py); config.py dead settings (none — all referenced); unused imports (ruff-clean);
+facade compression (re-export contract); ffmpeg builder sharing (flags genuinely diverge);
+CSS dead-selector hunt (dynamic class names defeat grep); `dev-token-tweak.js` (dev-only,
+export-stripped); big-hub copy-paste blocks (none found).

@@ -8,9 +8,10 @@ namespace hygiene).
 """
 
 import re
-from pathlib import Path
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
+from _frontend_source import WEB as _WEB
+from _frontend_source import assert_es5
+
 OVERVIEW_HTML = _WEB / "overview.html"
 
 
@@ -231,9 +232,4 @@ def test_hidden_utility_class_defined():
 def test_es5_discipline_in_overview_sources():
     """House style: no arrows / async-await in the Overview page scripts."""
     for path in _overview_js_files():
-        src = path.read_text(encoding="utf-8")
-        assert "=>" not in src, f"{path.name} uses an arrow function"
-        # `img.decoding = "async"` is a DOM property, not the keyword.
-        assert not re.search(r"\basync function\b|\bawait\s", src), (
-            f"{path.name} uses async/await"
-        )
+        assert_es5(path.read_text(encoding="utf-8"), path.name)

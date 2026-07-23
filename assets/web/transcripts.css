@@ -1736,16 +1736,10 @@ body {
   color: var(--accent-fg);
 }
 
-/* Modal */
+/* Modal — shell comes from .cg-modal-overlay (tokens.css). */
 
 .modal {
-  position: fixed;
-  inset: 0;
   background: var(--color-backdrop);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
 }
 
 .modal.hidden {

@@ -1,33 +1,10 @@
 import pytest
 
 import spreadsheet
-from spreadsheet import SheetContext
 from types import SimpleNamespace
 
+from conftest import make_sheet_context as _make_context
 from utils import ClipRecord
-
-
-def _make_context(
-    sheet_data,
-    id_cell,
-    observation_cell,
-    category_cell,
-    num_participants=1,
-    study_name="study",
-    baseline_row_idx=None,
-    filename_row_idx=None,
-):
-    """Helper to build a SheetContext for tests."""
-    return SheetContext(
-        sheet_data=sheet_data,
-        id_cell=id_cell,
-        observation_cell=observation_cell,
-        category_cell=category_cell,
-        num_participants=num_participants,
-        study_name=study_name,
-        baseline_row_idx=baseline_row_idx,
-        filename_row_idx=filename_row_idx,
-    )
 
 
 def test_parse_reel_input_parses_mixed_selectors():

@@ -3978,16 +3978,11 @@ body.panel-dragging #bottomPanel {
   text-align: center;
 }
 
-/* Modal */
+/* Modal — shell comes from .cg-modal-overlay (tokens.css); .hidden (!important)
+   handles the toggle. */
 
 .modal-overlay {
-  position: fixed;
-  inset: 0;
   background: var(--color-backdrop);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
 }
 
 .modal-card {

@@ -1149,6 +1149,95 @@ var createSSEStream = function (url, opts) {
   return es;
 };
 
+// ---- NDJSON streaming reader ----
+// Drain a fetch Response body line-by-line, calling onLine(trimmedLine) for each
+// non-empty newline-delimited chunk. Returns a Promise that resolves when the
+// stream is fully drained. Guards against responses without a streamable body
+// (e.g. older browsers, or unexpected non-streaming responses that the caller
+// should have caught with response.ok before reaching here).
+var readNDJSONStream = function (response, onLine) {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    return Promise.reject(new Error("Streaming response not supported"));
+  }
+  var reader = response.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = "";
+  function pump() {
+    return reader.read().then(function (result) {
+      if (result.done) {
+        if (buffer.trim()) onLine(buffer.trim());
+        return;
+      }
+      buffer += decoder.decode(result.value, { stream: true });
+      var lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].trim()) onLine(lines[i].trim());
+      }
+      return pump();
+    });
+  }
+  return pump();
+};
+
+// ---- Video seek coalescer ----
+// Shared scaffolding for pages that seek a <video> from rapid-fire UI events
+// (scrub drags, timeline clicks): while metadata is not loaded (readyState < 1)
+// the seek is deferred onto loadedmetadata; otherwise bursts are RAF-coalesced
+// into one seek per frame. Page behavior stays at the call site via the hooks:
+//   getVideo()          — the page's <video> element (or null)
+//   onDeferred(t)       — re-dispatch after metadata arrives (page seek entry)
+//   applySeek(video, t) — the actual seek write for the RAF path
+var createSeekCoalescer = function (getVideo, onDeferred, applySeek) {
+  var pendingTime = null;
+  var raf = 0;
+  var listener = null;
+  return {
+    cancel: function () {
+      var video = getVideo();
+      pendingTime = null;
+      cancelAnimationFrame(raf);
+      raf = 0;
+      if (listener) {
+        if (video) video.removeEventListener("loadedmetadata", listener);
+        listener = null;
+      }
+    },
+    seek: function (time) {
+      var video = getVideo();
+      if (!video || !video.src) return;
+      // Remove any previous deferred-seek listener.
+      if (listener) {
+        video.removeEventListener("loadedmetadata", listener);
+        listener = null;
+      }
+      // Metadata not loaded yet: defer the seek until it is.
+      if (video.readyState < 1) {
+        pendingTime = time;
+        listener = function () {
+          video.removeEventListener("loadedmetadata", listener);
+          listener = null;
+          var t = pendingTime;
+          pendingTime = null;
+          if (t !== null) onDeferred(t);
+        };
+        video.addEventListener("loadedmetadata", listener);
+        return;
+      }
+      // Coalesce rapid seeks into one write per animation frame.
+      pendingTime = time;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(function () {
+        var t = pendingTime;
+        pendingTime = null;
+        raf = 0;
+        if (t === null) return;
+        applySeek(video, t);
+      });
+    },
+  };
+};
+
 // ---- Blocking modal lifecycle (Escape / backdrop / optional focus trap) ----
 // Shared lifecycle for blocking overlays: closes on Escape, optionally on
 // backdrop click, optionally traps Tab/Shift+Tab inside the overlay and restores

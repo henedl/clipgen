@@ -3,9 +3,10 @@ from types import SimpleNamespace
 import pytest
 
 import spreadsheet
-from spreadsheet import SheetContext
 import files
 import utils
+
+from conftest import make_sheet_context
 
 
 def _make_cells():
@@ -37,18 +38,17 @@ def _make_context(
     baseline_row_idx=None,
     filename_row_idx=None,
 ):
-    """Helper to build a SheetContext for tests."""
+    """Build a SheetContext defaulting to this file's basic sheet + cells."""
     if sheet_data is None:
         sheet_data = _basic_sheet_data()
     if cells is None:
         cells = _make_cells()
-    return SheetContext(
+    return make_sheet_context(
         sheet_data=sheet_data,
         id_cell=cells.id_cell,
         observation_cell=cells.observation_cell,
         category_cell=cells.category_cell,
         num_participants=num_participants,
-        study_name="study",
         baseline_row_idx=baseline_row_idx,
         filename_row_idx=filename_row_idx,
     )

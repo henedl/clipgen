@@ -1,20 +1,16 @@
 """Static regression checks for Studio frontend sources."""
 
-from pathlib import Path
+from _frontend_source import WEB as _WEB
+from _frontend_source import concat_js
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
 STUDIO_CSS = _WEB / "studio.css"
 STUDIO_HTML = _WEB / "studio.html"
 
 
 def _studio_js() -> str:
-    # Studio is a hub (studio.js) + feature satellites (studio-*.js). Concatenate
-    # all of them so assertions stay valid wherever a function lives. Satellites
-    # sort before the hub ("-" < "."), so each src.index(a)..src.index(b) slice
-    # below still resolves within the single file that owns both anchors.
-    return "".join(
-        p.read_text(encoding="utf-8") for p in sorted(_WEB.glob("studio*.js"))
-    )
+    # Studio is a hub (studio.js) + feature satellites (studio-*.js): read the
+    # whole group so assertions stay valid wherever a function lives.
+    return concat_js("studio")
 
 
 def test_studio_selection_requires_valid_timestamp_cells():
@@ -84,16 +80,18 @@ def test_on_cancel_generate_aborts_and_posts_intake_cancel():
 # ---- Task 3: studio streaming, selectors, finishBranch ----
 
 
-def test_studio_defines_shared_ndjson_reader():
-    """One shared NDJSON helper guards response.body and is reused by the
-    sheet/intake/reel readers (the three sites used to duplicate the loop)."""
-    src = _studio_js()
-    assert "function readNDJSONStream(response, onLine)" in src
+def test_studio_uses_shared_ndjson_reader():
+    """The shared NDJSON helper lives in utils.js (also used by Composer) and is
+    reused by the sheet/intake/reel readers (the three sites used to duplicate
+    the loop); Studio must not grow a local copy back."""
+    utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert "var readNDJSONStream = function (response, onLine)" in utils_src
     # response.body guard
-    assert "if (!response.body" in src
-    # The duplicated raw .getReader() blocks should be gone (only the helper
-    # itself calls it). Allow the helper to be the sole getReader site.
-    assert src.count("response.body.getReader()") == 1
+    assert "if (!response.body" in utils_src
+    src = _studio_js()
+    # The duplicated raw .getReader() blocks should be gone (only the utils.js
+    # helper calls it).
+    assert "response.body.getReader()" not in src
     # Used by all three streaming endpoints.
     assert "readNDJSONStream(response, handleLine).then(finishBranch)" in src
     assert "readNDJSONStream(response, handleIntakeLine).then(finishBranch)" in src

@@ -108,12 +108,6 @@ _VALID_STEP_TYPES = (
     "flow",
     "scene",
 )
-_TASK_BINARY_KEYS = (
-    "reference_frame",
-    "template_image",
-    "template_mask",
-    "reference_scenes",
-)
 
 
 def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
@@ -2706,16 +2700,9 @@ def _clean_task(task: dict[str, Any]) -> dict[str, Any]:
     """
     cleaned = {k: v for k, v in task.items() if not k.startswith("_")}
     if "parameters" in cleaned:
-        cleaned["parameters"] = {
-            k: v for k, v in cleaned["parameters"].items() if k not in _TASK_BINARY_KEYS
-        }
-        # Strip binary data and internal coords from multitool step parameters
-        if "steps" in cleaned["parameters"]:
-            _step_strip_keys = _TASK_BINARY_KEYS + ("region_coords",)
-            cleaned["parameters"]["steps"] = [
-                {k: v for k, v in s.items() if k not in _step_strip_keys}
-                for s in cleaned["parameters"]["steps"]
-            ]
+        cleaned["parameters"] = screenspace.strip_task_param_binaries(
+            cleaned["parameters"]
+        )
     return utils.sanitize_floats(cleaned)
 
 

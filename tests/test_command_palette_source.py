@@ -8,11 +8,11 @@ references, CSS toggle completeness, the summon-chord shape).
 """
 
 import re
-from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent.parent
-_WEB = _ROOT / "assets" / "web"
-_ICONS = _ROOT / "assets" / "icons"
+from _frontend_source import WEB as _WEB
+from _frontend_source import assert_es5, strip_comments
+
+_ICONS = _WEB.parent / "icons"
 
 PALETTE_JS = _WEB / "command-palette.js"
 PALETTE_CSS = _WEB / "command-palette.css"
@@ -27,24 +27,15 @@ HUB_PAGES = {
 }
 
 
-def _strip_comments(src: str) -> str:
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    return re.sub(r"^\s*//.*$", "", src, flags=re.M)
-
-
 def test_es5_discipline():
     """House style: no arrows / async-await in the palette module."""
-    src = PALETTE_JS.read_text(encoding="utf-8")
-    assert "=>" not in src, "command-palette.js uses an arrow function"
-    assert not re.search(r"\basync function\b|\bawait\s", src), (
-        "command-palette.js uses async/await"
-    )
+    assert_es5(PALETTE_JS.read_text(encoding="utf-8"), "command-palette.js")
 
 
 def test_iife_with_single_namespace():
     """Must stay an IIFE (keeps it out of the wiring test's ambient-global
     scan) exposing exactly the ClipgenCommandPalette namespace."""
-    src = _strip_comments(PALETTE_JS.read_text(encoding="utf-8")).strip()
+    src = strip_comments(PALETTE_JS.read_text(encoding="utf-8")).strip()
     assert src.startswith("(function"), "command-palette.js must be an IIFE"
     assert "window.ClipgenCommandPalette =" in src
 

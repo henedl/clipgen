@@ -641,7 +641,7 @@
 
   function openDialog(opts) {
     if (!_dialogOverlay) {
-      _dialogOverlay = el("div", "wf-dialog-overlay hidden");
+      _dialogOverlay = el("div", "wf-dialog-overlay cg-modal-overlay hidden");
       _dialogOverlay.appendChild(el("div", "wf-dialog"));
       document.body.appendChild(_dialogOverlay);
     }

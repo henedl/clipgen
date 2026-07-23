@@ -72,3 +72,35 @@ def fake_sheet_meta():
         observation_cell=SimpleNamespace(row=2, col=4),
         category_cell=SimpleNamespace(row=2, col=5),
     )
+
+
+def make_sheet_context(
+    sheet_data,
+    id_cell,
+    observation_cell,
+    category_cell=None,
+    num_participants=2,
+    study_name="study",
+    baseline_row_idx=None,
+    filename_row_idx=None,
+):
+    """Build a SheetContext with test-friendly defaults.
+
+    Plain helper, not a fixture — import with
+    ``from conftest import make_sheet_context`` (call sites pass everything by
+    keyword). ``category_cell=None`` defaults to a header on the ID row, col 5.
+    """
+    from spreadsheet import SheetContext
+
+    if category_cell is None:
+        category_cell = SimpleNamespace(row=id_cell.row, col=5)
+    return SheetContext(
+        sheet_data=sheet_data,
+        id_cell=id_cell,
+        observation_cell=observation_cell,
+        category_cell=category_cell,
+        num_participants=num_participants,
+        study_name=study_name,
+        baseline_row_idx=baseline_row_idx,
+        filename_row_idx=filename_row_idx,
+    )

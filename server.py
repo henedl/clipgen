@@ -529,12 +529,6 @@ def _resolve_participant_sources(participant: str) -> list[Path]:
     )
 
 
-def _resolve_source_video(participant: str) -> Path | None:
-    """Return the first source-video path for a participant, or None."""
-    sources = _resolve_participant_sources(participant)
-    return sources[0] if sources else None
-
-
 # ---- API endpoints ----
 
 

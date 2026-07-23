@@ -13,7 +13,7 @@
 | [transcripts_server.py](transcripts_server.py) | Transcripts Flask blueprint and thinking-agent orchestrator: `_next_eligible_agent()`, `_run_agent()`, `_run_agent_chain()`, `_agent_in_flight` tracking, REST endpoints |
 | [ollama_client.py](ollama_client.py) | Ollama HTTP transport: `is_available()`, `list_models()`, `generate()`, auto-start of `ollama serve`. Pure transport. No prompt or response-parsing logic lives here. |
 | [thinking_agents.py](thinking_agents.py) | Registry of Ollama-powered "thinking agents" that reason over transcripts (summary, citations, friction). Owns prompt assembly, model selection, response parsing, and the `AGENTS` list. Default prompt **text** lives in `config.py` as `OLLAMA_*_PROMPT`/`OLLAMA_*_SYSTEM` settings (user-editable in Settings → Summaries) and is read at call time. New agents are added by appending an `Agent` entry. No orchestrator edits needed. |
-| [friction.py](friction.py) | Pure deterministic friction scorer: compiled phrase patterns across six categories, per-segment score/markers, candidate selection, session stats, rolling-window smoothing. No Ollama/I/O. The LLM refinement (`find_friction_moments`, `_run_friction`) lives in thinking_agents.py. |
+| [friction.py](friction.py) | Pure deterministic friction scorer: compiled phrase patterns across six categories, per-segment score/markers, candidate selection, session stats (the timeline heatmap's rolling-window smoothing is client-side, in `transcripts-video.js`). No Ollama/I/O. The LLM refinement (`find_friction_moments`, `_run_friction`) lives in thinking_agents.py. |
 | [titlecards.py](titlecards.py) | Titlecard/endcard generation: `build_titlecard_frame()`, `build_endcard_frame()`, `wrap_clip_with_cards()`. Prepends a title card and appends an endcard in a single FFmpeg encode pass |
 | [files.py](files.py) | Filename handling (unique names, truncation), `prepare_clip()` (parse timestamps + annotations, sanitize desc/category), clip discovery for reel-late |
 | [utils.py](utils.py) | Timestamp parsing, cell/header annotation parsing, rich/plain output helpers, progress bar utilities, keyword-aware input helpers |
@@ -74,7 +74,7 @@ Opt-in via `--composer`; no spreadsheet required. Served at `/composer/` by the 
 
 ## Artifact Manifest ([viewer.py](viewer.py))
 
-Opt-in via `--manifest` or `config.MANIFEST_ENABLED`. Writes `clipgen_manifest.json` alongside artifacts. Key functions: `save_manifest`, `load_manifest_artifacts`, `load_manifest_reels`. Consumed by `--regenerate` and standalone `--viewer`.
+Opt-in via `--manifest` or `config.MANIFEST_ENABLED`. Writes `clipgen_manifest.json` alongside artifacts. Key functions: `save_manifest`, `load_manifest_artifacts`, `load_manifest_both` (reels are its second return value). Consumed by `--regenerate` and standalone `--viewer`.
 
 ## Transcription ([transcripts.py](transcripts.py))
 

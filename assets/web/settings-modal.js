@@ -126,7 +126,7 @@
   function _buildDom() {
     if (_root) return;
 
-    var overlay = el("div", "settings-overlay hidden");
+    var overlay = el("div", "settings-overlay cg-modal-overlay hidden");
     overlay.id = "settingsOverlay";
 
     var panel = el("div", "settings-panel");

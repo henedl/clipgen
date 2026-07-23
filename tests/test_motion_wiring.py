@@ -7,9 +7,9 @@ retired (so a refactor can't silently drop the script tag or resurrect two
 parallel animation systems).
 """
 
-from pathlib import Path
+from _frontend_source import WEB as _WEB
+from _frontend_source import concat_js
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
 MOTION_JS = _WEB / "motion.js"
 
 
@@ -57,9 +57,7 @@ def test_motion_wired_at_mutation_sites():
     # Studio's mutation sites are spread across the hub + its satellites (the
     # stash sites live in studio-stash.js), so read the whole studio*.js group —
     # same convention as test_studio_frontend_source.py.
-    studio = "\n".join(
-        p.read_text(encoding="utf-8") for p in sorted(_WEB.glob("studio*.js"))
-    )
+    studio = concat_js("studio")
     ss_overlay = (_WEB / "screenspace-overlay-interaction.js").read_text(
         encoding="utf-8"
     )

@@ -5,13 +5,8 @@
  * that includes settings-modal.js.
  */
 
+/* Shell (fixed/centered/z-modal) comes from .cg-modal-overlay (tokens.css). */
 .settings-overlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
   /* Backdrop blur + dark veil are animated via these custom props on the
    * overlay root; the ::before pseudo paints them. Mirrors start-overlay. */
   --host-blur: 0px;

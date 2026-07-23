@@ -3358,36 +3358,6 @@
 
   var setButtonProgress = ClipgenPrimitives.setButtonProgress;
 
-  // Shared NDJSON streaming reader used by generate/intake/reel fetches.
-  // Returns a Promise that resolves when the stream is fully drained. Guards
-  // against responses without a streamable body (e.g. older browsers, or
-  // unexpected non-streaming responses that the caller should have caught
-  // with response.ok before reaching here).
-  function readNDJSONStream(response, onLine) {
-    if (!response.body || typeof response.body.getReader !== "function") {
-      return Promise.reject(new Error("Streaming response not supported"));
-    }
-    var reader = response.body.getReader();
-    var decoder = new TextDecoder();
-    var buffer = "";
-    function pump() {
-      return reader.read().then(function (result) {
-        if (result.done) {
-          if (buffer.trim()) onLine(buffer.trim());
-          return;
-        }
-        buffer += decoder.decode(result.value, { stream: true });
-        var lines = buffer.split("\n");
-        buffer = lines.pop();
-        for (var i = 0; i < lines.length; i++) {
-          if (lines[i].trim()) onLine(lines[i].trim());
-        }
-        return pump();
-      });
-    }
-    return pump();
-  }
-
   function createPulserOverlay() {
     var overlay = el("div", "card-gen-overlay");
     // Intentional inline SVG (icon convention exception): a three-dot "generating" pulse animation, not an icon.
@@ -4791,13 +4761,12 @@
   STUDIO.ssClearPending = ssClearPending;
   STUDIO.kbPaintCursor = kbPaintCursor;
 
-  // Hub → studio-generate.js: the card painters + readNDJSONStream (shared with
-  // the reel/build path), the artifact-status/result helpers, and the shared
-  // elapsed-time trackers the Generate flow drives.
+  // Hub → studio-generate.js: the card painters (shared with the reel/build
+  // path), the artifact-status/result helpers, and the shared elapsed-time
+  // trackers the Generate flow drives.
   STUDIO.setArtifactGenerating = setArtifactGenerating;
   STUDIO.showResult = showResult;
   STUDIO.revealStatusOverlay = revealStatusOverlay;
-  STUDIO.readNDJSONStream = readNDJSONStream;
   STUDIO.setCardQueued = setCardQueued;
   STUDIO.clearCardStatus = clearCardStatus;
   STUDIO.setCardResult = setCardResult;

@@ -588,6 +588,23 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
   z-index: var(--z-dropdown);
 }
 
+/* Centered blocking-modal overlay shell — shared across pages. Add ALONGSIDE a
+   page-local class that owns the backdrop color and the show/hide toggle, e.g.
+   class="wf-dialog-overlay cg-modal-overlay". Unlike .cg-menu this DOES set
+   `display: flex`, so each adopter's hide mechanism must out-cascade it: a
+   compound rule (.modal.hidden) or an !important .hidden utility both do; a
+   bare later-loading .hidden also works (equal specificity, page CSS loads
+   after tokens.css). NOT for hotkeys.css/gallery/viewer overlays — those ship
+   in exported HTML where tokens.css is stripped, and stay self-contained. */
+.cg-modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+}
+
 /* Thin custom scrollbar — theme-aware thumb (adapts to light mode via --border).
    Apply to any overflow container that wants the slim 6px scrollbar. */
 .cg-scroll-thin {

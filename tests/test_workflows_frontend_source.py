@@ -5,17 +5,15 @@ satellites (workflows-canvas / -wires / -nodes / -runs / -stashes) in later
 milestones — mirroring tests/test_studio_frontend_source.py.
 """
 
-from pathlib import Path
+from _frontend_source import WEB as _WEB
+from _frontend_source import concat_js
 
-_WEB = Path(__file__).resolve().parent.parent / "assets" / "web"
 WORKFLOWS_HTML = _WEB / "workflows.html"
 WORKFLOWS_CSS = _WEB / "workflows.css"
 
 
 def _workflows_js() -> str:
-    return "".join(
-        p.read_text(encoding="utf-8") for p in sorted(_WEB.glob("workflows*.js"))
-    )
+    return concat_js("workflows")
 
 
 def test_hub_publishes_namespace_and_state():

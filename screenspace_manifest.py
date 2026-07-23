@@ -27,7 +27,32 @@ TASK_STATUS_FAILED = "failed"
 TASK_STATUS_CANCELLED = "cancelled"
 TASK_STATUS_PAUSED = "paused"
 
+# Task parameter keys carrying binary payloads (base64 frames/templates) that
+# must never reach the manifest on disk or JSON API responses.
+TASK_BINARY_KEYS = (
+    "reference_frame",
+    "template_image",
+    "template_mask",
+    "reference_scenes",
+)
+
 _SENTINEL = object()
+
+
+def strip_task_param_binaries(params: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of task ``parameters`` without binary payloads
+    (``TASK_BINARY_KEYS``), also stripping binaries + internal ``region_coords``
+    from multitool ``steps``. Shared by manifest writes and API responses
+    (``screenspace_server._clean_task``)."""
+    params = {k: v for k, v in params.items() if k not in TASK_BINARY_KEYS}
+    if "steps" in params:
+        step_strip_keys = TASK_BINARY_KEYS + ("region_coords",)
+        params["steps"] = [
+            {k: v for k, v in s.items() if k not in step_strip_keys}
+            for s in params["steps"]
+        ]
+    return params
+
 
 # OpenCV-style HSV hue buckets (h in 0-179, wraparound at 180) for color-task
 # names. Each entry is (upper_bound_exclusive, name); red owns both ends.
@@ -245,22 +270,7 @@ def save_screenspace_manifest(
     for task in tasks:
         ct = {k: v for k, v in task.items() if not k.startswith("_")}
         if "parameters" in ct:
-            _binary_keys = (
-                "reference_frame",
-                "template_image",
-                "template_mask",
-                "reference_scenes",
-            )
-            ct["parameters"] = {
-                k: v for k, v in ct["parameters"].items() if k not in _binary_keys
-            }
-            # Strip binary data and internal coords from multitool step parameters
-            if "steps" in ct["parameters"]:
-                _step_strip_keys = _binary_keys + ("region_coords",)
-                ct["parameters"]["steps"] = [
-                    {k: v for k, v in s.items() if k not in _step_strip_keys}
-                    for s in ct["parameters"]["steps"]
-                ]
+            ct["parameters"] = strip_task_param_binaries(ct["parameters"])
         # Strip large per-frame heatmap grids from results (not needed on disk)
         if isinstance(ct.get("result"), list):
             _grid_keys = ("flow_grid", "change_grid", "saliency_grid")

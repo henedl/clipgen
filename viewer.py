@@ -28,7 +28,6 @@ Artifact manifest (save_manifest / load_manifest_*):
 import base64
 import functools
 import json
-import math
 import re
 import threading
 from datetime import datetime, timezone
@@ -156,17 +155,6 @@ def finalize_timeline_data(
     return data
 
 
-def _sanitize_event_metadata(obj: Any) -> Any:
-    """Replace non-finite floats (inf, nan) with None for JSON safety."""
-    if isinstance(obj, float):
-        return obj if math.isfinite(obj) else None
-    if isinstance(obj, dict):
-        return {k: _sanitize_event_metadata(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_event_metadata(v) for v in obj]
-    return obj
-
-
 # Module-level mtime cache for the screenspace-events-for-viewer transform.
 # Viewer exports call load_screenspace_events_for_viewer() repeatedly; re-reading
 # and re-parsing screenspace_manifest.json each time is pure overhead. Keyed on
@@ -218,12 +206,12 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
             "type": e.get("detector", ""),
             "eventType": e.get("event_type", ""),
             "participant": e.get("participant", ""),
-            "timeIn": _sanitize_event_metadata(e.get("time_in", 0.0)),
-            "timeOut": _sanitize_event_metadata(e.get("time_out", 0.0)),
-            "confidence": _sanitize_event_metadata(e.get("confidence", 0.0)),
+            "timeIn": utils.sanitize_floats(e.get("time_in", 0.0)),
+            "timeOut": utils.sanitize_floats(e.get("time_out", 0.0)),
+            "confidence": utils.sanitize_floats(e.get("confidence", 0.0)),
             "region": e.get("region", ""),
             "navigational": bool(e.get("navigational", False)),
-            "metadata": _sanitize_event_metadata(e.get("metadata", {})),
+            "metadata": utils.sanitize_floats(e.get("metadata", {})),
         }
         for e in manifest.get("events", [])
         if not e.get("excluded")
@@ -576,12 +564,6 @@ def load_manifest_artifacts() -> list[dict[str, Any]]:
     """Load artifact records from the manifest file, or return [] if unavailable."""
     artifacts, _ = load_manifest_both()
     return artifacts
-
-
-def load_manifest_reels() -> list[dict[str, Any]]:
-    """Load reel records from the manifest file, or return [] if unavailable."""
-    _, reels = load_manifest_both()
-    return reels
 
 
 def save_manifest(

@@ -12,33 +12,8 @@ import utils
 import video
 import viewer
 import spreadsheet
-from spreadsheet import SheetContext
+from conftest import make_sheet_context as _make_context
 from utils import ClipRecord
-
-
-def _make_context(
-    sheet_data,
-    id_cell,
-    observation_cell,
-    category_cell=None,
-    num_participants=2,
-    study_name="study",
-    baseline_row_idx=None,
-    filename_row_idx=None,
-):
-    """Helper to build a SheetContext for tests."""
-    if category_cell is None:
-        category_cell = SimpleNamespace(row=id_cell.row, col=5)
-    return SheetContext(
-        sheet_data=sheet_data,
-        id_cell=id_cell,
-        observation_cell=observation_cell,
-        category_cell=category_cell,
-        num_participants=num_participants,
-        study_name=study_name,
-        baseline_row_idx=baseline_row_idx,
-        filename_row_idx=filename_row_idx,
-    )
 
 
 def test_get_unique_filename_truncates_long_names(monkeypatch, tmp_path):

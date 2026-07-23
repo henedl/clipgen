@@ -1967,15 +1967,9 @@ body[data-frontend="workflows"] {
 
 /* ---- Prompt / confirm dialogs (hub openPromptDialog / openConfirmDialog) ----
    In-page replacements for window.prompt/confirm on the shared blocking-modal
-   primitive; shell modeled on hotkeys.css .hk-overlay / .hk-panel. */
+   primitive; shell comes from .cg-modal-overlay (tokens.css). */
 
 .wf-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-modal);
   background: rgba(10, 10, 11, 0.55);
 }
 

@@ -99,50 +99,83 @@ def _ss_args(**overrides):
 # ---- Argparse parsing ----
 
 
-def test_parse_ss_task_color_minimal(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "clipgen.py",
-            "--ss-task",
-            "color",
-            "P01",
-            "button",
-            "--ss-target-color",
-            "#FF0000",
-            "--ss-tolerance",
-            "20,30,30",
-            "--ss-threshold",
-            "0.85",
-        ],
-    )
+# Each argv case is a single space-split string (no argument here contains a
+# space); `expected` maps parsed-Namespace attrs to their values.
+@pytest.mark.parametrize(
+    "argv,expected",
+    [
+        pytest.param(
+            "--ss-task color P01 button --ss-target-color #FF0000"
+            " --ss-tolerance 20,30,30 --ss-threshold 0.85",
+            {
+                "ss_task": ["color", "P01", "button"],
+                "ss_target_color": "#FF0000",
+                "ss_tolerance": "20,30,30",
+                "ss_threshold": 0.85,
+                "ss_color_mode": "average",  # asserts the default
+            },
+            id="color-minimal",
+        ),
+        pytest.param(
+            # REGION is optional — `--ss-task TYPE PARTICIPANT` parses to a
+            # 2-element list.
+            "--ss-task color P01 --ss-target-color #FF0000"
+            " --ss-tolerance 20,30,30 --ss-threshold 0.85",
+            {"ss_task": ["color", "P01"]},
+            id="region-optional",
+        ),
+        pytest.param(
+            "--ss-task color P01 button --ss-target-color #8B0000"
+            " --ss-tolerance 20,80,80 --ss-color-mode presence --ss-min-area 1",
+            {"ss_color_mode": "presence", "ss_min_area": 1.0},
+            id="color-presence",
+        ),
+        pytest.param(
+            "--ss-list-tasks completed",
+            {"ss_list_tasks": "completed"},
+            id="list-tasks-with-status",
+        ),
+        pytest.param(
+            "--ss-list-tasks",
+            {"ss_list_tasks": ""},  # const="" when no value
+            id="list-tasks-no-status",
+        ),
+        pytest.param(
+            "--ss-run-task ss_abc123", {"ss_run_task": "ss_abc123"}, id="run-task"
+        ),
+        pytest.param(
+            "--ss-task scene P01 btn --ss-scene-ref menu:12.5 --ss-scene-ref game:30:0.8",
+            {
+                "ss_task": ["scene", "P01", "btn"],
+                "ss_scene_ref": ["menu:12.5", "game:30:0.8"],
+            },
+            id="scene-ref-repeatable",
+        ),
+    ],
+)
+def test_parse_ss_flags(monkeypatch, argv, expected):
+    monkeypatch.setattr("sys.argv", ["clipgen.py"] + argv.split())
     args = cli.parse_arguments()
-    assert args.ss_task == ["color", "P01", "button"]
-    assert args.ss_target_color == "#FF0000"
-    assert args.ss_tolerance == "20,30,30"
-    assert args.ss_threshold == 0.85
-    assert args.ss_color_mode == "average"  # default
+    for attr, value in expected.items():
+        assert getattr(args, attr) == value
 
 
-def test_parse_ss_task_region_optional(monkeypatch):
-    # REGION is optional — `--ss-task TYPE PARTICIPANT` parses to a 2-element list.
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "clipgen.py",
-            "--ss-task",
-            "color",
-            "P01",
-            "--ss-target-color",
-            "#FF0000",
-            "--ss-tolerance",
-            "20,30,30",
-            "--ss-threshold",
-            "0.85",
-        ],
-    )
-    args = cli.parse_arguments()
-    assert args.ss_task == ["color", "P01"]
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(
+            "--ss-list-regions --ss-list-stashes", id="list-modes-mutually-exclusive"
+        ),
+        pytest.param(
+            "--ss-run-task ss_abc --ss-task color P01 btn",
+            id="run-task-and-task-mutually-exclusive",
+        ),
+    ],
+)
+def test_parse_ss_conflicting_flags_exit(monkeypatch, argv):
+    monkeypatch.setattr("sys.argv", ["clipgen.py"] + argv.split())
+    with pytest.raises(SystemExit):
+        cli.parse_arguments()
 
 
 def test_ss_task_omitted_region_defaults_to_full_frame(monkeypatch, capsys):
@@ -166,30 +199,6 @@ def test_ss_task_omitted_region_defaults_to_full_frame(monkeypatch, capsys):
     assert "P01" in capsys.readouterr().out
 
 
-def test_parse_ss_task_color_presence(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "clipgen.py",
-            "--ss-task",
-            "color",
-            "P01",
-            "button",
-            "--ss-target-color",
-            "#8B0000",
-            "--ss-tolerance",
-            "20,80,80",
-            "--ss-color-mode",
-            "presence",
-            "--ss-min-area",
-            "1",
-        ],
-    )
-    args = cli.parse_arguments()
-    assert args.ss_color_mode == "presence"
-    assert args.ss_min_area == 1.0
-
-
 def test_ss_build_params_color_presence():
     region = {"x": 0, "y": 0, "w": 100, "h": 100}
     args = _ss_args(
@@ -211,86 +220,34 @@ def test_ss_build_params_color_average_omits_mode():
     assert "min_coverage" not in params
 
 
-def test_parse_ss_list_tasks_with_status(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ss-list-tasks", "completed"])
-    args = cli.parse_arguments()
-    assert args.ss_list_tasks == "completed"
-
-
-def test_parse_ss_list_tasks_no_status(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ss-list-tasks"])
-    args = cli.parse_arguments()
-    assert args.ss_list_tasks == ""  # const="" when no value
-
-
-def test_ss_list_modes_are_mutually_exclusive(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv", ["clipgen.py", "--ss-list-regions", "--ss-list-stashes"]
-    )
-    with pytest.raises(SystemExit):
-        cli.parse_arguments()
-
-
-def test_parse_ss_run_task(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["clipgen.py", "--ss-run-task", "ss_abc123"])
-    args = cli.parse_arguments()
-    assert args.ss_run_task == "ss_abc123"
-
-
-def test_parse_ss_scene_ref_repeatable(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "clipgen.py",
-            "--ss-task",
-            "scene",
-            "P01",
-            "btn",
-            "--ss-scene-ref",
-            "menu:12.5",
-            "--ss-scene-ref",
-            "game:30:0.8",
-        ],
-    )
-    args = cli.parse_arguments()
-    assert args.ss_task == ["scene", "P01", "btn"]
-    assert args.ss_scene_ref == ["menu:12.5", "game:30:0.8"]
-
-
-def test_ss_run_task_and_ss_task_mutually_exclusive(monkeypatch):
-    monkeypatch.setattr(
-        "sys.argv",
-        ["clipgen.py", "--ss-run-task", "ss_abc", "--ss-task", "color", "P01", "btn"],
-    )
-    with pytest.raises(SystemExit):
-        cli.parse_arguments()
-
-
 # ---- Conflict validation ----
 
 
-def test_ss_task_conflicts_with_studio():
-    args = _ss_args(
-        ss_task=["color", "P01", "button"],
-        ss_target_color="#FF0000",
-        ss_tolerance="20,30,30",
-        ss_threshold=0.85,
-        studio=True,
-    )
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(
+            dict(
+                ss_task=["color", "P01", "button"],
+                ss_target_color="#FF0000",
+                ss_tolerance="20,30,30",
+                ss_threshold=0.85,
+                studio=True,
+            ),
+            id="ss-task-vs-studio",
+        ),
+        pytest.param(
+            dict(summarize=[], pre_transcribe=["P01"]),
+            id="summarize-vs-pre-transcribe",
+        ),
+        pytest.param(
+            dict(ss_run_task="ss_abc", studio=True), id="ss-run-task-vs-studio"
+        ),
+    ],
+)
+def test_mode_conflicts_exit(overrides):
     with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
-
-
-def test_summarize_conflicts_with_pre_transcribe():
-    args = _ss_args(summarize=[], pre_transcribe=["P01"])
-    with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
-
-
-def test_ss_run_task_conflicts_with_studio():
-    args = _ss_args(ss_run_task="ss_abc", studio=True)
-    with pytest.raises(SystemExit):
-        cli._validate_mode_conflicts(args)
+        cli._validate_mode_conflicts(_ss_args(**overrides))
 
 
 def test_ss_run_task_marks_cli_mode():
@@ -317,46 +274,52 @@ def test_ss_hex_to_hsv_red_only():
     assert hsv["v"] == 255
 
 
-def test_ss_hex_to_hsv_invalid_length_raises():
-    with pytest.raises(ValueError):
-        cli._ss_hex_to_hsv("#ABC")
-
-
 def test_ss_parse_tolerance_valid():
     tol = cli._ss_parse_tolerance("20,30,30")
     assert tol == {"h": 20, "s": 30, "v": 30}
 
 
-def test_ss_parse_tolerance_wrong_count_raises():
+@pytest.mark.parametrize(
+    "fn,raw",
+    [
+        pytest.param(cli._ss_hex_to_hsv, "#ABC", id="hex-invalid-length"),
+        pytest.param(cli._ss_parse_tolerance, "20,30", id="tolerance-wrong-count"),
+    ],
+)
+def test_ss_conversion_invalid_input_raises(fn, raw):
     with pytest.raises(ValueError):
-        cli._ss_parse_tolerance("20,30")
+        fn(raw)
 
 
-def test_ss_parse_scene_ref_name_timestamp():
-    ref = cli._ss_parse_scene_ref("menu:12.5")
-    assert ref == {"name": "menu", "timestamp": 12.5}
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        pytest.param(
+            "menu:12.5", {"name": "menu", "timestamp": 12.5}, id="name-timestamp"
+        ),
+        pytest.param(
+            "game:30:0.8",
+            {"name": "game", "timestamp": 30.0, "threshold": 0.8},
+            id="with-threshold",
+        ),
+    ],
+)
+def test_ss_parse_scene_ref_valid(raw, expected):
+    assert cli._ss_parse_scene_ref(raw) == expected
 
 
-def test_ss_parse_scene_ref_with_threshold():
-    ref = cli._ss_parse_scene_ref("game:30:0.8")
-    assert ref == {"name": "game", "timestamp": 30.0, "threshold": 0.8}
-
-
-def test_ss_parse_scene_ref_missing_timestamp_raises():
-    with pytest.raises(ValueError):
-        cli._ss_parse_scene_ref("menu")
-
-
-def test_ss_parse_scene_ref_nonnumeric_timestamp_raises():
-    with pytest.raises(ValueError):
-        cli._ss_parse_scene_ref("menu:soon")
-
-
-def test_ss_parse_scene_ref_threshold_out_of_range_raises():
-    with pytest.raises(ValueError, match="between 0 and 1"):
-        cli._ss_parse_scene_ref("menu:12.5:1.5")
-    with pytest.raises(ValueError, match="between 0 and 1"):
-        cli._ss_parse_scene_ref("menu:12.5:-0.1")
+@pytest.mark.parametrize(
+    "raw,match",
+    [
+        pytest.param("menu", None, id="missing-timestamp"),
+        pytest.param("menu:soon", None, id="nonnumeric-timestamp"),
+        pytest.param("menu:12.5:1.5", "between 0 and 1", id="threshold-too-high"),
+        pytest.param("menu:12.5:-0.1", "between 0 and 1", id="threshold-negative"),
+    ],
+)
+def test_ss_parse_scene_ref_invalid_raises(raw, match):
+    with pytest.raises(ValueError, match=match):
+        cli._ss_parse_scene_ref(raw)
 
 
 # ---- Listing helpers ----
