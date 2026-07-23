@@ -73,6 +73,7 @@
     { id: "studio.moveDown",        section: "studio", group: "Selection", label: "Move selection down", combos: ["ArrowDown"] },
     { id: "studio.sendArtifacts",   section: "studio", group: "Selection", label: "Add / remove selection in work area", combos: ["Enter"] },
     { id: "studio.sendReel",        section: "studio", group: "Selection", label: "Add / remove selection in reel", combos: ["Shift+Enter"] },
+    { id: "studio.removeCard",      section: "studio", group: "Selection", label: "Remove focused queue card", combos: ["Backspace", "Delete"] },
     { id: "studio.togglePanel",     section: "studio", group: "Panels", label: "Collapse / expand artifact & reel panel", combos: ["V"] },
     { id: "studio.toggleSidebar",   section: "studio", group: "Panels", label: "Collapse / expand filter sidebar", combos: ["F"] },
     { id: "studio.stashArtifacts",  section: "studio", group: "Queue", label: "Stash artifacts", combos: ["A"] },

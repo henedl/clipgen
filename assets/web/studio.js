@@ -1850,6 +1850,21 @@
     return !!(STUDIO.intakeToggleAt && STUDIO.intakeToggleAt(surface, _kbCursor.idx, reel));
   }
 
+  // Backspace / Delete remove the focused card when the cursor sits on a queue
+  // surface. Returns false elsewhere so Backspace keeps its default (browser
+  // back); on a queue surface it always consumes the key.
+  function kbRemoveCard() {
+    var surface = kbSurface();
+    if (surface !== "artifact-queue" && surface !== "reel-queue") return false;
+    if (!_kbCursor || _kbCursor.surface !== surface) return false;
+    var el = kbCursorEl();
+    if (el) {
+      KB_LIST_SURFACES[surface].activate(el, false);
+      kbPaintCursor();
+    }
+    return true;
+  }
+
   // ---- Panel divider (resizable split between sheet preview and bottom panel) ----
   //
   // Layout model: #sheetPreview is `flex: 1 1 auto` and #bottomPanel has an
@@ -3209,6 +3224,7 @@
       { id: "studio.moveUp", handler: function () { return kbStepVertical(-1); } },
       { id: "studio.sendArtifacts", handler: function () { return kbSend(false); } },
       { id: "studio.sendReel", handler: function () { return kbSend(true); } },
+      { id: "studio.removeCard", repeat: false, handler: function () { return kbRemoveCard(); } },
       { id: "studio.togglePanel", handler: function () { toggleBottomPanel(); } },
       {
         id: "studio.toggleSidebar",
