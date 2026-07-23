@@ -87,6 +87,17 @@ body[data-frontend="workflows"] {
   border-bottom: 1px solid var(--border);
 }
 
+/* Header row that carries an action button (e.g. Nodes + Add sticky note): keep
+   the uppercase label baseline while a compact icon button hugs the right. */
+.wf-sidebar-header--with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+
 .wf-palette-search {
   margin: var(--space-3) var(--space-4) 0;
   background: var(--bg-input);
@@ -147,8 +158,13 @@ body[data-frontend="workflows"] {
   color: var(--fg-muted);
 }
 
-#wfBlueprintSelect,
-#wfBlueprintName {
+/* Splits the toolbar into a left group (blueprint controls + undo/redo) and a
+   right group (canvas/run actions). */
+.wf-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+#wfBlueprintSelect {
   background: var(--bg-input);
   color: var(--fg);
   border: 1px solid var(--border);

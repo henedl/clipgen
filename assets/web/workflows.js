@@ -948,7 +948,6 @@
       "#wfRedo",
       "#wfCleanUp",
       "#wfAddNote",
-      "#wfFitView",
       "#wfSnapBtn",
       "#wfRunBtn",
       "#wfRunMenuBtn",
@@ -1095,7 +1094,7 @@
         buttonCommand("workflows:new", "New blueprint", "squares-plus",
           "create canvas", "wfNewBlueprint"),
         buttonCommand("workflows:fit", "Fit to view", "arrows-pointing-out",
-          "zoom center canvas", "wfFitView"),
+          "zoom center canvas", "wfMinimapFit"),
         buttonCommand("workflows:undo", "Undo", "arrow-uturn-left",
           "revert history", "wfUndo"),
         buttonCommand("workflows:redo", "Redo", "arrow-uturn-right",
@@ -1171,12 +1170,6 @@
     if (cleanBtn) {
       cleanBtn.addEventListener("click", function () {
         if (WF.autoArrange) WF.autoArrange();
-      });
-    }
-    var fitBtn = qs("#wfFitView");
-    if (fitBtn) {
-      fitBtn.addEventListener("click", function () {
-        if (WF.fitToView) WF.fitToView();
       });
     }
     var snapBtn = qs("#wfSnapBtn");
