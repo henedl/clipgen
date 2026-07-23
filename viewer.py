@@ -566,12 +566,6 @@ def load_manifest_artifacts() -> list[dict[str, Any]]:
     return artifacts
 
 
-def load_manifest_reels() -> list[dict[str, Any]]:
-    """Load reel records from the manifest file, or return [] if unavailable."""
-    _, reels = load_manifest_both()
-    return reels
-
-
 def save_manifest(
     new_artifacts: list[dict[str, Any]],
     *,

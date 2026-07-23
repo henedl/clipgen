@@ -216,8 +216,13 @@ above — parametrize/shared-helper refactors keep the guard rails, they only re
 
 ## D. Owner-decision deletions
 
-- [ ] **D1. `viewer.load_manifest_reels` / `friction.smooth_scores`** — zero product callers,
-  only dedicated tests; decide per-function via `git log -S` intent check. (~0–25)
+- [x] **D1. `viewer.load_manifest_reels` / `friction.smooth_scores`** — **Both deleted (~−40).**
+  `load_manifest_reels` was a 3-line convenience over `load_manifest_both` used only by
+  `test_manifest.py` (call sites switched to `load_manifest_both()[1]`; the empty-file test now
+  asserts on `load_manifest_both`). `smooth_scores` was never wired to a route — the transcripts
+  timeline band does its own smoothing client-side in `transcripts-video.js` (EMA over the shared
+  friction state), so the Python rolling mean was duplicate intent; its `TestSmoothScores` class
+  went with it and the friction.py / ARCHITECTURE.md docs now point at the client-side smoothing.
 
 ## Pass-2 dead ends (verified, don't re-chase)
 

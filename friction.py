@@ -140,7 +140,8 @@ def score_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Score every segment, returning per-segment friction rows.
 
     Each row: ``{"id", "score", "categories", "markers", "counts"}``. Segment
-    order is preserved (the smoothing/heatmap path relies on positional order).
+    order is preserved (the client's timeline heatmap band relies on positional
+    order; it does its own smoothing in ``transcripts-video.js``).
     """
     scored: list[dict[str, Any]] = []
     for idx, seg in enumerate(segments):
@@ -195,23 +196,3 @@ def compute_stats(
         "markers_per_minute": markers_per_minute,
         "total_markers": total,
     }
-
-
-def smooth_scores(scored: list[dict[str, Any]], window: int = 5) -> list[float]:
-    """Rolling-mean of per-segment scores for the timeline heatmap.
-
-    Centered window; at the edges the window shrinks to the available range.
-    Returns one value per segment, in order. The raw per-segment score (not this
-    smoothed series) still drives the inline segment background tint.
-    """
-    scores = [row.get("score", 0.0) for row in scored]
-    if window < 1:
-        window = 1
-    half = window // 2
-    smoothed: list[float] = []
-    for i in range(len(scores)):
-        lo = max(0, i - half)
-        hi = min(len(scores), i + half + 1)
-        window_vals = scores[lo:hi]
-        smoothed.append(round(sum(window_vals) / len(window_vals), 4))
-    return smoothed

@@ -139,7 +139,7 @@ def test_save_and_load_reels_roundtrip(tmp_path, monkeypatch):
     path = viewer.save_manifest([], new_reels=[reel], study="study", mode="reel")
     assert path is not None
 
-    loaded_reels = viewer.load_manifest_reels()
+    _, loaded_reels = viewer.load_manifest_both()
     assert len(loaded_reels) == 1
     assert loaded_reels[0]["id"] == "reel_abcd1234"
     assert len(loaded_reels[0]["components"]) == 2
@@ -179,12 +179,12 @@ def test_save_manifest_merges_reels_and_artifacts(tmp_path, monkeypatch):
     viewer.save_manifest([], new_reels=[reel])
 
     assert len(viewer.load_manifest_artifacts()) == 1
-    assert len(viewer.load_manifest_reels()) == 1
+    assert len(viewer.load_manifest_both()[1]) == 1
 
 
-def test_load_manifest_reels_returns_empty_when_no_file(tmp_path, monkeypatch):
+def test_load_manifest_both_returns_empty_when_no_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-    assert viewer.load_manifest_reels() == []
+    assert viewer.load_manifest_both() == ([], [])
 
 
 def test_cli_manifest_flag_parsed(monkeypatch):
@@ -266,6 +266,6 @@ def test_save_manifest_concurrent_writes_keep_every_id(tmp_path, monkeypatch):
     assert not any(t.is_alive() for t in threads)
 
     artifact_ids = {a["id"] for a in viewer.load_manifest_artifacts()}
-    reel_ids = {r["id"] for r in viewer.load_manifest_reels()}
+    reel_ids = {r["id"] for r in viewer.load_manifest_both()[1]}
     assert artifact_ids == {f"a{i}" for i in range(n)}
     assert reel_ids == {f"reel{i}" for i in range(n)}
