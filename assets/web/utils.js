@@ -322,6 +322,79 @@ var applyIconMasksIn = function (scope, opts) {
   }
 };
 
+// ---- Segmented capsule track (pairs with .cg-segtrack in tokens.css) ----
+//
+// A pill track of mutually exclusive options; a capsule thumb slides to the
+// selected segment (CSS transition driven by the --seg-index inline var, so
+// no layout measurement is needed and building while detached is safe).
+//
+// opts = {
+//   id,        // optional id for the hidden <input type=hidden> value holder
+//   value,     // initially selected value
+//   options,   // [{ value, icon, label, desc, title }] — icon is an
+//              //   assets/icons basename; desc -> data-desc (custom param
+//              //   tooltips); title -> native title attribute
+//   size,      // "sm" -> .cg-segtrack--sm
+//   onChange,  // fn(value), fires on user click after state applies, before
+//              //   the bubbling input event
+//   basePath,  // icon base path, default "icons/"
+// }
+var createSegTrack = function (opts) {
+  opts = opts || {};
+  var options = opts.options || [];
+  var track = el("div", "cg-segtrack" + (opts.size === "sm" ? " cg-segtrack--sm" : ""));
+  // Set before the first style computation so the thumb never slides in.
+  track.style.setProperty("--seg-count", String(options.length));
+  var hidden = document.createElement("input");
+  hidden.type = "hidden";
+  if (opts.id) hidden.id = opts.id;
+  track.appendChild(hidden);
+  track.appendChild(el("span", "cg-segtrack-thumb"));
+  options.forEach(function (spec) {
+    var btn = el("button", "cg-segtrack-btn");
+    btn.type = "button";
+    btn.setAttribute("data-value", spec.value);
+    if (spec.desc) btn.setAttribute("data-desc", spec.desc);
+    if (spec.title) btn.title = spec.title;
+    if (spec.icon) {
+      btn.appendChild(iconMaskSpan(spec.icon, { className: "cg-segtrack-icon", basePath: opts.basePath }));
+    }
+    if (spec.label) btn.appendChild(el("span", "cg-segtrack-label", spec.label));
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      if (spec.value === hidden.value) return; // nothing to slide
+      segTrackSetValue(track, spec.value);
+      if (opts.onChange) opts.onChange(spec.value);
+      // Bubbles so container-level input listeners (e.g. Screenspace's
+      // addParamRow live-preview handler) fire, mirroring a checkbox change.
+      hidden.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    track.appendChild(btn);
+  });
+  segTrackSetValue(track, opts.value);
+  return track;
+};
+
+// Reflect a value onto an existing segtrack (active segment, thumb position,
+// hidden input). Dispatches no events and calls no onChange — callers that
+// need side effects run them explicitly. Unknown values are a no-op.
+var segTrackSetValue = function (trackEl, value) {
+  var btns = trackEl.querySelectorAll(".cg-segtrack-btn");
+  var index = -1;
+  for (var i = 0; i < btns.length; i++) {
+    if (btns[i].getAttribute("data-value") === value) { index = i; break; }
+  }
+  if (index < 0) return;
+  for (var j = 0; j < btns.length; j++) {
+    var active = j === index;
+    btns[j].classList.toggle("active", active);
+    btns[j].setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  var hidden = trackEl.querySelector("input[type=hidden]");
+  if (hidden) hidden.value = value;
+  trackEl.style.setProperty("--seg-index", String(index));
+};
+
 // ---- Hover tooltips (dark pill, pairs with .cg-tooltip in tokens.css) ----
 
 var createTooltip = function (opts) {

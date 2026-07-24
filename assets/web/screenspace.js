@@ -50,15 +50,17 @@
     });
   }
 
-  // Three-state OCR-normalize direction control: a segmented icon button-set
-  // backed by a hidden input holding the mode string ("letters" | "off" |
-  // "digits"). It folds easily-confused glyphs toward whichever canonical form
-  // you pick before the fuzzy compare — see _normalize_ocr_text in
-  // screenspace_ocr.py. Off sits in the middle: digit→letter | off | letter→digit.
+  // Three-state OCR-normalize direction control: a segmented capsule track
+  // (createSegTrack in utils.js) backed by a hidden input holding the mode
+  // string ("letters" | "off" | "digits"). It folds easily-confused glyphs
+  // toward whichever canonical form you pick before the fuzzy compare — see
+  // _normalize_ocr_text in screenspace_ocr.py. Off sits in the middle:
+  // digit→letter | off | letter→digit. `desc` is surfaced via the custom param
+  // tooltip (see initParamTooltips), matching how param labels show their help.
   var NORMALIZE_MODES = [
-    { mode: "letters", icon: "language", desc: "Fold digits to letters before matching (0→o, 1→l, 5→s). For word targets that OCR may read as digits" },
-    { mode: "off", icon: "no-symbol", desc: "No character folding" },
-    { mode: "digits", icon: "hashtag", desc: "Fold letters to digits before matching (O→0, l→1, S→5). For number targets that OCR may read as letters" },
+    { value: "letters", icon: "language", desc: "Fold digits to letters before matching (0→o, 1→l, 5→s). For word targets that OCR may read as digits" },
+    { value: "off", icon: "no-symbol", desc: "No character folding" },
+    { value: "digits", icon: "hashtag", desc: "Fold letters to digits before matching (O→0, l→1, S→5). For number targets that OCR may read as letters" },
   ];
 
   function _normalizeMode(mode) {
@@ -66,58 +68,29 @@
   }
 
   function buildNormalizeControl(id, mode, small) {
-    var wrap = el("div", "ss-segctl" + (small ? " ss-segctl--sm" : ""));
-    var hidden = document.createElement("input");
-    hidden.type = "hidden";
-    hidden.id = id;
-    hidden.value = _normalizeMode(mode);
-    wrap.appendChild(hidden);
-    NORMALIZE_MODES.forEach(function (spec) {
-      var btn = el("button", "ss-segctl-btn");
-      btn.type = "button";
-      // Description shown via the custom param tooltip (see initParamTooltips),
-      // matching how param labels surface their help text.
-      btn.setAttribute("data-desc", spec.desc);
-      btn.setAttribute("data-mode", spec.mode);
-      btn.appendChild(iconSpan(spec.icon, "ss-icon--xs"));
-      if (spec.mode === hidden.value) btn.classList.add("active");
-      btn.addEventListener("click", function (e) {
-        e.preventDefault();
-        hidden.value = spec.mode;
-        var sibs = wrap.querySelectorAll(".ss-segctl-btn");
-        for (var i = 0; i < sibs.length; i++) {
-          sibs[i].classList.toggle("active", sibs[i] === btn);
-        }
-        // Bubbles to the .param-control wrapper so addParamRow's input handler
-        // (live model preview) fires, mirroring a checkbox change.
-        hidden.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      wrap.appendChild(btn);
+    return createSegTrack({
+      id: id,
+      value: _normalizeMode(mode),
+      options: NORMALIZE_MODES,
+      size: small ? "sm" : null,
+      basePath: "/screenspace/icons/",
     });
-    return wrap;
   }
 
   // Reflect a mode string back onto an existing segmented control (used when
   // rehydrating a saved task into the editor).
   function applyNormalizeMode(id, mode) {
     var hidden = qs("#" + id);
-    if (!hidden) return;
-    var m = _normalizeMode(mode);
-    hidden.value = m;
-    var wrap = hidden.parentNode;
-    if (!wrap) return;
-    var btns = wrap.querySelectorAll(".ss-segctl-btn");
-    for (var i = 0; i < btns.length; i++) {
-      btns[i].classList.toggle("active", btns[i].getAttribute("data-mode") === m);
-    }
+    if (!hidden || !hidden.parentNode) return;
+    segTrackSetValue(hidden.parentNode, _normalizeMode(mode));
   }
 
   // Two-state Color match-mode control: "average" (region's mean color) vs
   // "presence" (target color appears anywhere in the region, per-pixel). Backed
   // by a hidden input holding the mode string. See ColorTool in screenspace_tools.py.
   var COLOR_MODES = [
-    { mode: "average", icon: "swatch", desc: "Match the region's average colour" },
-    { mode: "presence", icon: "magnifying-glass-circle", desc: "Match when the target colour appears anywhere in the region (per-pixel)" },
+    { value: "average", icon: "swatch", desc: "Match the region's average colour" },
+    { value: "presence", icon: "magnifying-glass-circle", desc: "Match when the target colour appears anywhere in the region (per-pixel)" },
   ];
 
   function _colorMode(mode) {
@@ -130,49 +103,22 @@
     var hidden = qs("#" + id);
     if (!hidden) return;
     var m = _colorMode(mode);
-    hidden.value = m;
-    var wrap = hidden.parentNode;
-    if (wrap) {
-      var btns = wrap.querySelectorAll(".ss-segctl-btn");
-      for (var i = 0; i < btns.length; i++) {
-        btns[i].classList.toggle("active", btns[i].getAttribute("data-mode") === m);
-      }
-    }
+    if (hidden.parentNode) segTrackSetValue(hidden.parentNode, m);
     var row = qs("#paramColorMinAreaRow");
     if (row) row.classList.toggle("hidden", m !== "presence");
   }
 
-  // `onChange(mode)` fires after the active button flips, before the bubbling
+  // `onChange(mode)` fires after the active segment flips, before the bubbling
   // input event — callers use it to show/hide the presence-only min-area row.
   function buildColorModeControl(id, mode, small, onChange) {
-    var wrap = el("div", "ss-segctl" + (small ? " ss-segctl--sm" : ""));
-    var hidden = document.createElement("input");
-    hidden.type = "hidden";
-    hidden.id = id;
-    hidden.value = _colorMode(mode);
-    wrap.appendChild(hidden);
-    COLOR_MODES.forEach(function (spec) {
-      var btn = el("button", "ss-segctl-btn");
-      btn.type = "button";
-      btn.setAttribute("data-desc", spec.desc);
-      btn.setAttribute("data-mode", spec.mode);
-      btn.appendChild(iconSpan(spec.icon, "ss-icon--xs"));
-      if (spec.mode === hidden.value) btn.classList.add("active");
-      btn.addEventListener("click", function (e) {
-        e.preventDefault();
-        hidden.value = spec.mode;
-        var sibs = wrap.querySelectorAll(".ss-segctl-btn");
-        for (var i = 0; i < sibs.length; i++) {
-          sibs[i].classList.toggle("active", sibs[i] === btn);
-        }
-        if (onChange) onChange(spec.mode);
-        // Bubbles to the .param-control wrapper so addParamRow's input handler
-        // (live model preview) fires, mirroring a checkbox change.
-        hidden.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      wrap.appendChild(btn);
+    return createSegTrack({
+      id: id,
+      value: _colorMode(mode),
+      options: COLOR_MODES,
+      size: small ? "sm" : null,
+      basePath: "/screenspace/icons/",
+      onChange: onChange,
     });
-    return wrap;
   }
 
   var _paletteDocListeners = null;
@@ -1008,9 +954,9 @@
     }
 
     container.addEventListener("mouseenter", function (e) {
-      // Segmented-control buttons (e.g. the Normalize direction set) carry their
+      // Segmented-track buttons (e.g. the Normalize direction set) carry their
       // own description on data-desc; reuse the same dark-pill tooltip.
-      var seg = e.target.closest && e.target.closest(".ss-segctl-btn");
+      var seg = e.target.closest && e.target.closest(".cg-segtrack-btn");
       if (seg) {
         var segDesc = seg.getAttribute("data-desc");
         if (segDesc) tooltip.show(seg, segDesc);
@@ -1027,7 +973,7 @@
     container.addEventListener("mouseleave", function (e) {
       if (
         e.target.closest &&
-        (e.target.closest(".param-label") || e.target.closest(".ss-segctl-btn"))
+        (e.target.closest(".param-label") || e.target.closest(".cg-segtrack-btn"))
       ) {
         tooltip.hide();
       }

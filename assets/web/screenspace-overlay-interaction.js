@@ -861,10 +861,19 @@
     });
 
     // Region selector tools: rectangle (default), freehand lasso, magic wand.
-    var toolBtns = { rect: qs("#toolRectBtn"), lasso: qs("#toolLassoBtn"), wand: qs("#toolWandBtn") };
-    toolBtns.rect.appendChild(iconSpan("squares-2x2"));
-    toolBtns.lasso.appendChild(iconSpan("pencil"));
-    toolBtns.wand.appendChild(iconSpan("sparkles"));
+    // One segmented capsule track (mutually exclusive), native title tooltips —
+    // this bar sits outside #workflowParams so initParamTooltips never sees it.
+    var regionToolTrack = createSegTrack({
+      value: state.regionTool,
+      options: [
+        { value: "rect", icon: "squares-2x2", title: "Rectangle: drag to select" },
+        { value: "lasso", icon: "pencil", title: "Lasso: draw a freehand shape" },
+        { value: "wand", icon: "sparkles", title: "Magic wand: click a similar-colored area" },
+      ],
+      basePath: "/screenspace/icons/",
+      onChange: setRegionTool,
+    });
+    qs("#regionActions").insertBefore(regionToolTrack, qs("#wandToleranceWrap"));
     function setRegionTool(tool) {
       state.regionTool = tool;
       // Abandon any in-progress draw from the previous tool, else mouseup
@@ -872,14 +881,13 @@
       if (state.wandDragging) cancelWandDrag();
       state.drawingLasso = null;
       state.drawingRegion = null;
-      Object.keys(toolBtns).forEach(function (key) {
-        toolBtns[key].classList.toggle("active", key === tool);
-      });
-      qs("#wandToleranceWrap").classList.toggle("hidden", tool !== "wand");
+      // Idempotent after a click (the track already moved); needed when
+      // setRegionTool is called programmatically.
+      segTrackSetValue(regionToolTrack, tool);
+      // Eased width collapse (see .wand-tolerance in screenspace.css), so the
+      // capsule track glides rather than jumps when the slider (dis)appears.
+      qs("#wandToleranceWrap").classList.toggle("collapsed", tool !== "wand");
     }
-    Object.keys(toolBtns).forEach(function (key) {
-      toolBtns[key].addEventListener("click", function () { setRegionTool(key); });
-    });
     var wandToleranceInput = qs("#wandToleranceInput");
     wandToleranceInput.value = String(state.wandTolerance);
     wandToleranceInput.addEventListener("input", function () {
