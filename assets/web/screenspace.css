@@ -4181,3 +4181,12 @@ body.panel-dragging #bottomPanel {
     height: auto;
   }
 }
+
+/* ---- Panel focus navigation (Shift+1..4 + arrows; see initKeyboard) ---- */
+/* Painted keyboard cursor on the focused item in a targeted panel. This is not
+ * real DOM focus (that would suppress the arrow handlers at the dispatcher); the
+ * notes textarea is the lone real-focus exception, styled by its own :focus. */
+.ss-nav-cursor {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}

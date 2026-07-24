@@ -80,12 +80,12 @@
     { id: "studio.stashReel",       section: "studio", group: "Queue", label: "Stash reel", combos: ["Shift+A"] },
     { id: "studio.clearArtifacts",  section: "studio", group: "Queue", label: "Clear artifacts", combos: ["C"] },
     { id: "studio.clearReel",       section: "studio", group: "Queue", label: "Clear reel", combos: ["Shift+C"] },
-    { id: "studio.focusFilter",        section: "studio", group: "Selection", label: "Select filter list", combos: ["1"] },
-    { id: "studio.focusArtifacts",     section: "studio", group: "Selection", label: "Select artifact queue", combos: ["2"] },
-    { id: "studio.focusReel",          section: "studio", group: "Selection", label: "Select reel queue", combos: ["3"] },
-    { id: "studio.focusArtifactStash", section: "studio", group: "Selection", label: "Select stashed artifacts", combos: ["4"] },
-    { id: "studio.focusReelStash",     section: "studio", group: "Selection", label: "Select stashed reels", combos: ["5"] },
-    { id: "studio.selectTab",          section: "studio", group: "Tabs", label: "Switch preview tab by number", combos: ["Shift+1", "Shift+2", "Shift+3", "Shift+4"], rebindable: false, displayKeys: "⇧1–4" },
+    { id: "studio.focusFilter",        section: "studio", group: "Selection", label: "Select filter list", combos: ["Shift+1"] },
+    { id: "studio.focusArtifacts",     section: "studio", group: "Selection", label: "Select artifact queue", combos: ["Shift+2"] },
+    { id: "studio.focusReel",          section: "studio", group: "Selection", label: "Select reel queue", combos: ["Shift+3"] },
+    { id: "studio.focusArtifactStash", section: "studio", group: "Selection", label: "Select stashed artifacts", combos: ["Shift+4"] },
+    { id: "studio.focusReelStash",     section: "studio", group: "Selection", label: "Select stashed reels", combos: ["Shift+5"] },
+    { id: "studio.selectTab",          section: "studio", group: "Tabs", label: "Switch preview tab by number", combos: ["1", "2", "3", "4"], rebindable: false, displayKeys: "1–4" },
 
     { id: "composer.seekBackMid",      section: "composer", group: "Playhead", label: "Seek back 2.5 s", combos: ["Shift+ArrowLeft"] },
     { id: "composer.seekFwdMid",       section: "composer", group: "Playhead", label: "Seek forward 2.5 s", combos: ["Shift+ArrowRight"] },
@@ -122,6 +122,9 @@
     { id: "screenspace.cycleToolPrev", section: "screenspace", group: "Tools", label: "Previous tool tab", combos: ["Z"] },
     { id: "screenspace.cycleToolNext", section: "screenspace", group: "Tools", label: "Next tool tab", combos: ["X"] },
     { id: "screenspace.selectTool",    section: "screenspace", group: "Tools", label: "Select tool / category by number", combos: ["1", "2", "3", "4", "5", "6", "7", "8", "9"], rebindable: false, displayKeys: "1–9" },
+    { id: "screenspace.focusRegion",   section: "screenspace", group: "Focus", label: "Focus panel by number (sidebar / tool / tasks / results)", combos: ["Shift+1", "Shift+2", "Shift+3", "Shift+4"], rebindable: false, displayKeys: "⇧1–4" },
+    { id: "screenspace.nav",           section: "screenspace", group: "Focus", label: "Navigate the focused panel", combos: ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"], rebindable: false, displayKeys: "←↑↓→" },
+    { id: "screenspace.navActivate",   section: "screenspace", group: "Focus", label: "Activate the focused item", combos: ["Enter"], rebindable: false },
 
     { id: "transcripts.mark",         section: "transcripts", group: "Marks", label: "Mark active segment", combos: ["M"] },
     { id: "transcripts.nextMarked",   section: "transcripts", group: "Marks", label: "Next marked segment", combos: ["N"] },
@@ -130,6 +133,8 @@
     { id: "transcripts.cyclePartPrev",  section: "transcripts", group: "Participants", label: "Previous participant", combos: ["Z"] },
     { id: "transcripts.cyclePartNext",  section: "transcripts", group: "Participants", label: "Next participant", combos: ["X"] },
     { id: "transcripts.pillMenu",       section: "transcripts", group: "Participants", label: "Open participant options (then 1–4)", combos: ["O"] },
+    { id: "transcripts.pillNav",        section: "transcripts", group: "Participants", label: "Navigate open participant options", combos: ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"], rebindable: false, displayKeys: "←↑↓→" },
+    { id: "transcripts.pillActivate",   section: "transcripts", group: "Participants", label: "Run the focused option", combos: ["Enter"], rebindable: false },
     { id: "transcripts.toggleCaptions", section: "transcripts", group: "Playback", label: "Toggle captions", combos: ["C"] },
     { id: "transcripts.speedDown",      section: "transcripts", group: "Playback", label: "Slower playback", combos: ["Shift+,"] },
     { id: "transcripts.speedUp",        section: "transcripts", group: "Playback", label: "Faster playback", combos: ["Shift+."] },
@@ -221,7 +226,8 @@
         // Shifted digits resolve to layout-dependent symbols ("!" on US,
         // "&" on French), so "Shift+1" would never match below. The physical
         // DigitN keys are layout-stable — map by e.code so numbered combos
-        // (e.g. Studio's Shift+1…4 tab switch) work everywhere.
+        // (e.g. the Shift+1…N panel-focus keys in Studio/Screenspace) work
+        // everywhere.
         name = e.code.charAt(5);
         shift = true;
       } else if (key.toUpperCase() !== key.toLowerCase()) {
@@ -412,6 +418,37 @@
     return t.matches("input, textarea, select") || t.isContentEditable === true;
   }
 
+  // A free-text-entry field: text inputs, textareas, contenteditable. Excludes
+  // <select> and non-text inputs (checkbox / radio / range) — those are safe to
+  // blur on Escape without discarding half-typed text.
+  function isTextEntry(t) {
+    if (!t) return false;
+    if (t.isContentEditable === true) return true;
+    if (t.tagName === "TEXTAREA") return true;
+    if (t.tagName === "INPUT") {
+      var ty = (t.getAttribute("type") || "text").toLowerCase();
+      return (
+        ty === "text" || ty === "search" || ty === "email" || ty === "url" ||
+        ty === "tel" || ty === "password" || ty === "number"
+      );
+    }
+    return false;
+  }
+
+  // Drop a lingering native DOM focus (a tabbed-to button / select / link) so it
+  // leaves no focus ring competing with a page's painted keyboard cursor. Pages
+  // call this when a painted cursor takes over (Studio kbJumpTo, Screenspace
+  // Shift+1..4); the Escape dispatcher calls it as a last resort when nothing
+  // else claimed the key (so a focused <select> can be dismissed with Escape).
+  function blurStrayFocus() {
+    var el = document.activeElement;
+    if (el && el !== document.body && el.blur && !isTextEntry(el)) {
+      el.blur();
+      return true;
+    }
+    return false;
+  }
+
   function blockingModalOpen() {
     if (typeof isBlockingModalOpen === "function" && isBlockingModalOpen()) return true;
     return document.body && document.body.classList.contains("modal-open");
@@ -438,6 +475,9 @@
           return;
         }
       }
+      // No page handler claimed Escape: drop a lingering native focus ring so it
+      // does not compete with painted keyboard cursors across the app.
+      if (blurStrayFocus()) e.preventDefault();
       return;
     }
     var modalOpen = blockingModalOpen();
@@ -820,6 +860,7 @@
   window.ClipgenHotkeys = {
     register: register,
     registerEscape: registerEscape,
+    blurStrayFocus: blurStrayFocus,
     catalog: catalog,
     resolvedCombos: resolvedCombos,
     applyOverrides: applyOverrides,

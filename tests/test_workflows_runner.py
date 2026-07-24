@@ -7,7 +7,7 @@ Ollama is needed. The HTTP surface is covered in tests/test_workflows_api.py.
 
 import json
 import threading
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -77,7 +77,7 @@ def test_bind_participant_rebinds_every_video_source_without_mutating_original()
     assert by_id["v2"]["params"]["participant"] == "P07"
     assert by_id["t"]["params"] == {"foo": "bar"}
     # Pure: the original blueprint is never mutated (deep copy).
-    orig_nodes: Any = blueprint["nodes"]
+    orig_nodes = cast(list[dict[str, Any]], blueprint["nodes"])
     orig_by_id = {n["id"]: n for n in orig_nodes}
     assert orig_by_id["v1"]["params"]["participant"] == "P01"
     assert "participant" not in orig_by_id["v2"]["params"]

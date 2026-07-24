@@ -1736,6 +1736,14 @@ body {
   color: var(--accent-fg);
 }
 
+/* Keyboard cursor while arrow-navigating the open participant-options dropdown
+ * (Shift-less arrows once the dropdown is open; see pillNav* in
+ * transcripts-pills.js). Painted, not real DOM focus. */
+.pill-nav-cursor {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 /* Modal — shell comes from .cg-modal-overlay (tokens.css). */
 
 .modal {
