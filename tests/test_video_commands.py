@@ -158,8 +158,8 @@ def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
                     "codec_type": "audio",
                     "codec_name": "aac",
                     "channels": 2,
-                    # No usable tags at all → ordinal label.
-                    "tags": {},
+                    # "und" is MP4's undefined-language default → ordinal label.
+                    "tags": {"language": "und"},
                 },
             ]
         }

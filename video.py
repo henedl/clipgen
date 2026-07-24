@@ -1533,11 +1533,12 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
                 if handler and handler.lower() not in _GENERIC_AUDIO_HANDLERS
                 else ""
             )
+            # "und" (undefined) is MP4's default language tag, not a real name.
+            lang_label = (
+                language.upper() if language and language.lower() != "und" else ""
+            )
             label = (
-                title
-                or meaningful_handler
-                or (language.upper() if language else "")
-                or f"Track {track_index + 1}"
+                title or meaningful_handler or lang_label or f"Track {track_index + 1}"
             )
             audio_tracks.append(
                 {
