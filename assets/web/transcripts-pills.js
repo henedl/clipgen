@@ -271,6 +271,10 @@
     chevBtn.className = "pill-chevron-btn";
     chevBtn.setAttribute("aria-label", "Transcription options");
     chevBtn.setAttribute("aria-expanded", state.pillOptionsOpen === p.id ? "true" : "false");
+    // Alt-hold hint: `O` (pillMenu) opens the options for the *selected*
+    // participant, so only the active pill's chevron carries the hint. Pills
+    // re-render on selection change, keeping this in sync.
+    if (isActive) chevBtn.setAttribute("data-hotkey", "transcripts.pillMenu");
     var chev = document.createElement("span");
     chev.className = "pill-chevron";
     chevBtn.appendChild(chev);
@@ -517,6 +521,14 @@
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-small pill-agent-btn";
+    // Alt-hold hint: while the dropdown is open, digits 1-4 route to these rows
+    // (triggerPillOption). Tag each with the markCategory combo index so the
+    // "1".."4" chips show (mirrors how Screenspace reuses selectTool for menus).
+    var agentIdx = PILL_AGENT_ORDER.indexOf(opts.agent);
+    if (agentIdx >= 0 && agentIdx < 9) {
+      btn.setAttribute("data-hotkey", "transcripts.markCategory");
+      btn.setAttribute("data-hotkey-combo", String(agentIdx));
+    }
 
     var running = opts.agentState === "running";
     var mode = "start"; // start | stop | disabled
@@ -599,6 +611,7 @@
       state.pillOptionsReposition = null;
     }
     state.pillOptionsOpen = null;
+    state.pillOptionsCursor = -1;
   }
 
   function togglePillOptions(pid) {
@@ -633,6 +646,7 @@
     var chev = wrap.querySelector(".pill-chevron-btn");
     if (chev) chev.setAttribute("aria-expanded", "true");
     state.pillOptionsOpen = pid;
+    state.pillOptionsCursor = -1; // no keyboard cursor until an arrow is pressed
 
     var reposition = function () {
       var w = _findPillWrap(pid);
@@ -735,12 +749,79 @@
     btn.click();
   }
 
+  // ---- Keyboard navigation inside the open dropdown ----
+  // The pane is mounted on <body>; its interactive controls in DOM order are the
+  // Model + Language selects, then the four agent buttons. A painted cursor
+  // (.pill-nav-cursor) roves them — no real DOM focus, so the arrow hotkeys are
+  // not swallowed by the dispatcher's typing gate. Left/Right steps a focused
+  // select; Enter runs a focused agent button (digits 1–4 still shortcut them).
+
+  function pillNavControls() {
+    var pane = document.querySelector("body > .pill-options");
+    if (!pane) return [];
+    return Array.prototype.slice.call(
+      pane.querySelectorAll(".pill-options-row select, .pill-agent-btn")
+    );
+  }
+
+  function pillNavPaint() {
+    var pane = document.querySelector("body > .pill-options");
+    if (!pane) return;
+    var prev = pane.querySelectorAll(".pill-nav-cursor");
+    for (var i = 0; i < prev.length; i++) prev[i].classList.remove("pill-nav-cursor");
+    if (state.pillOptionsCursor < 0) return;
+    var controls = pillNavControls();
+    if (!controls.length) return;
+    state.pillOptionsCursor = Math.max(0, Math.min(state.pillOptionsCursor, controls.length - 1));
+    var cur = controls[state.pillOptionsCursor];
+    if (cur) {
+      cur.classList.add("pill-nav-cursor");
+      if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function pillNavMove(delta) {
+    var controls = pillNavControls();
+    if (!controls.length) return;
+    if (state.pillOptionsCursor < 0) {
+      state.pillOptionsCursor = delta > 0 ? 0 : controls.length - 1;
+    } else {
+      state.pillOptionsCursor = Math.max(
+        0, Math.min(state.pillOptionsCursor + delta, controls.length - 1)
+      );
+    }
+    pillNavPaint();
+  }
+
+  function pillNavAdjust(dir) {
+    var controls = pillNavControls();
+    if (state.pillOptionsCursor < 0 || !controls.length) return;
+    var cur = controls[state.pillOptionsCursor];
+    if (cur && cur.tagName === "SELECT" && cur.options.length) {
+      cur.selectedIndex = Math.max(0, Math.min(cur.selectedIndex + dir, cur.options.length - 1));
+      cur.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  function pillNavActivate() {
+    var controls = pillNavControls();
+    if (state.pillOptionsCursor < 0 || !controls.length) return;
+    var cur = controls[state.pillOptionsCursor];
+    if (cur && cur.classList.contains("pill-agent-btn") && !cur.hasAttribute("disabled")) {
+      cur.click();
+    }
+  }
+
   // ---- Published back to the hub (loadParticipants/selectParticipant/poller
   // render pills; boot wires the listeners) ----
   TS.renderPills = renderPills;
   TS.initPillOutsideClick = initPillOutsideClick;
   TS.initPillWheelScroll = initPillWheelScroll;
   TS.togglePillOptions = togglePillOptions; // video (O hotkey)
+  TS.closePillOptions = closePillOptions; // video (Escape closes the dropdown)
   TS.isPillMenuOpen = isPillMenuOpen; // video (digit branch)
   TS.triggerPillOption = triggerPillOption; // video (1–4 while dropdown open)
+  TS.pillNavMove = pillNavMove; // video (Up/Down while dropdown open)
+  TS.pillNavAdjust = pillNavAdjust; // video (Left/Right while dropdown open)
+  TS.pillNavActivate = pillNavActivate; // video (Enter while dropdown open)
 })();

@@ -853,6 +853,16 @@
     return _hotkeysActive() && !!(state.segments && state.segments.length);
   }
 
+  // While the participant-options dropdown is open the arrows drive it instead
+  // of the video: pill-nav claims the arrows and coarse seek yields them.
+  function _pillMenuActive() {
+    return _hotkeysActive() && !!(TS.isPillMenuOpen && TS.isPillMenuOpen());
+  }
+
+  function _seekActive() {
+    return _hotkeysActive() && !_pillMenuActive();
+  }
+
   function initPlayerKeyboard() {
     window.ClipgenHotkeys.register([
       {
@@ -869,12 +879,12 @@
       },
       {
         id: "transport.seekBack",
-        when: _hotkeysActive,
+        when: _seekActive,
         handler: function () { seekVideo(Math.max(0, videoGlobalTime() - 5)); },
       },
       {
         id: "transport.seekFwd",
-        when: _hotkeysActive,
+        when: _seekActive,
         handler: function () { seekVideo(videoGlobalTime() + 5); },
       },
       {
@@ -938,6 +948,22 @@
         },
       },
       {
+        id: "transcripts.pillNav",
+        when: _pillMenuActive,
+        handler: function (e, combo) {
+          if (combo === "ArrowUp") { if (TS.pillNavMove) TS.pillNavMove(-1); }
+          else if (combo === "ArrowDown") { if (TS.pillNavMove) TS.pillNavMove(1); }
+          else if (combo === "ArrowLeft") { if (TS.pillNavAdjust) TS.pillNavAdjust(-1); }
+          else if (combo === "ArrowRight") { if (TS.pillNavAdjust) TS.pillNavAdjust(1); }
+        },
+      },
+      {
+        id: "transcripts.pillActivate",
+        repeat: false,
+        when: _pillMenuActive,
+        handler: function () { if (TS.pillNavActivate) TS.pillNavActivate(); },
+      },
+      {
         id: "transcripts.toggleCaptions",
         when: _hotkeysActive,
         handler: function () {
@@ -953,6 +979,15 @@
         handler: function () { _toggleVideoFullscreen(); },
       },
     ]);
+
+    // Escape closes an open participant-options dropdown before anything else.
+    window.ClipgenHotkeys.registerEscape(function () {
+      if (TS.isPillMenuOpen && TS.isPillMenuOpen()) {
+        if (TS.closePillOptions) TS.closePillOptions();
+        return true;
+      }
+      return false;
+    });
   }
 
   // Step the playback rate one stop along VIDEO_SPEEDS (clamped at the ends).

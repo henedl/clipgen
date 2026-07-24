@@ -1676,6 +1676,11 @@
       if (cfg.ghostSel) pulseGhost(cfg.ghostSel);
       return false;
     }
+    // Taking over with the painted cursor: drop any lingering native DOM focus
+    // (e.g. a tabbed-to top-nav button) so only one focus indicator shows.
+    if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
+      window.ClipgenHotkeys.blurStrayFocus();
+    }
     _kbRegion = region;
     _kbCursor = { surface: region, idx: 0 };
     kbPaintCursor();
@@ -3263,11 +3268,12 @@
       {
         id: "studio.selectTab",
         handler: function (e, combo) {
-          // Shift+1…4 → the Nth preview tab by fixed position (Sheet, Screenspace
+          // 1…4 → the Nth preview tab by fixed position (Sheet, Screenspace
           // Intake, Transcript Intake, Composer Intake). No-op if that tab is
           // still hidden (its data source hasn't appeared). Fixed positions keep
           // the Alt-hint chip (data-hotkey-combo) in sync with the action.
           // Routing through .click() reuses initPreviewTabs' switch + persistence.
+          // (replace("Shift+", "") is now a no-op — kept harmless for clarity.)
           var n = parseInt(combo.replace("Shift+", ""), 10);
           if (isNaN(n)) return;
           var tab = qsa(".preview-tab")[n - 1];

@@ -229,6 +229,16 @@
     // match the Python default before /api/settings resolves.
     groupedToolNav: true,
     activeWorkflow: "color",
+    // Panel-focus keyboard navigation (Shift+1..4 + arrows). focusRegion is the
+    // surface the arrows drive: "video" (the default) means transport seek and
+    // is what Escape returns to; "sidebar"/"tool"/"task"/"results" rove within a
+    // panel. focusCursor indexes ssNavItems(focusRegion). navEditing is true
+    // while a text control (notes / a param input) holds real focus for typing.
+    // pickerCursor (>= 0) indexes into an open run-picker dropdown's options.
+    focusRegion: "video",
+    focusCursor: 0,
+    navEditing: false,
+    pickerCursor: -1,
     referenceTimestamp: null,
     sceneReferences: [],
     tasks: [],
@@ -3106,7 +3116,58 @@
     renderIntervalSlot("paramSceneInterval", 0.5, 60, 1.0, 0.5);
   }
 
+  // Param inputs are DOM-only (rangeInput/numberInput carry hardcoded defaults,
+  // not state), so any *same-tool* rebuild of the panel — Capture Current Frame,
+  // a scene/template add, a picker toggle — would snap every value (Interval,
+  // thresholds, …) back to its default. Snapshot values by id and restore them
+  // across the rebuild. Tool *switches* still reset (ids are tool-prefixed, so
+  // they don't match). Multitool step params are state-backed (step._initial) and
+  // its per-step ids are positional, so for multitool we restore only the shared
+  // #workflowIntervalSlot, never the step rows.
+  var _lastRenderedTool = null;
+
+  function _snapshotParamValues(intervalOnly) {
+    var map = {};
+    var sel = intervalOnly
+      ? "#workflowIntervalSlot [id]"
+      : "#workflowParams [id], #workflowIntervalSlot [id]";
+    qsa(sel).forEach(function (el) {
+      var tag = el.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
+        map[el.id] = el.type === "checkbox" ? el.checked : el.value;
+      }
+    });
+    return map;
+  }
+
+  function _restoreParamValues(map) {
+    Object.keys(map).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      var tag = el.tagName;
+      if (tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") return;
+      var saved = map[id];
+      if (el.type === "checkbox") {
+        if (el.checked === saved) return;
+        el.checked = saved;
+      } else {
+        if (el.value === String(saved)) return;
+        el.value = saved;
+      }
+      // Fire input so value readouts + the model view reflect the restored value.
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
   function renderWorkflowParams() {
+    var sameTool = _lastRenderedTool === state.activeWorkflow;
+    var saved = sameTool ? _snapshotParamValues(state.activeWorkflow === "multitool") : null;
+    _renderWorkflowParamsBuild();
+    _lastRenderedTool = state.activeWorkflow;
+    if (saved) _restoreParamValues(saved);
+  }
+
+  function _renderWorkflowParamsBuild() {
     var container = qs("#workflowParams");
     container.innerHTML = "";
     SS.setColorHiddenInputs(null);
@@ -3759,6 +3820,288 @@
     loadFrame(clamp(state.currentTimestamp + delta, 0, Math.max(0, state.videoInfo.duration - 0.001)));
   }
 
+  // ---- Panel focus navigation (Shift+1..4 + arrows) ----
+  //
+  // Project convention: Shift+numeral targets a panel for keyboard focus; the
+  // arrows then rove within it while bare numerals keep selecting tools. The
+  // video player is the default surface (arrows = transport seek) that Escape
+  // returns to. Selection is a painted cursor (.ss-nav-cursor), NOT real DOM
+  // focus — real focus would flip the dispatcher's isTypingTarget check and
+  // suppress the arrow handlers. The lone exception is the notes textarea, which
+  // takes real focus for editing (Enter to edit, Escape to step back out).
+
+  function ssVideoFocused() {
+    return state.focusRegion === "video";
+  }
+
+  function ssElVisible(elm) {
+    if (!elm) return false;
+    var r = elm.getBoundingClientRect();
+    return r.width > 0 || r.height > 0;
+  }
+
+  // The interactive control of a tool-region nav item: a param row wraps its
+  // control (slider / select / checkbox / a button such as "Capture Current
+  // Frame") in .param-control; the top-row run controls are already the control.
+  function ssToolControl(item) {
+    if (item && item.classList && item.classList.contains("param-row")) {
+      return item.querySelector("input, select, textarea, button");
+    }
+    return item;
+  }
+
+  // Ordered, currently-visible items the arrows walk in each region.
+  function ssNavItems(region) {
+    if (region === "sidebar") {
+      var items = [];
+      var notes = qs("#ssInfoNotes");
+      if (notes) items.push(notes);
+      // Each collapsible section contributes its header (Enter toggles collapse,
+      // so a collapsed Top-issues / Transcript-tags section can still be reached
+      // and reopened) followed by its rows while expanded.
+      qsa("#ssInfoPanel .ss-info-section").forEach(function (section) {
+        if (section.classList.contains("hidden")) return;
+        var header = section.querySelector(".ss-info-section-header");
+        if (header) items.push(header);
+        if (section.getAttribute("data-collapsed") !== "true") {
+          qsa("#" + section.id + " li.ss-info-issue").forEach(function (li) { items.push(li); });
+        }
+      });
+      return items;
+    }
+    if (region === "tool") {
+      // The "top row" run controls (participant / interval / region / fast-mode),
+      // then the active tool's parameter rows. The tool *selector* is not here:
+      // bare numerals and Z/X switch tools, so Shift+2 focuses the panel itself.
+      var toolItems = [];
+      [
+        qs("#runParticipantPicker .run-picker-btn"),
+        qs("#workflowIntervalSlot input, #workflowIntervalSlot select"),
+        qs("#runRegionPicker .run-picker-btn"),
+        qs("#runScanModePicker button"),
+      ].forEach(function (ctrl) {
+        if (ssElVisible(ctrl)) toolItems.push(ctrl);
+      });
+      qsa("#workflowParams .param-row").forEach(function (row) { toolItems.push(row); });
+      return toolItems;
+    }
+    if (region === "task") return qsa("#taskList .task-card");
+    if (region === "results") return qsa("#resultsList .result-row");
+    return [];
+  }
+
+  function ssClearNavPaint() {
+    qsa(".ss-nav-cursor").forEach(function (n) { n.classList.remove("ss-nav-cursor"); });
+  }
+
+  // ---- Run-picker sub-navigation ----
+  // Opening a participant/region picker with Enter drops the cursor into the
+  // dropdown: arrows walk its options (the Select-all row + per-item checkbox
+  // labels) and Enter toggles the focused one. pickerCursor >= 0 means we're
+  // inside a dropdown, so the tool-region handlers delegate here.
+
+  function ssOpenPicker() {
+    return qs(".run-picker-panel:not(.hidden)");
+  }
+
+  function ssInPicker() {
+    return state.pickerCursor >= 0 && !!ssOpenPicker();
+  }
+
+  function ssPickerItems() {
+    var panel = ssOpenPicker();
+    if (!panel) return [];
+    return Array.prototype.slice.call(panel.querySelectorAll(".run-picker-toggle-all, label"));
+  }
+
+  function ssPaintPicker() {
+    ssClearNavPaint();
+    var items = ssPickerItems();
+    if (!items.length) { state.pickerCursor = -1; return; }
+    state.pickerCursor = clamp(state.pickerCursor, 0, items.length - 1);
+    var cur = items[state.pickerCursor];
+    if (cur) {
+      cur.classList.add("ss-nav-cursor");
+      if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // Repaint the item cursor. Regions re-render their innerHTML (poller, results
+  // load, param rebuild), so the index is always re-clamped and never trusted
+  // stale; the next nav keypress self-heals a wiped cursor. Only the focused
+  // item is highlighted (no whole-panel outline — matches Studio).
+  function ssPaintNav() {
+    ssClearNavPaint();
+    if (state.focusRegion === "video") return;
+    var items = ssNavItems(state.focusRegion);
+    if (!items.length) { state.focusCursor = 0; return; }
+    state.focusCursor = clamp(state.focusCursor, 0, items.length - 1);
+    var cur = items[state.focusCursor];
+    if (cur) {
+      cur.classList.add("ss-nav-cursor");
+      if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function ssSetFocusRegion(region) {
+    closeRunPicker(); // a transient dropdown doesn't survive a focus-region change
+    state.focusRegion = region;
+    state.navEditing = false;
+    state.pickerCursor = -1;
+    if (region === "video") { ssClearNavPaint(); return; }
+    state.focusCursor = 0;
+    ssPaintNav();
+  }
+
+  // Shift+N: reveal the target panel, then land the cursor in it. Declines
+  // (stays put) when the panel has nothing to land on, mirroring Studio kbJumpTo.
+  function ssFocusRegionByNumber(n) {
+    var region;
+    if (n === 1) {
+      region = "sidebar";
+      if (qs("#ssInfoPanel") && qs("#ssInfoPanel").classList.contains("hidden")) {
+        applyInfoPanelCollapsed(false);
+        setStoredUIStateField("screenspace", "infoPanelCollapsed", false);
+      }
+    } else if (n === 2) {
+      region = "tool";
+      if (state.bottomCollapsed) toggleBottomPanel();
+    } else if (n === 3) {
+      region = "task";
+      setRightPaneTab("queue");
+    } else if (n === 4) {
+      region = "results";
+      setRightPaneTab("results");
+    } else {
+      return;
+    }
+    if (!ssNavItems(region).length) return;
+    // Taking over with the painted cursor: drop any lingering native DOM focus
+    // (e.g. a tabbed-to top-nav button) so only one focus indicator shows.
+    if (window.ClipgenHotkeys && window.ClipgenHotkeys.blurStrayFocus) {
+      window.ClipgenHotkeys.blurStrayFocus();
+    }
+    ssSetFocusRegion(region);
+  }
+
+  function ssNavMove(delta) {
+    if (ssInPicker()) {
+      var picks = ssPickerItems();
+      if (!picks.length) { state.pickerCursor = -1; return; }
+      state.pickerCursor = clamp(state.pickerCursor + delta, 0, picks.length - 1);
+      ssPaintPicker();
+      return;
+    }
+    var items = ssNavItems(state.focusRegion);
+    if (!items.length) return;
+    state.focusCursor = clamp(state.focusCursor + delta, 0, items.length - 1);
+    ssPaintNav();
+  }
+
+  // Left/Right nudges a control by one native step and fires the input event
+  // addParamRow listens for (so the model view refreshes). We set .value rather
+  // than real-focusing the range, which would double-apply the browser's own
+  // arrow stepping. Sliders and number inputs step; selects cycle; buttons,
+  // checkboxes and text inputs ignore horizontal (they act on Enter).
+  function ssAdjustControl(ctrl, dir) {
+    if (!ctrl) return;
+    if (ctrl.type === "range" || ctrl.type === "number") {
+      var step = parseFloat(ctrl.step) || 1;
+      var value = parseFloat(ctrl.value);
+      if (isNaN(value)) value = 0;
+      value += step * dir;
+      if (ctrl.min !== "") value = Math.max(value, parseFloat(ctrl.min));
+      if (ctrl.max !== "") value = Math.min(value, parseFloat(ctrl.max));
+      value = Math.round(value * 1e6) / 1e6; // trim fractional-step float drift
+      ctrl.value = value;
+      ctrl.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+    if (ctrl.tagName === "SELECT" && ctrl.options.length) {
+      ctrl.selectedIndex = Math.max(0, Math.min(ctrl.selectedIndex + dir, ctrl.options.length - 1));
+      ctrl.dispatchEvent(new Event("input", { bubbles: true }));
+      ctrl.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  // Left/Right: adjust the focused item's control. Only the tool region has
+  // horizontal controls; the other regions are vertical lists, so horizontal is
+  // a consumed no-op — the handler still preventDefaults so the arrows never
+  // leak to a video seek.
+  function ssNavAdjust(dir) {
+    if (state.focusRegion !== "tool" || ssInPicker()) return;
+    var cur = ssNavItems("tool")[state.focusCursor];
+    if (cur) ssAdjustControl(ssToolControl(cur), dir);
+  }
+
+  function ssNavActivate() {
+    if (ssInPicker()) {
+      var picks = ssPickerItems();
+      var pick = picks[state.pickerCursor];
+      if (!pick) return;
+      var cb = pick.querySelector && pick.querySelector('input[type="checkbox"]');
+      if (cb) {
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event("change", { bubbles: true }));
+      } else if (pick.click) {
+        pick.click(); // the Select-all / Deselect-all row
+      }
+      ssPaintPicker(); // reflect the toggle; keep the cursor in place
+      return;
+    }
+    var items = ssNavItems(state.focusRegion);
+    var cur = items[state.focusCursor];
+    if (!cur) return;
+    if (state.focusRegion === "sidebar") {
+      if (cur.tagName === "TEXTAREA") {
+        state.navEditing = true;
+        cur.focus(); // Enter edits the notes; Escape steps back out to the cursor
+      } else if (cur.classList.contains("ss-info-section-header")) {
+        cur.click();  // toggle the section collapse
+        ssPaintNav(); // rows appeared/disappeared; keep the cursor on the header
+      } else {
+        cur.click(); // clickable cross-ref row -> loadFrame(t)
+      }
+      return;
+    }
+    if (state.focusRegion === "task") {
+      cur.click(); // selects a completed/paused/running task -> Results tab
+      if (state.selectedTaskId) {
+        // "Enter moves into Task Results": follow the selection into the panel.
+        state.focusRegion = "results";
+        state.focusCursor = 0;
+        ssPaintNav();
+      }
+      return;
+    }
+    if (state.focusRegion === "results") {
+      cur.click(); // -> loadFrame(row.dataset.timestamp)
+      return;
+    }
+    // Tool region: operate the focused control. Buttons/checkboxes (run pickers,
+    // fast-mode toggle, "Capture Current Frame", "Detect first") activate on
+    // Enter; text/number/select controls take real focus so the user can type or
+    // open them (Escape steps back out to the cursor). Sliders act on Left/Right.
+    var ctrl = ssToolControl(cur);
+    if (!ctrl) return;
+    if (ctrl.tagName === "BUTTON") {
+      var opensPicker = ctrl.classList.contains("run-picker-btn");
+      ctrl.click();
+      // A run picker opens its dropdown: drop the cursor into it so the arrows
+      // navigate its options (Escape closes it and returns here).
+      if (opensPicker && ssOpenPicker()) {
+        state.pickerCursor = 0;
+        ssPaintPicker();
+      }
+      return;
+    }
+    if (ctrl.type === "checkbox") { ctrl.click(); return; }
+    if (ctrl.tagName === "SELECT" || ctrl.type === "text" || ctrl.type === "search" || ctrl.type === "number") {
+      state.navEditing = true;
+      ctrl.focus();
+    }
+  }
+
   function initKeyboard() {
     window.ClipgenHotkeys.register([
       {
@@ -3770,14 +4113,17 @@
       },
       // Arrows are the coarse seek; ,/. step a single frame (the page's
       // pre-registry arrows were frame-steps — that role moved to ,/.).
-      { id: "transport.seekBack", handler: function () { _seekBy(-SEEK_STEP); } },
-      { id: "transport.seekFwd", handler: function () { _seekBy(SEEK_STEP); } },
+      // Arrow-key transport is gated to video focus so that a focused panel
+      // (Shift+1..4) fully owns the arrows; ,/. fine-step is never an arrow so it
+      // works regardless of focus.
+      { id: "transport.seekBack", when: ssVideoFocused, handler: function () { _seekBy(-SEEK_STEP); } },
+      { id: "transport.seekFwd", when: ssVideoFocused, handler: function () { _seekBy(SEEK_STEP); } },
       { id: "transport.stepBack", handler: function () { _seekBy(-FRAME_STEP); } },
       { id: "transport.stepFwd", handler: function () { _seekBy(FRAME_STEP); } },
       // Shift+arrow mirrors the ,/. fine step so the 1 s / 5 s pair is discoverable
       // from the arrow keys alone (screenspace-scoped to avoid Composer's Shift+arrow).
-      { id: "screenspace.stepBackFine", handler: function () { _seekBy(-FRAME_STEP); } },
-      { id: "screenspace.stepFwdFine", handler: function () { _seekBy(FRAME_STEP); } },
+      { id: "screenspace.stepBackFine", when: ssVideoFocused, handler: function () { _seekBy(-FRAME_STEP); } },
+      { id: "screenspace.stepFwdFine", when: ssVideoFocused, handler: function () { _seekBy(FRAME_STEP); } },
       { id: "screenspace.setIn", handler: function () { if (SS.setInMark) SS.setInMark(); } },
       { id: "screenspace.setOut", handler: function () { if (SS.setOutMark) SS.setOutMark(); } },
       {
@@ -3824,12 +4170,43 @@
         repeat: false,
         handler: function (e, combo) { handleToolDigit(parseInt(combo, 10)); },
       },
+      // Shift+1..4 target a panel for focus; the arrows then rove within it.
+      {
+        id: "screenspace.focusRegion",
+        repeat: false,
+        handler: function (e, combo) {
+          ssFocusRegionByNumber(parseInt(combo.replace("Shift+", ""), 10));
+        },
+      },
+      {
+        id: "screenspace.nav",
+        when: function () { return state.focusRegion !== "video"; },
+        handler: function (e, combo) {
+          if (combo === "ArrowUp") ssNavMove(-1);
+          else if (combo === "ArrowDown") ssNavMove(1);
+          else if (combo === "ArrowLeft") ssNavAdjust(-1);
+          else if (combo === "ArrowRight") ssNavAdjust(1);
+        },
+      },
+      {
+        id: "screenspace.navActivate",
+        repeat: false,
+        when: function () { return state.focusRegion !== "video"; },
+        handler: function () { ssNavActivate(); },
+      },
     ]);
 
-    // Back-out cascade: an open run-picker dropdown first, then the active
-    // pointer interaction, then the pending/active region, then the
-    // region-name modal.
+    // Back-out cascade: leave the notes editor, then return panel focus to the
+    // video, then an open run-picker dropdown, then the active pointer
+    // interaction, then the pending/active region, then the region-name modal.
     window.ClipgenHotkeys.registerEscape(function () {
+      if (state.navEditing) {
+        var active = document.activeElement;
+        if (active && active.blur) active.blur();
+        state.navEditing = false;
+        ssPaintNav();
+        return true;
+      }
       var openCat = qs("#workflowCategories .ss-cat-chip.open");
       if (openCat) {
         closeCatMenus(null);
@@ -3838,6 +4215,13 @@
       var openPicker = qs(".run-picker-panel:not(.hidden)");
       if (openPicker) {
         closeRunPicker();
+        state.pickerCursor = -1;
+        if (state.focusRegion === "tool") ssPaintNav(); // restore the cursor on the picker button
+        return true;
+      }
+      // With transient popovers closed, Escape returns panel focus to the video.
+      if (state.focusRegion !== "video") {
+        ssSetFocusRegion("video");
         return true;
       }
       var consumed = true;
@@ -3889,6 +4273,8 @@
         hideRegionNameModal();
         consumed = true;
       }
+      // A stray tabbed focus (top-nav button, source <select>, …) is dropped by
+      // the shared Escape fallback in hotkeys.js when nothing here claims it.
       return consumed;
     });
   }

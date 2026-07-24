@@ -73,6 +73,9 @@
     // in the agents satellite) can detect they're stale and bail before
     // clobbering the active participant's UI.
     participantReqVer: 0,
+    // Keyboard cursor into the open participant-options dropdown (-1 = none);
+    // see pillNav* in transcripts-pills.js.
+    pillOptionsCursor: -1,
   };
 
   var _transcriptionWarmupPosted = false;
