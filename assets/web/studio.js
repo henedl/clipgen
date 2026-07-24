@@ -1953,36 +1953,40 @@
 
     if (state.bottomCollapsed) {
       // --- Restore ---
+      // Animate `height` between concrete pixel endpoints (0 → bottomH); the box
+      // is never `auto` mid-flight, so the reveal tracks linearly. Mirrors the
+      // Screenspace panel.
       state.bottomCollapsed = false;
       document.body.classList.add("bottom-animating");
-      // Animate maxHeight from 0 to the persisted bottomH; afterwards drop the
-      // inline maxHeight so the explicit `height` style takes over.
-      bottom.style.maxHeight = "0px";
-      bottom.offsetHeight; // reflow at 0
       document.body.classList.remove("bottom-collapsed");
-      bottom.style.maxHeight = state.bottomH + "px";
+      bottom.style.height = "0px";
+      bottom.offsetHeight; // reflow — pin the start frame
       bottom.style.height = state.bottomH + "px";
 
       onCollapseTransitionEnd(bottom, function () {
         document.body.classList.remove("bottom-animating");
-        bottom.style.maxHeight = "";
         bottom._transitioning = false;
         persistBottomHeight();
       });
     } else {
       // --- Collapse ---
+      // Pin the current pixel height, then animate `height` to 0. Keeping the box
+      // height definite the whole way (never clearing to `auto`) is what avoids
+      // the mid-animation hitch.
       state.bottomCollapsed = true;
-      document.body.classList.add("bottom-animating");
       var currentH = bottom.offsetHeight;
-      bottom.style.maxHeight = currentH + "px";
+      document.body.classList.add("bottom-animating");
+      bottom.style.height = currentH + "px";
+      bottom.offsetHeight; // reflow — pin the start frame
       document.body.classList.add("bottom-collapsed");
-      bottom.offsetHeight; // reflow
-      bottom.style.maxHeight = "0px";
-      bottom.style.height = "";
+      bottom.style.height = "0px";
 
       onCollapseTransitionEnd(bottom, function () {
         bottom._transitioning = false;
         document.body.classList.remove("bottom-animating");
+        // Drop the inline height so the collapsed CSS (height: 0) governs the
+        // rest state.
+        bottom.style.height = "";
         persistBottomHeight();
       });
     }
@@ -1997,7 +2001,7 @@
       cb();
     }
     function handler(e) {
-      if (e.target === el && e.propertyName === "max-height") done();
+      if (e.target === el && e.propertyName === "height") done();
     }
     el.addEventListener("transitionend", handler);
     setTimeout(done, 400);
