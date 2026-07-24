@@ -74,7 +74,12 @@
     return AUDIO_CTX;
   }
 
-  var DRIFT_TOLERANCE = 0.15; // seconds of audio<->video slip before a nudge
+  // Audio<->video drift is corrected by trimming playbackRate (smooth, no seek),
+  // never by reassigning currentTime mid-playback (that re-seeks and pops).
+  var SYNC_DEADBAND = 0.05; // s of slip tolerated before nudging
+  var SYNC_GAIN = 0.5;      // proportional correction gain
+  var SYNC_MAX = 0.06;      // cap the rate trim at ±6% (inaudible tempo shift)
+  var SYNC_HARD = 0.75;     // s — beyond this, a one-off hard resync (seek) is ok
 
   function attachAudioPanel(opts) {
     opts = opts || {};
@@ -187,6 +192,10 @@
         if (!url) { teardownMulti(); enterSingle(); return; }
         var el = document.createElement("audio");
         el.preload = "auto";
+        // Keep pitch stable while the sync logic trims playbackRate to converge.
+        el.preservesPitch = true;
+        el.mozPreservesPitch = true;
+        el.webkitPreservesPitch = true;
         el.src = url;
         el.className = "cg-audiotrack";
         el.addEventListener("error", bailToSingle);
@@ -220,20 +229,54 @@
     }
 
     // ---- Video <-> audio-element sync (attached once; no-op unless multi) ----
+    // Separate media elements can't be sample-locked to the video, so align
+    // currentTime only on discontinuities (play / seek) and otherwise converge
+    // residual drift by trimming playbackRate. Reassigning currentTime during
+    // playback re-seeks the element and pops the audio, so it's reserved for a
+    // rare large slip.
     function forEachTrack(fn) {
       for (var i = 0; i < trackNodes.length; i++) fn(trackNodes[i].el, i);
     }
-    function syncTime() {
+    function alignTime() {
       forEachTrack(function (el) {
         try { el.currentTime = video.currentTime; } catch (e) {}
       });
     }
     function syncPlay() {
       resumeCtx();
-      syncTime();
+      var rate = video.playbackRate || 1;
       forEachTrack(function (el) {
+        try { el.currentTime = video.currentTime; } catch (e) {}
+        el.playbackRate = rate;
         var p = el.play();
         if (p && p.catch) p.catch(function () {});
+      });
+    }
+    function resyncTick() {
+      if (!multiActive || video.paused || video.seeking) return;
+      var rate = video.playbackRate || 1;
+      forEachTrack(function (el) {
+        if (el.readyState < 3) return; // HAVE_FUTURE_DATA — don't fight the buffer
+        if (el.paused) {
+          var p = el.play();
+          if (p && p.catch) p.catch(function () {});
+          return;
+        }
+        var delta = el.currentTime - video.currentTime; // + => audio ahead
+        var ad = delta < 0 ? -delta : delta;
+        if (ad > SYNC_HARD) {
+          // Way out of sync (long stall / tab throttled) — accept one seek pop.
+          try { el.currentTime = video.currentTime; } catch (e) {}
+          el.playbackRate = rate;
+        } else if (ad > SYNC_DEADBAND) {
+          // Proportional rate trim: converges smoothly and settles as drift → 0.
+          var corr = delta * SYNC_GAIN;
+          if (corr > SYNC_MAX) corr = SYNC_MAX;
+          else if (corr < -SYNC_MAX) corr = -SYNC_MAX;
+          el.playbackRate = rate * (1 - corr);
+        } else {
+          el.playbackRate = rate; // within deadband — run at the true rate
+        }
       });
     }
     video.addEventListener("play", function () { if (multiActive) syncPlay(); });
@@ -243,21 +286,12 @@
     video.addEventListener("ended", function () {
       if (multiActive) forEachTrack(function (el) { el.pause(); });
     });
-    video.addEventListener("seeking", function () { if (multiActive) syncTime(); });
-    video.addEventListener("seeked", function () { if (multiActive) syncTime(); });
+    video.addEventListener("seeking", function () { if (multiActive) alignTime(); });
+    video.addEventListener("seeked", function () { if (multiActive) alignTime(); });
     video.addEventListener("ratechange", function () {
       if (multiActive) forEachTrack(function (el) { el.playbackRate = video.playbackRate; });
     });
-    video.addEventListener("timeupdate", function () {
-      if (!multiActive || video.seeking) return;
-      forEachTrack(function (el) {
-        if (el.readyState < 2) return;
-        if (Math.abs(el.currentTime - video.currentTime) > DRIFT_TOLERANCE) {
-          try { el.currentTime = video.currentTime; } catch (e) {}
-        }
-        if (!video.paused && el.paused) { var p = el.play(); if (p && p.catch) p.catch(function () {}); }
-      });
-    });
+    video.addEventListener("timeupdate", resyncTick);
     // Defend the invariant: in multitrack mode the video must never regain audio
     // (page code re-applies video.muted on load), else its baked track doubles.
     video.addEventListener("volumechange", function () {

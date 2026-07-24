@@ -1613,8 +1613,9 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
         return None
     resolved, mtime_ns = key
     cache_dir = Path(tempfile.gettempdir()) / "clipgen_audio_tracks"
+    # The scheme tag (_v2) invalidates caches from before +faststart was added.
     digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:16]
-    out_path = cache_dir / f"{digest}_{mtime_ns}_a{audio_index}.m4a"
+    out_path = cache_dir / f"{digest}_{mtime_ns}_a{audio_index}_v2.m4a"
     if out_path.is_file() and out_path.stat().st_size > 0:
         return out_path
     if config.DEBUGGING:
@@ -1625,7 +1626,19 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
     except OSError:
         return None
     tmp_path = out_path.with_suffix(".partial.m4a")
-    base = ["ffmpeg", "-y", "-i", filepath, "-map", f"0:a:{audio_index}", "-vn"]
+    # +faststart relocates the moov atom to the front so the browser can stream
+    # and seek the track smoothly (a tail moov forces buffering stalls → pops).
+    base = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        filepath,
+        "-map",
+        f"0:a:{audio_index}",
+        "-vn",
+        "-movflags",
+        "+faststart",
+    ]
     # Try a stream copy first (instant for AAC), then an AAC re-encode for
     # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
     for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
