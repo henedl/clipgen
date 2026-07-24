@@ -1,6 +1,8 @@
 import json
 import subprocess
+from pathlib import Path
 
+import config
 import utils
 import video
 
@@ -221,6 +223,71 @@ def test_probe_video_properties_failure(monkeypatch, tmp_path):
 def test_probe_video_properties_file_not_found():
     video._video_properties_cache.clear()
     assert video.probe_video_properties("/nonexistent/missing.mp4") is None
+
+
+# -- extract_audio_track tests --
+
+
+def _stub_ffmpeg_writes_output(monkeypatch, tmp_path, fail_copy=False):
+    """Route the audio-track cache to tmp_path and fake ffmpeg by writing the
+    output file. Returns the list that records each subprocess.run cmd."""
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(video.tempfile, "gettempdir", lambda: str(tmp_path))
+    calls: list[list[str]] = []
+
+    def _run(cmd, **_kw):
+        calls.append(cmd)
+        if fail_copy and "copy" in cmd:
+            raise subprocess.CalledProcessError(1, "ffmpeg")
+        Path(cmd[-1]).write_bytes(b"audio")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(video.subprocess, "run", _run)
+    return calls
+
+
+def test_extract_audio_track_stream_copy_and_cache(monkeypatch, tmp_path):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    calls = _stub_ffmpeg_writes_output(monkeypatch, tmp_path)
+
+    out = video.extract_audio_track(str(src), 0)
+    assert out is not None and out.is_file()
+    assert len(calls) == 1  # AAC copy succeeded → no re-encode retry
+    assert "copy" in calls[0]
+
+    # Second call hits the on-disk cache — ffmpeg is not invoked again.
+    out2 = video.extract_audio_track(str(src), 0)
+    assert out2 == out
+    assert len(calls) == 1
+
+
+def test_extract_audio_track_falls_back_to_aac(monkeypatch, tmp_path):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    calls = _stub_ffmpeg_writes_output(monkeypatch, tmp_path, fail_copy=True)
+
+    out = video.extract_audio_track(str(src), 1)
+    assert out is not None and out.is_file()
+    assert len(calls) == 2  # copy failed, AAC re-encode succeeded
+    assert "aac" in calls[1]
+
+
+def test_extract_audio_track_failure_returns_none(monkeypatch, tmp_path):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(video.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    def _raise(_cmd, **_kw):
+        raise subprocess.CalledProcessError(1, "ffmpeg")
+
+    monkeypatch.setattr(video.subprocess, "run", _raise)
+    assert video.extract_audio_track(str(src), 0) is None
+
+
+def test_extract_audio_track_file_not_found():
+    assert video.extract_audio_track("/nonexistent/missing.mp4", 0) is None
 
 
 # -- probe_max_keyframe_gap tests --

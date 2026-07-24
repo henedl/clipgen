@@ -1393,6 +1393,24 @@ def api_video_stream(participant: str) -> FlaskResponse:
     return response
 
 
+@screenspace_bp.route("/api/video/audio-track/<participant>/<int:idx>")
+def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
+    """Stream one demuxed audio track for the browser's per-track volume mixer."""
+    paths = _participant_video_paths(participant)
+    if not paths:
+        return err(f"No video for participant {participant}", 404)
+    part = request.args.get("part", type=int)
+    video_path = (
+        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
+    )
+    out = video.extract_audio_track(video_path, idx)
+    if out is None:
+        return err("Could not extract audio track", 500)
+    response = send_file(str(out), mimetype="audio/mp4", conditional=True)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ---- Region coordinate normalization ----
 
 

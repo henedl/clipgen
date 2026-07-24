@@ -57,8 +57,9 @@
     videoPlaying: false,
     videoMuted: false,
     // Audio-track layout for the current participant (from /api/audio-info);
-    // feeds the volume popover's detected-track caption.
+    // feeds the volume popover's detected-track caption + per-track mixer.
     audioTracks: [],
+    audioPanel: null, // ClipgenVideoControls audio-popover controller
     videoPlaybackRate: 1,
     ccEnabled: false,
     pipActive: false,
@@ -701,15 +702,18 @@
     // a re-encoded or replaced source file invalidates the browser HTTP cache
     // instead of relying on send_from_directory's Last-Modified revalidation.
     if (p.has_video) {
-      // Lazily probe the audio-track layout for the volume popover's caption.
-      // Guarded by participantReqVer so a slow response for a since-abandoned
-      // participant can't overwrite the current one's tracks.
+      // Lazily probe the audio-track layout for the volume popover's caption +
+      // per-track mixer. Reset to single-track now (tears down the previous
+      // participant's mix), then reconfigure once the layout arrives. Guarded by
+      // participantReqVer so a stale response can't overwrite the current tracks.
       state.audioTracks = [];
+      if (state.audioPanel) state.audioPanel.refresh();
       (function (ver) {
         apiGet("api/audio-info/" + encodeURIComponent(pid))
           .then(function (data) {
             if (ver !== state.participantReqVer) return;
             if (data && data.ok) state.audioTracks = data.audio_tracks || [];
+            if (state.audioPanel) state.audioPanel.refresh();
           })
           .catch(function () {});
       })(state.participantReqVer);

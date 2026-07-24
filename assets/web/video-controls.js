@@ -40,16 +40,25 @@
   // element alone. We route the element through a Web Audio GainNode
   // (createMediaElementSource -> gain -> destination) whose gain runs 0..2.0.
   //
-  // The graph is built lazily on the first real user gesture on the slider,
-  // never on hover: autoplay policy only resumes an AudioContext inside a
+  // The single-track graph is built lazily on the first real user gesture on the
+  // slider, never on hover: autoplay policy only resumes an AudioContext inside a
   // user-activation handler, and connecting a suspended context to an
   // already-playing element would cut its sound. Until then the video plays
   // natively; the first interaction activates gain seamlessly.
   //
-  // Mute stays each page's own concern (video.muted) — it still silences the
-  // graph because the element's muted flag gates its MediaElementSource output.
-  // The slider and mute are independent (mute overrides; slider at 0 also
-  // silences). Volume is in-memory only and resets to 100% on reload.
+  // MULTITRACK: a browser plays only the container's default audio track, so
+  // independent per-track volume needs each track as its own media source. When
+  // a (single-file) participant has >1 track and the page supplies trackAudioUrl,
+  // the module mutes the <video> (visual only) and plays N hidden <audio>
+  // elements — one per extracted track (/api/.../audio-track/…) — each through
+  // its own GainNode into a shared master, kept time-aligned with the video
+  // (play/pause/seek/rate + drift correction). The popover then shows one slider
+  // per track. Any audio-element error bails back to the video's own track so
+  // there's always sound. Multi-part participants keep the single master slider.
+  //
+  // The page drives mode via ctrl.setMuted() (mute intent) and ctrl.refresh()
+  // (call after the track list for the current participant is known). Volume is
+  // in-memory only and resets to 100% on reload.
 
   var AUDIO_CTX = null; // one AudioContext shared by every attached player
 
@@ -65,6 +74,8 @@
     return AUDIO_CTX;
   }
 
+  var DRIFT_TOLERANCE = 0.15; // seconds of audio<->video slip before a nudge
+
   function attachAudioPanel(opts) {
     opts = opts || {};
     var video = opts.video;
@@ -72,69 +83,231 @@
     if (!video || !button) return null;
     // Idempotent: a page may re-run its player init. createMediaElementSource
     // throws if called twice on one element, so reuse the existing controller
-    // and just refresh its track getter.
+    // and just refresh its getters.
     if (video.__cgAudioPanel) {
       if (opts.getTracks) video.__cgAudioPanel.getTracks = opts.getTracks;
+      if (opts.trackAudioUrl) video.__cgAudioPanel.trackAudioUrl = opts.trackAudioUrl;
       return video.__cgAudioPanel;
     }
 
     var ctrl = {
       getTracks: opts.getTracks || function () { return []; },
-      gainPercent: 100,
+      trackAudioUrl: opts.trackAudioUrl || null,
     };
     video.__cgAudioPanel = ctrl;
 
-    var srcNode = null;
-    var gainNode = null;
-    var graphFailed = false;
+    var muted = false;         // unified mute intent (page drives via setMuted)
+    var multiActive = false;   // multitrack mixing engaged for this participant
+    var lastSig = null;        // track-set signature so refresh() is idempotent
 
-    // Build the element -> gain -> destination graph. Must run inside a user
-    // gesture so the context resumes and playback isn't interrupted.
-    function ensureGraph() {
-      if (gainNode || graphFailed) return;
+    // ---- Single-track path: lazy video -> gain -> destination (commit 1) ----
+    var videoSrcNode = null;
+    var videoGain = null;
+    var videoGraphFailed = false;
+    var singlePercent = 100;
+
+    function ensureVideoGraph() {
+      if (videoGain || videoGraphFailed) return;
       var ctx = audioContext();
-      if (!ctx) { graphFailed = true; return; }
+      if (!ctx) { videoGraphFailed = true; return; }
       try {
-        srcNode = ctx.createMediaElementSource(video);
+        videoSrcNode = ctx.createMediaElementSource(video);
       } catch (e) {
-        // Element not routable (already sourced, cross-origin) -> native volume.
-        graphFailed = true;
+        videoGraphFailed = true; // not routable -> native volume fallback
         return;
       }
       try {
-        gainNode = ctx.createGain();
-        gainNode.gain.value = ctrl.gainPercent / 100;
-        srcNode.connect(gainNode);
-        gainNode.connect(ctx.destination);
+        videoGain = ctx.createGain();
+        videoGain.gain.value = singlePercent / 100;
+        videoSrcNode.connect(videoGain);
+        videoGain.connect(ctx.destination);
       } catch (e2) {
-        // Gain path failed but the element is already tapped — restore a direct
-        // passthrough so audio isn't lost, and drop to native-volume control
-        // (element.volume still attenuates a MediaElementSource output).
-        gainNode = null;
-        try { srcNode.connect(ctx.destination); } catch (e3) {}
-        graphFailed = true;
+        // Element already tapped — restore a passthrough so audio isn't lost.
+        videoGain = null;
+        try { videoSrcNode.connect(ctx.destination); } catch (e3) {}
+        videoGraphFailed = true;
       }
       if (ctx.state === "suspended" && ctx.resume) ctx.resume();
     }
 
-    function applyGain(percent) {
-      ctrl.gainPercent = percent;
-      if (gainNode) {
-        gainNode.gain.value = percent / 100;
-      } else {
-        // No gain node (unbuilt or failed): approximate with native volume,
-        // capped at 1.0 (boost above 100% is unavailable on this path).
-        video.volume = Math.min(1, percent / 100);
+    function applySingleGain(percent) {
+      singlePercent = percent;
+      if (videoGain) videoGain.gain.value = percent / 100;
+      // Boost above 100% is unavailable on the native fallback path.
+      else if (videoGraphFailed) video.volume = Math.min(1, percent / 100);
+    }
+
+    // ---- Multitrack path: N synced <audio> elements + per-track gain ----
+    var masterGain = null;
+    var trackNodes = [];       // [{ el, gain, index }]
+    var trackPercents = [];    // parallel gain %, defaults 100
+
+    function resumeCtx() {
+      var ctx = audioContext();
+      if (ctx && ctx.state === "suspended" && ctx.resume) ctx.resume();
+    }
+
+    function teardownMulti() {
+      for (var i = 0; i < trackNodes.length; i++) {
+        var t = trackNodes[i];
+        try { t.el.pause(); } catch (e) {}
+        try { t.el.removeAttribute("src"); t.el.load(); } catch (e2) {}
+        try { t.src.disconnect(); } catch (e3) {}
+        try { t.gain.disconnect(); } catch (e4) {}
+        if (t.el.parentNode) t.el.parentNode.removeChild(t.el);
+      }
+      trackNodes = [];
+      if (masterGain) { try { masterGain.disconnect(); } catch (e5) {} masterGain = null; }
+      multiActive = false;
+    }
+
+    function bailToSingle() {
+      // Something went wrong loading a track — never leave the user with a muted
+      // video and no sound. Drop the mix and play the video's own default track.
+      teardownMulti();
+      lastSig = "single";
+      video.muted = muted;
+      rowsDirty = true;
+      if (isOpen()) rebuildRows();
+    }
+
+    function enterMulti(tracks) {
+      teardownMulti();
+      var ctx = audioContext();
+      if (!ctx) { enterSingle(); return; }
+      video.muted = true; // video is visual only; its baked track stays silent
+      try {
+        masterGain = ctx.createGain();
+        masterGain.gain.value = muted ? 0 : 1;
+        masterGain.connect(ctx.destination);
+      } catch (e) { enterSingle(); return; }
+      trackPercents = [];
+      for (var i = 0; i < tracks.length; i++) {
+        var url = safeTrackUrl(tracks[i].index);
+        if (!url) { teardownMulti(); enterSingle(); return; }
+        var el = document.createElement("audio");
+        el.preload = "auto";
+        el.src = url;
+        el.className = "cg-audiotrack";
+        el.addEventListener("error", bailToSingle);
+        try {
+          var src = ctx.createMediaElementSource(el);
+          var g = ctx.createGain();
+          g.gain.value = 1;
+          src.connect(g);
+          g.connect(masterGain);
+          trackNodes.push({ el: el, gain: g, src: src, index: tracks[i].index });
+          trackPercents.push(100);
+          document.body.appendChild(el);
+          el.load();
+        } catch (e2) { teardownMulti(); enterSingle(); return; }
+      }
+      multiActive = true;
+      if (!video.paused) syncPlay();
+    }
+
+    function enterSingle() {
+      teardownMulti();
+      video.muted = muted;
+      // The video->gain graph stays lazy (built on first slider interaction).
+    }
+
+    function setTrackGain(i, percent) {
+      trackPercents[i] = percent;
+      if (trackNodes[i] && trackNodes[i].gain) {
+        trackNodes[i].gain.gain.value = percent / 100;
       }
     }
 
-    // ---- Popover DOM (built once, lazily on first open) ----
+    // ---- Video <-> audio-element sync (attached once; no-op unless multi) ----
+    function forEachTrack(fn) {
+      for (var i = 0; i < trackNodes.length; i++) fn(trackNodes[i].el, i);
+    }
+    function syncTime() {
+      forEachTrack(function (el) {
+        try { el.currentTime = video.currentTime; } catch (e) {}
+      });
+    }
+    function syncPlay() {
+      resumeCtx();
+      syncTime();
+      forEachTrack(function (el) {
+        var p = el.play();
+        if (p && p.catch) p.catch(function () {});
+      });
+    }
+    video.addEventListener("play", function () { if (multiActive) syncPlay(); });
+    video.addEventListener("pause", function () {
+      if (multiActive) forEachTrack(function (el) { el.pause(); });
+    });
+    video.addEventListener("ended", function () {
+      if (multiActive) forEachTrack(function (el) { el.pause(); });
+    });
+    video.addEventListener("seeking", function () { if (multiActive) syncTime(); });
+    video.addEventListener("seeked", function () { if (multiActive) syncTime(); });
+    video.addEventListener("ratechange", function () {
+      if (multiActive) forEachTrack(function (el) { el.playbackRate = video.playbackRate; });
+    });
+    video.addEventListener("timeupdate", function () {
+      if (!multiActive || video.seeking) return;
+      forEachTrack(function (el) {
+        if (el.readyState < 2) return;
+        if (Math.abs(el.currentTime - video.currentTime) > DRIFT_TOLERANCE) {
+          try { el.currentTime = video.currentTime; } catch (e) {}
+        }
+        if (!video.paused && el.paused) { var p = el.play(); if (p && p.catch) p.catch(function () {}); }
+      });
+    });
+    // Defend the invariant: in multitrack mode the video must never regain audio
+    // (page code re-applies video.muted on load), else its baked track doubles.
+    video.addEventListener("volumechange", function () {
+      if (multiActive && !video.muted) video.muted = true;
+    });
+
+    // ---- Shared mute + track helpers ----
+    function safeTracks() {
+      var t;
+      try { t = ctrl.getTracks() || []; } catch (e) { t = []; }
+      return t;
+    }
+    function safeTrackUrl(index) {
+      if (!ctrl.trackAudioUrl) return null;
+      try { return ctrl.trackAudioUrl(index) || null; } catch (e) { return null; }
+    }
+    function applyMute() {
+      if (multiActive) {
+        if (masterGain) masterGain.gain.value = muted ? 0 : 1;
+        video.muted = true;
+      } else {
+        video.muted = muted;
+      }
+    }
+    ctrl.setMuted = function (m) { muted = !!m; applyMute(); };
+
+    // Reconfigure single vs multi for the current participant. Idempotent via a
+    // track-set signature so repeat calls (poll-driven track fetches) are cheap.
+    ctrl.refresh = function () {
+      var tracks = safeTracks();
+      var url0 = tracks.length > 1 ? safeTrackUrl(tracks[0].index) : null;
+      var wantMulti = tracks.length > 1 && !!url0;
+      var sig = wantMulti
+        ? "multi|" + url0 + "|" + tracks.map(function (t) { return t.index; }).join(",")
+        : "single";
+      if (sig === lastSig) return;
+      lastSig = sig;
+      if (wantMulti) enterMulti(tracks); else enterSingle();
+      rowsDirty = true;
+      if (isOpen()) rebuildRows();
+    };
+
+    // ---- Popover DOM (glass panel; rows rebuilt per mode) ----
     var popover = null;
-    var slider = null;
-    var valueLabel = null;
+    var rowsContainer = null;
     var caption = null;
+    var rowsDirty = true;
     var closeTimer = null;
 
+    function isOpen() { return popover && popover.style.display !== "none"; }
     function cancelClose() {
       if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
     }
@@ -142,95 +315,100 @@
       cancelClose();
       closeTimer = setTimeout(close, 120);
     }
-    function close() {
-      if (popover) popover.style.display = "none";
+    function close() { if (popover) popover.style.display = "none"; }
+
+    // Build one label + slider + %-readout row. onGesture runs first (inside the
+    // input's user activation) so it can arm/resume the audio graph.
+    function makeRow(labelText, percent, onGesture, onValue) {
+      var row = document.createElement("div");
+      row.className = "audio-popover-row";
+      var label = document.createElement("span");
+      label.className = "audio-popover-label";
+      label.textContent = labelText;
+      var slider = document.createElement("input");
+      slider.type = "range";
+      slider.className = "audio-slider";
+      slider.min = "0";
+      slider.max = "200";
+      slider.step = "1";
+      slider.value = String(percent);
+      slider.setAttribute("aria-label", labelText + " — 100% is source level");
+      var value = document.createElement("span");
+      value.className = "audio-popover-value";
+      value.textContent = percent + "%";
+      function commit() {
+        onGesture();
+        var v = parseInt(slider.value, 10);
+        if (isNaN(v)) v = 100;
+        value.textContent = v + "%";
+        onValue(v);
+      }
+      slider.addEventListener("input", commit);
+      slider.addEventListener("dblclick", function () {
+        slider.value = "100";
+        commit();
+      });
+      row.appendChild(label);
+      row.appendChild(slider);
+      row.appendChild(value);
+      return row;
     }
 
-    function onSliderChange() {
-      // The change itself is the user gesture — arm the graph synchronously so
-      // the AudioContext resumes within the activation (covers pointer + arrows).
-      ensureGraph();
-      var v = parseInt(slider.value, 10);
-      if (isNaN(v)) v = 100;
-      valueLabel.textContent = v + "%";
-      applyGain(v);
+    function rebuildRows() {
+      rowsDirty = false;
+      rowsContainer.innerHTML = "";
+      var tracks = safeTracks();
+      if (multiActive) {
+        for (var i = 0; i < trackNodes.length; i++) {
+          (function (idx) {
+            var tr = tracks[idx] || {};
+            var name = tr.label || ("Track " + (idx + 1));
+            rowsContainer.appendChild(
+              makeRow(name, trackPercents[idx] || 100, resumeCtx, function (v) {
+                setTrackGain(idx, v);
+              })
+            );
+          })(i);
+        }
+        caption.style.display = "none";
+      } else {
+        rowsContainer.appendChild(
+          makeRow("Volume", singlePercent, ensureVideoGraph, applySingleGain)
+        );
+        // Detected-but-unmixable tracks (e.g. a multi-part participant): note them.
+        if (tracks.length > 1) {
+          var names = tracks.map(function (t, i) {
+            return (t && t.label) || ("Track " + (i + 1));
+          });
+          caption.textContent = tracks.length + " tracks: " + names.join(", ");
+          caption.style.display = "";
+        } else {
+          caption.style.display = "none";
+        }
+      }
     }
 
     function buildPopover() {
       popover = document.createElement("div");
       popover.className = "audio-popover";
       popover.setAttribute("role", "dialog");
-      popover.setAttribute("aria-label", "Audio level");
-
-      var row = document.createElement("div");
-      row.className = "audio-popover-row";
-
-      var label = document.createElement("span");
-      label.className = "audio-popover-label";
-      label.textContent = "Volume";
-
-      slider = document.createElement("input");
-      slider.type = "range";
-      slider.className = "audio-slider";
-      slider.min = "0";
-      slider.max = "200";
-      slider.step = "1";
-      slider.value = String(ctrl.gainPercent);
-      slider.setAttribute("aria-label", "Volume — 100% is source level");
-
-      valueLabel = document.createElement("span");
-      valueLabel.className = "audio-popover-value";
-      valueLabel.textContent = ctrl.gainPercent + "%";
-
-      row.appendChild(label);
-      row.appendChild(slider);
-      row.appendChild(valueLabel);
-      popover.appendChild(row);
-
-      // Read-only detected-track caption (shown only when >1 track). The
-      // per-track sliders themselves land in a follow-up commit; this row list
-      // is already shaped to grow one row per track.
+      popover.setAttribute("aria-label", "Audio levels");
+      rowsContainer = document.createElement("div");
+      rowsContainer.className = "audio-popover-rows";
+      popover.appendChild(rowsContainer);
       caption = document.createElement("div");
       caption.className = "audio-popover-caption";
       caption.style.display = "none";
       popover.appendChild(caption);
-
-      slider.addEventListener("input", onSliderChange);
-      // Double-click resets to the source level.
-      slider.addEventListener("dblclick", function () {
-        ensureGraph();
-        slider.value = "100";
-        valueLabel.textContent = "100%";
-        applyGain(100);
-      });
       popover.addEventListener("mouseenter", cancelClose);
       popover.addEventListener("mouseleave", scheduleClose);
-
       document.body.appendChild(popover);
-    }
-
-    function refreshCaption() {
-      if (!caption) return;
-      var tracks = [];
-      try { tracks = ctrl.getTracks() || []; } catch (e) { tracks = []; }
-      if (tracks.length > 1) {
-        var names = tracks.map(function (t, i) {
-          return (t && t.label) || ("Track " + (i + 1));
-        });
-        caption.textContent = tracks.length + " audio tracks: " + names.join(", ");
-        caption.style.display = "";
-      } else {
-        caption.textContent = "";
-        caption.style.display = "none";
-      }
     }
 
     function open() {
       cancelClose();
       if (!popover) buildPopover();
-      slider.value = String(ctrl.gainPercent);
-      valueLabel.textContent = ctrl.gainPercent + "%";
-      refreshCaption();
+      if (rowsDirty) rebuildRows();
       // Measure hidden, then anchor to the button (bottom-left, viewport-clamped).
       popover.style.visibility = "hidden";
       popover.style.display = "flex";

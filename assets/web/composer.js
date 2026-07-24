@@ -14,6 +14,8 @@
 (function () {
   "use strict";
 
+  var audioPanel = null; // ClipgenVideoControls audio-popover controller
+
   var state = {
     participants: [],       // [{id, parts:[{name,duration,offset}], total_duration}]
     participant: null,      // active participant id
@@ -251,21 +253,27 @@
     });
     qs("#coPlayBtn").addEventListener("click", togglePlay);
 
-    var muteBtn = qs("#coMuteBtn");
-    muteBtn.addEventListener("click", function () {
-      state.videoMuted = !state.videoMuted;
-      video.muted = state.videoMuted;
-      updateMuteButton();
-    });
     // Hover the mute button for a glassy 0–200% volume popover (click still
-    // mutes). getTracks reads the active participant's probed audio layout.
-    window.ClipgenVideoControls.attachAudioPanel({
+    // mutes). getTracks reads the active participant's probed audio layout;
+    // trackAudioUrl enables per-track mixing for single-file participants.
+    var muteBtn = qs("#coMuteBtn");
+    audioPanel = window.ClipgenVideoControls.attachAudioPanel({
       video: video,
       button: muteBtn,
       getTracks: function () {
         var p = findParticipant(state.participant);
         return (p && p.audio_tracks) || [];
       },
+      trackAudioUrl: function (idx) {
+        if (!state.participant || state.parts.length > 1) return null;
+        return "api/audio-track/" + encodeURIComponent(state.participant) + "/" + idx;
+      },
+    });
+    muteBtn.addEventListener("click", function () {
+      state.videoMuted = !state.videoMuted;
+      if (audioPanel) audioPanel.setMuted(state.videoMuted);
+      else video.muted = state.videoMuted;
+      updateMuteButton();
     });
     updateMuteButton();
   }
@@ -315,6 +323,9 @@
       video.removeAttribute("src");
       qs("#coVideoFrame").classList.remove("has-video");
     }
+    // Reconfigure the audio popover (per-track mixer vs master slider) and tear
+    // down the previous participant's track mix for this new participant.
+    if (audioPanel) audioPanel.refresh();
 
     ["#coPlayBtn", "#coMuteBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
       qs(sel).disabled = false;

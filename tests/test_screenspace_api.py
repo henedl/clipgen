@@ -135,6 +135,24 @@ def test_video_info_reports_audio_tracks(client, monkeypatch):
     assert [t["label"] for t in info["audio_tracks"]] == ["Microphone", "System"]
 
 
+def test_audio_track_streams(client, monkeypatch, tmp_path):
+    import video
+
+    track = tmp_path / "track.m4a"
+    track.write_bytes(b"audio")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_video_paths",
+        lambda pid: ["/tmp/test_P01.mp4"] if pid == "P01" else [],
+    )
+    monkeypatch.setattr(video, "extract_audio_track", lambda p, idx: track)
+
+    resp = client.get("/screenspace/api/video/audio-track/P01/0")
+    assert resp.status_code == 200
+    assert resp.mimetype == "audio/mp4"
+    assert client.get("/screenspace/api/video/audio-track/ZZ/0").status_code == 404
+
+
 def test_participant_notes_default_empty(client):
     resp = client.get("/screenspace/api/participants/P01/notes")
     assert resp.status_code == 200

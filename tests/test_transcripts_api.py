@@ -90,6 +90,17 @@ def test_audio_info_unknown_participant_404(tr_client):
     assert tr_client.get("/transcripts/api/audio-info/ZZ").status_code == 404
 
 
+def test_audio_track_streams(tr_client, monkeypatch, tmp_path):
+    track = tmp_path / "track.m4a"
+    track.write_bytes(b"audio")
+    monkeypatch.setattr(video, "extract_audio_track", lambda p, idx: track)
+
+    resp = tr_client.get("/transcripts/api/audio-track/P01/0")
+    assert resp.status_code == 200
+    assert resp.mimetype == "audio/mp4"
+    assert tr_client.get("/transcripts/api/audio-track/ZZ/0").status_code == 404
+
+
 def test_prewarm_invalid_config_normalized_in_participants(tr_client, monkeypatch):
     monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "bogus")
     resp = tr_client.get("/transcripts/api/participants")

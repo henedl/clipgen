@@ -3,6 +3,7 @@
 
 import concurrent.futures
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -1593,6 +1594,65 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     if fmt_duration > 0:
         _file_duration_cache[key] = round(fmt_duration)
     return result
+
+
+def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
+    """Demux one audio stream (``0:a:<audio_index>``) to a standalone, seekable
+    ``.m4a`` for the browser's per-track mixer.
+
+    HTML5 ``<video>`` plays only the container's default audio track, so
+    independent per-track volume needs each track as its own media source.
+    Extraction is demux-only (no video decode): a stream copy when the source is
+    already AAC (near-instant), falling back to an AAC re-encode otherwise. The
+    result is cached on disk under the OS temp dir keyed by (resolved path,
+    mtime_ns, index) so a re-encoded/replaced source re-extracts and range
+    requests (seeking) are served from a real file. Returns the path or ``None``.
+    """
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
+        return None
+    resolved, mtime_ns = key
+    cache_dir = Path(tempfile.gettempdir()) / "clipgen_audio_tracks"
+    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:16]
+    out_path = cache_dir / f"{digest}_{mtime_ns}_a{audio_index}.m4a"
+    if out_path.is_file() and out_path.stat().st_size > 0:
+        return out_path
+    if config.DEBUGGING:
+        return None
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    tmp_path = out_path.with_suffix(".partial.m4a")
+    base = ["ffmpeg", "-y", "-i", filepath, "-map", f"0:a:{audio_index}", "-vn"]
+    # Try a stream copy first (instant for AAC), then an AAC re-encode for
+    # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
+    for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
+        try:
+            subprocess.run(
+                base + codec_args + [str(tmp_path)],
+                check=True,
+                capture_output=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            _delete_quietly(tmp_path)
+            continue
+        try:
+            tmp_path.replace(out_path)
+        except OSError:
+            _delete_quietly(tmp_path)
+            return None
+        return out_path
+    return None
+
+
+def _delete_quietly(path: Path) -> None:
+    """Best-effort unlink; ignore a missing file or OS error."""
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 def probe_max_keyframe_gap(filepath: str) -> float | None:

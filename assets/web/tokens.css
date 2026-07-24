@@ -614,11 +614,18 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
 @supports not (backdrop-filter: blur(1px)) {
   .audio-popover { background: var(--bg-elevated); }
 }
+.audio-popover-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
 .audio-popover-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
+/* Hidden per-track audio elements spawned by the multitrack mixer. */
+audio.cg-audiotrack { display: none; }
 .audio-popover-label {
   flex: 0 0 auto;
   min-width: 3.5rem;

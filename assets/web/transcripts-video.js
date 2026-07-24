@@ -541,17 +541,27 @@
       if (video.paused) video.play();
       else video.pause();
     });
-    qs("#videoMuteBtn").addEventListener("click", function () {
-      state.videoMuted = !state.videoMuted;
-      video.muted = state.videoMuted;
-      updatePlayerButtons();
-    });
     // Hover the mute button for a glassy 0–200% volume popover (click still
-    // mutes). getTracks reads the layout fetched by selectParticipant.
-    window.ClipgenVideoControls.attachAudioPanel({
+    // mutes). getTracks reads the layout fetched by selectParticipant;
+    // trackAudioUrl enables per-track mixing for single-file participants.
+    state.audioPanel = window.ClipgenVideoControls.attachAudioPanel({
       video: video,
       button: qs("#videoMuteBtn"),
       getTracks: function () { return state.audioTracks || []; },
+      trackAudioUrl: function (idx) {
+        var pid = state.selectedParticipant;
+        if (!pid || state.videoTimeline) return null; // multi-part -> master slider
+        var url = "api/audio-track/" + encodeURIComponent(pid) + "/" + idx;
+        return state.videoVersion != null
+          ? url + "?v=" + encodeURIComponent(state.videoVersion)
+          : url;
+      },
+    });
+    qs("#videoMuteBtn").addEventListener("click", function () {
+      state.videoMuted = !state.videoMuted;
+      if (state.audioPanel) state.audioPanel.setMuted(state.videoMuted);
+      else video.muted = state.videoMuted;
+      updatePlayerButtons();
     });
     qs("#videoSpeedBtn").addEventListener("click", function () {
       state.videoPlaybackRate = window.ClipgenVideoControls.nextSpeed(VIDEO_SPEEDS, state.videoPlaybackRate);
