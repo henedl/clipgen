@@ -91,9 +91,8 @@
       <div id="regionBar">
         <div id="regionChipsScroll"><div id="regionChips"></div></div>
         <div id="regionActions">
-          <button id="toolRectBtn" class="region-toggle-btn active" title="Rectangle: drag to select"></button>
-          <button id="toolLassoBtn" class="region-toggle-btn" title="Lasso: draw a freehand shape"></button>
-          <button id="toolWandBtn" class="region-toggle-btn" title="Magic wand: click a similar-colored area"></button>
+          <!-- Region drawing tool capsule track (rect/lasso/wand) is built here
+               by screenspace-overlay-interaction.js via createSegTrack. -->
           <span id="wandToleranceWrap" class="wand-tolerance hidden">
             <input id="wandToleranceInput" type="range" min="4" max="120" step="1" value="32" title="Wand color tolerance">
             <span id="wandToleranceValue">32</span>

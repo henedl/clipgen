@@ -679,6 +679,87 @@ button[data-tooltip]:disabled { pointer-events: auto; cursor: not-allowed; }
   color: var(--accent-fg);
 }
 
+/* ---- Segmented capsule track (built by createSegTrack in utils.js) ----
+ * Mutually exclusive options in a pill track; an absolutely-positioned capsule
+ * thumb slides to the selected segment. Segments are equal-width grid columns,
+ * so the thumb position derives purely from `--seg-index` / `--seg-count`
+ * (inline vars set by JS) — no layout measurement. The gap MUST stay 0: the
+ * thumb translates in multiples of its own width (one column). translateX math
+ * assumes LTR. Sizing knobs below are caller-overridable with tokens. */
+.cg-segtrack {
+  --segtrack-h: var(--space-5);
+  --segtrack-pad: 2px;
+  --segtrack-seg-min-w: var(--segtrack-h);
+  --segtrack-icon: var(--icon-size-xs);
+  --segtrack-font: var(--text-2xs);
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(var(--segtrack-seg-min-w), 1fr);
+  height: var(--segtrack-h);
+  box-sizing: border-box;
+  padding: var(--segtrack-pad);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+}
+/* 20px — between --space-4 and --space-5; no single spacing token matches. */
+.cg-segtrack--sm { --segtrack-h: calc(var(--space-4) + var(--space-1)); }
+/* Not a grid item (absolute), else it would occupy the first column. */
+.cg-segtrack-thumb {
+  position: absolute;
+  top: var(--segtrack-pad);
+  bottom: var(--segtrack-pad);
+  left: var(--segtrack-pad);
+  width: calc((100% - 2 * var(--segtrack-pad)) / var(--seg-count, 1));
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(calc(var(--seg-index, 0) * 100%));
+  transition: transform var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1);
+  pointer-events: none;
+}
+.cg-segtrack-btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--segtrack-font);
+  font-family: inherit;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: color var(--duration-fast);
+}
+.cg-segtrack-btn:hover { color: var(--fg); }
+.cg-segtrack-btn.active { color: var(--accent-fg); }
+.cg-segtrack-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+/* Paint + sizing for the masked icon; mask-image is applied inline by
+ * iconMaskSpan (mirrors .xref-badge-icon above). */
+.cg-segtrack-icon {
+  width: var(--segtrack-icon);
+  height: var(--segtrack-icon);
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+.cg-segtrack-label { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .cg-segtrack-thumb { transition: none; }
+}
+
 /* The frontend-switcher dropdown was replaced by the unified TopNav. See
  * topnav.{js,css}. The matching markup was removed from studio.html,
  * screenspace.html, and transcripts.html in the same change. */
