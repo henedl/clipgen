@@ -749,12 +749,27 @@ body {
 }
 
 /* Magic-wand flood-fill tolerance: a compact slider + value readout shown
-   only while the wand tool is selected. */
+   only while the wand tool is selected. Collapses via the 0fr/1fr grid trick
+   (animates to natural width, no measurement) with the same duration + easing
+   as the .cg-segtrack thumb, so the tool capsule glides sideways in step with
+   its own selection slide instead of being yanked by a display toggle. */
 .wand-tolerance {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  flex-shrink: 0;
+  transition: grid-template-columns var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
+              opacity var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
+              margin-left var(--duration-normal) cubic-bezier(0.3, 0.9, 0.35, 1),
+              visibility var(--duration-normal);
+}
+
+.wand-tolerance-inner {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .wand-tolerance input[type="range"] {
@@ -768,8 +783,18 @@ body {
   text-align: right;
 }
 
-.wand-tolerance.hidden {
-  display: none;
+.wand-tolerance.collapsed {
+  grid-template-columns: 0fr;
+  opacity: 0;
+  /* Cancel the #regionActions flex gap so collapsed occupies zero space. */
+  margin-left: calc(-1 * var(--space-1));
+  /* Flips at transition end (discrete), keeping the slider untabbable. */
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wand-tolerance { transition: none; }
 }
 
 /* Calibration pins: polarity colors are page-local (positive = green,

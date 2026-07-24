@@ -884,7 +884,9 @@
       // Idempotent after a click (the track already moved); needed when
       // setRegionTool is called programmatically.
       segTrackSetValue(regionToolTrack, tool);
-      qs("#wandToleranceWrap").classList.toggle("hidden", tool !== "wand");
+      // Eased width collapse (see .wand-tolerance in screenspace.css), so the
+      // capsule track glides rather than jumps when the slider (dis)appears.
+      qs("#wandToleranceWrap").classList.toggle("collapsed", tool !== "wand");
     }
     var wandToleranceInput = qs("#wandToleranceInput");
     wandToleranceInput.value = String(state.wandTolerance);
