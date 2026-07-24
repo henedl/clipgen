@@ -176,25 +176,52 @@
     // for a new region or in the modifier color for a shift/alt combine, with a
     // running tolerance readout. Drawn only while the press-drag is active;
     // release swaps it for a pending region or a boolean edit.
-    if (state.wandDragging && state.wandDragging.previewPoints) {
-      var wcol = drawStrokeColor(state.wandDragging.combine);
-      ctx.strokeStyle = wcol;
-      ctx.lineWidth = 1.5 * s;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      state.wandDragging.previewPoints.forEach(function (contour) {
-        if (contour.length < 3) return;
-        ctx.moveTo(contour[0][0], contour[0][1]);
-        for (var wi = 1; wi < contour.length; wi++) ctx.lineTo(contour[wi][0], contour[wi][1]);
-        ctx.closePath();
-      });
-      ctx.stroke();
-      ctx.fillStyle = hexToRgba(wcol, 0.12);
-      ctx.fill();
-      var wb = contoursBounds(state.wandDragging.previewPoints);
+    if (state.wandDragging) {
+      var wd = state.wandDragging;
+      var wcol = drawStrokeColor(wd.combine);
+      if (wd.previewPoints) {
+        ctx.strokeStyle = wcol;
+        ctx.lineWidth = 1.5 * s;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        wd.previewPoints.forEach(function (contour) {
+          if (contour.length < 3) return;
+          ctx.moveTo(contour[0][0], contour[0][1]);
+          for (var wi = 1; wi < contour.length; wi++) ctx.lineTo(contour[wi][0], contour[wi][1]);
+          ctx.closePath();
+        });
+        ctx.stroke();
+        ctx.fillStyle = hexToRgba(wcol, 0.12);
+        ctx.fill();
+      }
+
+      // Drag chrome, painted on top of the contour and *not* gated on it: the
+      // flood can find nothing contiguous, and without this the whole drag
+      // would have zero visual response. The anchor marks where the press
+      // landed, the horizontal track shows how far the tolerance scrub has
+      // travelled, and the readout rides the head next to the pointer.
+      var dragged = Math.abs(wd.headX - wd.seedX) >= 2 * s;
+      if (dragged) {
+        ctx.strokeStyle = hexToRgba(wcol, 0.55);
+        ctx.lineWidth = 1 * s;
+        ctx.setLineDash([3 * s, 3 * s]);
+        ctx.beginPath();
+        ctx.moveTo(wd.seedX, wd.seedY);
+        ctx.lineTo(wd.headX, wd.seedY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      // Dark ring on each dot so they stay legible over light frame content.
+      ctx.lineWidth = 1 * s;
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.fillStyle = wcol;
+      ctx.beginPath(); ctx.arc(wd.seedX, wd.seedY, 2.5 * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (dragged) {
+        ctx.beginPath(); ctx.arc(wd.headX, wd.seedY, 2 * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
       ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText("tol " + state.wandDragging.tolerance, wb.x + Math.round(4 * s), wb.y + Math.round(14 * s));
+      ctx.fillText("tol " + wd.tolerance, wd.headX + Math.round(6 * s), wd.seedY - Math.round(8 * s));
     }
 
     // Pending (unsaved) region
