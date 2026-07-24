@@ -103,7 +103,9 @@
 
     var muted = false;         // unified mute intent (page drives via setMuted)
     var multiActive = false;   // multitrack mixing engaged for this participant
+    var mixRunning = false;    // per-track <audio> elements confirmed playing
     var lastSig = null;        // track-set signature so refresh() is idempotent
+    var retryHandler = null;   // one-shot gesture listener re-arming a blocked mix
 
     // ---- Single-track path: lazy video -> gain -> destination (commit 1) ----
     var videoSrcNode = null;
@@ -153,6 +155,7 @@
     }
 
     function teardownMulti() {
+      disarmRetry();
       for (var i = 0; i < trackNodes.length; i++) {
         var t = trackNodes[i];
         try { t.el.pause(); } catch (e) {}
@@ -164,6 +167,7 @@
       trackNodes = [];
       if (masterGain) { try { masterGain.disconnect(); } catch (e5) {} masterGain = null; }
       multiActive = false;
+      mixRunning = false;
     }
 
     function bailToSingle() {
@@ -180,7 +184,8 @@
       teardownMulti();
       var ctx = audioContext();
       if (!ctx) { enterSingle(); return; }
-      video.muted = true; // video is visual only; its baked track stays silent
+      // NB: don't mute the <video> yet — the tail decides based on play state so
+      // an already-playing switch stays audible until the mix is confirmed.
       try {
         masterGain = ctx.createGain();
         masterGain.gain.value = muted ? 0 : 1;
@@ -212,7 +217,18 @@
         } catch (e2) { teardownMulti(); enterSingle(); return; }
       }
       multiActive = true;
-      if (!video.paused) syncPlay();
+      mixRunning = false;
+      if (video.paused) {
+        // Paused: silent anyway. The next user-initiated play() runs playTracks
+        // within that gesture, so the elements start reliably; mute now so the
+        // baked track never leaks when play resumes.
+        video.muted = true;
+      } else {
+        // Already playing (audio-info resolved after play): keep the video's own
+        // track audible and only mute once the mix is confirmed running, so a
+        // gesture-less play() rejection can't leave playback silent.
+        playTracks();
+      }
     }
 
     function enterSingle() {
@@ -242,18 +258,52 @@
         try { el.currentTime = video.currentTime; } catch (e) {}
       });
     }
-    function syncPlay() {
+    // Start (or restart) every track element, aligned to the video. play() can
+    // reject when called outside a user gesture (mid-playback mode switch); in
+    // that case we keep the video's own track audible and retry on the next
+    // gesture, so playback is never left silent.
+    function playTracks() {
       resumeCtx();
       var rate = video.playbackRate || 1;
       forEachTrack(function (el) {
         try { el.currentTime = video.currentTime; } catch (e) {}
         el.playbackRate = rate;
         var p = el.play();
-        if (p && p.catch) p.catch(function () {});
+        if (p && p.then) p.then(onMixStarted, onPlayBlocked);
+        else onMixStarted(); // no promise (older browsers) → assume it started
       });
     }
+    function onMixStarted() {
+      if (!multiActive) return;
+      disarmRetry();
+      mixRunning = true;
+      applyMute(); // now silence the <video> — the mix has taken over its audio
+    }
+    function onPlayBlocked() {
+      // Autoplay policy blocked a gesture-less start. Leave the video audible and
+      // finish the switch on the user's next interaction anywhere on the page.
+      if (multiActive) armRetry();
+    }
+    function armRetry() {
+      if (retryHandler) return;
+      // A pointerdown anywhere re-attempts the mix within that user activation.
+      // Keyboard users are covered too: any pause→play cycle re-runs playTracks
+      // from the video's own "play" gesture (so no document keydown needed).
+      retryHandler = function () {
+        disarmRetry();
+        if (multiActive && !video.paused) playTracks();
+      };
+      document.addEventListener("pointerdown", retryHandler, true);
+    }
+    function disarmRetry() {
+      if (!retryHandler) return;
+      document.removeEventListener("pointerdown", retryHandler, true);
+      retryHandler = null;
+    }
     function resyncTick() {
-      if (!multiActive || video.paused || video.seeking) return;
+      // Only correct once the mix is confirmed running — before that the start /
+      // retry path owns playback and the video's own track is intentionally live.
+      if (!multiActive || !mixRunning || video.paused || video.seeking) return;
       var rate = video.playbackRate || 1;
       forEachTrack(function (el) {
         if (el.readyState < 3) return; // HAVE_FUTURE_DATA — don't fight the buffer
@@ -279,7 +329,7 @@
         }
       });
     }
-    video.addEventListener("play", function () { if (multiActive) syncPlay(); });
+    video.addEventListener("play", function () { if (multiActive) playTracks(); });
     video.addEventListener("pause", function () {
       if (multiActive) forEachTrack(function (el) { el.pause(); });
     });
@@ -292,10 +342,12 @@
       if (multiActive) forEachTrack(function (el) { el.playbackRate = video.playbackRate; });
     });
     video.addEventListener("timeupdate", resyncTick);
-    // Defend the invariant: in multitrack mode the video must never regain audio
-    // (page code re-applies video.muted on load), else its baked track doubles.
+    // Defend the invariant: once the mix is running the video must never regain
+    // audio (page code re-applies video.muted on load), else its baked track
+    // doubles. Before the mix starts the video stays audible on purpose, so this
+    // is gated on mixRunning.
     video.addEventListener("volumechange", function () {
-      if (multiActive && !video.muted) video.muted = true;
+      if (multiActive && mixRunning && !video.muted) video.muted = true;
     });
 
     // ---- Shared mute + track helpers ----
