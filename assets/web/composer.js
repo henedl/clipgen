@@ -167,6 +167,9 @@
   function updateMuteButton() {
     var icon = qs("#coMuteIcon");
     if (icon) icon.className = "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute");
+    // Accent tint while sound is on — matches Screenspace/Transcripts mute btns.
+    var btn = qs("#coMuteBtn");
+    if (btn) btn.classList.toggle("active", !state.videoMuted);
   }
 
   function updateTimeLabel() {
