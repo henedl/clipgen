@@ -1316,6 +1316,8 @@ def api_video_info(participant: str) -> FlaskResponse:
             "height": props.get("height") or None,
             "nb_frames": 0,
             "video_codec": props.get("video_codec") or "",
+            "audio_tracks": props.get("audio_tracks") or [],
+            "audio_track_count": props.get("audio_track_count") or 0,
             "version": _participant_video_version(participant),
             "parts": [
                 {"filename": Path(p).name, "duration": d, "cumulativeStart": c}
@@ -1355,6 +1357,8 @@ def api_video_info(participant: str) -> FlaskResponse:
         "height": height if height > 0 else None,
         "nb_frames": props.get("nb_frames", 0) or 0,
         "video_codec": props.get("video_codec") or "",
+        "audio_tracks": props.get("audio_tracks") or [],
+        "audio_track_count": props.get("audio_track_count") or 0,
         "version": mtime_ns,
     }
     with _video_metadata_cache_lock:
@@ -1385,6 +1389,24 @@ def api_video_stream(participant: str) -> FlaskResponse:
         paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
     )
     response = send_file(video_path, mimetype="video/mp4", conditional=True)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@screenspace_bp.route("/api/video/audio-track/<participant>/<int:idx>")
+def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
+    """Stream one demuxed audio track for the browser's per-track volume mixer."""
+    paths = _participant_video_paths(participant)
+    if not paths:
+        return err(f"No video for participant {participant}", 404)
+    part = request.args.get("part", type=int)
+    video_path = (
+        paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
+    )
+    out = video.extract_audio_track(video_path, idx)
+    if out is None:
+        return err("Could not extract audio track", 500)
+    response = send_file(str(out), mimetype="audio/mp4", conditional=True)
     response.headers["Cache-Control"] = "no-cache"
     return response
 

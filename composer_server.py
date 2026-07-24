@@ -51,7 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, request
+from flask import Blueprint, Response, request, send_file
 
 import config
 import files
@@ -195,6 +195,8 @@ def api_participants() -> Any:
                 "width": props.get("width") if props else None,
                 "height": props.get("height") if props else None,
                 "fps": props.get("fps") if props else None,
+                "audio_tracks": props.get("audio_tracks") if props else [],
+                "audio_track_count": props.get("audio_track_count") if props else 0,
             }
         )
     return ok(participants=participants, config=utils.get_frontend_config())
@@ -956,6 +958,20 @@ def api_audio(participant: str) -> Any:
     minutes, and the WAV is decoded whole in the browser's WebAudio context.
     """
     return _scrub_media_response(participant, _audio_cache, "audio")
+
+
+@composer_bp.route("/api/audio-track/<participant>/<int:idx>")
+def api_audio_track(participant: str, idx: int) -> Any:
+    """Stream one demuxed audio track for the browser's per-track volume mixer."""
+    parts = _find_participant_parts(participant)
+    if not parts:
+        return err(f"No video for participant {participant}", 404)
+    out = video.extract_audio_track(parts[0]["path"], idx)
+    if out is None:
+        return err("Could not extract audio track", 500)
+    response = send_file(str(out), mimetype="audio/mp4", conditional=True)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 def _unlink_quiet(path: str | None) -> None:

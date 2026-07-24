@@ -129,8 +129,38 @@ body[data-frontend="composer"] {
   vertical-align: 0;
 }
 
+/* Borderless ghost transport buttons (play / mute) — mirror Screenspace's
+   .region-toggle-btn and Transcripts' .player-btn so the source-video players
+   share one player-chrome look. */
+.co-player-btn {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast), color var(--duration-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.co-player-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+.co-player-btn.active { color: var(--accent); }
+.co-player-btn:disabled { opacity: 0.5; cursor: default; }
+.co-player-btn .co-btn-icon {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  vertical-align: 0;
+}
+
 .co-icon-play { --co-icon: url("icons/play.svg"); }
 .co-icon-pause { --co-icon: url("icons/pause.svg"); }
+.co-icon-mute { --co-icon: url("icons/speaker-wave.svg"); }
+.co-icon-mute-off { --co-icon: url("icons/speaker-x-mark.svg"); }
 .co-icon-in { --co-icon: url("icons/arrow-uturn-down.svg"); transform: rotate(90deg); }
 .co-icon-out { --co-icon: url("icons/arrow-uturn-up.svg"); transform: rotate(90deg); }
 .co-icon-undo { --co-icon: url("icons/arrow-uturn-left.svg"); }

@@ -101,6 +101,58 @@ def test_list_participants(client):
     assert data["participants"][0]["id"] == "P01"
 
 
+def test_video_info_reports_audio_tracks(client, monkeypatch):
+    import video
+
+    monkeypatch.setattr(screenspace_server, "_participant_timeline", lambda pid: None)
+    monkeypatch.setattr(
+        screenspace_server,
+        "_find_participant_video_with_mtime",
+        lambda pid: ("/tmp/test_P01.mp4", 4242) if pid == "P01" else None,
+    )
+    monkeypatch.setattr(screenspace_server, "_video_metadata_cache", {})
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "duration": 12.0,
+            "nb_frames": 360,
+            "video_codec": "h264",
+            "audio_tracks": [
+                {"index": 0, "label": "Microphone"},
+                {"index": 1, "label": "System"},
+            ],
+            "audio_track_count": 2,
+        },
+    )
+    resp = client.get("/screenspace/api/video/info/P01")
+    assert resp.status_code == 200
+    info = resp.get_json()["info"]
+    assert info["audio_track_count"] == 2
+    assert [t["label"] for t in info["audio_tracks"]] == ["Microphone", "System"]
+
+
+def test_audio_track_streams(client, monkeypatch, tmp_path):
+    import video
+
+    track = tmp_path / "track.m4a"
+    track.write_bytes(b"audio")
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_video_paths",
+        lambda pid: ["/tmp/test_P01.mp4"] if pid == "P01" else [],
+    )
+    monkeypatch.setattr(video, "extract_audio_track", lambda p, idx: track)
+
+    resp = client.get("/screenspace/api/video/audio-track/P01/0")
+    assert resp.status_code == 200
+    assert resp.mimetype == "audio/mp4"
+    assert client.get("/screenspace/api/video/audio-track/ZZ/0").status_code == 404
+
+
 def test_participant_notes_default_empty(client):
     resp = client.get("/screenspace/api/participants/P01/notes")
     assert resp.status_code == 200

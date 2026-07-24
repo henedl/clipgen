@@ -1,6 +1,8 @@
 import json
 import subprocess
+from pathlib import Path
 
+import config
 import utils
 import video
 
@@ -107,10 +109,72 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "audio_sample_rate": 48000,
         "audio_channels": 2,
         "audio_channel_layout": "stereo",
+        "audio_tracks": [
+            {
+                "index": 0,
+                "codec": "aac",
+                "channels": 2,
+                "title": "",
+                "language": "",
+                "handler": "",
+                "label": "Track 1",
+            }
+        ],
+        "audio_track_count": 1,
         "fps": 0.0,
         "duration": 0.0,
         "nb_frames": 0,
     }
+
+
+def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
+    """Every audio stream is enumerated; the first also fills the flat fields."""
+    video._video_properties_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    fake_json = json.dumps(
+        {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2,
+                    "tags": {"title": "Microphone"},
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "opus",
+                    "channels": 1,
+                    # Generic muxer handler + language → label falls back to lang.
+                    "tags": {"handler_name": "SoundHandler", "language": "eng"},
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2,
+                    # "und" is MP4's undefined-language default → ordinal label.
+                    "tags": {"language": "und"},
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
+
+    result = video.probe_video_properties(str(clip))
+    assert result is not None
+    assert result["audio_track_count"] == 3
+    labels = [t["label"] for t in result["audio_tracks"]]
+    assert labels == ["Microphone", "ENG", "Track 3"]
+    assert [t["index"] for t in result["audio_tracks"]] == [0, 1, 2]
+    # Flat top-level fields describe the first audio stream only.
+    assert result["audio_codec"] == "aac"
+    assert result["audio_channels"] == 2
 
 
 def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
@@ -140,6 +204,8 @@ def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
     assert result["audio_sample_rate"] == 0
     assert result["audio_channels"] == 0
     assert result["audio_channel_layout"] is None
+    assert result["audio_tracks"] == []
+    assert result["audio_track_count"] == 0
 
 
 def test_probe_video_properties_failure(monkeypatch, tmp_path):
@@ -157,6 +223,71 @@ def test_probe_video_properties_failure(monkeypatch, tmp_path):
 def test_probe_video_properties_file_not_found():
     video._video_properties_cache.clear()
     assert video.probe_video_properties("/nonexistent/missing.mp4") is None
+
+
+# -- extract_audio_track tests --
+
+
+def _stub_ffmpeg_writes_output(monkeypatch, tmp_path, fail_copy=False):
+    """Route the audio-track cache to tmp_path and fake ffmpeg by writing the
+    output file. Returns the list that records each subprocess.run cmd."""
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(video.tempfile, "gettempdir", lambda: str(tmp_path))
+    calls: list[list[str]] = []
+
+    def _run(cmd, **_kw):
+        calls.append(cmd)
+        if fail_copy and "copy" in cmd:
+            raise subprocess.CalledProcessError(1, "ffmpeg")
+        Path(cmd[-1]).write_bytes(b"audio")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(video.subprocess, "run", _run)
+    return calls
+
+
+def test_extract_audio_track_stream_copy_and_cache(monkeypatch, tmp_path):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    calls = _stub_ffmpeg_writes_output(monkeypatch, tmp_path)
+
+    out = video.extract_audio_track(str(src), 0)
+    assert out is not None and out.is_file()
+    assert len(calls) == 1  # AAC copy succeeded → no re-encode retry
+    assert "copy" in calls[0]
+
+    # Second call hits the on-disk cache — ffmpeg is not invoked again.
+    out2 = video.extract_audio_track(str(src), 0)
+    assert out2 == out
+    assert len(calls) == 1
+
+
+def test_extract_audio_track_falls_back_to_aac(monkeypatch, tmp_path):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    calls = _stub_ffmpeg_writes_output(monkeypatch, tmp_path, fail_copy=True)
+
+    out = video.extract_audio_track(str(src), 1)
+    assert out is not None and out.is_file()
+    assert len(calls) == 2  # copy failed, AAC re-encode succeeded
+    assert "aac" in calls[1]
+
+
+def test_extract_audio_track_failure_returns_none(monkeypatch, tmp_path):
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(video.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    def _raise(_cmd, **_kw):
+        raise subprocess.CalledProcessError(1, "ffmpeg")
+
+    monkeypatch.setattr(video.subprocess, "run", _raise)
+    assert video.extract_audio_track(str(src), 0) is None
+
+
+def test_extract_audio_track_file_not_found():
+    assert video.extract_audio_track("/nonexistent/missing.mp4", 0) is None
 
 
 # -- probe_max_keyframe_gap tests --

@@ -3,6 +3,7 @@
 
 import concurrent.futures
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -35,6 +36,12 @@ _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
 # Max keyframe gap (seconds) per file; None means "unknown / too sparse to
 # confirm" and callers must treat that as "do not enable keyframe-only decode".
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
+
+# Generic audio-stream handler names muxers emit by default — treated as "no
+# useful name" when labelling audio tracks (fall back to language / ordinal).
+_GENERIC_AUDIO_HANDLERS = frozenset(
+    {"soundhandler", "core media audio", "isom", "audio"}
+)
 
 
 def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
@@ -1406,6 +1413,8 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     Returns:
         Dict with 'width' (int), 'height' (int), 'video_codec' (str),
         'audio_codec' (str or None if no audio stream),
+        'audio_tracks' (list of per-audio-stream dicts: index/codec/channels/
+        title/language/handler/label), 'audio_track_count' (int),
         'fps' (float, 0.0 if unknown), 'duration' (float seconds, 0.0 if unknown),
         'nb_frames' (int, 0 if unknown),
         or None if probe fails.
@@ -1420,6 +1429,18 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "audio_sample_rate": 48000,
             "audio_channels": 2,
             "audio_channel_layout": "stereo",
+            "audio_tracks": [
+                {
+                    "index": 0,
+                    "codec": "aac",
+                    "channels": 2,
+                    "title": "",
+                    "language": "",
+                    "handler": "",
+                    "label": "Track 1",
+                }
+            ],
+            "audio_track_count": 1,
             "fps": 30.0,
             "duration": 300.0,
             "nb_frames": 9000,
@@ -1445,6 +1466,8 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "stream=width,height,codec_name,codec_type,r_frame_rate,nb_frames,"
         "pix_fmt,sample_rate,channels,channel_layout",
         "-show_entries",
+        "stream_tags=title,language,handler_name",
+        "-show_entries",
         "format=duration",
         "-of",
         "json",
@@ -1468,6 +1491,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     audio_sample_rate = 0
     audio_channels = 0
     audio_channel_layout: str | None = None
+    audio_tracks: list[dict[str, Any]] = []
     fps = 0.0
     nb_frames = 0
     for stream in streams:
@@ -1490,17 +1514,53 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
                 nb_frames = int(stream.get("nb_frames") or 0)
             except (ValueError, TypeError):
                 nb_frames = 0
-        elif codec_type == "audio" and audio_codec is None:
-            audio_codec = stream.get("codec_name")
+        elif codec_type == "audio":
             try:
-                audio_sample_rate = int(stream.get("sample_rate") or 0)
+                track_channels = int(stream.get("channels") or 0)
             except (ValueError, TypeError):
-                audio_sample_rate = 0
-            try:
-                audio_channels = int(stream.get("channels") or 0)
-            except (ValueError, TypeError):
-                audio_channels = 0
-            audio_channel_layout = stream.get("channel_layout")
+                track_channels = 0
+            tags = stream.get("tags") or {}
+            title = (tags.get("title") or "").strip()
+            language = (tags.get("language") or "").strip()
+            handler = (tags.get("handler_name") or "").strip()
+            # Audio-relative index (0, 1, 2…) — the `a:N` selector ffmpeg needs
+            # for per-track extraction (multitrack mixing lands in a follow-up).
+            track_index = len(audio_tracks)
+            # Prefer an explicit title, then a meaningful handler name (skip the
+            # generic muxer defaults), then the language code, then an ordinal.
+            meaningful_handler = (
+                handler
+                if handler and handler.lower() not in _GENERIC_AUDIO_HANDLERS
+                else ""
+            )
+            # "und" (undefined) is MP4's default language tag, not a real name.
+            lang_label = (
+                language.upper() if language and language.lower() != "und" else ""
+            )
+            label = (
+                title or meaningful_handler or lang_label or f"Track {track_index + 1}"
+            )
+            audio_tracks.append(
+                {
+                    "index": track_index,
+                    "codec": stream.get("codec_name"),
+                    "channels": track_channels,
+                    "title": title,
+                    "language": language,
+                    "handler": handler,
+                    "label": label,
+                }
+            )
+            # Retain the first audio stream's details as the flat top-level fields
+            # (backward-compatible with the ~20 existing callers).
+            if audio_codec is None:
+                audio_codec = stream.get("codec_name")
+                try:
+                    audio_sample_rate = int(stream.get("sample_rate") or 0)
+                except (ValueError, TypeError):
+                    audio_sample_rate = 0
+                audio_channels = track_channels
+                audio_channel_layout = stream.get("channel_layout")
 
     if not video_codec or width <= 0 or height <= 0:
         return None
@@ -1525,6 +1585,8 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "audio_sample_rate": audio_sample_rate,
         "audio_channels": audio_channels,
         "audio_channel_layout": audio_channel_layout,
+        "audio_tracks": audio_tracks,
+        "audio_track_count": len(audio_tracks),
         "fps": fps,
         "duration": fmt_duration,
         "nb_frames": nb_frames,
@@ -1533,6 +1595,78 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     if fmt_duration > 0:
         _file_duration_cache[key] = round(fmt_duration)
     return result
+
+
+def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
+    """Demux one audio stream (``0:a:<audio_index>``) to a standalone, seekable
+    ``.m4a`` for the browser's per-track mixer.
+
+    HTML5 ``<video>`` plays only the container's default audio track, so
+    independent per-track volume needs each track as its own media source.
+    Extraction is demux-only (no video decode): a stream copy when the source is
+    already AAC (near-instant), falling back to an AAC re-encode otherwise. The
+    result is cached on disk under the OS temp dir keyed by (resolved path,
+    mtime_ns, index) so a re-encoded/replaced source re-extracts and range
+    requests (seeking) are served from a real file. Returns the path or ``None``.
+    """
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
+        return None
+    resolved, mtime_ns = key
+    cache_dir = Path(tempfile.gettempdir()) / "clipgen_audio_tracks"
+    # The scheme tag (_v2) invalidates caches from before +faststart was added.
+    digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:16]
+    out_path = cache_dir / f"{digest}_{mtime_ns}_a{audio_index}_v2.m4a"
+    if out_path.is_file() and out_path.stat().st_size > 0:
+        return out_path
+    if config.DEBUGGING:
+        return None
+
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    tmp_path = out_path.with_suffix(".partial.m4a")
+    # +faststart relocates the moov atom to the front so the browser can stream
+    # and seek the track smoothly (a tail moov forces buffering stalls → pops).
+    base = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        filepath,
+        "-map",
+        f"0:a:{audio_index}",
+        "-vn",
+        "-movflags",
+        "+faststart",
+    ]
+    # Try a stream copy first (instant for AAC), then an AAC re-encode for
+    # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
+    for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
+        try:
+            subprocess.run(
+                base + codec_args + [str(tmp_path)],
+                check=True,
+                capture_output=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            _delete_quietly(tmp_path)
+            continue
+        try:
+            tmp_path.replace(out_path)
+        except OSError:
+            _delete_quietly(tmp_path)
+            return None
+        return out_path
+    return None
+
+
+def _delete_quietly(path: Path) -> None:
+    """Best-effort unlink; ignore a missing file or OS error."""
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 def probe_max_keyframe_gap(filepath: str) -> float | None:

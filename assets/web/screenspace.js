@@ -141,6 +141,7 @@
     participants: [],
     selectedParticipant: null,
     videoInfo: null,
+    audioPanel: null, // ClipgenVideoControls audio-popover controller
     currentTimestamp: 0,
     frameImage: null,
     frameLoading: false,
@@ -1043,6 +1044,8 @@
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
         if (!data.ok) { qs("#videoInfo").textContent = ""; return; }
         state.videoInfo = data.info;
+        // Reconfigure the audio popover for this participant's track layout.
+        if (state.audioPanel) state.audioPanel.refresh();
         // If the server reports a different mtime than we last saw, the
         // source file was replaced \u2014 drop the stale frame-0 blob so the
         // next loadFrame(0) hits the API and the new ?v= URL.
@@ -1605,9 +1608,30 @@
       }
     });
 
+    // Hover the mute button for a glassy 0–200% volume popover (click still
+    // mutes). getTracks reads the audio-track layout from /api/video/info;
+    // trackAudioUrl enables per-track mixing for single-file participants.
+    state.audioPanel = window.ClipgenVideoControls.attachAudioPanel({
+      video: video,
+      button: muteBtn,
+      getTracks: function () {
+        return (state.videoInfo && state.videoInfo.audio_tracks) || [];
+      },
+      trackAudioUrl: function (idx) {
+        var pid = state.selectedParticipant;
+        if (!pid || !state.videoInfo) return null;
+        // Per-track mixing is single-file only; multi-part keeps the master slider.
+        if (state.videoInfo.parts && state.videoInfo.parts.length > 1) return null;
+        var url = "api/video/audio-track/" + encodeURIComponent(pid) + "/" + idx;
+        var v = _videoVersions[pid];
+        return v ? url + "?v=" + encodeURIComponent(v) : url;
+      },
+    });
+
     muteBtn.addEventListener("click", function () {
       state.videoMuted = !state.videoMuted;
-      video.muted = state.videoMuted;
+      if (state.audioPanel) state.audioPanel.setMuted(state.videoMuted);
+      else video.muted = state.videoMuted;
       updateVideoButtons();
     });
 
@@ -1691,7 +1715,10 @@
       }
       video.currentTime = state.currentTimestamp;
     }
-    video.muted = state.videoMuted;
+    // Route through the audio panel so multitrack mode keeps the <video> muted
+    // (its baked track stays silent while the per-track mix plays).
+    if (state.audioPanel) state.audioPanel.setMuted(state.videoMuted);
+    else video.muted = state.videoMuted;
 
     video.classList.add("active");
     qs("#frameCanvas").classList.add("video-active");

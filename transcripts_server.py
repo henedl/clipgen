@@ -50,7 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 
 import config
 import files
@@ -495,6 +495,40 @@ def _video_paths_for_participant(participant: str) -> list[str]:
         if p["id"] == participant:
             return list(p["video_paths"])
     return []
+
+
+@transcripts_bp.route("/api/audio-info/<participant>")
+def api_audio_info(participant: str) -> FlaskResponse:
+    """Return the participant's audio-track layout (count + per-track labels).
+
+    Lazy per-participant probe (cached in ``video`` by file mtime) so the
+    ``/api/participants`` list endpoint stays free of an ffprobe per participant.
+    Multi-part participants share the first part's audio setup.
+    """
+    video_paths = _video_paths_for_participant(participant)
+    if not video_paths:
+        return err(f"No video for participant {participant}", 404)
+    props = video.probe_video_properties(video_paths[0])
+    if props is None:
+        return err("Could not probe video file", 500)
+    return ok(
+        audio_tracks=props.get("audio_tracks") or [],
+        audio_track_count=props.get("audio_track_count") or 0,
+    )
+
+
+@transcripts_bp.route("/api/audio-track/<participant>/<int:idx>")
+def api_audio_track(participant: str, idx: int) -> FlaskResponse:
+    """Stream one demuxed audio track for the browser's per-track volume mixer."""
+    video_paths = _video_paths_for_participant(participant)
+    if not video_paths:
+        return err(f"No video for participant {participant}", 404)
+    out = video.extract_audio_track(video_paths[0], idx)
+    if out is None:
+        return err("Could not extract audio track", 500)
+    response = send_file(str(out), mimetype="audio/mp4", conditional=True)
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 def _embed_subtitle_for_participant(

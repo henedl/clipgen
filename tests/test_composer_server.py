@@ -76,6 +76,43 @@ def test_participants_reports_parts_and_total(co_client):
     assert "defaultDuration" in body["config"]
 
 
+def test_participants_reports_audio_tracks(co_client, monkeypatch):
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _p: {
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "audio_tracks": [
+                {"index": 0, "label": "Microphone", "channels": 1},
+                {"index": 1, "label": "System", "channels": 2},
+            ],
+            "audio_track_count": 2,
+        },
+    )
+    body = co_client.get("/composer/api/participants").get_json()
+    (p,) = body["participants"]
+    assert p["audio_track_count"] == 2
+    assert [t["label"] for t in p["audio_tracks"]] == ["Microphone", "System"]
+
+
+def test_audio_track_streams(co_client, monkeypatch, tmp_path):
+    track = tmp_path / "track.m4a"
+    track.write_bytes(b"audio")
+    monkeypatch.setattr(
+        composer_server,
+        "_find_participant_parts",
+        lambda pid: [{"path": "/x.mp4"}] if pid == "P01" else None,
+    )
+    monkeypatch.setattr(video, "extract_audio_track", lambda p, idx: track)
+
+    resp = co_client.get("/composer/api/audio-track/P01/0")
+    assert resp.status_code == 200
+    assert resp.mimetype == "audio/mp4"
+    assert co_client.get("/composer/api/audio-track/ZZ/0").status_code == 404
+
+
 def test_cuts_crud_round_trip(co_client, tmp_path):
     created = co_client.post(
         "/composer/api/cuts",

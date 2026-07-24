@@ -14,6 +14,8 @@
 (function () {
   "use strict";
 
+  var audioPanel = null; // ClipgenVideoControls audio-popover controller
+
   var state = {
     participants: [],       // [{id, parts:[{name,duration,offset}], total_duration}]
     participant: null,      // active participant id
@@ -22,6 +24,7 @@
     activePart: 0,
     playhead: 0,            // global seconds (kept current by timeupdate)
     playing: false,
+    videoMuted: false,      // player mute state (icon + video.muted)
     cuts: [],               // all cuts from the composer manifest (all participants)
     trims: {},              // marker key → {start, end} span overrides
     annotations: [],        // all annotation records (all participants)
@@ -163,6 +166,14 @@
     if (icon) icon.className = "co-btn-icon " + (state.playing ? "co-icon-pause" : "co-icon-play");
   }
 
+  function updateMuteButton() {
+    var icon = qs("#coMuteIcon");
+    if (icon) icon.className = "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute");
+    // Accent tint while sound is on — matches Screenspace/Transcripts mute btns.
+    var btn = qs("#coMuteBtn");
+    if (btn) btn.classList.toggle("active", !state.videoMuted);
+  }
+
   function updateTimeLabel() {
     var label = qs("#coTimeLabel");
     if (!label) return;
@@ -241,6 +252,30 @@
       }
     });
     qs("#coPlayBtn").addEventListener("click", togglePlay);
+
+    // Hover the mute button for a glassy 0–200% volume popover (click still
+    // mutes). getTracks reads the active participant's probed audio layout;
+    // trackAudioUrl enables per-track mixing for single-file participants.
+    var muteBtn = qs("#coMuteBtn");
+    audioPanel = window.ClipgenVideoControls.attachAudioPanel({
+      video: video,
+      button: muteBtn,
+      getTracks: function () {
+        var p = findParticipant(state.participant);
+        return (p && p.audio_tracks) || [];
+      },
+      trackAudioUrl: function (idx) {
+        if (!state.participant || state.parts.length > 1) return null;
+        return "api/audio-track/" + encodeURIComponent(state.participant) + "/" + idx;
+      },
+    });
+    muteBtn.addEventListener("click", function () {
+      state.videoMuted = !state.videoMuted;
+      if (audioPanel) audioPanel.setMuted(state.videoMuted);
+      else video.muted = state.videoMuted;
+      updateMuteButton();
+    });
+    updateMuteButton();
   }
 
   // ---- Participant selection ----
@@ -288,8 +323,11 @@
       video.removeAttribute("src");
       qs("#coVideoFrame").classList.remove("has-video");
     }
+    // Reconfigure the audio popover (per-track mixer vs master slider) and tear
+    // down the previous participant's track mix for this new participant.
+    if (audioPanel) audioPanel.refresh();
 
-    ["#coPlayBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
+    ["#coPlayBtn", "#coMuteBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
       qs(sel).disabled = false;
     });
     qs("#coAnnotateBar").classList.remove("hidden");
