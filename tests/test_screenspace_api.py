@@ -101,6 +101,40 @@ def test_list_participants(client):
     assert data["participants"][0]["id"] == "P01"
 
 
+def test_video_info_reports_audio_tracks(client, monkeypatch):
+    import video
+
+    monkeypatch.setattr(screenspace_server, "_participant_timeline", lambda pid: None)
+    monkeypatch.setattr(
+        screenspace_server,
+        "_find_participant_video_with_mtime",
+        lambda pid: ("/tmp/test_P01.mp4", 4242) if pid == "P01" else None,
+    )
+    monkeypatch.setattr(screenspace_server, "_video_metadata_cache", {})
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "duration": 12.0,
+            "nb_frames": 360,
+            "video_codec": "h264",
+            "audio_tracks": [
+                {"index": 0, "label": "Microphone"},
+                {"index": 1, "label": "System"},
+            ],
+            "audio_track_count": 2,
+        },
+    )
+    resp = client.get("/screenspace/api/video/info/P01")
+    assert resp.status_code == 200
+    info = resp.get_json()["info"]
+    assert info["audio_track_count"] == 2
+    assert [t["label"] for t in info["audio_tracks"]] == ["Microphone", "System"]
+
+
 def test_participant_notes_default_empty(client):
     resp = client.get("/screenspace/api/participants/P01/notes")
     assert resp.status_code == 200

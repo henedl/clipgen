@@ -131,6 +131,8 @@ body[data-frontend="composer"] {
 
 .co-icon-play { --co-icon: url("icons/play.svg"); }
 .co-icon-pause { --co-icon: url("icons/pause.svg"); }
+.co-icon-mute { --co-icon: url("icons/speaker-wave.svg"); }
+.co-icon-mute-off { --co-icon: url("icons/speaker-x-mark.svg"); }
 .co-icon-in { --co-icon: url("icons/arrow-uturn-down.svg"); transform: rotate(90deg); }
 .co-icon-out { --co-icon: url("icons/arrow-uturn-up.svg"); transform: rotate(90deg); }
 .co-icon-undo { --co-icon: url("icons/arrow-uturn-left.svg"); }

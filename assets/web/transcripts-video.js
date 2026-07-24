@@ -546,6 +546,13 @@
       video.muted = state.videoMuted;
       updatePlayerButtons();
     });
+    // Hover the mute button for a glassy 0–200% volume popover (click still
+    // mutes). getTracks reads the layout fetched by selectParticipant.
+    window.ClipgenVideoControls.attachAudioPanel({
+      video: video,
+      button: qs("#videoMuteBtn"),
+      getTracks: function () { return state.audioTracks || []; },
+    });
     qs("#videoSpeedBtn").addEventListener("click", function () {
       state.videoPlaybackRate = window.ClipgenVideoControls.nextSpeed(VIDEO_SPEEDS, state.videoPlaybackRate);
       applyPlaybackRate();

@@ -195,6 +195,8 @@ def api_participants() -> Any:
                 "width": props.get("width") if props else None,
                 "height": props.get("height") if props else None,
                 "fps": props.get("fps") if props else None,
+                "audio_tracks": props.get("audio_tracks") if props else [],
+                "audio_track_count": props.get("audio_track_count") if props else 0,
             }
         )
     return ok(participants=participants, config=utils.get_frontend_config())

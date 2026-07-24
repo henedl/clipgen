@@ -76,6 +76,27 @@ def test_participants_reports_parts_and_total(co_client):
     assert "defaultDuration" in body["config"]
 
 
+def test_participants_reports_audio_tracks(co_client, monkeypatch):
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _p: {
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "audio_tracks": [
+                {"index": 0, "label": "Microphone", "channels": 1},
+                {"index": 1, "label": "System", "channels": 2},
+            ],
+            "audio_track_count": 2,
+        },
+    )
+    body = co_client.get("/composer/api/participants").get_json()
+    (p,) = body["participants"]
+    assert p["audio_track_count"] == 2
+    assert [t["label"] for t in p["audio_tracks"]] == ["Microphone", "System"]
+
+
 def test_cuts_crud_round_trip(co_client, tmp_path):
     created = co_client.post(
         "/composer/api/cuts",

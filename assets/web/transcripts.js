@@ -56,6 +56,9 @@
     modelFailSince: 0,
     videoPlaying: false,
     videoMuted: false,
+    // Audio-track layout for the current participant (from /api/audio-info);
+    // feeds the volume popover's detected-track caption.
+    audioTracks: [],
     videoPlaybackRate: 1,
     ccEnabled: false,
     pipActive: false,
@@ -698,6 +701,19 @@
     // a re-encoded or replaced source file invalidates the browser HTTP cache
     // instead of relying on send_from_directory's Last-Modified revalidation.
     if (p.has_video) {
+      // Lazily probe the audio-track layout for the volume popover's caption.
+      // Guarded by participantReqVer so a slow response for a since-abandoned
+      // participant can't overwrite the current one's tracks.
+      state.audioTracks = [];
+      (function (ver) {
+        apiGet("api/audio-info/" + encodeURIComponent(pid))
+          .then(function (data) {
+            if (ver !== state.participantReqVer) return;
+            if (data && data.ok) state.audioTracks = data.audio_tracks || [];
+          })
+          .catch(function () {});
+      })(state.participantReqVer);
+
       // Multi-video participants carry a per-part timeline; play part-by-part
       // with client-side source switching (see the timeline helpers).
       state.videoTimeline = p.timeline && p.timeline.length > 1 ? p.timeline : null;

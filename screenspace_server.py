@@ -1316,6 +1316,8 @@ def api_video_info(participant: str) -> FlaskResponse:
             "height": props.get("height") or None,
             "nb_frames": 0,
             "video_codec": props.get("video_codec") or "",
+            "audio_tracks": props.get("audio_tracks") or [],
+            "audio_track_count": props.get("audio_track_count") or 0,
             "version": _participant_video_version(participant),
             "parts": [
                 {"filename": Path(p).name, "duration": d, "cumulativeStart": c}
@@ -1355,6 +1357,8 @@ def api_video_info(participant: str) -> FlaskResponse:
         "height": height if height > 0 else None,
         "nb_frames": props.get("nb_frames", 0) or 0,
         "video_codec": props.get("video_codec") or "",
+        "audio_tracks": props.get("audio_tracks") or [],
+        "audio_track_count": props.get("audio_track_count") or 0,
         "version": mtime_ns,
     }
     with _video_metadata_cache_lock:

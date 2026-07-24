@@ -497,6 +497,26 @@ def _video_paths_for_participant(participant: str) -> list[str]:
     return []
 
 
+@transcripts_bp.route("/api/audio-info/<participant>")
+def api_audio_info(participant: str) -> FlaskResponse:
+    """Return the participant's audio-track layout (count + per-track labels).
+
+    Lazy per-participant probe (cached in ``video`` by file mtime) so the
+    ``/api/participants`` list endpoint stays free of an ffprobe per participant.
+    Multi-part participants share the first part's audio setup.
+    """
+    video_paths = _video_paths_for_participant(participant)
+    if not video_paths:
+        return err(f"No video for participant {participant}", 404)
+    props = video.probe_video_properties(video_paths[0])
+    if props is None:
+        return err("Could not probe video file", 500)
+    return ok(
+        audio_tracks=props.get("audio_tracks") or [],
+        audio_track_count=props.get("audio_track_count") or 0,
+    )
+
+
 def _embed_subtitle_for_participant(
     participant: str, output_dir: Path
 ) -> dict[str, Any]:

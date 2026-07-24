@@ -22,6 +22,7 @@
     activePart: 0,
     playhead: 0,            // global seconds (kept current by timeupdate)
     playing: false,
+    videoMuted: false,      // player mute state (icon + video.muted)
     cuts: [],               // all cuts from the composer manifest (all participants)
     trims: {},              // marker key → {start, end} span overrides
     annotations: [],        // all annotation records (all participants)
@@ -163,6 +164,11 @@
     if (icon) icon.className = "co-btn-icon " + (state.playing ? "co-icon-pause" : "co-icon-play");
   }
 
+  function updateMuteButton() {
+    var icon = qs("#coMuteIcon");
+    if (icon) icon.className = "co-btn-icon " + (state.videoMuted ? "co-icon-mute-off" : "co-icon-mute");
+  }
+
   function updateTimeLabel() {
     var label = qs("#coTimeLabel");
     if (!label) return;
@@ -241,6 +247,24 @@
       }
     });
     qs("#coPlayBtn").addEventListener("click", togglePlay);
+
+    var muteBtn = qs("#coMuteBtn");
+    muteBtn.addEventListener("click", function () {
+      state.videoMuted = !state.videoMuted;
+      video.muted = state.videoMuted;
+      updateMuteButton();
+    });
+    // Hover the mute button for a glassy 0–200% volume popover (click still
+    // mutes). getTracks reads the active participant's probed audio layout.
+    window.ClipgenVideoControls.attachAudioPanel({
+      video: video,
+      button: muteBtn,
+      getTracks: function () {
+        var p = findParticipant(state.participant);
+        return (p && p.audio_tracks) || [];
+      },
+    });
+    updateMuteButton();
   }
 
   // ---- Participant selection ----
@@ -289,7 +313,7 @@
       qs("#coVideoFrame").classList.remove("has-video");
     }
 
-    ["#coPlayBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
+    ["#coPlayBtn", "#coMuteBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
       qs(sel).disabled = false;
     });
     qs("#coAnnotateBar").classList.remove("hidden");

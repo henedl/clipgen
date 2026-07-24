@@ -107,10 +107,72 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "audio_sample_rate": 48000,
         "audio_channels": 2,
         "audio_channel_layout": "stereo",
+        "audio_tracks": [
+            {
+                "index": 0,
+                "codec": "aac",
+                "channels": 2,
+                "title": "",
+                "language": "",
+                "handler": "",
+                "label": "Track 1",
+            }
+        ],
+        "audio_track_count": 1,
         "fps": 0.0,
         "duration": 0.0,
         "nb_frames": 0,
     }
+
+
+def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
+    """Every audio stream is enumerated; the first also fills the flat fields."""
+    video._video_properties_cache.clear()
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    fake_json = json.dumps(
+        {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1920,
+                    "height": 1080,
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2,
+                    "tags": {"title": "Microphone"},
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "opus",
+                    "channels": 1,
+                    # Generic muxer handler + language → label falls back to lang.
+                    "tags": {"handler_name": "SoundHandler", "language": "eng"},
+                },
+                {
+                    "codec_type": "audio",
+                    "codec_name": "aac",
+                    "channels": 2,
+                    # No usable tags at all → ordinal label.
+                    "tags": {},
+                },
+            ]
+        }
+    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
+
+    result = video.probe_video_properties(str(clip))
+    assert result is not None
+    assert result["audio_track_count"] == 3
+    labels = [t["label"] for t in result["audio_tracks"]]
+    assert labels == ["Microphone", "ENG", "Track 3"]
+    assert [t["index"] for t in result["audio_tracks"]] == [0, 1, 2]
+    # Flat top-level fields describe the first audio stream only.
+    assert result["audio_codec"] == "aac"
+    assert result["audio_channels"] == 2
 
 
 def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
@@ -140,6 +202,8 @@ def test_probe_video_properties_no_audio(monkeypatch, tmp_path):
     assert result["audio_sample_rate"] == 0
     assert result["audio_channels"] == 0
     assert result["audio_channel_layout"] is None
+    assert result["audio_tracks"] == []
+    assert result["audio_track_count"] == 0
 
 
 def test_probe_video_properties_failure(monkeypatch, tmp_path):
