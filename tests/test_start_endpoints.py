@@ -48,6 +48,15 @@ def app(monkeypatch, tmp_path):
     # Reset Google-auth state between tests.
     monkeypatch.setattr(server, "_google_auth", server._GoogleAuthState())
 
+    # /api/spreadsheets/open reassigns these module globals directly (no
+    # fixture owns them), so an opened workbook would otherwise outlive the
+    # test and feed its participants to anything later in the same worker that
+    # reads the live sheet. monkeypatch restores them however the route left them.
+    monkeypatch.setattr(server, "_worksheet", None)
+    monkeypatch.setattr(server, "_sheet_context", None)
+    monkeypatch.setattr(server, "_sheet_payload_cache", None)
+    monkeypatch.setattr(server, "_active_sheet_meta", None)
+
     return server.build_combined_app(worksheet=None, default_page="studio")
 
 
