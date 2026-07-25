@@ -1,13 +1,13 @@
 # Workflows — Phase 2 plan (recipes · batch · catalog · triggers)
 
-> **Phase 2 complete — P1–P6 all shipped.** v1 (`plans/WORKFLOWS-PLAN.md`, M0–M5) proves the
+> **Phase 2 complete — P1–P6 all shipped.** v1 (`plans/archive/WORKFLOWS-PLAN.md`, M0–M5) proves the
 > cross-domain chain with a curated node set and a sequential, in-process run engine. Phase 2 made it a
 > daily tool: a **recipe/template layer on top of a steadily-growing catalog** (P1/P2/P4), a
 > **whole-study batch** (P3), authoring + run-history UX (P5), and a **narrow watch-dir trigger** (P6,
 > the final workstream). All open questions are resolved (see *Open questions*); remaining items are
 > demand-driven follow-ups noted inline per workstream.
 >
-> **Phase 3 shipped most of the inline deferrals** — see `plans/WORKFLOWS-PHASE3-PLAN.md`:
+> **Phase 3 shipped most of the inline deferrals** — see `plans/archive/WORKFLOWS-PHASE3-PLAN.md`:
 > data/transcript export nodes, the heatmap rolling-GIF window, compound filter clauses, canvas
 > notes (the groups/comments deferral), resume-from-failure (the partial/memoized re-run this plan
 > cut), a dry-run preview, a cross-blueprint run-history view, `transcript_complete` / `scan_event`

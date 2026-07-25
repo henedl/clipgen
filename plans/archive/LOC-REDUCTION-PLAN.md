@@ -14,7 +14,7 @@ as they land (per AGENTS.md plan-maintenance rule).
 
 ## Framing
 
-Hub→satellite carves (see [FRONTEND-REFACTORS-PLAN.md](../FRONTEND-REFACTORS-PLAN.md)) **relocate**
+Hub→satellite carves (see [FRONTEND-REFACTORS-PLAN.md](FRONTEND-REFACTORS-PLAN.md)) **relocate**
 lines — the hub shrinks but the total is unchanged. Real reduction comes from **deduplication
 and deleting redundancy**. Everything below targets repeated shapes, ordered by leverage.
 
@@ -76,7 +76,7 @@ dozens of times.
 
 ## 3. Cross-cutting JS dedup (these *delete* lines)
 
-Shared with [FRONTEND-REFACTORS-PLAN.md](../FRONTEND-REFACTORS-PLAN.md) Theme B — listed here because,
+Shared with [FRONTEND-REFACTORS-PLAN.md](FRONTEND-REFACTORS-PLAN.md) Theme B — listed here because,
 unlike the carves, they remove duplication rather than move it.
 
 - [x] **3a. `createSSEStream(url, {onMessage, onOpen, onError, onUnsupported})`** in `utils.js` —

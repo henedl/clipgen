@@ -1,6 +1,12 @@
 # Frontend refactors & carveouts — plan
 
-Status: **proposed** (2026-06-30). Tracks a sweep of refactor/carveout opportunities
+> **Status: closed 2026-07-25.** 13 of 17 items landed (commit notes inline).
+> The four unchecked items are deliberately not-doing rather than pending: three
+> were logged as _optional later_ / _investigate only_ / _opportunistic_, and the
+> fourth — the **build** carve (`studio.js 4136–4615`) — is blocked on a separate
+> reel-vs-viewer split and should be re-opened as its own plan if wanted.
+
+Originally proposed (2026-06-30). Tracks a sweep of refactor/carveout opportunities
 across `assets/web/`. Each numbered item is sized to be one focused `refactor:` commit/PR.
 Check items off and add a "Done" note as they land (per AGENTS.md plan-maintenance rule).
 

@@ -726,7 +726,7 @@ class ScreenspaceWorker:
                         # _partial_results from t["result"]. For attention that
                         # re-seed is shift-only, so a resumed scan's heatmap
                         # under-accumulates the pre-pause segment (accepted;
-                        # see plans/ATTENTION-PLAN.md).
+                        # see plans/archive/ATTENTION-PLAN.md).
                         partial = t.get("_partial_results")
                         if partial and isinstance(result, list):
                             result = partial + result
