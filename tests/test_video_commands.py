@@ -1,5 +1,8 @@
 import json
+import os
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import config
@@ -288,6 +291,78 @@ def test_extract_audio_track_failure_returns_none(monkeypatch, tmp_path):
 
 def test_extract_audio_track_file_not_found():
     assert video.extract_audio_track("/nonexistent/missing.mp4", 0) is None
+
+
+def test_extract_audio_track_concurrent_calls_run_ffmpeg_once(monkeypatch, tmp_path):
+    """Two threads racing on the same track must not both invoke ffmpeg.
+
+    Without the per-key lock both would write the same deterministic .partial
+    path with -y and one would rename a half-written file into the cache, which
+    is then served for the source's whole mtime lifetime.
+    """
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    monkeypatch.setattr(config, "DEBUGGING", False)
+    monkeypatch.setattr(video.tempfile, "gettempdir", lambda: str(tmp_path))
+
+    calls: list[list[str]] = []
+    tmp_names: list[str] = []
+    started = threading.Event()
+    calls_lock = threading.Lock()
+
+    def _run(cmd, **_kw):
+        with calls_lock:
+            calls.append(cmd)
+            tmp_names.append(Path(cmd[-1]).name)
+        started.set()
+        time.sleep(0.05)  # hold the lock long enough for the racer to pile up
+        Path(cmd[-1]).write_bytes(b"audio")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(video.subprocess, "run", _run)
+
+    results: list[Path | None] = []
+    results_lock = threading.Lock()
+
+    def _extract():
+        out = video.extract_audio_track(str(src), 0)
+        with results_lock:
+            results.append(out)
+
+    threads = [threading.Thread(target=_extract) for _ in range(2)]
+    threads[0].start()
+    started.wait(timeout=5)
+    threads[1].start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(calls) == 1, "second caller should have used the cached result"
+    assert len(results) == 2
+    assert results[0] == results[1]
+    assert results[0] is not None and results[0].read_bytes() == b"audio"
+    # Scratch paths are per-caller, so even a different track of the same file
+    # can never collide on one .partial name.
+    assert ".partial." in tmp_names[0]
+
+
+def test_extract_audio_track_prunes_superseded_extractions(monkeypatch, tmp_path):
+    """A re-encoded source keys a new cache file; the old mtime's must go."""
+    src = tmp_path / "v.mp4"
+    src.write_bytes(b"x")
+    _stub_ffmpeg_writes_output(monkeypatch, tmp_path)
+
+    first = video.extract_audio_track(str(src), 0)
+    assert first is not None and first.is_file()
+
+    # Rewrite the source so mtime_ns (and therefore the cache key) changes.
+    time.sleep(0.01)
+    src.write_bytes(b"xy")
+    os.utime(src, ns=(time.time_ns(), time.time_ns()))
+
+    second = video.extract_audio_track(str(src), 0)
+    assert second is not None and second.is_file()
+    assert second != first
+    assert not first.exists(), "superseded extraction should be pruned"
 
 
 # -- probe_max_keyframe_gap tests --

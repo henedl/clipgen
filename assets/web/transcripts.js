@@ -701,13 +701,18 @@
     // Set video source. ?v=<mtime_ns> mirrors the screenspace cache-bust so
     // a re-encoded or replaced source file invalidates the browser HTTP cache
     // instead of relying on send_from_directory's Last-Modified revalidation.
+    // Reset the audio-track layout to single-track, which tears down the
+    // previous participant's mix. Outside the has_video branch on purpose:
+    // selecting a participant *without* video must also drop the mix, or its
+    // orphaned <audio> elements keep playing, the <video> stays force-muted, and
+    // the volume popover goes on showing the previous participant's sliders.
+    state.audioTracks = [];
+    if (state.audioPanel) state.audioPanel.refresh();
+
     if (p.has_video) {
       // Lazily probe the audio-track layout for the volume popover's caption +
-      // per-track mixer. Reset to single-track now (tears down the previous
-      // participant's mix), then reconfigure once the layout arrives. Guarded by
+      // per-track mixer, then reconfigure once the layout arrives. Guarded by
       // participantReqVer so a stale response can't overwrite the current tracks.
-      state.audioTracks = [];
-      if (state.audioPanel) state.audioPanel.refresh();
       (function (ver) {
         apiGet("api/audio-info/" + encodeURIComponent(pid))
           .then(function (data) {

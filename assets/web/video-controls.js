@@ -106,6 +106,11 @@
     var mixRunning = false;    // per-track <audio> elements confirmed playing
     var lastSig = null;        // track-set signature so refresh() is idempotent
     var retryHandler = null;   // one-shot gesture listener re-arming a blocked mix
+    // Bumped by teardownMulti (which every mode switch goes through). A
+    // discarded track element can still deliver a queued "error" after the next
+    // participant's mix is built, and that must not tear the new mix down —
+    // each track's error handler captures the generation it was created in.
+    var mixGeneration = 0;
 
     // ---- Single-track path: lazy video -> gain -> destination (commit 1) ----
     var videoSrcNode = null;
@@ -151,14 +156,25 @@
 
     function resumeCtx() {
       var ctx = audioContext();
-      if (ctx && ctx.state === "suspended" && ctx.resume) ctx.resume();
+      if (!ctx || ctx.state !== "suspended" || !ctx.resume) return;
+      var p = ctx.resume();
+      // resume() is async and can settle after the elements' play() promises.
+      // onMixStarted bails while the context is still suspended, so re-run it
+      // here once the graph is genuinely audible.
+      if (p && p.then) {
+        p.then(function () {
+          if (multiActive && !mixRunning && !video.paused) onMixStarted();
+        }, function () {});
+      }
     }
 
     function teardownMulti() {
       disarmRetry();
+      mixGeneration++;
       for (var i = 0; i < trackNodes.length; i++) {
         var t = trackNodes[i];
         try { t.el.pause(); } catch (e) {}
+        if (t.onError) t.el.removeEventListener("error", t.onError);
         try { t.el.removeAttribute("src"); t.el.load(); } catch (e2) {}
         try { t.src.disconnect(); } catch (e3) {}
         try { t.gain.disconnect(); } catch (e4) {}
@@ -170,9 +186,13 @@
       mixRunning = false;
     }
 
-    function bailToSingle() {
+    function bailToSingle(gen) {
       // Something went wrong loading a track — never leave the user with a muted
       // video and no sound. Drop the mix and play the video's own default track.
+      // Ignore a track that already belongs to a torn-down mix: its error can
+      // land after the *next* participant's mix is up, and tearing that one down
+      // would silently cost them per-track mixing until another switch.
+      if (gen !== mixGeneration) return;
       teardownMulti();
       lastSig = "single";
       video.muted = muted;
@@ -192,6 +212,7 @@
         masterGain.connect(ctx.destination);
       } catch (e) { enterSingle(); return; }
       trackPercents = [];
+      var gen = mixGeneration;
       for (var i = 0; i < tracks.length; i++) {
         var url = safeTrackUrl(tracks[i].index);
         if (!url) { teardownMulti(); enterSingle(); return; }
@@ -203,14 +224,17 @@
         el.webkitPreservesPitch = true;
         el.src = url;
         el.className = "cg-audiotrack";
-        el.addEventListener("error", bailToSingle);
+        var onError = (function (g0) {
+          return function () { bailToSingle(g0); };
+        })(gen);
+        el.addEventListener("error", onError);
         try {
           var src = ctx.createMediaElementSource(el);
           var g = ctx.createGain();
           g.gain.value = 1;
           src.connect(g);
           g.connect(masterGain);
-          trackNodes.push({ el: el, gain: g, src: src, index: tracks[i].index });
+          trackNodes.push({ el: el, gain: g, src: src, index: tracks[i].index, onError: onError });
           trackPercents.push(100);
           document.body.appendChild(el);
           el.load();
@@ -275,6 +299,13 @@
     }
     function onMixStarted() {
       if (!multiActive) return;
+      // Element playback and AudioContext.resume() are gated independently, so
+      // the tracks can "play" into a still-suspended context — routing the mix
+      // nowhere. Muting the <video> at that point leaves *total* silence with
+      // no retry armed, recoverable only by a manual pause→play. Treat it like
+      // a blocked start instead; resumeCtx re-runs this once the graph is live.
+      var ctx = audioContext();
+      if (!ctx || ctx.state !== "running") { armRetry(); return; }
       disarmRetry();
       mixRunning = true;
       applyMute(); // now silence the <video> — the mix has taken over its audio
@@ -450,7 +481,8 @@
             var tr = tracks[idx] || {};
             var name = tr.label || ("Track " + (idx + 1));
             rowsContainer.appendChild(
-              makeRow(name, trackPercents[idx] || 100, resumeCtx, function (v) {
+              // == null, not ||: 0% is a valid (fully attenuated) track.
+              makeRow(name, trackPercents[idx] == null ? 100 : trackPercents[idx], resumeCtx, function (v) {
                 setTrackGain(idx, v);
               })
             );
