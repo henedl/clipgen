@@ -91,8 +91,9 @@ def test_wrap_clip_with_cards_respects_disabled_flag(monkeypatch, make_clip):
         lambda *_a, **_k: calls.__setitem__("ffmpeg", calls["ffmpeg"] + 1),
     )
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is False
     assert calls == {"build_title": 0, "build_end": 0, "ffmpeg": 0}
 
 
@@ -136,8 +137,9 @@ def test_wrap_clip_with_cards_single_encode_happy_path(monkeypatch, make_clip):
         lambda src, dst: replaced.update({"src": src, "dst": dst}),
     )
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     assert len(commands) == 1, "expected exactly one ffmpeg invocation"
 
     cmd = commands[0]
@@ -193,8 +195,9 @@ def test_wrap_clip_with_cards_title_only_fallback(monkeypatch, make_clip):
     )
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     assert len(commands) == 1
     joined = " ".join(commands[0])
     assert "concat=n=2:v=1:a=1" in joined
@@ -239,8 +242,9 @@ def test_wrap_clip_with_cards_no_audio_drops_audio_stream(monkeypatch, make_clip
     )
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     cmd = commands[0]
     joined = " ".join(cmd)
     # No audio stream in output: concat a=0 and no anullsrc inputs.
@@ -277,8 +281,9 @@ def test_wrap_clip_with_cards_no_cards_is_noop(monkeypatch, make_clip):
         lambda cmd, **_k: ffmpeg_calls.append(cmd) or None,
     )
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is False
     assert ffmpeg_calls == []
 
 
@@ -322,8 +327,9 @@ def test_wrap_clip_with_cards_copy_path_builds_matching_cards(monkeypatch, make_
         titlecards.os, "replace", lambda src, dst: replaced.update({"dst": dst})
     )
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
 
     joined = [" ".join(c) for c in commands]
     # Both card builds carry a matching silent AAC track, fixed fps, and SAR.
@@ -371,8 +377,9 @@ def test_wrap_clip_with_cards_copy_path_no_audio(monkeypatch, make_clip):
     )
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     joined = [" ".join(c) for c in commands]
     assert not any("anullsrc" in j for j in joined)
     assert not any("-c:a" in j for j in joined)
@@ -408,8 +415,9 @@ def test_wrap_clip_with_cards_non_copy_safe_reencodes(monkeypatch, make_clip):
     )
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     assert len(commands) == 1
     joined = " ".join(commands[0])
     assert "-filter_complex" in joined
@@ -444,8 +452,9 @@ def test_wrap_clip_with_cards_copy_failure_falls_back(monkeypatch, make_clip):
         titlecards.os, "replace", lambda src, dst: replaced.update({"dst": dst})
     )
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     joined = [" ".join(c) for c in commands]
     # The copy concat was attempted...
     assert any("-f concat" in j and "-c copy" in j for j in joined)
@@ -756,8 +765,9 @@ def test_wrap_reencode_uses_fast_preset(monkeypatch, make_clip):
     )
     monkeypatch.setattr(titlecards.os, "replace", lambda src, dst: None)
 
-    ok = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
+    ok, cards_applied = titlecards.wrap_clip_with_cards(clip, "clip.mp4")
     assert ok is True
+    assert cards_applied is True
     joined = " ".join(commands[0])
     assert "-preset veryfast" in joined
     assert "-crf 20" in joined
@@ -809,11 +819,11 @@ def test_pipeline_wraps_clip_without_forcing_source_resolution(monkeypatch, make
 
     def fake_wrap(_clip, out_name, resolution=None, **_kwargs):
         wrap_calls.append((out_name, resolution))
-        return True
+        return (True, True)
 
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
-    generated, _paths = pipeline._process_single_clip_segments(
+    generated, _paths, _ = pipeline._process_single_clip_segments(
         clip, "source.mp4", set(), output_format="clip"
     )
 

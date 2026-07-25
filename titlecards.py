@@ -561,7 +561,7 @@ def wrap_clip_with_cards(
     on_progress: Callable[[float], None] | None = None,
     titlecards_enabled: bool | None = None,
     titlecard_duration_seconds: int | None = None,
-) -> bool:
+) -> tuple[bool, bool]:
     """Prepend a titlecard and append an endcard to a clip.
 
     Fast path: when the clip body is a copy-safe shape (see _body_is_copy_safe), only
@@ -571,10 +571,21 @@ def wrap_clip_with_cards(
     non-copy-safe body, or a failed copy concat, falls back to a single filter_complex
     encode that re-encodes the whole clip.
 
-    Returns True when the clip file is usable afterwards (either wrapped or left
-    untouched on soft failure), and False only on a hard failure (e.g. the clip file
-    is missing). When *cancel_flag* is supplied and returns True during a card or wrap
-    encode, the in-flight ffmpeg is terminated and the original clip is left untouched.
+    Returns ``(clip_ok, cards_applied)``:
+
+    - ``clip_ok`` is True when the clip file is usable afterwards (either wrapped or
+      left untouched on soft failure), and False only on a hard failure (e.g. the clip
+      file is missing).
+    - ``cards_applied`` is True only when the cards are actually in the output file.
+
+    Both values matter to the caller. A soft failure leaves a perfectly good *unwrapped*
+    clip, so it must still be recorded — but recording it as ``titlecards: true`` makes
+    the manifest lie, and the generate-cache check (``server.py`` Phase 1) then skips
+    the clip forever, so the card can never be applied. Callers must persist
+    ``cards_applied``, not the requested flag.
+
+    When *cancel_flag* is supplied and returns True during a card or wrap encode, the
+    in-flight ffmpeg is terminated and the original clip is left untouched.
     """
     cards_enabled = (
         config.TITLECARDS_ENABLED
@@ -582,7 +593,7 @@ def wrap_clip_with_cards(
         else bool(titlecards_enabled)
     )
     if not cards_enabled:
-        return True
+        return (True, False)
 
     card_duration = (
         config.TITLECARD_DURATION_SECONDS
@@ -594,14 +605,14 @@ def wrap_clip_with_cards(
         utils.debug_print(
             f"Debugging enabled, skipping titlecard/endcard wrap for '{clip_path}'."
         )
-        return True
+        return (True, False)
 
     clip_file = Path(clip_path)
     if not clip_file.is_file():
         utils.warning_print(
             f"Cannot wrap clip with titlecards; clip file not found: '{clip_path}'"
         )
-        return False
+        return (False, False)
 
     # One probe gives us both audio presence and (when needed) resolution; it's
     # cached by resolved path in video.probe_video_properties.
@@ -613,7 +624,7 @@ def wrap_clip_with_cards(
             f"Could not determine video resolution for '{clip_path}'. "
             "Skipping title/endcard for this clip."
         )
-        return True
+        return (True, False)
 
     has_clip_audio = bool(probed and probed.get("audio_codec"))
     clip_duration = (
@@ -662,7 +673,7 @@ def wrap_clip_with_cards(
             )
             if not titlecard_path and not endcard_path:
                 # Both cards failed to build; nothing to do, keep clip as-is.
-                return True
+                return (True, False)
 
             segments = [p for p in (titlecard_path, clip_path, endcard_path) if p]
             with tempfile.NamedTemporaryFile(
@@ -678,7 +689,7 @@ def wrap_clip_with_cards(
             ):
                 os.replace(output_temp_path, clip_path)
                 output_temp_path = None
-                return True
+                return (True, True)
             # Copy concat failed — discard the temp output and fall through to the
             # re-encode path (which rebuilds video-only cards).
             if output_temp_path:
@@ -707,7 +718,7 @@ def wrap_clip_with_cards(
         )
         if not titlecard_path and not endcard_path:
             # Both cards failed to build; nothing to do, keep clip as-is.
-            return True
+            return (True, False)
 
         input_args, filter_complex, map_args = _build_wrap_filter_and_inputs(
             titlecard_path=titlecard_path,
@@ -756,14 +767,14 @@ def wrap_clip_with_cards(
                 if ffmpeg_result and ffmpeg_result.stderr
                 else None,
             )
-            return True
+            return (True, False)
 
         if not video.verify_output_file(output_temp_path, "Wrap clip with cards"):
-            return True
+            return (True, False)
 
         os.replace(output_temp_path, clip_path)
         output_temp_path = None
-        return True
+        return (True, True)
     finally:
         # Titlecards are per-clip temps; endcards are managed by _endcard_cache.
         for titlecard_temp in titlecard_temps:

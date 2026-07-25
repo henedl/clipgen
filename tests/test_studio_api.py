@@ -4185,7 +4185,7 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
                 "enabled": kwargs.get("titlecards_enabled"),
             }
         )
-        return True
+        return (True, True)
 
     monkeypatch.setattr("titlecards.wrap_clip_with_cards", fake_wrap)
     server._reel_cancel_event.clear()

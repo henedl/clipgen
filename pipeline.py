@@ -493,8 +493,14 @@ def _process_single_clip_segments(
     pad_pre: float = 0.0,
     pad_post: float = 0.0,
     max_duration: float = 0.0,
-) -> tuple[int, list[tuple[str, int]]]:
+) -> tuple[int, list[tuple[str, int]], bool]:
     """Process one clip's segments: run ffmpeg for each (start, end), optionally collect output paths.
+
+    Returns ``(generated, output_paths, cards_applied)``. ``cards_applied`` is True only
+    when cards were requested *and* every generated segment actually got them. A wrap
+    that soft-fails leaves a usable but *unwrapped* clip; recording that as carded makes
+    the generate-cache (``server.py`` Phase 1) skip it forever, so the card could never
+    be applied. See ``titlecards.wrap_clip_with_cards``.
 
     Caller must have already called prepare_clip(clip). Does not add to missing_videos; caller handles that.
 
@@ -525,6 +531,9 @@ def _process_single_clip_segments(
     """
     generated = 0
     output_paths: list[tuple[str, int]] = []
+    # Cards are per-segment; a single soft failure makes the whole clip uncarded
+    # as far as the manifest is concerned, so regeneration retries it.
+    all_cards_applied = True
     extension_map = {
         "clip": config.FILEFORMAT,
         "screen": config.SCREENSHOT_FORMAT,
@@ -533,7 +542,7 @@ def _process_single_clip_segments(
     file_extension = extension_map.get(output_format)
     if not file_extension:
         utils.error_print(f"Unsupported output format: '{output_format}'")
-        return (generated, output_paths)
+        return (generated, output_paths, False)
 
     severity_tag = (
         f"[{clip['severity']}]" if include_severity and clip.get("severity") else ""
@@ -592,7 +601,7 @@ def _process_single_clip_segments(
                     "Try simplifying the description or category names to use only ASCII characters.",
                 ],
             )
-            return (generated, output_paths)
+            return (generated, output_paths, False)
         if output_format == "clip":
             if timeline:
                 global_start = utils.timestamp_to_seconds(start_time) or 0.0
@@ -634,13 +643,17 @@ def _process_single_clip_segments(
                 # wrap_clip_with_cards). For multi-video participants a clip may
                 # be cut from a later part whose resolution differs from the
                 # first source, so trusting the clip avoids a concat mismatch.
-                ok = titlecards.wrap_clip_with_cards(
+                ok, cards_applied = titlecards.wrap_clip_with_cards(
                     clip,
                     out_name,
                     cancel_flag=cancel_flag,
                     titlecards_enabled=cards_enabled,
                     titlecard_duration_seconds=card_duration,
                 )
+                # A soft wrap failure keeps a usable, unwrapped clip — record it,
+                # but not as carded, so the generate-cache retries it later.
+                if ok and not cards_applied:
+                    all_cards_applied = False
             # Enforce the size cap on the finished clip (after any wrap re-encode),
             # not on intermediate reel parts (enforce_size=False).
             if ok and enforce_size:
@@ -693,7 +706,7 @@ def _process_single_clip_segments(
             break
         else:
             files.release_reservation(out_name)
-    return (generated, output_paths)
+    return (generated, output_paths, all_cards_applied and generated > 0)
 
 
 def _parallel_map_ordered(
@@ -1138,13 +1151,17 @@ def process_clips(
     # -- Phase 2: Execute ffmpeg work ------------------------------------------
     workers = _resolve_clip_workers()
     use_parallel = workers >= 2 and len(prepared) >= 2
-    _EMPTY_RESULT: tuple[int, list[tuple[str, int]]] = (0, [])
+    _EMPTY_RESULT: tuple[int, list[tuple[str, int]], bool] = (0, [], False)
     # Pre-allocate results in original order for deterministic artifact output
-    results: list[tuple[int, list[tuple[str, int]]]] = [_EMPTY_RESULT] * len(prepared)
+    results: list[tuple[int, list[tuple[str, int]], bool]] = [_EMPTY_RESULT] * len(
+        prepared
+    )
 
     if use_parallel:
 
-        def _cut(pair: tuple[ClipRecord, str]) -> tuple[int, list[tuple[str, int]]]:
+        def _cut(
+            pair: tuple[ClipRecord, str],
+        ) -> tuple[int, list[tuple[str, int]], bool]:
             clip, base_video = pair
             return _process_single_clip_segments(
                 clip,
@@ -1262,19 +1279,23 @@ def process_clips(
     )
 
     for idx, (clip, base_video) in enumerate(prepared):
-        generated_count, segment_details = results[idx]
+        generated_count, segment_details, cards_applied = results[idx]
         outputs_generated += generated_count
         if generated_count < len(clip["times"]):
             outputs_skipped += len(clip["times"]) - generated_count
         if segment_details:
-            title_img, end_img = _resolve_titlecard_images(cards_enabled)
+            # Record what actually landed on disk, not what was asked for: a clip
+            # whose wrap soft-failed is usable but uncarded, and claiming otherwise
+            # makes the Phase-1 generate cache skip it forever.
+            carded = cards_enabled and cards_applied
+            title_img, end_img = _resolve_titlecard_images(carded)
             clip_artifacts = viewer.build_artifact_records_for_clip(
                 clip,
                 base_video,
                 segment_details,
                 output_format,
-                titlecards=cards_enabled,
-                titlecard_duration=card_duration,
+                titlecards=carded,
+                titlecard_duration=card_duration if carded else 0,
                 titlecard_image=title_img,
                 endcard_image=end_img,
             )
@@ -1518,12 +1539,37 @@ def _process_reel(
 
     def process_reel_clip(
         clip: Any, missing_videos: set[str]
-    ) -> tuple[list[tuple[str, int]], list[dict[str, Any]]]:
-        """Process one clip for reel mode and return (segment_paths, component_dicts)."""
+    ) -> tuple[list[tuple[str, int]], list[dict[str, Any]], list[str]]:
+        """Process one clip for reel mode.
+
+        Returns ``(segment_paths, component_dicts, failures)``. *failures* carries a
+        human-readable line per segment that could not be produced, so the caller can
+        abort rather than silently concatenating the survivors into a short reel.
+        """
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
+        # `times` is populated by prepare_clip, so the expected segment count is
+        # only knowable after the call above.
+        expected = len(clip.get("times") or [])
+        label = (
+            " ".join(
+                part
+                for part in (
+                    (clip.get("participant") or "").strip(),
+                    (clip.get("desc") or "").strip()[
+                        : config.PROGRESS_DESCRIPTION_LENGTH
+                    ],
+                )
+                if part
+            )
+            or "(unnamed clip)"
+        )
         if base_video is None:
-            return ([], [])
-        _, segment_paths = _process_single_clip_segments(
+            # A row with no timestamps is not a failure — nothing was requested of
+            # it. A missing source video when timestamps *were* requested is.
+            if not expected:
+                return ([], [], [])
+            return ([], [], [f"{label} — source video not found"])
+        _, segment_paths, _ = _process_single_clip_segments(
             clip,
             base_video,
             missing_videos,
@@ -1542,7 +1588,13 @@ def _process_reel(
             utils.build_reel_component(clip, base_video, *times[time_idx])
             for _out_path, time_idx in segment_paths
         ]
-        return (segment_paths, clip_components)
+        failures: list[str] = []
+        if len(segment_paths) < expected:
+            failures.append(
+                f"{label} — {expected - len(segment_paths)} of {expected} "
+                "segment(s) failed to cut"
+            )
+        return (segment_paths, clip_components, failures)
 
     def _on_clip_complete(done: int, total: int) -> None:
         _emit({"phase": "clip_done", "clip_index": done - 1, "total_clips": total})
@@ -1560,7 +1612,7 @@ def _process_reel(
 
     # If cancelled, clean up any partial clip files and bail out
     if cancel_flag and cancel_flag():
-        for segment_paths, _ in all_results:
+        for segment_paths, _, _ in all_results:
             for entry in segment_paths:
                 try:
                     Path(entry[0]).unlink(missing_ok=True)
@@ -1571,10 +1623,36 @@ def _process_reel(
     # Assemble ordered paths and components from per-clip results
     components: list[dict[str, Any]] = []
     clip_paths = []
-    for segment_paths, clip_components in all_results:
+    reel_failures: list[str] = []
+    for segment_paths, clip_components, clip_failures in all_results:
         for entry in segment_paths:
             clip_paths.append(entry[0])
         components.extend(clip_components)
+        reel_failures.extend(clip_failures)
+
+    # A reel is a single deliverable: concatenating only the clips that happened to
+    # succeed produces a silently short video that looks complete, and its reel id
+    # is hashed from the truncated component list, so the cache would then serve
+    # that truncated reel even after the problem is fixed. Abort instead.
+    if reel_failures:
+        for path in clip_paths:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        files.release_reservation(output_file)
+        utils.error_print(
+            f"Reel aborted: {len(reel_failures)} clip(s) could not be generated.",
+            reel_failures
+            + [
+                "No reel was written — a partial reel would look complete but "
+                "silently omit these moments.",
+                "Fix the sources (or deselect those clips) and run again; the "
+                "clips that did cut are not reused, so nothing is left stale.",
+            ],
+        )
+        return (0, [])
+
     if not clip_paths:
         utils.warning_print("No clips were generated for the reel.")
         # Reclaim a caller-supplied output reservation we'll never fill.
@@ -1821,9 +1899,15 @@ def regenerate_from_manifest(
 
 
 def _reapply_titlecards(artifact: dict[str, Any], output_path: str) -> bool:
-    """Reapply titlecards to a regenerated clip when the manifest entry used them."""
+    """Reapply titlecards to a regenerated clip when the manifest entry used them.
+
+    Returns False unless the cards actually landed. The manifest entry claims this
+    artifact is carded, so a soft wrap failure means the regenerated file no longer
+    matches its own record — report that as a failed regeneration rather than
+    silently writing an uncarded clip under a carded manifest entry.
+    """
     clip: ClipRecord = {"desc": artifact.get("description", "")}
-    return titlecards.wrap_clip_with_cards(
+    clip_ok, cards_applied = titlecards.wrap_clip_with_cards(
         clip,
         output_path,
         titlecards_enabled=True,
@@ -1831,6 +1915,7 @@ def _reapply_titlecards(artifact: dict[str, Any], output_path: str) -> bool:
             artifact.get("titlecardDuration") or config.TITLECARD_DURATION_SECONDS
         ),
     )
+    return clip_ok and cards_applied
 
 
 def _regenerate_single_artifact(
