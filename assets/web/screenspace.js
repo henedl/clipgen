@@ -282,6 +282,18 @@
       try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
       delete _preloadedFrames[pid];
     });
+    // The model-view preview holds one blob URL in state and one on the <img>
+    // expando. Both are revoked on replacement, so at most two are ever live —
+    // released here anyway so every blob URL on this page has one owner.
+    if (state.overlayImageObjectUrl) {
+      try { URL.revokeObjectURL(state.overlayImageObjectUrl); } catch (_) {}
+      state.overlayImageObjectUrl = null;
+    }
+    var mvImg = qs("#modelViewImage");
+    if (mvImg && mvImg._modelViewObjectUrl) {
+      try { URL.revokeObjectURL(mvImg._modelViewObjectUrl); } catch (_) {}
+      mvImg._modelViewObjectUrl = null;
+    }
   });
   var _participantRequestVersion = 0;
   var _frameRequestVersion = 0;

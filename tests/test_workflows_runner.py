@@ -13,6 +13,7 @@ import pytest
 
 import config
 import workflows
+import workflows_runner
 
 
 def _ctx(tmp_path, **kw):
@@ -214,22 +215,33 @@ def test_inspectable_result_projects_and_filters_ports():
 
 def test_write_node_sidecar_guards_and_empty_payload(tmp_path):
     arts = {"artifacts": {"artifacts": [], "study": "", "count": 0}}
-    # A node id that isn't a bare basename is rejected (no file, returns False).
-    assert not workflows.write_node_sidecar(
-        tmp_path, "run_x", "../escape", "make_clips", arts
+    # A node id that isn't a bare basename is rejected — nothing to write, which
+    # is "empty", not "failed" (the caller must not report a degraded run for it).
+    assert (
+        workflows.write_node_sidecar(tmp_path, "run_x", "../escape", "make_clips", arts)
+        == "empty"
     )
     # A clipRecords producer has no JSON-safe port — writes nothing (gspread
     # Cells never reach a sidecar; such nodes always re-run on resume).
-    assert not workflows.write_node_sidecar(
-        tmp_path, "run_x", "sel", "sheet_selection", {"clips": {"records": ["x"]}}
+    assert (
+        workflows.write_node_sidecar(
+            tmp_path, "run_x", "sel", "sheet_selection", {"clips": {"records": ["x"]}}
+        )
+        == "empty"
     )
     # A plumbing-only video source IS persisted now (resume seeds need it),
     # even though it has nothing inspectable.
-    assert workflows.write_node_sidecar(
-        tmp_path, "run_x", "v", "video_source", {"video": {"participant": "P01"}}
+    assert (
+        workflows.write_node_sidecar(
+            tmp_path, "run_x", "v", "video_source", {"video": {"participant": "P01"}}
+        )
+        == "written"
     )
     # A real inspectable payload writes a loadable sidecar carrying __type__.
-    assert workflows.write_node_sidecar(tmp_path, "run_x", "m", "make_clips", arts)
+    assert (
+        workflows.write_node_sidecar(tmp_path, "run_x", "m", "make_clips", arts)
+        == "written"
+    )
     written = workflows.run_results_dir(tmp_path, "run_x") / "m.json"
     loaded = json.loads(written.read_text(encoding="utf-8"))
     assert "artifacts" in loaded
@@ -416,7 +428,7 @@ def test_control_edges_are_excluded_from_inputs(tmp_path):
     runner = _runner(tmp_path, nodes, edges)
     runner._results["v"] = {"video": {"participant": "P01", "video_paths": []}}
     runner._results["g"] = {"pass": True}
-    inputs, _notes = runner._gather_inputs({"id": "m", "type": "make_clips"})
+    inputs, _notes, _deg = runner._gather_inputs({"id": "m", "type": "make_clips"})
     assert "video" in inputs
     assert "__gate__" not in inputs
 
@@ -443,7 +455,7 @@ def test_adapter_is_applied_on_type_mismatch(tmp_path):
             "source": {},
         }
     }
-    inputs, _notes = runner._gather_inputs(nodes[1])
+    inputs, _notes, _deg = runner._gather_inputs(nodes[1])
     assert "clips" in inputs
     assert "records" in inputs["clips"]  # adapter produced ClipRecords
 
@@ -482,9 +494,59 @@ def test_adapter_failure_records_a_note(tmp_path, monkeypatch):
     monkeypatch.setitem(workflows.ADAPTERS, ("events", "clipRecords"), _boom)
     runner = _runner(tmp_path, nodes, edges)
     runner._results["a"] = {"events": {"events": [], "source": {}}}
-    inputs, notes = runner._gather_inputs(nodes[1])
+    inputs, notes, degraded = runner._gather_inputs(nodes[1])
     assert inputs["clips"] is None
     assert any("convert" in n.lower() for n in notes)
+    # The node still runs, but on data the graph promised and did not deliver —
+    # the run must not roll up as a clean completion.
+    assert degraded is True
+
+
+def test_adapter_failure_rolls_up_to_a_degraded_run(tmp_path, monkeypatch):
+    """A lost input marks its node and the whole run degraded, not completed.
+
+    Before this the node was set COMPLETED and the run rolled up COMPLETED (the
+    roll-up only looked for FAILED), so a run that quietly produced less than the
+    graph describes showed green in the history with the reason one drill-in deep.
+    """
+    nodes = [
+        {"id": "a", "type": "ss_color", "params": {}},
+        {"id": "b", "type": "make_clips", "params": {}},
+    ]
+    edges = [{"from": "a", "fromPort": "events", "to": "b", "toPort": "clips"}]
+
+    def _boom(_value):
+        raise ValueError("nope")
+
+    monkeypatch.setitem(workflows.ADAPTERS, ("events", "clipRecords"), _boom)
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["ss_color"],
+        "execute",
+        lambda ctx, inputs, params: {"events": {"events": [], "source": {}}},
+    )
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["make_clips"],
+        "execute",
+        lambda ctx, inputs, params: {
+            "artifacts": {"artifacts": [], "study": "", "count": 0}
+        },
+    )
+
+    runner = _runner(tmp_path, nodes, edges)
+    runner.run()
+    snap = runner.snapshot()
+
+    assert snap["nodeStates"]["a"]["status"] == "completed"
+    assert snap["nodeStates"]["b"]["status"] == "degraded"
+    assert runner.status == workflows.RUN_STATUS_DEGRADED
+    # A degraded node re-runs on resume rather than seeding from its (known
+    # incomplete) sidecar — compute_resume_plan only seeds from COMPLETED.
+    seeds, _notes = workflows.compute_resume_plan(
+        {"nodes": nodes, "edges": edges},
+        snap["nodeStates"],
+        lambda _n: {"__type__": "make_clips", "artifacts": {"artifacts": []}},
+    )
+    assert "b" not in seeds
 
 
 def test_optional_input_failure_does_not_skip_consumer(tmp_path, monkeypatch):
@@ -724,3 +786,58 @@ def test_seeded_node_survives_skipped_parent(tmp_path):
     assert runner.node_states["s"]["status"] == "completed"
     assert runner.node_states["s"]["note"] == "Reused from run run_prior"
     assert runner.status == "completed"
+
+
+def test_seeded_node_reports_a_failed_sidecar_write_as_degraded(tmp_path, monkeypatch):
+    """The resume-seed path must compare the sidecar status, not its truthiness.
+
+    `write_node_sidecar` returns "written" / "empty" / "failed" — all three are
+    truthy strings, so a truthiness check advertises a `hasResult` badge for a
+    node whose sidecar was never written (404 on fetch) and reports a failed
+    write as a green COMPLETED. Regression guard for that call site.
+    """
+    monkeypatch.setattr(
+        workflows_runner, "write_node_sidecar", lambda *_a, **_k: "failed"
+    )
+    runner = workflows.WorkflowRunner(
+        "run_seed",
+        {
+            "id": "bp",
+            "nodes": [{"id": "s", "type": "summarize", "params": {}}],
+            "edges": [],
+        },
+        _ctx(tmp_path),
+        seed_results={"s": {"summary": {"text": "cached", "bullets": []}}},
+        seed_note="Reused from run run_prior",
+    )
+    runner.run()
+
+    assert runner.node_states["s"]["status"] == "degraded"
+    assert "sidecar" in (runner.node_states["s"]["note"] or "").lower()
+    # The original seed note survives alongside the new one.
+    assert "Reused from run run_prior" in runner.node_states["s"]["note"]
+    assert runner.status == workflows.RUN_STATUS_DEGRADED
+    # No hasResult badge for a sidecar that isn't on disk.
+    assert runner.snapshot()["nodeStates"]["s"]["hasResult"] is False
+
+
+def test_seeded_node_with_no_sidecar_payload_is_not_advertised(tmp_path, monkeypatch):
+    """An "empty" sidecar is not a failure, but must not claim hasResult either."""
+    monkeypatch.setattr(
+        workflows_runner, "write_node_sidecar", lambda *_a, **_k: "empty"
+    )
+    runner = workflows.WorkflowRunner(
+        "run_seed2",
+        {
+            "id": "bp",
+            "nodes": [{"id": "s", "type": "summarize", "params": {}}],
+            "edges": [],
+        },
+        _ctx(tmp_path),
+        seed_results={"s": {"summary": {"text": "cached", "bullets": []}}},
+    )
+    runner.run()
+
+    assert runner.node_states["s"]["status"] == "completed"
+    assert runner.status == workflows.RUN_STATUS_COMPLETED
+    assert runner.snapshot()["nodeStates"]["s"]["hasResult"] is False

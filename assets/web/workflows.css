@@ -1502,6 +1502,10 @@ body[data-frontend="workflows"] {
   border-left-color: var(--severity-positive);
 }
 
+.wf-node.run-degraded {
+  border-left-color: var(--severity-medium);
+}
+
 .wf-node.run-failed {
   box-shadow: 0 0 0 2px var(--severity-high);
 }
@@ -1692,6 +1696,9 @@ body[data-frontend="workflows"] {
 }
 .wf-run-status-completed {
   color: var(--severity-positive);
+}
+.wf-run-status-degraded {
+  color: var(--severity-medium);
 }
 .wf-run-status-failed {
   color: var(--severity-high);

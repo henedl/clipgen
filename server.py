@@ -2766,6 +2766,10 @@ def api_reel_direct() -> FlaskResponse:
         def work(emit_event: Callable[[dict[str, Any]], None]) -> None:
             output_dir = Path(utils.get_effective_output_dir())
             clip_paths: list[str] = []
+            # A reel is one deliverable: a segment that fails to cut must abort the
+            # build, not silently shrink it (see pipeline.process_reel).
+            failed_segments: list[str] = []
+            all_cards_applied = True
             # Throttle concat progress emissions to ~5 Hz, same as before.
             concat_last_emit = [0.0]
 
@@ -2852,15 +2856,22 @@ def api_reel_direct() -> FlaskResponse:
                     wrap_clip: utils.ClipRecord = {
                         "desc": seg.get("event_type") or seg.get("desc") or "",
                     }
-                    ok = titlecards.wrap_clip_with_cards(
+                    ok, seg_cards_applied = titlecards.wrap_clip_with_cards(
                         wrap_clip,
                         tmp_path,
                         cancel_flag=_reel_cancel_event.is_set,
                         titlecards_enabled=cards_enabled,
                         titlecard_duration_seconds=card_duration,
                     )
+                    if ok and not seg_cards_applied:
+                        all_cards_applied = False
                 if ok:
                     clip_paths.append(tmp_path)
+                else:
+                    failed_segments.append(
+                        (seg.get("event_type") or seg.get("desc") or "").strip()
+                        or f"segment {completed + 1}"
+                    )
                 completed += 1
                 emit_event(
                     {
@@ -2884,6 +2895,22 @@ def api_reel_direct() -> FlaskResponse:
                 emit_event({"ok": False, "error": "No clips could be generated"})
                 return
 
+            if failed_segments:
+                # Abort rather than ship a reel that looks complete but omits
+                # marked moments. The temp cuts are dropped by cleanup(), so a
+                # re-run starts clean once the sources are fixed.
+                emit_event(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"Reel aborted: {len(failed_segments)} of {total} "
+                            "segment(s) could not be generated"
+                        ),
+                        "failedSegments": failed_segments,
+                    }
+                )
+                return
+
             reel_study = _sheet_context.study_name if _sheet_context else ""
             reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
             reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
@@ -2901,16 +2928,19 @@ def api_reel_direct() -> FlaskResponse:
                 concat_ok = False
 
             if concat_ok:
+                # Record the cards that actually landed, not the ones requested —
+                # a lying manifest makes the generate-cache skip this reel forever.
+                reel_carded = cards_enabled and all_cards_applied
                 direct_title_img, direct_end_img = pipeline._resolve_titlecard_images(
-                    cards_enabled
+                    reel_carded
                 )
                 reel_record: dict[str, Any] = {
                     "id": f"reel_intake_{hashlib.md5(reel_name.encode()).hexdigest()[:8]}",
                     "file": Path(reel_name).name,
                     "source": "intake",
                     "description": f"Intake reel ({len(clip_paths)} segments)",
-                    "titlecards": cards_enabled,
-                    "titlecardDuration": card_duration if cards_enabled else 0,
+                    "titlecards": reel_carded,
+                    "titlecardDuration": card_duration if reel_carded else 0,
                     "titlecardImage": direct_title_img,
                     "endcardImage": direct_end_img,
                 }

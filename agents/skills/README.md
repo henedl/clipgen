@@ -4,19 +4,19 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 
 ## Development
 
-- @agents/skills/check/SKILL.md — full pre-commit pipeline (ruff → ty → tests)
-- @agents/skills/test/SKILL.md — run the test suite
-- @agents/skills/bump/SKILL.md — increment patch version
-- @agents/skills/new-mode/SKILL.md — checklist for adding a CLI mode or flag
-- @agents/skills/new-screenspace-tool/SKILL.md — checklist for adding a Screenspace tool
-- @agents/skills/new-thinking-agent/SKILL.md — checklist for adding an Ollama thinking agent
-- @agents/skills/sync-constants/SKILL.md — audit Python ↔ JS constant mirroring
-- @agents/skills/carve-satellite/SKILL.md — carve a JS hub into hub + satellite without ReferenceErrors
-- @agents/skills/split-module/SKILL.md — split a Python god-file into facade + siblings
+- [check](check/SKILL.md) — full pre-commit pipeline (ruff → ty → tests)
+- [test](test/SKILL.md) — run the test suite
+- [bump](bump/SKILL.md) — increment patch version
+- [new-mode](new-mode/SKILL.md) — checklist for adding a CLI mode or flag
+- [new-screenspace-tool](new-screenspace-tool/SKILL.md) — checklist for adding a Screenspace tool
+- [new-thinking-agent](new-thinking-agent/SKILL.md) — checklist for adding an Ollama thinking agent
+- [sync-constants](sync-constants/SKILL.md) — audit Python ↔ JS constant mirroring
+- [carve-satellite](carve-satellite/SKILL.md) — carve a JS hub into hub + satellite without ReferenceErrors
+- [split-module](split-module/SKILL.md) — split a Python god-file into facade + siblings
 
 ## Using clipgen
 
-- @agents/skills/generate/SKILL.md — translate intent into a clipgen CLI command
-- @agents/skills/screenspace/SKILL.md — headless Screenspace analysis workflow
-- @agents/skills/transcribe/SKILL.md — transcription and thinking agent workflow
-- @agents/skills/debug/SKILL.md — diagnostic checklist for common issues
+- [generate](generate/SKILL.md) — translate intent into a clipgen CLI command
+- [screenspace](screenspace/SKILL.md) — headless Screenspace analysis workflow
+- [transcribe](transcribe/SKILL.md) — transcription and thinking agent workflow
+- [debug](debug/SKILL.md) — diagnostic checklist for common issues

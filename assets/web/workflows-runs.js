@@ -24,7 +24,7 @@
   var _discoverPoller = null; // low-freq poll surfacing runs THIS client didn't start
   var _reconnecting = false; // an SSE stream dropped; polling is covering the gap
 
-  var TERMINAL = { completed: 1, failed: 1, cancelled: 1 };
+  var TERMINAL = { completed: 1, degraded: 1, failed: 1, cancelled: 1 };
 
   function isTerminal(status) {
     return !!TERMINAL[status];
@@ -486,6 +486,7 @@
     "run-queued",
     "run-running",
     "run-completed",
+    "run-degraded",
     "run-failed",
     "run-skipped",
   ];
@@ -957,7 +958,10 @@
     var f = state.runFilter || "all";
     if (f === "all") return true;
     if (f === "running") return !isTerminal(status);
-    if (f === "completed") return status === "completed";
+    // "degraded" is a finished run whose outputs are known incomplete — it
+    // belongs with completed (it ran to the end), not with failed.
+    if (f === "completed")
+      return status === "completed" || status === "degraded";
     if (f === "failed") return status === "failed" || status === "cancelled";
     return true;
   }

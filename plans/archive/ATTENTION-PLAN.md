@@ -69,6 +69,11 @@ so the timeline/results panel show one tick per shift, not per sample.
 
 ## Open steps
 
+> **Archived 2026-07-25.** All implementation landed; the two items below were
+> closed as accepted-as-is rather than completed — browser verification and the
+> defaults tuning pass were never formally run. Re-open if the Attention tool's
+> defaults turn out to need work on real footage.
+
 ### 1. Browser verification  ⏳
 Manual check (no headless browsers — repo rule): tab renders with lime hue + eye icon
 and no region picker; a run on a real recording streams shift ticks live; on completion

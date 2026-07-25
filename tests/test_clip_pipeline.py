@@ -371,7 +371,7 @@ def test_process_clips_forwards_cancel_flag_to_segments(monkeypatch, make_clip):
 
     def fake_segments(*args, **kwargs):
         captured["cancel_flag"] = kwargs.get("cancel_flag")
-        return (1, [])
+        return (1, [], True)
 
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
 
@@ -397,7 +397,7 @@ def test_process_clips_sequential_short_circuits_on_cancel(monkeypatch, make_cli
     def seg_side_effect(*_args, **_kwargs):
         # Trip cancel after the first segment finishes; no further calls expected.
         cancelled["flag"] = True
-        return (1, [])
+        return (1, [], True)
 
     seg_mock = Mock(side_effect=seg_side_effect)
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", seg_mock)
@@ -475,7 +475,7 @@ def test_process_single_clip_segments_unlinks_partial_on_cancel(
     monkeypatch.setattr(pipeline.video, "run_ffmpeg", fake_run_ffmpeg)
     monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
 
-    generated, paths = pipeline._process_single_clip_segments(
+    generated, paths, _ = pipeline._process_single_clip_segments(
         raw_clip,
         "src.mp4",
         set(),
@@ -526,7 +526,7 @@ def test_process_clips_forwards_titlecard_options_to_wrap(monkeypatch, make_clip
 
     def fake_wrap(_clip, _out_name, **kwargs):
         captured.update(kwargs)
-        return True
+        return (True, True)
 
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
@@ -567,7 +567,7 @@ def test_process_clips_compresses_after_titlecard_wrap(monkeypatch, make_clip):
 
     def fake_wrap(_clip, _out_name, **_kwargs):
         order.append("wrap")
-        return True
+        return (True, True)
 
     def fake_enforce(_path, **_kwargs):
         order.append("enforce")
@@ -763,7 +763,7 @@ def test_process_single_clip_segments_releases_reservation_on_ffmpeg_failure(
     monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: False)
 
     raw_clip = pipeline.files.prepare_clip(make_clip())
-    generated, paths = pipeline._process_single_clip_segments(
+    generated, paths, _ = pipeline._process_single_clip_segments(
         raw_clip, str(input_dir / "study_P01.mp4"), set(), output_format="clip"
     )
 
@@ -784,7 +784,7 @@ def test_process_reel_releases_reservation_on_concat_failure(
     monkeypatch.setattr(
         pipeline,
         "_run_clip_pipeline",
-        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [])], set()),
+        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [], [], True)], set()),
     )
     monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *a, **k: False)
     monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
@@ -978,7 +978,7 @@ def test_process_clips_skips_titlecard_cache_clear_when_disabled(
         lambda *_a, **_k: {"width": 1280, "height": 720},
     )
     monkeypatch.setattr(
-        pipeline.titlecards, "wrap_clip_with_cards", lambda *_a, **_k: True
+        pipeline.titlecards, "wrap_clip_with_cards", lambda *_a, **_k: (True, True)
     )
 
     clear_mock = Mock()
@@ -1009,7 +1009,7 @@ def test_process_reel_forwards_cancel_and_titlecard_options_to_segments(
 
     def fake_segments(*_args, **kwargs):
         captured.update(kwargs)
-        return (1, [("_reel_part_1.mp4", 0)])
+        return (1, [("_reel_part_1.mp4", 0)], True)
 
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
     monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
@@ -1053,7 +1053,60 @@ def test_process_reel_dedups_missing_video_across_parallel_clips(
     result, _ = clipgen.process_reel(clips, output_file="reel.mp4")
 
     assert result == 0
-    assert len(errors) == 1
+    # The missing-video error is reported once, not once per worker thread.
+    missing_errors = [e for e in errors if "Source video file not found" in e[0]]
+    assert len(missing_errors) == 1
+    # ...and the reel aborts rather than shipping a reel built from no clips.
+    assert any("Reel aborted" in e[0] for e in errors)
+
+
+def test_process_reel_aborts_when_a_clip_fails_to_cut(monkeypatch, make_clip):
+    """A reel is all-or-nothing: one failed segment must not ship a short reel.
+
+    Concatenating the survivors produces a video that looks complete but silently
+    omits moments, and `compute_reel_id` hashes the truncated component list, so the
+    generate-cache would then serve that truncated reel even after the source is
+    fixed. Guards the abort path.
+    """
+    clips = [make_clip(row=3, col=2), make_clip(row=4, col=2)]
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline, "_large_input_videos", lambda _d: [])
+
+    # Second clip's cut fails; the first succeeds.
+    calls: list[str] = []
+
+    def fake_ffmpeg(**kwargs):
+        calls.append(kwargs["output_file"])
+        return len(calls) == 1
+
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", fake_ffmpeg)
+
+    concat_calls: list = []
+    monkeypatch.setattr(
+        pipeline.video,
+        "concatenate_clips",
+        lambda *a, **k: concat_calls.append(a) or True,
+    )
+
+    errors: list[tuple] = []
+    monkeypatch.setattr(
+        pipeline.utils, "error_print", lambda *a, **_k: errors.append(a)
+    )
+
+    generated, records = clipgen.process_reel(clips, output_file="reel.mp4")
+
+    assert generated == 0
+    assert records == []
+    # Crucially: no concatenation was attempted, so no partial reel exists.
+    assert concat_calls == []
+    assert any("Reel aborted" in e[0] for e in errors)
 
 
 def test_build_artifact_records_for_clip_stamps_titlecard_state(make_clip):
@@ -1096,7 +1149,7 @@ def test_regenerate_single_artifact_applies_titlecards_from_manifest(monkeypatch
 
     def fake_wrap(clip, out_path, **kwargs):
         wrap_calls.append((clip, out_path, kwargs))
-        return True
+        return (True, True)
 
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
@@ -1267,3 +1320,47 @@ def test_parallel_map_ordered_cancel_leaves_prefilled_sentinel():
         cancel_flag=lambda: True,
     )
     assert all(r == sentinel for r in results)
+
+
+def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip):
+    """A part whose card wrap soft-failed must not be recorded as carded.
+
+    `wrap_clip_with_cards` leaves a usable but *unwrapped* clip on a soft
+    failure. If the reel record still claims `titlecards: true`, the generate
+    cache matches on that flag and skips rebuilding, so the card can never be
+    applied — the same bug fixed for process_clips and /api/reel-direct.
+    """
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
+    monkeypatch.setattr(pipeline, "_build_reel_transcript", lambda *_a, **_k: [])
+
+    # The part was cut, but its wrap soft-failed → cards_applied False.
+    monkeypatch.setattr(
+        pipeline,
+        "_process_single_clip_segments",
+        lambda *_a, **_k: (1, [("_reel_part_1.mp4", 0)], False),
+    )
+    generated, records = clipgen.process_reel(
+        [raw_clip], output_file="reel.mp4", titlecards_enabled=True
+    )
+    assert generated == 1
+    assert records[0]["titlecards"] is False
+    assert records[0]["titlecardDuration"] == 0
+
+    # Control: when the wrap succeeds the reel is recorded as carded.
+    monkeypatch.setattr(
+        pipeline,
+        "_process_single_clip_segments",
+        lambda *_a, **_k: (1, [("_reel_part_2.mp4", 0)], True),
+    )
+    _generated, records = clipgen.process_reel(
+        [raw_clip], output_file="reel2.mp4", titlecards_enabled=True
+    )
+    assert records[0]["titlecards"] is True

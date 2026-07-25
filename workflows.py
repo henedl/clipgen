@@ -91,6 +91,7 @@ from workflows_catalog import (  # noqa: F401
 from workflows_runner import TRIGGER_TYPE_IDS  # used by load_workflows_manifest
 from workflows_runner import (  # noqa: F401
     NODE_STATUS_COMPLETED,
+    NODE_STATUS_DEGRADED,
     NODE_STATUS_FAILED,
     NODE_STATUS_QUEUED,
     NODE_STATUS_RUNNING,
@@ -98,6 +99,7 @@ from workflows_runner import (  # noqa: F401
     NOTE_NODE_TYPE,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_COMPLETED,
+    RUN_STATUS_DEGRADED,
     RUN_STATUS_FAILED,
     RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,

@@ -11,9 +11,22 @@ Splitting a large page script (`screenspace.js`, `transcripts.js`, `studio.js`, 
    - Satellite: `SS.findTask = findTask;`
    The reverse direction matters too: a satellite that calls a hub-owned helper must reach it via the namespace, not a bare name (`8c7f347` `_currentParticipantHasTranscript` was never published → the agents satellite threw).
 
-3. **Respect the load-order contract.** A satellite that **destructures** another file's published fn at load time (`var findTask = SS.findTask;`) must load *after* that file. When the owner loads *later*, late-bind at the call site instead (`SS.findTask(...)`), never destructure. Update the `<script>` order in the page HTML to match.
+3. **Respect the load-order contract.** A satellite that **destructures** another file's published fn at load time (`var findTask = SS.findTask;`) must load *after* that file. When the owner loads *later*, late-bind at the call site instead (`SS.findTask(...)`), never destructure. Update the `<script>` order in the page HTML to match. The existing orders and why they are what they are:
+   - **Screenspace** — `screenspace-model-view.js` loads first after the hub because overlay / calibration / tasks / multitool-params destructure its `_overlayEligibleForActiveTool` / `_previewRegionRef` / `_updateMinAreaReadout`. `screenspace-tasks.js` loads before the satellites that destructure its `findTask` / `restoreTaskToWorkflow` / `setInputValue` / `syncValueDisplays`. `screenspace-results.js` loads last, so tasks reaches its `renderResults` / `loadAndShowResults` — and the color satellite's `setTargetColor` — late-bound.
+   - **Transcripts** — satellites load after the hub; pills reaches `TS.loadFriction` and search reaches `TS.seekVideo` late-bound because those owners load later.
+   - **Studio** — the `ss*Thumb*` lazy-thumbnail cluster stays in the hub on purpose (shared with the hub's own queue cards); intake reaches `ssClearPending` and stash reaches `ssEnqueueThumbCustom` through `STUDIO`.
 
 4. **Watch poll/render gates.** A control gated on poll-driven state must re-render when *any* gate input changes. Read both the immediately-rendered source and the poll-lagged source: `5683a96`'s friction Re-run gate read only `state.participants[].agents.summary` (lags the poll) and stayed stuck until reload; it also had to watch `state.summaryText` (set on render).
+
+5. **Move the CSS with the JS.** The generic `.hidden` utility (and friends) is **per-page CSS**, not shared. JS moved onto another page needs every class it toggles present in that page's stylesheet — this shipped the Overview always-visible-banners bug. `tests/test_overview_frontend_source.py` guards it for that page only.
+
+## Worked examples of state routing
+
+These are the fields that had to stop being bare cross-file `var` reads during past carves; use them as the shape to look for:
+
+- **Screenspace** — `resultsRequestVersion`, `suppressCalibrationRefresh`, `heatmapOverlayRequestVersion` moved onto `state` because the hub and two satellites all touch them.
+- **Transcripts** — `state.participantReqVer`, `state.cachedSegmentRows`, `state.frictionTooltipShown` moved onto `state`; `TS.isSummaryPolling()` and `TS.hasTimelineHover()` became published accessors rather than exported variables.
+- **Studio** — the stash carve moved the hub's drop-target callbacks (which wrote the satellite-private `_justStashedId`) into the satellite as late-bound `STUDIO.stashDropReel` / `.stashDropArtifacts` handlers, rather than leave a bare cross-file *write*. The boot block's two `initIntakePanel(SS_INTAKE/TR_INTAKE)` calls were folded into a satellite `initIntake()` so the configs never leave the satellite.
 
 ## Verify
 
@@ -25,4 +38,4 @@ Splitting a large page script (`screenspace.js`, `transcripts.js`, `studio.js`, 
 
 ## Reference
 
-The *why* lives in the dense AGENTS.md "Workspace facts" entries for Screenspace / Transcripts / Studio. `tests/test_frontend_satellite_wiring.py` is the automated guard (the JS analogue of `tests/test_packaging.py`); `tests/test_studio_frontend_source.py` / `tests/test_workflows_frontend_source.py` glob `*.js` so source assertions stay valid wherever a function lands.
+The per-page satellite inventory (which file owns what) lives in the `assets/web/` row of [agents/ARCHITECTURE.md](../../ARCHITECTURE.md). `tests/test_frontend_satellite_wiring.py` is the automated guard (the JS analogue of `tests/test_packaging.py`); `tests/test_studio_frontend_source.py` / `tests/test_overview_frontend_source.py` / `tests/test_workflows_frontend_source.py` glob `*.js` so source assertions stay valid wherever a function lands.

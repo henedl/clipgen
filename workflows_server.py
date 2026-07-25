@@ -67,6 +67,7 @@ _batches_lock = threading.Lock()
 _notify_batch_clients, _batch_stream, _batch_sse_clients = make_sse_channel()
 _RUN_TERMINAL = {
     workflows.RUN_STATUS_COMPLETED,
+    workflows.RUN_STATUS_DEGRADED,
     workflows.RUN_STATUS_FAILED,
     workflows.RUN_STATUS_CANCELLED,
 }
@@ -729,6 +730,8 @@ def _aggregate_batch_status(child_statuses: list[str], cancelled: bool) -> str:
         return workflows.RUN_STATUS_CANCELLED
     if any(s == workflows.RUN_STATUS_FAILED for s in child_statuses):
         return workflows.RUN_STATUS_FAILED
+    if any(s == workflows.RUN_STATUS_DEGRADED for s in child_statuses):
+        return workflows.RUN_STATUS_DEGRADED
     return workflows.RUN_STATUS_COMPLETED
 
 

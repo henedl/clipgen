@@ -233,7 +233,7 @@ def test_single_video_cut_unchanged_and_no_mapping(monkeypatch, make_clip):
         pipeline.files, "get_unique_filename", lambda *a, **k: "out.mp4"
     )
 
-    generated, _ = pipeline._process_single_clip_segments(
+    generated, _, _ = pipeline._process_single_clip_segments(
         clip, "study_P01.mp4", set(), output_format="clip", collect_paths=True
     )
 
@@ -252,7 +252,7 @@ def test_multi_video_clip_maps_into_second_video(monkeypatch, make_clip):
         pipeline.files, "get_unique_filename", lambda *a, **k: "out.mp4"
     )
 
-    generated, _ = pipeline._process_single_clip_segments(
+    generated, _, _ = pipeline._process_single_clip_segments(
         clip, "video1.mp4", set(), output_format="clip", collect_paths=True
     )
 
@@ -290,11 +290,11 @@ def test_multi_video_titlecard_wraps_at_clip_resolution(monkeypatch, make_clip):
 
     def fake_wrap(_clip, out_name, resolution=None, **_kwargs):
         wrap_calls.append((out_name, resolution))
-        return True
+        return (True, True)
 
     monkeypatch.setattr(pipeline.titlecards, "wrap_clip_with_cards", fake_wrap)
 
-    generated, _ = pipeline._process_single_clip_segments(
+    generated, _, _ = pipeline._process_single_clip_segments(
         clip, "video1.mp4", set(), output_format="clip", collect_paths=True
     )
 
@@ -316,7 +316,7 @@ def test_multi_video_clip_stitches_across_boundary(monkeypatch, make_clip):
     )
     monkeypatch.setattr(pipeline.Path, "unlink", lambda self, **k: None)
 
-    generated, _ = pipeline._process_single_clip_segments(
+    generated, _, _ = pipeline._process_single_clip_segments(
         clip, "video1.mp4", set(), output_format="clip", collect_paths=True
     )
 

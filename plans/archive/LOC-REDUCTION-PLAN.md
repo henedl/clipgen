@@ -1,8 +1,13 @@
 # LOC-reduction opportunities — plan
 
-Status: **pass 1 complete; pass 2 in progress** (2026-07-23). Items **1 (1a + 1b)**, **2**, **3**,
-**4**, and **5** are closed (see check-marks below); a second sweep (three parallel exploration
-agents over Python / JS / CSS+tests) found the remaining items tracked in **Pass 2** at the bottom.
+> **Status: complete (2026-07-25).** Both passes closed — all 19 items checked. Several were
+> deliberately resolved as *descoped/skipped after investigation* rather than built (3c, the
+> item-4 icon-mask/badge sub-bullet, B4, and item 5, which was closed as "not duplication");
+> those notes are kept inline below.
+
+Pass 1 closed items **1 (1a + 1b)**, **2**, **3**, **4**, and **5**; a second sweep (three
+parallel exploration agents over Python / JS / CSS+tests) found the items tracked in **Pass 2**
+at the bottom.
 Investigation targets for genuinely *reducing* total lines of code (not relocating them). Each
 item is sized as one or more focused `refactor:` commits. Check items off and add a "Done" note
 as they land (per AGENTS.md plan-maintenance rule).

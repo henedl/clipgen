@@ -726,7 +726,7 @@ class ScreenspaceWorker:
                         # _partial_results from t["result"]. For attention that
                         # re-seed is shift-only, so a resumed scan's heatmap
                         # under-accumulates the pre-pause segment (accepted;
-                        # see plans/ATTENTION-PLAN.md).
+                        # see plans/archive/ATTENTION-PLAN.md).
                         partial = t.get("_partial_results")
                         if partial and isinstance(result, list):
                             result = partial + result
@@ -761,9 +761,10 @@ class ScreenspaceWorker:
                             )
                     t["completed_at"] = datetime.now(timezone.utc).isoformat()
 
-            # Generate heatmaps without holding the lock, then briefly reacquire
-            # it to attach the filenames. Safe because the scan has finished
-            # (no more _on_result appends) and nothing else mutates `result`.
+            # Generate heatmaps without holding the lock, then reacquire it to
+            # strip the grids and attach the filenames. Safe because the scan has
+            # finished (no more _on_result appends); the strip+attach still needs
+            # the lock because readers deep-copy `result` under it.
             if heatmap_inputs is not None and isinstance(result, list) and result:
                 task_type, video_paths, region_coords = heatmap_inputs
                 attachments = self._generate_heatmap(
@@ -774,11 +775,18 @@ class ScreenspaceWorker:
                 # per-frame grids in memory until dismissal. Attention's
                 # shift-only t["result"] shares these dicts, so its visible
                 # entries are stripped by the same pass.
-                for r in result:
-                    if isinstance(r, dict):
-                        for key in _SERVER_ONLY_GRID_KEYS:
-                            r.pop(key, None)
+                #
+                # This strip must hold the lock: these dicts are reachable from
+                # self._tasks[task_id]["result"], and _copy_task_for_read /
+                # get_task_result_tail iterate r.items() under the lock. Popping
+                # concurrently raises "dictionary changed size during iteration"
+                # in whichever reader is mid-copy (a 500 on /api/tasks). The scan
+                # itself is finished, so nothing else appends here.
                 with self._lock:
+                    for r in result:
+                        if isinstance(r, dict):
+                            for key in _SERVER_ONLY_GRID_KEYS:
+                                r.pop(key, None)
                     t = self._tasks.get(task_id)
                     if t is not None:
                         t.update(attachments)

@@ -83,13 +83,30 @@ Available analysis tools:
 - **Similarity**: find frames matching a reference
 - **Text**: OCR fuzzy search
 - **Numbers**: OCR numeric comparison
-- **Timelapse**: sped-up region video
 - **Template**: pattern matching frame contents
+- **Flow**: detect motion direction and magnitude
+- **Scene**: detect scene changes by visual fingerprint
 - **Inactivity**: detect periods with no change
+- **Boundary**: segment the session into scenes across the full frame
+- **Attention**: computational saliency across the full frame
+- **Timelapse**: sped-up region video
+- **Multitool**: chain several of the above, optionally joined by time-offset windows
 
 ### Transcripts - generate transcripts using local models
 
 clipgen features local **Transcripts**, generated via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
+
+### Composer - cut clips from the full source video
+
+**Composer** is a cutting timeline for a whole session recording, for when the moments you want aren't in the spreadsheet. Scrub the source video, mark as many named in/out cut pairs as you like (`i` and `o`, or double-click the timeline), and drag their edges to adjust. Multi-part recordings are stitched into one continuous timeline.
+
+Three read-only marker lanes ride alongside the cuts — spreadsheet timestamps, Screenspace events, and Transcript marks — so you can cut against what the other tools already found. Dragging a marker's edge trims it for your purposes without touching the source manifest, and right-click resets it.
+
+An annotation layer adds text labels, freehand strokes, and rectangles/ellipses over the video, each visible for a span you control. Annotations can be exported as a screenshot or GIF, or burned into a generated clip. Finished cuts feed into Studio's generation queue via its Composer Intake tab; the spreadsheet is never written.
+
+```shell
+uv run clipgen.py --composer -i ./videos -o ./out
+```
 
 ### Workflows - chain analyses on a node canvas
 
