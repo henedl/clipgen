@@ -1539,12 +1539,16 @@ def _process_reel(
 
     def process_reel_clip(
         clip: Any, missing_videos: set[str]
-    ) -> tuple[list[tuple[str, int]], list[dict[str, Any]], list[str]]:
+    ) -> tuple[list[tuple[str, int]], list[dict[str, Any]], list[str], bool]:
         """Process one clip for reel mode.
 
-        Returns ``(segment_paths, component_dicts, failures)``. *failures* carries a
-        human-readable line per segment that could not be produced, so the caller can
-        abort rather than silently concatenating the survivors into a short reel.
+        Returns ``(segment_paths, component_dicts, failures, cards_applied)``.
+        *failures* carries a human-readable line per segment that could not be
+        produced, so the caller can abort rather than silently concatenating the
+        survivors into a short reel. *cards_applied* reports whether every part this
+        clip contributed actually got its cards — the reel record must persist that,
+        not the requested flag, or the generate cache skips retrying a reel whose
+        parts are missing their cards.
         """
         clip, base_video = _prepare_and_check_clip(clip, missing_videos, fuzzy_matches)
         # `times` is populated by prepare_clip, so the expected segment count is
@@ -1567,9 +1571,9 @@ def _process_reel(
             # A row with no timestamps is not a failure — nothing was requested of
             # it. A missing source video when timestamps *were* requested is.
             if not expected:
-                return ([], [], [])
-            return ([], [], [f"{label} — source video not found"])
-        _, segment_paths, _ = _process_single_clip_segments(
+                return ([], [], [], True)
+            return ([], [], [f"{label} — source video not found"], False)
+        _, segment_paths, cards_applied = _process_single_clip_segments(
             clip,
             base_video,
             missing_videos,
@@ -1594,7 +1598,7 @@ def _process_reel(
                 f"{label} — {expected - len(segment_paths)} of {expected} "
                 "segment(s) failed to cut"
             )
-        return (segment_paths, clip_components, failures)
+        return (segment_paths, clip_components, failures, cards_applied)
 
     def _on_clip_complete(done: int, total: int) -> None:
         _emit({"phase": "clip_done", "clip_index": done - 1, "total_clips": total})
@@ -1612,7 +1616,7 @@ def _process_reel(
 
     # If cancelled, clean up any partial clip files and bail out
     if cancel_flag and cancel_flag():
-        for segment_paths, _, _ in all_results:
+        for segment_paths, _, _, _ in all_results:
             for entry in segment_paths:
                 try:
                     Path(entry[0]).unlink(missing_ok=True)
@@ -1624,11 +1628,17 @@ def _process_reel(
     components: list[dict[str, Any]] = []
     clip_paths = []
     reel_failures: list[str] = []
-    for segment_paths, clip_components, clip_failures in all_results:
+    # One part whose wrap soft-failed makes the whole reel not-carded: the
+    # concatenated output really is missing that card, so recording it as carded
+    # would make the generate cache skip the rebuild (see process_clips).
+    all_parts_carded = True
+    for segment_paths, clip_components, clip_failures, clip_carded in all_results:
         for entry in segment_paths:
             clip_paths.append(entry[0])
         components.extend(clip_components)
         reel_failures.extend(clip_failures)
+        if not clip_carded:
+            all_parts_carded = False
 
     # A reel is a single deliverable: concatenating only the clips that happened to
     # succeed produces a silently short video that looks complete, and its reel id
@@ -1734,16 +1744,20 @@ def _process_reel(
     cards_enabled, card_duration = _resolve_titlecard_options(
         titlecards_enabled, titlecard_duration_seconds
     )
+    # Persist the cards that actually landed on the parts, not the ones asked
+    # for: a reel whose part wraps soft-failed is genuinely missing those cards,
+    # and claiming otherwise makes the generate cache skip rebuilding it.
+    reel_carded = cards_enabled and all_parts_carded
     reel_id = compute_reel_id(components)
-    title_img, end_img = _resolve_titlecard_images(cards_enabled)
+    title_img, end_img = _resolve_titlecard_images(reel_carded)
     reel_record: dict[str, Any] = {
         "id": reel_id,
         "file": Path(output_file).name,
         "study": study_name,
         "description": f"Reel: {len(components)} segments",
         "components": components,
-        "titlecards": cards_enabled,
-        "titlecardDuration": card_duration if cards_enabled else 0,
+        "titlecards": reel_carded,
+        "titlecardDuration": card_duration if reel_carded else 0,
         "titlecardImage": title_img,
         "endcardImage": end_img,
     }

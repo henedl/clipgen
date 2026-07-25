@@ -13,6 +13,7 @@ import pytest
 
 import config
 import workflows
+import workflows_runner
 
 
 def _ctx(tmp_path, **kw):
@@ -785,3 +786,58 @@ def test_seeded_node_survives_skipped_parent(tmp_path):
     assert runner.node_states["s"]["status"] == "completed"
     assert runner.node_states["s"]["note"] == "Reused from run run_prior"
     assert runner.status == "completed"
+
+
+def test_seeded_node_reports_a_failed_sidecar_write_as_degraded(tmp_path, monkeypatch):
+    """The resume-seed path must compare the sidecar status, not its truthiness.
+
+    `write_node_sidecar` returns "written" / "empty" / "failed" — all three are
+    truthy strings, so a truthiness check advertises a `hasResult` badge for a
+    node whose sidecar was never written (404 on fetch) and reports a failed
+    write as a green COMPLETED. Regression guard for that call site.
+    """
+    monkeypatch.setattr(
+        workflows_runner, "write_node_sidecar", lambda *_a, **_k: "failed"
+    )
+    runner = workflows.WorkflowRunner(
+        "run_seed",
+        {
+            "id": "bp",
+            "nodes": [{"id": "s", "type": "summarize", "params": {}}],
+            "edges": [],
+        },
+        _ctx(tmp_path),
+        seed_results={"s": {"summary": {"text": "cached", "bullets": []}}},
+        seed_note="Reused from run run_prior",
+    )
+    runner.run()
+
+    assert runner.node_states["s"]["status"] == "degraded"
+    assert "sidecar" in (runner.node_states["s"]["note"] or "").lower()
+    # The original seed note survives alongside the new one.
+    assert "Reused from run run_prior" in runner.node_states["s"]["note"]
+    assert runner.status == workflows.RUN_STATUS_DEGRADED
+    # No hasResult badge for a sidecar that isn't on disk.
+    assert runner.snapshot()["nodeStates"]["s"]["hasResult"] is False
+
+
+def test_seeded_node_with_no_sidecar_payload_is_not_advertised(tmp_path, monkeypatch):
+    """An "empty" sidecar is not a failure, but must not claim hasResult either."""
+    monkeypatch.setattr(
+        workflows_runner, "write_node_sidecar", lambda *_a, **_k: "empty"
+    )
+    runner = workflows.WorkflowRunner(
+        "run_seed2",
+        {
+            "id": "bp",
+            "nodes": [{"id": "s", "type": "summarize", "params": {}}],
+            "edges": [],
+        },
+        _ctx(tmp_path),
+        seed_results={"s": {"summary": {"text": "cached", "bullets": []}}},
+    )
+    runner.run()
+
+    assert runner.node_states["s"]["status"] == "completed"
+    assert runner.status == workflows.RUN_STATUS_COMPLETED
+    assert runner.snapshot()["nodeStates"]["s"]["hasResult"] is False

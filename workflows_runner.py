@@ -590,10 +590,10 @@ class WorkflowRunner:
                 # (``pass`` False) or it never completed (failed/skipped).
                 if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
                     return True
-                if (
-                    status in (NODE_STATUS_COMPLETED, NODE_STATUS_DEGRADED)
-                    and self._gate_blocks(dep)
-                ):
+                if status in (
+                    NODE_STATUS_COMPLETED,
+                    NODE_STATUS_DEGRADED,
+                ) and self._gate_blocks(dep):
                     return True
                 continue
             # A data edge: only a *required* input's dead producer forces a skip.
@@ -723,17 +723,31 @@ class WorkflowRunner:
                 seeded = self._seed_results[node_id]
                 with self._lock:
                     self._results[node_id] = seeded
-                if write_node_sidecar(
+                # Compare against "written" explicitly: every return value is a
+                # truthy string, so a truthiness check here would advertise a
+                # hasResult badge for a node whose sidecar was never written
+                # (404 when the inspector fetches it) and hide a failed write
+                # behind a green COMPLETED — the same failure the execute path
+                # below surfaces as DEGRADED.
+                sidecar = write_node_sidecar(
                     self.ctx.output_dir, self.run_id, node_id, node["type"], seeded
-                ) and _inspectable_result(node["type"], seeded):
+                )
+                if sidecar == "written" and _inspectable_result(node["type"], seeded):
                     with self._lock:
                         self._sidecars.add(node_id)
+                seed_notes = [self._seed_note] if self._seed_note else []
+                if sidecar == "failed":
+                    seed_notes.append("Result sidecar could not be written")
                 self._set_node(
                     node_id,
-                    status=NODE_STATUS_COMPLETED,
+                    status=(
+                        NODE_STATUS_DEGRADED
+                        if sidecar == "failed"
+                        else NODE_STATUS_COMPLETED
+                    ),
                     progress=1.0,
                     completed_at=_now_iso(),
-                    note=self._seed_note or None,
+                    note="; ".join(seed_notes) if seed_notes else None,
                 )
                 self._notify(force=True)
                 continue

@@ -784,7 +784,7 @@ def test_process_reel_releases_reservation_on_concat_failure(
     monkeypatch.setattr(
         pipeline,
         "_run_clip_pipeline",
-        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [], [])], set()),
+        lambda clips_list, **kwargs: ([([(str(part_path), 0)], [], [], True)], set()),
     )
     monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *a, **k: False)
     monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
@@ -1320,3 +1320,47 @@ def test_parallel_map_ordered_cancel_leaves_prefilled_sentinel():
         cancel_flag=lambda: True,
     )
     assert all(r == sentinel for r in results)
+
+
+def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip):
+    """A part whose card wrap soft-failed must not be recorded as carded.
+
+    `wrap_clip_with_cards` leaves a usable but *unwrapped* clip on a soft
+    failure. If the reel record still claims `titlecards: true`, the generate
+    cache matches on that flag and skips rebuilding, so the card can never be
+    applied — the same bug fixed for process_clips and /api/reel-direct.
+    """
+    raw_clip = make_clip()
+    monkeypatch.setattr(
+        clipgen.files,
+        "prepare_clip",
+        lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
+    )
+    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
+    monkeypatch.setattr(pipeline, "_build_reel_transcript", lambda *_a, **_k: [])
+
+    # The part was cut, but its wrap soft-failed → cards_applied False.
+    monkeypatch.setattr(
+        pipeline,
+        "_process_single_clip_segments",
+        lambda *_a, **_k: (1, [("_reel_part_1.mp4", 0)], False),
+    )
+    generated, records = clipgen.process_reel(
+        [raw_clip], output_file="reel.mp4", titlecards_enabled=True
+    )
+    assert generated == 1
+    assert records[0]["titlecards"] is False
+    assert records[0]["titlecardDuration"] == 0
+
+    # Control: when the wrap succeeds the reel is recorded as carded.
+    monkeypatch.setattr(
+        pipeline,
+        "_process_single_clip_segments",
+        lambda *_a, **_k: (1, [("_reel_part_2.mp4", 0)], True),
+    )
+    _generated, records = clipgen.process_reel(
+        [raw_clip], output_file="reel2.mp4", titlecards_enabled=True
+    )
+    assert records[0]["titlecards"] is True
