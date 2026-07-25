@@ -101,7 +101,7 @@ a `test_batch_honors_participant_subset` regression guard.
 Today a Video Source's participant param is a single `<select>` offering each participant **or** the
 `__all__` sentinel (`WF.ALL_PARTICIPANTS`); "All" fans out to a batch over every participant. Goal:
 let the user pick an **arbitrary subset** to fan out over, keeping "All" as a shortcut. The original
-authors flagged this as the intended follow-up (`plans/WORKFLOWS-PHASE2-PLAN.md` lines 128-131).
+authors flagged this as the intended follow-up (`plans/archive/WORKFLOWS-PHASE2-PLAN.md` lines 128-131).
 
 ### Backend — already done, just confirm
 
@@ -159,6 +159,6 @@ should behave like a single run (see `blueprintWantsBatch` below).
 
 ## Out of scope (intentionally descoped — do not build without a fresh ask)
 
-Per `plans/WORKFLOWS-PHASE2-PLAN.md`: canvas **groups/comments**, **per-node cancel/retry**, cross-run
+Per `plans/archive/WORKFLOWS-PHASE2-PLAN.md`: canvas **groups/comments**, **per-node cancel/retry**, cross-run
 **memoization**, general **foreach/looping**, **sibling-node parallelism within a run**, and
 **parallel/queued batch runs** (batches stay sequential).
