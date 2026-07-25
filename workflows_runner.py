@@ -45,6 +45,11 @@ from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_COMPLETED = "completed"
+# Every node ran, but at least one produced a result we know is incomplete (an
+# input that failed to coerce, or a result sidecar that could not be written).
+# Distinct from COMPLETED so the run history can't show green over lost data,
+# and distinct from FAILED because the outputs that did land are usable.
+RUN_STATUS_DEGRADED = "degraded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_CANCELLED = "cancelled"
 
@@ -52,6 +57,7 @@ NODE_STATUS_QUEUED = "queued"
 NODE_STATUS_RUNNING = "running"
 NODE_STATUS_COMPLETED = "completed"
 NODE_STATUS_FAILED = "failed"
+NODE_STATUS_DEGRADED = "degraded"
 NODE_STATUS_SKIPPED = "skipped"
 
 # Canvas-only sticky-note pseudo-node (frontend-created, not in NODE_TYPES).
@@ -302,21 +308,24 @@ def inspectable_sidecar_view(payload: dict[str, Any]) -> dict[str, Any]:
 
 def write_node_sidecar(
     output_dir: Path | str, run_id: str, node_id: str, node_type_id: str, result: Any
-) -> bool:
+) -> str:
     """Atomically write a node's JSON-safe result ports to its run sidecar.
 
     Persists every ``_SIDECAR_PORT_TYPES`` port plus a self-describing
     ``__type__`` key (consumed by resume + the read-time inspectable filter).
-    Returns True iff a sidecar file now exists for this node. JSON-sanitizes via
-    :func:`utils.sanitize_floats` (non-finite floats / numpy scalars). A bad
-    ``node_id`` (path separators) or an empty payload writes nothing and
-    returns False.
+    Returns ``"written"`` when a sidecar now exists, ``"empty"`` when there was
+    nothing to persist (bad ``node_id`` or no sidecar-able ports — not a problem),
+    and ``"failed"`` when the write itself errored. The caller must tell those
+    last two apart: collapsing them hides a full disk behind a missing
+    ``hasResult`` badge, and a later resume then silently re-executes every node
+    because no sidecar exists to seed from. JSON-sanitizes via
+    :func:`utils.sanitize_floats` (non-finite floats / numpy scalars).
     """
     if not node_id or node_id != os.path.basename(node_id) or node_id in (".", ".."):
-        return False
+        return "empty"
     payload = _filter_result_ports(node_type_id, result, _SIDECAR_PORT_TYPES)
     if not payload:
-        return False
+        return "empty"
     payload["__type__"] = node_type_id
     path = run_results_dir(output_dir, run_id) / f"{node_id}.json"
     tmp = path.with_suffix(".json.tmp")
@@ -327,14 +336,14 @@ def write_node_sidecar(
             encoding="utf-8",
         )
         os.replace(tmp, path)
-        return True
+        return "written"
     except (OSError, TypeError, ValueError) as exc:
         utils.warning_print(f"workflow sidecar write failed ({node_id}): {exc}")
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
-        return False
+        return "failed"
 
 
 # Collection nodes that pass an events value's ``raw_results`` through
@@ -581,7 +590,10 @@ class WorkflowRunner:
                 # (``pass`` False) or it never completed (failed/skipped).
                 if status in (NODE_STATUS_FAILED, NODE_STATUS_SKIPPED):
                     return True
-                if status == NODE_STATUS_COMPLETED and self._gate_blocks(dep):
+                if (
+                    status in (NODE_STATUS_COMPLETED, NODE_STATUS_DEGRADED)
+                    and self._gate_blocks(dep)
+                ):
                     return True
                 continue
             # A data edge: only a *required* input's dead producer forces a skip.
@@ -592,18 +604,23 @@ class WorkflowRunner:
                 return True
         return False
 
-    def _gather_inputs(self, node: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    def _gather_inputs(
+        self, node: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[str], bool]:
         """Map upstream results onto this node's input ports, applying adapters.
 
-        Returns ``(inputs, notes)``. ``notes`` carries any adapter-failure
+        Returns ``(inputs, notes, degraded)``. ``notes`` carries any adapter-failure
         messages so the runner can surface them on the node — a coercion that
         raises otherwise degrades the input to ``None`` invisibly (only a server
-        log). Control edges (a gate's ``control`` output) establish a dependency
-        but carry no data, so they are excluded here — they never clobber a real
-        input.
+        log). ``degraded`` is True when that happened: the node still runs, but on
+        less data than the graph promised it, so the run must not report a clean
+        completion. Control edges (a gate's ``control`` output) establish a
+        dependency but carry no data, so they are excluded here — they never
+        clobber a real input.
         """
         inputs: dict[str, Any] = {}
         notes: list[str] = []
+        degraded = False
         for edge in self._incoming(node["id"]):
             src_id = edge.get("from")
             to_port = edge.get("toPort")
@@ -633,8 +650,9 @@ class WorkflowRunner:
                         )
                         notes.append(f"Couldn't convert {out_type} to {in_type}")
                         value = None
+                        degraded = True
             inputs[to_port] = value
-        return inputs, notes
+        return inputs, notes, degraded
 
     # ---- state + notify ----
 
@@ -735,7 +753,7 @@ class WorkflowRunner:
                 self._notify(force=True)
                 continue
 
-            inputs, input_notes = self._gather_inputs(node)
+            inputs, input_notes, inputs_degraded = self._gather_inputs(node)
             params = node.get("params", {}) or {}
             executor = NODE_TYPES.get(node["type"], {}).get("execute")
             self._set_node(
@@ -770,14 +788,20 @@ class WorkflowRunner:
                 # run-history UI fetches the inspectable subset on demand even
                 # after this runner is evicted from memory). ``hasResult`` only
                 # advertises sidecars with something the inspector can render.
-                if write_node_sidecar(
+                sidecar = write_node_sidecar(
                     self.ctx.output_dir, self.run_id, node_id, node["type"], result
-                ) and _inspectable_result(node["type"], result):
+                )
+                if sidecar == "written" and _inspectable_result(node["type"], result):
                     with self._lock:
                         self._sidecars.add(node_id)
+                if sidecar == "failed":
+                    notes.append("Result sidecar could not be written")
+                degraded = inputs_degraded or sidecar == "failed"
                 self._set_node(
                     node_id,
-                    status=NODE_STATUS_COMPLETED,
+                    status=(
+                        NODE_STATUS_DEGRADED if degraded else NODE_STATUS_COMPLETED
+                    ),
                     progress=1.0,
                     completed_at=_now_iso(),
                     note="; ".join(notes) if notes else None,
@@ -795,6 +819,10 @@ class WorkflowRunner:
             self.status = RUN_STATUS_CANCELLED
         elif any(s["status"] == NODE_STATUS_FAILED for s in self.node_states.values()):
             self.status = RUN_STATUS_FAILED
+        elif any(
+            s["status"] == NODE_STATUS_DEGRADED for s in self.node_states.values()
+        ):
+            self.status = RUN_STATUS_DEGRADED
         else:
             self.status = RUN_STATUS_COMPLETED
         self.completed_at = _now_iso()
