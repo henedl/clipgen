@@ -1102,6 +1102,13 @@ body.dragging .ts-cell:hover {
   overflow: hidden;
 }
 
+/* The divider drag writes `height` every frame, so the collapse transition
+ * above has to be off for the duration or the panel lags behind the cursor.
+ * Toggled by initBottomPanelDivider's onDragStart/onDragEnd. */
+body.panel-dragging #bottomPanel {
+  transition: none;
+}
+
 /* Two-column split: ARTIFACTS | REEL — matches the prototype's bottom strip
  * anatomy (full-bleed, hairline divider between columns). */
 #bottomColumns {

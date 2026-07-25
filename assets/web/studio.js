@@ -1930,6 +1930,16 @@
         state.bottomH = h;
         applyBottomHeight();
       },
+      // #bottomPanel carries a `transition: height` for the collapse animation,
+      // and the drag writes that same property every frame — without suppressing
+      // it the panel eases ~250 ms behind the cursor and keeps sliding after
+      // mouseup. Mirrors Screenspace's body.panel-dragging handling.
+      onDragStart: function () {
+        document.body.classList.add("panel-dragging");
+      },
+      onDragEnd: function () {
+        document.body.classList.remove("panel-dragging");
+      },
       getBounds: function () {
         // Reserve at least MIN_UPPER for the sheet pane.
         var header = qs("#studioSubheader");
