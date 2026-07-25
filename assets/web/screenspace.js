@@ -182,8 +182,12 @@
     // panel. focusCursor indexes ssNavItems(focusRegion). navEditing is true
     // while a text control (notes / a param input) holds real focus for typing.
     // pickerCursor (>= 0) indexes into an open run-picker dropdown's options.
+    // focusAnchor identifies the focused item so a list that re-renders (the
+    // poller rebuilds #taskList wholesale, and a finishing task re-sorts it)
+    // can restore the cursor to the same row, not the old index.
     focusRegion: "video",
     focusCursor: 0,
+    focusAnchor: null,
     navEditing: false,
     pickerCursor: -1,
     referenceTimestamp: null,
@@ -3954,8 +3958,36 @@
     var cur = items[state.focusCursor];
     if (cur) {
       cur.classList.add("ss-nav-cursor");
+      state.focusAnchor = ssNavKey(cur);
       if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
     }
+  }
+
+  // Stable identity for a nav item, where it has one. Index alone is not enough
+  // for the task queue: it is rebuilt from scratch on every poll and re-sorted
+  // when a task finishes, so the old index points at a different task.
+  function ssNavKey(item) {
+    if (!item) return null;
+    if (item.dataset && item.dataset.taskId) return "task:" + item.dataset.taskId;
+    if (item.id) return "id:" + item.id;
+    return null;
+  }
+
+  // Re-anchor and repaint after a region's list was rebuilt wholesale. Without
+  // this the painted cursor is simply gone (innerHTML = "") and the user has to
+  // re-target the panel with Shift+N.
+  function ssRefreshNav() {
+    if (state.focusRegion === "video") return;
+    var items = ssNavItems(state.focusRegion);
+    // Nothing to land on: leave focusRegion alone — ssNavFocused hands the
+    // arrows back to the video on the next keypress.
+    if (!items.length) return;
+    if (state.focusAnchor) {
+      for (var i = 0; i < items.length; i++) {
+        if (ssNavKey(items[i]) === state.focusAnchor) { state.focusCursor = i; break; }
+      }
+    }
+    ssPaintNav();
   }
 
   function ssSetFocusRegion(region) {
@@ -3963,9 +3995,31 @@
     state.focusRegion = region;
     state.navEditing = false;
     state.pickerCursor = -1;
+    state.focusAnchor = null;
     if (region === "video") { ssClearNavPaint(); return; }
     state.focusCursor = 0;
     ssPaintNav();
+  }
+
+  // Mouse and keyboard focus must not disagree. Once the user starts clicking,
+  // the arrows belong to whatever they clicked: landing on an item of the
+  // focused region moves the cursor there, anything else (the video, another
+  // panel, a toolbar) hands the arrows back to the video for transport seeking.
+  // Without this the region stays focused as long as its panel is merely
+  // visible, so arrows keep roving a list the user has clicked away from and
+  // seeking looks broken until they think to press Escape.
+  function ssSyncFocusToClick(e) {
+    if (state.focusRegion === "video" || state.navEditing) return;
+    if (ssInPicker()) return; // an open dropdown owns its own click handling
+    var items = ssNavItems(state.focusRegion);
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] === e.target || items[i].contains(e.target)) {
+        state.focusCursor = i;
+        ssPaintNav();
+        return;
+      }
+    }
+    ssSetFocusRegion("video");
   }
 
   // Shift+N: reveal the target panel, then land the cursor in it. Declines
@@ -4221,6 +4275,11 @@
         handler: function () { ssNavActivate(); },
       },
     ]);
+
+    // Capture phase: page click handlers re-render panels (a task card switches
+    // the right-pane tab), so read the click against the *current* DOM before
+    // they run.
+    document.addEventListener("mousedown", ssSyncFocusToClick, true);
 
     // Back-out cascade: leave the notes editor, then return panel focus to the
     // video, then an open run-picker dropdown, then the active pointer
@@ -4928,5 +4987,7 @@
   SS.togglePinTrayVisibility = togglePinTrayVisibility;
   SS.clearAllPins = clearAllPins;
   SS.updatePinButtons = updatePinButtons;
+  // Satellites call this after rebuilding a nav region's list wholesale.
+  SS.ssRefreshNav = ssRefreshNav;
 
 })();
