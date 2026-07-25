@@ -953,6 +953,10 @@
     container.innerHTML = "";
     container.appendChild(frag);
     container.scrollTop = prevScrollTop;
+    // The rebuild drops the painted keyboard cursor, and sortTasks() above may
+    // have moved the focused card (a task finishing re-sorts the list), so
+    // re-anchor by task id rather than leaving the user to re-target Shift+3.
+    if (SS.ssRefreshNav) SS.ssRefreshNav();
     updateResultsCrumb();
   }
 

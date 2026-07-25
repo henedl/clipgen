@@ -174,6 +174,12 @@
     var fresh = buildPillOptions(p, s);
     fresh.setAttribute("data-pid", pid);
     floating.parentNode.replaceChild(fresh, floating);
+    // The whole pane node is swapped, so a painted keyboard cursor goes with it
+    // while state.pillOptionsCursor stays set — and the arrows are still claimed
+    // by _pillMenuActive, so it would look like nothing has focus until the next
+    // keypress. This poll fires most often while a transcription is running,
+    // which is exactly when the dropdown is likely open.
+    pillNavPaint();
   }
 
   function buildPillWrap(p, taskByPid) {

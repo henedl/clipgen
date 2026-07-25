@@ -77,6 +77,28 @@ def test_keyup_only_in_dispatcher():
     )
 
 
+def test_keyup_normalizes_shifted_digits_and_punctuation_by_code():
+    """onRelease depends on keydown and keyup agreeing on the base token.
+
+    Keydown derives it from ``e.code`` for shifted digits and , / . because
+    their ``e.key`` is a layout-dependent symbol ("!" / "<" / ";"). If keyup
+    normalized from ``e.key`` alone the two would never match: onRelease would
+    never fire and the entry would leak in ``_held``, later firing on an
+    unrelated keyup whose ``e.key`` happened to equal the stored token.
+    """
+    match = re.search(
+        r"function keyupBaseKey\(e\) \{(.+?)\n  \}", HOTKEYS_SRC, re.DOTALL
+    )
+    assert match, "keyupBaseKey not found in hotkeys.js"
+    body = match.group(1)
+    assert "Digit" in body and "e.code.charAt(5)" in body, (
+        "keyupBaseKey must map physical DigitN codes back to their digit"
+    )
+    assert '"Comma"' in body and '"Period"' in body, (
+        "keyupBaseKey must map the physical Comma/Period codes"
+    )
+
+
 def _parse_literal(name: str):
     match = re.search(
         r"var\s+" + re.escape(name) + r"\s*=\s*(\[.+?\n  \]);",

@@ -261,6 +261,39 @@
     return parts.join("+");
   }
 
+  // Fallback combo for a *bare* digit binding on a layout whose number row is
+  // shifted: on AZERTY the physical Digit1 produces e.key "&", so "1" would
+  // never match and the digit shortcuts (Studio preview tabs, Screenspace tool
+  // selection, transcript mark categories) would be unreachable. The DigitN
+  // codes are layout-stable. Returned as a *second* lookup key rather than
+  // replacing the primary name, so combos that legitimately are "&" still work.
+  // Alt/AltGr is excluded: on ISO layouts that is how punctuation is typed, and
+  // there the produced character — not the physical key — is the combo.
+  function codeDigitCombo(e) {
+    if (e.altKey || e.shiftKey) return null; // shifted digits: see normalizeEvent
+    if (!/^Digit[0-9]$/.test(e.code)) return null;
+    var digit = e.code.charAt(5);
+    if (e.key === digit) return null; // already matched as produced
+    var parts = [];
+    if (IS_MAC ? e.metaKey : e.ctrlKey) parts.push("Mod");
+    if (IS_MAC && e.ctrlKey) parts.push("Ctrl");
+    parts.push(digit);
+    return parts.join("+");
+  }
+
+  // The token keydown stored as `baseKey`, recomputed from a keyup. Shifted
+  // digits and , / . normalize from e.code on keydown (their e.key is the
+  // layout symbol: "!" / "<" / ";"), so keyup has to agree or onRelease never
+  // fires and the entry leaks in _held — later firing on an unrelated keyup
+  // whose e.key happens to equal the stored token.
+  function keyupBaseKey(e) {
+    if (e.key === " " || e.key === "Spacebar") return "SPACE";
+    if (/^Digit[0-9]$/.test(e.code)) return e.code.charAt(5);
+    if (e.code === "Comma") return ",";
+    if (e.code === "Period") return ".";
+    return (e.key || "").length === 1 ? e.key.toUpperCase() : e.key;
+  }
+
   var _MAC_MODS = { Mod: "⌘", Ctrl: "⌃", Alt: "⌥", Shift: "⇧" };
   var _PC_MODS = { Mod: "Ctrl", Ctrl: "Ctrl", Alt: "Alt", Shift: "Shift" };
   var _KEY_GLYPHS = {
@@ -500,7 +533,12 @@
     var combo = normalizeEvent(e);
     if (!combo) return;
     var ids = _comboIndex[combo];
-    if (!ids) return;
+    if (!ids) {
+      var byCode = codeDigitCombo(e);
+      if (byCode) ids = _comboIndex[byCode];
+      if (!ids) return;
+      combo = byCode;
+    }
     var typing = isTypingTarget(e.target);
     for (var n = 0; n < ids.length; n++) {
       var atts = _attachments[ids[n]] || [];
@@ -530,14 +568,7 @@
       disarmHints();
     }
     if (!_held.length) return;
-    // Normalize to the combo token the keydown stored as baseKey — Space's
-    // e.key is " ", which would never match "SPACE" without this.
-    var key =
-      e.key === " " || e.key === "Spacebar"
-        ? "SPACE"
-        : (e.key || "").length === 1
-          ? e.key.toUpperCase()
-          : e.key;
+    var key = keyupBaseKey(e);
     var remaining = [];
     for (var n = 0; n < _held.length; n++) {
       if (_held[n].baseKey === key) _held[n].attachment.onRelease(e);

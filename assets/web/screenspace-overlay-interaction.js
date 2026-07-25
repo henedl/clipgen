@@ -191,7 +191,9 @@
     body.canvas_width = canvas.width;
     body.canvas_height = canvas.height;
     if (region.description) body.description = region.description;
-    apiPost("api/regions", body)
+    // Returns the request promise (it always resolves — the catch below swallows
+    // failures) so callers can serialize successive saves of the same region.
+    return apiPost("api/regions", body)
       .then(function (data) {
         if (!data.ok) {
           showToast(data.error || "Failed to update region");
@@ -228,29 +230,13 @@
     return { x: x, y: y, w: w, h: h, points: contours, shape: shape };
   }
 
-  // Boolean-edit the active region — or, when none is saved-and-active, the
-  // unsaved pending region — with a freshly drawn shape (shift = add, alt =
-  // subtract, shift+alt = intersect — the selection modifiers users know from
-  // Photoshop). `shape` is {rect} or {contours} in canvas pixels. A saved
-  // region round-trips through the server; a pending region is edited in place
-  // and stays unsaved until it's named via the modal.
-  function applyRegionCombine(op, shape) {
+  var COMBINE_VERBS = { add: "Added to", subtract: "Subtracted from", intersect: "Intersected" };
+
+  // Rasterize base ∪/∖/∩ shape and trace it back to contours, or null when
+  // nothing meaningful survives.
+  function combineToContours(baseShape, shape, op) {
     var overlay = qs("#overlayCanvas");
-    if (!overlay.width || !overlay.height) return;
-    var name = state.activeRegion;
-    var savedRegion = name && state.regions[name] ? state.regions[name] : null;
-    var pending = savedRegion ? null : state.pendingRegion;
-    var baseShape = null;
-    if (savedRegion) {
-      baseShape = regionShapeAbs(savedRegion);
-    } else if (pending) {
-      // Pending contours are already canvas-pixel absolute (unlike a saved
-      // region's bbox-relative points, which regionShapeAbs() denormalizes).
-      baseShape = pending.points && pending.points.length > 0
-        ? { contours: pending.points }
-        : { rect: { x: pending.x, y: pending.y, w: pending.w, h: pending.h } };
-    }
-    if (!baseShape) return;
+    if (!overlay.width || !overlay.height) return null;
     var w = overlay.width, h = overlay.height;
     var mask = rasterizeShapesMask([baseShape], w, h);
     combineShapeMasks(mask, rasterizeShapesMask([shape], w, h), op);
@@ -258,23 +244,65 @@
     var s = w / displayW;
     // Drop <8px² specks, then simplify toward the server's 400-vertex cap.
     var contours = simplifyContours(maskToContours(mask, w, h, 8), 2 * s, 400);
-    var verb = { add: "Added to", subtract: "Subtracted from", intersect: "Intersected" }[op];
-    if (!contours.length || contoursArea(contours) < 64) {
-      showToast(savedRegion
-        ? "Nothing would remain of '" + name + "', so this was not applied"
-        : "Nothing would remain, so this was not applied");
+    if (!contours.length || contoursArea(contours) < 64) return null;
+    return contours;
+  }
+
+  // Pending edits to a saved region are serialized per region name. The base
+  // geometry is read from state.regions[name], which is only updated when the
+  // POST resolves — so two combines fired inside one round-trip (an easy
+  // sub-second double shift+wand scrub) would both read the *pre-edit* base and
+  // the second would silently overwrite the first, after the user saw a success
+  // toast for both. Chaining makes the second read the first's saved result.
+  var _regionCombineChain = {};
+
+  // Boolean-edit the active region — or, when none is saved-and-active, the
+  // unsaved pending region — with a freshly drawn shape (shift = add, alt =
+  // subtract, shift+alt = intersect — the selection modifiers users know from
+  // Photoshop). `shape` is {rect} or {contours} in canvas pixels. A saved
+  // region round-trips through the server; a pending region is edited in place
+  // and stays unsaved until it's named via the modal.
+  function applyRegionCombine(op, shape) {
+    var name = state.activeRegion;
+    if (name && state.regions[name]) {
+      var run = function () { return combineIntoRegion(op, shape, name); };
+      var prev = _regionCombineChain[name];
+      _regionCombineChain[name] = prev ? prev.then(run) : run();
       return;
     }
-    if (savedRegion) {
-      saveRegionShape(name, contours, verb + " region '" + name + "'");
-      return;
+    combineIntoPending(op, shape);
+  }
+
+  function combineIntoRegion(op, shape, name) {
+    // Re-read at run time: an earlier queued combine may have replaced it, and
+    // the region can be deleted while this one waits its turn.
+    var region = state.regions[name];
+    if (!region) return Promise.resolve();
+    var contours = combineToContours(regionShapeAbs(region), shape, op);
+    if (!contours) {
+      showToast("Nothing would remain of '" + name + "', so this was not applied");
+      return Promise.resolve();
     }
-    // Pending region: update in place, no server round-trip. Collapse to a
-    // plain rect when the result is axis-aligned (parity with saveRegionShape).
-    var rect = contoursToAxisRect(contours, 2);
-    var updated = rect
-      ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
-      : pendingShapedRegion(contours, "combo");
+    return saveRegionShape(name, contours, COMBINE_VERBS[op] + " region '" + name + "'");
+  }
+
+  function combineIntoPending(op, shape) {
+    var pending = state.pendingRegion;
+    if (!pending) return;
+    // Pending contours are already canvas-pixel absolute (unlike a saved
+    // region's bbox-relative points, which regionShapeAbs() denormalizes).
+    var baseShape = pending.points && pending.points.length > 0
+      ? { contours: pending.points }
+      : { rect: { x: pending.x, y: pending.y, w: pending.w, h: pending.h } };
+    var contours = combineToContours(baseShape, shape, op);
+    // Update in place, no server round-trip. Collapse to a plain rect when the
+    // result is axis-aligned (parity with saveRegionShape).
+    var rect = contours ? contoursToAxisRect(contours, 2) : null;
+    var updated = !contours
+      ? null
+      : rect
+        ? { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+        : pendingShapedRegion(contours, "combo");
     if (!updated) {
       showToast("Nothing would remain, so this was not applied");
       return;
@@ -282,7 +310,7 @@
     state.pendingRegion = updated;
     renderOverlay();
     updateRegionButtons();
-    showToast(verb + " region");
+    showToast(COMBINE_VERBS[op] + " region");
   }
 
   // ---- Overlay interaction state machine ----
@@ -418,13 +446,23 @@
 
     function beginWandDrag(e, pos, s, combine) {
       var frameCanvas = qs("#frameCanvas");
-      if (!frameCanvas || !frameCanvas.width) return;
+      // Gate on the loaded image, not on frameCanvas.width: a <canvas> with no
+      // width/height attributes reports the 300x150 default, so a width check
+      // never fires and the wand would flood the blank placeholder into a bogus
+      // full-canvas region. The caller already cleared the pending/active
+      // region, so repaint before bailing or the buttons and selection go stale.
+      if (!frameCanvas || !state.frameImage) {
+        flushOverlayRender();
+        renderRegionChips();
+        updateRegionButtons();
+        return;
+      }
       var w = frameCanvas.width, h = frameCanvas.height;
       _wandFrame = {
         data: frameCanvas.getContext("2d").getImageData(0, 0, w, h).data,
         w: w, h: h, seedX: pos.x, seedY: pos.y, s: s,
       };
-      // seedX/seedY/scale/headX are for the painter's drag chrome (anchor dot,
+      // seedX/seedY/headOffsetPx are for the painter's drag chrome (anchor dot,
       // track, head dot) — it can't see the module-local _wandFrame.
       state.wandDragging = {
         startClientX: e.clientX,
@@ -434,9 +472,13 @@
         previewPoints: null,
         seedX: pos.x,
         seedY: pos.y,
-        scale: s,
-        headX: pos.x,
+        headOffsetPx: 0,
       };
+      // The scrub is horizontal, so advertise ew-resize — on the *overlay*, not
+      // just the body: #overlayCanvas has its own `cursor: crosshair` rule and
+      // the hover pass writes an inline cursor, both of which beat an inherited
+      // body cursor for the whole drag (which happens over the canvas).
+      overlay.style.cursor = "ew-resize";
       document.body.style.cursor = "ew-resize";
       document.body.style.userSelect = "none";
       computeWandPreview();
@@ -455,8 +497,12 @@
       // Track head follows the *clamped* tolerance, not the raw cursor, so the
       // painted track stops growing once the scrub saturates at min/max —
       // hitting the end of the range is visible instead of running off-screen.
+      // Stored as a CSS-pixel offset rather than a canvas-pixel x so the painter
+      // maps it with the *live* canvas scale: toggling a side panel or resizing
+      // the window mid-drag changes that ratio, and a scale captured at press
+      // would detach the head dot from the cursor.
       var wd = state.wandDragging;
-      wd.headX = wd.seedX + ((tol - wd.startTolerance) / WAND_SCRUB_SENSITIVITY) * wd.scale;
+      wd.headOffsetPx = (tol - wd.startTolerance) / WAND_SCRUB_SENSITIVITY;
       state.wandTolerance = tol;
       inp.value = String(tol);
       qs("#wandToleranceValue").textContent = String(tol);
@@ -465,6 +511,8 @@
 
     function endWandDrag() {
       if (_wandRaf) { cancelAnimationFrame(_wandRaf); _wandRaf = 0; }
+      // The hover pass re-establishes the overlay cursor on the next move.
+      overlay.style.cursor = "";
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       _wandFrame = null;
@@ -506,6 +554,11 @@
       flushOverlayRender();
       updateRegionButtons();
     }
+    // Published here rather than in the export block at the bottom because the
+    // whole wand cluster is scoped to initRegionDrawing. The hub's Escape
+    // cascade and the frame loader both need to abort a live scrub, and only
+    // this path releases the cached full-frame ImageData (~33 MB at 4K).
+    SS.cancelWandDrag = cancelWandDrag;
 
     overlay.addEventListener("mousedown", function (e) {
       if (e.button !== 0) return;
@@ -699,6 +752,11 @@
 
     overlay.addEventListener("mouseup", function (e) {
       if (state.pipetteActive) return;
+      // Mirror mousedown's `e.button !== 0` guard. Without it, right-clicking
+      // (or a middle / back-forward click) mid-drag commits the gesture while
+      // the left button is still held — the region lands at whatever tolerance
+      // happened to be current, under the open context menu.
+      if (e.button !== 0) return;
       if (state.wandDragging) { commitWandDrag(); return; }
       if (state.draggingTemplate) {
         _cachedOverlayRect = null;
@@ -734,9 +792,23 @@
       finishDrawingRegion(e);
     });
 
+    // Cancel a live scrub when the press can no longer be released normally:
+    // the pointer left the window and came back up, focus moved to another app
+    // (both would otherwise leave `wandDragging` set forever — the document
+    // mousemove branch below returns unconditionally, so every later move would
+    // keep re-flooding and every other drag mode would be dead), or a context
+    // menu opened mid-drag.
+    window.addEventListener("blur", cancelWandDrag);
+    overlay.addEventListener("contextmenu", cancelWandDrag);
+
     // Document-level listeners so drag/resize continues outside the canvas
     document.addEventListener("mousemove", function (e) {
-      if (state.wandDragging) { updateWandDragFromEvent(e); return; }
+      if (state.wandDragging) {
+        // No button held: the mouseup happened somewhere we never saw it.
+        if (e.buttons === 0) cancelWandDrag();
+        else updateWandDragFromEvent(e);
+        return;
+      }
       if (state.drawingLasso) {
         var lassoRect = _cachedOverlayRect || overlay.getBoundingClientRect();
         var lassoPos = canvasCoords(overlay, e, lassoRect);
@@ -777,6 +849,7 @@
     });
 
     document.addEventListener("mouseup", function (e) {
+      if (e.button !== 0) return; // see the overlay mouseup guard above
       if (state.wandDragging) { commitWandDrag(); return; }
       if (finishDrawingLasso()) return;
       if (finishDrawingRegion(e)) return;

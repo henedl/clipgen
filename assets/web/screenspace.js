@@ -182,8 +182,12 @@
     // panel. focusCursor indexes ssNavItems(focusRegion). navEditing is true
     // while a text control (notes / a param input) holds real focus for typing.
     // pickerCursor (>= 0) indexes into an open run-picker dropdown's options.
+    // focusAnchor identifies the focused item so a list that re-renders (the
+    // poller rebuilds #taskList wholesale, and a finishing task re-sorts it)
+    // can restore the cursor to the same row, not the old index.
     focusRegion: "video",
     focusCursor: 0,
+    focusAnchor: null,
     navEditing: false,
     pickerCursor: -1,
     referenceTimestamp: null,
@@ -1531,6 +1535,12 @@
     var img = new Image();
     img.onload = function () {
       if (frameRequestVersion !== _frameRequestVersion || participantId !== state.selectedParticipant) return;
+      // The wand traces a pixel snapshot of the *outgoing* frame and the canvas
+      // may be resized below, so a scrub that is somehow still live here would
+      // commit a contour in the old frame's pixel space. The transport hotkeys
+      // are gated during a drag; this covers every other path into a reload
+      // (participant switch, timeline click, playback tick).
+      cancelWandDrag();
       state.frameImage = img;
       state.frameLoading = false;
       qs("#frameEmpty").classList.add("hidden");
@@ -1785,6 +1795,7 @@
   function updateRegionButtons() { return SS.updateRegionButtons && SS.updateRegionButtons.apply(null, arguments); }
   function hideRegionNameModal() { return SS.hideRegionNameModal && SS.hideRegionNameModal.apply(null, arguments); }
   function invalidateOverlayRect() { return SS.invalidateOverlayRect && SS.invalidateOverlayRect.apply(null, arguments); }
+  function cancelWandDrag() { return SS.cancelWandDrag && SS.cancelWandDrag.apply(null, arguments); }
 
   // ---- Region stashing ----
 
@@ -3123,6 +3134,17 @@
       if (el.type === "checkbox") {
         if (el.checked === saved) return;
         el.checked = saved;
+      } else if (el.type === "hidden" && el.parentNode
+                 && el.parentNode.classList.contains("cg-segtrack")) {
+        // A segmented capsule's value lives in a hidden input, but the visible
+        // state (thumb position, .active segment) is CSS driven off the track
+        // element — writing el.value alone restores the value behind a control
+        // still showing the rebuilt default, and the scan then runs a mode the
+        // UI denies. applyColorMode/applyNormalizeMode also re-apply the
+        // value-dependent row visibility.
+        if (el.value === String(saved)) return;
+        if (id === "paramColorMode") applyColorMode(id, saved);
+        else segTrackSetValue(el.parentNode, saved);
       } else {
         if (el.value === String(saved)) return;
         el.value = saved;
@@ -3803,8 +3825,21 @@
   // suppress the arrow handlers. The lone exception is the notes textarea, which
   // takes real focus for editing (Enter to edit, Escape to step back out).
 
+  // True while a panel owns the arrows. A focused panel can go dark without ever
+  // passing through Escape — clicking a task card switches the right-pane tab,
+  // and the info / bottom panels have their own collapse controls — and its rows
+  // survive in the DOM behind the hidden container. Left unchecked the arrows
+  // stay claimed (and preventDefault'ed) by an invisible cursor and video
+  // seeking silently dies, so an empty region hands focus back to the video.
+  function ssNavFocused() {
+    if (state.focusRegion === "video") return false;
+    if (ssNavItems(state.focusRegion).length) return true;
+    ssSetFocusRegion("video");
+    return false;
+  }
+
   function ssVideoFocused() {
-    return state.focusRegion === "video";
+    return !ssNavFocused();
   }
 
   function ssElVisible(elm) {
@@ -3824,7 +3859,18 @@
   }
 
   // Ordered, currently-visible items the arrows walk in each region.
+  //
+  // The visibility filter is load-bearing, not cosmetic: `.hidden` is
+  // `display: none`, so a panel can go dark while its rows stay in the DOM
+  // (switching the right-pane tab hides the task queue, the info and bottom
+  // panels have their own collapse controls). Returning those would paint the
+  // cursor on an invisible row and keep the arrows claimed — see ssNavFocused.
   function ssNavItems(region) {
+    // slice: the task/results branches return a NodeList, which has no .filter.
+    return Array.prototype.slice.call(_ssNavItemsRaw(region)).filter(ssElVisible);
+  }
+
+  function _ssNavItemsRaw(region) {
     if (region === "sidebar") {
       var items = [];
       var notes = qs("#ssInfoNotes");
@@ -3912,8 +3958,36 @@
     var cur = items[state.focusCursor];
     if (cur) {
       cur.classList.add("ss-nav-cursor");
+      state.focusAnchor = ssNavKey(cur);
       if (cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
     }
+  }
+
+  // Stable identity for a nav item, where it has one. Index alone is not enough
+  // for the task queue: it is rebuilt from scratch on every poll and re-sorted
+  // when a task finishes, so the old index points at a different task.
+  function ssNavKey(item) {
+    if (!item) return null;
+    if (item.dataset && item.dataset.taskId) return "task:" + item.dataset.taskId;
+    if (item.id) return "id:" + item.id;
+    return null;
+  }
+
+  // Re-anchor and repaint after a region's list was rebuilt wholesale. Without
+  // this the painted cursor is simply gone (innerHTML = "") and the user has to
+  // re-target the panel with Shift+N.
+  function ssRefreshNav() {
+    if (state.focusRegion === "video") return;
+    var items = ssNavItems(state.focusRegion);
+    // Nothing to land on: leave focusRegion alone — ssNavFocused hands the
+    // arrows back to the video on the next keypress.
+    if (!items.length) return;
+    if (state.focusAnchor) {
+      for (var i = 0; i < items.length; i++) {
+        if (ssNavKey(items[i]) === state.focusAnchor) { state.focusCursor = i; break; }
+      }
+    }
+    ssPaintNav();
   }
 
   function ssSetFocusRegion(region) {
@@ -3921,9 +3995,31 @@
     state.focusRegion = region;
     state.navEditing = false;
     state.pickerCursor = -1;
+    state.focusAnchor = null;
     if (region === "video") { ssClearNavPaint(); return; }
     state.focusCursor = 0;
     ssPaintNav();
+  }
+
+  // Mouse and keyboard focus must not disagree. Once the user starts clicking,
+  // the arrows belong to whatever they clicked: landing on an item of the
+  // focused region moves the cursor there, anything else (the video, another
+  // panel, a toolbar) hands the arrows back to the video for transport seeking.
+  // Without this the region stays focused as long as its panel is merely
+  // visible, so arrows keep roving a list the user has clicked away from and
+  // seeking looks broken until they think to press Escape.
+  function ssSyncFocusToClick(e) {
+    if (state.focusRegion === "video" || state.navEditing) return;
+    if (ssInPicker()) return; // an open dropdown owns its own click handling
+    var items = ssNavItems(state.focusRegion);
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] === e.target || items[i].contains(e.target)) {
+        state.focusCursor = i;
+        ssPaintNav();
+        return;
+      }
+    }
+    ssSetFocusRegion("video");
   }
 
   // Shift+N: reveal the target panel, then land the cursor in it. Declines
@@ -4075,10 +4171,21 @@
     }
   }
 
+  // A live pointer drag owns the frame: the wand caches the frame's pixels at
+  // press and traces the release against that snapshot, so letting a
+  // frame-changing key through mid-drag would commit a region drawn from a frame
+  // that is no longer on screen. (Arrow seeks are already gated on
+  // ssVideoFocused; play/pause and the ,/. frame steps were not gated at all,
+  // and during a mouse drag document.activeElement is <body>, so they dispatch.)
+  function noPointerDrag() {
+    return !state.wandDragging && !state.drawingLasso && !state.drawingRegion;
+  }
+
   function initKeyboard() {
     window.ClipgenHotkeys.register([
       {
         id: "transport.playPause",
+        when: noPointerDrag,
         handler: function () {
           if (state.videoPlaying) pauseVideo();
           else playVideo();
@@ -4091,8 +4198,8 @@
       // works regardless of focus.
       { id: "transport.seekBack", when: ssVideoFocused, handler: function () { _seekBy(-SEEK_STEP); } },
       { id: "transport.seekFwd", when: ssVideoFocused, handler: function () { _seekBy(SEEK_STEP); } },
-      { id: "transport.stepBack", handler: function () { _seekBy(-FRAME_STEP); } },
-      { id: "transport.stepFwd", handler: function () { _seekBy(FRAME_STEP); } },
+      { id: "transport.stepBack", when: noPointerDrag, handler: function () { _seekBy(-FRAME_STEP); } },
+      { id: "transport.stepFwd", when: noPointerDrag, handler: function () { _seekBy(FRAME_STEP); } },
       // Shift+arrow mirrors the ,/. fine step so the 1 s / 5 s pair is discoverable
       // from the arrow keys alone (screenspace-scoped to avoid Composer's Shift+arrow).
       { id: "screenspace.stepBackFine", when: ssVideoFocused, handler: function () { _seekBy(-FRAME_STEP); } },
@@ -4153,7 +4260,7 @@
       },
       {
         id: "screenspace.nav",
-        when: function () { return state.focusRegion !== "video"; },
+        when: ssNavFocused,
         handler: function (e, combo) {
           if (combo === "ArrowUp") ssNavMove(-1);
           else if (combo === "ArrowDown") ssNavMove(1);
@@ -4164,10 +4271,15 @@
       {
         id: "screenspace.navActivate",
         repeat: false,
-        when: function () { return state.focusRegion !== "video"; },
+        when: ssNavFocused,
         handler: function () { ssNavActivate(); },
       },
     ]);
+
+    // Capture phase: page click handlers re-render panels (a task card switches
+    // the right-pane tab), so read the click against the *current* DOM before
+    // they run.
+    document.addEventListener("mousedown", ssSyncFocusToClick, true);
 
     // Back-out cascade: leave the notes editor, then return panel focus to the
     // video, then an open run-picker dropdown, then the active pointer
@@ -4215,15 +4327,11 @@
         document.body.style.userSelect = "";
         renderOverlay();
       } else if (state.wandDragging) {
-        // Abort an in-progress wand scrub. It never sets pendingRegion until
-        // release, so nulling the state is a complete cancel; the satellite's
-        // cached frame ImageData is only read while wandDragging is truthy.
-        state.wandDragging = null;
-        invalidateOverlayRect();
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-        renderOverlay();
-        updateRegionButtons();
+        // Abort an in-progress wand scrub. Route through the satellite rather
+        // than nulling the state here: only its cancel path releases the cached
+        // full-frame ImageData (~8 MB at 1080p, ~33 MB at 4K) and drops the
+        // pending re-flood RAF.
+        cancelWandDrag();
       } else if (state.drawingRegion || state.drawingLasso) {
         state.drawingRegion = null;
         state.drawingLasso = null;
@@ -4879,5 +4987,7 @@
   SS.togglePinTrayVisibility = togglePinTrayVisibility;
   SS.clearAllPins = clearAllPins;
   SS.updatePinButtons = updatePinButtons;
+  // Satellites call this after rebuilding a nav region's list wholesale.
+  SS.ssRefreshNav = ssRefreshNav;
 
 })();

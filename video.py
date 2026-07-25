@@ -1597,6 +1597,42 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     return result
 
 
+# Per-(file, index) locks for extract_audio_track. Two requests for the same
+# track are routine (a re-select tears the <audio> element down and re-requests
+# it; range requests can arrive on a second connection), and the Flask server is
+# threaded, so without this two ffmpeg processes would race on one output path.
+_audio_track_locks: dict[tuple[str, int], threading.Lock] = {}
+_audio_track_locks_guard = threading.Lock()
+
+
+def _audio_track_lock(resolved: str, audio_index: int) -> threading.Lock:
+    key = (resolved, audio_index)
+    with _audio_track_locks_guard:
+        lock = _audio_track_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _audio_track_locks[key] = lock
+        return lock
+
+
+def _prune_stale_audio_tracks(cache_dir: Path, digest: str, keep_mtime_ns: int) -> None:
+    """Drop this source's extractions from earlier mtimes.
+
+    Every re-encode of a source yields a fresh ``mtime_ns`` filename, so without
+    this the superseded tracks accumulate forever — and the directory does not
+    use ``config.TEMP_ARTIFACT_PREFIX``, so the normal temp cleanup never reaps
+    it either.
+    """
+    prefix = f"{digest}_{keep_mtime_ns}_"
+    try:
+        entries = list(cache_dir.glob(f"{digest}_*"))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.startswith(prefix):
+            _delete_quietly(entry)
+
+
 def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
     """Demux one audio stream (``0:a:<audio_index>``) to a standalone, seekable
     ``.m4a`` for the browser's per-track mixer.
@@ -1626,39 +1662,61 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
         cache_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
-    tmp_path = out_path.with_suffix(".partial.m4a")
-    # +faststart relocates the moov atom to the front so the browser can stream
-    # and seek the track smoothly (a tail moov forces buffering stalls → pops).
-    base = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        filepath,
-        "-map",
-        f"0:a:{audio_index}",
-        "-vn",
-        "-movflags",
-        "+faststart",
-    ]
-    # Try a stream copy first (instant for AAC), then an AAC re-encode for
-    # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
-    for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
-        try:
-            subprocess.run(
-                base + codec_args + [str(tmp_path)],
-                check=True,
-                capture_output=True,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-            _delete_quietly(tmp_path)
-            continue
-        try:
-            tmp_path.replace(out_path)
-        except OSError:
-            _delete_quietly(tmp_path)
-            return None
-        return out_path
-    return None
+
+    with _audio_track_lock(resolved, audio_index):
+        # Re-check: another thread may have finished while we waited on the lock.
+        if out_path.is_file() and out_path.stat().st_size > 0:
+            return out_path
+        # Unique per caller so a concurrent extraction of a *different* track of
+        # the same file can never share a scratch path either.
+        tmp_path = (
+            cache_dir
+            / f"{out_path.stem}.partial.{os.getpid()}.{threading.get_ident()}.m4a"
+        )
+        # +faststart relocates the moov atom to the front so the browser can
+        # stream and seek the track smoothly (a tail moov forces buffering
+        # stalls → pops).
+        base = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            filepath,
+            "-map",
+            f"0:a:{audio_index}",
+            "-vn",
+            "-movflags",
+            "+faststart",
+        ]
+        # Try a stream copy first (instant for AAC), then an AAC re-encode for
+        # codecs that can't be copied into an MP4/M4A container (Opus, PCM, …).
+        for codec_args in (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "160k"]):
+            try:
+                subprocess.run(
+                    base + codec_args + [str(tmp_path)],
+                    check=True,
+                    capture_output=True,
+                    # Generous: the copy path is near-instant but the AAC
+                    # re-encode fallback runs the length of a long session
+                    # recording. Bounded all the same, so a wedged ffmpeg can't
+                    # pin this request thread (and every waiter on the lock).
+                    timeout=300,
+                )
+            except (
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+                FileNotFoundError,
+                OSError,
+            ):
+                _delete_quietly(tmp_path)
+                continue
+            try:
+                tmp_path.replace(out_path)
+            except OSError:
+                _delete_quietly(tmp_path)
+                return None
+            _prune_stale_audio_tracks(cache_dir, digest, mtime_ns)
+            return out_path
+        return None
 
 
 def _delete_quietly(path: Path) -> None:
