@@ -200,14 +200,18 @@
       // would have zero visual response. The anchor marks where the press
       // landed, the horizontal track shows how far the tolerance scrub has
       // travelled, and the readout rides the head next to the pointer.
-      var dragged = Math.abs(wd.headX - wd.seedX) >= 2 * s;
+      // headOffsetPx is the scrub distance in CSS pixels; mapping it here with
+      // the live `s` keeps the head under the cursor even when a panel toggle
+      // or window resize changes the canvas-to-display ratio mid-drag.
+      var headX = wd.seedX + wd.headOffsetPx * s;
+      var dragged = Math.abs(headX - wd.seedX) >= 2 * s;
       if (dragged) {
         ctx.strokeStyle = hexToRgba(wcol, 0.55);
         ctx.lineWidth = 1 * s;
         ctx.setLineDash([3 * s, 3 * s]);
         ctx.beginPath();
         ctx.moveTo(wd.seedX, wd.seedY);
-        ctx.lineTo(wd.headX, wd.seedY);
+        ctx.lineTo(headX, wd.seedY);
         ctx.stroke();
         ctx.setLineDash([]);
       }
@@ -217,11 +221,23 @@
       ctx.fillStyle = wcol;
       ctx.beginPath(); ctx.arc(wd.seedX, wd.seedY, 2.5 * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       if (dragged) {
-        ctx.beginPath(); ctx.arc(wd.headX, wd.seedY, 2 * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.beginPath(); ctx.arc(headX, wd.seedY, 2 * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       }
       ctx.font = Math.round(11 * s) + "px " + getThemeColors().fontMono;
       ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillText("tol " + wd.tolerance, wd.headX + Math.round(6 * s), wd.seedY - Math.round(8 * s));
+      // Ride the head, but flip to its left when scrubbing leftward (otherwise
+      // the readout sits on top of the track and anchor dot) and clamp to the
+      // canvas so a seed near an edge doesn't push it out of frame.
+      var wlabel = "tol " + wd.tolerance;
+      var wpad = Math.round(6 * s);
+      var wlw = ctx.measureText(wlabel).width;
+      var wlx = headX >= wd.seedX ? headX + wpad : headX - wpad - wlw;
+      var wmargin = Math.round(2 * s);
+      ctx.fillText(
+        wlabel,
+        clamp(wlx, wmargin, Math.max(wmargin, canvas.width - wlw - wmargin)),
+        clamp(wd.seedY - Math.round(8 * s), Math.round(11 * s), canvas.height - wmargin)
+      );
     }
 
     // Pending (unsaved) region
