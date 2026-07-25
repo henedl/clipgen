@@ -1,7 +1,7 @@
 # Workflows — Phase 3 plan (exports · canvas polish · resume · chaining)
 
 > **Phase 3 complete — W1–W8 all shipped** (v0.14.15 → v0.14.22). Picks up the deliberately
-> deferred items from `plans/WORKFLOWS-PHASE2-PLAN.md` and `plans/WORKFLOWS-UX-PHASE-2-5.md`
+> deferred items from `plans/archive/WORKFLOWS-PHASE2-PLAN.md` and `plans/archive/WORKFLOWS-UX-PHASE-2-5.md`
 > across four themes: new nodes, canvas/authoring polish, run experience, and triggers/automation.
 > Each workstream landed as one `feat(workflows)` commit with its own version bump.
 
