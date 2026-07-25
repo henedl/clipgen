@@ -424,12 +424,18 @@
         data: frameCanvas.getContext("2d").getImageData(0, 0, w, h).data,
         w: w, h: h, seedX: pos.x, seedY: pos.y, s: s,
       };
+      // seedX/seedY/scale/headX are for the painter's drag chrome (anchor dot,
+      // track, head dot) — it can't see the module-local _wandFrame.
       state.wandDragging = {
         startClientX: e.clientX,
         startTolerance: state.wandTolerance,
         tolerance: state.wandTolerance,
         combine: combine || null,
         previewPoints: null,
+        seedX: pos.x,
+        seedY: pos.y,
+        scale: s,
+        headX: pos.x,
       };
       document.body.style.cursor = "ew-resize";
       document.body.style.userSelect = "none";
@@ -446,6 +452,11 @@
       var delta = e.clientX - state.wandDragging.startClientX;
       var tol = clamp(Math.round(state.wandDragging.startTolerance + delta * WAND_SCRUB_SENSITIVITY), lo, hi);
       state.wandDragging.tolerance = tol;
+      // Track head follows the *clamped* tolerance, not the raw cursor, so the
+      // painted track stops growing once the scrub saturates at min/max —
+      // hitting the end of the range is visible instead of running off-screen.
+      var wd = state.wandDragging;
+      wd.headX = wd.seedX + ((tol - wd.startTolerance) / WAND_SCRUB_SENSITIVITY) * wd.scale;
       state.wandTolerance = tol;
       inp.value = String(tol);
       qs("#wandToleranceValue").textContent = String(tol);
