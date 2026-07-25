@@ -4445,6 +4445,23 @@
   var _SS_THUMB_MAX = 3;
   var _ssThumbCache = {}; // url -> objectURL | "error"
 
+  // Cache keys are unique per participant+timestamp, so the same-key revoke in
+  // the fetch handler below almost never fires. Without this teardown every
+  // source frame lazily loaded during a session stays pinned for the document's
+  // lifetime — and Studio is the longest-lived, most thumbnail-heavy page.
+  // Mirrors viewer.js's _thumbCache/_filmstripCache handler.
+  window.addEventListener("pagehide", function () {
+    Object.keys(_ssThumbCache).forEach(function (key) {
+      var url = _ssThumbCache[key];
+      if (url && url !== "error" && url !== "loading") {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_) {}
+      }
+      delete _ssThumbCache[key];
+    });
+  });
+
   function ssThumbUrl(participant, timestamp) {
     return "../screenspace/api/video/frame/" + encodeURIComponent(participant) + "/" + timestamp + "?w=200";
   }

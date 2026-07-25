@@ -7,12 +7,16 @@ viewport clamping, `0e21c928` native `title` invisible on draggable rows,
 are mechanically checkable are asserted here.
 
 Native ``title`` is *not* banned outright — ~150 uses are intentional. What is
-banned is the two combinations that actually shipped bugs.
+banned is the combinations that actually shipped bugs.
+
+Both static HTML and JS-constructed DOM are covered. The JS half matters most:
+every instance of the draggable-row bug so far has been in a JS builder, which
+is exactly where nothing was checking.
 """
 
 import re
 
-from _frontend_source import WEB
+from _frontend_source import WEB, strip_comments
 
 # One opening tag, non-greedy, no nested ">" — good enough for our hand-written
 # HTML (no ">" appears inside an attribute value in assets/web).
@@ -71,4 +75,56 @@ def test_hotkey_elements_do_not_hand_write_the_key_hint():
     assert not offenders, (
         "[data-hotkey] control hand-writes a key hint the registry already "
         "appends; drop the parenthesised hint:\n" + "\n".join(offenders)
+    )
+
+
+# `el.draggable = true` or `el.setAttribute("draggable", "true")`
+_DRAGGABLE_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*)\.(?:draggable\s*=\s*true"
+    r"|setAttribute\(\s*[\"']draggable[\"']\s*,\s*[\"']true[\"'])"
+)
+# `el.title = ...` on that same identifier (not `document.title`).
+_TITLE_ASSIGN_RE = re.compile(
+    r"\b([A-Za-z_$][\w$]*)\.(?:title\s*=|setAttribute\(\s*[\"']title[\"'])"
+)
+
+
+def _js_functions(src: str):
+    """Yield rough function bodies, so we only pair up names in the same scope.
+
+    Splitting on `function` is crude, but a builder that makes an element
+    draggable and sets its title does both within one function — which is all
+    this needs to see. Being scope-local is what keeps it from pairing an
+    unrelated `card.title` in a different builder.
+    """
+    parts = re.split(r"\bfunction\b", src)
+    for part in parts[1:]:
+        yield part
+
+
+def test_native_title_is_not_set_on_a_draggable_element():
+    """Native `title` does not render on an element with `draggable="true"`.
+
+    The hint silently disappears, which is how `0e21c928` (Workflows palette
+    rows) and the stash list shipped without their affordance text. Use the
+    `[data-tooltip]` singleton on draggable elements instead.
+
+    Only flags the *same identifier* getting both in one function — a `title`
+    on a child of a draggable ancestor still renders and is not the bug.
+    """
+    offenders = []
+    for path in sorted(WEB.glob("*.js")):
+        src = strip_comments(path.read_text(encoding="utf-8"))
+        for body in _js_functions(src):
+            draggable = {m.group(1) for m in _DRAGGABLE_RE.finditer(body)}
+            if not draggable:
+                continue
+            for m in _TITLE_ASSIGN_RE.finditer(body):
+                if m.group(1) in draggable:
+                    offenders.append(
+                        f"{path.name}: {m.group(1)} is draggable and sets .title"
+                    )
+    assert not offenders, (
+        "native title on a draggable element never renders; use data-tooltip:\n"
+        + "\n".join(sorted(set(offenders)))
     )

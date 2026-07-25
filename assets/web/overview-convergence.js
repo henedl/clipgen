@@ -68,6 +68,22 @@
   // hover (would otherwise display participant A's frame under B's label).
   var _cvPreviewSeq = 0;
 
+  // Frame-cache keys are unique per participant+timestamp, so the same-key
+  // revoke in cvShowFramePreview almost never fires; without this every marker
+  // frame hovered during a scrub session stays pinned for the document's
+  // lifetime. Mirrors viewer.js's _thumbCache handler.
+  window.addEventListener("pagehide", function () {
+    Object.keys(_cvFrameCache).forEach(function (key) {
+      var url = _cvFrameCache[key];
+      if (url && url !== "error" && url !== "loading") {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (_) {}
+      }
+      delete _cvFrameCache[key];
+    });
+  });
+
   // --- Utilities ---
 
   function getState() {
@@ -1613,6 +1629,15 @@
   function deactivate() {
     cvState.active = false;
     closeDetailInline();
+    // The frame preview is appended to document.body, not to #convergencePanel,
+    // so hiding the panel does not hide it — switching tabs mid-hover left the
+    // thumbnail painted over the Map or Metadata tab. The pending debounce has
+    // to go too, or a switch within its window paints a preview on the tab the
+    // user just moved to. (Same class as the empty mapDeactivate in 2a387fd6;
+    // overview-map.js clears its own tooltip here for exactly this reason.)
+    clearTimeout(_cvHoverDebounce);
+    _cvHoverDebounce = null;
+    cvHideFramePreview();
   }
 
   function init() {

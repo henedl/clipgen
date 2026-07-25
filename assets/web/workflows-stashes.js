@@ -87,9 +87,15 @@
     if (stash.builtin) item.classList.add("wf-stash-builtin");
     item.dataset.stashId = stash.id;
     item.draggable = true;
-    item.title = stash.builtin
-      ? "Built-in recipe. Drag or click to add to the canvas"
-      : "Drag or click to add to the canvas";
+    // Use the [data-tooltip] singleton, not native title — title doesn't render
+    // on draggable=true rows (same reason as the palette rows in workflows.js),
+    // so this affordance hint never appeared.
+    item.setAttribute(
+      "data-tooltip",
+      stash.builtin
+        ? "Built-in recipe. Drag or click to add to the canvas"
+        : "Drag or click to add to the canvas"
+    );
 
     item.appendChild(el("span", "wf-stash-label", stash.name));
 

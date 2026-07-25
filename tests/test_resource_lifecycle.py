@@ -26,10 +26,15 @@ def test_every_createobjecturl_file_also_revokes():
 
     This is the cheap half of the rule: it catches a *new* cache of blob URLs
     landing with no revoke path at all. The other half -- revoking on
-    ``pagehide`` as well as on replacement -- is prose in CODE-REVIEW.md, since
-    four existing files (overview-convergence, overview-metadata, studio,
-    workflows) mint blob URLs without a pagehide teardown and fixing those is a
-    behavioural change, not a docs one.
+    ``pagehide`` as well as on replacement -- stays prose in CODE-REVIEW.md.
+
+    Grepping for ``createObjectURL`` without ``pagehide`` over-reports: the
+    download-anchor idiom (``createObjectURL`` -> ``a.click()`` ->
+    ``revokeObjectURL`` on the next statement, as in ``overview-metadata.js``
+    and ``workflows.js``) caches nothing, so there is nothing for a teardown to
+    free. The shape that actually leaks is a blob URL stored in a *module-scoped
+    cache*; those live in ``studio.js``, ``overview-convergence.js``,
+    ``viewer.js`` and ``screenspace.js``, and all four now revoke on pagehide.
     """
     offenders = [
         p.name
