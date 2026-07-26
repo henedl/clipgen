@@ -41,13 +41,13 @@ Always use `uv run` instead of `python`. Use `uv add` to add dependencies.
 
 ```python
 {
-    'cell': gspread.Cell,      # Cell with timestamp value (1-based row/col)
-    'desc': str,               # Observation text from Observation column
-    'study': str,              # Normalized study name (filesystem-safe)
-    'participant': str,        # e.g. 'P01', 'G02' from header
-    'category': str,           # Row category (sanitized; empty → 'uncategorized')
-    'severity': str,           # Row severity (normalized label; empty if no Severity column)
-    'times': [(start, end)]    # Added by files.prepare_clip(): list of (start_time, end_time) strings
+    "cell": gspread.Cell,  # Cell with timestamp value (1-based row/col)
+    "desc": str,  # Observation text from Observation column
+    "study": str,  # Normalized study name (filesystem-safe)
+    "participant": str,  # e.g. 'P01', 'G02' from header
+    "category": str,  # Row category (sanitized; empty → 'uncategorized')
+    "severity": str,  # Row severity (normalized label; empty if no Severity column)
+    "times": [(start, end)],  # Set by files.prepare_clip(): (start, end) strings
 }
 ```
 

@@ -105,15 +105,17 @@ carrying typed ports the DAG needs. Each entry:
 
 ```python
 class NodeType(TypedDict):
-    id: str            # "transcribe", "ss_scan", "find_word", "make_clips", "timeline_viewer", "gate"
+    id: str  # "transcribe", "ss_scan", "find_word", "make_clips", "timeline_viewer", "gate"
     label: str
     domain: Literal["artifact", "screenspace", "transcript", "thinking", "control"]
     category: str
-    inputs: list[Port]            # {name, type, optional}
+    inputs: list[Port]  # {name, type, optional}
     outputs: list[Port]
-    params: list[ParamSpec]       # {name, type, default, min/max/choices, label}
+    params: list[ParamSpec]  # {name, type, default, min/max/choices, label}
     requires: list[Literal["sheet", "videoDir"]]
-    execute: Callable[[NodeContext, dict, dict], dict]   # (ctx, inputs, params) -> {out_port: value}
+    execute: Callable[
+        [NodeContext, dict, dict], dict
+    ]  # (ctx, inputs, params) -> {out_port: value}
 ```
 `NodeContext` carries `on_progress(float)`, `cancel_event: threading.Event`, and
 `cancel_flag()->bool` so each executor forwards whichever form its callee wants (scans want
@@ -192,11 +194,22 @@ contract — avoids a backwards `workflows → cli` import) and refactor the two
 (collapses existing duplication):
 
 ```python
-def build_clip_records(*, participant, source_filename, time_ranges: list[tuple[float, float]],
-                       description, category="workflow", study="", severity="",
-                       cell_col=_WORKFLOW_CELL_COL, cell_row_base=0,
-                       cluster_gap=None, pad_pre=0.0, pad_post=0.0,
-                       max_duration=None) -> list[ClipRecord]:
+def build_clip_records(
+    *,
+    participant,
+    source_filename,
+    time_ranges: list[tuple[float, float]],
+    description,
+    category="workflow",
+    study="",
+    severity="",
+    cell_col=_WORKFLOW_CELL_COL,
+    cell_row_base=0,
+    cluster_gap=None,
+    pad_pre=0.0,
+    pad_post=0.0,
+    max_duration=None,
+) -> list[ClipRecord]:
     """Build sheet-free ClipRecords from explicit (start,end) second ranges; pre-fills `times`
     (H:MM:SS) so process_clips runs without a live spreadsheet. cluster_gap merges adjacent ranges."""
 ```

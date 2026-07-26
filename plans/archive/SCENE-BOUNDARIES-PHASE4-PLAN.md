@@ -170,14 +170,24 @@ in Phase 4 — only the data is emitted, as the bridge to the future "Segment la
 ## Config (config.py)
 
 ```python
-SCREENSPACE_BOUNDARY_METRIC: str = "hybrid"               # default algorithm
-SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = 0.25        # fingerprint distance (1 − similarity); mirrors scene's 0.75 sim
-SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2              # samples a shift must persist
-SCREENSPACE_BOUNDARY_SCENE_HASH_DIM: int = 128           # pipe downscale for fingerprinting
-SCREENSPACE_BOUNDARY_MERGE_THRESHOLD: float = 0.15        # post-run: merge periods this similar (exposed in settings)
-SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = 3.0    # post-run: transient-dissolve candidate ceiling
-SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED: bool = True  # post-run: session-relative weak-boundary prune (exposed in settings)
-SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR: float = 0.5   # drop boundaries below factor × median entry distance
+SCREENSPACE_BOUNDARY_METRIC: str = "hybrid"  # default algorithm
+SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = (
+    0.25  # fingerprint distance (1 − similarity); mirrors scene's 0.75 sim
+)
+SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2  # samples a shift must persist
+SCREENSPACE_BOUNDARY_SCENE_HASH_DIM: int = 128  # pipe downscale for fingerprinting
+SCREENSPACE_BOUNDARY_MERGE_THRESHOLD: float = (
+    0.15  # post-run: merge periods this similar (exposed in settings)
+)
+SCREENSPACE_BOUNDARY_SHORT_PERIOD_SECONDS: float = (
+    3.0  # post-run: transient-dissolve candidate ceiling
+)
+SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_ENABLED: bool = (
+    True  # post-run: session-relative weak-boundary prune (exposed in settings)
+)
+SCREENSPACE_BOUNDARY_RELATIVE_PRUNE_FACTOR: float = (
+    0.5  # drop boundaries below factor × median entry distance
+)
 ```
 
 ### Exposed in the settings modal (per decisions 4 & 5)
