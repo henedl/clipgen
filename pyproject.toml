@@ -46,6 +46,37 @@ py-modules = [
 [tool.uv]
 required-version = ">=0.11.0"
 
+[tool.ruff]
+# Ruff 0.16 enables ~413 rules by default (up from 59 in 0.15). We run those defaults
+# as-is; the carve-outs below are the only deliberate exceptions. Pinned so a stale
+# local ruff fails loudly instead of quietly disagreeing with CI (tests.yml lint job).
+# `requires-python` above already gives ruff target-version = py312.
+required-version = ">=0.16.0"
+
+[tool.ruff.lint]
+ignore = [
+    # ~50 `except Exception:` handlers at ffmpeg / OCR / worker-thread / HTTP
+    # boundaries. Narrowing them is semantic work, tracked as "Narrow
+    # `except Exception`" in agents/CODE-REVIEW.md. Drop this once that pass lands.
+    "BLE001",
+    # Import sorting. Module import order in the screenspace.py / workflows.py
+    # re-export facades is a deliberate deepest-first DAG (agents/ARCHITECTURE.md).
+    "I001",
+    # Timestamps here are local wall-clock times for video/session metadata, never
+    # cross-timezone instants. Naive datetimes are the correct representation.
+    "DTZ005",
+    "DTZ007",
+    # PEP 695 generic syntax. Plain TypeVars read better in this codebase.
+    "UP047",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Both clusters are test-only, and both are correct test idioms:
+# B018   — bare `resp.data` expressions that intentionally consume a streamed
+#          response so the generator's finally-block runs.
+# RUF012 — mutable class attributes on throwaway test doubles; ClassVar noise.
+"tests/**" = ["B018", "RUF012"]
+
 [tool.coverage.run]
 source = ["."]
 omit = ["tests/*"]

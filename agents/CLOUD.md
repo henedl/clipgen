@@ -14,7 +14,7 @@ clipgen is a self-contained Python CLI tool with no databases or Docker services
 
 | Task | Command |
 |------|---------|
-| Lint | `uvx ruff check` and `uvx ruff format --check` |
+| Lint | `uvx ruff@0.16.0 check` and `uvx ruff@0.16.0 format --check` (match the CI pin; `pyproject.toml` sets `required-version = ">=0.16.0"`) |
 | Type check | `uvx ty check` |
 | Tests | `uv run --no-sync pytest -c tests/pytest.ini` |
 | Run app (CLI help) | `uv run clipgen.py --help` |
