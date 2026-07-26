@@ -58,6 +58,20 @@ def test_topo_order_ignores_stale_edges():
     assert workflows.topo_order(nodes, edges) == ["a"]
 
 
+def test_topo_order_ignores_edges_with_a_missing_endpoint():
+    # A half-drawn wire persisted mid-drag carries no "to" at all. This already
+    # held via the `in id_set` membership test (None is never a node id); the
+    # explicit isinstance guard in topo_order makes that provable to ty rather
+    # than incidental. Pinned here so a future rewrite of the guard keeps it.
+    nodes = [{"id": "a"}, {"id": "b"}]
+    edges = [
+        {"from": "a", "fromPort": "o"},
+        {"to": "b", "toPort": "i"},
+        {"from": None, "to": "b"},
+    ]
+    assert workflows.topo_order(nodes, edges) == ["a", "b"]
+
+
 # ---- bind_participant (P3 whole-study fan-out) ----
 
 

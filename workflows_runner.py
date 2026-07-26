@@ -105,6 +105,13 @@ def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list
     indeg: dict[str, int] = {nid: 0 for nid in ids}
     for edge in edges:
         src, dst = edge.get("from"), edge.get("to")
+        # A wire missing either endpoint (or carrying a non-string one) is
+        # malformed, not just stale — skip it for the same reason. `in id_set`
+        # below already excluded these (None is never a node id), but only
+        # incidentally: it reads as a membership test, and ty cannot use it to
+        # narrow `.get()`'s Optional. This states the contract instead.
+        if not isinstance(src, str) or not isinstance(dst, str):
+            continue
         if src in id_set and dst in id_set:
             adj[src].append(dst)
             indeg[dst] += 1
