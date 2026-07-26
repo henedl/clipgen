@@ -139,6 +139,13 @@ body {
   max-width: 35vw;
 }
 
+/* Sits beside the search box (see the comment on the markup) — never let the
+   subheader squeeze the label. */
+#correctionsBtn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 #searchInput {
   flex: 1;
   height: 32px;

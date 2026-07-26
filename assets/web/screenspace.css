@@ -1604,6 +1604,12 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 }
 
 #workflowActionRow {
+  /* One height for the row's input controls (participant/region pickers,
+     interval stepper, fast-scan toggle). Without it each sizes from its own
+     padding + font and the row reads as ragged. Run is deliberately taller —
+     it's the CTA, not another input. */
+  --ss-action-h: 28px;
+  --ss-run-h: 34px;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -1618,6 +1624,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 #runBtn {
   margin-left: auto;
+  height: var(--ss-run-h);
+  padding: 0 var(--space-4);
 }
 
 #workflowIntervalSlot {
@@ -1631,8 +1639,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: var(--ss-action-h);
+  height: var(--ss-action-h);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-right: none;
@@ -1642,8 +1650,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 .interval-icon-mask {
   display: block;
-  width: 12px;
-  height: 12px;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   background: var(--color-text-dim);
   mask-size: contain;
   mask-repeat: no-repeat;
@@ -1653,7 +1661,10 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 #workflowIntervalSlot .param-control input[type="number"] {
   width: 4.5rem;
-  height: 28px;
+  height: var(--ss-action-h);
+  /* Match the pickers' 12px rather than inheriting the 13px param default —
+     the larger face is what made the stepper look cramped. */
+  font-size: var(--text-xs);
   border-radius: 0 calc(var(--radius) - 2px) calc(var(--radius) - 2px) 0;
   text-align: center;
 }
@@ -1671,7 +1682,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: calc(var(--radius) - 2px);
-  padding: var(--space-1) var(--space-2);
+  height: var(--ss-action-h);
+  padding: 0 var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text);
   cursor: pointer;
@@ -1757,7 +1769,9 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   text-decoration: underline;
 }
 
-.run-picker-fullframe {
+/* Separator below "Full frame" — only when a region or stash row follows it,
+   otherwise the popover ends on a stray hairline. */
+.run-picker-fullframe.has-following {
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -1797,8 +1811,8 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: var(--ss-action-h);
+  height: var(--ss-action-h);
   padding: 0;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -2713,6 +2727,14 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   min-width: 0;
 }
 
+/* Short free-text params (the event label) — a full-width box overstates how
+   much text belongs in it. Floors at a readable width in narrow panels. */
+.param-control input[type="text"].param-input-half {
+  flex: 0 1 50%;
+  min-width: 12rem;
+  max-width: 100%;
+}
+
 .param-hint {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
@@ -2726,6 +2748,48 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   color: var(--color-text-dim);
   min-width: 2.5rem;
   text-align: right;
+}
+
+/* Captured reference-frame timestamp + its seek affordance (built by
+   refTimeChip in screenspace.js). */
+.param-value--ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  text-align: left;
+}
+
+.mt-ref-cell {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ref-seek-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--duration-fast);
+}
+
+.ref-seek-btn:hover {
+  color: var(--color-accent);
+}
+
+.ref-seek-icon {
+  display: block;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
 }
 
 /* Color presence "Min area %" readout: words + pixel estimate, so it needs to
@@ -2793,13 +2857,22 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 .color-hex-input {
   font-family: var(--font-mono);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: calc(var(--radius) - 2px);
   background: var(--color-surface);
   color: var(--color-text);
-  width: 5.5rem;
+  width: 4.75rem;
+}
+
+/* Names the region it samples ("From region \"Sidebar\"") — long names ellipse
+   rather than pushing the pipette off the row. */
+.color-sample-btn {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .btn-pipette {
@@ -4068,6 +4141,9 @@ body.panel-dragging #bottomPanel {
 /* Tool info tooltip */
 
 .tool-info-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ss-action-h);
   background: none;
   border: none;
   padding: 0;

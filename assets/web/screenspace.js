@@ -630,19 +630,22 @@
     // (addRunRegion/removeRunRegion clear the flag). Without the follow-up
     // re-seed, the first created region stayed pinned and the model preview
     // ignored chip selection.
+    //
+    // With no user regions at all there is no chip to follow, so full frame
+    // takes the seed — otherwise a fresh page has nothing selected and Run is
+    // dead. The first region the user draws replaces it (the follow-up branch
+    // accepts a seeded full_frame the same way it accepts a seeded active).
     var seedRef = state.activeRegion && names.indexOf(state.activeRegion) >= 0
       ? activeRegionRef(state.activeRegion)
       : null;
     if (state.runRegions.length === 0) {
-      if (seedRef) {
-        state.runRegions = [seedRef];
-        state.runRegionsSeeded = true;
-      }
+      state.runRegions = [seedRef || fullFrameRegionRef()];
+      state.runRegionsSeeded = true;
     } else if (
       state.runRegionsSeeded &&
       seedRef &&
       state.runRegions.length === 1 &&
-      state.runRegions[0].source === "active" &&
+      (state.runRegions[0].source === "active" || state.runRegions[0].source === "full_frame") &&
       regionRefKey(state.runRegions[0]) !== regionRefKey(seedRef)
     ) {
       state.runRegions = [seedRef];
@@ -655,9 +658,14 @@
     var panel = el("div", "run-picker-panel hidden");
 
     // Full-frame entry — always available, sits above the active/stash regions.
+    // Its separator hairline is class-gated on something actually following it
+    // (active regions, or a stash folder with regions).
+    var hasFollowingRows = names.length > 0 || state.stashes.some(function (stash) {
+      return Object.keys(stash.regions).length > 0;
+    });
     var fullFrameRef = fullFrameRegionRef();
     var fullFrameLbl = document.createElement("label");
-    fullFrameLbl.className = "run-picker-fullframe";
+    fullFrameLbl.className = "run-picker-fullframe" + (hasFollowingRows ? " has-following" : "");
     var fullFrameCb = document.createElement("input");
     fullFrameCb.type = "checkbox";
     fullFrameCb.value = regionRefKey(fullFrameRef);
@@ -792,6 +800,11 @@
 
     wrap.appendChild(btn);
     wrap.appendChild(panel);
+    // The seed above mutates runRegions, so the Run gate has to be re-evaluated
+    // here — the regions/stashes load paths don't call it themselves, and
+    // without this a fresh page keeps Run disabled despite full frame being
+    // selected.
+    updateRunButton();
   }
 
   function updateRegionPickerBtnText(btn) {
@@ -1020,6 +1033,11 @@
     state.frameLoading = false;
     state.referenceTimestamp = null;
     state.sceneReferences = [];
+    // In/out markers are per participant and persisted for the tab — swap in
+    // the incoming participant's pair (nulls when they have none) rather than
+    // letting the outgoing participant's markers leak across.
+    if (SS.restoreMarkers) SS.restoreMarkers(pid);
+    updateMarkerInfo();
     state.resultOverlay = null;
     state.heatmapOverlay = null;
     state.pins = [];
@@ -1060,6 +1078,9 @@
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
         if (!data.ok) { qs("#videoInfo").textContent = ""; return; }
         state.videoInfo = data.info;
+        // Duration is only known now, so a restored marker can't be range-checked
+        // until this point.
+        if (SS.clampMarkersToDuration) SS.clampMarkersToDuration(data.info.duration);
         // Reconfigure the audio popover for this participant's track layout.
         if (state.audioPanel) state.audioPanel.refresh();
         // If the server reports a different mtime than we last saw, the
@@ -2278,6 +2299,7 @@
   function initTimeline() { return SS.initTimeline && SS.initTimeline.apply(null, arguments); }
   function renderTimeline() { return SS.renderTimeline && SS.renderTimeline.apply(null, arguments); }
   function renderPlayhead() { return SS.renderPlayhead && SS.renderPlayhead.apply(null, arguments); }
+  function updateMarkerInfo() { return SS.updateMarkerInfo && SS.updateMarkerInfo.apply(null, arguments); }
   // ---- Tool info tooltip ----
 
   var TOOL_INFO = {
@@ -2717,9 +2739,11 @@
     });
     inputRow.appendChild(pipetteBtn);
 
-    var sampleBtn = el("button", "btn btn-small", "From Region");
+    var sampleBtn = el("button", "btn btn-small color-sample-btn");
+    sampleBtn.id = "colorSampleBtn";
     sampleBtn.addEventListener("click", sampleColorFromRegion);
     inputRow.appendChild(sampleBtn);
+    updateColorSampleBtnLabel();
 
     pickerGroup.appendChild(inputRow);
 
@@ -2850,8 +2874,7 @@
     });
     refControl.appendChild(refBtn);
     if (state.referenceTimestamp !== null) {
-      var refTs = el("span", "param-value", formatTime(state.referenceTimestamp, { decimals: 1 }));
-      refControl.appendChild(refTs);
+      refControl.appendChild(refTimeChip(state.referenceTimestamp));
     }
     refRow.appendChild(refLabel);
     refRow.appendChild(refControl);
@@ -3039,7 +3062,7 @@
       uploadInfo.appendChild(clearBtn);
       tmplRefCtrl.appendChild(uploadInfo);
     } else if (state.referenceTimestamp !== null) {
-      tmplRefCtrl.appendChild(el("span", "param-value", formatTime(state.referenceTimestamp, { decimals: 1 })));
+      tmplRefCtrl.appendChild(refTimeChip(state.referenceTimestamp));
     }
     tmplRefRow.appendChild(tmplRefCtrl);
     container.appendChild(tmplRefRow);
@@ -3066,7 +3089,7 @@
       if (ref.threshold === undefined) ref.threshold = 0.75;
       var item = el("div", "scene-ref-item");
       item.appendChild(el("span", "scene-ref-name", ref.name));
-      item.appendChild(el("span", "param-value", formatTime(ref.timestamp, { decimals: 1 })));
+      item.appendChild(refTimeChip(ref.timestamp));
       var threshSlider = document.createElement("input");
       threshSlider.type = "range";
       threshSlider.min = "0.50";
@@ -3196,7 +3219,9 @@
     if (type === "multitool") {
       SS.renderMultitoolParams(container);
       renderIntervalSlot("paramMultitoolInterval", 0.5, 60, 1.0, 0.5);
-      addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
+      var mtEventLabel = textInput("paramEventLabel", "e.g. low_health");
+      mtEventLabel.className = "param-input-half";
+      addParamRow(container, "Event label", mtEventLabel);
       var dfCb = document.createElement("input");
       dfCb.type = "checkbox";
       dfCb.id = "paramDetectFirst";
@@ -3277,7 +3302,9 @@
     }
 
     if (type !== "timelapse") {
-      addParamRow(container, "Event label", textInput("paramEventLabel", "e.g. low_health"));
+      var eventLabel = textInput("paramEventLabel", "e.g. low_health");
+      eventLabel.className = "param-input-half";
+      addParamRow(container, "Event label", eventLabel);
       // Boundary marks period transitions and attention streams shift
       // moments, not discrete detections, so "Detect first" (stop after the
       // first hit) doesn't apply — omit it for both.
@@ -3309,6 +3336,31 @@
     state.calibrationResult = null;
     renderCalibration();
     if (!state.suppressCalibrationRefresh) refreshCalibration();
+  }
+
+  // A captured reference-frame timestamp with a click-to-seek affordance.
+  // Shared by every tool that captures a reference (similarity, template, scene
+  // list, and the multitool steps) so the markup and the seek behaviour stay in
+  // one place. `textId` is optional and lands on the inner text span, which is
+  // what callers update in place after a re-capture.
+  function refTimeChip(seconds, textId) {
+    var wrap = el("span", "param-value param-value--ref");
+    var text = el("span", null, formatTime(seconds, { decimals: 1 }));
+    if (textId) text.id = textId;
+    wrap.appendChild(text);
+
+    var btn = el("button", "ref-seek-btn");
+    btn.type = "button";
+    btn.setAttribute("data-tooltip", "Jump to this frame");
+    btn.setAttribute("aria-label", "Jump to this frame");
+    var icon = el("span", "ref-seek-icon");
+    applyIconMask(icon, "arrow-up-right", "/screenspace/icons/");
+    btn.appendChild(icon);
+    btn.addEventListener("click", function () {
+      loadFrame(seconds);
+    });
+    wrap.appendChild(btn);
+    return wrap;
   }
 
   function addParamRow(container, label, control, valueDisplayId) {
@@ -3368,6 +3420,7 @@
   function renderColorPalette() { return SS.renderColorPalette && SS.renderColorPalette(); }
   function renderBrightnessStrip() { return SS.renderBrightnessStrip && SS.renderBrightnessStrip(); }
   function sampleColorFromRegion() { return SS.sampleColorFromRegion && SS.sampleColorFromRegion(); }
+  function updateColorSampleBtnLabel() { return SS.updateColorSampleBtnLabel && SS.updateColorSampleBtnLabel(); }
 
   function activatePipette() {
     if (!state.frameImage) {
@@ -4951,6 +5004,7 @@
   SS.gatherWorkflowParams = gatherWorkflowParams;
   SS.loadFrame = loadFrame;
   SS.seekPlayhead = seekPlayhead;
+  SS.refTimeChip = refTimeChip;
   SS.taskTypeColor = taskTypeColor;
   SS.taskRegionPixels = taskRegionPixels;
   SS.regionRefPayload = regionRefPayload;

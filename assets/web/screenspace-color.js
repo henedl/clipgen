@@ -147,6 +147,17 @@
     ctx.stroke();
   }
 
+  // The sampler reads the highlighted chip, not the run-picker selection, so the
+  // button says which region that is. Called on every renderRegionChips() (the
+  // chokepoint for state.activeRegion changes) and once when the panel renders.
+  function updateColorSampleBtnLabel() {
+    var btn = qs("#colorSampleBtn");
+    if (!btn) return;
+    btn.textContent = state.activeRegion
+      ? 'From region "' + state.activeRegion + '"'
+      : "From region";
+  }
+
   function sampleColorFromRegion() {
     if (!state.frameImage || !state.activeRegion) {
       showToast("Select a saved region first");
@@ -174,6 +185,7 @@
   SS.renderColorPalette = renderColorPalette;
   SS.renderBrightnessStrip = renderBrightnessStrip;
   SS.sampleColorFromRegion = sampleColorFromRegion;
+  SS.updateColorSampleBtnLabel = updateColorSampleBtnLabel;
   SS.setColorHiddenInputs = function (v) { _colorHiddenInputs = v; };
   SS.getColorHiddenInputs = function () { return _colorHiddenInputs; };
 })();

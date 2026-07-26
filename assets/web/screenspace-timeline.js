@@ -199,6 +199,7 @@
     qs("#clearMarkersBtn").addEventListener("click", function () {
       state.inMarker = null;
       state.outMarker = null;
+      persistMarkers();
       updateMarkerInfo();
       renderTimeline();
     });
@@ -242,9 +243,59 @@
   }
 
   // In/out markers — shared by the toolbar buttons and the i/o hotkeys.
+  //
+  // Persisted per participant in sessionStorage so leaving Screenspace and
+  // coming back (every TopNav tab is a full page load, i.e. a fresh `state`)
+  // doesn't silently drop a range the user set. Per-tab, not localStorage: the
+  // markers describe the clip you're working on right now, not a preference.
+  var MARKERS_STORAGE_KEY = "ss_markers";
+
+  function _readStoredMarkers() {
+    try {
+      var raw = sessionStorage.getItem(MARKERS_STORAGE_KEY);
+      var all = raw ? JSON.parse(raw) : null;
+      return (all && typeof all === "object") ? all : {};
+    } catch (_) { return {}; }
+  }
+
+  function persistMarkers() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    var all = _readStoredMarkers();
+    if (state.inMarker === null && state.outMarker === null) delete all[pid];
+    else all[pid] = { in: state.inMarker, out: state.outMarker };
+    try {
+      sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all));
+    } catch (_) { /* sessionStorage may be unavailable */ }
+  }
+
+  // Load `pid`'s markers into state (nulls when it has none). Callers repaint.
+  function restoreMarkers(pid) {
+    var entry = pid ? _readStoredMarkers()[pid] : null;
+    var inTs = entry && typeof entry.in === "number" ? entry.in : null;
+    var outTs = entry && typeof entry.out === "number" ? entry.out : null;
+    state.inMarker = inTs;
+    state.outMarker = outTs;
+  }
+
+  // Drop markers past the end of the participant's video — a stale one would
+  // reach the scan as an out-of-range start_seconds/end_seconds.
+  function clampMarkersToDuration(duration) {
+    if (!(duration > 0)) return;
+    var changed = false;
+    if (state.inMarker !== null && state.inMarker > duration) { state.inMarker = null; changed = true; }
+    if (state.outMarker !== null && state.outMarker > duration) { state.outMarker = null; changed = true; }
+    if (changed) {
+      persistMarkers();
+      updateMarkerInfo();
+      renderTimeline();
+    }
+  }
+
   function setInMark() {
     state.inMarker = state.currentTimestamp;
     if (state.outMarker !== null && state.inMarker > state.outMarker) state.outMarker = null;
+    persistMarkers();
     updateMarkerInfo();
     renderTimeline();
   }
@@ -252,6 +303,7 @@
   function setOutMark() {
     state.outMarker = state.currentTimestamp;
     if (state.inMarker !== null && state.outMarker < state.inMarker) state.inMarker = null;
+    persistMarkers();
     updateMarkerInfo();
     renderTimeline();
   }
@@ -732,4 +784,7 @@
   SS.updateMarkerInfo = updateMarkerInfo;
   SS.setInMark = setInMark;
   SS.setOutMark = setOutMark;
+  SS.restoreMarkers = restoreMarkers;
+  SS.persistMarkers = persistMarkers;
+  SS.clampMarkersToDuration = clampMarkersToDuration;
 })();
