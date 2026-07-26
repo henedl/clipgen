@@ -25,6 +25,12 @@ dependencies = [
 # pure-Python plugin, so unlike pytest-cov / pytest-xdist (kept CI-only, see
 # tests.yml) it lives in dev.
 dev = ["pytest", "pytest-randomly"]
+# Opt-in headless-browser harness (tests/ui/, agents/skills/ui-check/SKILL.md).
+# Never installed by CI or by a plain `uv sync` — /ui-check prompts first, and
+# `tests/pytest.ini` keeps tests/ui out of every default run. The version floor
+# barely matters: the harness always passes `executable_path` explicitly rather
+# than letting playwright resolve the browser build it expects.
+ui = ["playwright>=1.55"]
 
 [tool.setuptools]
 packages = []

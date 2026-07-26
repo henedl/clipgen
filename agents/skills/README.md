@@ -5,6 +5,7 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 ## Development
 
 - [check](check/SKILL.md) — full pre-commit pipeline (ruff → ty → tests)
+- [ui-check](ui-check/SKILL.md) — headless page smoke, screenshots, and in-page probing
 - [test](test/SKILL.md) — run the test suite
 - [bump](bump/SKILL.md) — increment patch version
 - [new-mode](new-mode/SKILL.md) — checklist for adding a CLI mode or flag

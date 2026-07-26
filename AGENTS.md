@@ -22,6 +22,9 @@ uv run clipgen.py --studio                                  # spreadsheet UI (re
 uv run clipgen.py --screenspace -i INPUT_DIR -o OUTPUT_DIR  # http://127.0.0.1:8089/screenspace/
 uv run clipgen.py --transcripts -i INPUT_DIR -o OUTPUT_DIR  # http://127.0.0.1:8089/transcripts/
 uv run clipgen.py --composer -i INPUT_DIR -o OUTPUT_DIR     # http://127.0.0.1:8089/composer/
+
+CLIPGEN_UI_CHECK=1 uv run --extra dev --extra ui pytest -c tests/pytest.ini tests/ui  # headless 6-page smoke
+uv run --extra ui python tests/ui/shot.py studio --eval "return CLIPGEN_CONFIG"       # one page: shot + probe
 ```
 
 Always use `uv run` instead of `python`. Use `uv add` to add dependencies.
@@ -88,7 +91,7 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 
 - **No backwards-compatibility layers.** Do not add migration shims, schema-version checks for hard-break detection, legacy-format readers, or "warn and ignore" branches for old persisted state (manifests, stashes, sessionStorage queues, settings files, etc.). The user base is small and the work is ephemeral; just change the shape and let users re-run. Tests covering persisted shapes get updated to the new shape, not gated behind a version flag.
 - **No duplicated constants between Python and JS.** Any value that lives in `config.py` (or a Python helper) and that the frontend also needs must flow through `utils.get_frontend_config()`, not be hardcoded in JS. Procedure: [agents/skills/sync-constants/SKILL.md](agents/skills/sync-constants/SKILL.md).
-- **Don't install heavy software to verify UI changes.** No headless Chromium, Playwright, Puppeteer, or similar pulled in unilaterally. For Studio / Screenspace / Transcripts / Viewer changes, ask the human to test in their browser and report back; if you need in-browser diagnostics, give them a small DevTools console snippet to paste.
+- **Never install heavy software without asking; do use what is already installed.** Browsers, torch, and similar large downloads are never pulled in unilaterally — ask first, every time. But verifying UI changes in a browser is now expected rather than forbidden: run [/ui-check](agents/skills/ui-check/SKILL.md), which loads all six pages headless, fails on any uncaught error, and writes screenshots you should **actually look at** with `Read`. For in-browser diagnostics, run the snippet yourself via `tests/ui/shot.py --eval` instead of handing the human a DevTools paste. Ask the human only for what the smoke genuinely cannot see: interaction feel, motion, drag behaviour, and real-media playback.
 - **Pre-commit check:** Before every `git commit`, run [agents/skills/check/SKILL.md](agents/skills/check/SKILL.md).
 - **Never edit .gitignore automatically.** Always confirm changes with the user.
 

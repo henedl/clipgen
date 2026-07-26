@@ -74,7 +74,7 @@ Today the summary agent's first `generate()` after transcription pays the 5–30
 `screenspace.js` boot (~3745–3758) fires an **unbounded** fetch of frame 0 for every participant simultaneously, competing with the selected participant's own first-frame render (server has a 3-slot VideoCapture pool).
 
 - Reorder the `apiGet("api/participants")` handler: compute `pickId` (localStorage-restore block currently *below* the loop) **first**, call `selectParticipant(pickId, initialTs)` so its request wins, then pump a bounded queue (selected first, then the rest) at concurrency 2 — the `studio-scrubber.js` prefetch-queue pattern (lines ~27–52). Keep `_videoVersions` seeding above everything (`?v=` cache-bust contract) and the existing `TODO: apiGetBlob` comment. ES5 note: release the slot in a final `.then()` after `.catch()` so it always decrements.
-- No config, no automated tests (no JS runtime harness) — manual browser verification: DevTools Network shows ≤2 concurrent `frame/*/0` requests, selected participant first. Per AGENTS.md, ask the maintainer to browser-check.
+- No config change. Verify with `/ui-check` — `tests/ui/shot.py screenspace --eval` can read back `performance.getEntriesByType("resource")` to confirm ≤2 concurrent `frame/*/0` requests with the selected participant first, rather than reading DevTools Network by hand.
 
 ## Item 6 — Opt-in hardware encoding, default `auto` (VideoToolbox) — real speedup on Apple Silicon
 
@@ -128,4 +128,4 @@ Studio sheet (`populateSheetSkeleton`, studio.js:1082) and the Screenspace frame
 
 ## Verification
 
-For each item: the per-item test plans above, plus `/check` (ruff format + lint, ty, full suite) before every commit; browser checks (Items 5, 7, and the Settings UI of 4/6) are manual — ask the maintainer to verify in their browser per the no-headless-browser rule; benchmark notes worth capturing in PR bodies: titlecard wrap before/after on a ~60s clip (Item 3), reel generation on a 20+ clip reel (Item 1), `ffmpeg` wall time for a reel re-encode with `FFMPEG_VIDEO_ENCODER=auto` vs `libx264` (Item 6).
+For each item: the per-item test plans above, plus `/check` (ruff format + lint, ty, full suite) before every commit; browser checks (Items 5, 7, and the Settings UI of 4/6) run through `/ui-check` (page smoke + screenshots + `shot.py --eval` probes), with the maintainer asked only for interaction feel; benchmark notes worth capturing in PR bodies: titlecard wrap before/after on a ~60s clip (Item 3), reel generation on a 20+ clip reel (Item 1), `ffmpeg` wall time for a reel re-encode with `FFMPEG_VIDEO_ENCODER=auto` vs `libx264` (Item 6).

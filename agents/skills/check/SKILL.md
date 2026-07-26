@@ -20,3 +20,6 @@ Report pass/fail per stage. If all pass, remind the agent:
 - **ty `union-attr`**: narrow the Optional before use with `assert x is not None` rather than `# type: ignore`.
 - **ty JSON dicts**: after `isinstance(item, dict)`, use `cast(Dict[str, Any], item)`.
 - **Tests**: run a single file to isolate: `uv run --extra dev pytest -c tests/pytest.ini tests/test_foo.py`.
+- **`test_js_parses[…]`**: that `assets/web` file is not valid JavaScript. The assertion message carries `node --check`'s stderr, which names the line. Skipped entirely where `node` is absent.
+
+`/check` covers syntax but never runs a browser. After frontend changes also run [/ui-check](../ui-check/SKILL.md), which boots the pages headless and screenshots them.

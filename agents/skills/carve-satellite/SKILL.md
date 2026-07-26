@@ -30,11 +30,11 @@ These are the fields that had to stop being bare cross-file `var` reads during p
 
 ## Verify
 
-1. `node --check` each touched `.js` (catches syntax only).
+1. **Syntax** — no longer a manual step: `tests/test_frontend_syntax.py` runs `node --check` over every `assets/web/*.js` as part of `/check`.
 2. **Run the static wiring guard.** It fails on any bare cross-file call with no delegator/import:
    `uv run --extra dev pytest -c tests/pytest.ini tests/test_frontend_satellite_wiring.py`
 3. Run `/check`.
-4. Ask the human to load the page in their browser and confirm init completes and the carved feature works (per the "no heavy software" rule, do not pull in headless Chromium).
+4. **Run [/ui-check](../ui-check/SKILL.md).** This is the direct automated answer to this skill's whole failure mode: a bare cross-file reference throws a `ReferenceError` on page boot, which the guard in step 2 only approximates with regexes and `node --check` cannot see at all. Load the carved page, confirm it passes, and `Read` its screenshot. Ask the human only about interaction feel and drag behaviour.
 
 ## Reference
 
