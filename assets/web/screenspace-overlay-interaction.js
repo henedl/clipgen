@@ -53,6 +53,7 @@
   // (screenspace-color.js) load AFTER this file — reach them late-bound.
   function renderOverlay() { return SS.renderOverlay && SS.renderOverlay.apply(null, arguments); }
   function setTargetColor(h, s, v) { return SS.setTargetColor && SS.setTargetColor(h, s, v); }
+  function updateColorSampleBtnLabel() { return SS.updateColorSampleBtnLabel && SS.updateColorSampleBtnLabel(); }
 
   // Overlay-rect cache + render RAF, moved from the hub (this satellite owns
   // ~every read/write). The hub keeps an invalidateOverlayRect delegator for its
@@ -1175,6 +1176,7 @@
       // stash-all). Otherwise a stale region_ref survives and reaches the
       // preview / calibrate endpoints, which 400 ("Region '<name>' not found").
       renderRunRegionPicker();
+      updateColorSampleBtnLabel();
       return;
     }
     var newPrev = {};
@@ -1233,6 +1235,7 @@
     });
     _prevRegionNames = newPrev;
     renderRunRegionPicker();
+    updateColorSampleBtnLabel();
     updateRegionChipsOverflow();
     _updateMinAreaReadout(""); // region change → refresh color presence pixel estimate
     refreshModelView({ debounce: true });

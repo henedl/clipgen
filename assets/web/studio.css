@@ -2767,15 +2767,6 @@ html[data-theme="dark"] .log-panel {
   border-color: var(--accent);
 }
 
-.intake-filter-new-label {
-  font-size: var(--text-xs);
-  color: var(--fg-muted);
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  cursor: pointer;
-}
-
 /* Intake source badge on queue cards */
 .queue-card-source-badge {
   position: absolute;

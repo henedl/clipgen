@@ -130,18 +130,11 @@
   }
 
   // Events fed into the intake clustering surface. Navigational (boundary)
-  // events are orientation scaffolding, not clip candidates — hidden by
-  // default so they don't flood the curation queue. state.intakeEvents still
-  // holds ALL events (Metadata's boundary count reads from it).
+  // events are orientation scaffolding, not clip candidates, so they never
+  // reach the curation queue. state.intakeEvents still holds ALL events
+  // (Metadata's boundary count reads from it).
   function intakeClusterSource() {
-    if (state.intakeShowNavigational) return state.intakeEvents;
     return state.intakeEvents.filter(function (ev) { return !ev.navigational; });
-  }
-
-  function reclusterIntake() {
-    var threshold = parseInt((qs("#intakeClusterThreshold") || {}).value, 10) || 10;
-    state.intakeClusters = clusterIntakeEvents(intakeClusterSource(), threshold);
-    renderIntake(false);
   }
 
   // Apply the events slice from a Screenspace intake poll. Dirty-checks against
@@ -367,24 +360,7 @@
       }
       return null;
     },
-    extraControl: function (cfg) {
-      var newToggle = qs("#intakeFilterNew");
-      if (newToggle) {
-        newToggle.addEventListener("change", function () {
-          state.intakeFilterNew = this.checked;
-          cfg.rerender();
-        });
-      }
-      var navToggle = qs("#intakeShowNavigational");
-      if (navToggle) {
-        navToggle.addEventListener("change", function () {
-          state.intakeShowNavigational = this.checked;
-          // Navigational events change the clustering input, so re-cluster
-          // rather than just re-render the existing clusters.
-          reclusterIntake();
-        });
-      }
-    },
+    extraControl: function () {},
   };
   var TR_INTAKE = {
     cardsSel: "#trIntakeCards",
@@ -662,22 +638,14 @@
     var clusters = state.intakeClusters;
     var text = state.intakeFilterText.toLowerCase();
     var det = state.intakeFilterDetector;
-    var onlyNew = state.intakeFilterNew;
     var parts = state.intakeFilterParticipants;
-    if (!text && !det && !onlyNew && !parts.length) return clusters;
+    if (!text && !det && !parts.length) return clusters;
     return clusters.filter(function (c) {
       if (parts.length && parts.indexOf(c.participant) === -1) return false;
       if (det && c.detector !== det) return false;
       if (text && (c.event_type || "").toLowerCase().indexOf(text) === -1
           && (c.region || "").toLowerCase().indexOf(text) === -1
           && (c.participant || "").toLowerCase().indexOf(text) === -1) return false;
-      if (onlyNew) {
-        var hasNew = false;
-        for (var i = 0; i < c.events.length; i++) {
-          if (state.intakeSeenIds[c.events[i].id] === "new") { hasNew = true; break; }
-        }
-        if (!hasNew) return false;
-      }
       return true;
     });
   }
@@ -776,7 +744,7 @@
       });
     }
 
-    // Per-type extra control (SS "New only" / TR "Show all")
+    // Per-type extra control (TR "Show all"; SS and CO have none)
     cfg.extraControl(cfg);
   }
 
@@ -1081,16 +1049,68 @@
     intakeToggleItem(state.reelQueue, composerCutToItem(cut), renderReelQueue);
   }
 
+  // The four kinds of item the Composer feeds into intake: its own in/out cut
+  // pairs, plus the non-destructive trims of each read-only marker lane. Order
+  // here is the pill order.
+  var CO_INTAKE_TYPES = [
+    { key: "cut", label: "Cuts", color: "var(--color-accent)" },
+    { key: "transcript", label: "Transcript edit", color: "var(--stream-transcript)" },
+    { key: "screenspace", label: "Screenspace edit", color: "var(--stream-screenspace)" },
+    { key: "sheet", label: "Sheet edit", color: "var(--stream-sheet)" },
+  ];
+
+  // Which lane a trim came from. Named cutType, not source: the queue items
+  // composerCutToItem() builds already carry source "composer". The key prefix
+  // is load-bearing rather than the stored `source`, because trims written
+  // before trims carried metadata have source "".
+  function composerTrimType(key, stored) {
+    if (key.indexOf("sheet:") === 0) return "sheet";
+    if (key.indexOf("screenspace:") === 0) return "screenspace";
+    if (key.indexOf("transcript-mark:") === 0) return "transcript";
+    return stored || "";
+  }
+
   function filteredComposerIntakeCuts() {
     var items = state.coIntakeItems;
     var parts = state.coIntakeFilterParticipants;
+    var types = state.coIntakeFilterTypes;
     var text = state.coIntakeFilterText.toLowerCase();
-    if (!parts.length && !text) return items;
+    if (!parts.length && !types.length && !text) return items;
     return items.filter(function (c) {
       if (parts.length && parts.indexOf(c.participant) === -1) return false;
+      if (types.length && types.indexOf(c.cutType) === -1) return false;
       if (text && (c.label || "").toLowerCase().indexOf(text) === -1
           && (c.participant || "").toLowerCase().indexOf(text) === -1) return false;
       return true;
+    });
+  }
+
+  // Type filter chips — multi-select, and all four always render (with a 0
+  // count) so the row reads as a legend even on an empty panel.
+  function buildCoIntakeTypePills() {
+    var container = qs("#coIntakeTypePills");
+    if (!container) return;
+    var counts = {};
+    state.coIntakeItems.forEach(function (c) {
+      if (c.cutType) counts[c.cutType] = (counts[c.cutType] || 0) + 1;
+    });
+    container.innerHTML = "";
+    CO_INTAKE_TYPES.forEach(function (type) {
+      var chip = ClipgenPrimitives.createFilterChip({
+        label: type.label,
+        active: state.coIntakeFilterTypes.indexOf(type.key) >= 0,
+        count: counts[type.key] || 0,
+        color: type.color,
+        onClick: function () {
+          var arr = state.coIntakeFilterTypes.slice();
+          var idx = arr.indexOf(type.key);
+          if (idx >= 0) arr.splice(idx, 1);
+          else arr.push(type.key);
+          state.coIntakeFilterTypes = arr;
+          renderComposerIntake();
+        },
+      });
+      container.appendChild(chip);
     });
   }
 
@@ -1168,7 +1188,10 @@
         if (!data || !data.ok || !data.manifest) return false;
         var cuts = data.manifest.cuts || [];
         var trims = data.manifest.trims || {};
-        var items = cuts.slice();
+        var items = cuts.map(function (cut) {
+          cut.cutType = "cut";
+          return cut;
+        });
         // Keys that actually produce a card below — the asterisk badges on
         // sheet/SS/TR/queue cards gate on this so a deep-link never lands on
         // an empty panel.
@@ -1196,10 +1219,11 @@
             end: t.end,
             label: label,
             isTrim: true,
+            cutType: composerTrimType(key, t.source),
           });
         });
         var fp = JSON.stringify(items.map(function (c) {
-          return [c.id, c.participant, c.start, c.end, c.label, !!c.isTrim];
+          return [c.id, c.participant, c.start, c.end, c.label, !!c.isTrim, c.cutType];
         }));
         if (fp === state._coIntakeFp) return false;
         state._coIntakeFp = fp;
@@ -1235,6 +1259,7 @@
     if (idx === -1) {
       state.coIntakeFilterText = "";
       state.coIntakeFilterParticipants = [];
+      state.coIntakeFilterTypes = [];
       var searchEl = qs("#coIntakeFilterSearch");
       if (searchEl) searchEl.value = "";
       renderComposerIntake();
@@ -1269,6 +1294,9 @@
     if (addAllBtn) addAllBtn.disabled = filtered.length === 0;
     if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
 
+    // Both pill rows build before the empty-panel bail so the type legend and
+    // its counts stay visible when nothing matches.
+    buildCoIntakeTypePills();
     buildIntakeParticipantPills(CO_INTAKE);
     buildIntakeDensityTimeline(CO_INTAKE, filtered);
 

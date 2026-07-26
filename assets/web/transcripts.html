@@ -29,6 +29,11 @@
           <span id="searchCount" class="search-count"></span>
           <div id="searchResults" class="hidden"></div>
         </div>
+        <!-- Sibling of #headerSearch, not a child: nesting it would widen the
+             absolutely-positioned #searchResults dropdown, interleave with the
+             Mark All button search injects, and make the outside-click handler
+             treat a Corrections click as "inside" so results stayed open. -->
+        <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
       </div>
       <div class="subheader-actions">
         <span id="trStatusIndicator" class="status-indicator" tabindex="0" role="status" aria-label="Transcription status"></span>
@@ -39,7 +44,6 @@
                 aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">
           <span class="hk-help-icon" aria-hidden="true"></span>
         </button>
-        <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
       </div>
     </div>
     <div id="trPillBar">

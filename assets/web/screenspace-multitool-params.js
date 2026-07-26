@@ -31,6 +31,7 @@
     renderWorkflowParams = SS.renderWorkflowParams,
     updateRunButton = SS.updateRunButton,
     findTask = SS.findTask,
+    refTimeChip = SS.refTimeChip,
     refreshCalibration = SS.refreshCalibration;
 
   // ---- Multitool step list (drag reorder + drop-to-import from task queue) ----
@@ -444,18 +445,28 @@
     r.appendChild(el("span", "param-label", label));
     var c = el("div", "param-control");
     var capBtn = el("button", "btn btn-small", "Capture Frame");
-    var tsLabel = el("span", "param-value", "\u2014");
-    tsLabel.id = tsLabelId;
-    if (state.multitoolSteps[idx]._refTs !== undefined) {
-      tsLabel.textContent = formatTime(state.multitoolSteps[idx]._refTs, { decimals: 1 });
+    // Swapped wholesale on capture: an uncaptured step has no frame to seek to,
+    // so it renders as a bare em dash without the jump affordance.
+    var cell = el("span", "mt-ref-cell");
+    function renderCell() {
+      cell.innerHTML = "";
+      var ts = state.multitoolSteps[idx]._refTs;
+      if (ts === undefined) {
+        var placeholder = el("span", "param-value", "\u2014");
+        placeholder.id = tsLabelId;
+        cell.appendChild(placeholder);
+        return;
+      }
+      cell.appendChild(refTimeChip(ts, tsLabelId));
     }
+    renderCell();
     capBtn.addEventListener("click", function () {
       state.multitoolSteps[idx]._refTs = state.currentTimestamp;
-      tsLabel.textContent = formatTime(state.currentTimestamp, { decimals: 1 });
+      renderCell();
       refreshCalibration({ debounce: true });
     });
     c.appendChild(capBtn);
-    c.appendChild(tsLabel);
+    c.appendChild(cell);
     r.appendChild(c);
     body.appendChild(r);
   }

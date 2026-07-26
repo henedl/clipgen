@@ -733,6 +733,9 @@
       if (hasIn || hasOut) {
         state.inMarker = hasIn ? params.start_seconds : null;
         state.outMarker = hasOut ? params.end_seconds : null;
+        // Markers persist per participant, so a task-restored range has to be
+        // written through too or a page nav would revert to the previous pair.
+        if (SS.persistMarkers) SS.persistMarkers();
         updateMarkerInfo();
         renderTimeline();
       }
