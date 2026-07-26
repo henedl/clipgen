@@ -667,8 +667,9 @@ class WorkflowRunner:
             self._last_notify = now
             try:
                 self.on_update()
-            except Exception:
-                pass
+            except Exception as exc:
+                # A broken progress listener must never abort the run itself.
+                utils.verbose_print(f"workflow progress notify failed: {exc}")
 
     def _make_progress(self, node_id: str) -> Callable[[float], None]:
         def _on_progress(fraction: float) -> None:

@@ -129,11 +129,15 @@ def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
     listing whose second column is the encoder/filter name.
     """
     try:
+        # check=False throughout this module: every ffmpeg/ffprobe call inspects
+        # returncode itself and turns a failure into a warning or a None return.
+        # check=True would raise past that handling and lose the diagnostics.
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", listing_arg],
             capture_output=True,
             text=True,
             timeout=10,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -281,7 +285,9 @@ def run_ffmpeg_process(
                 return subprocess.CompletedProcess(
                     ffmpeg_command, proc.returncode, out, err
                 )
-        return subprocess.run(ffmpeg_command, encoding="utf-8", capture_output=True)
+        return subprocess.run(
+            ffmpeg_command, encoding="utf-8", capture_output=True, check=False
+        )
     except FileNotFoundError:
         utils.error_print(
             "ffmpeg is not installed or not found in system PATH.",
@@ -360,8 +366,7 @@ def _run_ffmpeg_with_progress(
         # Read until EOF; without this the stderr pipe can fill its 64 KB
         # OS buffer and deadlock ffmpeg while we're blocked on stdout.
         assert proc.stderr is not None
-        for chunk in proc.stderr:
-            stderr_chunks.append(chunk)
+        stderr_chunks.extend(proc.stderr)
 
     stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
     stderr_thread.start()
@@ -906,7 +911,7 @@ def extract_thumbnail_bytes(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
 
@@ -980,7 +985,7 @@ def extract_sprite_sheet_bytes(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=20)
+        result = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
 
@@ -1035,7 +1040,7 @@ def _extract_sprite_sheet_seek(
             "pipe:1",
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, timeout=15)
+            result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
         except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
             return None
         if result.returncode != 0 or not result.stdout:
@@ -1134,7 +1139,7 @@ def extract_audio_segment_bytes(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=20)
+        result = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
         if result.returncode != 0:
             return None
         data = Path(tmp_path).read_bytes()
@@ -1846,6 +1851,7 @@ def extract_frame_at_timestamp(
             cmd,
             capture_output=True,
             timeout=10,
+            check=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
@@ -1943,9 +1949,12 @@ def enforce_filesize_limit(
     artifact after any titlecard wrap or concat — never to an intermediate cut
     that will be re-encoded downstream (see the note in :func:`run_ffmpeg`).
     """
-    if config.MAX_FILESIZE_MB and config.MAX_FILESIZE_MB > 0:
-        if not compress_to_size(path, config.MAX_FILESIZE_MB, cancel_flag=cancel_flag):
-            utils.warning_print(f"Could not compress '{path}' to target size")
+    if (
+        config.MAX_FILESIZE_MB
+        and config.MAX_FILESIZE_MB > 0
+        and not compress_to_size(path, config.MAX_FILESIZE_MB, cancel_flag=cancel_flag)
+    ):
+        utils.warning_print(f"Could not compress '{path}' to target size")
 
 
 def compress_to_size(

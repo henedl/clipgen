@@ -192,7 +192,6 @@ def _resolve_one_source(
             _best_ratio, best_size, best_path = candidates[0]
             size_gb = best_size / 1_000_000_000
             # Pause progress bar so the prompt is visible and input is rendered
-            global _active_progress
             paused = False
             if _active_progress is not None:
                 _active_progress.stop()
@@ -1106,7 +1105,7 @@ def process_clips(
     skipped_no_times = 0
     skipped_no_video = 0
 
-    global _active_progress, _active_secondary_task
+    global _active_progress
     progress = utils.create_progress_bar()
     if progress:
         _active_progress = progress

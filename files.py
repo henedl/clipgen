@@ -301,7 +301,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
         config.debug_ic(clip["times"])
 
     # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
-    if not clip["times"] and utils.has_non_ignored_timestamp_content(
+    if not clip["times"] and utils.has_non_ignored_timestamp_content(  # noqa: SIM102 - the comment below belongs to the inner branch
         cleaned_cell_value
     ):
         # Only show this detailed per-cell warning at verbose verbosity.

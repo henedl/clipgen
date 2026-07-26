@@ -600,7 +600,9 @@ def _make_clip_record(
             str(ctx.sheet_data[participant_row][col_idx] or "")
         )
     timestamp_baseline = ""
-    if ctx.baseline_row_idx is not None:
+    # Kept nested (not collapsed) to match the severity_cell guard below: row
+    # presence and row/col bounds are separate checks in this layer.
+    if ctx.baseline_row_idx is not None:  # noqa: SIM102
         if 0 <= ctx.baseline_row_idx < len(ctx.sheet_data) and col_idx < len(
             ctx.sheet_data[ctx.baseline_row_idx]
         ):
@@ -625,7 +627,7 @@ def _make_clip_record(
     }
     if timestamp_baseline:
         result["timestamp_baseline"] = timestamp_baseline
-    if ctx.filename_row_idx is not None:
+    if ctx.filename_row_idx is not None:  # noqa: SIM102 - see baseline_row_idx above
         if 0 <= ctx.filename_row_idx < len(ctx.sheet_data) and col_idx < len(
             ctx.sheet_data[ctx.filename_row_idx]
         ):

@@ -366,7 +366,10 @@ def resolve_region_request(
         raise ValueError(f"Region '{region_name}' not found")
 
     if not isinstance(region_ref, dict):
-        raise ValueError("region_ref must be an object")
+        # ValueError, not TypeError: this resolver's contract is "ValueError means
+        # bad request", and every caller (cli.py, screenspace_server's
+        # _resolve_region_request) catches ValueError to render a hint or a 400.
+        raise ValueError("region_ref must be an object")  # noqa: TRY004
 
     source = str(region_ref.get("source", "")).strip()
 

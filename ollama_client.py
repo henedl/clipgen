@@ -340,8 +340,8 @@ def _do_generate(
         if resp is not None:
             try:
                 resp.close()
-            except Exception:
-                pass
+            except OSError:
+                pass  # already-dead socket; nothing to recover
         if watcher is not None:
             watcher.join(timeout=0.5)
         if deadline_exceeded:
@@ -476,8 +476,8 @@ def _do_pull(model: str, on_progress: Callable[[dict[str, Any]], None] | None) -
         if resp is not None:
             try:
                 resp.close()
-            except Exception:
-                pass
+            except OSError:
+                pass  # already-dead socket; nothing to recover
     return succeeded
 
 

@@ -596,23 +596,28 @@ def _embed_subtitle_for_participant(
         str(output_dir / desired_name), file_format=src.suffix
     )
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".srt", delete=False, encoding="utf-8"
-    )
+    tmp_path = ""
     try:
-        tmp.write(srt_text)
-        tmp.close()
+        # delete=False + the explicit unlink below: ffmpeg reopens the sidecar by
+        # path once we've closed it, which Windows won't allow while the
+        # NamedTemporaryFile handle is still open.
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".srt", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp_path = tmp.name
+            tmp.write(srt_text)
         ok = video.mux_subtitles(
             str(video_path),
-            tmp.name,
+            tmp_path,
             output_path,
             track_language=language or "und",
         )
     finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     if not ok:
         return {

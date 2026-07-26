@@ -54,9 +54,11 @@ def _js_files():
 def test_document_keydown_allowlist():
     offenders = []
     for path in _js_files():
-        if _DOC_KEYDOWN_RE.search(path.read_text(encoding="utf-8")):
-            if path.name not in KEYDOWN_ALLOWLIST:
-                offenders.append(path.name)
+        if (
+            _DOC_KEYDOWN_RE.search(path.read_text(encoding="utf-8"))
+            and path.name not in KEYDOWN_ALLOWLIST
+        ):
+            offenders.append(path.name)
     assert not offenders, (
         f"Files attach document-level keydown listeners outside the allowlist: "
         f"{offenders}. Register actions via ClipgenHotkeys.register / "

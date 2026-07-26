@@ -321,10 +321,11 @@ def _score_numbers_readings(
         cleaned = text.replace(",", "")
         for match in _NUMBERS_RE.findall(cleaned):
             num = float(match)
-            if _number_matches(num, operator, target_value, range_min, range_max):
-                if matched_number is None or conf > matched_conf:
-                    matched_number = num
-                    matched_conf = conf
+            if _number_matches(num, operator, target_value, range_min, range_max) and (
+                matched_number is None or conf > matched_conf
+            ):
+                matched_number = num
+                matched_conf = conf
     detail: dict[str, Any] = {"confidence": round(matched_conf, 4)}
     if matched_number is not None:
         detail["number_found"] = matched_number

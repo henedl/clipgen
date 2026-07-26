@@ -3066,7 +3066,7 @@ def _init_studio_state(worksheet: Any) -> None:
     the HTML, but spreadsheet-dependent routes report ``sheet_loaded: false``
     until a sheet is opened via ``POST /api/spreadsheets/open``.
     """
-    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    global _worksheet, _generated_artifacts, _generated_reels
 
     _load_studio_settings()
     _worksheet = worksheet
@@ -3123,8 +3123,8 @@ def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
                 "label": Path(path).name,
                 "worksheet": getattr(worksheet, "title", ""),
             }
-    except Exception:
-        pass
+    except ImportError:
+        pass  # no excel_io in this build; fall through to the gspread branch
     # gspread Worksheet (or anything quacking like one): use the parent
     # spreadsheet title as both the identifier and the label.
     parent = getattr(worksheet, "spreadsheet", None)
@@ -3161,7 +3161,7 @@ def _swap_worksheet(new_worksheet: Any) -> None:
     import screenspace_server
     import transcripts_server
 
-    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    global _worksheet, _generated_artifacts, _generated_reels
     prev_worksheet = _worksheet
     prev_sheet_context = _sheet_context
     prev_artifacts = _generated_artifacts
@@ -3191,14 +3191,14 @@ def _swap_worksheet(new_worksheet: Any) -> None:
                 sheet_context=_sheet_context,
                 participant_list=_resolve_participants(),
             )
-        except Exception:
+        except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
         try:
             transcripts_server._init_transcripts_state(
                 sheet_context=_sheet_context,
                 participant_list=_resolve_participants(),
             )
-        except Exception:
+        except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
         raise
 

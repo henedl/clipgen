@@ -2687,7 +2687,9 @@ def _validate_scene_references(
     validated_refs = []
     for i, ref_raw in enumerate(scene_refs):
         if not isinstance(ref_raw, dict):
-            raise ValueError(f"{context}scene_references[{i}] must be an object")
+            # ValueError, not TypeError: this validator's contract is that any bad
+            # payload raises ValueError, which the calling route turns into a 400.
+            raise ValueError(f"{context}scene_references[{i}] must be an object")  # noqa: TRY004
         ref_data = cast(dict[str, Any], ref_raw)
         name = str(ref_data.get("name", "")).strip()
         if not name:

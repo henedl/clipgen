@@ -2303,9 +2303,8 @@ def _filter_transcript_segments(
             attached = marks_by_segment.get(seg_id, [])
             if mark_categories and not attached:
                 continue
-            if needle is not None:
-                if needle not in str(seg.get("text", "")).lower():
-                    continue
+            if needle is not None and needle not in str(seg.get("text", "")).lower():
+                continue
             rows.append((pid, seg, attached))
     return rows
 
@@ -3703,7 +3702,7 @@ def main() -> None:
     gspread_client = None
     if not _is_excel_spreadsheet_arg(getattr(args, "spreadsheet", None)):
         gspread_client = authenticate_google()
-        if gspread_client is None:
+        if gspread_client is None:  # noqa: SIM102 - the comment below belongs to the inner branch
             # Auth failed. CLI mode or an explicit -s argument can't recover
             # interactively — fall back to a sole local .xlsx when possible,
             # else point the user at the Excel option and exit.
