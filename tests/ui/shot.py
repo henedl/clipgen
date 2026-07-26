@@ -32,7 +32,6 @@ import _ui_fixtures
 import _ui_pages
 import _ui_server
 import config
-import excel_io
 import start_settings
 import utils
 
@@ -120,7 +119,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     utils.NO_INPUT_MODE = True
 
-    workbook = excel_io.open_excel_workbook(str(_ui_fixtures.workbook_path()))
+    workbook, reason = _ui_fixtures.open_workbook()
+    if reason:
+        print(reason, file=sys.stderr)
+        return 1
+
     log = _ui_pages.PageLog()
     result: Any = None
     eval_error: str | None = None

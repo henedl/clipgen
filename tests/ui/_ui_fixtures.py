@@ -71,6 +71,35 @@ def workbook_path() -> Path:
     return INPUT_DIR / f"{STUDY}.xlsx"
 
 
+def open_workbook() -> tuple[Any, str]:
+    """Open the generated workbook. Returns ``(workbook, "")`` or ``(None, reason)``.
+
+    Both entry points must check this *before* handing the workbook to
+    ``build_combined_app``: ``server._init_studio_state`` calls ``sys.exit(1)``
+    when ``build_sheet_context`` returns ``None`` (server.py:3077), which would
+    abort the caller with a bare ``SystemExit`` and an error naming Studio rather
+    than the generator that actually drifted.
+
+    A reason string rather than :class:`UiUnavailable`, deliberately: that
+    exception means "prerequisite missing, skip", and a drifted fixture is a bug
+    to fail on, not a reason to quietly skip. The caller picks the severity.
+    """
+    import excel_io
+    import spreadsheet
+
+    workbook = excel_io.open_excel_workbook(str(workbook_path()))
+    if workbook is None:
+        return None, f"fixture workbook failed to open: {workbook_path()}"
+    if spreadsheet.build_sheet_context(workbook) is None:
+        return None, (
+            "the generated fixture workbook no longer satisfies "
+            "spreadsheet.build_sheet_context — the layout in "
+            "tests/ui/_ui_fixtures.py._make_workbook has drifted from "
+            "spreadsheet.py's header contract"
+        )
+    return workbook, ""
+
+
 def video_path(participant: str) -> Path:
     """Source video path for a participant.
 

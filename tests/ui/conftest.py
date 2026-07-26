@@ -24,8 +24,6 @@ import _ui_browser
 import _ui_fixtures
 import _ui_server
 import config
-import excel_io
-import spreadsheet
 import start_settings
 import utils
 
@@ -57,17 +55,12 @@ def ui_env() -> Iterator[None]:
 
 @pytest.fixture(scope="session")
 def live_server(ui_env: None) -> Iterator[_ui_server.LiveServer]:
-    workbook = excel_io.open_excel_workbook(str(_ui_fixtures.workbook_path()))
-    assert workbook is not None, "fixture workbook failed to open"
-    # server._init_studio_state calls sys.exit(1) when build_sheet_context
-    # returns None, which would abort the whole run with a bare SystemExit.
-    # Fail readably instead if the generated layout ever drifts from
-    # spreadsheet.py's contract.
-    if spreadsheet.build_sheet_context(workbook) is None:
-        pytest.fail(
-            "generated fixture workbook no longer satisfies "
-            "spreadsheet.build_sheet_context — see tests/ui/_ui_fixtures.py"
-        )
+    # Validated before the app is built: _init_studio_state would otherwise
+    # sys.exit(1) and abort the run with a bare SystemExit. A drifted fixture is
+    # a bug in our own generator, so this fails rather than skips.
+    workbook, reason = _ui_fixtures.open_workbook()
+    if reason:
+        pytest.fail(reason)
 
     live = _ui_server.start(workbook)
     try:
