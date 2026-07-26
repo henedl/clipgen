@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Titlecard and endcard generation for clipgen.
 
 Prepends a short title card (first frame of source video + text overlay) and optionally
@@ -105,7 +104,7 @@ def _build_drawtext_filter(text: str) -> str:
         safe_text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
     )
     return (
-        "drawtext=text='{}'"
+        f"drawtext=text='{safe_text}'"
         # The text is static — disable drawtext's %{...} expansion so a
         # description containing "%" (which sanitize_filename keeps) renders
         # literally instead of erroring the encode.
@@ -116,7 +115,7 @@ def _build_drawtext_filter(text: str) -> str:
         ":x=(w-text_w)/2"
         ":y=(h-text_h)/2"
         ":box=1:boxcolor=black@0.4:boxborderw=10"
-    ).format(safe_text)
+    )
 
 
 def _ffmpeg_color(value: str) -> str:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Video processing operations for clipgen."""
 
 import concurrent.futures

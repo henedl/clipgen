@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Combined Flask server for clipgen Studio, Screenspace, Transcripts, and Workflows.
 
 Entry point: start_combined_server(worksheet, port, default_page) registers
@@ -60,11 +59,12 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterator
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from flask import (
     Blueprint,
@@ -95,6 +95,7 @@ from server_utils import (
     parse_clip_window,
     parse_number_arg,
 )
+from datetime import UTC
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -280,7 +281,11 @@ def _try_claim_busy(slot: str) -> bool:
     Returns True on success (caller must call ``_release_busy`` when done) or
     False if another request is already holding the slot.
     """
-    global _generate_in_progress, _reel_in_progress, _timeline_viewer_in_progress, _gallery_in_progress  # noqa: PLW0603
+    global \
+        _generate_in_progress, \
+        _reel_in_progress, \
+        _timeline_viewer_in_progress, \
+        _gallery_in_progress
     with _busy_lock:
         if slot == "generate":
             if _generate_in_progress:
@@ -373,7 +378,11 @@ def _release_busy(slot: str) -> None:
 
     Valid slots: ``'generate'``, ``'reel'``, ``'timeline_viewer'``, ``'gallery'``.
     """
-    global _generate_in_progress, _reel_in_progress, _timeline_viewer_in_progress, _gallery_in_progress  # noqa: PLW0603
+    global \
+        _generate_in_progress, \
+        _reel_in_progress, \
+        _timeline_viewer_in_progress, \
+        _gallery_in_progress
     with _busy_lock:
         if slot == "generate":
             _generate_in_progress = False
@@ -453,7 +462,7 @@ def _increment_intake_done(n: int = 1) -> None:
 
 def _mark_intake_active(active: bool) -> None:
     """Increment/decrement the in-flight intake-stream counter."""
-    global _intake_active  # noqa: PLW0603
+    global _intake_active
     with _busy_lock:
         _intake_active += 1 if active else -1
 
@@ -2176,7 +2185,7 @@ def api_regenerate() -> FlaskResponse:
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
     """Shared create/update/delete logic for stash endpoints."""
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
@@ -2201,7 +2210,7 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
                 "items": items,
                 "count": len(items),
                 "totalDuration": total_duration,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "createdAt": datetime.now(UTC).isoformat(),
             }
             stashes.append(stash)
             save_fn(stashes)

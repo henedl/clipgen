@@ -321,7 +321,7 @@ class TestTranscribeVideoWhisperKwargs:
             language = "en"
 
         class FakeModel:
-            def transcribe(self, path: str, **kwargs):  # noqa: ARG002
+            def transcribe(self, path: str, **kwargs):
                 captured.update(kwargs)
                 return iter([FakeSeg()]), FakeInfo()
 
@@ -357,7 +357,7 @@ class TestTranscribeVideoWhisperKwargs:
 
         monkeypatch.setattr(video_mod, "probe_video_properties", _fake_probe)
 
-        def _fail_load(model_name=None):  # noqa: ARG001
+        def _fail_load(model_name=None):
             raise AssertionError("_load_model must not be called when audio is absent")
 
         monkeypatch.setattr(transcripts, "_load_model", _fail_load)
@@ -894,7 +894,7 @@ class TestTranscriptWorker:
                 yield FakeSeg(i)
 
         class FakeModel:
-            def transcribe(self, path, **kwargs):  # noqa: ARG002
+            def transcribe(self, path, **kwargs):
                 return fake_segments(), SimpleNamespace(language="en")
 
         monkeypatch.setattr(transcripts, "_load_model", lambda *_a, **_k: FakeModel())

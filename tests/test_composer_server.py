@@ -13,10 +13,10 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
-import composer_server  # noqa: E402
-import config  # noqa: E402
-import utils  # noqa: E402
-import video  # noqa: E402
+import composer_server
+import config
+import utils
+import video
 
 
 @pytest.fixture

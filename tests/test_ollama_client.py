@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests for ollama_client transport layer.
 
 Agent-specific behavior (summarization, citation linking) lives in
@@ -343,7 +342,7 @@ class _StubOllamaHandler(http.server.BaseHTTPRequestHandler):
                      readline() until shut down.
     """
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body_bytes = self.rfile.read(length)
         body = json.loads(body_bytes.decode("utf-8"))

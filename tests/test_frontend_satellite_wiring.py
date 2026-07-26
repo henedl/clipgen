@@ -148,7 +148,7 @@ def _strip(src: str) -> str:
     a DOTALL match would let one stray quote/regex literal eat real definitions
     across the whole file.
     """
-    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.S)
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.DOTALL)
     src = re.sub(r"(?<!:)//[^\n]*", " ", src)  # keep http:// inside strings intact
     src = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', src)
     src = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", src)
@@ -195,7 +195,9 @@ def _local_defs(src: str) -> set[str]:
 def _top_level_defs(src: str) -> set[str]:
     """File-scope (column-0) defs — the globals a non-IIFE script exposes."""
     return set(
-        re.findall(r"^(?:var|let|const|function)\s+([A-Za-z_$][\w$]*)", src, re.M)
+        re.findall(
+            r"^(?:var|let|const|function)\s+([A-Za-z_$][\w$]*)", src, re.MULTILINE
+        )
     )
 
 

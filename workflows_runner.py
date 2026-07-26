@@ -19,9 +19,10 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import utils
 from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
@@ -89,7 +90,7 @@ class WorkflowCycleError(ValueError):
 
 def _now_iso() -> str:
     """UTC ISO-8601 timestamp for run/node start+complete stamps."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[str]:

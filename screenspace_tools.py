@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace analysis tools (strategy registry) + per-frame dispatch.
 
 The ``AnalysisTool`` base class, one subclass per tool, the ``TOOLS`` registry,
@@ -10,8 +9,9 @@ keep the module graph acyclic.
 """
 
 import math
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, ClassVar
+from typing import Any, ClassVar
 
 import cv2
 import numpy as np

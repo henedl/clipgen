@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Clip processing pipeline for clipgen.
 
 Reusable functions for generating clips, reels, screenshots, GIFs, and
@@ -20,8 +19,9 @@ import hashlib
 import os
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import config
 import files
@@ -940,7 +940,7 @@ def _embed_transcript_on_artifacts(
             model=entry.get("model", ""),
         )
         transcript_version = entry.get("transcribed_at", "")
-    elif base_video in transcript_cache and transcript_cache[base_video]:
+    elif transcript_cache.get(base_video):
         full_transcript = transcript_cache[base_video]
 
     if not full_transcript:

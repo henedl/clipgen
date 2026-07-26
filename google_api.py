@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Google Sheets API integration for clipgen."""
 
 from __future__ import annotations

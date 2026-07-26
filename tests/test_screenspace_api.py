@@ -8,10 +8,10 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
-import config  # noqa: E402
-import screenspace  # noqa: E402
-import screenspace_preview  # noqa: E402
-import screenspace_server  # noqa: E402
+import config
+import screenspace
+import screenspace_preview
+import screenspace_server
 
 
 @pytest.fixture

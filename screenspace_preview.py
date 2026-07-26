@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Preprocessing preview generation for the Screenspace "Model view" pane.
 
 Given a frame (and optionally a prev_frame / reference_frame / template_image),
@@ -327,8 +326,7 @@ def _draw_flow_arrows(
             if m < min_mag:
                 continue
             samples.append((cx * coord_scale, cy * coord_scale, fx, fy, m))
-            if m > max_mag:
-                max_mag = m
+            max_mag = max(max_mag, m)
 
     if not samples or max_mag <= 0:
         return
@@ -346,7 +344,7 @@ def _overlay_flow(
     pixels: "np.ndarray",
     prev_frame: "np.ndarray | None",
     region: dict[str, Any] | None,
-    params: dict[str, Any],  # noqa: ARG001 — magnitude param affects threshold display only
+    params: dict[str, Any],  # magnitude param affects threshold display only
 ) -> "np.ndarray | None":
     if prev_frame is None:
         return None
@@ -891,7 +889,7 @@ def _preview_flow(
 def _preview_scene(
     frame: "np.ndarray",
     region: dict[str, Any] | None,
-    params: dict[str, Any],  # noqa: ARG001 — reserved for future scene-ref overlays
+    params: dict[str, Any],  # reserved for future scene-ref overlays
 ) -> "np.ndarray":
     pixels = _clip_region_pixels(frame, region)
     if pixels is None:

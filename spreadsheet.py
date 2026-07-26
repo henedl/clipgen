@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Spreadsheet data processing for clipgen.
 
 Expected spreadsheet layout (see README.md for a reference example):
@@ -40,8 +39,8 @@ Clip record (returned by generation functions):
 """
 
 import re
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, NamedTuple
 
 import config

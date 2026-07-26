@@ -21,9 +21,10 @@ module, before running graphs — this module alone is an unwired catalog.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, NotRequired, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 import config
 import utils

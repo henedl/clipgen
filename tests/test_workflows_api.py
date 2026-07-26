@@ -14,10 +14,10 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
-import config  # noqa: E402
-import utils  # noqa: E402
-import workflows  # noqa: E402
-import workflows_server  # noqa: E402
+import config
+import utils
+import workflows
+import workflows_server
 
 
 @pytest.fixture

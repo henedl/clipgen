@@ -95,7 +95,7 @@ def test_css_toggle_completeness_and_tokens():
     page stylesheet), sit at --z-overlay, and use no raw z-index."""
     css = PALETTE_CSS.read_text(encoding="utf-8")
     assert re.search(
-        r"^\.cmdp-overlay\.hidden \{\n  display: none !important;", css, re.M
+        r"^\.cmdp-overlay\.hidden \{\n  display: none !important;", css, re.MULTILINE
     )
     assert "z-index: var(--z-overlay);" in css
     assert not re.search(r"z-index: \d", css), "raw z-index in command-palette.css"
@@ -158,7 +158,7 @@ def test_cross_page_deep_links():
     utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
     assert "var clipgenHashTab = function () {" in utils_src
     tabs_block = src[src.index("var NAV_TABS") : src.index("var PARTICIPANT_PAGES")]
-    for dest in re.findall(r"^    (\w[\w-]*): \[", tabs_block, re.M):
+    for dest in re.findall(r"^    (\w[\w-]*): \[", tabs_block, re.MULTILINE):
         page_src = (_WEB / f"{dest}.js").read_text(encoding="utf-8")
         assert "clipgenHashTab()" in page_src, f"{dest}.js ignores #tab= deep links"
     pages_block = src[src.index("var PARTICIPANT_PAGES") : src.index("var providers")]

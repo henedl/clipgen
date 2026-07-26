@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Programmatic friction scorer for clipgen Transcripts.
 
 A cheap, deterministic first pass over transcript segments that flags moments of

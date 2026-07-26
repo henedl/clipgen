@@ -31,8 +31,9 @@ import math
 import queue
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from functools import wraps
-from typing import Any, Callable
+from typing import Any
 
 from flask import Response, jsonify, request
 
@@ -120,7 +121,7 @@ class MediaCache:
     """
 
     def __init__(self, max_entries: int) -> None:
-        self._store: "OrderedDict[tuple, bytes]" = OrderedDict()
+        self._store: OrderedDict[tuple, bytes] = OrderedDict()
         self._max = max_entries
         self._lock = threading.Lock()
         self._inflight: dict[tuple, threading.Lock] = {}
@@ -251,7 +252,7 @@ def make_sse_channel(
 ) -> tuple[
     Callable[..., None],
     Callable[..., Response],
-    list[tuple[Any, "queue.Queue[str]"]],
+    list[tuple[Any, queue.Queue[str]]],
 ]:
     """Build one SSE pub/sub channel; returns ``(notify, stream, clients)``.
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Guard: static element IDs the Transcripts page script toggles must exist.
 
 A missing element makes ``qs("#id")`` return ``null`` and the first

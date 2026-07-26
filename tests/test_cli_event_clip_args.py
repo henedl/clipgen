@@ -396,7 +396,6 @@ def test_run_ss_clips_smoke_dispatches_pipeline(monkeypatch):
     def fake_save(artifacts, **kw):
         saved["artifacts"] = artifacts
         saved["mode"] = kw.get("mode")
-        return None
 
     monkeypatch.setattr(viewer, "save_manifest", fake_save)
 
@@ -456,7 +455,6 @@ def test_run_transcript_clips_smoke_dispatches_pipeline(monkeypatch):
     def fake_save(artifacts, **kw):
         saved["artifacts"] = artifacts
         saved["mode"] = kw.get("mode")
-        return None
 
     monkeypatch.setattr(viewer, "save_manifest", fake_save)
 

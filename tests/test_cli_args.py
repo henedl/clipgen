@@ -483,7 +483,7 @@ def test_select_worksheet_url_skips_drive_listing(monkeypatch):
 def test_single_xlsx_fallback_path_requires_exactly_one(monkeypatch):
     import excel_io
 
-    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: [])
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", list)
     assert cli._single_xlsx_fallback_path("reason") is None
 
     monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["a.xlsx", "b.xlsx"])

@@ -560,7 +560,6 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
         regions, tasks, events, stashes=None, per_participant=None, pins=None
     ):
         saved_tasks.extend(tasks)
-        return None
 
     monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
 
@@ -671,7 +670,6 @@ def test_ss_task_attention_forces_full_frame(monkeypatch, capsys):
         regions, tasks, events, stashes=None, per_participant=None, pins=None
     ):
         saved_tasks.extend(tasks)
-        return None
 
     monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
     monkeypatch.setattr(screenspace, "ScreenspaceWorker", _FakeWorker)
@@ -746,7 +744,6 @@ def _install_ss_stubs(monkeypatch, fake_manifest):
         regions, tasks, events, stashes=None, per_participant=None, pins=None
     ):
         saved_tasks.extend(tasks)
-        return None
 
     monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
     return saved_tasks

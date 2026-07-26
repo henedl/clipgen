@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace image-analysis primitives (pure cv2/numpy).
 
 Region cropping/denormalization/resolution, HSV color math, frame-diff, SSIM,
@@ -10,7 +9,8 @@ buffer, static-frame skip). No file or ffmpeg I/O lives here.
 import functools
 import math
 import statistics
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import cv2
 
@@ -18,7 +18,7 @@ try:
     # cv2.data.haarcascades is a submodule attribute; ty needs the explicit
     # import. Absent on cv2 builds without the bundled cascade data (the face
     # channel feature-detects it and degrades to a zeros map).
-    import cv2.data  # noqa: F401
+    import cv2.data
 except ImportError:  # pragma: no cover - depends on the installed cv2 build
     pass
 import numpy as np

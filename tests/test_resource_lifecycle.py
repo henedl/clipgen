@@ -121,7 +121,7 @@ def test_module_level_caches_are_bounded_or_justified():
         if "OrderedDict" in rhs:
             # Require a companion cap constant, e.g. _FRAME_CACHE_MAX.
             cap = name.upper() + "_MAX"
-            if re.search(rf"^{cap}\s*=", src, re.M):
+            if re.search(rf"^{cap}\s*=", src, re.MULTILINE):
                 continue
             offenders.append(f"{mod}:{name} is an OrderedDict with no {cap}")
             continue

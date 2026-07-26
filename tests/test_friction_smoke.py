@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """End-to-end smoke test for the friction pipeline.
 
 Stub Whisper output (segments) flows through the programmatic scorer into the

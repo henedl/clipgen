@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Overview: per-participant feature matrix + Flask blueprint for /overview/.
 
 Serves the Overview frontend (assets/web/overview.html + the overview-*.js

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """CLI entry point and argument parsing for clipgen.
 
 Handles command-line argument parsing, CLI mode detection, setup,
@@ -12,9 +11,10 @@ import io
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, NamedTuple
+from typing import Any, NamedTuple
 
 import clipgen
 import config
@@ -1324,7 +1324,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
             "language": result["language"],
             "model": result["model"],
             "source_file": result["source_file"],
-            "transcribed_at": datetime.now(timezone.utc).isoformat(),
+            "transcribed_at": datetime.now(UTC).isoformat(),
         }
         transcribed += 1
 
@@ -2365,8 +2365,7 @@ def _build_clusters_from_ss_events(
             t_out = float(ev.get("time_out", t_in))
         except (TypeError, ValueError):
             continue
-        if t_out < t_in:
-            t_out = t_in
+        t_out = max(t_out, t_in)
         key = (
             ev.get("participant", ""),
             ev.get("source_video", ""),
@@ -2435,8 +2434,7 @@ def _build_clusters_from_transcript_segments(
             e = float(seg.get("end", s))
         except (TypeError, ValueError):
             continue
-        if e < s:
-            e = s
+        e = max(e, s)
         keyed.append((pid, (s, e), idx))
 
     clusters_raw = _cluster_groups(
@@ -2775,7 +2773,7 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
         return
 
     existing_by_seg = {m["segment_id"]: m for m in marks if m.get("segment_id")}
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     created = 0
     updated = 0
     for sid in seg_id_list:

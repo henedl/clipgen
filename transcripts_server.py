@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Transcripts Flask blueprint for clipgen.
 
 Registered at /transcripts/ by start_combined_server(). Works with or without a
@@ -46,7 +45,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -336,7 +335,7 @@ _corrections_version = 0
 
 def _bump_corrections_version() -> None:
     """Invalidate the corrected-segments cache (corrections or segments changed)."""
-    global _corrections_version  # noqa: PLW0603
+    global _corrections_version
     with _corrected_cache_lock:
         _corrections_version += 1
         _corrected_cache.clear()
@@ -445,7 +444,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
             "id": f"c_{uuid.uuid4().hex[:8]}",
             "from": original_text,
             "to": new_text,
-            "created": datetime.now(timezone.utc).isoformat(),
+            "created": datetime.now(UTC).isoformat(),
         }
         _manifest.setdefault("corrections", []).append(correction)
         _bump_corrections_version()  # new correction invalidates corrected cache
@@ -908,7 +907,7 @@ def api_corrections_add() -> FlaskResponse:
                 "id": f"c_{uuid.uuid4().hex[:8]}",
                 "from": from_text,
                 "to": to_text,
-                "created": datetime.now(timezone.utc).isoformat(),
+                "created": datetime.now(UTC).isoformat(),
             }
             corrections.append(correction)
 
@@ -1117,7 +1116,7 @@ def api_marks_add() -> FlaskResponse:
     category = data.get("category") or None
     label = data.get("label") or None
     severity = data.get("severity") or None
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     created = []
     with _manifest_lock:
@@ -1305,7 +1304,7 @@ def api_transcribe_warmup() -> FlaskResponse:
             size_mb=_whisper_model_size_mb(model),
         )
 
-    global _transcript_model_warming  # noqa: PLW0603
+    global _transcript_model_warming
 
     with _transcript_model_warming_lock:
         if _transcript_model_warming:
@@ -1315,7 +1314,7 @@ def api_transcribe_warmup() -> FlaskResponse:
         _transcript_model_warming = True
 
     def _run_warmup() -> None:
-        global _transcript_model_warming  # noqa: PLW0603
+        global _transcript_model_warming
         try:
             transcripts.warmup_transcription_model()
         finally:
@@ -1832,9 +1831,7 @@ class AgentOrchestrator:
                 return
             self._in_flight[agent_key].add(participant)
             self._cancel_events[agent_key][participant] = cancel_event
-            self._started_at[agent_key][participant] = datetime.now(
-                timezone.utc
-            ).timestamp()
+            self._started_at[agent_key][participant] = datetime.now(UTC).timestamp()
         with self._partial_lock:
             self._partial[agent_key][participant] = []
 
@@ -1946,7 +1943,7 @@ def _init_transcripts_state(
     Loads manifest, resolves participant video paths, and starts the
     background worker thread.
     """
-    global _manifest, _worker, _input_dir, _participants  # noqa: PLW0603
+    global _manifest, _worker, _input_dir, _participants
 
     _input_dir = str(utils.get_effective_input_dir())
     _manifest = transcripts.load_transcripts_manifest()

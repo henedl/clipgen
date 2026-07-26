@@ -60,8 +60,9 @@ test, patch the owning sibling module.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import config
 import utils
@@ -906,8 +907,7 @@ def _exec_interval_captures(
         float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
         or config.GALLERY_INTERVAL_SECONDS
     )
-    if interval < 1:
-        interval = 1
+    interval = max(interval, 1)
     fmt = (
         "gif" if str(params.get("output_format", "screen") or "") == "gif" else "screen"
     )

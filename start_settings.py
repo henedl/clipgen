@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Persistent first-run / Start overlay settings.
 
 Stores last-used input/output directories and last-used spreadsheet so the
@@ -17,7 +16,7 @@ Settings file location:
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -180,7 +179,7 @@ def record_project_session(
         "input": input_dir,
         "output": output_dir,
         "spreadsheet": spreadsheet if spreadsheet else None,
-        "last_opened": datetime.now(timezone.utc).isoformat(),
+        "last_opened": datetime.now(UTC).isoformat(),
     }
     settings["recent_projects"] = _prepend_dedup(
         settings.get("recent_projects", []),

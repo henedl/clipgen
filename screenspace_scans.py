@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace scan workflows (one per analysis tool).
 
 Each scan sweeps a video via the frame-extraction drivers and applies one
@@ -9,7 +8,8 @@ Imports primitives, OCR helpers, and frame extractors from sibling modules.
 """
 
 import subprocess
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -1037,7 +1037,7 @@ def scan_inactivity(
     vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    prev_hash: list["imagehash.ImageHash | None"] = [None]
+    prev_hash: list[imagehash.ImageHash | None] = [None]
     prev_skip_gray: list[np.ndarray | None] = [None]
     span_start: list[float | None] = [None]
     span_distances: list[list[int]] = [[]]
@@ -1382,7 +1382,7 @@ def scan_boundaries(
     boundary_opts.pop("phash_skip", None)
 
     results: list[dict[str, Any]] = []
-    prev_hash: list["imagehash.ImageHash | None"] = [None]
+    prev_hash: list[imagehash.ImageHash | None] = [None]
     last_boundary_ts: list[float | None] = [None]
     eps = config.SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON
 

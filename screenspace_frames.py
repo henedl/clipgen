@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace frame extraction (ffmpeg pipe + ffprobe).
 
 The per-frame scan drivers (``scan_video_frames`` / ``scan_video_full_frames``),
@@ -349,7 +348,7 @@ def _scan_via_ffmpeg_pipe(
     _phash_thresh = (fast_opts or {}).get(
         "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
     )
-    _prev_phash: list["imagehash.ImageHash | None"] = [None]
+    _prev_phash: list[imagehash.ImageHash | None] = [None]
 
     pipe_region = None if full_frame else region
     # For the pipe, push max_dim downscaling into ffmpeg when phash_skip is off.

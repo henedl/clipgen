@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace background worker.
 
 A daemon-thread task queue that runs analysis tasks sequentially with
@@ -11,10 +10,11 @@ import copy
 import queue
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import config
 import utils
@@ -759,7 +759,7 @@ class ScreenspaceWorker:
                                 list(t.get("video_paths", [])),
                                 dict(t.get("region_coords", {})),
                             )
-                    t["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    t["completed_at"] = datetime.now(UTC).isoformat()
 
             # Generate heatmaps without holding the lock, then reacquire it to
             # strip the grids and attach the filenames. Safe because the scan has
@@ -803,7 +803,7 @@ class ScreenspaceWorker:
                 if t:
                     t["status"] = TASK_STATUS_FAILED
                     t["error"] = str(exc)
-                    t["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    t["completed_at"] = datetime.now(UTC).isoformat()
         finally:
             # A task dismissed while running was kept in _tasks so its cancel
             # could land; now that the scan has unwound, drop it for good.

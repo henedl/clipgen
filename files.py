@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """File and filename operations for clipgen."""
 
 import os

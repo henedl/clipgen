@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Ollama local LLM transport for clipgen.
 
 A thin, reusable HTTP wrapper around the Ollama REST API. All functions fail
@@ -28,7 +27,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import config
 import utils

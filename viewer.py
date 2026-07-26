@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Timeline and gallery viewer generation, manifest persistence.
 
 Timeline viewer (--viewer / interactive 'viewer'):
@@ -30,7 +29,7 @@ import functools
 import json
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -134,7 +133,7 @@ def finalize_timeline_data(
         "meta": {
             "study": study,
             "participant": participant,
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "generatedAt": datetime.now(UTC).isoformat(),
             "mode": mode,
             "sourceSpreadsheet": worksheet_title,
             "sourceFileType": "excel" if is_excel else "google",
@@ -460,7 +459,7 @@ def finalize_gallery_data(
     return {
         "meta": {
             "sourceVideo": source_video,
-            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "generatedAt": datetime.now(UTC).isoformat(),
             "mode": "gallery",
             "format": output_format,
             "interval": interval,

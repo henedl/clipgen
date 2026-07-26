@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Thinking-agent registry for clipgen.
 
 A "thinking agent" is a small, self-contained unit of Ollama-powered reasoning
@@ -25,8 +24,9 @@ import bisect
 import json
 import re
 import threading
-from datetime import datetime, timezone
-from typing import Any, Callable, TypedDict
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any, TypedDict
 
 import config
 import friction
@@ -603,7 +603,7 @@ def _run_friction(
         "segments": scored,
         "moments": moments or [],
         "stats": stats,
-        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "computed_at": datetime.now(UTC).isoformat(),
         "model": model,
         "llm_ok": llm_ok,
         "stale": False,

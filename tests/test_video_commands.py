@@ -1296,7 +1296,7 @@ def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     ok = video.run_ffmpeg(
         "in.mp4", "out.mp4", "00:10", "00:15", reencode=False, cancel_flag=sentinel
     )
@@ -1326,7 +1326,7 @@ def test_enforce_filesize_limit_compresses_and_forwards_cancel_flag(monkeypatch)
 
     monkeypatch.setattr(video, "compress_to_size", _fake_compress)
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     video.enforce_filesize_limit("out.mp4", cancel_flag=sentinel)
     assert captured == [("out.mp4", 50, sentinel)]
 
@@ -1342,7 +1342,7 @@ def test_extract_screenshot_forwards_cancel_flag(monkeypatch):
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     ok = video.extract_screenshot("in.mp4", "out.png", "00:10", cancel_flag=sentinel)
     assert ok is True
     assert captured == [sentinel]
@@ -1359,7 +1359,7 @@ def test_extract_gif_forwards_cancel_flag(monkeypatch):
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     ok = video.extract_gif("in.mp4", "out.gif", "00:10", 5, cancel_flag=sentinel)
     assert ok is True
     assert captured == [sentinel]
@@ -1377,7 +1377,7 @@ def test_compress_to_size_forwards_cancel_flag_to_both_passes(monkeypatch, tmp_p
     # Stub os.replace and unlink so the test doesn't move/delete real files.
     monkeypatch.setattr(video.os, "replace", lambda *_a, **_kw: None)
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     # Target tiny size so compression runs both passes.
     video.compress_to_size(str(big), 0.0001, cancel_flag=sentinel)
     assert captured == [sentinel, sentinel]
@@ -1482,7 +1482,6 @@ def test_batch_extract_screenshots_seeks_only_for_offset_grid(monkeypatch):
 
     def fake_run(command, **_kwargs):
         captured["cmd"] = command
-        return None  # short-circuit fallback; we only inspect the built command
 
     monkeypatch.setattr(video.config, "SCREENSHOT_FORMAT", ".png")
     monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace OCR + numeric helpers.
 
 Pooled EasyOCR readers, region preprocessing, glyph confusion-folding, the
@@ -11,8 +10,9 @@ import math
 import queue
 import re
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 import cv2
 import numpy as np
