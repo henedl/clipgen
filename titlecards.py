@@ -243,7 +243,12 @@ def _build_card_frame(
     video_out_args = list(_x264_video_args())
     if match_fps:
         # Fixed framerate + timebase so concat-demuxer copy sees consistent cards.
-        video_out_args += ["-r", "%g" % match_fps, "-video_track_timescale", "90000"]
+        video_out_args += [
+            "-r",
+            f"{match_fps:g}",
+            "-video_track_timescale",
+            "90000",
+        ]
 
     ffmpeg_command = [
         "ffmpeg",
@@ -419,7 +424,7 @@ def get_or_build_endcard(
     if config.ENDCARD_IMAGE == config.CARD_IMAGE_COLOR:
         endcard_id = endcard_id + config.ENDCARD_COLOR
     audio_sig = _audio_match_signature(audio_match)
-    fps_sig = ("%g" % match_fps) if match_fps else "nofps"
+    fps_sig = f"{match_fps:g}" if match_fps else "nofps"
     cache_key = f"{resolution}:{duration}:{endcard_id}:{fps_sig}:{audio_sig}"
     with _endcard_lock:
         cached = _endcard_cache.get(cache_key)

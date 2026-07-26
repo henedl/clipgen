@@ -121,7 +121,7 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
         return pixels
     if h < min_height:
         scale = min_height / float(h)
-        new_w = max(1, int(round(w * scale)))
+        new_w = max(1, round(w * scale))
         pixels = cv2.resize(pixels, (new_w, min_height), interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY) if pixels.ndim == 3 else pixels
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))

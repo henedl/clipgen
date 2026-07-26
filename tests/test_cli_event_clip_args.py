@@ -140,13 +140,13 @@ def _ev(**overrides):
     return base
 
 
-_NO_FILTERS = dict(
-    detectors=None,
-    regions=None,
-    participants=None,
-    min_confidence=None,
-    event_type_substr=None,
-)
+_NO_FILTERS = {
+    "detectors": None,
+    "regions": None,
+    "participants": None,
+    "min_confidence": None,
+    "event_type_substr": None,
+}
 
 
 @pytest.mark.parametrize(
@@ -613,15 +613,15 @@ def _mark_manifest():
     "args_overrides,expected_seg_ids",
     [
         (
-            dict(transcript_mark="checkout", transcript_mark_category="insight"),
+            {"transcript_mark": "checkout", "transcript_mark_category": "insight"},
             ["P01:0", "P02:0"],
         ),
         (
-            dict(
-                transcript_mark="checkout",
-                transcript_mark_category="insight",
-                transcript_mark_participant="P01",
-            ),
+            {
+                "transcript_mark": "checkout",
+                "transcript_mark_category": "insight",
+                "transcript_mark_participant": "P01",
+            },
             ["P01:0"],
         ),
     ],

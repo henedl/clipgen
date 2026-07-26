@@ -204,7 +204,7 @@ def test_topnav_exposes_quick_actions_getter():
 def test_all_hubs_register():
     """Each hub contributes a page command set (Composer and Overview have no
     quick actions, so without this they'd only get the built-ins)."""
-    for page, hub_js in HUB_PAGES.items():
+    for hub_js in HUB_PAGES.values():
         src = (_WEB / hub_js).read_text(encoding="utf-8")
         assert "window.ClipgenCommandPalette.register(" in src, (
             f"{hub_js} does not register palette commands"

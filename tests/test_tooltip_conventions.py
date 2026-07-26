@@ -98,8 +98,7 @@ def _js_functions(src: str):
     unrelated `card.title` in a different builder.
     """
     parts = re.split(r"\bfunction\b", src)
-    for part in parts[1:]:
-        yield part
+    yield from parts[1:]
 
 
 def test_native_title_is_not_set_on_a_draggable_element():

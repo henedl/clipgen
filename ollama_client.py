@@ -157,9 +157,7 @@ def _is_connection_refused(exc: Exception) -> bool:
         exc.reason, ConnectionRefusedError
     ):
         return True
-    if isinstance(exc, ConnectionRefusedError):
-        return True
-    return False
+    return isinstance(exc, ConnectionRefusedError)
 
 
 def _ollama_install_guidance_lines() -> list[str]:

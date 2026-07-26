@@ -1439,11 +1439,9 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
             new_times.append(
                 (
                     utils.seconds_to_timestamp(
-                        int(round(start_sec)), force_hours=needs_hours
+                        round(start_sec), force_hours=needs_hours
                     ),
-                    utils.seconds_to_timestamp(
-                        int(round(end_sec)), force_hours=needs_hours
-                    ),
+                    utils.seconds_to_timestamp(round(end_sec), force_hours=needs_hours),
                 )
             )
         if new_times:
@@ -2355,7 +2353,7 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
         # subset (now at defaults) with the current non-default values of
         # everything else, and let _save_studio_settings drop any keys that
         # equal their default (including the ones we just reset).
-        merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS.keys()}
+        merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
         return applied, None
 
@@ -2630,7 +2628,7 @@ def api_titlecard_delete(name: str) -> FlaskResponse:
             setattr(config, setting, "")
             reset[setting] = ""
     if reset:
-        merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS.keys()}
+        merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
     return ok(reset=reset)
 
@@ -3577,9 +3575,7 @@ def build_combined_app(
                 import clipgen as _clipgen
                 import google_api
 
-                if id_or_path.startswith("http://") or id_or_path.startswith(
-                    "https://"
-                ):
+                if id_or_path.startswith(("http://", "https://")):
                     new_ws = _clipgen.open_spreadsheet_by_url(
                         _google_auth.client, id_or_path, worksheet_name=worksheet
                     )

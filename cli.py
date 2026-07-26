@@ -2500,8 +2500,10 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
         utils.warning_print(
             "No Screenspace events found.",
             [
-                "Run --screenspace (UI) or --ss-task to generate events first, "
-                "or check your input/output directory."
+                (
+                    "Run --screenspace (UI) or --ss-task to generate events first, "
+                    "or check your input/output directory."
+                )
             ],
         )
         return
@@ -2586,8 +2588,10 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
         utils.warning_print(
             "No transcripts found.",
             [
-                "Run --transcribe (with a clip mode) or --pre-transcribe / --transcripts "
-                "to generate transcripts first."
+                (
+                    "Run --transcribe (with a clip mode) or --pre-transcribe / --transcripts "
+                    "to generate transcripts first."
+                )
             ],
         )
         return
@@ -2735,8 +2739,10 @@ def _run_transcript_mark(args: argparse.Namespace) -> None:
         utils.warning_print(
             "No transcripts found.",
             [
-                "Run --transcribe (with a clip mode) or --pre-transcribe / --transcripts "
-                "to generate transcripts first."
+                (
+                    "Run --transcribe (with a clip mode) or --pre-transcribe / --transcripts "
+                    "to generate transcripts first."
+                )
             ],
         )
         return

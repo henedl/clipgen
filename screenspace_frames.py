@@ -189,8 +189,8 @@ def _ffmpeg_pipe_frames(
     # max_dim cap. Skipped at 1.0 so default-config runs are byte-identical
     # to pre-feature behavior.
     if cv_scale > 0 and abs(cv_scale - 1.0) > 1e-6:
-        scaled_w = max(2, int(round(out_w * cv_scale)))
-        scaled_h = max(2, int(round(out_h * cv_scale)))
+        scaled_w = max(2, round(out_w * cv_scale))
+        scaled_h = max(2, round(out_h * cv_scale))
         scaled_w += scaled_w % 2
         scaled_h += scaled_h % 2
         filters.append(f"scale={scaled_w}:{scaled_h}:flags=lanczos")

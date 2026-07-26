@@ -198,7 +198,7 @@ def _split_summary_sentences(summary: str) -> list[str]:
         line = line.strip()
         if not line:
             continue
-        if line.startswith("- ") or line.startswith("* "):
+        if line.startswith(("- ", "* ")):
             sentences.append(line[2:].strip())
             continue
         parts = re.split(r"(?<=[.!?])\s+", line)

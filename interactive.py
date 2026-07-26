@@ -689,7 +689,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
             else:
                 utils.info_print("Already at the last row.")
             return True, cur
-        if cmd.startswith("jump ") or cmd.startswith("j "):
+        if cmd.startswith(("jump ", "j ")):
             try:
                 parts = cmd.split()
                 if len(parts) >= 2:

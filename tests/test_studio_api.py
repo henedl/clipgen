@@ -6,6 +6,7 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 import server
+import itertools
 
 
 def _set_artifacts(monkeypatch, artifacts):
@@ -1822,7 +1823,7 @@ def test_api_gallery_multi_video_intervals_globally_aligned(
     assert requested[str(b)] == list(range(5, 120, 10))  # 5,15,...,115
     # Global timestamps are evenly spaced by the interval across the boundary.
     globals_ = sorted(art["timestamp"] for art in captured["artifacts"])
-    diffs = {round(hi - lo, 6) for lo, hi in zip(globals_, globals_[1:])}
+    diffs = {round(hi - lo, 6) for lo, hi in itertools.pairwise(globals_)}
     assert diffs == {10.0}
 
 

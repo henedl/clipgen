@@ -197,7 +197,7 @@ def test_session_shape_bins_place_events_and_sum_to_one():
         _ss_row(time_in=1.0, time_out=3.0),
         _ss_row(time_in=98.0, time_out=100.0),
     ]
-    columns, values = overview.build_session_shape_features(rows, {}, bins=4)
+    _columns, values = overview.build_session_shape_features(rows, {}, bins=4)
     p01 = values["P01"]
     ss_bins = [p01[f"shape_ss_bin{i}"] for i in range(4)]
     assert sum(ss_bins) == pytest.approx(1.0, abs=1e-3)

@@ -375,15 +375,7 @@ def test_probe_max_keyframe_gap_uses_max_not_median(monkeypatch, tmp_path):
     # Keyframes at 0, 1, 2, 8 (gaps 1, 1, 6). The max (6.0) is returned — a
     # single long-GOP stretch must not be masked by the surrounding short gaps
     # (median would be 1.0). Interior non-keyframe packets are ignored.
-    csv = "\n".join(
-        [
-            "0.000000,K__",
-            "0.033000,__",
-            "1.000000,K__",
-            "2.000000,K__",
-            "8.000000,K__",
-        ]
-    )
+    csv = "0.000000,K__\n0.033000,__\n1.000000,K__\n2.000000,K__\n8.000000,K__"
     monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: csv)
     assert video.probe_max_keyframe_gap(str(clip)) == 6.0
 
@@ -406,7 +398,7 @@ def test_probe_max_keyframe_gap_single_keyframe_returns_none(monkeypatch, tmp_pa
     clip.write_bytes(b"x")
     # Only one keyframe in the probe window → GOP longer than the window; can't
     # confirm short cadence, so treat as unknown (None → do not skip).
-    csv = "\n".join(["0.000000,K__", "0.033000,__", "1.000000,__"])
+    csv = "0.000000,K__\n0.033000,__\n1.000000,__"
     monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: csv)
     assert video.probe_max_keyframe_gap(str(clip)) is None
 

@@ -710,7 +710,7 @@ def api_calibrate() -> FlaskResponse:
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
         return err(f"No video for participant {participant}", 404)
-    video_path, mtime_ns = resolved
+    video_path, _mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
     resolve_region = _region_coords_resolver(props, all_known_regions)
@@ -1090,10 +1090,10 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             except ValueError:
                 return err("Invalid region")
             region_coords = {
-                "x": int(round(rx * frame_w)),
-                "y": int(round(ry * frame_h)),
-                "w": int(round(rw * frame_w)),
-                "h": int(round(rh * frame_h)),
+                "x": round(rx * frame_w),
+                "y": round(ry * frame_h),
+                "w": round(rw * frame_w),
+                "h": round(rh * frame_h),
             }
             # Optional shaped-region contours: "u1,v1;u2,v2;..." bbox-relative
             # fractions, multiple contours joined with "|". Malformed values

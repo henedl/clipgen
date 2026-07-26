@@ -518,8 +518,10 @@ def run_cli_export() -> int:
             "No exports written.",
             [
                 "No manifest files were found in the output directory.",
-                f"Expected one or more of: {config.SCREENSPACE_MANIFEST_FILENAME}, "
-                f"{config.TRANSCRIPTS_MANIFEST_FILENAME}",
+                (
+                    f"Expected one or more of: {config.SCREENSPACE_MANIFEST_FILENAME}, "
+                    f"{config.TRANSCRIPTS_MANIFEST_FILENAME}"
+                ),
             ],
         )
         return 1

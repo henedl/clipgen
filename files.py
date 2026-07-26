@@ -221,8 +221,10 @@ def discover_numbered_source_videos(
             f"Numbered source videos for '{prefix}' are non-contiguous "
             f"(found parts {indices}); expected 1..N with no gaps.",
             [
-                "Ignoring the numbered sequence; rename the parts to a gapless "
-                "1..N sequence to enable concatenation.",
+                (
+                    "Ignoring the numbered sequence; rename the parts to a gapless "
+                    "1..N sequence to enable concatenation."
+                ),
             ],
         )
         return []

@@ -615,7 +615,7 @@ class ScreenspaceWorker:
                     except queue.Empty:
                         continue
 
-                    priority, created_at, task_id = item
+                    _priority, _created_at, task_id = item
                     if task_id is _SENTINEL:
                         # Wait for active tasks to finish
                         for drain_tid, f in active.items():

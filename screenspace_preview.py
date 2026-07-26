@@ -311,7 +311,7 @@ def _draw_flow_arrows(
     vis_step_y = step_y * coord_scale
     vis_cell = min(vis_step_x, vis_step_y)
     max_arrow_len = vis_cell * 0.7
-    thickness = max(1, min(2, int(round(vis_cell / 32))))
+    thickness = max(1, min(2, round(vis_cell / 32)))
 
     samples: list[tuple[float, float, float, float, float]] = []
     max_mag = 0.0
@@ -332,9 +332,9 @@ def _draw_flow_arrows(
         return
     arrow_scale = max_arrow_len / max_mag
     for vx, vy, fx, fy, m in samples:
-        sx, sy = int(round(vx)), int(round(vy))
-        ex = int(round(vx + fx * arrow_scale))
-        ey = int(round(vy + fy * arrow_scale))
+        sx, sy = round(vx), round(vy)
+        ex = round(vx + fx * arrow_scale)
+        ey = round(vy + fy * arrow_scale)
         # Color-code by magnitude: slow = blue, fast = red (JET).
         color = _magnitude_color(m / max_mag)
         cv2.arrowedLine(vis, (sx, sy), (ex, ey), color, thickness, tipLength=0.3)
@@ -486,7 +486,7 @@ def _colorize_diff(
 
 def _magnitude_color(t: float) -> tuple[int, int, int]:
     """Map a normalized magnitude in [0, 1] to a BGR color via the diff colormap."""
-    v = int(round(max(0.0, min(1.0, t)) * 255))
+    v = round(max(0.0, min(1.0, t)) * 255)
     bgr = cv2.applyColorMap(np.array([[v]], dtype=np.uint8), _DIFF_COLORMAP)[0, 0]
     return int(bgr[0]), int(bgr[1]), int(bgr[2])
 
@@ -515,7 +515,7 @@ def _fit_width(img: "np.ndarray", target_w: int) -> "np.ndarray":
     if w == target_w:
         return img
     scale = target_w / float(w)
-    new_h = max(1, int(round(h * scale)))
+    new_h = max(1, round(h * scale))
     interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_NEAREST
     return cv2.resize(img, (target_w, new_h), interpolation=interp)
 
@@ -523,7 +523,7 @@ def _fit_width(img: "np.ndarray", target_w: int) -> "np.ndarray":
 def _label_panel(img: "np.ndarray", label: str) -> "np.ndarray":
     """Stack a small label strip above an image."""
     img = _gray_to_bgr(img)
-    h, w = img.shape[:2]
+    _h, w = img.shape[:2]
     strip = np.full((_LABEL_HEIGHT, w, 3), 24, dtype=np.uint8)
     cv2.putText(
         strip,
@@ -548,7 +548,7 @@ def _hstack_panels(panels: list["np.ndarray"]) -> "np.ndarray":
         h, w = p.shape[:2]
         if h != target_h:
             scale = target_h / float(h)
-            new_w = max(1, int(round(w * scale)))
+            new_w = max(1, round(w * scale))
             p = cv2.resize(
                 _gray_to_bgr(p), (new_w, target_h), interpolation=cv2.INTER_AREA
             )

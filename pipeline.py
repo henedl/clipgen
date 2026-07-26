@@ -189,7 +189,7 @@ def _resolve_one_source(
         candidates.sort(key=lambda c: (c[0], c[1]), reverse=True)
 
         if candidates and candidates[0][0] >= 0.7 and not utils.NO_INPUT_MODE:
-            best_ratio, best_size, best_path = candidates[0]
+            _best_ratio, best_size, best_path = candidates[0]
             size_gb = best_size / 1_000_000_000
             # Pause progress bar so the prompt is visible and input is rendered
             global _active_progress
@@ -330,7 +330,7 @@ def _local_timestamp(seconds: float) -> str:
     ``M:SS`` / ``H:MM:SS`` pairs. These strings feed ffmpeg, not the
     spreadsheet, so the explicit hours are harmless.
     """
-    return utils.seconds_to_timestamp(int(round(seconds)), force_hours=True)
+    return utils.seconds_to_timestamp(round(seconds), force_hours=True)
 
 
 def _point_source(
@@ -348,7 +348,7 @@ def _point_source(
         return None
     index, local_start = mapped
     seg_duration = timeline[index][1]
-    remaining = max(1, seg_duration - int(round(local_start)))
+    remaining = max(1, seg_duration - round(local_start))
     return (timeline[index][0], _local_timestamp(local_start), remaining)
 
 
@@ -1655,10 +1655,14 @@ def _process_reel(
             f"Reel aborted: {len(reel_failures)} clip(s) could not be generated.",
             reel_failures
             + [
-                "No reel was written — a partial reel would look complete but "
-                "silently omit these moments.",
-                "Fix the sources (or deselect those clips) and run again; the "
-                "clips that did cut are not reused, so nothing is left stale.",
+                (
+                    "No reel was written — a partial reel would look complete but "
+                    "silently omit these moments."
+                ),
+                (
+                    "Fix the sources (or deselect those clips) and run again; the "
+                    "clips that did cut are not reused, so nothing is left stale."
+                ),
             ],
         )
         return (0, [])
@@ -2082,10 +2086,10 @@ def _regenerate_reel(
                     # regenerated segment reproduces the original cut instead
                     # of truncating up to ~1s off it.
                     "start_ts": utils.seconds_to_timestamp(
-                        int(round(local_start)), force_hours=True
+                        round(local_start), force_hours=True
                     ),
                     "end_ts": utils.seconds_to_timestamp(
-                        int(round(local_end)), force_hours=True
+                        round(local_end), force_hours=True
                     ),
                 }
             )

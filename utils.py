@@ -2057,8 +2057,10 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
                         f"Numbered source videos for participant '{pid}' are "
                         f"non-contiguous (found parts {indices}); expected 1..N.",
                         [
-                            "Skipping this participant; rename the parts to a "
-                            "gapless 1..N sequence to enable concatenation.",
+                            (
+                                "Skipping this participant; rename the parts to a "
+                                "gapless 1..N sequence to enable concatenation."
+                            ),
                         ],
                     )
                     continue

@@ -751,10 +751,10 @@ def scan_template(
             inv = scale_back / _cv_scale
             if abs(inv - 1.0) > 1e-6:
                 for m in matches:
-                    m["x"] = int(round(m["x"] * inv))
-                    m["y"] = int(round(m["y"] * inv))
-                    m["w"] = int(round(m["w"] * inv))
-                    m["h"] = int(round(m["h"] * inv))
+                    m["x"] = round(m["x"] * inv)
+                    m["y"] = round(m["y"] * inv)
+                    m["w"] = round(m["w"] * inv)
+                    m["h"] = round(m["h"] * inv)
             # Shaped region: the match itself runs full-frame (as for rects,
             # which don't restrict template search either), but detections
             # whose center falls outside the polygon are dropped. Runs before
@@ -1517,7 +1517,7 @@ def scan_boundaries(
                             {
                                 "start_ts": round(pending["start_ts"], 2),
                                 "pixels": _boundary_rep_pixels(pixels),
-                                "entry_dist": int(round(dist_raw * 100)),
+                                "entry_dist": round(dist_raw * 100),
                                 "entry_conf": conf,
                             }
                         )

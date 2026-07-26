@@ -158,7 +158,7 @@ def _strip(src: str) -> str:
 def _is_iife(src: str) -> bool:
     """True if the file body opens with an IIFE wrapper (isolated scope)."""
     body = re.sub(r'^\s*"use strict";?', "", _strip(src).lstrip()).lstrip()
-    return body.startswith("(function") or body.startswith("(()")
+    return body.startswith(("(function", "(()"))
 
 
 def _param_names(params: str) -> set[str]:

@@ -18,6 +18,7 @@ from typing import Any
 import config
 import files
 import utils
+import itertools
 
 INVALID_END_TIMESTAMP = None
 
@@ -1462,8 +1463,10 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "-v",
         "error",
         "-show_entries",
-        "stream=width,height,codec_name,codec_type,r_frame_rate,nb_frames,"
-        "pix_fmt,sample_rate,channels,channel_layout",
+        (
+            "stream=width,height,codec_name,codec_type,r_frame_rate,nb_frames,"
+            "pix_fmt,sample_rate,channels,channel_layout"
+        ),
         "-show_entries",
         "stream_tags=title,language,handler_name",
         "-show_entries",
@@ -1791,7 +1794,7 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
 
     if len(keyframe_times) >= 2:
         keyframe_times.sort()
-        gaps = [b - a for a, b in zip(keyframe_times, keyframe_times[1:]) if b - a > 0]
+        gaps = [b - a for a, b in itertools.pairwise(keyframe_times) if b - a > 0]
         if gaps:
             result = max(gaps)
 
@@ -1841,8 +1844,7 @@ def extract_frame_at_timestamp(
     try:
         result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=10,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):

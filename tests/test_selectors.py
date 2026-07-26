@@ -288,9 +288,9 @@ def test_generate_keyword_timestamps_honors_header_and_segment_annotations(
     coords = {(clip["cell"].row, clip["cell"].col) for clip in clips}
     # Both cells with segment-level !key annotations should be included.
     assert coords == {(3, 2), (4, 3)}
-    segment_indexes = [
+    segment_indexes = next(
         clip.get("selected_segment_indexes") for clip in clips if clip["cell"].col == 3
-    ][0]
+    )
     assert segment_indexes == [0]
 
 

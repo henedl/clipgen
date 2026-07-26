@@ -306,10 +306,10 @@ def denormalize_region(
         ``mask_points``/``shape`` passed through for shaped regions.
     """
     out: dict[str, Any] = {
-        "x": int(round(region["x"] * target_w)),
-        "y": int(round(region["y"] * target_h)),
-        "w": int(round(region["w"] * target_w)),
-        "h": int(round(region["h"] * target_h)),
+        "x": round(region["x"] * target_w),
+        "y": round(region["y"] * target_h),
+        "w": round(region["w"] * target_w),
+        "h": round(region["h"] * target_h),
     }
     # Shaped regions: contour vertices are bbox-relative (0-1 of the region's
     # own rect), so they pass through denormalization verbatim. Copying them
@@ -672,8 +672,8 @@ def _scale_template(
     if not (effective > 0 and abs(effective - 1.0) > 1e-6):
         return template, mask
     th, tw = template.shape[:2]
-    nw = max(8, int(round(tw * effective)))
-    nh = max(8, int(round(th * effective)))
+    nw = max(8, round(tw * effective))
+    nh = max(8, round(th * effective))
     interp = cv2.INTER_AREA if effective < 1.0 else cv2.INTER_CUBIC
     scaled_template = cv2.resize(template, (nw, nh), interpolation=interp)
     scaled_mask = (
