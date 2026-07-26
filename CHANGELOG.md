@@ -2,6 +2,70 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.36 — 2026-07-25 — Screenspace
+**Spatial anchor for the magic-wand tolerance scrub**
+The wand scrub paints an anchor dot at the press point, a dashed horizontal track, and a head dot that stops growing at slider min/max; the tolerance readout sits at the head beside the pointer, including when the flood finds no contour.
+
+## v0.14.35 — 2026-07-24 — Core
+**Audio volume popover with per-track mixing**
+Hover the speaker icon for a 0–200% volume slider (Web Audio gain, boost past 100%); multi-track sources get independent per-track sliders mixed in the browser with drift correction; wired into Screenspace, Transcripts, and Composer.
+
+## v0.14.35 — 2026-07-24 — Core
+**Segmented capsule track control**
+New `.cg-segtrack` primitive with a sliding thumb for mutually exclusive options; adopted at Screenspace Color Mode, Text Normalize, and the region tools (rect/lasso/wand).
+
+## v0.14.34 — 2026-07-24 — Core
+**Shift+numeral panel focus with arrow navigation**
+Shift+numeral targets a panel for keyboard focus while bare numerals pick tools or actions; Screenspace sidebar, tool, tasks, and results panels gain arrow-key navigation; Transcripts pill dropdowns are keyboard-navigable; stray modal focus is cleared on Escape.
+
+## v0.14.33 — 2026-07-23 — Core
+**Studio and Screenspace keyboard and slider polish**
+Empty-queue focus hotkeys pulse a ghost card; Backspace/Delete remove the focused queue card; timeline step buttons seek 5s with Shift for 1s; Set In/Out bind to `i`/`o`; slider defaults fixed (Min OCR 0.6, Fuzzy 0.75).
+
+## v0.14.32 — 2026-07-23 — Core
+**Keyboard shortcuts across pages and Workflows toolbar polish**
+New hotkeys on Studio, Screenspace, Transcripts, and Workflows; blueprint rename modal, cleaner toolbar layout, custom `[data-tooltip]` tooltips, and Composer undo/redo aligned to the compact icon buttons.
+
+## v0.14.31 — 2026-07-23 — Core
+**Modal keyboard navigation and scoped Alt hints**
+Alt-hold hint chips scope to the open modal; the Start launcher and Settings modal gain tab, list, and reset hotkeys with focus trapping; the Start overlay is now a real blocking modal.
+
+## v0.14.31 — 2026-07-23 — Core
+**Sheet last-edit date and worksheet picker on Start**
+Each spreadsheet dropdown entry shows an "Edited …" date; multi-tab spreadsheets get a worksheet picker that threads through open and persists across reloads, with a spinner gating Open while tabs load.
+
+## v0.14.30 — 2026-07-22 — Composer
+**Annotation stroke controls, multi-select, and timeline chrome**
+Stroke width and Solid/Dashed/Dotted style menus apply to new and selected annotations; shift-click and marquee multi-select with group move/style/delete; hold-Shift proportion lock when drawing; dashed/dotted strokes export via PIL; timeline gains lane bands and a step-track ruler.
+
+## v0.14.29 — 2026-07-22 — Composer
+**Hideable Timelines sidebar**
+The right Timelines panel collapses to a thin strip with animation and persisted state; `F` toggles the sidebar (matching Studio) and thumbnail strips move to `S`.
+
+## v0.14.28 — 2026-07-21 — Composer
+**Timeline chrome rework, shape annotations, and cut UX**
+Transport and controls move above the canvas; rotatable rect/ellipse shape tools with corner and rotation handles; draggable annotation spans on the timeline; double-click cuts on empty timeline space; chronological index badges on markers and cut list.
+
+## v0.14.26 — 2026-07-20 — Screenspace
+**Attention computational-saliency tool**
+A bottom-up saliency composite (spectral residual + contrast + motion + optional faces) predicts visual attention without eye-tracking; full-frame scans feed heatmaps and gaze-replay GIFs while timeline events fire only at confirmed attention shifts.
+
+## v0.14.25 — 2026-07-20 — Screenspace
+**Grouped tool navigation with numeral hotkeys**
+Optional category dropdown chips (Difference, Detection, Classification, Attention, Utility) replace the flat 12-tab row; numeral hotkeys pick tabs or open a category then its tool, with Alt-hold hints and a Settings toggle.
+
+## v0.14.24 — 2026-07-20 — Composer
+**Follow the playhead when panning the zoomed timeline**
+When zoomed in, seeks and playback pan the viewport minimally to keep the playhead visible; a persisted Follow toggle extends this to playback while clicks always reveal regardless.
+
+## v0.14.23 — 2026-07-20 — Workflows
+**Phase 3 — exports, canvas polish, resume, and trigger chaining**
+New transcript and data export nodes, compound filter clauses, heatmap rolling GIF output; two-finger pan, pinch zoom, snap-to-grid, sticky notes, and in-page dialogs; resume failed runs, cross-blueprint history, and dry-run hover preview; transcript-complete and scan-event trigger chaining plus parallel batch children.
+
+## v0.14.15 — 2026-07-20 — Composer
+**Thumbnail strips and hover audio scrub on timeline markers**
+Zoom-adaptive thumbnail tiles on marker bars and cut bands refetch finer frames as you zoom in; hover audio scrub with waveform via the shared card-scrubber primitives, toggled with `F`/`W` and persisted in the UI manifest.
+
 ## v0.14.14 — 2026-07-18 — Screenspace
 **Colorized Change, SSIM, and Flow model-view previews**
 The Change diff preview is JET-colorized with an on-frame overlay that tints changed pixels without darkening the live frame; Similarity adds an SSIM difference map and score; Flow arrows are color-coded by magnitude.
