@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Transcripts Flask blueprint for clipgen.
 
 Registered at /transcripts/ by start_combined_server(). Works with or without a
@@ -46,7 +45,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -336,7 +335,7 @@ _corrections_version = 0
 
 def _bump_corrections_version() -> None:
     """Invalidate the corrected-segments cache (corrections or segments changed)."""
-    global _corrections_version  # noqa: PLW0603
+    global _corrections_version
     with _corrected_cache_lock:
         _corrections_version += 1
         _corrected_cache.clear()
@@ -445,7 +444,7 @@ def api_edit_segment(participant: str) -> FlaskResponse:
             "id": f"c_{uuid.uuid4().hex[:8]}",
             "from": original_text,
             "to": new_text,
-            "created": datetime.now(timezone.utc).isoformat(),
+            "created": datetime.now(UTC).isoformat(),
         }
         _manifest.setdefault("corrections", []).append(correction)
         _bump_corrections_version()  # new correction invalidates corrected cache
@@ -597,23 +596,28 @@ def _embed_subtitle_for_participant(
         str(output_dir / desired_name), file_format=src.suffix
     )
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".srt", delete=False, encoding="utf-8"
-    )
+    tmp_path = ""
     try:
-        tmp.write(srt_text)
-        tmp.close()
+        # delete=False + the explicit unlink below: ffmpeg reopens the sidecar by
+        # path once we've closed it, which Windows won't allow while the
+        # NamedTemporaryFile handle is still open.
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".srt", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp_path = tmp.name
+            tmp.write(srt_text)
         ok = video.mux_subtitles(
             str(video_path),
-            tmp.name,
+            tmp_path,
             output_path,
             track_language=language or "und",
         )
     finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     if not ok:
         return {
@@ -908,7 +912,7 @@ def api_corrections_add() -> FlaskResponse:
                 "id": f"c_{uuid.uuid4().hex[:8]}",
                 "from": from_text,
                 "to": to_text,
-                "created": datetime.now(timezone.utc).isoformat(),
+                "created": datetime.now(UTC).isoformat(),
             }
             corrections.append(correction)
 
@@ -1117,7 +1121,7 @@ def api_marks_add() -> FlaskResponse:
     category = data.get("category") or None
     label = data.get("label") or None
     severity = data.get("severity") or None
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     created = []
     with _manifest_lock:
@@ -1305,7 +1309,7 @@ def api_transcribe_warmup() -> FlaskResponse:
             size_mb=_whisper_model_size_mb(model),
         )
 
-    global _transcript_model_warming  # noqa: PLW0603
+    global _transcript_model_warming
 
     with _transcript_model_warming_lock:
         if _transcript_model_warming:
@@ -1315,7 +1319,7 @@ def api_transcribe_warmup() -> FlaskResponse:
         _transcript_model_warming = True
 
     def _run_warmup() -> None:
-        global _transcript_model_warming  # noqa: PLW0603
+        global _transcript_model_warming
         try:
             transcripts.warmup_transcription_model()
         finally:
@@ -1832,9 +1836,7 @@ class AgentOrchestrator:
                 return
             self._in_flight[agent_key].add(participant)
             self._cancel_events[agent_key][participant] = cancel_event
-            self._started_at[agent_key][participant] = datetime.now(
-                timezone.utc
-            ).timestamp()
+            self._started_at[agent_key][participant] = datetime.now(UTC).timestamp()
         with self._partial_lock:
             self._partial[agent_key][participant] = []
 
@@ -1946,7 +1948,7 @@ def _init_transcripts_state(
     Loads manifest, resolves participant video paths, and starts the
     background worker thread.
     """
-    global _manifest, _worker, _input_dir, _participants  # noqa: PLW0603
+    global _manifest, _worker, _input_dir, _participants
 
     _input_dir = str(utils.get_effective_input_dir())
     _manifest = transcripts.load_transcripts_manifest()

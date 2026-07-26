@@ -12,7 +12,7 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
-import server_utils  # noqa: E402
+import server_utils
 
 
 @pytest.fixture
@@ -132,6 +132,5 @@ def test_json_endpoint_does_not_swallow_other_exceptions(app):
     def handler():
         raise ValueError("real bug")
 
-    with app.app_context():
-        with pytest.raises(ValueError):
-            handler()
+    with app.app_context(), pytest.raises(ValueError):
+        handler()

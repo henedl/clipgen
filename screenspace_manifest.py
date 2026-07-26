@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace task + manifest helpers.
 
 Task-status constants, task construction, manifest load/save, result-time
@@ -7,7 +6,7 @@ Imports the confidence extractor from screenspace_tools.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -211,7 +210,7 @@ def create_task(
         "priority": 100,
         "result": None,
         "error": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "completed_at": None,
         "_cancelled": False,
     }

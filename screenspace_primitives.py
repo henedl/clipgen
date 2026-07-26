@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace image-analysis primitives (pure cv2/numpy).
 
 Region cropping/denormalization/resolution, HSV color math, frame-diff, SSIM,
@@ -10,7 +9,8 @@ buffer, static-frame skip). No file or ffmpeg I/O lives here.
 import functools
 import math
 import statistics
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import cv2
 
@@ -18,7 +18,7 @@ try:
     # cv2.data.haarcascades is a submodule attribute; ty needs the explicit
     # import. Absent on cv2 builds without the bundled cascade data (the face
     # channel feature-detects it and degrades to a zeros map).
-    import cv2.data  # noqa: F401
+    import cv2.data
 except ImportError:  # pragma: no cover - depends on the installed cv2 build
     pass
 import numpy as np
@@ -306,10 +306,10 @@ def denormalize_region(
         ``mask_points``/``shape`` passed through for shaped regions.
     """
     out: dict[str, Any] = {
-        "x": int(round(region["x"] * target_w)),
-        "y": int(round(region["y"] * target_h)),
-        "w": int(round(region["w"] * target_w)),
-        "h": int(round(region["h"] * target_h)),
+        "x": round(region["x"] * target_w),
+        "y": round(region["y"] * target_h),
+        "w": round(region["w"] * target_w),
+        "h": round(region["h"] * target_h),
     }
     # Shaped regions: contour vertices are bbox-relative (0-1 of the region's
     # own rect), so they pass through denormalization verbatim. Copying them
@@ -366,7 +366,10 @@ def resolve_region_request(
         raise ValueError(f"Region '{region_name}' not found")
 
     if not isinstance(region_ref, dict):
-        raise ValueError("region_ref must be an object")
+        # ValueError, not TypeError: this resolver's contract is "ValueError means
+        # bad request", and every caller (cli.py, screenspace_server's
+        # _resolve_region_request) catches ValueError to render a hint or a 400.
+        raise ValueError("region_ref must be an object")  # noqa: TRY004
 
     source = str(region_ref.get("source", "")).strip()
 
@@ -672,8 +675,8 @@ def _scale_template(
     if not (effective > 0 and abs(effective - 1.0) > 1e-6):
         return template, mask
     th, tw = template.shape[:2]
-    nw = max(8, int(round(tw * effective)))
-    nh = max(8, int(round(th * effective)))
+    nw = max(8, round(tw * effective))
+    nh = max(8, round(th * effective))
     interp = cv2.INTER_AREA if effective < 1.0 else cv2.INTER_CUBIC
     scaled_template = cv2.resize(template, (nw, nh), interpolation=interp)
     scaled_mask = (

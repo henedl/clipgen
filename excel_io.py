@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Local Excel (.xlsx) support for clipgen.
 
 Provides a sheet adapter that matches the gspread Worksheet interface

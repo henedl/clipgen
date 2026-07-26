@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Analysis-ready data export for Screenspace and Transcripts.
 
 Reads the on-disk manifests and produces flat, one-row-per-atomic-unit
@@ -22,9 +21,10 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import config
 import utils
@@ -368,7 +368,7 @@ def to_csv(
 def to_json(records: list[dict[str, Any]]) -> str:
     """Serialize records to a JSON string with an export envelope."""
     payload = {
-        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_at": datetime.now(UTC).isoformat(),
         "version": utils.get_version(),
         "records": records,
     }
@@ -518,8 +518,10 @@ def run_cli_export() -> int:
             "No exports written.",
             [
                 "No manifest files were found in the output directory.",
-                f"Expected one or more of: {config.SCREENSPACE_MANIFEST_FILENAME}, "
-                f"{config.TRANSCRIPTS_MANIFEST_FILENAME}",
+                (
+                    f"Expected one or more of: {config.SCREENSPACE_MANIFEST_FILENAME}, "
+                    f"{config.TRANSCRIPTS_MANIFEST_FILENAME}"
+                ),
             ],
         )
         return 1
@@ -528,15 +530,15 @@ def run_cli_export() -> int:
 
 
 __all__ = [
+    "SCREENSPACE_EVENT_COLUMNS",
+    "SCREENSPACE_PIN_COLUMNS",
+    "build_friction_moments",
+    "build_friction_segments",
     "build_screenspace_events",
     "build_screenspace_pins",
     "build_transcript_segments",
-    "build_friction_moments",
-    "build_friction_segments",
+    "run_cli_export",
     "to_csv",
     "to_json",
     "write_export_bundle",
-    "run_cli_export",
-    "SCREENSPACE_EVENT_COLUMNS",
-    "SCREENSPACE_PIN_COLUMNS",
 ]

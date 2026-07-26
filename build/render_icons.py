@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+import itertools
 
 BG = (10, 10, 10, 255)  # #0a0a0a
 FG = (250, 250, 247, 255)  # #fafaf7
@@ -54,7 +55,7 @@ def render(size: int) -> Image.Image:
         return (offset + x * scale, offset + y * scale)
 
     for corners in PATHS:
-        for a, b in zip(corners, corners[1:]):
+        for a, b in itertools.pairwise(corners):
             x1, y1 = to_canvas(*a)
             x2, y2 = to_canvas(*b)
             left = min(x1, x2) - half

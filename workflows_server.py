@@ -25,7 +25,7 @@ import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -184,7 +184,7 @@ def api_blueprints_create() -> Any:
         # Auto-run binding: null when never armed, else {"type": <TRIGGER_TYPES
         # id>, "enabled": bool} — see api_blueprint_trigger.
         "trigger": None,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": datetime.now(UTC).isoformat(),
     }
     with _manifest_lock:
         _manifest.setdefault("blueprints", []).append(blueprint)
@@ -317,7 +317,7 @@ def api_stashes_create() -> Any:
         "nodes": nodes,
         "edges": data.get("edges", []),
         "builtin": False,  # P4 built-ins are served from code; CRUD guards on this
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": datetime.now(UTC).isoformat(),
     }
     with _manifest_lock:
         _manifest.setdefault("stashes", []).append(stash)
@@ -817,7 +817,7 @@ def _precompute_shared_nodes(
             continue
         try:
             result = executor(ctx, {}, node.get("params", {}) or {})
-        except Exception as exc:  # noqa: BLE001 — child re-runs it; don't sink the batch
+        except Exception as exc:  # the child run re-runs this; don't sink the batch
             utils.warning_print(f"workflow batch precompute failed: {exc}")
             continue
         if isinstance(result, dict):
@@ -978,7 +978,7 @@ def api_batch_create() -> Any:
             "participants": participants,
             "runIds": run_ids,
             "cancel_event": threading.Event(),
-            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "createdAt": datetime.now(UTC).isoformat(),
         }
 
     threading.Thread(
@@ -1072,7 +1072,7 @@ def _transcript_markers() -> dict[str, str]:
     re-parsed only when its file actually changed — a handful of times per
     session, not once per poll tick.
     """
-    global _watch_transcript_cache  # noqa: PLW0603
+    global _watch_transcript_cache
     mtime = _manifest_mtime(config.TRANSCRIPTS_MANIFEST_FILENAME)
     if mtime == _watch_transcript_cache[0]:
         return _watch_transcript_cache[1]
@@ -1093,7 +1093,7 @@ def _transcript_markers() -> dict[str, str]:
 
 def _scan_markers() -> dict[str, str]:
     """``{task_id: participant}`` for every completed Screenspace task (mtime-gated)."""
-    global _watch_scan_cache  # noqa: PLW0603
+    global _watch_scan_cache
     mtime = _manifest_mtime(config.SCREENSPACE_MANIFEST_FILENAME)
     if mtime == _watch_scan_cache[0]:
         return _watch_scan_cache[1]
@@ -1121,7 +1121,7 @@ def _seed_watch_seen() -> None:
     scans are all recorded; the watcher fires only for arrivals/completions
     that happen *after* this call.
     """
-    global _watch_transcript_cache, _watch_scan_cache  # noqa: PLW0603
+    global _watch_transcript_cache, _watch_scan_cache
     with _watch_lock:
         _watch_seen.clear()
         _watch_pending.clear()
@@ -1276,14 +1276,14 @@ def _watch_loop() -> None:
     while not _watch_stop.is_set():
         try:
             _watch_poll_once()
-        except Exception as exc:  # noqa: BLE001 — a poll error must not kill the daemon
+        except Exception as exc:  # a poll error must not kill the daemon
             utils.warning_print(f"watch-dir trigger poll failed: {exc}")
         _watch_stop.wait(config.WORKFLOWS_WATCH_POLL_SECONDS)
 
 
 def _start_watch_thread() -> None:
     """Start the watch-dir daemon (idempotent; daemon dies with the process)."""
-    global _watch_thread  # noqa: PLW0603
+    global _watch_thread
     with _watch_lock:
         if _watch_thread is not None and _watch_thread.is_alive():
             return
@@ -1307,7 +1307,7 @@ def _init_workflows_state(
     ``participant_list`` is accepted for parity with the other blueprints' init
     signatures; per-participant video paths are resolved on demand.
     """
-    global _input_dir, _sheet_context, _worksheet, _manifest  # noqa: PLW0603
+    global _input_dir, _sheet_context, _worksheet, _manifest
 
     _input_dir = str(utils.get_effective_input_dir())
     _sheet_context = sheet_context

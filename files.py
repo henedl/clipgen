@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """File and filename operations for clipgen."""
 
 import os
@@ -222,8 +221,10 @@ def discover_numbered_source_videos(
             f"Numbered source videos for '{prefix}' are non-contiguous "
             f"(found parts {indices}); expected 1..N with no gaps.",
             [
-                "Ignoring the numbered sequence; rename the parts to a gapless "
-                "1..N sequence to enable concatenation.",
+                (
+                    "Ignoring the numbered sequence; rename the parts to a gapless "
+                    "1..N sequence to enable concatenation."
+                ),
             ],
         )
         return []
@@ -300,7 +301,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
         config.debug_ic(clip["times"])
 
     # Warn if no valid timestamps were parsed, except cells with only ignored tokens (e.g. "x").
-    if not clip["times"] and utils.has_non_ignored_timestamp_content(
+    if not clip["times"] and utils.has_non_ignored_timestamp_content(  # noqa: SIM102 - the comment below belongs to the inner branch
         cleaned_cell_value
     ):
         # Only show this detailed per-cell warning at verbose verbosity.

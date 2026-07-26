@@ -227,21 +227,21 @@ def test_ss_build_params_color_average_omits_mode():
     "overrides",
     [
         pytest.param(
-            dict(
-                ss_task=["color", "P01", "button"],
-                ss_target_color="#FF0000",
-                ss_tolerance="20,30,30",
-                ss_threshold=0.85,
-                studio=True,
-            ),
+            {
+                "ss_task": ["color", "P01", "button"],
+                "ss_target_color": "#FF0000",
+                "ss_tolerance": "20,30,30",
+                "ss_threshold": 0.85,
+                "studio": True,
+            },
             id="ss-task-vs-studio",
         ),
         pytest.param(
-            dict(summarize=[], pre_transcribe=["P01"]),
+            {"summarize": [], "pre_transcribe": ["P01"]},
             id="summarize-vs-pre-transcribe",
         ),
         pytest.param(
-            dict(ss_run_task="ss_abc", studio=True), id="ss-run-task-vs-studio"
+            {"ss_run_task": "ss_abc", "studio": True}, id="ss-run-task-vs-studio"
         ),
     ],
 )
@@ -560,7 +560,6 @@ def test_ss_task_color_dispatches_and_persists(monkeypatch):
         regions, tasks, events, stashes=None, per_participant=None, pins=None
     ):
         saved_tasks.extend(tasks)
-        return None
 
     monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
 
@@ -671,7 +670,6 @@ def test_ss_task_attention_forces_full_frame(monkeypatch, capsys):
         regions, tasks, events, stashes=None, per_participant=None, pins=None
     ):
         saved_tasks.extend(tasks)
-        return None
 
     monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
     monkeypatch.setattr(screenspace, "ScreenspaceWorker", _FakeWorker)
@@ -746,7 +744,6 @@ def _install_ss_stubs(monkeypatch, fake_manifest):
         regions, tasks, events, stashes=None, per_participant=None, pins=None
     ):
         saved_tasks.extend(tasks)
-        return None
 
     monkeypatch.setattr(screenspace, "save_screenspace_manifest", fake_save)
     return saved_tasks

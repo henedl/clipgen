@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace Flask blueprint for clipgen.
 
 Registered at /screenspace/ by start_combined_server(). Works with or without a
@@ -60,9 +59,10 @@ import math
 import threading
 import uuid
 from collections import OrderedDict
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, TypeGuard, cast
+from typing import Any, TypeGuard, cast
 
 from flask import Blueprint, Response, jsonify, request, send_file
 
@@ -503,7 +503,7 @@ def api_pins_create(participant: str) -> FlaskResponse:
         "timestamp": round(timestamp, 3),
         "polarity": polarity,
         "label": label,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
     with _manifest_lock:
         pins = _participant_pin_list(participant, create=True)
@@ -710,7 +710,7 @@ def api_calibrate() -> FlaskResponse:
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
         return err(f"No video for participant {participant}", 404)
-    video_path, mtime_ns = resolved
+    video_path, _mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
     resolve_region = _region_coords_resolver(props, all_known_regions)
@@ -797,7 +797,7 @@ def api_calibrate() -> FlaskResponse:
                     ocr_reader=ocr_reader,
                 )
             entry.update(score)
-        except Exception as exc:  # noqa: BLE001 - one bad pin must not 500 the batch
+        except Exception as exc:  # one bad pin must not 500 the whole batch
             utils.warning_print(f"Calibration failed for pin {pin.get('id')}: {exc}")
             entry["status"] = "not_evaluable"
         results.append(entry)
@@ -1090,10 +1090,10 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             except ValueError:
                 return err("Invalid region")
             region_coords = {
-                "x": int(round(rx * frame_w)),
-                "y": int(round(ry * frame_h)),
-                "w": int(round(rw * frame_w)),
-                "h": int(round(rh * frame_h)),
+                "x": round(rx * frame_w),
+                "y": round(ry * frame_h),
+                "w": round(rw * frame_w),
+                "h": round(rh * frame_h),
             }
             # Optional shaped-region contours: "u1,v1;u2,v2;..." bbox-relative
             # fractions, multiple contours joined with "|". Malformed values
@@ -1695,7 +1695,7 @@ def api_stashes_create() -> FlaskResponse:
         stash = {
             "id": "stash_" + uuid.uuid4().hex[:8],
             "name": "Stashed Regions",
-            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "createdAt": datetime.now(UTC).isoformat(),
             "regions": copy.deepcopy(regions),
         }
         _manifest.setdefault("stashes", []).append(stash)
@@ -1934,14 +1934,11 @@ def _coerce_tool_spec(spec: dict[str, Any], tool_type: str, context: str = "") -
     Mutates *spec* in place; raises ``ValueError`` on bad input. *context* prefixes
     error messages (e.g. ``"Step 0: "``). Shared by the task-level and per-step paths.
     """
-    if tool_type == "similarity":
-        spec["reference_timestamp"] = _coerce_float(
-            spec.get("reference_timestamp"),
-            "reference_timestamp",
-            required=True,
-            context=context,
-        )
-    elif tool_type == "template" and not spec.get("template_image_data"):
+    if (
+        tool_type == "similarity"
+        or tool_type == "template"
+        and not spec.get("template_image_data")
+    ):
         spec["reference_timestamp"] = _coerce_float(
             spec.get("reference_timestamp"),
             "reference_timestamp",
@@ -2690,7 +2687,9 @@ def _validate_scene_references(
     validated_refs = []
     for i, ref_raw in enumerate(scene_refs):
         if not isinstance(ref_raw, dict):
-            raise ValueError(f"{context}scene_references[{i}] must be an object")
+            # ValueError, not TypeError: this validator's contract is that any bad
+            # payload raises ValueError, which the calling route turns into a 400.
+            raise ValueError(f"{context}scene_references[{i}] must be an object")  # noqa: TRY004
         ref_data = cast(dict[str, Any], ref_raw)
         name = str(ref_data.get("name", "")).strip()
         if not name:
@@ -2821,7 +2820,7 @@ def _init_screenspace_state(
 
 def _discover_participant_videos(study_name: str) -> None:
     """Scan input directory for source video files and populate _participants."""
-    global _participants  # noqa: PLW0603
+    global _participants
     _participants = utils.discover_participant_videos(study_name)
 
 

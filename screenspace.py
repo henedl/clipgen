@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace analysis engine for clipgen.
 
 Thirteen analysis tools (passed as 'type' when creating a task):

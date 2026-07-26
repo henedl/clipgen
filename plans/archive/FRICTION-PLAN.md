@@ -115,7 +115,9 @@ Phrase patterns, not bare words. Examples (final list refined during implementat
 ```python
 FRICTION_PATTERNS = {
     "hesitation": [
-        r"\bum+\b", r"\buh+\b", r"\berm+\b",
+        r"\bum+\b",
+        r"\buh+\b",
+        r"\berm+\b",
         r"\b(let me (see|think|try))\b",
         r"\b(i (think|guess|mean))\b",
         r"\b(kind of|sort of)\b",
@@ -133,12 +135,16 @@ FRICTION_PATTERNS = {
         r"\bwhy (won't|isn't|can't|does)\b",
     ],
     "surprise": [
-        r"\boh!?\b", r"\bhuh\b", r"\bwait what\b",
-        r"\bno way\b", r"\bwhat the\b",
+        r"\boh!?\b",
+        r"\bhuh\b",
+        r"\bwait what\b",
+        r"\bno way\b",
+        r"\bwhat the\b",
     ],
     "self_correction": [
         r"\bwait[,.]\s*(actually|no)\b",
-        r"\bnever mind\b", r"\bscratch that\b",
+        r"\bnever mind\b",
+        r"\bscratch that\b",
         r"\blet me start over\b",
     ],
     "help_seeking": [
@@ -156,15 +162,17 @@ Patterns are compiled once at module load. Matching is case-insensitive. Word bo
 `Agent` is a **TypedDict** — append a dict literal (not a constructor call):
 
 ```python
-Agent(
-    key="friction",
-    enabled_config_key="OLLAMA_FRICTION_ENABLED",
-    model_config_key="OLLAMA_FRICTION_MODEL",
-    manifest_field="friction",
-    depends_on=["summary"],
-    thread_name_prefix="friction",
-    run=_run_friction,
-),
+(
+    Agent(
+        key="friction",
+        enabled_config_key="OLLAMA_FRICTION_ENABLED",
+        model_config_key="OLLAMA_FRICTION_MODEL",
+        manifest_field="friction",
+        depends_on=["summary"],
+        thread_name_prefix="friction",
+        run=_run_friction,
+    ),
+)
 ```
 
 `_run_friction(entry, cancel_event)`:
@@ -180,9 +188,9 @@ Agent(
 
 ```python
 {
-    "segments": [...],       # per-segment scores from step 2
+    "segments": [...],  # per-segment scores from step 2
     "stats": {...},
-    "moments": [...],        # from LLM
+    "moments": [...],  # from LLM
     "computed_at": "...",
     "model": config.OLLAMA_FRICTION_MODEL,
     "stale": False,

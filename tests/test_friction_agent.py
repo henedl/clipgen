@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests for the friction thinking agent (thinking_agents friction helpers).
 
 Covers defensive JSON extraction/parsing, candidate formatting, the Ollama-

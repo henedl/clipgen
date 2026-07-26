@@ -47,7 +47,7 @@ import math
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +59,7 @@ import pipeline
 import utils
 import video
 from server_utils import MediaCache, err, ok, parse_clip_window
+import itertools
 
 # ---- Module state (initialized by _init_composer_state) ----
 
@@ -242,7 +243,7 @@ def api_cut_create() -> Any:
         "start": start,
         "end": end,
         "label": str(data.get("label", "")),
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": datetime.now(UTC).isoformat(),
     }
     with _manifest_lock:
         _manifest.setdefault("cuts", []).append(cut)
@@ -503,7 +504,7 @@ def api_annotation_create() -> Any:
         "span": {"start": span[0], "end": span[1]},
         "geometry": geometry,
         "style": _sanitize_annotation_style(data.get("style")),
-        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "createdAt": datetime.now(UTC).isoformat(),
     }
     with _manifest_lock:
         _manifest.setdefault("annotations", []).append(annotation)
@@ -1014,7 +1015,7 @@ def _annotation_windows(
         bounds.add(min(end, max(start, a["span"]["end"])))
     ordered = sorted(bounds)
     windows: list[dict[str, Any]] = []
-    for w_start, w_end in zip(ordered, ordered[1:]):
+    for w_start, w_end in itertools.pairwise(ordered):
         if w_end - w_start < 0.01:
             continue
         visible = [
@@ -1372,7 +1373,7 @@ def _init_composer_state(
     ``participant_list`` is accepted for parity with the other blueprints' init
     signatures; participants are discovered from the input dir on demand.
     """
-    global _input_dir, _sheet_context, _manifest  # noqa: PLW0603
+    global _input_dir, _sheet_context, _manifest
 
     _input_dir = str(utils.get_effective_input_dir())
     _sheet_context = sheet_context

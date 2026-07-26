@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Interactive prompt helpers for clipgen.
 
 All user-facing interactive prompts (line selection, range selection, cell
@@ -14,7 +13,8 @@ the caller should re-prompt or abort).
 import shutil
 import sys
 import webbrowser
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import config
 import spreadsheet
@@ -689,7 +689,7 @@ def browse_spreadsheet(sheet: Any, *, process_fn=None) -> None:
             else:
                 utils.info_print("Already at the last row.")
             return True, cur
-        if cmd.startswith("jump ") or cmd.startswith("j "):
+        if cmd.startswith(("jump ", "j ")):
             try:
                 parts = cmd.split()
                 if len(parts) >= 2:

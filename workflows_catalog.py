@@ -21,9 +21,10 @@ module, before running graphs — this module alone is an unwired catalog.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, NotRequired, TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 
 import config
 import utils
@@ -1027,7 +1028,7 @@ _MULTITOOL_STEP_TOOLS = frozenset(
     {"color", "change", "flow", "text", "numbers", "inactivity"}
 )
 
-for _ss_tool in _SS_DETECTOR_SPECS:
+for _ss_tool, _ss_param_spec in _SS_DETECTOR_SPECS.items():
     NODE_TYPES[f"ss_{_ss_tool}"] = {
         "id": f"ss_{_ss_tool}",
         "label": _SS_DETECTOR_LABELS[_ss_tool],
@@ -1040,7 +1041,7 @@ for _ss_tool in _SS_DETECTOR_SPECS:
             {"name": "timeRange", "type": "timeRange", "optional": True},
         ],
         "outputs": [{"name": "events", "type": "events"}],
-        "params": list(_SS_DETECTOR_SPECS[_ss_tool]),
+        "params": list(_ss_param_spec),
         "requires": ["videoDir"],
         # Hidden from the palette: the unified "detect" node below is the
         # palette-facing entry. These stay in the catalog as the per-detector

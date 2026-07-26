@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace OCR + numeric helpers.
 
 Pooled EasyOCR readers, region preprocessing, glyph confusion-folding, the
@@ -11,8 +10,9 @@ import math
 import queue
 import re
 import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 import cv2
 import numpy as np
@@ -121,7 +121,7 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
         return pixels
     if h < min_height:
         scale = min_height / float(h)
-        new_w = max(1, int(round(w * scale)))
+        new_w = max(1, round(w * scale))
         pixels = cv2.resize(pixels, (new_w, min_height), interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY) if pixels.ndim == 3 else pixels
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -321,10 +321,11 @@ def _score_numbers_readings(
         cleaned = text.replace(",", "")
         for match in _NUMBERS_RE.findall(cleaned):
             num = float(match)
-            if _number_matches(num, operator, target_value, range_min, range_max):
-                if matched_number is None or conf > matched_conf:
-                    matched_number = num
-                    matched_conf = conf
+            if _number_matches(num, operator, target_value, range_min, range_max) and (
+                matched_number is None or conf > matched_conf
+            ):
+                matched_number = num
+                matched_conf = conf
     detail: dict[str, Any] = {"confidence": round(matched_conf, 4)}
     if matched_number is not None:
         detail["number_found"] = matched_number

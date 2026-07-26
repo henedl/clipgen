@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests for the programmatic friction scorer (friction.py).
 
 Pure deterministic engine — no Ollama, no I/O. Covers phrase matching per

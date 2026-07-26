@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Transcription support for clipgen via faster-whisper (CTranslate2-based Whisper).
 
 The Whisper model is lazy-loaded on first use and cached at module level for the session.
@@ -45,9 +44,10 @@ import queue
 import re
 import threading
 import uuid
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 import config
 import utils
@@ -158,7 +158,7 @@ def _load_model(model_name: str | None = None) -> Any:
     When *model_name* is None, uses ``config.TRANSCRIBE_MODEL``. Passing a
     different name swaps the cached model.
     """
-    global _cached_model, _cached_model_name  # noqa: PLW0603
+    global _cached_model, _cached_model_name
 
     model_name = model_name or config.TRANSCRIBE_MODEL
     if _cached_model is not None and _cached_model_name == model_name:
@@ -373,11 +373,13 @@ def transcribe_timeline(
     out_language = ""
     out_model = ""
     for path, _duration, cumulative in timeline:
-        part_on_segment: Callable[[float, "TranscriptSegment"], None] | None = None
+        part_on_segment: Callable[[float, TranscriptSegment], None] | None = None
         if on_segment is not None:
             inner = on_segment
 
-            def part_on_segment(  # noqa: E731 - small per-part shifter
+            # Small per-part shifter: rebases this part's segment times onto the
+            # stitched timeline via the default-arg captures below.
+            def part_on_segment(
                 end_time: float,
                 segment: "TranscriptSegment",
                 _cum: int = cumulative,
@@ -686,7 +688,7 @@ def _format_markdown(result: TranscriptResult) -> str:
         f"- **Source:** {source_name}",
         f"- **Model:** {result['model']}",
         f"- **Language:** {result['language']}",
-        f"- **Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+        f"- **Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
         "",
         "---",
         "",
@@ -921,7 +923,7 @@ def create_transcript_task(
         "partial_segments": [],
         "result": None,
         "error": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "completed_at": None,
         "_cancelled": False,
     }
@@ -1079,7 +1081,7 @@ class TranscriptWorker:
                 task["status"] = TASK_STATUS_FAILED
                 task["error"] = "No video files — nothing to transcribe."
                 task["partial_segments"] = []
-                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                task["completed_at"] = datetime.now(UTC).isoformat()
             return
 
         # Multi-video participants form one continuous timeline; transcribe each
@@ -1097,7 +1099,7 @@ class TranscriptWorker:
                     "No audio stream — this video has no audio track to transcribe."
                 )
                 task["partial_segments"] = []
-                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                task["completed_at"] = datetime.now(UTC).isoformat()
             return
 
         if timeline is not None:
@@ -1144,7 +1146,7 @@ class TranscriptWorker:
                     task["status"] = TASK_STATUS_FAILED
                     task["error"] = "Transcription returned None"
                     task["partial_segments"] = []
-                    task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    task["completed_at"] = datetime.now(UTC).isoformat()
                 return
 
             with self._lock:
@@ -1156,19 +1158,19 @@ class TranscriptWorker:
                     "language": result["language"],
                     "model": result["model"],
                     "source_file": result["source_file"],
-                    "transcribed_at": datetime.now(timezone.utc).isoformat(),
+                    "transcribed_at": datetime.now(UTC).isoformat(),
                 }
-                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                task["completed_at"] = datetime.now(UTC).isoformat()
 
         except _TranscriptionCancelled:
             with self._lock:
                 task["status"] = TASK_STATUS_CANCELLED
                 task["partial_segments"] = []
-                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                task["completed_at"] = datetime.now(UTC).isoformat()
 
         except Exception as exc:
             with self._lock:
                 task["status"] = TASK_STATUS_FAILED
                 task["error"] = str(exc)
                 task["partial_segments"] = []
-                task["completed_at"] = datetime.now(timezone.utc).isoformat()
+                task["completed_at"] = datetime.now(UTC).isoformat()

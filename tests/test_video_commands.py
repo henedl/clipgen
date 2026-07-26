@@ -375,15 +375,7 @@ def test_probe_max_keyframe_gap_uses_max_not_median(monkeypatch, tmp_path):
     # Keyframes at 0, 1, 2, 8 (gaps 1, 1, 6). The max (6.0) is returned — a
     # single long-GOP stretch must not be masked by the surrounding short gaps
     # (median would be 1.0). Interior non-keyframe packets are ignored.
-    csv = "\n".join(
-        [
-            "0.000000,K__",
-            "0.033000,__",
-            "1.000000,K__",
-            "2.000000,K__",
-            "8.000000,K__",
-        ]
-    )
+    csv = "0.000000,K__\n0.033000,__\n1.000000,K__\n2.000000,K__\n8.000000,K__"
     monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: csv)
     assert video.probe_max_keyframe_gap(str(clip)) == 6.0
 
@@ -406,7 +398,7 @@ def test_probe_max_keyframe_gap_single_keyframe_returns_none(monkeypatch, tmp_pa
     clip.write_bytes(b"x")
     # Only one keyframe in the probe window → GOP longer than the window; can't
     # confirm short cadence, so treat as unknown (None → do not skip).
-    csv = "\n".join(["0.000000,K__", "0.033000,__", "1.000000,__"])
+    csv = "0.000000,K__\n0.033000,__\n1.000000,__"
     monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: csv)
     assert video.probe_max_keyframe_gap(str(clip)) is None
 
@@ -1296,7 +1288,7 @@ def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     ok = video.run_ffmpeg(
         "in.mp4", "out.mp4", "00:10", "00:15", reencode=False, cancel_flag=sentinel
     )
@@ -1326,7 +1318,7 @@ def test_enforce_filesize_limit_compresses_and_forwards_cancel_flag(monkeypatch)
 
     monkeypatch.setattr(video, "compress_to_size", _fake_compress)
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     video.enforce_filesize_limit("out.mp4", cancel_flag=sentinel)
     assert captured == [("out.mp4", 50, sentinel)]
 
@@ -1342,7 +1334,7 @@ def test_extract_screenshot_forwards_cancel_flag(monkeypatch):
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     ok = video.extract_screenshot("in.mp4", "out.png", "00:10", cancel_flag=sentinel)
     assert ok is True
     assert captured == [sentinel]
@@ -1359,7 +1351,7 @@ def test_extract_gif_forwards_cancel_flag(monkeypatch):
     captured: list = []
     monkeypatch.setattr(video, "run_ffmpeg_process", _captured_run_ffmpeg(captured))
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     ok = video.extract_gif("in.mp4", "out.gif", "00:10", 5, cancel_flag=sentinel)
     assert ok is True
     assert captured == [sentinel]
@@ -1377,7 +1369,7 @@ def test_compress_to_size_forwards_cancel_flag_to_both_passes(monkeypatch, tmp_p
     # Stub os.replace and unlink so the test doesn't move/delete real files.
     monkeypatch.setattr(video.os, "replace", lambda *_a, **_kw: None)
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     # Target tiny size so compression runs both passes.
     video.compress_to_size(str(big), 0.0001, cancel_flag=sentinel)
     assert captured == [sentinel, sentinel]
@@ -1482,7 +1474,6 @@ def test_batch_extract_screenshots_seeks_only_for_offset_grid(monkeypatch):
 
     def fake_run(command, **_kwargs):
         captured["cmd"] = command
-        return None  # short-circuit fallback; we only inspect the built command
 
     monkeypatch.setattr(video.config, "SCREENSHOT_FORMAT", ".png")
     monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)

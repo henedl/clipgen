@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Shaped-region mask primitives and per-tool masked-statistics behavior."""
 
 import numpy as np

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """clipgen - Video clip generator from Google Sheets timestamps.
 
 This program will help quickly create video snippets from longer video files, based on timestamps in a spreadsheet!
@@ -15,8 +14,9 @@ This script supports full unicode/UTF-8 for international characters in:
 """
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import config
 import files

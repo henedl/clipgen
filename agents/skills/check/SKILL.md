@@ -4,8 +4,8 @@ Run this before every `git commit` to catch formatting, lint, type, and test fai
 
 ## Steps (run in order, stop on first failure)
 
-1. **Format check** — `uv run ruff format --check` on all modified `.py` files.
-   - If any would be reformatted: run `uv run ruff format` on them, then re-check.
+1. **Format check** — `uv run ruff format --check` (covers `.py` **and** Python code blocks in `.md`).
+   - If any file would be reformatted: run `uv run ruff format`, then re-check.
 2. **Lint** — `uv run ruff check --fix`
 3. **Type check** — `uv run ty check`
 4. **Tests** — `uv run --extra dev pytest -c tests/pytest.ini`

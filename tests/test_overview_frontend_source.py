@@ -226,7 +226,7 @@ def test_hidden_utility_class_defined():
     Studio that rule came from studio.css — which this page doesn't load.
     Without it the "analysis running"/"data changed" banners render always."""
     css = (_WEB / "overview.css").read_text(encoding="utf-8")
-    assert re.search(r"^\.hidden \{\n  display: none !important;", css, re.M)
+    assert re.search(r"^\.hidden \{\n  display: none !important;", css, re.MULTILINE)
 
 
 def test_es5_discipline_in_overview_sources():

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace heatmap generation (pure cv2/PIL leaf).
 
 Template-, flow-, change-, and attention-heatmap PNGs plus animated-GIF views:

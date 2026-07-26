@@ -5,7 +5,8 @@ from unittest.mock import Mock
 import pytest
 
 Flask = pytest.importorskip("flask").Flask
-import server  # noqa: E402
+import server
+import itertools
 
 
 def _set_artifacts(monkeypatch, artifacts):
@@ -1322,7 +1323,7 @@ def test_api_timeline_viewer_without_intake(client, monkeypatch):
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: fake_clips)
     monkeypatch.setattr(pipeline, "process_clips", lambda *a, **kw: (1, fake_artifacts))
     monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
-    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
     monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
     monkeypatch.setattr(
         viewer, "generate_timeline_viewer", lambda *a, **kw: "/out/viewer.html"
@@ -1371,7 +1372,7 @@ def test_api_timeline_viewer_with_intake(client, monkeypatch):
         pipeline, "process_clips", lambda *a, **kw: (1, sheet_artifacts)
     )
     monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
-    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
     monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
 
     captured_artifacts = []
@@ -1522,7 +1523,7 @@ def test_api_timeline_viewer_passes_cancel_flag(client, monkeypatch):
     monkeypatch.setattr(spreadsheet, "generate_list", lambda *a, **kw: [{"desc": "x"}])
     monkeypatch.setattr(pipeline, "process_clips", fake_process_clips)
     monkeypatch.setattr(pipeline, "is_excel_worksheet", lambda ws: False)
-    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", lambda: [])
+    monkeypatch.setattr(viewer, "load_screenspace_events_for_viewer", list)
     monkeypatch.setattr(viewer, "finalize_timeline_data", lambda *a, **kw: {"meta": {}})
     monkeypatch.setattr(
         viewer, "generate_timeline_viewer", lambda *a, **kw: "/out/viewer.html"
@@ -1822,7 +1823,7 @@ def test_api_gallery_multi_video_intervals_globally_aligned(
     assert requested[str(b)] == list(range(5, 120, 10))  # 5,15,...,115
     # Global timestamps are evenly spaced by the interval across the boundary.
     globals_ = sorted(art["timestamp"] for art in captured["artifacts"])
-    diffs = {round(hi - lo, 6) for lo, hi in zip(globals_, globals_[1:])}
+    diffs = {round(hi - lo, 6) for lo, hi in itertools.pairwise(globals_)}
     assert diffs == {10.0}
 
 
@@ -1859,7 +1860,7 @@ def test_api_gallery_returns_409_when_busy(client, monkeypatch):
 
 
 def test_api_stashes_get_empty(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_stashes", list)
     resp = client.get("/studio/api/stashes")
     assert resp.status_code == 200
     data = resp.get_json()
@@ -1869,7 +1870,7 @@ def test_api_stashes_get_empty(client, monkeypatch):
 
 def test_api_stashes_create(client, monkeypatch):
     saved = []
-    monkeypatch.setattr(server, "_load_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_stashes", list)
     monkeypatch.setattr(server, "_save_stashes", lambda s: saved.append(s))
 
     items = [
@@ -1906,7 +1907,7 @@ def test_api_stashes_create_default_name(client, monkeypatch):
 
 
 def test_api_stashes_create_empty_items_400(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_stashes", list)
     resp = client.post(
         "/studio/api/stashes",
         json={"action": "create", "items": []},
@@ -1934,7 +1935,7 @@ def test_api_stashes_update_name(client, monkeypatch):
 
 
 def test_api_stashes_update_404(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_stashes", list)
     resp = client.post(
         "/studio/api/stashes",
         json={"action": "update", "id": "stash_nope", "name": "x"},
@@ -1963,7 +1964,7 @@ def test_api_stashes_delete(client, monkeypatch):
 
 
 def test_api_stashes_delete_not_found_404(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_stashes", list)
     resp = client.post(
         "/studio/api/stashes",
         json={"action": "delete", "id": "stash_nope"},
@@ -1972,7 +1973,7 @@ def test_api_stashes_delete_not_found_404(client, monkeypatch):
 
 
 def test_api_stashes_unknown_action_400(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_stashes", list)
     resp = client.post(
         "/studio/api/stashes",
         json={"action": "bogus"},
@@ -1986,7 +1987,7 @@ def test_api_stashes_unknown_action_400(client, monkeypatch):
 
 
 def test_api_artifact_stashes_get_empty(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_artifact_stashes", list)
     resp = client.get("/studio/api/artifact-stashes")
     assert resp.status_code == 200
     data = resp.get_json()
@@ -1996,7 +1997,7 @@ def test_api_artifact_stashes_get_empty(client, monkeypatch):
 
 def test_api_artifact_stashes_create(client, monkeypatch):
     saved = []
-    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_artifact_stashes", list)
     monkeypatch.setattr(server, "_save_artifact_stashes", lambda s: saved.append(s))
 
     items = [
@@ -2035,7 +2036,7 @@ def test_api_artifact_stashes_create_default_name(client, monkeypatch):
 
 
 def test_api_artifact_stashes_create_empty_items_400(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_artifact_stashes", list)
     resp = client.post(
         "/studio/api/artifact-stashes",
         json={"action": "create", "items": []},
@@ -2063,7 +2064,7 @@ def test_api_artifact_stashes_update_name(client, monkeypatch):
 
 
 def test_api_artifact_stashes_update_404(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_artifact_stashes", list)
     resp = client.post(
         "/studio/api/artifact-stashes",
         json={"action": "update", "id": "astash_nope", "name": "x"},
@@ -2092,7 +2093,7 @@ def test_api_artifact_stashes_delete(client, monkeypatch):
 
 
 def test_api_artifact_stashes_delete_not_found_404(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_artifact_stashes", list)
     resp = client.post(
         "/studio/api/artifact-stashes",
         json={"action": "delete", "id": "astash_nope"},
@@ -2101,7 +2102,7 @@ def test_api_artifact_stashes_delete_not_found_404(client, monkeypatch):
 
 
 def test_api_artifact_stashes_unknown_action_400(client, monkeypatch):
-    monkeypatch.setattr(server, "_load_artifact_stashes", lambda: [])
+    monkeypatch.setattr(server, "_load_artifact_stashes", list)
     resp = client.post(
         "/studio/api/artifact-stashes",
         json={"action": "bogus"},

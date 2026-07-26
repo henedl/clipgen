@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Parse ``CHANGELOG.md`` into structured entries for the Start overlay.
 
 Each entry corresponds to a level-2 heading in the form::

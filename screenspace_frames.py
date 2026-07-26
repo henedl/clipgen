@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace frame extraction (ffmpeg pipe + ffprobe).
 
 The per-frame scan drivers (``scan_video_frames`` / ``scan_video_full_frames``),
@@ -63,12 +62,11 @@ def scan_video_frames(
     # Reject zero-dimension regions early so ffmpeg's crop filter doesn't
     # produce empty frames downstream (which would crash cv2.cvtColor /
     # cv2.GaussianBlur with an opaque shape mismatch).
-    if not full_frame and region is not None:
-        if region.get("w", 0) <= 0 or region.get("h", 0) <= 0:
-            utils.warning_print(
-                f"Skipping scan: region has zero width or height ({region})"
-            )
-            return
+    if region is not None and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
+        utils.warning_print(
+            f"Skipping scan: region has zero width or height ({region})"
+        )
+        return
     if cv_scale is None:
         cv_scale = config.SCREENSPACE_CV_RESOLUTION_SCALE
 
@@ -190,8 +188,8 @@ def _ffmpeg_pipe_frames(
     # max_dim cap. Skipped at 1.0 so default-config runs are byte-identical
     # to pre-feature behavior.
     if cv_scale > 0 and abs(cv_scale - 1.0) > 1e-6:
-        scaled_w = max(2, int(round(out_w * cv_scale)))
-        scaled_h = max(2, int(round(out_h * cv_scale)))
+        scaled_w = max(2, round(out_w * cv_scale))
+        scaled_h = max(2, round(out_h * cv_scale))
         scaled_w += scaled_w % 2
         scaled_h += scaled_h % 2
         filters.append(f"scale={scaled_w}:{scaled_h}:flags=lanczos")
@@ -349,7 +347,7 @@ def _scan_via_ffmpeg_pipe(
     _phash_thresh = (fast_opts or {}).get(
         "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
     )
-    _prev_phash: list["imagehash.ImageHash | None"] = [None]
+    _prev_phash: list[imagehash.ImageHash | None] = [None]
 
     pipe_region = None if full_frame else region
     # For the pipe, push max_dim downscaling into ffmpeg when phash_skip is off.

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Utility functions for clipgen."""
 
 import contextlib
@@ -10,10 +9,11 @@ import os
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from datetime import datetime
 from numbers import Integral, Real
 from pathlib import Path
-from typing import Any, Callable, TypedDict, TypeVar
+from typing import Any, TypedDict, TypeVar
 
 import config
 
@@ -1496,8 +1496,7 @@ def seconds_to_timestamp(total_seconds: float, *, force_hours: bool = False) -> 
     whole seconds so the ``:d``/``:02d`` format specs can't crash.
     """
     total_seconds = int(total_seconds)
-    if total_seconds < 0:
-        total_seconds = 0
+    total_seconds = max(total_seconds, 0)
     hours, rem = divmod(total_seconds, config.SECONDS_PER_HOUR)
     minutes, seconds = divmod(rem, config.SECONDS_PER_MINUTE)
     if hours > 0 or force_hours:
@@ -1703,8 +1702,7 @@ def cluster_spans(
             groups.append((cur_start, cur_end, cur_members))
             cur_start, cur_end, cur_members = s, e, [orig_idx]
         else:
-            if e > cur_end:
-                cur_end = e
+            cur_end = max(cur_end, e)
             cur_members.append(orig_idx)
     groups.append((cur_start, cur_end, cur_members))
 
@@ -1756,8 +1754,7 @@ def apply_span_padding(
         s = min(s, max(0.0, limit - 1))
     if max_duration > 0 and (e - s) > max_duration:
         e = s + max_duration
-    if e < s + 1:
-        e = s + 1
+    e = max(e, s + 1)
     return s, e
 
 
@@ -2060,8 +2057,10 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
                         f"Numbered source videos for participant '{pid}' are "
                         f"non-contiguous (found parts {indices}); expected 1..N.",
                         [
-                            "Skipping this participant; rename the parts to a "
-                            "gapless 1..N sequence to enable concatenation.",
+                            (
+                                "Skipping this participant; rename the parts to a "
+                                "gapless 1..N sequence to enable concatenation."
+                            ),
                         ],
                     )
                     continue

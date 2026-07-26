@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Tests for thinking_agents module.
 
 Covers the built-in summary and citation agents plus registry invariants.
@@ -213,7 +212,7 @@ class TestSummarizeTranscript:
     @patch("thinking_agents.ollama_client.generate")
     def test_forwards_on_token_to_generate(self, mock_generate):
         mock_generate.return_value = "ok"
-        sink = lambda _tok: None  # noqa: E731
+        sink = lambda _tok: None
         segments = [
             {
                 "text": "A sufficiently long segment of text for the minimum length check."
@@ -225,7 +224,7 @@ class TestSummarizeTranscript:
     @patch("thinking_agents.ollama_client.generate")
     def test_run_summary_forwards_on_token(self, mock_generate):
         mock_generate.return_value = "ok"
-        sink = lambda _tok: None  # noqa: E731
+        sink = lambda _tok: None
         entry = {
             "segments": [
                 {"text": "A sufficiently long segment of text for the length check."}

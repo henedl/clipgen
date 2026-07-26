@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Screenspace multitool chaining.
 
 Chains multiple tools (each later step only re-checks frames that passed the
@@ -8,7 +7,8 @@ sweep / ffprobe helper from screenspace_frames.
 """
 
 import bisect
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 

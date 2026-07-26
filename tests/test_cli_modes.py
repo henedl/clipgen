@@ -10,31 +10,31 @@ import viewer as viewer_mod
 
 
 def _args(**overrides):
-    base = dict(
-        batch=False,
-        lines=None,
-        range=None,
-        category=None,
-        cell=None,
-        participant=None,
-        keyword=False,
-        severity=None,
-        mixed=None,
-        reel=None,
-        chronologic=None,
-        highlights=None,
-        screen=False,
-        gif=False,
-        no_input=False,
-        verbose=False,
-        spreadsheet=None,
-        viewer=False,
-        screenspace=False,
-        transcripts=False,
-        workflows=False,
-        composer=False,
-        overview=False,
-    )
+    base = {
+        "batch": False,
+        "lines": None,
+        "range": None,
+        "category": None,
+        "cell": None,
+        "participant": None,
+        "keyword": False,
+        "severity": None,
+        "mixed": None,
+        "reel": None,
+        "chronologic": None,
+        "highlights": None,
+        "screen": False,
+        "gif": False,
+        "no_input": False,
+        "verbose": False,
+        "spreadsheet": None,
+        "viewer": False,
+        "screenspace": False,
+        "transcripts": False,
+        "workflows": False,
+        "composer": False,
+        "overview": False,
+    }
     base.update(overrides)
     return Namespace(**base)
 

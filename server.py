@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Combined Flask server for clipgen Studio, Screenspace, Transcripts, and Workflows.
 
 Entry point: start_combined_server(worksheet, port, default_page) registers
@@ -60,11 +59,12 @@ import sys
 import threading
 import time
 import webbrowser
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterator
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from flask import (
     Blueprint,
@@ -95,6 +95,7 @@ from server_utils import (
     parse_clip_window,
     parse_number_arg,
 )
+from datetime import UTC
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -280,7 +281,11 @@ def _try_claim_busy(slot: str) -> bool:
     Returns True on success (caller must call ``_release_busy`` when done) or
     False if another request is already holding the slot.
     """
-    global _generate_in_progress, _reel_in_progress, _timeline_viewer_in_progress, _gallery_in_progress  # noqa: PLW0603
+    global \
+        _generate_in_progress, \
+        _reel_in_progress, \
+        _timeline_viewer_in_progress, \
+        _gallery_in_progress
     with _busy_lock:
         if slot == "generate":
             if _generate_in_progress:
@@ -373,7 +378,11 @@ def _release_busy(slot: str) -> None:
 
     Valid slots: ``'generate'``, ``'reel'``, ``'timeline_viewer'``, ``'gallery'``.
     """
-    global _generate_in_progress, _reel_in_progress, _timeline_viewer_in_progress, _gallery_in_progress  # noqa: PLW0603
+    global \
+        _generate_in_progress, \
+        _reel_in_progress, \
+        _timeline_viewer_in_progress, \
+        _gallery_in_progress
     with _busy_lock:
         if slot == "generate":
             _generate_in_progress = False
@@ -453,7 +462,7 @@ def _increment_intake_done(n: int = 1) -> None:
 
 def _mark_intake_active(active: bool) -> None:
     """Increment/decrement the in-flight intake-stream counter."""
-    global _intake_active  # noqa: PLW0603
+    global _intake_active
     with _busy_lock:
         _intake_active += 1 if active else -1
 
@@ -1430,11 +1439,9 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
             new_times.append(
                 (
                     utils.seconds_to_timestamp(
-                        int(round(start_sec)), force_hours=needs_hours
+                        round(start_sec), force_hours=needs_hours
                     ),
-                    utils.seconds_to_timestamp(
-                        int(round(end_sec)), force_hours=needs_hours
-                    ),
+                    utils.seconds_to_timestamp(round(end_sec), force_hours=needs_hours),
                 )
             )
         if new_times:
@@ -2176,7 +2183,7 @@ def api_regenerate() -> FlaskResponse:
 def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskResponse:
     """Shared create/update/delete logic for stash endpoints."""
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     data = request.get_json(silent=True) or {}
     action = data.get("action", "create")
@@ -2201,7 +2208,7 @@ def _handle_stash_crud(load_fn: Any, save_fn: Any, id_prefix: str) -> FlaskRespo
                 "items": items,
                 "count": len(items),
                 "totalDuration": total_duration,
-                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "createdAt": datetime.now(UTC).isoformat(),
             }
             stashes.append(stash)
             save_fn(stashes)
@@ -2346,7 +2353,7 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
         # subset (now at defaults) with the current non-default values of
         # everything else, and let _save_studio_settings drop any keys that
         # equal their default (including the ones we just reset).
-        merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS.keys()}
+        merged = {name: getattr(config, name) for name in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
         return applied, None
 
@@ -2621,7 +2628,7 @@ def api_titlecard_delete(name: str) -> FlaskResponse:
             setattr(config, setting, "")
             reset[setting] = ""
     if reset:
-        merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS.keys()}
+        merged = {n: getattr(config, n) for n in config.STUDIO_SETTINGS}
         _save_studio_settings(merged)
     return ok(reset=reset)
 
@@ -3059,7 +3066,7 @@ def _init_studio_state(worksheet: Any) -> None:
     the HTML, but spreadsheet-dependent routes report ``sheet_loaded: false``
     until a sheet is opened via ``POST /api/spreadsheets/open``.
     """
-    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    global _worksheet, _generated_artifacts, _generated_reels
 
     _load_studio_settings()
     _worksheet = worksheet
@@ -3116,8 +3123,8 @@ def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
                 "label": Path(path).name,
                 "worksheet": getattr(worksheet, "title", ""),
             }
-    except Exception:
-        pass
+    except ImportError:
+        pass  # no excel_io in this build; fall through to the gspread branch
     # gspread Worksheet (or anything quacking like one): use the parent
     # spreadsheet title as both the identifier and the label.
     parent = getattr(worksheet, "spreadsheet", None)
@@ -3154,7 +3161,7 @@ def _swap_worksheet(new_worksheet: Any) -> None:
     import screenspace_server
     import transcripts_server
 
-    global _worksheet, _sheet_context, _generated_artifacts, _generated_reels
+    global _worksheet, _generated_artifacts, _generated_reels
     prev_worksheet = _worksheet
     prev_sheet_context = _sheet_context
     prev_artifacts = _generated_artifacts
@@ -3184,14 +3191,14 @@ def _swap_worksheet(new_worksheet: Any) -> None:
                 sheet_context=_sheet_context,
                 participant_list=_resolve_participants(),
             )
-        except Exception:
+        except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
         try:
             transcripts_server._init_transcripts_state(
                 sheet_context=_sheet_context,
                 participant_list=_resolve_participants(),
             )
-        except Exception:
+        except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
         raise
 
@@ -3568,9 +3575,7 @@ def build_combined_app(
                 import clipgen as _clipgen
                 import google_api
 
-                if id_or_path.startswith("http://") or id_or_path.startswith(
-                    "https://"
-                ):
+                if id_or_path.startswith(("http://", "https://")):
                     new_ws = _clipgen.open_spreadsheet_by_url(
                         _google_auth.client, id_or_path, worksheet_name=worksheet
                     )

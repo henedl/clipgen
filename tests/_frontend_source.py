@@ -30,8 +30,8 @@ def concat_js(prefix: str) -> str:
 
 def strip_comments(src: str) -> str:
     """Drop ``/* */`` blocks and full-line ``//`` comments from a JS source."""
-    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
-    return re.sub(r"^\s*//.*$", "", src, flags=re.M)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    return re.sub(r"^\s*//.*$", "", src, flags=re.MULTILINE)
 
 
 def assert_es5(src: str, name: str) -> None:

@@ -23,9 +23,9 @@ import pytest
 
 pytest.importorskip("flask")
 
-import config  # noqa: E402
-import server  # noqa: E402
-import start_settings  # noqa: E402
+import config
+import server
+import start_settings
 
 
 @pytest.fixture

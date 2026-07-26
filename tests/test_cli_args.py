@@ -416,9 +416,12 @@ def test_run_cli_mode_dispatch(
     monkeypatch.setattr(clipgen, process_attr, process_fn)
     monkeypatch.setattr(clipgen, "_print_completion_message", completion)
 
-    parsed_defaults = dict(
-        line_numbers=None, range_start=None, range_end=None, cell_specs=None
-    )
+    parsed_defaults = {
+        "line_numbers": None,
+        "range_start": None,
+        "range_end": None,
+        "cell_specs": None,
+    }
     parsed_defaults.update(parsed_kwargs)
 
     cli.run_cli_mode(None, args, cli.CliModeArgs(**parsed_defaults))
@@ -483,7 +486,7 @@ def test_select_worksheet_url_skips_drive_listing(monkeypatch):
 def test_single_xlsx_fallback_path_requires_exactly_one(monkeypatch):
     import excel_io
 
-    monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: [])
+    monkeypatch.setattr(excel_io, "list_excel_in_cwd", list)
     assert cli._single_xlsx_fallback_path("reason") is None
 
     monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["a.xlsx", "b.xlsx"])

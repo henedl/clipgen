@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Ollama local LLM transport for clipgen.
 
 A thin, reusable HTTP wrapper around the Ollama REST API. All functions fail
@@ -28,7 +27,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import config
 import utils
@@ -157,9 +157,7 @@ def _is_connection_refused(exc: Exception) -> bool:
         exc.reason, ConnectionRefusedError
     ):
         return True
-    if isinstance(exc, ConnectionRefusedError):
-        return True
-    return False
+    return isinstance(exc, ConnectionRefusedError)
 
 
 def _ollama_install_guidance_lines() -> list[str]:
@@ -342,8 +340,8 @@ def _do_generate(
         if resp is not None:
             try:
                 resp.close()
-            except Exception:
-                pass
+            except OSError:
+                pass  # already-dead socket; nothing to recover
         if watcher is not None:
             watcher.join(timeout=0.5)
         if deadline_exceeded:
@@ -478,8 +476,8 @@ def _do_pull(model: str, on_progress: Callable[[dict[str, Any]], None] | None) -
         if resp is not None:
             try:
                 resp.close()
-            except Exception:
-                pass
+            except OSError:
+                pass  # already-dead socket; nothing to recover
     return succeeded
 
 

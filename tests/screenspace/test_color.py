@@ -73,7 +73,7 @@ class TestResolveRegionRequest:
         assert region["w"] == 1.0
 
     def test_active_ref(self):
-        name, region = screenspace.resolve_region_request(
+        _name, region = screenspace.resolve_region_request(
             "", {"source": "active", "name": "hud"}, self.MANIFEST
         )
         assert region["w"] == 0.5

@@ -375,7 +375,7 @@ def test_process_clips_forwards_cancel_flag_to_segments(monkeypatch, make_clip):
 
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     clipgen.process_clips([raw_clip], output_format="clip", cancel_flag=sentinel)
     assert captured["cancel_flag"] is sentinel
 
@@ -435,7 +435,7 @@ def test_process_single_clip_segments_forwards_cancel_to_video(monkeypatch, make
     monkeypatch.setattr(pipeline.video, "extract_gif", fake_gif)
     monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     pipeline._process_single_clip_segments(
         raw_clip, "src.mp4", set(), output_format="clip", cancel_flag=sentinel
     )
@@ -1015,7 +1015,7 @@ def test_process_reel_forwards_cancel_and_titlecard_options_to_segments(
     monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
     monkeypatch.setattr(pipeline, "_build_reel_transcript", lambda *_a, **_k: [])
 
-    sentinel = lambda: False  # noqa: E731
+    sentinel = lambda: False
     clipgen.process_reel(
         [raw_clip],
         output_file="reel.mp4",

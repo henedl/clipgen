@@ -7,12 +7,12 @@ import pytest
 
 Flask = pytest.importorskip("flask").Flask
 
-import config  # noqa: E402
-import thinking_agents  # noqa: E402
-import transcripts  # noqa: E402
-import transcripts_server  # noqa: E402
-import video  # noqa: E402
-import viewer  # noqa: E402
+import config
+import thinking_agents
+import transcripts
+import transcripts_server
+import video
+import viewer
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def tr_client(tmp_path, monkeypatch):
     monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
     monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
 
-    monkeypatch.setattr(viewer, "load_manifest_artifacts", lambda: [])
+    monkeypatch.setattr(viewer, "load_manifest_artifacts", list)
 
     with app.test_client() as c:
         yield c
@@ -559,7 +559,6 @@ def test_orchestrator_stop_then_restart_isolates_run_state(
     def blocking_run_first(snapshot, cancel_event, on_token=None):
         started_first.set()
         release_first.wait(timeout=5)
-        return None
 
     monkeypatch.setitem(summary_agent, "run", blocking_run_first)
 
@@ -584,7 +583,6 @@ def test_orchestrator_stop_then_restart_isolates_run_state(
     def blocking_run_second(snapshot, cancel_event, on_token=None):
         started_second.set()
         release_second.wait(timeout=5)
-        return None
 
     monkeypatch.setitem(summary_agent, "run", blocking_run_second)
     orch.run_agent("summary", pid, force=True)
@@ -638,7 +636,6 @@ def test_summary_partial_streams_via_sink_and_clears(
         on_token(" world")
         streamed.set()
         release.wait(timeout=5)
-        return None  # don't commit; finally releases the slot
 
     monkeypatch.setitem(summary_agent, "run", streaming_run)
 
@@ -1057,7 +1054,6 @@ def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch
 
     def stub_run(snapshot, cancel_event, on_token=None):
         done.set()
-        return None
 
     fr_agent = thinking_agents.get_agent("friction")
     assert fr_agent is not None
@@ -1436,7 +1432,6 @@ def test_citations_regenerate_does_not_run_disabled_friction(
 
     def fr_stub(snapshot, cancel_event, on_token=None):
         friction_ran.set()
-        return None
 
     cit_agent = thinking_agents.get_agent("citations")
     fr_agent = thinking_agents.get_agent("friction")
@@ -1517,7 +1512,6 @@ def test_on_task_complete_registers_summary_before_disk_write(
             "summary must be in-flight before the manifest disk write"
         )
         persisted["flag"] = True
-        return None  # avoid touching disk
 
     monkeypatch.setattr(transcripts, "save_transcripts_manifest", _spy_save)
 
@@ -1528,7 +1522,6 @@ def test_on_task_complete_registers_summary_before_disk_write(
     def _blocking_summary(snapshot, cancel_event, on_token=None):
         started.set()
         release.wait(2.0)
-        return None  # don't commit/chain; the finally{} block releases the slot
 
     summary_agent = thinking_agents.get_agent("summary")
     assert summary_agent is not None
