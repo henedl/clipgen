@@ -34,6 +34,7 @@
     selectParticipant = SS.selectParticipant,
     taskTypeColor = SS.taskTypeColor,
     updateMarkerInfo = SS.updateMarkerInfo,
+    updateParamResetButtons = SS.updateParamResetButtons,
     updateRegionButtons = SS.updateRegionButtons,
     updateRunButton = SS.updateRunButton;
 
@@ -516,6 +517,10 @@
     container.classList.remove("drag-over-append");
   }
 
+  // Writes the value only — no event is dispatched, so nothing downstream of an
+  // `input` listener updates (value readouts, the model view, the calibration
+  // mark/tint). Callers that need those to follow must dispatch a bubbling
+  // `input` themselves, as the calibration Apply badge does.
   function setInputValue(selector, value) {
     var inp = qs(selector);
     if (inp) inp.value = value;
@@ -621,8 +626,12 @@
     // Rebuild param controls then set values. Suppress the calibration re-eval
     // this triggers — it would run on the just-reset default params; the
     // refreshCalibration() at the end of restore evaluates the real values.
+    // {defaults: true} keeps the session's remembered values out of the panel:
+    // this must show the task's own parameters, and a param the task doesn't
+    // carry (an absent event label) has to read as absent, not as whatever was
+    // last typed.
     state.suppressCalibrationRefresh = true;
-    renderWorkflowParams();
+    renderWorkflowParams({ defaults: true });
     state.suppressCalibrationRefresh = false;
 
     params = task.parameters || {};
@@ -742,6 +751,10 @@
     }
 
     syncValueDisplays();
+    // The setInputValue calls above dispatch nothing, so the reset buttons have
+    // to be re-derived against the task's values rather than the defaults the
+    // panel was built with.
+    updateParamResetButtons();
     updateRunButton();
     // Re-evaluate pins against the restored params so the strip (and the Run
     // "Calibrated" hint) immediately reflect whether the saved task still
