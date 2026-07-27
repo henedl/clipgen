@@ -45,6 +45,11 @@ output*/
 .cursor/
 .vscode/
 .conductor/
+# Conductor's per-worktree agent scratch dir. Conductor also excludes this via
+# .git/info/exclude, but that file is local-only and absent from a plain clone —
+# so the rule lives here too. Holds the /ui-check fixture project (videos,
+# workbook, manifests, screenshots) alongside agent notes.
+.context/
 .venv/
 node_modules/
 .claude/*

@@ -118,4 +118,4 @@ jobs:
           uv pip install ".[dev]" --torch-backend cpu
 
       - name: Type check
-        run: uvx ty@0.0.33 check
+        run: uvx ty@0.0.63 check

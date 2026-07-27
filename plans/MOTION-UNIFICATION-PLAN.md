@@ -98,6 +98,7 @@ plus `pulse-dot`. Decide before building:
 
 - Extend `tests/test_motion_wiring.py` for every new kind/API and every new `<script src="motion.js">`
   include; keep `tests/test_frontend_satellite_wiring.py` green.
-- Manual browser check per touched surface (repo rule: no headless-browser installs) — verify the
-  animation, the reused-surface re-open, and `prefers-reduced-motion`. A DevTools
-  `el.getAnimations()` snippet is the fastest bisect for "animation created but not painted."
+- Run `/ui-check` per touched surface: it fails on any uncaught error and screenshots the page, and
+  `tests/ui/shot.py <page> --eval "return el.getAnimations()..."` is the fastest bisect for
+  "animation created but not painted" — no DevTools paste needed. Animation *feel*, the
+  reused-surface re-open, and `prefers-reduced-motion` still want a human eye.

@@ -21,7 +21,9 @@ Two sections, each kept only if it earns its place:
 - **Summary** — what changed and *why*, in 1–2 sentences. Add one bullet per part only when there
   are several distinct parts. Backtick paths, endpoints, and config keys.
 - **Test plan** — `[x]` for automated checks you ran, `[ ]` for manual steps still needed. Be
-  honest about what isn't verified (e.g. "⚠️ UI not browser-checked").
+  honest about what isn't verified. Frontend PRs should normally carry a `[x]` for
+  [/ui-check](skills/ui-check/SKILL.md) (pages loaded clean, screenshots reviewed); "⚠️ UI not
+  browser-checked" is now the exception that needs a reason, not the default.
 
 Cut anything that doesn't help a reviewer: no Motivation/Solution/Alternatives scaffolding, and
 don't restate the diff in prose.
