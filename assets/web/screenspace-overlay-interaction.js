@@ -951,9 +951,9 @@
     var regionToolTrack = createSegTrack({
       value: state.regionTool,
       options: [
-        { value: "rect", icon: "squares-2x2", title: "Rectangle: drag to select" },
-        { value: "lasso", icon: "pencil", title: "Lasso: draw a freehand shape" },
-        { value: "wand", icon: "sparkles", title: "Magic wand: click a similar-colored area" },
+        { value: "rect", icon: "squares-2x2", title: "Rectangle: drag to select", hotkey: "screenspace.regionRect" },
+        { value: "lasso", icon: "pencil", title: "Lasso: draw a freehand shape", hotkey: "screenspace.regionLasso" },
+        { value: "wand", icon: "sparkles", title: "Magic wand: click a similar-colored area", hotkey: "screenspace.regionWand" },
       ],
       basePath: "/screenspace/icons/",
       onChange: setRegionTool,
@@ -973,6 +973,16 @@
       // capsule track glides rather than jumps when the slider (dis)appears.
       qs("#wandToleranceWrap").classList.toggle("collapsed", tool !== "wand");
     }
+    // Registered here rather than the hub's initKeyboard(): setRegionTool is local
+    // to initRegionDrawing (which runs once), so the switcher stays unexported.
+    // Ungated on purpose — a tool key pressed mid-draw aborts the draw and
+    // switches, which setRegionTool already handles.
+    window.ClipgenHotkeys.register([
+      { id: "screenspace.regionRect", repeat: false, handler: function () { setRegionTool("rect"); } },
+      { id: "screenspace.regionLasso", repeat: false, handler: function () { setRegionTool("lasso"); } },
+      { id: "screenspace.regionWand", repeat: false, handler: function () { setRegionTool("wand"); } },
+    ]);
+
     var wandToleranceInput = qs("#wandToleranceInput");
     wandToleranceInput.value = String(state.wandTolerance);
     wandToleranceInput.addEventListener("input", function () {
