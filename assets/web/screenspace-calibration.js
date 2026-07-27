@@ -36,6 +36,13 @@
 
   var _calibrationGen = 0;
   var _calibrationTimer = 0;
+  // Per-slider pin verdict, keyed by the threshold control's element id:
+  // {lo, hi, compare, applyVal, min, max, step}. Written by _calBuildTrack (only
+  // when a step-aligned cutoff exists), read by updateCalibrationSliderMarks to
+  // annotate the control itself. Rebuilt from scratch on every renderCalibration
+  // — which every param-panel rebuild funnels through — so an entry can never
+  // outlive the slider it describes.
+  var _calBands = {};
   // Set while restoreTaskToWorkflow() rebuilds the param panel: the
   // renderWorkflowParams() call there fires before the saved values are
   // written, so its calibration re-eval would POST default params only to be
@@ -207,8 +214,8 @@
   // Build one track (axis + dots + optional threshold line). `rows` is
   // [{polarity, timestamp, sc, stale}] where `sc` is the score object for this
   // track (the pin entry for a single tool, or entry.steps[k] for multitool).
-  // `suggest` enables the dashed midpoint marker + "Apply" badge (single tools
-  // with a threshold slider only; multitool steps pass it falsy).
+  // `suggest` enables the dashed midpoint marker + "Apply" badge — every track
+  // whose tool has a threshold slider, single or multitool step.
   function _calBuildTrack(rows, tool, axis, sliderId, label, suggest) {
     var track = el("div", "cal-track");
     if (label) track.appendChild(label);
@@ -243,6 +250,13 @@
       if (applyVal == null) {
         narrowGap = true; // valid interval exists but no step-aligned value lands in it
       } else {
+        // Same gate as the Apply badge, so the mark drawn on the slider itself
+        // (updateCalibrationSliderMarks) and the panel always agree: a pin
+        // verdict is recorded only when a reachable cutoff exists.
+        _calBands[sliderId] = {
+          lo: suggestion.lo, hi: suggestion.hi, compare: axis.compare,
+          applyVal: applyVal, min: range.min, max: range.max, step: step,
+        };
         // Marker sits where Apply lands, so the threshold line meets it exactly.
         var marker = el("div", "cal-suggestion");
         marker.style.left = _calPos(applyVal, range, axis.invert) + "%";
@@ -375,6 +389,19 @@
     return v.toFixed(decimals);
   }
 
+  // Does threshold `t` fall inside the valid interval, i.e. satisfy every scored
+  // pin? Either bound may be null (unbounded). The inclusivity is asymmetric by
+  // direction and mirrors the backend's own comparison, so the slider tint and
+  // the per-pin dots can never disagree. `!= null` throughout: 0 is a legitimate
+  // bound (inactivity and color min-area both start there).
+  function _calValueSatisfies(t, lo, hi, compare) {
+    if (!isFinite(t)) return false;
+    if (compare === "le") {
+      return (lo == null || t >= lo) && (hi == null || t < hi);
+    }
+    return (lo == null || t > lo) && (hi == null || t <= hi);
+  }
+
   // Pick a step-aligned threshold inside the valid interval [lo, hi] (either
   // bound may be null = unbounded). The interval is asymmetric by direction —
   // ge needs lo < T <= hi, le needs lo <= T < hi — so the plain midpoint can
@@ -388,10 +415,7 @@
   function _calApplyValue(lo, hi, compare, step, rmin, rmax) {
     function valid(t) {
       if (t < rmin || t > rmax) return false;
-      if (compare === "le") {
-        return (lo == null || t >= lo) && (hi == null || t < hi);
-      }
-      return (lo == null || t > lo) && (hi == null || t <= hi);
+      return _calValueSatisfies(t, lo, hi, compare);
     }
     var target;
     if (lo != null && hi != null) target = (lo + hi) / 2;
@@ -445,10 +469,14 @@
     var stripsEl = qs("#calibrationStrips");
     if (!stripsEl) return;
     stripsEl.innerHTML = "";
+    // Re-derived below by _calBuildTrack; clearing first is what un-marks the
+    // sliders when the pins, the participant, or the fetch outcome change.
+    _calBands = {};
     if (!result || !result.pins || !result.pins.length) {
       if (summaryEl) summaryEl.textContent = "";
       _calSetNote([]);
       state.calibrationGreen = false;
+      updateCalibrationSliderMarks();
       updateRunButton();
       return;
     }
@@ -512,6 +540,7 @@
     var cov = _calCoverageNote();
     if (cov) notes.push(cov);
     _calSetNote(notes);
+    updateCalibrationSliderMarks();
     updateRunButton();
   }
 
@@ -528,6 +557,61 @@
       if (!(mx > mn) || !isFinite(val)) return;
       var invert = line.getAttribute("data-cal-invert") === "1";
       line.style.left = _calPos(val, { min: mn, max: mx }, invert) + "%";
+    });
+  }
+
+  // Human-readable valid interval for the readout tooltip. Either bound may be
+  // open, which is the common case when only positives are pinned.
+  function _calBandLabel(band) {
+    var lo = band.lo != null ? _calFmtVal(band.lo, band.step) : null;
+    var hi = band.hi != null ? _calFmtVal(band.hi, band.step) : null;
+    if (lo != null && hi != null) return lo + "–" + hi;
+    if (hi != null) return "up to " + hi;
+    return "from " + lo;
+  }
+
+  // Annotate each threshold control with what the pins say: a hairline on the
+  // slider track at the suggested cutoff, and a green/red tint on the value
+  // readout for whether the *current* value satisfies every scored pin. Runs
+  // whether or not the strip is expanded — the panel ships collapsed, so this is
+  // the only calibration signal most users see while tuning.
+  //
+  // Sweep-then-apply, because the paths that invalidate a mark leave the slider
+  // DOM in place: participant switch, clear-pins, a failed fetch, or a pin that
+  // flips a clean gap into an overlap. Only a param-panel rebuild disposes of
+  // the controls for us — and multitool's step ids are positional, so after a
+  // delete-and-reindex the same id can belong to a different step.
+  function updateCalibrationSliderMarks() {
+    // Previously-marked nodes are found in the DOM rather than tracked in a JS
+    // list: #workflowParams is rebuilt by innerHTML at arbitrary times, which
+    // would leave any retained element references pointing at detached nodes.
+    qsa("#workflowParams .cal-mark, #workflowParams .cal-pass, #workflowParams .cal-fail")
+      .forEach(function (node) {
+        node.classList.remove("cal-mark", "cal-pass", "cal-fail");
+        node.style.removeProperty("--cal-mark-frac");
+        node.removeAttribute("data-tooltip");
+      });
+    Object.keys(_calBands).forEach(function (sliderId) {
+      var band = _calBands[sliderId];
+      var ctrl = qs("#" + sliderId);
+      if (!ctrl) return;
+      if (ctrl.type === "range" && band.max > band.min) {
+        var frac = (band.applyVal - band.min) / (band.max - band.min);
+        ctrl.style.setProperty("--cal-mark-frac", String(Math.min(Math.max(frac, 0), 1)));
+        ctrl.classList.add("cal-mark");
+      }
+      // Same sibling lookup as syncValueDisplays(); multitool's number-spinner
+      // steps have no readout, so the tint lands on the input's own text.
+      var target = ctrl.parentNode && ctrl.parentNode.querySelector(".param-value");
+      if (!target) target = ctrl;
+      var ok = _calValueSatisfies(parseFloat(ctrl.value), band.lo, band.hi, band.compare);
+      target.classList.add(ok ? "cal-pass" : "cal-fail");
+      // "scored" is load-bearing: _calSuggest ignores not-evaluable pins, so a
+      // green readout here can coexist with a neutral summary chip (which
+      // requires every pin to be evaluable).
+      target.setAttribute("data-tooltip", ok
+        ? "Satisfies every scored pin on this axis (valid " + _calBandLabel(band) + ")."
+        : "Lets a pinned frame through — valid " + _calBandLabel(band) + ".");
     });
   }
 
@@ -669,6 +753,11 @@
       if (!container) return;
       var handler = function () {
         updateCalibrationThresholdLine();
+        // Re-tint from the cached interval so the readout flips the instant the
+        // value crosses the boundary, rather than after the debounced refetch.
+        // The scores these tools produce are threshold-independent, so the
+        // client-side verdict is exact, not an approximation.
+        updateCalibrationSliderMarks();
         refreshCalibration({ debounce: true });
       };
       container.addEventListener("input", handler);

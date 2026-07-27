@@ -516,6 +516,10 @@
     container.classList.remove("drag-over-append");
   }
 
+  // Writes the value only — no event is dispatched, so nothing downstream of an
+  // `input` listener updates (value readouts, the model view, the calibration
+  // mark/tint). Callers that need those to follow must dispatch a bubbling
+  // `input` themselves, as the calibration Apply badge does.
   function setInputValue(selector, value) {
     var inp = qs(selector);
     if (inp) inp.value = value;

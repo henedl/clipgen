@@ -2802,6 +2802,44 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   line-height: 1.2;
 }
 
+/* Calibration pin verdict on a threshold control (see
+   updateCalibrationSliderMarks in screenspace-calibration.js). Only applied when
+   the pins admit a reachable cutoff; otherwise the control renders exactly as it
+   does with no pins at all.
+
+   The suggested cutoff is a background layer on the track rather than a
+   positioned child element: syncValueDisplays() finds a slider's readout as
+   `range.parentNode.querySelector(".param-value")`, so wrapping the input would
+   break that lookup. --cal-mark-frac (0..1) is set inline by the updater; the
+   half-thumb inset is what makes the hairline meet the thumb, whose centre
+   travels from half a thumb in to half a thumb short of the far edge. */
+.param-control input[type="range"].cal-mark {
+  --cal-mark-x: calc(
+    var(--slider-thumb-size) / 2 + (100% - var(--slider-thumb-size)) * var(--cal-mark-frac)
+  );
+  background-image: linear-gradient(
+    90deg,
+    transparent calc(var(--cal-mark-x) - 1px),
+    var(--color-pin-positive) calc(var(--cal-mark-x) - 1px),
+    var(--color-pin-positive) calc(var(--cal-mark-x) + 1px),
+    transparent calc(var(--cal-mark-x) + 1px)
+  );
+}
+
+/* Green when the current value satisfies every scored pin, red when it lets one
+   through. The input[type="number"] selectors are spelled out because the base
+   number-input rule above is specificity (0,2,1) and would otherwise win over a
+   bare class — multitool's chain steps are spinners, not sliders. */
+.param-control .cal-pass,
+.param-control input[type="number"].cal-pass {
+  color: var(--color-pin-positive);
+}
+
+.param-control .cal-fail,
+.param-control input[type="number"].cal-fail {
+  color: var(--color-pin-negative);
+}
+
 .template-upload-info {
   display: flex;
   align-items: center;
@@ -3740,14 +3778,23 @@ body.panel-dragging #bottomPanel {
 /* Shared slider styling — used by all Screenspace range inputs.
    Per-variant widths live with each slider's own rule
    (.rp-certainty-slider = 34px, .scene-ref-thresh = 60px,
-   .param-control input[type="range"] = 80px). */
+   .param-control input[type="range"] = 80px).
+   background-color (not the `background` shorthand) so a later rule can paint a
+   background-image layer on the track — the shorthand would implicitly reset it
+   to none and the override would depend on source order. Mirrors .audio-slider
+   in tokens.css, which draws its centre tick the same way.
+   --slider-thumb-size is read by the thumb pseudo-elements below (custom
+   properties inherit into them) and by .cal-mark, whose hairline has to line up
+   with the thumb centre. */
 .rp-certainty-slider,
 .param-control input[type="range"],
 .scene-ref-thresh {
+  --slider-thumb-size: 12px;
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  background: var(--color-border);
+  background-color: var(--color-border);
+  background-repeat: no-repeat;
   border-radius: var(--radius-xs);
   cursor: pointer;
   outline: none;
@@ -3762,8 +3809,8 @@ body.panel-dragging #bottomPanel {
 .scene-ref-thresh::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 12px;
-  height: 12px;
+  width: var(--slider-thumb-size, 12px);
+  height: var(--slider-thumb-size, 12px);
   border-radius: var(--radius-full);
   background: var(--color-accent);
   border: none;
@@ -3774,8 +3821,8 @@ body.panel-dragging #bottomPanel {
 .rp-certainty-slider::-moz-range-thumb,
 .param-control input[type="range"]::-moz-range-thumb,
 .scene-ref-thresh::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
+  width: var(--slider-thumb-size, 12px);
+  height: var(--slider-thumb-size, 12px);
   border-radius: var(--radius-full);
   background: var(--color-accent);
   border: none;
