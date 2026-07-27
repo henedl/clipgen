@@ -2764,7 +2764,11 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   align-items: center;
 }
 
-.ref-seek-btn {
+/* Bare icon affordances inside a param row: the reference-frame seek arrow and
+   the reset-to-default circular arrow (_buildParamResetButton). Same treatment,
+   one rule — they sit in the same row and would read as two systems otherwise. */
+.ref-seek-btn,
+.param-reset {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2777,11 +2781,13 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   transition: color var(--duration-fast);
 }
 
-.ref-seek-btn:hover {
+.ref-seek-btn:hover,
+.param-reset:hover {
   color: var(--color-accent);
 }
 
-.ref-seek-icon {
+.ref-seek-icon,
+.param-reset-icon {
   display: block;
   width: var(--icon-size-xs);
   height: var(--icon-size-xs);
@@ -2790,6 +2796,14 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   mask-repeat: no-repeat;
   -webkit-mask-size: contain;
   -webkit-mask-repeat: no-repeat;
+}
+
+/* Sits immediately after the value it resets, not on a right-hand rail — the
+   panel is wide enough that a rail reads as detached from the row. Appending it
+   last in a left-packed .param-control means showing and hiding it never nudges
+   the control or its readout. */
+.param-reset {
+  margin-left: calc(var(--space-1) * -1);
 }
 
 /* Color presence "Min area %" readout: words + pixel estimate, so it needs to

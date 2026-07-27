@@ -265,6 +265,12 @@
     calibrationResult: null,
     calibrationOcrWarmed: false,
     calibrationGreen: false,
+    // Workflow param panel, keyed by control id. paramValues accumulates every
+    // tool's settings for the session so switching tools doesn't discard them;
+    // paramDefaults records what each control was built with, so a row can tell
+    // whether it has been touched and offer a reset. See _snapshotParamValues.
+    paramValues: {},
+    paramDefaults: {},
   };
 
   var _playheadRaf = 0;
@@ -3136,27 +3142,50 @@
   }
 
   // Param inputs are DOM-only (rangeInput/numberInput carry hardcoded defaults,
-  // not state), so any *same-tool* rebuild of the panel — Capture Current Frame,
-  // a scene/template add, a picker toggle — would snap every value (Interval,
-  // thresholds, …) back to its default. Snapshot values by id and restore them
-  // across the rebuild. Tool *switches* still reset (ids are tool-prefixed, so
-  // they don't match). Multitool step params are state-backed (step._initial) and
-  // its per-step ids are positional, so for multitool we restore only the shared
-  // #workflowIntervalSlot, never the step rows.
-  var _lastRenderedTool = null;
+  // not state), so every rebuild of the panel — a tool switch, Capture Current
+  // Frame, a scene/template add, a picker toggle — would snap every value
+  // (Interval, thresholds, …) back to its default. Values are snapshotted by id
+  // into state.paramValues before each teardown and written back after, so a
+  // setting survives however it was made: dragged, typed, or applied from the
+  // calibration suggestion. Ids are tool-prefixed (paramChangeThresh vs
+  // paramSimThresh), so one flat store holds every tool without collisions.
+  //
+  // Multitool step params are the exception: their ids are positional, so after
+  // a step delete-and-reindex a stored value would land on a different step.
+  // They are state-backed (step._initial) and restore themselves.
+  var _MT_STEP_ID = /_mt\d+$/;
 
-  function _snapshotParamValues(intervalOnly) {
+  function _paramControlValue(el) {
+    return el.type === "checkbox" ? el.checked : el.value;
+  }
+
+  // The id'd form controls under `root` that participate in save/restore/reset.
+  function _paramControls(root) {
+    var out = [];
+    var nodes = root.querySelectorAll("[id]");
+    for (var i = 0; i < nodes.length; i++) {
+      var tag = nodes[i].tagName;
+      if (tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") continue;
+      if (_MT_STEP_ID.test(nodes[i].id)) continue;
+      out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  function _snapshotParamValues() {
     var map = {};
-    var sel = intervalOnly
-      ? "#workflowIntervalSlot [id]"
-      : "#workflowParams [id], #workflowIntervalSlot [id]";
-    qsa(sel).forEach(function (el) {
-      var tag = el.tagName;
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
-        map[el.id] = el.type === "checkbox" ? el.checked : el.value;
-      }
+    ["#workflowParams", "#workflowIntervalSlot"].forEach(function (id) {
+      var root = qs(id);
+      if (!root) return;
+      _paramControls(root).forEach(function (el) {
+        map[el.id] = _paramControlValue(el);
+      });
     });
     return map;
+  }
+
+  function _mergeParamMap(target, src) {
+    Object.keys(src).forEach(function (id) { target[id] = src[id]; });
   }
 
   function _restoreParamValues(map) {
@@ -3184,17 +3213,123 @@
         if (el.value === String(saved)) return;
         el.value = saved;
       }
-      // Fire input so value readouts + the model view reflect the restored value.
+      // Fire input so value readouts + the model view reflect the restored
+      // value, and change so listeners that only watch it (the numbers operator
+      // row-visibility toggle) don't leave the UI denying the restored value.
       el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
     });
   }
 
-  function renderWorkflowParams() {
-    var sameTool = _lastRenderedTool === state.activeWorkflow;
-    var saved = sameTool ? _snapshotParamValues(state.activeWorkflow === "multitool") : null;
+  // The color target lives in three hidden inputs that drive a canvas picker,
+  // not a readout, so restoring their values alone leaves the swatch, hex field
+  // and palette showing the default. setTargetColor is the only path that
+  // repaints them; feed it back what the restore just wrote.
+  function _restoreColorTarget() {
+    if (state.activeWorkflow !== "color") return;
+    var c = SS.getColorHiddenInputs();
+    if (!c) return;
+    setTargetColor(
+      numberOrDefault(c.h.value, 90), numberOrDefault(c.s.value, 200), numberOrDefault(c.v.value, 200)
+    );
+  }
+
+  // `opts.defaults` skips the restore, leaving the freshly-built defaults in
+  // place: task restore (which writes the task's own saved parameters next)
+  // must not inherit whatever the panel happened to be showing.
+  function renderWorkflowParams(opts) {
+    _mergeParamMap(state.paramValues, _snapshotParamValues());
     _renderWorkflowParamsBuild();
-    _lastRenderedTool = state.activeWorkflow;
-    if (saved) _restoreParamValues(saved);
+    // A just-built panel *is* the defaults, so they are read off the DOM rather
+    // than kept as a second table that would drift from the rangeInput() and
+    // numberInput() call sites above.
+    _mergeParamMap(state.paramDefaults, _snapshotParamValues());
+    if (!(opts && opts.defaults)) {
+      _restoreParamValues(state.paramValues);
+      _restoreColorTarget();
+    }
+    updateParamResetButtons();
+  }
+
+  // ---- Reset-to-default affordance ----
+  //
+  // A circular-arrow button appears at the end of any param row holding a value
+  // that differs from what the panel was built with. The row (not the control)
+  // is the unit: the numbers Range row carries two inputs that read as one
+  // parameter, and resetting one of them alone would be a half-reset.
+  // Multitool step rows have no entry in state.paramDefaults (their ids are
+  // filtered out by _paramControls), so they get no button.
+  function _buildParamResetButton(row) {
+    var btn = el("button", "param-reset hidden");
+    btn.type = "button";
+    var icon = el("span", "param-reset-icon");
+    applyIconMask(icon, "arrow-path", "/screenspace/icons/");
+    btn.appendChild(icon);
+    btn.addEventListener("click", function () {
+      var map = {};
+      _paramControls(row).forEach(function (c) {
+        if (state.paramDefaults[c.id] !== undefined) map[c.id] = state.paramDefaults[c.id];
+      });
+      // No _restoreColorTarget here: the H/S/V inputs sit in the picker group,
+      // not in a .param-row, so no reset button can reach them.
+      _restoreParamValues(map);
+      updateParamResetButtons();
+    });
+    return btn;
+  }
+
+  function _syncParamResetButton(row) {
+    var ctrl = row.querySelector(".param-control");
+    if (!ctrl) return;
+    var btn = row.querySelector(".param-reset");
+    var eligible = _paramControls(row).filter(function (c) {
+      return state.paramDefaults[c.id] !== undefined;
+    });
+    if (!eligible.length) {
+      if (btn) btn.parentNode.removeChild(btn);
+      return;
+    }
+    var changed = eligible.some(function (c) {
+      return _paramControlValue(c) !== state.paramDefaults[c.id];
+    });
+    if (!btn) {
+      btn = _buildParamResetButton(row);
+      ctrl.appendChild(btn);
+    }
+    var tip = "Reset to default";
+    if (eligible.length === 1 && eligible[0].type !== "checkbox") {
+      tip += " (" + state.paramDefaults[eligible[0].id] + ")";
+    }
+    btn.setAttribute("data-tooltip", tip);
+    btn.setAttribute("aria-label", tip);
+    btn.classList.toggle("hidden", !changed);
+  }
+
+  function updateParamResetButtons() {
+    var container = qs("#workflowParams");
+    if (container) {
+      _paramRows(container).forEach(_syncParamResetButton);
+    }
+    // The interval control lives in its own slot outside #workflowParams and
+    // has no .param-row wrapper, so it stands in as its own row.
+    var slot = qs("#workflowIntervalSlot");
+    if (slot) _syncParamResetButton(slot);
+  }
+
+  function _paramRows(container) {
+    return Array.prototype.slice.call(container.querySelectorAll(".param-row"));
+  }
+
+  // One delegated pair on each stable container, mirroring initCalibration():
+  // catches every control the panels build, including the hand-assembled rows
+  // that never go through addParamRow.
+  function initParamResets() {
+    ["workflowParams", "workflowIntervalSlot"].forEach(function (id) {
+      var container = qs("#" + id);
+      if (!container) return;
+      container.addEventListener("input", updateParamResetButtons);
+      container.addEventListener("change", updateParamResetButtons);
+    });
   }
 
   function _renderWorkflowParamsBuild() {
@@ -4823,6 +4958,7 @@
     initModelView();
     initCalibration();
     initParamTooltips();
+    initParamResets();
     initRunButton();
     initTaskQueue();
     initRightPaneTabs();
@@ -5026,6 +5162,7 @@
   SS.activatePipette = activatePipette;
   SS.deactivatePipette = deactivatePipette;
   SS.renderWorkflowParams = renderWorkflowParams;
+  SS.updateParamResetButtons = updateParamResetButtons;
   SS.updateRunButton = updateRunButton;
   // Hub helpers the tasks + results satellites reuse. findTask /
   // restoreTaskToWorkflow / setInputValue / syncValueDisplays live in

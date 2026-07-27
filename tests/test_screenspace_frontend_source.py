@@ -1,10 +1,11 @@
 """Static regression checks for Screenspace frontend sources.
 
-Focused on the calibration slider annotation (the hairline at the pin-derived
-cutoff plus the pass/fail tint on the value readout), whose failure mode is
-silent: a renamed class or custom property, or a `background` shorthand
-reintroduced on the shared slider rule, makes the mark quietly stop rendering
-with no error anywhere.
+Two surfaces whose failure modes are silent. The calibration slider annotation
+(the hairline at the pin-derived cutoff plus the pass/fail tint on the value
+readout): a renamed class or custom property, or a `background` shorthand
+reintroduced on the shared slider rule, makes the mark stop rendering with no
+error anywhere. And the workflow param store: params are DOM-only, so the rules
+about which ids may be remembered live in the code that reads them.
 """
 
 import re
@@ -13,6 +14,8 @@ from _frontend_source import assert_es5, read
 
 CALIBRATION_JS = read("screenspace-calibration.js")
 SCREENSPACE_CSS = read("screenspace.css")
+SCREENSPACE_JS = read("screenspace.js")
+TASKS_JS = read("screenspace-tasks.js")
 
 
 def _shared_slider_rule() -> str:
@@ -80,3 +83,38 @@ def test_calibration_custom_properties_round_trip():
 
 def test_calibration_satellite_is_es5():
     assert_es5(CALIBRATION_JS, "screenspace-calibration.js")
+
+
+def test_multitool_step_ids_are_excluded_from_the_param_store():
+    """Step ids are positional (paramSimThresh_mt1), so a remembered value would
+    land on a different step after a delete-and-reindex. _paramControls is the
+    one gate — snapshot, restore and the reset buttons all go through it."""
+    start = SCREENSPACE_JS.index("function _paramControls(")
+    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n  }", start)]
+    assert "_MT_STEP_ID.test(" in body, (
+        "_paramControls must filter multitool step ids out of the param store"
+    )
+    assert re.search(r"var _MT_STEP_ID = /_mt\\d\+\$/;", SCREENSPACE_JS)
+
+
+def test_task_restore_does_not_inherit_remembered_param_values():
+    """Editing a task must show that task's parameters, so a param it doesn't
+    carry reads as absent rather than as whatever was last typed."""
+    assert "renderWorkflowParams({ defaults: true });" in TASKS_JS
+
+
+def test_param_restore_fires_change_as_well_as_input():
+    """Listeners that only watch `change` (the numbers operator, which toggles
+    the range/target rows) would otherwise leave the UI denying the restored
+    value while the scan runs it."""
+    start = SCREENSPACE_JS.index("function _restoreParamValues(")
+    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n  }", start)]
+    for event in ("input", "change"):
+        assert f'new Event("{event}", {{ bubbles: true }})' in body, (
+            f"_restoreParamValues must dispatch a bubbling {event} event"
+        )
+
+
+def test_param_reset_button_classes_have_css_rules():
+    for name in ("param-reset", "param-reset-icon"):
+        assert f".{name}" in SCREENSPACE_CSS, f".{name} is built in JS but never styled"
