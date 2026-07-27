@@ -248,6 +248,9 @@ def test_handwritten_cheatsheets_removed():
 
 _DATA_HOTKEY_HTML_RE = re.compile(r'data-hotkey="([^"]+)"')
 _DATA_HOTKEY_JS_RE = re.compile(r'setAttribute\(\s*"data-hotkey",\s*"([^"]+)"\s*\)')
+# createSegTrack option specs tag a segment declaratively (`hotkey: "<id>"`) and
+# set data-hotkey internally, so the setAttribute form above never sees them.
+_SEGTRACK_HOTKEY_JS_RE = re.compile(r'\bhotkey:\s*"([^"]+)"')
 
 
 def test_data_hotkey_values_exist_in_catalog(catalog):
@@ -262,9 +265,11 @@ def test_data_hotkey_values_exist_in_catalog(catalog):
             if action_id not in known:
                 unknown.append(f"{name}: {action_id}")
     for path in _js_files():
-        for action_id in _DATA_HOTKEY_JS_RE.findall(path.read_text(encoding="utf-8")):
-            if action_id not in known:
-                unknown.append(f"{path.name}: {action_id}")
+        src = path.read_text(encoding="utf-8")
+        for pattern in (_DATA_HOTKEY_JS_RE, _SEGTRACK_HOTKEY_JS_RE):
+            for action_id in pattern.findall(src):
+                if action_id not in known:
+                    unknown.append(f"{path.name}: {action_id}")
     assert not unknown, (
         f"data-hotkey tags reference ids missing from HOTKEY_CATALOG (the "
         f"Alt-hold hint would silently never show): {unknown}"

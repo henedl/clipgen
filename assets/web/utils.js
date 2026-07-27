@@ -331,9 +331,10 @@ var applyIconMasksIn = function (scope, opts) {
 // opts = {
 //   id,        // optional id for the hidden <input type=hidden> value holder
 //   value,     // initially selected value
-//   options,   // [{ value, icon, label, desc, title }] — icon is an
+//   options,   // [{ value, icon, label, desc, title, hotkey }] — icon is an
 //              //   assets/icons basename; desc -> data-desc (custom param
-//              //   tooltips); title -> native title attribute
+//              //   tooltips); title -> native title attribute; hotkey -> the
+//              //   data-hotkey catalog id whose combo the Alt-hold chip shows
 //   size,      // "sm" -> .cg-segtrack--sm
 //   onChange,  // fn(value), fires on user click after state applies, before
 //              //   the bubbling input event
@@ -356,6 +357,7 @@ var createSegTrack = function (opts) {
     btn.setAttribute("data-value", spec.value);
     if (spec.desc) btn.setAttribute("data-desc", spec.desc);
     if (spec.title) btn.title = spec.title;
+    if (spec.hotkey) btn.setAttribute("data-hotkey", spec.hotkey);
     if (spec.icon) {
       btn.appendChild(iconMaskSpan(spec.icon, { className: "cg-segtrack-icon", basePath: opts.basePath }));
     }
