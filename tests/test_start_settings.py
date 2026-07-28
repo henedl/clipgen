@@ -85,12 +85,13 @@ def test_save_and_reload_roundtrip(settings_file):
 
 
 def test_record_recent_input_prepends_dedupes_caps(settings_file):
-    for i in range(10):
+    overflow = start_settings.RECENTS_CAP + 2
+    for i in range(overflow):
         start_settings.record_recent_input(f"/dir{i}")
     settings = start_settings.load_start_settings()
     assert len(settings["recent_inputs"]) == start_settings.RECENTS_CAP
-    assert settings["recent_inputs"][0] == "/dir9"
-    assert settings["last_input"] == "/dir9"
+    assert settings["recent_inputs"][0] == f"/dir{overflow - 1}"
+    assert settings["last_input"] == f"/dir{overflow - 1}"
 
     # dedupe: re-record an existing entry
     start_settings.record_recent_input("/dir3")
@@ -150,6 +151,41 @@ def test_record_project_session_dedupes_on_triple(settings_file):
     assert head["output"] == "/out"
     assert head["spreadsheet"] == sheet
     assert head["last_opened"]  # ISO-8601 string
+
+
+def test_record_project_session_stores_and_trims_the_name(settings_file):
+    start_settings.record_project_session("/in", "/out", None, name="  My study  ")
+    settings = start_settings.load_start_settings()
+    assert settings["recent_projects"][0]["name"] == "My study"
+
+
+def test_record_project_session_name_is_tri_state(settings_file):
+    start_settings.record_project_session("/in", "/out", None, name="My study")
+    # None means "keep whatever is stored" — the CLI-launch and Studio
+    # sheet-switch call sites pass nothing and must not wipe the label.
+    start_settings.record_project_session("/in", "/out", None)
+    assert start_settings.load_start_settings()["recent_projects"][0]["name"] == (
+        "My study"
+    )
+    # An explicit empty string clears it.
+    start_settings.record_project_session("/in", "/out", None, name="")
+    assert start_settings.load_start_settings()["recent_projects"][0]["name"] == ""
+
+
+def test_record_project_session_name_is_not_part_of_the_identity(settings_file):
+    start_settings.record_project_session("/in", "/out", None, name="First")
+    start_settings.record_project_session("/in", "/out", None, name="Renamed")
+    settings = start_settings.load_start_settings()
+    assert len(settings["recent_projects"]) == 1
+    assert settings["recent_projects"][0]["name"] == "Renamed"
+
+
+def test_record_project_session_name_does_not_leak_across_projects(settings_file):
+    start_settings.record_project_session("/in", "/out", None, name="Named")
+    start_settings.record_project_session("/other", "/out", None)
+    settings = start_settings.load_start_settings()
+    assert settings["recent_projects"][0]["input"] == "/other"
+    assert settings["recent_projects"][0]["name"] == ""
 
 
 def test_record_project_session_ignores_blank_dirs(settings_file):

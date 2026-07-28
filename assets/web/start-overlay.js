@@ -5,6 +5,10 @@
  *     plays once per browser session, gated by the existing sessionStorage flag)
  *   • section cascade-in (220ms base, 80ms stagger)
  *   • backdrop blur via --host-blur / --veil-alpha on the overlay root
+ *   • optional project name, echoed live under the wordmark and stored on the
+ *     recent-projects record (there is no server-side "current project name")
+ *   • the rail's Recently-opened list: RAIL_RECENTS_VISIBLE rows plus a
+ *     fold-out that overlays the brand block behind a blurred scrim
  *   • folder + spreadsheet picker (Google / Excel / No spreadsheet)
  *   • Extras tabs: tools / changelog / about
  *   • persistence via the existing /api/start-settings endpoint
@@ -31,6 +35,9 @@
   var GOOGLE_POLL_RETRY_MS = 2500;
   // Wait for typing to settle before fetching worksheets for a pasted URL/name.
   var WORKSHEET_PASTE_DEBOUNCE_MS = 600;
+  // Recents shown in the rail before the fold-out; the rest overlay the brand
+  // block on demand. The server keeps start_settings.RECENTS_CAP of them.
+  var RAIL_RECENTS_VISIBLE = 3;
 
   function sessionDismissed() {
     try { return sessionStorage.getItem(DISMISSED_KEY) === "1"; } catch (_) { return false; }
@@ -69,6 +76,8 @@
     excelFiles: [],
     statusData: null,
     recentProjects: [],
+    projectName: "",          // the optional label typed in the right column
+    recentsExpanded: false,   // rail fold-out revealing projects past RAIL_RECENTS_VISIBLE
     worksheetsCache: {},      // "type|id_or_path" -> { worksheets, recommended }
     worksheetReqVer: 0,       // rejects stale worksheet fetches
     worksheetLoading: false,  // a worksheet fetch is in flight (gates Confirm)
@@ -149,8 +158,15 @@
 
     els.cascades = root.querySelectorAll(".cascade-in");
 
+    els.railProject = root.querySelector('[data-role="rail-project"]');
+    els.railRecentsSection = root.querySelector('[data-role="rail-recents-section"]');
     els.railRecents = root.querySelector('[data-role="rail-recents"]');
+    els.railRecentsOverflow = root.querySelector('[data-role="rail-recents-overflow"]');
+    els.railRecentsMore = root.querySelector('[data-role="rail-recents-more"]');
+    els.railRecentsMoreLabel = root.querySelector('[data-role="rail-recents-more-label"]');
+    els.railRecentsScrim = root.querySelector('[data-role="rail-recents-scrim"]');
 
+    els.projectName = root.querySelector("#startProjectName");
     els.inputField = root.querySelector('[data-role="input-field"]');
     els.outputField = root.querySelector('[data-role="output-field"]');
     els.inputDir = root.querySelector("#startInputDir");
@@ -214,6 +230,18 @@
       on(tab, "click", function () { setExtrasTab(tab.getAttribute("data-extras-tab")); });
     });
 
+    on(els.projectName, "input", function () {
+      setProjectName(els.projectName.value || "");
+    });
+
+    on(els.railRecentsMore, "click", function (e) {
+      e.stopPropagation();
+      setRecentsExpanded(!state.recentsExpanded);
+    });
+    on(els.railRecentsScrim, "click", function () {
+      setRecentsExpanded(false);
+    });
+
     on(els.inputRecentsBtn, "click", function (e) {
       e.stopPropagation();
       toggleRecents("input");
@@ -254,6 +282,10 @@
       if (!root || !state.open) return;
       closeRecentsIfOutside(e);
       closePickersIfOutside(e);
+      if (state.recentsExpanded && els.railRecentsSection &&
+          !els.railRecentsSection.contains(e.target)) {
+        setRecentsExpanded(false);
+      }
     });
 
     on(els.persist, "change", function () {
@@ -715,35 +747,142 @@
     });
   }
 
+  function basename(path) {
+    if (!path) return "";
+    var parts = String(path).replace(/[\\/]+$/, "").split(/[\\/]/);
+    return parts[parts.length - 1] || path;
+  }
+
+  // One chip = one fact (input folder, output folder, spreadsheet). The icon
+  // rides on data-icon so applyIcons() can resolve it against whichever host
+  // page's /icons/ route mounted the overlay.
+  function recentChip(icon, text, mono) {
+    var chip = el("span", "rail-recent__chip");
+    var glyph = el("span", "so-icon so-icon--xs");
+    glyph.setAttribute("data-icon", icon);
+    chip.appendChild(glyph);
+    chip.appendChild(el("span", "rail-recent__chip-text" + (mono ? " mono" : ""), text));
+    return chip;
+  }
+
+  // Two lines: title + relative time, then the folder/spreadsheet chips. The
+  // full paths live in a single row-level data-tooltip — never one per chip,
+  // since clipgenInitDataTooltips resolves via closest() and a nested
+  // [data-tooltip] would shadow the row's.
+  function buildRecentRow(project, currentKey) {
+    var btn = el("button", "rail-recent");
+    btn.type = "button";
+    var isCurrent = currentKey && projectKey(project) === currentKey;
+    if (isCurrent) btn.classList.add("is-current");
+
+    var sheet = project.spreadsheet || null;
+    var sheetLabel = sheet ? (sheet.label || sheet.id_or_path || "") : "";
+    var name = (project.name || "").trim();
+    var title = name || sheetLabel || basename(project.input) || project.input || "Untitled";
+
+    var head = el("span", "rail-recent__head");
+    head.appendChild(el("span", "rail-recent__title", title));
+    var when = formatWhen(project.last_opened);
+    if (when) head.appendChild(el("span", "rail-recent__when", when));
+    btn.appendChild(head);
+
+    var meta = el("span", "rail-recent__meta");
+    if (project.input) meta.appendChild(recentChip("folder", basename(project.input), true));
+    if (project.output && project.output !== project.input) {
+      meta.appendChild(recentChip("folder-arrow-down", basename(project.output), true));
+    }
+    // Skip the sheet chip when the title already *is* the sheet label.
+    if (sheetLabel && title !== sheetLabel) {
+      meta.appendChild(recentChip("table-cells", sheetLabel, false));
+    }
+    btn.appendChild(meta);
+
+    var tip = [];
+    if (isCurrent) tip.push("Currently loaded");
+    if (project.input) tip.push("Input: " + project.input);
+    if (project.output) tip.push("Output: " + project.output);
+    if (sheetLabel) {
+      tip.push("Sheet: " + sheetLabel + (sheet.worksheet ? " · " + sheet.worksheet : ""));
+    }
+    if (tip.length) btn.setAttribute("data-tooltip", tip.join("\n"));
+
+    btn.addEventListener("click", function () {
+      setRecentsExpanded(false);
+      restoreProject(project);
+    });
+    return btn;
+  }
+
   function renderRailRecents(projects) {
     if (!els.railRecents) return;
+    // A re-render invalidates the fold-out's contents; never leave it open
+    // over a list that no longer matches.
+    setRecentsExpanded(false);
     els.railRecents.innerHTML = "";
+    if (els.railRecentsOverflow) els.railRecentsOverflow.innerHTML = "";
+    setHidden(els.railRecentsMore, true);
     if (!projects.length) {
       els.railRecents.appendChild(el("div", "rail-recent--empty", "No recent projects yet"));
       return;
     }
     var currentKey = currentSessionKey();
-    projects.slice(0, 4).forEach(function (project) {
-      var btn = el("button", "rail-recent");
-      btn.type = "button";
-      var key = projectKey(project);
-      if (currentKey && key === currentKey) {
-        btn.classList.add("is-current");
-        btn.title = "Currently loaded";
-      }
-      var paths = el("span", "rail-recent__paths");
-      paths.appendChild(el("span", "rail-recent__path mono", project.input || ""));
-      if (project.output && project.output !== project.input) {
-        paths.appendChild(el("span", "rail-recent__path rail-recent__path--secondary mono", project.output));
-      }
-      btn.appendChild(paths);
-      var when = formatWhen(project.last_opened);
-      if (when) btn.appendChild(el("span", "rail-recent__when", when));
-      btn.addEventListener("click", function () {
-        restoreProject(project);
-      });
-      els.railRecents.appendChild(btn);
+    var visible = document.createDocumentFragment();
+    projects.slice(0, RAIL_RECENTS_VISIBLE).forEach(function (project) {
+      visible.appendChild(buildRecentRow(project, currentKey));
     });
+    els.railRecents.appendChild(visible);
+    applyIcons(els.railRecents);
+
+    var rest = projects.slice(RAIL_RECENTS_VISIBLE);
+    if (!rest.length || !els.railRecentsOverflow) return;
+    var hidden = document.createDocumentFragment();
+    // Newest-first reads top-down in the visible list, but the fold-out grows
+    // upward from it — reverse so the whole stack stays chronological.
+    rest.slice().reverse().forEach(function (project) {
+      hidden.appendChild(buildRecentRow(project, currentKey));
+    });
+    els.railRecentsOverflow.appendChild(hidden);
+    applyIcons(els.railRecentsOverflow);
+    setHidden(els.railRecentsMore, false);
+    setRecentsMoreLabel();
+  }
+
+  function setRecentsMoreLabel() {
+    if (!els.railRecentsMoreLabel) return;
+    if (state.recentsExpanded) {
+      els.railRecentsMoreLabel.textContent = "Show less";
+      return;
+    }
+    var rest = Math.max(0, state.recentProjects.length - RAIL_RECENTS_VISIBLE);
+    els.railRecentsMoreLabel.textContent =
+      clipgenPluralUnit(rest, "more project", "more projects");
+  }
+
+  function setRecentsExpanded(expanded) {
+    var next = !!expanded;
+    if (state.recentsExpanded === next) return;
+    state.recentsExpanded = next;
+    if (els.railRecentsSection) {
+      els.railRecentsSection.classList.toggle("is-expanded", next);
+    }
+    setHidden(els.railRecentsOverflow, !next);
+    if (els.railRecentsMore) {
+      els.railRecentsMore.setAttribute("aria-expanded", next ? "true" : "false");
+    }
+    setRecentsMoreLabel();
+  }
+
+  // State first, DOM second — the rail heading is a projection of
+  // state.projectName, never the other way round.
+  function setProjectName(value) {
+    state.projectName = value || "";
+    if (els.projectName && els.projectName.value !== state.projectName) {
+      els.projectName.value = state.projectName;
+    }
+    if (!els.railProject) return;
+    var trimmed = state.projectName.trim();
+    els.railProject.textContent = trimmed;
+    setHidden(els.railProject, !trimmed);
   }
 
   function projectKey(project) {
@@ -796,6 +935,7 @@
 
   function restoreProject(project) {
     if (!project) return;
+    setProjectName(project.name || "");
     els.inputDir.value = project.input || "";
     els.outputDir.value = project.output || "";
     var sheet = project.spreadsheet;
@@ -1220,6 +1360,7 @@
 
     var inputVal = (els.inputDir.value || "").trim();
     var outputVal = (els.outputDir.value || "").trim();
+    var nameVal = state.projectName.trim();
 
     clearFieldError(els.inputField);
     clearFieldError(els.outputField);
@@ -1258,7 +1399,7 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        recordSession(inputVal, outputVal, null).finally(function () {
+        recordSession(inputVal, outputVal, null, nameVal).finally(function () {
           releaseConfirm();
           close();
         });
@@ -1267,7 +1408,15 @@
       fetch("/api/spreadsheets/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state.selection),
+        // Built explicitly rather than posting state.selection verbatim so the
+        // name rides along with the open that records the session server-side.
+        body: JSON.stringify({
+          type: state.selection.type,
+          id_or_path: state.selection.id_or_path,
+          label: state.selection.label,
+          worksheet: state.selection.worksheet || "",
+          project_name: nameVal,
+        }),
       })
         .then(function (r) {
           return r.json().then(function (j) { return { ok: r.ok, body: j }; });
@@ -1292,11 +1441,11 @@
     });
   }
 
-  function recordSession(input, output, spreadsheet) {
+  function recordSession(input, output, spreadsheet, name) {
     // Fire-and-forget on the no-sheet path. The sheet-open path records on
     // the server during /api/spreadsheets/open, so this is the only call
     // site that needs to invoke /api/sessions/record explicitly.
-    var payload = { input: input, output: output };
+    var payload = { input: input, output: output, name: name || "" };
     if (spreadsheet) payload.spreadsheet = spreadsheet;
     return apiPost("/api/sessions/record", payload).catch(function (err) {
       console.warn("Session record failed", err);
@@ -1321,7 +1470,14 @@
     // to the launch trigger on dismiss (else it stays stuck on the hidden panel).
     if (typeof openBlockingModal === "function") {
       openBlockingModal(root, {
-        onEscape: close,
+        // Escape peels the recents fold-out first, then dismisses the overlay.
+        onEscape: function () {
+          if (state.recentsExpanded) {
+            setRecentsExpanded(false);
+            return;
+          }
+          close();
+        },
         trapFocus: true,
         initialFocus: els.panel,
         restoreFocus: true
@@ -1334,6 +1490,7 @@
   function close() {
     if (!root) return;
     state.open = false;
+    setRecentsExpanded(false);
     markDismissed();
     stopGooglePoll();
     // Animate the panel and backdrop out, then hide.
@@ -1462,6 +1619,14 @@
     }
     state.baseline = baselineFromInputs();
     applyFieldStates();
+    // The name isn't a server-side field — it lives on the recent-projects
+    // record, so the current session's label is whichever stored project
+    // matches the session key.
+    var currentKey = currentSessionKey();
+    var current = currentKey && state.recentProjects.filter(function (p) {
+      return projectKey(p) === currentKey;
+    })[0];
+    setProjectName(current ? (current.name || "") : "");
     // Re-render rail recents now that we know the current session key.
     renderRailRecents(state.recentProjects);
   }

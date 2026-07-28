@@ -14,11 +14,20 @@
       <div class="rail__brand cascade-in" data-cascade="0">
         <div class="brand-mark rail__mark" aria-hidden="true"></div>
         <span class="rail__wordmark" id="startOverlayTitle" data-role="wordmark">clipgen</span>
+        <span class="rail__project" data-role="rail-project" hidden></span>
       </div>
+
+      <!-- Blurs the brand block when the recents fold-out overlays it. -->
+      <div class="rail__recents-scrim" data-role="rail-recents-scrim" aria-hidden="true"></div>
 
       <div class="rail__recents cascade-in" data-cascade="1" data-role="rail-recents-section">
         <div class="eyebrow">Recently opened</div>
+        <div class="rail__recents-overflow cg-scroll-thin" data-role="rail-recents-overflow" hidden></div>
         <div class="rail__recents-list" data-role="rail-recents"></div>
+        <button type="button" class="rail-recents-more" data-role="rail-recents-more" aria-expanded="false" hidden>
+          <span class="so-icon so-icon--xs rail-recents-more__chev" data-icon="chevron-down"></span>
+          <span data-role="rail-recents-more-label"></span>
+        </button>
       </div>
 
       <div class="rail__footer cascade-in" data-cascade="2">
@@ -35,6 +44,21 @@
     </aside>
 
     <main class="start-main">
+
+      <section class="start-section cascade-in" data-cascade="0">
+        <div class="path-field" data-role="name-field">
+          <label for="startProjectName">
+            <span>Project name</span>
+            <span class="hint">optional</span>
+          </label>
+          <div class="path-input path-input--bare">
+            <div class="path-input__field">
+              <span class="path-input__icon so-icon so-icon--sm" data-icon="tag"></span>
+              <input type="text" id="startProjectName" class="path-input__input" autocomplete="off" spellcheck="false" maxlength="60" placeholder="e.g. Coffee machine usability study">
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section class="start-section cascade-in" data-cascade="1">
         <div class="eyebrow">Folders</div>

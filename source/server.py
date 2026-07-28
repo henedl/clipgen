@@ -3550,6 +3550,11 @@ def build_combined_app(
         worksheet = (data.get("worksheet") or "").strip() or None
         if type_ not in ("google", "excel") or not id_or_path:
             return err("Required: type ('google'|'excel') and id_or_path")
+        # Absent → None → record_project_session keeps any stored name. Only the
+        # Start overlay sends it; Studio's runtime sheet switch never does.
+        project_name = data.get("project_name")
+        if project_name is not None and not isinstance(project_name, str):
+            return err("project_name must be a string")
 
         if _generation_busy():
             return err(
@@ -3616,6 +3621,7 @@ def build_combined_app(
                 "label": label,
                 "worksheet": loaded_worksheet,
             },
+            name=project_name,
         )
         global _active_sheet_meta
         _active_sheet_meta = {
@@ -3658,6 +3664,9 @@ def build_combined_app(
         The Google/Excel paths already record via api_spreadsheets_open after a
         successful sheet open; this endpoint covers the case where the user
         clicks "Open workspace" on the "No spreadsheet" tab.
+
+        An omitted ``name`` leaves any stored project name alone; ``""`` clears
+        it. See :func:`start_settings.record_project_session`.
         """
         import start_settings
 
@@ -3670,6 +3679,10 @@ def build_combined_app(
             return err("output must be a string")
         input_dir = (input_raw or "").strip()
         output_dir = (output_raw or "").strip()
+
+        name_raw = data.get("name")
+        if name_raw is not None and not isinstance(name_raw, str):
+            return err("name must be a string")
 
         spreadsheet_payload = data.get("spreadsheet")
         spreadsheet_dict: dict[str, Any] | None = None
@@ -3692,6 +3705,7 @@ def build_combined_app(
             input_dir or str(utils.get_effective_input_dir()),
             output_dir or str(utils.get_effective_output_dir()),
             spreadsheet_dict,
+            name=name_raw,
         )
         return ok()
 
