@@ -51,11 +51,28 @@ def _repo_root_stays_clean():
     ``git status`` and accumulates unnoticed — ``workflows_manifest.json`` did
     exactly that. Comparing a before/after listing of the root turns the next
     one into a red run instead of silent litter.
+
+    Scoped to *product* writes, which in this codebase are all plainly named
+    (``*_manifest.json``, ``*.mp4``, ``*.png``). Test-runner artifacts are a
+    different category and legitimately belong at the rootdir: under CI's
+    ``-n auto``, ``pytest-cov`` writes one
+    ``.coverage.<host>.<pid>.<random>`` per xdist worker there by design, and
+    ``__pycache__`` appears whenever bytecode is not suppressed. Both are
+    ignored rather than fought.
     """
     root = Path(__file__).resolve().parents[1]
-    before = set(root.iterdir())
+
+    def _product_writes() -> set[str]:
+        return {
+            p.name
+            for p in root.iterdir()
+            # Dot-prefixed covers .coverage*, .pytest_cache, .ruff_cache …
+            if not p.name.startswith(".") and p.name != "__pycache__"
+        }
+
+    before = _product_writes()
     yield
-    strays = {p.name for p in set(root.iterdir()) - before if p.name != "__pycache__"}
+    strays = _product_writes() - before
     assert not strays, (
         "the test suite wrote into the repo root; every path must stay inside "
         f"tmp_path (see _sandbox_cwd / _anchor_cwd_outside_repo): {sorted(strays)}"
