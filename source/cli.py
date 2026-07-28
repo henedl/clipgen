@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import clipgen
+import app
 import config
 import files
 import spreadsheet
@@ -826,9 +826,14 @@ def setup_encoding() -> None:
 def get_runtime_working_dir() -> str:
     """Return the runtime working directory.
 
-    Source runs use the script directory. Frozen builds use the directory the
-    user sees the application in, so "put credentials.json next to the app"
-    means what it says:
+    Source runs use the repo root — the directory holding ``clipgen.py``, one
+    level above this module's ``source/`` — because that is the directory the
+    user is working in. ``main`` chdirs here, so it decides where
+    ``credentials.json`` is looked up, where ``.xlsx`` files are discovered, and
+    what the default output directory is.
+
+    Frozen builds use the directory the user sees the application in, so "put
+    credentials.json next to the app" means what it says:
 
     * macOS ``.app`` — the folder *containing* the bundle. ``sys.executable``
       points inside ``Contents/MacOS``, which is invisible in Finder and part of
@@ -841,7 +846,7 @@ def get_runtime_working_dir() -> str:
     * anything else — the executable's own directory.
     """
     if not getattr(sys, "frozen", False):
-        return str(Path(__file__).resolve().parent)
+        return str(Path(__file__).resolve().parent.parent)
 
     exe_dir = Path(sys.executable).resolve().parent
     # .../clipgen.app/Contents/MacOS/clipgen → .../  (the .app's parent)
@@ -1069,15 +1074,13 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
                 utils.error_print(f'Could not open Excel file "{args.spreadsheet}"')
                 sys.exit(1)
         elif args.spreadsheet.startswith(config.COMMAND_HTTP_PREFIX):
-            worksheet = clipgen.open_spreadsheet_by_url(
-                gspread_client, args.spreadsheet
-            )
+            worksheet = app.open_spreadsheet_by_url(gspread_client, args.spreadsheet)
         elif args.spreadsheet.isdigit():
-            worksheet = clipgen.open_spreadsheet_by_index(
+            worksheet = app.open_spreadsheet_by_index(
                 gspread_client, get_doc_list(), int(args.spreadsheet)
             )
         else:
-            worksheet = clipgen.open_spreadsheet_by_name(
+            worksheet = app.open_spreadsheet_by_name(
                 gspread_client, get_doc_list(), args.spreadsheet
             )
 
@@ -1089,7 +1092,7 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
     else:
         # Auto-connect if working directory name matches a spreadsheet
         cwd_name = Path.cwd().name
-        worksheet = clipgen.open_spreadsheet_by_name(
+        worksheet = app.open_spreadsheet_by_name(
             gspread_client,
             get_doc_list(),
             cwd_name,
@@ -1119,11 +1122,11 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
                 )
                 sys.exit(1)
         else:
-            worksheet = clipgen.select_spreadsheet(gspread_client, get_doc_list())
+            worksheet = app.select_spreadsheet(gspread_client, get_doc_list())
 
     if worksheet and config.DEBUGGING:
         config.debug_ic(worksheet.title)
-    if clipgen._is_excel_worksheet(worksheet):
+    if app._is_excel_worksheet(worksheet):
         utils.standard_print("Using local Excel file.")
     else:
         utils.standard_print("Connected to Google Drive!")
@@ -3092,13 +3095,11 @@ def _run_friction_agent(args: argparse.Namespace) -> None:
 def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
     """Export all clips via batch mode and generate a per-participant timeline viewer."""
     clips_list = spreadsheet.generate_list(worksheet, "batch", skip_prompts=True)
-    outputs_generated, artifacts = clipgen.process_clips(
-        clips_list, output_format="clip"
-    )
+    outputs_generated, artifacts = app.process_clips(clips_list, output_format="clip")
 
     if not config.REENCODING:
-        clipgen._print_reencoding_warning(utils.verbose_print)
-    clipgen._print_completion_message(outputs_generated, "clip", is_reel=False)
+        app._print_reencoding_warning(utils.verbose_print)
+    app._print_completion_message(outputs_generated, "clip", is_reel=False)
 
     if not artifacts:
         utils.warning_print("No artifacts were generated; skipping timeline viewer.")
@@ -3110,7 +3111,7 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
         artifacts,
         study=study,
         worksheet_title=getattr(worksheet, "title", ""),
-        is_excel=clipgen._is_excel_worksheet(worksheet),
+        is_excel=app._is_excel_worksheet(worksheet),
         mode="timeline-viewer",
         screenspace_events=ss_events or None,
     )
@@ -3127,7 +3128,7 @@ def _run_timeline_viewer_mode(worksheet: Any, args: Any) -> None:
             artifacts,
             study=study,
             worksheet_title=getattr(worksheet, "title", ""),
-            is_excel=clipgen._is_excel_worksheet(worksheet),
+            is_excel=app._is_excel_worksheet(worksheet),
             mode="timeline-viewer",
         )
         if manifest_path:
@@ -3176,27 +3177,27 @@ def run_cli_mode(worksheet: Any, args: Any, cli_mode_args: CliModeArgs) -> None:
         reel_output_file = _resolve_chronologic_output_file(args, clips_list)
         if args.highlights and reel_output_file is None:
             reel_output_file = _resolve_highlights_output_file(clips_list)
-        outputs_generated, reel_records = clipgen.process_reel(
+        outputs_generated, reel_records = app.process_reel(
             clips_list,
             output_file=reel_output_file,
         )
     else:
-        outputs_generated, artifacts = clipgen.process_clips(
+        outputs_generated, artifacts = app.process_clips(
             clips_list,
             output_format=output_format,
             include_severity=bool(args.severity),
         )
 
     if not config.REENCODING:
-        clipgen._print_reencoding_warning(utils.verbose_print)
-    clipgen._print_completion_message(
+        app._print_reencoding_warning(utils.verbose_print)
+    app._print_completion_message(
         outputs_generated,
         output_format,
         is_reel=is_reel,
     )
 
     ws_title = getattr(worksheet, "title", "")
-    is_excel = clipgen._is_excel_worksheet(worksheet)
+    is_excel = app._is_excel_worksheet(worksheet)
     effective_mode = output_format if output_format != "clip" else "batch"
 
     wants_viewer_or_manifest = getattr(args, "viewer", False) or getattr(
@@ -3729,7 +3730,7 @@ def _dispatch_standalone_mode(
         utils.info_print(
             f"Found {media_count} media artifact(s) and {reel_count} reel(s) in manifest. Regenerating..."
         )
-        regenerated = clipgen.regenerate_from_manifest(
+        regenerated = app.regenerate_from_manifest(
             existing_artifacts, reels=existing_reels
         )
         utils.info_print(f"Regenerated {regenerated} of {total} item(s).")
@@ -3924,7 +3925,7 @@ def main() -> None:
             elif cli_mode:
                 run_cli_mode(worksheet, args, cli_mode_args)
             else:
-                clipgen.run_interactive_mode(worksheet, gspread_client=gspread_client)
+                app.run_interactive_mode(worksheet, gspread_client=gspread_client)
             break
         except utils.TopToSpreadsheet:
             # User requested to go back to spreadsheet selection; restart loop.

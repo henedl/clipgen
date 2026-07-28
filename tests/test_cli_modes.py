@@ -4,7 +4,7 @@ from unittest.mock import Mock
 import pytest
 
 import cli
-import clipgen
+import app
 import config
 import viewer as viewer_mod
 
@@ -171,7 +171,7 @@ def test_run_cli_mode_chronologic_reel_and_viewer(monkeypatch):
         }
     ]
     process_reel = Mock(return_value=(1, reel_records))
-    monkeypatch.setattr(clipgen, "process_reel", process_reel)
+    monkeypatch.setattr(app, "process_reel", process_reel)
 
     viewer_calls = []
     viewer_path = "clips_viewer.html"

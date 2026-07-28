@@ -16,7 +16,7 @@ from pathlib import Path
 
 from _frontend_source import WEB
 
-ROOT = Path(__file__).resolve().parent.parent
+SOURCE = Path(__file__).resolve().parent.parent / "source"
 
 # ---------------------------------------------------------------- blob URLs
 
@@ -77,7 +77,7 @@ def _cache_definitions():
     negative in exactly the direction that matters here.
     """
     for mod in _CACHE_MODULES:
-        src = (ROOT / mod).read_text(encoding="utf-8")
+        src = (SOURCE / mod).read_text(encoding="utf-8")
         tree = ast.parse(src)
         for node in tree.body:  # module level only
             if isinstance(node, ast.AnnAssign):

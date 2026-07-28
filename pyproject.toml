@@ -35,8 +35,12 @@ ui = ["playwright>=1.55"]
 
 [tool.setuptools]
 packages = []
+# Every module lives in `source/`; the repo root holds only the `clipgen.py`
+# launcher, which is deliberately not shipped (nothing imports it). Guarded by
+# tests/test_packaging.py.
+package-dir = {"" = "source"}
 py-modules = [
-    "changelog", "cli", "clipgen", "composer_server", "config", "data_export",
+    "app", "changelog", "cli", "composer_server", "config", "data_export",
     "desktop", "excel_io",
     "files", "friction", "google_api", "interactive", "ollama_client", "overview",
     "pipeline",
@@ -52,6 +56,14 @@ py-modules = [
 
 [tool.uv]
 required-version = ">=0.11.0"
+
+[tool.ty.environment]
+# ty auto-detects a module root only when it is literally named `src`
+# ("Including `./src` in `environment.root` because a `./src` directory exists
+# and is not a package"). Our directory is `source`, so say it explicitly or
+# every first-party import comes back unresolved. `.` stays on the list so the
+# root `clipgen.py` launcher is still checked.
+root = [".", "./source"]
 
 [tool.ruff]
 # Ruff 0.16 enables ~413 rules by default (up from 59 in 0.15). We run those defaults

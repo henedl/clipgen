@@ -1,10 +1,10 @@
 # clipgen-split-module — Split a Python god-file into facade + siblings
 
-Splitting a large module (e.g. `screenspace.py` → 9 `screenspace_*` modules behind a re-export facade) has twice shipped install-breaking or test-breaking gaps: a module missing from `py-modules` (`b036aec`, risked again in `9fbc762`) and an incomplete facade re-export (`5683a96`: `screenspace._probe_video_meta` → `AttributeError`). This is a flat, package-less layout, so the traps are specific. Follow this checklist.
+Splitting a large module (e.g. `screenspace.py` → 9 `screenspace_*` modules behind a re-export facade) has twice shipped install-breaking or test-breaking gaps: a module missing from `py-modules` (`b036aec`, risked again in `9fbc762`) and an incomplete facade re-export (`5683a96`: `screenspace._probe_video_meta` → `AttributeError`). Modules live flat in `source/` (not a package — it is a `sys.path` entry), so the traps are specific. Follow this checklist.
 
 ## Checklist
 
-1. **List every new module in `pyproject.toml`.** Add each new root `*.py` to `[tool.setuptools] py-modules`. The source tree imports fine without this (so `pytest` passes), but `uv pip install .` ships only listed modules and installed/frozen environments die with `ModuleNotFoundError`. Guarded by `tests/test_packaging.py`.
+1. **List every new module in `pyproject.toml`.** Create each new module in `source/` and add its bare name to `[tool.setuptools] py-modules`. The source tree imports fine without this (so `pytest` passes), but `uv pip install .` ships only listed modules and installed/frozen environments die with `ModuleNotFoundError`. Guarded by `tests/test_packaging.py`.
 
 2. **Re-export *every* public name from the facade, and every test-touched private name.** The thin facade module (`screenspace.py`) must re-export each name former callers and tests reach via `facade.NAME`. Audit by grepping the test suite for `facade.` accesses (`screenspace.`), including underscore-prefixed helpers (`_probe_video_meta`).
 

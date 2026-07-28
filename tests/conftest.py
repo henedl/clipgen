@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import gspread
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The product modules live in `source/`, not the repo root. This insert is the
+# only reason `import config` / `import utils` resolve under pytest — there is
+# no `pythonpath` in tests/pytest.ini and the project is never pip-installed
+# locally (uv.lock records it as virtual). It must stay ahead of site-packages
+# so CI, which *does* `uv pip install .`, still tests the source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "source"))
 
 
 @pytest.fixture(autouse=True)
