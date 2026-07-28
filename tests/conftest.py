@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,54 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "source"))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _anchor_cwd_outside_repo(tmp_path_factory):
+    """Keep the process working directory outside the repo for the whole session.
+
+    ``_sandbox_cwd`` chdirs per test, but ``monkeypatch`` restores the *previous*
+    cwd on teardown — the repo root, since that is where pytest is invoked. Any
+    write that lands after that teardown therefore hits the repo: a
+    ``workflows_server`` run thread outliving its test persisted
+    ``workflows_manifest.json`` into the root exactly that way, and being
+    gitignored it accumulated unnoticed.
+
+    Anchoring the session cwd to a tmp directory makes that restore point
+    harmless. Deliberately *not* done by joining worker threads at teardown:
+    ``workflows_server`` spawns three families of daemon (``workflow-run_*``,
+    ``workflow-batch-*``, ``workflow-watch-dir``) and the last one never exits,
+    so a name-prefixed join stalls the suite once any test arms the watcher.
+    Anchoring the cwd needs no such enumeration and cannot hang.
+    """
+    anchor = tmp_path_factory.mktemp("cwd-anchor")
+    previous = Path.cwd()
+    os.chdir(anchor)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _repo_root_stays_clean():
+    """Fail the run if the suite wrote anything into the repo root.
+
+    ``_sandbox_cwd`` below is the *prevention*; this is the detection. Both the
+    artifacts it describes and the manifests a late worker thread persists are
+    gitignored (``*.json``, ``*.mp4``), so an escape leaves no trace in
+    ``git status`` and accumulates unnoticed — ``workflows_manifest.json`` did
+    exactly that. Comparing a before/after listing of the root turns the next
+    one into a red run instead of silent litter.
+    """
+    root = Path(__file__).resolve().parents[1]
+    before = set(root.iterdir())
+    yield
+    strays = {p.name for p in set(root.iterdir()) - before if p.name != "__pycache__"}
+    assert not strays, (
+        "the test suite wrote into the repo root; every path must stay inside "
+        f"tmp_path (see _sandbox_cwd / _anchor_cwd_outside_repo): {sorted(strays)}"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _sandbox_cwd(tmp_path, monkeypatch):
     """Run every test from a throwaway working directory.
@@ -26,6 +75,32 @@ def _sandbox_cwd(tmp_path, monkeypatch):
     explicitly are unaffected; this is purely a safety net for the rest.
     """
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _reset_gui_launch():
+    """Restore ``utils.GUI_LAUNCH`` after every test.
+
+    ``cli.main`` assigns this module global directly (``cli.py``), so any test
+    that drives a desktop/frozen launch leaves it ``True`` for the rest of the
+    worker process — ``test_frozen_no_args_launches_studio``,
+    ``test_desktop_flag_from_source_opens_window`` and
+    ``test_frozen_no_args_threads_into_standalone_branch`` all do.
+
+    The consequence is worse than a stale flag: ``utils.fatal_startup_error``
+    only raises a native dialog when ``GUI_LAUNCH`` is set, so a later test that
+    exercises a startup-failure path (missing ffmpeg, missing input dir) shells
+    out to ``osascript`` and *blocks on a modal alert* — up to the 120 s
+    subprocess timeout, per occurrence, on a developer's screen. Same
+    leak-and-restore shape as ``_reset_no_input_mode`` below.
+    """
+    import utils
+
+    original = utils.GUI_LAUNCH
+    try:
+        yield
+    finally:
+        utils.GUI_LAUNCH = original
 
 
 @pytest.fixture(autouse=True)
