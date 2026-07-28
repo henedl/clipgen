@@ -8,9 +8,14 @@ inert no-op rather than an ImportError — and the frontend contract, where the
 bar has to opt into pywebview's drag selector for the desktop launch only.
 """
 
+import re
+from pathlib import Path
+
 import desktop_chrome
 
 from _frontend_source import read, strip_comments
+
+SOURCE = Path(desktop_chrome.__file__).read_text(encoding="utf-8")
 
 # Comment-stripped: the prose around this code names both the selector we use and
 # the -webkit-app-region property we cannot.
@@ -34,6 +39,32 @@ def test_apply_declines_a_window_without_a_native_handle(monkeypatch):
         native = None
 
     assert desktop_chrome.apply(Window()) is False
+
+
+def test_pyobjc_is_imported_by_name_not_by_statement():
+    """A literal `import AppKit` fails the Linux typecheck job, not the tests.
+
+    Nothing here runs the macOS branch, so a plain import statement would sail
+    through pytest on any platform and only blow up in CI's `ty` step. Assert the
+    shape instead — this exact regression cost a red build once.
+    """
+    for statement in (
+        r"^\s*import AppKit",
+        r"^\s*from AppKit import",
+        r"^\s*import PyObjCTools",
+        r"^\s*from PyObjCTools import",
+    ):
+        assert not re.search(statement, SOURCE, re.MULTILINE), statement
+    assert 'importlib.import_module("AppKit")' in SOURCE
+    assert 'importlib.import_module("PyObjCTools.AppHelper")' in SOURCE
+
+
+def test_string_imports_are_declared_to_pyinstaller():
+    """importlib hides them from PyInstaller's static analysis; the spec re-adds them."""
+    spec = (Path(__file__).resolve().parents[1] / "build" / "clipgen.spec").read_text(
+        encoding="utf-8"
+    )
+    assert '"AppKit", "PyObjCTools.AppHelper"' in spec
 
 
 def test_teardown_is_idempotent():

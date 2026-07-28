@@ -27,6 +27,7 @@ Every entry point is a no-op off macOS and degrades to the standard title bar on
 any AppKit surprise — losing the styling must never cost the user their window.
 """
 
+import importlib
 import sys
 import threading
 from typing import Any
@@ -55,14 +56,16 @@ def chrome_style() -> str | None:
 def _appkit() -> Any:
     """Import AppKit as an opaque module.
 
+    Imported by name rather than with a plain ``import AppKit`` because pyobjc
+    only exists on macOS, and CI type-checks on Linux — a literal import is an
+    ``unresolved-import`` error there. Do not "simplify" it back.
+
     Typed as ``Any`` on purpose: pyobjc's stubs are incomplete (they omit
     ``NSNotificationCenter``, among others) and every call below is a
     dynamically-bridged ObjC selector, so checking against them buys nothing and
     costs a suppression at each site.
     """
-    import AppKit
-
-    return AppKit
+    return importlib.import_module("AppKit")
 
 
 def apply(window: Any) -> bool:
@@ -129,9 +132,9 @@ def on_shown(window: Any) -> None:
         return
     try:
         AppKit = _appkit()
-        from PyObjCTools import AppHelper
-
-        AppHelper.callAfter(lambda: _reposition_traffic_lights(AppKit, native))
+        # Imported by name for the same reason as AppKit — see _appkit().
+        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+        app_helper.callAfter(lambda: _reposition_traffic_lights(AppKit, native))
     except Exception as exc:
         utils.warning_print(f"Could not place the window buttons: {exc}")
 
