@@ -1122,6 +1122,12 @@
   color: var(--severity-high);
 }
 
+/* The head swaps its icon for a spinner while the sheet is being read. */
+.start-overlay .source-preview__head .so-spinner[hidden],
+.start-overlay .source-preview__head .so-icon[hidden] {
+  display: none;
+}
+
 .start-overlay .source-preview__list {
   max-height: 140px;
   overflow-y: auto;

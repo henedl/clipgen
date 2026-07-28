@@ -212,6 +212,8 @@
     els.worksheetPickerLabel = root.querySelector('[data-role="worksheet-picker-label"]');
     els.worksheetPickerMenu = root.querySelector('[data-role="worksheet-picker-menu"]');
     els.sourcePreview = root.querySelector('[data-role="source-preview"]');
+    els.sourcePreviewSpinner = root.querySelector('[data-role="source-preview-spinner"]');
+    els.sourcePreviewIcon = root.querySelector('[data-role="source-preview-icon"]');
     els.sourcePreviewSummary = root.querySelector('[data-role="source-preview-summary"]');
     els.sourcePreviewList = root.querySelector('[data-role="source-preview-list"]');
 
@@ -737,6 +739,28 @@
   function hideSourcePreview() {
     state.previewReqVer++;   // drop anything in flight
     setHidden(els.sourcePreview, true);
+    stopSourcePreviewLoading();
+    // Drop the rows too: the next thing to show here belongs to a different
+    // spreadsheet, and stale participants must not flash under the spinner.
+    if (els.sourcePreviewList) els.sourcePreviewList.innerHTML = "";
+  }
+
+  // Reveal the block in its loading state. The head row swaps its film icon for
+  // a spinner and the list (empty on a fresh selection, the previous rows on an
+  // input-folder recheck) stays put, so the box appears once and grows into the
+  // result rather than popping in fully formed.
+  function showSourcePreviewLoading() {
+    if (!els.sourcePreview) return;
+    els.sourcePreview.classList.remove("is-error");
+    setHidden(els.sourcePreviewSpinner, false);
+    setHidden(els.sourcePreviewIcon, true);
+    els.sourcePreviewSummary.textContent = "Checking source videos…";
+    setHidden(els.sourcePreview, false);
+  }
+
+  function stopSourcePreviewLoading() {
+    setHidden(els.sourcePreviewSpinner, true);
+    setHidden(els.sourcePreviewIcon, false);
   }
 
   function loadSourcePreview() {
@@ -754,6 +778,9 @@
       applySourcePreview(sel, cached, reqVer);
       return;
     }
+    // Only on a real fetch — a cache hit renders instantly and would just flash
+    // the spinner.
+    showSourcePreviewLoading();
     // Deliberately not apiGet(): this route answers a malformed spreadsheet with
     // a 400 carrying user-facing guidance, which apiGet would collapse into a
     // bare "Server error 400".
@@ -767,8 +794,11 @@
         applySourcePreview(sel, data, reqVer);
       })
       .catch(function () {
-        // Network/parse failure: stay quiet rather than blaming the sheet.
-        if (reqVer === state.previewReqVer) setHidden(els.sourcePreview, true);
+        // Network/parse failure: stay quiet rather than blaming the sheet, but
+        // never leave the spinner running.
+        if (reqVer !== state.previewReqVer) return;
+        stopSourcePreviewLoading();
+        setHidden(els.sourcePreview, true);
       });
   }
 
@@ -779,6 +809,7 @@
     if (state.activeTab !== sel.type) return;                    // tab switched away
     if (!els.sourcePreview) return;
 
+    stopSourcePreviewLoading();
     els.sourcePreviewList.innerHTML = "";
     if (!data || data.ok !== true) {
       els.sourcePreview.classList.add("is-error");
