@@ -107,6 +107,9 @@
 
 /* ---- Close button --------------------------------------------------- */
 
+/* Carries its own surface rather than only a hover one: .start-main scrolls
+ * underneath this button, and a bare glyph disappears into whatever text is
+ * passing behind it. The blur keeps the separation even mid-scroll. */
 .start-overlay .panel-close {
   position: absolute;
   top: 18px;
@@ -114,20 +117,28 @@
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: var(--shadow-sm);
   color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 5;
-  transition: background 120ms, color 120ms;
+  transition: background 120ms, color 120ms, border-color 120ms, transform 120ms;
 }
 
 .start-overlay .panel-close:hover {
   background: var(--bg-hover);
+  border-color: var(--fg-faint);
   color: var(--fg);
+}
+
+.start-overlay .panel-close:active {
+  transform: scale(0.94);
 }
 
 /* ---- Cascade-in animation ------------------------------------------ */
@@ -1080,6 +1091,81 @@
 
 .start-overlay .sheet-panel__worksheet-loading[hidden] {
   display: none;
+}
+
+/* ---- Source video preview -------------------------------------------
+ *
+ * Sits under the sheet card, listing the {study}_{participant}.mp4 files the
+ * chosen worksheet will look for. No z-index: the pickers deliberately drop out
+ * of the card and must keep overlapping this. */
+
+.start-overlay .source-preview {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--so-tabs-bg);
+  padding: 10px 12px;
+}
+
+.start-overlay .source-preview[hidden] {
+  display: none;
+}
+
+.start-overlay .source-preview__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.start-overlay .source-preview.is-error .source-preview__head {
+  color: var(--severity-high);
+}
+
+.start-overlay .source-preview__list {
+  max-height: 140px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.start-overlay .source-preview__list:empty {
+  display: none;
+}
+
+.start-overlay .source-preview__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.start-overlay .source-preview__status {
+  color: var(--severity-positive);
+  flex-shrink: 0;
+}
+
+.start-overlay .source-preview__row.is-missing .source-preview__status {
+  color: var(--severity-high);
+}
+
+.start-overlay .source-preview__pid {
+  color: var(--fg-muted);
+  min-width: 34px;
+  flex-shrink: 0;
+}
+
+.start-overlay .source-preview__name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.start-overlay .source-preview__row.is-missing .source-preview__name {
+  color: var(--fg-faint);
 }
 
 .start-overlay .so-spinner {

@@ -89,6 +89,11 @@
     worksheetReqVer: 0,       // rejects stale worksheet fetches
     worksheetLoading: false,  // a worksheet fetch is in flight (gates Confirm)
     wsPasteTimer: null,       // debounce for paste-driven worksheet loads
+    // Source-video filename preview, keyed "type|id_or_path|worksheet|inputDir"
+    // — the input dir is part of the key because it decides found/missing.
+    previewCache: {},
+    previewReqVer: 0,         // rejects stale preview fetches
+    previewDirTimer: null,    // debounce for input-folder-driven refreshes
     // Baseline = the (input, output, sheet selection, tab) snapshot at the
     // moment the overlay opened (or when a recent project was clicked).
     // Drives the .is-loaded / .is-dirty glow on the path-input and
@@ -206,6 +211,9 @@
     els.worksheetPickerTrigger = root.querySelector('[data-role="worksheet-picker-trigger"]');
     els.worksheetPickerLabel = root.querySelector('[data-role="worksheet-picker-label"]');
     els.worksheetPickerMenu = root.querySelector('[data-role="worksheet-picker-menu"]');
+    els.sourcePreview = root.querySelector('[data-role="source-preview"]');
+    els.sourcePreviewSummary = root.querySelector('[data-role="source-preview-summary"]');
+    els.sourcePreviewList = root.querySelector('[data-role="source-preview-list"]');
 
     els.extrasTabs = root.querySelectorAll(".extras-tabs__tab");
     els.extrasPanels = {
@@ -263,6 +271,14 @@
     on(els.inputDir, "input", function () {
       clearFieldError(els.inputField);
       applyFieldStates();
+      // The folder decides which expected videos count as found, so re-resolve
+      // the preview once typing settles (cached per folder, so re-typing a
+      // folder already seen costs no request).
+      if (state.previewDirTimer) clearTimeout(state.previewDirTimer);
+      state.previewDirTimer = setTimeout(function () {
+        state.previewDirTimer = null;
+        if (state.selection) loadSourcePreview();
+      }, WORKSHEET_PASTE_DEBOUNCE_MS);
     });
     on(els.outputDir, "input", function () {
       clearFieldError(els.outputField);
@@ -648,6 +664,9 @@
       hideWorksheetSection();
     }
     applyFieldStates();
+    // The worksheet is settled either way, so the filename preview can resolve
+    // against the tab that will actually open.
+    loadSourcePreview();
   }
 
   function renderWorksheetList(titles) {
@@ -665,6 +684,7 @@
         closePicker("worksheet");
         // Reflect the tab change in the sheet-card dirty glow.
         applyFieldStates();
+        loadSourcePreview();
       });
       els.worksheetPickerMenu.appendChild(option);
     });
@@ -702,7 +722,103 @@
     if (els.worksheetLoading) setHidden(els.worksheetLoading, true);
     if (els.worksheetPicker) setHidden(els.worksheetPicker, false);
     closePicker("worksheet");
+    hideSourcePreview();
     updateConfirmEnabled();
+  }
+
+  // ---- Source video preview ----
+  //
+  // clipgen resolves a participant's footage as {study}_{participant}.mp4 (or
+  // whatever the sheet's Filename row overrides it to). Getting that wrong used
+  // to surface only after the workspace opened, as clips with no source — so
+  // once a worksheet is settled we ask the server what it will look for and
+  // whether it is already in the input folder.
+
+  function hideSourcePreview() {
+    state.previewReqVer++;   // drop anything in flight
+    setHidden(els.sourcePreview, true);
+  }
+
+  function loadSourcePreview() {
+    var sel = state.selection;
+    if (!sel || (sel.type !== "google" && sel.type !== "excel") || !sel.id_or_path) {
+      hideSourcePreview();
+      return;
+    }
+    var worksheet = sel.worksheet || "";
+    var inputDir = ((els.inputDir && els.inputDir.value) || "").trim();
+    var key = sel.type + "|" + sel.id_or_path + "|" + worksheet + "|" + inputDir;
+    var reqVer = ++state.previewReqVer;
+    var cached = state.previewCache[key];
+    if (cached) {
+      applySourcePreview(sel, cached, reqVer);
+      return;
+    }
+    // Deliberately not apiGet(): this route answers a malformed spreadsheet with
+    // a 400 carrying user-facing guidance, which apiGet would collapse into a
+    // bare "Server error 400".
+    fetch("/api/spreadsheets/preview?type=" + encodeURIComponent(sel.type) +
+          "&id_or_path=" + encodeURIComponent(sel.id_or_path) +
+          "&worksheet=" + encodeURIComponent(worksheet) +
+          "&input_dir=" + encodeURIComponent(inputDir))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        state.previewCache[key] = data;
+        applySourcePreview(sel, data, reqVer);
+      })
+      .catch(function () {
+        // Network/parse failure: stay quiet rather than blaming the sheet.
+        if (reqVer === state.previewReqVer) setHidden(els.sourcePreview, true);
+      });
+  }
+
+  function applySourcePreview(sel, data, reqVer) {
+    if (reqVer !== state.previewReqVer) return;                  // stale fetch
+    if (!state.selection || state.selection.type !== sel.type ||
+        state.selection.id_or_path !== sel.id_or_path) return;   // selection moved
+    if (state.activeTab !== sel.type) return;                    // tab switched away
+    if (!els.sourcePreview) return;
+
+    els.sourcePreviewList.innerHTML = "";
+    if (!data || data.ok !== true) {
+      els.sourcePreview.classList.add("is-error");
+      els.sourcePreviewSummary.textContent =
+        (data && data.error) || "Could not read this worksheet.";
+      setHidden(els.sourcePreview, false);
+      return;
+    }
+    els.sourcePreview.classList.remove("is-error");
+    var rows = data.participants || [];
+    if (!rows.length) {
+      setHidden(els.sourcePreview, true);
+      return;
+    }
+
+    var missing = 0;
+    rows.forEach(function (row) { if (!row.found) missing++; });
+    els.sourcePreviewSummary.textContent = missing === 0
+      ? "All " + rows.length + " source videos found in the input folder"
+      : (rows.length - missing) + " of " + rows.length +
+        " source videos found — " + missing + " missing";
+
+    // Missing first: with the list capped to a few rows, the problem should not
+    // be the part you have to scroll for.
+    var ordered = rows.filter(function (r) { return !r.found; })
+      .concat(rows.filter(function (r) { return r.found; }));
+    var frag = document.createDocumentFragment();
+    ordered.forEach(function (row) {
+      var item = el("div", "source-preview__row" + (row.found ? "" : " is-missing"));
+      var icon = el("span", "so-icon so-icon--xs source-preview__status");
+      icon.setAttribute("data-icon", row.found ? "check-circle" : "exclamation-circle");
+      item.appendChild(icon);
+      item.appendChild(el("span", "source-preview__pid", row.id));
+      item.appendChild(el("span", "source-preview__name",
+                          (row.filenames || []).join("  +  ")));
+      frag.appendChild(item);
+    });
+    els.sourcePreviewList.appendChild(frag);
+    applyIcons(els.sourcePreviewList);
+    setHidden(els.sourcePreview, false);
   }
 
   // The Confirm ("Open workspace") button waits while worksheets are being
@@ -1508,6 +1624,11 @@
     setRecentsExpanded(false);
     markDismissed();
     stopGooglePoll();
+    // Don't let a debounced preview fetch fire into a closed overlay.
+    if (state.previewDirTimer) {
+      clearTimeout(state.previewDirTimer);
+      state.previewDirTimer = null;
+    }
     // Animate the panel and backdrop out, then hide.
     if (els.panel) els.panel.classList.remove("is-in");
     root.style.setProperty("--host-blur", "0px");
