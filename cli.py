@@ -360,6 +360,16 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         help="Launch the Overview frontend (Metadata, Convergence, and the 3D similarity Map)",
     )
     viewer_manifest.add_argument(
+        "--desktop",
+        action="store_true",
+        help="Open the web frontend in a native window instead of a browser (implies --studio when no frontend is given)",
+    )
+    viewer_manifest.add_argument(
+        "--browser",
+        action="store_true",
+        help="Force the web frontend into the default browser, even for a double-clicked bundle",
+    )
+    viewer_manifest.add_argument(
         "--gallery",
         type=str,
         nargs="?",
@@ -816,38 +826,105 @@ def setup_encoding() -> None:
 def get_runtime_working_dir() -> str:
     """Return the runtime working directory.
 
-    Source runs use the script directory; frozen one-file builds use the
-    executable directory so local assets resolve from where the binary lives.
+    Source runs use the script directory. Frozen builds use the directory the
+    user sees the application in, so "put credentials.json next to the app"
+    means what it says:
+
+    * macOS ``.app`` — the folder *containing* the bundle. ``sys.executable``
+      points inside ``Contents/MacOS``, which is invisible in Finder and part of
+      the code signature, so writing there would both hide files from the user
+      and invalidate the signature.
+    * anything else — the executable's own directory, which is already the
+      folder the user dropped the binary into.
     """
-    if getattr(sys, "frozen", False):
-        return str(Path(sys.executable).resolve().parent)
-    return str(Path(__file__).resolve().parent)
+    if not getattr(sys, "frozen", False):
+        return str(Path(__file__).resolve().parent)
+
+    exe_dir = Path(sys.executable).resolve().parent
+    # .../clipgen.app/Contents/MacOS/clipgen → .../  (the .app's parent)
+    if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
+        bundle = exe_dir.parent.parent
+        if bundle.suffix == ".app":
+            return str(bundle.parent)
+    return str(exe_dir)
 
 
 # ---- Google authentication ----
+
+CREDENTIALS_FILENAME = "credentials.json"
+
+
+def credentials_search_paths() -> list[Path]:
+    """Return the locations searched for ``credentials.json``, in priority order.
+
+    1. The working directory — for a frozen bundle that means *beside the app*,
+       which is where users are told to drop the file.
+    2. gspread's own config dir (``~/.config/gspread``), where many existing
+       installs already keep it.
+    3. clipgen's per-user config dir, alongside ``start.json``.
+    """
+    paths = [Path.cwd() / CREDENTIALS_FILENAME]
+    try:
+        from gspread.auth import DEFAULT_CONFIG_DIR
+
+        paths.append(Path(DEFAULT_CONFIG_DIR) / CREDENTIALS_FILENAME)
+    except ImportError:
+        pass
+    import start_settings
+
+    paths.append(start_settings.config_dir() / CREDENTIALS_FILENAME)
+    return paths
+
+
+def resolve_credentials_path() -> Path | None:
+    """Return the first existing ``credentials.json``, or None if there is none."""
+    for candidate in credentials_search_paths():
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _cached_token_path() -> Path | None:
+    """Return the cached gspread token path if it exists.
+
+    gspread always writes the token to an absolute path under its own config
+    dir (clipgen never overrides ``authorized_user_filename``), so this is the
+    single place it can be.
+    """
+    try:
+        from gspread.auth import DEFAULT_AUTHORIZED_USER_FILENAME
+    except ImportError:
+        return None
+    token = Path(DEFAULT_AUTHORIZED_USER_FILENAME)
+    return token if token.is_file() else None
 
 
 def _try_silent_google_auth() -> Any | None:
     """Reuse a cached gspread token without ever launching the OAuth flow.
 
-    Returns a gspread client when both ``credentials.json`` and the cached
-    ``authorized_user.json`` exist (and load); otherwise returns ``None``
-    without printing or prompting. Used by the frozen-binary launch path so
-    a previously-authenticated user is not forced through "Connect Google"
-    on every double-click — but a fresh install lands silently on the Start
-    overlay's Connect CTA rather than blocking on an interactive flow.
+    Returns a gspread client when the cached ``authorized_user.json`` exists and
+    loads; otherwise returns ``None`` without printing or prompting. Used by the
+    frozen-binary launch path so a previously-authenticated user is not forced
+    through "Connect Google" on every double-click — but a fresh install lands
+    silently on the Start overlay's Connect CTA rather than blocking on an
+    interactive flow.
+
+    The gate is the *token*, not ``credentials.json``: gspread only reads the
+    credentials file when no cached token exists, so requiring both would push
+    users with a perfectly good token back through the connect flow purely
+    because their credentials file lives somewhere else.
     """
     try:
         import gspread
-        from gspread.auth import DEFAULT_AUTHORIZED_USER_FILENAME
-    except Exception:
+    except ImportError:
         return None
-    if not Path("credentials.json").is_file():
+    if _cached_token_path() is None:
         return None
-    if not Path(DEFAULT_AUTHORIZED_USER_FILENAME).is_file():
-        return None
+    credentials = resolve_credentials_path()
     try:
-        return gspread.oauth(credentials_filename="credentials.json")
+        if credentials is None:
+            return gspread.oauth()
+        return gspread.oauth(credentials_filename=str(credentials))
     except Exception:
         return None
 
@@ -862,20 +939,30 @@ def authenticate_google() -> Any | None:
     """
     import gspread
 
+    credentials = resolve_credentials_path()
     try:
         utils.debug_print("Attempting login...")
-        gspread_client = gspread.oauth(credentials_filename="credentials.json")
+        if credentials is None:
+            # No file anywhere; let gspread raise against its own default path
+            # so the error names a location the user can act on.
+            gspread_client = gspread.oauth()
+        else:
+            utils.debug_print(f"Using credentials at {credentials}")
+            gspread_client = gspread.oauth(credentials_filename=str(credentials))
         utils.debug_print("Login successful!")
         return gspread_client
     except (gspread.exceptions.GSpreadException, FileNotFoundError, OSError) as e:
+        searched = [f"  - {p}" for p in credentials_search_paths()]
         utils.error_print(
             "Could not authenticate with Google.",
             [
                 f"Error details: {e}",
-                f"Credentials file location: {Path.cwd() / 'credentials.json'}",
+                "",
+                "Searched for credentials.json in:",
+                *searched,
                 "",
                 "Troubleshooting steps:",
-                "  1. Ensure 'credentials.json' exists in the working directory",
+                "  1. Put 'credentials.json' in one of the locations above",
                 "  2. Verify the credentials file is valid JSON",
                 "  3. Check that the service account has access to Google Sheets API",
                 "  4. For OAuth flow, delete any existing token files and re-authenticate",
@@ -3443,6 +3530,71 @@ def _maybe_apply_persisted_dirs(args: Any) -> None:
             config.OUTPUT_DIR = last_output
 
 
+# Ordered so the first match wins, matching the mutually-exclusive frontend
+# flags validated by _validate_mode_conflicts.
+_WEB_MODES = (
+    "studio",
+    "screenspace",
+    "transcripts",
+    "workflows",
+    "composer",
+    "overview",
+)
+
+
+def _resolve_web_mode(args: Any) -> str | None:
+    """Return the web frontend requested by *args*, or None if none was."""
+    for mode in _WEB_MODES:
+        if getattr(args, mode, False):
+            return mode
+    return None
+
+
+def _use_desktop_window(args: Any) -> bool:
+    """Decide whether a web frontend opens in a native window or the browser.
+
+    ``--browser`` always wins. Otherwise a window is used when asked for with
+    ``--desktop``, or when a frozen bundle was launched with no arguments at all
+    — a Finder/Explorer double-click. Every other invocation, including every
+    explicit CLI run of a frozen binary, keeps the browser behaviour.
+    """
+    if getattr(args, "browser", False):
+        return False
+    if getattr(args, "desktop", False):
+        return True
+    return bool(getattr(sys, "frozen", False)) and not sys.argv[1:]
+
+
+def _launch_web_frontend(
+    args: Any,
+    default_page: str,
+    worksheet: Any = None,
+    gspread_client: Any = None,
+) -> None:
+    """Serve *default_page*, in a desktop window or the default browser.
+
+    Single funnel for all seven launch sites so the window-vs-browser decision
+    lives in exactly one place.
+    """
+    if _use_desktop_window(args):
+        import desktop
+
+        desktop.launch(
+            worksheet=worksheet,
+            default_page=default_page,
+            gspread_client=gspread_client,
+        )
+        return
+
+    import server
+
+    server.start_combined_server(
+        worksheet=worksheet,
+        default_page=default_page,
+        gspread_client=gspread_client,
+    )
+
+
 def _dispatch_standalone_mode(
     args: Any,
     cli_mode: bool,
@@ -3526,33 +3678,18 @@ def _dispatch_standalone_mode(
         return True
 
     # Standalone web frontend (no spreadsheet) — Studio, Screenspace, or Transcripts.
-    # The Start overlay lets the user pick a spreadsheet from the browser.
-    web_mode = (
-        "studio"
-        if getattr(args, "studio", False)
-        else "screenspace"
-        if getattr(args, "screenspace", False)
-        else "transcripts"
-        if getattr(args, "transcripts", False)
-        else "workflows"
-        if getattr(args, "workflows", False)
-        else "composer"
-        if getattr(args, "composer", False)
-        else "overview"
-        if getattr(args, "overview", False)
-        else None
-    )
+    # The Start overlay lets the user pick a spreadsheet from the frontend.
+    web_mode = _resolve_web_mode(args)
     if web_mode is not None and not args.spreadsheet:
-        import server
-
         _maybe_apply_persisted_dirs(args)
         # Silent best-effort reuse of the cached Google token (frozen .app
         # double-clicks land here; without this, every launch forces the user
         # back through "Connect Google" even when their token is still good).
         gspread_client = _try_silent_google_auth()
-        server.start_combined_server(
+        _launch_web_frontend(
+            args,
+            web_mode,
             worksheet=None,
-            default_page=web_mode,
             gspread_client=gspread_client,
         )
         return True
@@ -3597,8 +3734,15 @@ def main() -> None:
     args = parse_arguments()
 
     # Double-clicked from Finder/Explorer (frozen bundle, no CLI args) → land in
-    # Studio. The Start overlay handles in-browser spreadsheet selection.
+    # Studio. The Start overlay handles in-app spreadsheet selection.
     if getattr(sys, "frozen", False) and not sys.argv[1:]:
+        args.studio = True
+
+    # `--desktop` / `--browser` on their own name a *surface*, not a frontend, so
+    # they mean "open the app" — Studio, the same landing page a double-clicked
+    # bundle gets. With a frontend flag alongside they just pick the surface.
+    surface_only = getattr(args, "desktop", False) or getattr(args, "browser", False)
+    if surface_only and _resolve_web_mode(args) is None:
         args.studio = True
 
     utils.NO_INPUT_MODE = bool(getattr(args, "no_input", False))
@@ -3740,62 +3884,12 @@ def main() -> None:
             else:
                 worksheet = select_worksheet(gspread_client, args, cli_mode)
 
-            if getattr(args, "studio", False):
-                import server
-
-                server.start_combined_server(
+            web_mode = _resolve_web_mode(args)
+            if web_mode is not None:
+                _launch_web_frontend(
+                    args,
+                    web_mode,
                     worksheet=worksheet,
-                    default_page="studio",
-                    gspread_client=gspread_client,
-                )
-                sys.exit(0)
-
-            if getattr(args, "screenspace", False):
-                import server
-
-                server.start_combined_server(
-                    worksheet=worksheet,
-                    default_page="screenspace",
-                    gspread_client=gspread_client,
-                )
-                sys.exit(0)
-
-            if getattr(args, "transcripts", False):
-                import server
-
-                server.start_combined_server(
-                    worksheet=worksheet,
-                    default_page="transcripts",
-                    gspread_client=gspread_client,
-                )
-                sys.exit(0)
-
-            if getattr(args, "workflows", False):
-                import server
-
-                server.start_combined_server(
-                    worksheet=worksheet,
-                    default_page="workflows",
-                    gspread_client=gspread_client,
-                )
-                sys.exit(0)
-
-            if getattr(args, "composer", False):
-                import server
-
-                server.start_combined_server(
-                    worksheet=worksheet,
-                    default_page="composer",
-                    gspread_client=gspread_client,
-                )
-                sys.exit(0)
-
-            if getattr(args, "overview", False):
-                import server
-
-                server.start_combined_server(
-                    worksheet=worksheet,
-                    default_page="overview",
                     gspread_client=gspread_client,
                 )
                 sys.exit(0)

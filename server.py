@@ -54,6 +54,7 @@ import json
 import os
 import queue
 import re
+import socket
 import string
 import sys
 import threading
@@ -77,7 +78,7 @@ from flask import (
     send_from_directory,
 )
 from flask.json.provider import DefaultJSONProvider
-from werkzeug.serving import WSGIRequestHandler
+from werkzeug.serving import ThreadedWSGIServer, WSGIRequestHandler, make_server
 
 import config
 import files
@@ -3852,23 +3853,23 @@ class QuietWSGIRequestHandler(WSGIRequestHandler):
         super().log_request(code, size)
 
 
-def start_combined_server(
-    worksheet: Any = None,
-    port: int | None = None,
-    default_page: str = "studio",
-    gspread_client: Any = None,
-) -> None:
-    """Start a combined Studio + Screenspace + Transcripts server on one port.
+@dataclass
+class LiveServer:
+    """Handle for a combined server running on a background thread.
 
-    All three blueprints are always registered. When *worksheet* is ``None``,
-    sheet-dependent Studio routes return ``sheet_loaded: false`` placeholder
-    responses; the frontend's Start overlay lets the user pick a spreadsheet
-    via ``POST /api/spreadsheets/open``.
-
-    If *gspread_client* is supplied (the CLI's auth already happened upstream),
-    the Google Sheets list endpoint reports authenticated and skips the
-    "Connect Google" CTA in the Start overlay.
+    Returned by :func:`serve_combined_app`; must be handed back to
+    :func:`stop_combined_app` to shut everything down.
     """
+
+    origin: str  # scheme + host + port, no path
+    url: str  # origin plus the landing page's prefix
+    port: int
+    srv: ThreadedWSGIServer
+    thread: threading.Thread
+
+
+def _prepare_server_runtime() -> None:
+    """Apply the process-wide setup every served instance needs."""
     # The web server has no interactive console: every request/run/background
     # task executes on a Flask/daemon thread with no attached stdin. Force
     # non-interactive resolution so a missing source video (or any pipeline
@@ -3886,6 +3887,146 @@ def start_combined_server(
     # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel temp-clips)
     # a prior hard kill may have left in the output dir, before workers spin up.
     utils.sweep_stale_temp_artifacts()
+
+
+def _port_available(port: int) -> bool:
+    """Report whether *port* can be bound on loopback right now.
+
+    Probing first keeps werkzeug's own "Port N is in use" message (and its
+    ``sys.exit(1)``) off the console in the ordinary second-instance case.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def serve_combined_app(
+    worksheet: Any = None,
+    port: int | None = None,
+    default_page: str = "studio",
+    gspread_client: Any = None,
+) -> LiveServer:
+    """Serve the combined app on a background thread and return once listening.
+
+    Unlike :func:`start_combined_server` this does not block and does not open a
+    browser, so a desktop host can point a native window at ``LiveServer.url``
+    and tear the server down again when the window closes.
+    """
+    _prepare_server_runtime()
+
+    combined = build_combined_app(
+        worksheet=worksheet,
+        default_page=default_page,
+        gspread_client=gspread_client,
+    )
+
+    # Not `port or ...`: 0 is a meaningful value here (bind an ephemeral port).
+    requested = port if port is not None else config.SERVER_PORT
+    if requested and not _port_available(requested):
+        # Usually a second clipgen instance already holding the port. Fall back
+        # to an ephemeral one rather than refusing to start at all.
+        utils.warning_print(
+            f"Port {requested} is already in use — starting on a free port instead."
+        )
+        requested = 0
+    try:
+        srv = make_server(
+            "127.0.0.1",
+            requested,
+            combined,
+            threaded=True,
+            request_handler=QuietWSGIRequestHandler,
+        )
+    except (OSError, SystemExit):
+        # Belt and braces for the race between the probe above and this bind.
+        # werkzeug turns EADDRINUSE into sys.exit(1), so SystemExit — which is a
+        # BaseException — has to be caught explicitly alongside OSError.
+        if requested == 0:
+            raise
+        srv = make_server(
+            "127.0.0.1",
+            0,
+            combined,
+            threaded=True,
+            request_handler=QuietWSGIRequestHandler,
+        )
+
+    # `threaded=True` guarantees this, but make_server's return type is the base
+    # class and only the ThreadingMixIn subclass has block_on_close.
+    assert isinstance(srv, ThreadedWSGIServer)
+    # socketserver defaults block_on_close to True, so server_close() joins every
+    # tracked connection thread. A single open SSE stream at teardown would hang
+    # shutdown forever — the nastiest failure mode in this path.
+    srv.block_on_close = False
+
+    thread = threading.Thread(
+        target=srv.serve_forever, daemon=True, name="clipgen-server"
+    )
+    thread.start()
+    origin = f"http://127.0.0.1:{srv.server_port}"
+    return LiveServer(
+        origin=origin,
+        url=f"{origin}/{default_page}/",
+        port=srv.server_port,
+        srv=srv,
+        thread=thread,
+    )
+
+
+def stop_combined_app(live: LiveServer) -> None:
+    """Close the socket, then stop every thread ``build_combined_app`` started.
+
+    The Screenspace and Transcripts workers and the Workflows watch-dir thread
+    are *module* globals rather than app-scoped, so without this they outlive
+    the Flask app and keep polling whatever ``config.INPUT_DIR`` points at next.
+    """
+    live.srv.shutdown()
+    live.srv.server_close()
+    live.thread.join(timeout=10)
+
+    # Imported lazily for the same reason build_combined_app does: keeping cv2
+    # and torch off the import path of callers that never serve Screenspace.
+    import screenspace_server
+    import transcripts_server
+    import workflows_server
+
+    if screenspace_server._worker is not None:
+        screenspace_server._worker.stop()
+        screenspace_server._worker = None
+    if transcripts_server._worker is not None:
+        transcripts_server._worker.stop()
+        transcripts_server._worker = None
+    workflows_server._watch_stop.set()
+    if workflows_server._watch_thread is not None:
+        workflows_server._watch_thread.join(timeout=5)
+        workflows_server._watch_thread = None
+    workflows_server._watch_stop.clear()
+
+
+def start_combined_server(
+    worksheet: Any = None,
+    port: int | None = None,
+    default_page: str = "studio",
+    gspread_client: Any = None,
+) -> None:
+    """Start a combined Studio + Screenspace + Transcripts server on one port.
+
+    All three blueprints are always registered. When *worksheet* is ``None``,
+    sheet-dependent Studio routes return ``sheet_loaded: false`` placeholder
+    responses; the frontend's Start overlay lets the user pick a spreadsheet
+    via ``POST /api/spreadsheets/open``.
+
+    If *gspread_client* is supplied (the CLI's auth already happened upstream),
+    the Google Sheets list endpoint reports authenticated and skips the
+    "Connect Google" CTA in the Start overlay.
+
+    Opens the user's default browser and blocks until interrupted. Desktop
+    launches use :func:`serve_combined_app` instead.
+    """
+    _prepare_server_runtime()
 
     combined = build_combined_app(
         worksheet=worksheet,

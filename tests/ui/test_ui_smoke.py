@@ -44,7 +44,7 @@ def test_page_loads_without_errors(
     page = browser_context.new_page()
     _ui_pages.wire_listeners(page, log)
     try:
-        _ui_pages.open_and_settle(page, live_server.url, name, log)
+        _ui_pages.open_and_settle(page, live_server.origin, name, log)
     finally:
         # Screenshot even on failure — a broken page is exactly the one worth
         # looking at, and the report has to record the attempt either way.
@@ -52,7 +52,7 @@ def test_page_loads_without_errors(
             page.screenshot(path=str(shot), full_page=True)
         except Exception as exc:  # pragma: no cover - capture is best-effort
             log.console_errors.append(f"screenshot failed: {exc}")
-        _record(name, log, shot.resolve(), live_server.url)
+        _record(name, log, shot.resolve(), live_server.origin)
         page.close()
 
     assert not log.fatal, _ui_pages.format_failure(

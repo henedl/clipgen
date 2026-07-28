@@ -241,8 +241,17 @@ def test_parse_cli_mode_args_parses_mixed_line_separators():
 
 
 def _mock_main_side_effects(monkeypatch, tmp_path):
-    """Silence the I/O-heavy parts of cli.main() so tests can drive dispatch."""
+    """Silence the I/O-heavy parts of cli.main() so tests can drive dispatch.
+
+    Both launch paths must be stubbed. ``desktop.launch`` is the one that bites:
+    the frozen-no-argv tests below reproduce a Finder double-click exactly, which
+    is the real trigger for a native window, so leaving it live blocks the whole
+    run inside ``webview.start()`` — a visible window and no test output.
+    ``captured["launcher"]`` records which path dispatch actually chose.
+    """
     import os as _os
+
+    import desktop
     import server
     import utils
     import video
@@ -257,11 +266,16 @@ def _mock_main_side_effects(monkeypatch, tmp_path):
 
     captured: dict[str, object] = {}
 
-    def fake_start(*, worksheet=None, port=None, default_page="studio", **_kw):
-        captured["worksheet"] = worksheet
-        captured["default_page"] = default_page
+    def _record(launcher):
+        def fake(*, worksheet=None, port=None, default_page="studio", **_kw):
+            captured["launcher"] = launcher
+            captured["worksheet"] = worksheet
+            captured["default_page"] = default_page
 
-    monkeypatch.setattr(server, "start_combined_server", fake_start)
+        return fake
+
+    monkeypatch.setattr(server, "start_combined_server", _record("browser"))
+    monkeypatch.setattr(desktop, "launch", _record("desktop"))
     return captured
 
 
@@ -277,6 +291,8 @@ def test_frozen_no_args_launches_studio(monkeypatch, tmp_path):
     assert exc.value.code == 0
     assert captured.get("default_page") == "studio"
     assert captured.get("worksheet") is None
+    # A double-click is the one case that opens a native window.
+    assert captured.get("launcher") == "desktop"
 
 
 def test_frozen_with_explicit_flag_is_respected(monkeypatch, tmp_path):
@@ -290,6 +306,50 @@ def test_frozen_with_explicit_flag_is_respected(monkeypatch, tmp_path):
 
     assert exc.value.code == 0
     assert captured.get("default_page") == "screenspace"
+    # Explicit CLI use of a frozen binary stays on the browser path — the window
+    # is reserved for the argument-less double-click.
+    assert captured.get("launcher") == "browser"
+
+
+def test_frozen_no_args_with_browser_flag_uses_browser(monkeypatch, tmp_path):
+    """--browser is the escape hatch out of the desktop window."""
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen", "--browser"])
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured.get("launcher") == "browser"
+
+
+def test_desktop_flag_from_source_opens_window(monkeypatch, tmp_path):
+    """--desktop alone means Studio in a window, mirroring a double-click."""
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--desktop"])
+    monkeypatch.delattr("sys.frozen", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured.get("launcher") == "desktop"
+    assert captured.get("default_page") == "studio"
+
+
+def test_web_frontend_from_source_defaults_to_browser(monkeypatch, tmp_path):
+    """A plain source-checkout launch keeps the pre-existing browser behaviour."""
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--composer"])
+    monkeypatch.delattr("sys.frozen", raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured.get("launcher") == "browser"
+    assert captured.get("default_page") == "composer"
 
 
 def test_frozen_no_args_threads_into_standalone_branch(monkeypatch, tmp_path):
@@ -671,3 +731,78 @@ def test_run_gallery_cli_negative_interval_falls_back_to_default(tmp_path, monke
     args = Namespace(gallery=str(video_file), interval=-5, gif=False, bundle=False)
     cli._run_gallery_cli(args)
     assert captured["interval"] == config.GALLERY_INTERVAL_SECONDS
+
+
+# ---- credentials.json resolution ----
+
+
+def test_credentials_search_path_order(monkeypatch, tmp_path):
+    """CWD (beside the app) wins, then gspread's config dir, then clipgen's."""
+    import start_settings
+
+    cwd = tmp_path / "app"
+    gspread_dir = tmp_path / "gspread"
+    clipgen_dir = tmp_path / "clipgen"
+    for d in (cwd, gspread_dir, clipgen_dir):
+        d.mkdir()
+
+    monkeypatch.chdir(cwd)
+    monkeypatch.setattr("gspread.auth.DEFAULT_CONFIG_DIR", str(gspread_dir))
+    monkeypatch.setattr(start_settings, "config_dir", lambda: clipgen_dir)
+
+    assert cli.resolve_credentials_path() is None
+
+    # Lowest priority first, then check each higher one takes over.
+    (clipgen_dir / "credentials.json").write_text("{}")
+    assert cli.resolve_credentials_path() == clipgen_dir / "credentials.json"
+
+    (gspread_dir / "credentials.json").write_text("{}")
+    assert cli.resolve_credentials_path() == gspread_dir / "credentials.json"
+
+    (cwd / "credentials.json").write_text("{}")
+    assert cli.resolve_credentials_path() == cwd / "credentials.json"
+
+
+def test_silent_auth_needs_only_a_cached_token(monkeypatch, tmp_path):
+    """A valid cached token is sufficient; credentials.json need not be present.
+
+    Requiring both is what pushed users with a good token back through
+    "Connect Google" whenever their credentials file lived elsewhere.
+    """
+    token = tmp_path / "authorized_user.json"
+    token.write_text("{}")
+    monkeypatch.setattr("gspread.auth.DEFAULT_AUTHORIZED_USER_FILENAME", str(token))
+    monkeypatch.setattr(cli, "resolve_credentials_path", lambda: None)
+
+    called = {}
+
+    def fake_oauth(**kwargs):
+        called.update(kwargs)
+        return "client"
+
+    monkeypatch.setattr("gspread.oauth", fake_oauth)
+    assert cli._try_silent_google_auth() == "client"
+
+    # No token -> no attempt at all.
+    monkeypatch.setattr(
+        "gspread.auth.DEFAULT_AUTHORIZED_USER_FILENAME", str(tmp_path / "missing.json")
+    )
+    assert cli._try_silent_google_auth() is None
+
+
+# ---- frozen working directory ----
+
+
+def test_frozen_macos_working_dir_is_beside_the_bundle(monkeypatch):
+    """Writing inside .app/Contents/MacOS would break the signature and hide files."""
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr(
+        "sys.executable", "/Applications/clipgen.app/Contents/MacOS/clipgen"
+    )
+    assert cli.get_runtime_working_dir() == "/Applications"
+
+
+def test_frozen_plain_binary_uses_its_own_directory(monkeypatch):
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", "/opt/tools/clipgen")
+    assert cli.get_runtime_working_dir() == "/opt/tools"

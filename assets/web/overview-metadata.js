@@ -1825,15 +1825,11 @@
       session_summary: cache.sessionSummary,
       cross_stream_collisions: cache.collisionStats,
     };
-    var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = getStudyName().replace(/[^a-zA-Z0-9_-]/g, "_") + "_metadata.json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    clipgenSaveFile(
+      getStudyName().replace(/[^a-zA-Z0-9_-]/g, "_") + "_metadata.json",
+      JSON.stringify(data, null, 2),
+      "application/json"
+    );
   }
 
   // --- CSV Export ---
@@ -1857,15 +1853,7 @@
   }
 
   function downloadCSV(filename, content) {
-    var blob = new Blob([content], { type: "text/csv" });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    clipgenSaveFile(filename, content, "text/csv");
   }
 
   function exportCSV() {

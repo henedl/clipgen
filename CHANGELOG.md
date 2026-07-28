@@ -2,6 +2,10 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.42 — 2026-07-27 — Core
+**Desktop app: clipgen opens in its own window**
+Double-clicking the bundled `.app`/`.exe` now opens a native window (pywebview over the existing loopback server) instead of spawning a Terminal and hijacking the default browser. The CLI is unchanged — only an argument-less frozen launch opens a window; `--desktop` forces one from a source checkout and `--browser` forces the old behaviour. Inter and JetBrains Mono are vendored locally, so the interface no longer blocks on a Google Fonts fetch and works fully offline. `credentials.json` is now found beside the app, in `~/.config/gspread`, or in clipgen's config dir, and a cached Google token alone is enough to stay signed in. Exports (Overview JSON/CSV, Workflows blueprints, Screenspace events) route through a native save dialog in the window, because embedded WebKit silently discards every kind of browser download. macOS builds ship as a `.dmg` on GitHub Releases — the previous artifact zip stripped the executable bit and broke the code signature.
+
 ## v0.14.36 — 2026-07-25 — Screenspace
 **Spatial anchor for the magic-wand tolerance scrub**
 The wand scrub paints an anchor dot at the press point, a dashed horizontal track, and a head dot that stops growing at slider min/max; the tolerance readout sits at the head beside the pointer, including when the flood finds no contour.
