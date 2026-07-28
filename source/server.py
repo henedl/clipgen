@@ -3204,6 +3204,49 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         raise
 
 
+def _open_worksheet_for(
+    type_: str, id_or_path: str, worksheet: str | None
+) -> tuple[Any, str]:
+    """Open a worksheet and return ``(worksheet, label)`` without swapping state.
+
+    The read-only half of ``POST /api/spreadsheets/open``: resolves an Excel path
+    or a Google spreadsheet (by URL, else by name against the Drive listing) and
+    hands back the worksheet plus its display label. Callers decide what to do
+    with it — ``/api/spreadsheets/open`` swaps it in via :func:`_swap_worksheet`,
+    ``/api/spreadsheets/preview`` only reads from it. Returns ``(None, "")`` when
+    the spreadsheet can't be resolved; raises whatever the backing library does.
+    """
+    if type_ == "excel":
+        import excel_io
+
+        return (
+            excel_io.open_excel_workbook(id_or_path, worksheet_name=worksheet),
+            Path(id_or_path).name,
+        )
+
+    if _google_auth.client is None:
+        raise RuntimeError(
+            "Not authenticated with Google — click 'Connect Google' first."
+        )
+    import app as _app
+    import google_api
+
+    if id_or_path.startswith(("http://", "https://")):
+        new_ws = _app.open_spreadsheet_by_url(
+            _google_auth.client, id_or_path, worksheet_name=worksheet
+        )
+    else:
+        doc_list = google_api.get_all_spreadsheets(_google_auth.client)
+        new_ws = _app.open_spreadsheet_by_name(
+            _google_auth.client, doc_list, id_or_path, worksheet_name=worksheet
+        )
+    label = ""
+    if new_ws is not None:
+        parent = getattr(new_ws, "spreadsheet", None)
+        label = getattr(parent, "title", "") or id_or_path
+    return new_ws, label
+
+
 def _set_cache_headers(response):
     """after_request hook: apply content-type-aware caching to static assets.
 
@@ -3508,6 +3551,76 @@ def build_combined_app(
             return err(str(exc), 500)
         return ok(worksheets=titles, recommended=recommended)
 
+    @combined.route("/api/spreadsheets/preview", methods=["GET"])
+    def api_spreadsheets_preview() -> Response:
+        """Preview the source-video filenames a spreadsheet will expect.
+
+        Query params: ``type`` ('google'|'excel'), ``id_or_path``, optional
+        ``worksheet``, and optional ``input_dir`` (the Start overlay's *typed*
+        folder, which is not yet the server's effective input dir). Returns
+        ``{study, participants: [{id, filenames, found, override}]}`` — the names
+        ``files.resolve_source_video_paths`` will look for, and whether they are
+        on disk, so a naming mismatch surfaces before the workspace is opened.
+
+        Read-only: builds a throwaway :class:`SheetContext` and never calls
+        ``_swap_worksheet``, so the active sheet is untouched.
+
+        Cost: one spreadsheet read (``get_all_values``) per (sheet, worksheet)
+        pair, duplicating the read ``/api/spreadsheets/open`` does moments later.
+        That duplication is deliberate — handing the parsed context off to the
+        open path would mean threading it through ``_swap_worksheet`` /
+        ``_init_studio_state`` (atomic swap, rollback contract) and opening a
+        staleness window between preview and open. The client caches per
+        ``type|id_or_path|worksheet|input_dir`` and must never poll this route.
+        """
+        type_ = (request.args.get("type") or "").strip()
+        id_or_path = (request.args.get("id_or_path") or "").strip()
+        worksheet = (request.args.get("worksheet") or "").strip() or None
+        input_dir = (request.args.get("input_dir") or "").strip()
+        if type_ not in ("google", "excel") or not id_or_path:
+            return err("Required: type ('google'|'excel') and id_or_path")
+        if type_ == "google" and _google_auth.client is None:
+            return err("Not authenticated with Google.")
+
+        try:
+            ws, _label = _open_worksheet_for(type_, id_or_path, worksheet)
+            if ws is None:
+                return err("Could not open spreadsheet", 404)
+            ctx = spreadsheet.build_sheet_context(ws)
+        except Exception as exc:
+            return err(str(exc), 500)
+        if ctx is None:
+            return err(
+                "Could not read participants from this worksheet — check that it "
+                "has ID, Observation and Category headers and P/G participant "
+                "columns."
+            )
+
+        participants = spreadsheet.get_participant_list(
+            ctx.header_row, ctx.id_cell, ctx.num_participants
+        )
+        overrides = spreadsheet.participant_filename_overrides(ctx)
+        base_dir = (
+            Path(input_dir).expanduser()
+            if input_dir
+            else utils.get_effective_input_dir()
+        )
+        rows: list[dict[str, Any]] = []
+        for pid in participants:
+            override = overrides.get(pid)
+            paths = files.resolve_source_video_paths(
+                ctx.study_name, pid, override, base_dir
+            )
+            rows.append(
+                {
+                    "id": pid,
+                    "filenames": [p.name for p in paths],
+                    "found": all(p.is_file() for p in paths),
+                    "override": bool(override),
+                }
+            )
+        return ok(study=ctx.study_name, participants=rows)
+
     @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
     def api_spreadsheets_google_auth() -> FlaskResponse:
         with _google_auth.lock:
@@ -3562,40 +3675,13 @@ def build_combined_app(
                 "before switching spreadsheets.",
                 409,
             )
+        if type_ == "google" and _google_auth.client is None:
+            return err("Not authenticated with Google — click 'Connect Google' first.")
 
         new_ws: Any = None
         label = ""
         try:
-            if type_ == "excel":
-                import excel_io
-
-                new_ws = excel_io.open_excel_workbook(
-                    id_or_path, worksheet_name=worksheet
-                )
-                label = Path(id_or_path).name
-            else:
-                if _google_auth.client is None:
-                    return err(
-                        "Not authenticated with Google — click 'Connect Google' first."
-                    )
-                import app as _app
-                import google_api
-
-                if id_or_path.startswith(("http://", "https://")):
-                    new_ws = _app.open_spreadsheet_by_url(
-                        _google_auth.client, id_or_path, worksheet_name=worksheet
-                    )
-                else:
-                    doc_list = google_api.get_all_spreadsheets(_google_auth.client)
-                    new_ws = _app.open_spreadsheet_by_name(
-                        _google_auth.client,
-                        doc_list,
-                        id_or_path,
-                        worksheet_name=worksheet,
-                    )
-                if new_ws is not None:
-                    parent = getattr(new_ws, "spreadsheet", None)
-                    label = getattr(parent, "title", "") or id_or_path
+            new_ws, label = _open_worksheet_for(type_, id_or_path, worksheet)
         except Exception as exc:
             return err(str(exc), 500)
 

@@ -153,6 +153,10 @@
 
     var panels = el("div", "settings-tab-panels");
     panels.id = "settingsContent";
+    // Keyboard entry point for the row cursor: the nav listener only engages
+    // while focus is inside this container, and on open no row is focused yet.
+    // Programmatically focusable only (-1), never in the Tab order.
+    panels.tabIndex = -1;
     panel.appendChild(panels);
 
     var footer = el("div", "settings-footer");
@@ -196,6 +200,11 @@
 
     _root.classList.remove("hidden");
     document.body.classList.add("modal-open");
+    // Every session starts in mouse mode: no cursor, no ring. Focus the list
+    // container so the first arrow key still reaches the nav listener.
+    _navVisible = false;
+    _navRow = null;
+    if (_panelsEl) _panelsEl.focus();
     // Let hotkeys.js scope Alt-hold hints to this modal's controls. This modal
     // rolls its own Escape/focus (bubble-phase, so capture-phase owners like the
     // hotkey recorder win first), so it can't rely on openBlockingModal to set
@@ -221,6 +230,9 @@
     // Dismiss the inline color popover; it lives on document.body at --z-toast
     // and would otherwise outlive the modal.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
+    // Drop the keyboard cursor so a re-open starts in mouse mode again.
+    _navVisible = false;
+    _selectNavRow(null, false);
     var panel = _root.querySelector(".settings-panel");
     if (panel) panel.classList.remove("is-in");
     _root.style.setProperty("--host-blur", "0px");
@@ -1247,7 +1259,15 @@
   // phase so edit-mode Esc is caught before the modal-close listener below. It
   // stays inert while the modal is closed, while the hotkey recorder or color
   // picker owns the keyboard, or when focus sits outside the settings list.
+  //
+  // The cursor has two independent states: a *position* (_navRow, which also
+  // carries the roving tabindex) and a *visibility* (_navVisible). A freshly
+  // opened modal is in mouse mode — no position, no ring — and the first nav
+  // keypress reveals the cursor. Without that split the ring painted itself on
+  // row 0 of every tab the moment the modal opened, reading as a stuck focus
+  // frame to anyone using the mouse.
   var _navRow = null;
+  var _navVisible = false;
 
   function _navPanel() {
     return _panelsEl ? _panelsEl.querySelector(".settings-tab-panel:not(.hidden)") : null;
@@ -1266,7 +1286,9 @@
     var rows = _navRows();
     for (var i = 0; i < rows.length; i++) {
       var on = rows[i] === row;
-      rows[i].classList.toggle("is-nav-selected", on);
+      // Ring only in keyboard mode; the roving tabindex tracks the position
+      // either way so a revealed cursor is immediately tabbable.
+      rows[i].classList.toggle("is-nav-selected", on && _navVisible);
       rows[i].tabIndex = on ? 0 : -1;
     }
     _navRow = row || null;
@@ -1276,9 +1298,23 @@
     }
   }
 
-  // Reset the cursor to the active panel's first row (called after render / tab
-  // switch). Only steals focus when the modal is actually open.
+  // Reveal the cursor on the first nav keypress. Called before the key acts, so
+  // a press that also moves paints the ring at the destination.
+  function _showNavCursor() {
+    if (_navVisible) return;
+    _navVisible = true;
+    _selectNavRow(_navRow, false);
+  }
+
+  // Park the cursor on the active panel's first row (called after render / tab
+  // switch). In mouse mode the cursor is cleared instead of parked, so the first
+  // ArrowDown lands on row 0 rather than skipping it (_moveNav treats a null
+  // cursor as "before the list"). Only steals focus when the modal is open.
   function _resetNavCursor(focus) {
+    if (!_navVisible) {
+      _selectNavRow(null, false);
+      return;
+    }
     var rows = _navRows();
     _selectNavRow(rows.length ? rows[0] : null, !!focus && _isModalOpen());
   }
@@ -1385,16 +1421,17 @@
     if (here && here !== _navRow) _selectNavRow(here, false);
 
     switch (e.key) {
-      case "ArrowDown": e.preventDefault(); _moveNav(1); break;
-      case "ArrowUp":   e.preventDefault(); _moveNav(-1); break;
+      case "ArrowDown": e.preventDefault(); _showNavCursor(); _moveNav(1); break;
+      case "ArrowUp":   e.preventDefault(); _showNavCursor(); _moveNav(-1); break;
       case "Tab":
         // Move rows; at the list edges fall through to native Tab so focus can
         // still leave the list (tab strip / footer).
+        _showNavCursor();
         if (_moveNav(e.shiftKey ? -1 : 1)) e.preventDefault();
         break;
-      case "ArrowLeft":  e.preventDefault(); _actuateNav(_navRow, -1); break;
-      case "ArrowRight": e.preventDefault(); _actuateNav(_navRow, 1); break;
-      case "Enter":      e.preventDefault(); _editNav(_navRow); break;
+      case "ArrowLeft":  e.preventDefault(); _showNavCursor(); _actuateNav(_navRow, -1); break;
+      case "ArrowRight": e.preventDefault(); _showNavCursor(); _actuateNav(_navRow, 1); break;
+      case "Enter":      e.preventDefault(); _showNavCursor(); _editNav(_navRow); break;
       // Space is left to the browser so it still scrolls the settings list.
       default: break;
     }

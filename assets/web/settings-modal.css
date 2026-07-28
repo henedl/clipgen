@@ -157,7 +157,9 @@
 
 /* Keyboard list cursor: the highlighted row for arrow-key navigation. The
    inset ring is the focus affordance, so the default outline on the
-   (programmatically focused) row is suppressed to avoid a double ring. */
+   (programmatically focused) row is suppressed to avoid a double ring.
+   Applied only once the user actually navigates by keyboard — settings-modal.js
+   withholds the class in mouse mode, so an opened modal shows no ring. */
 .settings-row.is-nav-selected {
   background: var(--bg-hover);
   box-shadow: inset 0 0 0 2px var(--color-accent);
@@ -165,6 +167,12 @@
 }
 
 .settings-row:focus {
+  outline: none;
+}
+
+/* The list container is focused on open purely so the arrow-key listener can
+   engage; it is not a visible target. */
+.settings-tab-panels:focus {
   outline: none;
 }
 
@@ -674,6 +682,22 @@
 .settings-tab-reset {
   margin-top: var(--space-4);
   align-self: flex-start;
+}
+
+/* Both resets wipe customized settings without asking for confirmation, so the
+   red hover/press is the only warning a user gets. Overrides .btn:hover, which
+   would otherwise tint them accent-blue like every benign button. */
+.settings-tab-reset:hover,
+.settings-reset-all:hover {
+  border-color: var(--sev-high);
+  color: var(--sev-high);
+}
+
+.settings-tab-reset:active,
+.settings-reset-all:active {
+  background: var(--sev-high);
+  border-color: var(--sev-high);
+  color: #fff;
 }
 
 /* ---- Footer ---- */

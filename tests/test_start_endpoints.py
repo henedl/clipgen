@@ -391,6 +391,137 @@ def test_worksheets_route_google_requires_auth(client):
     assert resp.get_json()["ok"] is False
 
 
+def _write_preview_workbook(path, participants, filename_row=None):
+    """Write a one-tab .xlsx with *participants* and an optional Filename row.
+
+    ``filename_row`` maps a participant id to its Filename-row override cell.
+    """
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = "Study"
+    ws["A2"] = "ID"
+    ws["D2"] = "Observation"
+    ws["E2"] = "Category"
+    for i, pid in enumerate(participants):
+        ws.cell(row=2, column=2 + i, value=pid)
+    if filename_row:
+        ws["A3"] = "Filename"
+        for i, pid in enumerate(participants):
+            override = filename_row.get(pid)
+            if override:
+                ws.cell(row=3, column=2 + i, value=override)
+    wb.save(path)
+    wb.close()
+
+
+def test_preview_reports_expected_filenames_and_disk_status(client, tmp_path):
+    """Each participant gets its expected name plus whether it is on disk."""
+    wb_path = tmp_path / "in" / "preview.xlsx"
+    _write_preview_workbook(wb_path, ["P01", "P02"])
+    (tmp_path / "in" / "study_P01.mp4").write_bytes(b"")
+
+    resp = client.get(
+        "/api/spreadsheets/preview",
+        query_string={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "input_dir": str(tmp_path / "in"),
+        },
+    )
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["study"] == "study"
+    assert body["participants"] == [
+        {
+            "id": "P01",
+            "filenames": ["study_P01.mp4"],
+            "found": True,
+            "override": False,
+        },
+        {
+            "id": "P02",
+            "filenames": ["study_P02.mp4"],
+            "found": False,
+            "override": False,
+        },
+    ]
+
+
+def test_preview_honours_the_filename_row_override(client, tmp_path):
+    """A plus-separated Filename cell previews both parts, in order."""
+    wb_path = tmp_path / "in" / "override.xlsx"
+    _write_preview_workbook(
+        wb_path, ["P01"], filename_row={"P01": "morning.mp4 + afternoon.mp4"}
+    )
+    (tmp_path / "in" / "morning.mp4").write_bytes(b"")
+
+    body = client.get(
+        "/api/spreadsheets/preview",
+        query_string={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+    entry = body["participants"][0]
+    assert entry["filenames"] == ["morning.mp4", "afternoon.mp4"]
+    assert entry["override"] is True
+    assert entry["found"] is False  # afternoon.mp4 is missing
+
+
+def test_preview_does_not_swap_the_active_sheet(client, tmp_path):
+    """Previewing is read-only: no sheet is loaded as a side effect."""
+    wb_path = tmp_path / "in" / "preview.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    assert client.get("/api/status").get_json()["sheet_loaded"] is False
+
+    client.get(
+        "/api/spreadsheets/preview",
+        query_string={"type": "excel", "id_or_path": str(wb_path)},
+    )
+    assert client.get("/api/status").get_json()["sheet_loaded"] is False
+
+
+def test_preview_reports_an_unreadable_worksheet(client, tmp_path):
+    """A sheet with no clipgen headers fails with guidance, not a stack trace."""
+    import openpyxl
+
+    wb_path = tmp_path / "in" / "empty.xlsx"
+    wb = openpyxl.Workbook()
+    wb.active["A1"] = "nothing useful"
+    wb.active["A2"] = "still nothing"
+    wb.save(wb_path)
+    wb.close()
+
+    resp = client.get(
+        "/api/spreadsheets/preview",
+        query_string={"type": "excel", "id_or_path": str(wb_path)},
+    )
+    body = resp.get_json()
+    assert body["ok"] is False
+    assert "Observation" in body["error"]
+
+
+def test_preview_rejects_bad_type(client):
+    resp = client.get(
+        "/api/spreadsheets/preview",
+        query_string={"type": "bogus", "id_or_path": "x"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_preview_google_requires_auth(client):
+    resp = client.get(
+        "/api/spreadsheets/preview",
+        query_string={"type": "google", "id_or_path": "My Study"},
+    )
+    assert resp.get_json()["ok"] is False
+
+
 def _write_valid_workbook(path, tabs):
     """Write an .xlsx whose every tab has a minimal valid clipgen layout."""
     import openpyxl
