@@ -24,6 +24,12 @@ import config
 # read this flag to fail fast (or skip) instead of blocking on stdin.
 NO_INPUT_MODE: bool = False
 
+# ---- Windowed-launch flag ----
+# Set to True from cli.py when the run will open a desktop window instead of a
+# console. Read by fatal_startup_error: a Finder/Explorer launch has no attached
+# terminal, so anything printed before the window exists is invisible.
+GUI_LAUNCH: bool = False
+
 
 # ---- Native (C/ObjC-level) stderr suppression ----
 
@@ -506,6 +512,82 @@ def get_effective_output_dir() -> Path:
     return Path.cwd()
 
 
+# Package managers install here, and macOS does not put any of them on a GUI
+# process's PATH. A Finder-launched .app gets only /usr/bin:/bin:/usr/sbin:/sbin,
+# so shutil.which("ffmpeg") misses a perfectly good Homebrew install.
+_GUI_PATH_DIRS = (
+    "/opt/homebrew/bin",  # Homebrew on Apple Silicon
+    "/usr/local/bin",  # Homebrew on Intel, and most manual installs
+    "/opt/local/bin",  # MacPorts
+)
+
+
+def augment_path_for_gui_launch() -> list[str]:
+    """Make package-manager binaries findable in a frozen macOS GUI launch.
+
+    Returns the directories actually added.
+
+    Double-clicking a .app used to work only by accident: the bundle shipped a
+    shim that ran ``open -a Terminal``, and Terminal starts a login shell that
+    sources the user's profile. Launching the binary directly (as the app now
+    does) drops that inheritance, and startup aborted on a missing ffmpeg with no
+    window and nothing on screen.
+
+    Entries are *appended*, never prepended — this is about discoverability, not
+    about overriding a resolution order the user already has. Source runs are
+    left alone: they already carry the developer's real PATH.
+    """
+    if not getattr(sys, "frozen", False) or sys.platform != "darwin":
+        return []
+    current = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    added = [d for d in _GUI_PATH_DIRS if d not in current and Path(d).is_dir()]
+    if added:
+        os.environ["PATH"] = os.pathsep.join([*current, *added])
+    return added
+
+
+def _show_native_alert(title: str, message: str) -> None:
+    """Best-effort native error dialog. Never raises."""
+    try:
+        if sys.platform == "darwin":
+            # json.dumps yields an AppleScript-compatible quoted literal.
+            script = (
+                f"display alert {json.dumps(title)} "
+                f"message {json.dumps(message)} as critical"
+            )
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                timeout=120,
+                check=False,
+            )
+        elif os.name == "nt":
+            import ctypes
+
+            # 0x10 = MB_ICONERROR
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        # osascript missing/failing, or no user32 to call. A failed dialog must
+        # never mask the error it was trying to report, so this is swallowed —
+        # but only for the failures the two branches above can actually raise.
+        pass
+
+
+def fatal_startup_error(message: str, details: list[str] | None = None) -> None:
+    """Report a startup failure that will end the process.
+
+    Always prints, so console runs are unchanged. Additionally raises a native
+    dialog when the run was going to open a window: a Finder/Explorer launch has
+    no attached terminal, so ``error_print`` goes to a stdout nobody sees and the
+    user gets a bouncing dock icon and silence. Every hard exit reachable before
+    the window exists must route through here.
+    """
+    error_print(message, details)
+    if GUI_LAUNCH:
+        body = "\n".join(details or []) or message
+        _show_native_alert("clipgen cannot start", body)
+
+
 def validate_runtime_directories() -> None:
     """Validate that the effective input directory exists and ensure output directory is ready.
 
@@ -515,7 +597,7 @@ def validate_runtime_directories() -> None:
     """
     input_dir = get_effective_input_dir()
     if not input_dir.exists():
-        warning_print(
+        fatal_startup_error(
             "Input directory does not exist.",
             [
                 f"Configured input directory: {input_dir}",
