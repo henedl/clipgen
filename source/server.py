@@ -3499,9 +3499,9 @@ def build_combined_app(
             else:
                 if _google_auth.client is None:
                     return err("Not authenticated with Google.")
-                import clipgen as _clipgen
+                import app as _app
 
-                titles, recommended = _clipgen.list_worksheet_titles(
+                titles, recommended = _app.list_worksheet_titles(
                     _google_auth.client, id_or_path
                 )
         except Exception as exc:
@@ -3573,16 +3573,16 @@ def build_combined_app(
                     return err(
                         "Not authenticated with Google — click 'Connect Google' first."
                     )
-                import clipgen as _clipgen
+                import app as _app
                 import google_api
 
                 if id_or_path.startswith(("http://", "https://")):
-                    new_ws = _clipgen.open_spreadsheet_by_url(
+                    new_ws = _app.open_spreadsheet_by_url(
                         _google_auth.client, id_or_path, worksheet_name=worksheet
                     )
                 else:
                     doc_list = google_api.get_all_spreadsheets(_google_auth.client)
-                    new_ws = _clipgen.open_spreadsheet_by_name(
+                    new_ws = _app.open_spreadsheet_by_name(
                         _google_auth.client,
                         doc_list,
                         id_or_path,

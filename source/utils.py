@@ -734,14 +734,18 @@ def sweep_stale_temp_artifacts() -> None:
 def get_bundled_assets_root() -> Path:
     """Return the base directory for bundled project assets.
 
-    In a PyInstaller one-file build, bundled data is extracted to sys._MEIPASS.
-    In source runs, assets are relative to the source directory.
+    In a PyInstaller build, bundled data lives under sys._MEIPASS, which is
+    already the bundle root. In source runs this is the *repo* root: `assets/`,
+    `build/VERSION` and `CHANGELOG.md` stay there while the Python modules live
+    one level down in `source/`, hence the second `.parent`. Every asset lookup
+    in the project funnels through here, so this is the only place that has to
+    know about that split.
     """
     if getattr(sys, "frozen", False):
         return Path(
             getattr(sys, "_MEIPASS", str(Path(sys.executable).resolve().parent))
         )
-    return Path(__file__).resolve().parent
+    return Path(__file__).resolve().parent.parent
 
 
 @functools.cache

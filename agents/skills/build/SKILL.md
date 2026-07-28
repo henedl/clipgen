@@ -93,8 +93,26 @@ Confusing these is the most common source of packaging bugs.
 
 | Need | Use | Notes |
 |---|---|---|
-| Bundled assets (`assets/`, `VERSION`) | `utils.get_bundled_assets_root()` | Wraps `sys._MEIPASS`. **Never** `Path(__file__).parent` |
+| Bundled assets (`assets/`, `VERSION`) | `utils.get_bundled_assets_root()` | Wraps `sys._MEIPASS`. **Never** `Path(__file__).parent` — in source runs this is `source/`'s **parent**, since the modules sit one level below the assets |
 | "Next to the application" (user files, `credentials.json`) | `cli.get_runtime_working_dir()` | Not the same directory as above |
+
+### Relative paths inside the spec resolve against two different bases
+
+This one produced a **green build that shipped no application code**. In `build/clipgen.spec`:
+
+- `datas` / `binaries` resolve against **SPECPATH** (`build/`), so `("../assets", "assets")`
+  correctly means the repo-root `assets/`.
+- `pathex` resolves against the **process CWD**. The documented build command runs from the
+  repo root, so a relative entry there points somewhere else entirely.
+
+Nothing warns you. PyInstaller prints `Build complete!`, the `.app` is the normal size (the
+third-party wheels still get collected), and it dies on its first import with an empty screen.
+The tell is build time — a bundle missing all first-party code finishes in ~15 s instead of
+~90 s, because modulegraph never walks the real dependency tree.
+
+`pathex` is therefore derived from `SPECPATH`, and the spec **asserts** that every
+`source/*.py` appears in `a.pure` before it builds. If you see
+`clipgen.spec: Analysis resolved none/some of source/`, that guard just saved a release.
 
 `sys._MEIPASS` means different things per build shape, which is exactly why
 `get_runtime_working_dir()` keys off it:
@@ -140,4 +158,4 @@ Plus: measure startup (above); DMG round-trip preserves exec bit + symlinks + si
 - [agents/skills/check/SKILL.md](../check/SKILL.md) — the pre-commit gate
 - [plans/DESKTOP-PACKAGING-PLAN.md](../../../plans/DESKTOP-PACKAGING-PLAN.md) — how the current
   shape was arrived at, including the deferred ffmpeg-bundling decision and its GPL implications
-- [desktop.py](../../../desktop.py) — the window host and its two JS bridges
+- [desktop.py](../../../source/desktop.py) — the window host and its two JS bridges

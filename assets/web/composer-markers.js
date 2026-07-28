@@ -35,7 +35,11 @@
 
   function loadMarkers(pid) {
     var version = ++_loadVersion;
-    fetchJson("../studio/api/convergence/offsets")
+    // Overview, not Studio: the convergence-offsets route is deliberately on the
+    // overview blueprint (see agents/ARCHITECTURE.md) so its own satellites can
+    // reach it page-relative. Pointing at ../studio/ 404s, and because the catch
+    // below degrades to {} every lane silently rendered at offset 0.
+    fetchJson("../overview/api/convergence/offsets")
       .catch(function () { return {}; })
       .then(function (offData) {
         var offsets = (offData && offData.offsets) || {};

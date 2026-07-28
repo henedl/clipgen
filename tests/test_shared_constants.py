@@ -235,7 +235,9 @@ def test_severity_css_class_mapping():
 
 def test_studio_api_payload_includes_config():
     """server.api_sheet must pass utils.get_frontend_config() to the JS layer."""
-    src = (Path(__file__).resolve().parent.parent / "server.py").read_text("utf-8")
+    src = (Path(__file__).resolve().parent.parent / "source" / "server.py").read_text(
+        "utf-8"
+    )
     assert '"config": utils.get_frontend_config()' in src, (
         "server.py /api/sheet response must embed `config: utils.get_frontend_config()` "
         "so JS reads canonical values instead of hardcoding them"
@@ -248,7 +250,9 @@ def test_exported_viewer_payloads_include_config():
     Exports go through _export_config(), which strips hotkeyOverrides so a
     standalone HTML file always runs the default keymap.
     """
-    src = (Path(__file__).resolve().parent.parent / "viewer.py").read_text("utf-8")
+    src = (Path(__file__).resolve().parent.parent / "source" / "viewer.py").read_text(
+        "utf-8"
+    )
     occurrences = src.count('"config": _export_config()')
     assert occurrences >= 2, (
         f"Expected at least 2 occurrences of config payload in viewer.py "

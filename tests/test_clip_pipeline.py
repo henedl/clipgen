@@ -1,6 +1,5 @@
 from unittest.mock import Mock
 
-import clipgen
 import config
 import pipeline
 import viewer
@@ -18,10 +17,10 @@ def test_process_clips_counts_generated_segments_for_all_formats(
     raw_clip = make_clip()
     times = [("00:10", "00:20"), ("00:30", "00:40")]
     monkeypatch.setattr(
-        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, times)
+        pipeline.files, "prepare_clip", lambda clip: _prepared_clip(clip, times)
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
 
     call_counter = {"n": 0}
@@ -30,18 +29,18 @@ def test_process_clips_counts_generated_segments_for_all_formats(
         call_counter["n"] += 1
         return f"out_{call_counter['n']}{file_format or '.mp4'}"
 
-    monkeypatch.setattr(clipgen.files, "get_unique_filename", unique_name)
+    monkeypatch.setattr(pipeline.files, "get_unique_filename", unique_name)
 
     run_ffmpeg = Mock(return_value=True)
     extract_screenshot = Mock(return_value=True)
     extract_gif = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
-    monkeypatch.setattr(clipgen.video, "extract_screenshot", extract_screenshot)
-    monkeypatch.setattr(clipgen.video, "extract_gif", extract_gif)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr(pipeline.video, "extract_screenshot", extract_screenshot)
+    monkeypatch.setattr(pipeline.video, "extract_gif", extract_gif)
 
-    assert clipgen.process_clips([raw_clip], output_format="clip")[0] == 2
-    assert clipgen.process_clips([raw_clip], output_format="screen")[0] == 2
-    assert clipgen.process_clips([raw_clip], output_format="gif")[0] == 2
+    assert pipeline.process_clips([raw_clip], output_format="clip")[0] == 2
+    assert pipeline.process_clips([raw_clip], output_format="screen")[0] == 2
+    assert pipeline.process_clips([raw_clip], output_format="gif")[0] == 2
 
     assert run_ffmpeg.call_count == 2
     assert extract_screenshot.call_count == 2
@@ -51,20 +50,20 @@ def test_process_clips_counts_generated_segments_for_all_formats(
 def _padding_test_setup(monkeypatch, make_clip, times):
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files, "prepare_clip", lambda clip: _prepared_clip(clip, times)
+        pipeline.files, "prepare_clip", lambda clip: _prepared_clip(clip, times)
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "get_unique_filename",
         lambda _t, file_format=None: f"out{file_format or '.mp4'}",
     )
     # Large EOF so pad_post never clamps in these assertions.
-    monkeypatch.setattr(clipgen.video, "get_file_duration", lambda _p: 10_000)
+    monkeypatch.setattr(pipeline.video, "get_file_duration", lambda _p: 10_000)
     run_ffmpeg = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
     return raw_clip, run_ffmpeg
 
 
@@ -75,7 +74,7 @@ def test_process_clips_pads_and_clamps_cut_timestamps(monkeypatch, make_clip):
         [("00:10", "01:10")],  # 60s span
     )
     # pad start 3s earlier, end 2s later → (7, 72); max_duration 10 caps end to 17.
-    clipgen.process_clips(
+    pipeline.process_clips(
         [raw_clip], output_format="clip", pad_pre=3.0, pad_post=2.0, max_duration=10.0
     )
     _, kwargs = run_ffmpeg.call_args
@@ -87,7 +86,7 @@ def test_process_clips_no_padding_leaves_timestamps_untouched(monkeypatch, make_
     raw_clip, run_ffmpeg = _padding_test_setup(
         monkeypatch, make_clip, [("00:10", "00:20")]
     )
-    clipgen.process_clips([raw_clip], output_format="clip")
+    pipeline.process_clips([raw_clip], output_format="clip")
     _, kwargs = run_ffmpeg.call_args
     # Default (no-op) path passes the original strings straight through.
     assert kwargs["start_pos"] == "00:10"
@@ -99,22 +98,22 @@ def test_process_clips_gif_fractional_max_duration_floors_to_one(
 ):
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "get_unique_filename",
         lambda _t, file_format=None: f"out{file_format or '.gif'}",
     )
     extract_gif = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "extract_gif", extract_gif)
+    monkeypatch.setattr(pipeline.video, "extract_gif", extract_gif)
     # A sub-1s cap must floor the gif to 1s, never truncate to a 0s (invalid) gif.
-    clipgen.process_clips([raw_clip], output_format="gif", max_duration=0.5)
+    pipeline.process_clips([raw_clip], output_format="gif", max_duration=0.5)
     _, kwargs = extract_gif.call_args
     assert kwargs["duration_seconds"] == 1
 
@@ -129,45 +128,45 @@ def test_prepare_clip_converts_clock_timestamps_to_relative(monkeypatch, make_cl
         return value, {}, set()
 
     monkeypatch.setattr(
-        clipgen.utils, "parse_cell_annotations", fake_parse_cell_annotations
+        pipeline.utils, "parse_cell_annotations", fake_parse_cell_annotations
     )
     monkeypatch.setattr(
-        clipgen.utils, "has_non_ignored_timestamp_content", lambda _v: True
+        pipeline.utils, "has_non_ignored_timestamp_content", lambda _v: True
     )
 
     # 09:15:00-09:16:30 should become 3:00-4:30 relative to 09:12:00 baseline.
     raw_cell_value = "09:15:00-09:16:30"
     raw_clip["cell"].value = raw_cell_value
 
-    prepared = clipgen.files.prepare_clip(raw_clip)
+    prepared = pipeline.files.prepare_clip(raw_clip)
     assert prepared["times"] == [("0:03:00", "0:04:30")]
 
 
 def test_process_clips_skips_when_source_video_missing(monkeypatch, make_clip):
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: False)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: False)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     run_ffmpeg = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
 
-    assert clipgen.process_clips([raw_clip], output_format="clip")[0] == 0
+    assert pipeline.process_clips([raw_clip], output_format="clip")[0] == 0
     run_ffmpeg.assert_not_called()
 
 
 def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip):
     raw_clips = [make_clip(row=3, col=2), make_clip(row=4, col=2)]
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
 
     generated_parts = []
 
@@ -176,20 +175,20 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
         generated_parts.append(next_name)
         return next_name
 
-    monkeypatch.setattr(clipgen.files, "get_unique_filename", unique_name)
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_kwargs: True)
+    monkeypatch.setattr(pipeline.files, "get_unique_filename", unique_name)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_kwargs: True)
 
     def path_is_file(self):
         return str(self).endswith(".mp4")
 
-    monkeypatch.setattr(clipgen.Path, "is_file", path_is_file)
+    monkeypatch.setattr(pipeline.Path, "is_file", path_is_file)
 
     concat = Mock(return_value=True)
     unlink = Mock()
-    monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
-    monkeypatch.setattr(clipgen.Path, "unlink", unlink)
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", concat)
+    monkeypatch.setattr(pipeline.Path, "unlink", unlink)
 
-    result, reel_records = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    result, reel_records = pipeline.process_reel(raw_clips, output_file="reel.mp4")
     assert result == 1
     concat.assert_called_once()
     concat_args = concat.call_args.args[0]
@@ -212,22 +211,22 @@ def test_process_reel_concatenates_and_cleans_temp_parts(monkeypatch, make_clip)
 def test_process_reel_returns_zero_when_no_segments_generated(monkeypatch, make_clip):
     raw_clips = [make_clip(row=3, col=2)]
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "get_unique_filename",
         lambda *_args, **_kwargs: "_reel_part_1.mp4",
     )
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_kwargs: False)
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_kwargs: False)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
     concat = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "concatenate_clips", concat)
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", concat)
 
-    result, _artifacts = clipgen.process_reel(raw_clips, output_file="reel.mp4")
+    result, _artifacts = pipeline.process_reel(raw_clips, output_file="reel.mp4")
     assert result == 0
     concat.assert_not_called()
 
@@ -236,12 +235,12 @@ def test_process_clips_parallel_generates_all(monkeypatch, make_clip):
     """Multiple clips processed in parallel should all generate successfully."""
     clips = [make_clip(row=i, col=2) for i in range(3, 7)]
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
 
     call_counter = {"n": 0}
@@ -250,11 +249,11 @@ def test_process_clips_parallel_generates_all(monkeypatch, make_clip):
         call_counter["n"] += 1
         return f"out_{call_counter['n']}{file_format or '.mp4'}"
 
-    monkeypatch.setattr(clipgen.files, "get_unique_filename", unique_name)
+    monkeypatch.setattr(pipeline.files, "get_unique_filename", unique_name)
     run_ffmpeg = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
 
-    count, _artifacts = clipgen.process_clips(clips, output_format="clip")
+    count, _artifacts = pipeline.process_clips(clips, output_format="clip")
     assert count == 4
     assert run_ffmpeg.call_count == 4
 
@@ -277,18 +276,18 @@ def test_process_clips_accepts_pre_parsed_synthetic_clip(monkeypatch):
         "times": [("0:00:10", "0:00:20")],
         "source_filename": "mystudy_P01.mp4",
     }
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "get_unique_filename",
         lambda _template, file_format=None: f"out{file_format or '.mp4'}",
     )
     run_ffmpeg = Mock(return_value=True)
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", run_ffmpeg)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", run_ffmpeg)
 
-    count, artifacts = clipgen.process_clips([clip], output_format="clip")
+    count, artifacts = pipeline.process_clips([clip], output_format="clip")
     assert count == 1
     assert len(artifacts) == 1
     a = artifacts[0]
@@ -359,12 +358,12 @@ def test_process_clips_forwards_cancel_flag_to_segments(monkeypatch, make_clip):
     """process_clips should forward cancel_flag into _process_single_clip_segments."""
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
 
     captured = {}
@@ -376,7 +375,7 @@ def test_process_clips_forwards_cancel_flag_to_segments(monkeypatch, make_clip):
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
 
     sentinel = lambda: False
-    clipgen.process_clips([raw_clip], output_format="clip", cancel_flag=sentinel)
+    pipeline.process_clips([raw_clip], output_format="clip", cancel_flag=sentinel)
     assert captured["cancel_flag"] is sentinel
 
 
@@ -384,12 +383,12 @@ def test_process_clips_sequential_short_circuits_on_cancel(monkeypatch, make_cli
     """Sequential branch should stop calling _process_single_clip_segments after cancel."""
     clips = [make_clip(row=i, col=2) for i in range(3, 6)]
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
 
     cancelled = {"flag": False}
@@ -402,7 +401,7 @@ def test_process_clips_sequential_short_circuits_on_cancel(monkeypatch, make_cli
     seg_mock = Mock(side_effect=seg_side_effect)
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", seg_mock)
 
-    clipgen.process_clips(
+    pipeline.process_clips(
         clips, output_format="clip", cancel_flag=lambda: cancelled["flag"]
     )
     assert seg_mock.call_count == 1
@@ -413,7 +412,7 @@ def test_process_single_clip_segments_forwards_cancel_to_video(monkeypatch, make
     raw_clip = _prepared_clip(make_clip(), [("00:10", "00:20")])
 
     monkeypatch.setattr(
-        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+        pipeline.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
     )
 
     captured = {}
@@ -459,7 +458,7 @@ def test_process_single_clip_segments_unlinks_partial_on_cancel(
 
     out_path = tmp_path / "out.mp4"
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "get_unique_filename",
         lambda *_a, **_k: str(out_path),
     )
@@ -504,20 +503,20 @@ def test_process_clips_forwards_titlecard_options_to_wrap(monkeypatch, make_clip
     """Per-request titlecard settings reach wrap_clip_with_cards without config overrides."""
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
     monkeypatch.setattr(
-        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+        pipeline.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
     )
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
     monkeypatch.setattr(
-        clipgen.video,
+        pipeline.video,
         "probe_video_properties",
         lambda *_a, **_k: {"width": 1280, "height": 720},
     )
@@ -550,18 +549,18 @@ def test_process_clips_compresses_after_titlecard_wrap(monkeypatch, make_clip):
     """
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     monkeypatch.setattr(config, "MAX_FILESIZE_MB", 50)
     monkeypatch.setattr(
-        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+        pipeline.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
     )
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
 
     order: list[str] = []
 
@@ -584,9 +583,9 @@ def test_reel_part_cut_is_not_size_capped(monkeypatch, make_clip):
     """Reel parts (enforce_size=False) skip compression; the cap applies to the reel-less final clip only."""
     monkeypatch.setattr(config, "MAX_FILESIZE_MB", 50)
     monkeypatch.setattr(
-        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+        pipeline.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
     )
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
     monkeypatch.setattr(config, "TITLECARDS_ENABLED", False)
 
     enforce = Mock()
@@ -790,7 +789,7 @@ def test_process_reel_releases_reservation_on_concat_failure(
     monkeypatch.setattr(pipeline.utils, "use_progress", lambda: False)
 
     clips = [make_clip()]
-    result, records = clipgen.process_reel(clips)
+    result, records = pipeline.process_reel(clips)
     assert result == 0
     assert records == []
     assert list(output_dir.iterdir()) == []
@@ -812,7 +811,7 @@ def test_process_reel_releases_caller_reserved_output_when_no_clips(
     reserved = pipeline.files.get_unique_filename("study_P01_chronologic.mp4")
     assert pipeline.Path(reserved).is_file()  # 0-byte placeholder created
 
-    result, records = clipgen.process_reel([make_clip()], output_file=reserved)
+    result, records = pipeline.process_reel([make_clip()], output_file=reserved)
     assert result == 0
     assert records == []
     assert not pipeline.Path(reserved).is_file()  # placeholder reclaimed
@@ -960,20 +959,20 @@ def test_process_clips_skips_titlecard_cache_clear_when_disabled(
     shared endcard cache mid-flight; the default True clears it once."""
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
     monkeypatch.setattr(config, "TITLECARDS_ENABLED", True)
     monkeypatch.setattr(
-        clipgen.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
+        pipeline.files, "get_unique_filename", lambda *_a, **_k: "out.mp4"
     )
-    monkeypatch.setattr(clipgen.video, "run_ffmpeg", lambda **_k: True)
+    monkeypatch.setattr(pipeline.video, "run_ffmpeg", lambda **_k: True)
     monkeypatch.setattr(
-        clipgen.video,
+        pipeline.video,
         "probe_video_properties",
         lambda *_a, **_k: {"width": 1280, "height": 720},
     )
@@ -984,10 +983,12 @@ def test_process_clips_skips_titlecard_cache_clear_when_disabled(
     clear_mock = Mock()
     monkeypatch.setattr(pipeline.titlecards, "clear_endcard_cache", clear_mock)
 
-    clipgen.process_clips([raw_clip], output_format="clip", clear_titlecard_cache=False)
+    pipeline.process_clips(
+        [raw_clip], output_format="clip", clear_titlecard_cache=False
+    )
     clear_mock.assert_not_called()
 
-    clipgen.process_clips([raw_clip], output_format="clip")
+    pipeline.process_clips([raw_clip], output_format="clip")
     clear_mock.assert_called_once()
 
 
@@ -998,12 +999,12 @@ def test_process_reel_forwards_cancel_and_titlecard_options_to_segments(
     into _process_single_clip_segments for each reel part."""
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
 
     captured = {}
 
@@ -1012,11 +1013,11 @@ def test_process_reel_forwards_cancel_and_titlecard_options_to_segments(
         return (1, [("_reel_part_1.mp4", 0)], True)
 
     monkeypatch.setattr(pipeline, "_process_single_clip_segments", fake_segments)
-    monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *_a, **_k: True)
     monkeypatch.setattr(pipeline, "_build_reel_transcript", lambda *_a, **_k: [])
 
     sentinel = lambda: False
-    clipgen.process_reel(
+    pipeline.process_reel(
         [raw_clip],
         output_file="reel.mp4",
         cancel_flag=sentinel,
@@ -1036,13 +1037,13 @@ def test_process_reel_dedups_missing_video_across_parallel_clips(
     produce exactly one missing-video error, not one per worker thread."""
     clips = [make_clip(row=i, col=2) for i in range(3, 7)]
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 4)
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: False)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: False)
     monkeypatch.setattr(pipeline, "_large_input_videos", lambda _d: [])
 
     errors: list[tuple] = []
@@ -1050,7 +1051,7 @@ def test_process_reel_dedups_missing_video_across_parallel_clips(
         pipeline.utils, "error_print", lambda *a, **_k: errors.append(a)
     )
 
-    result, _ = clipgen.process_reel(clips, output_file="reel.mp4")
+    result, _ = pipeline.process_reel(clips, output_file="reel.mp4")
 
     assert result == 0
     # The missing-video error is reported once, not once per worker thread.
@@ -1070,13 +1071,13 @@ def test_process_reel_aborts_when_a_clip_fails_to_cut(monkeypatch, make_clip):
     """
     clips = [make_clip(row=3, col=2), make_clip(row=4, col=2)]
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
     monkeypatch.setattr(config, "CLIP_PARALLEL_WORKERS", 1)
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
     monkeypatch.setattr(pipeline, "_large_input_videos", lambda _d: [])
 
     # Second clip's cut fails; the first succeeds.
@@ -1100,7 +1101,7 @@ def test_process_reel_aborts_when_a_clip_fails_to_cut(monkeypatch, make_clip):
         pipeline.utils, "error_print", lambda *a, **_k: errors.append(a)
     )
 
-    generated, records = clipgen.process_reel(clips, output_file="reel.mp4")
+    generated, records = pipeline.process_reel(clips, output_file="reel.mp4")
 
     assert generated == 0
     assert records == []
@@ -1332,13 +1333,13 @@ def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip)
     """
     raw_clip = make_clip()
     monkeypatch.setattr(
-        clipgen.files,
+        pipeline.files,
         "prepare_clip",
         lambda clip: _prepared_clip(clip, [("00:10", "00:20")]),
     )
-    monkeypatch.setattr(clipgen.Path, "is_file", lambda self: True)
-    monkeypatch.setattr(clipgen.utils, "create_progress_bar", lambda: None)
-    monkeypatch.setattr(clipgen.video, "concatenate_clips", lambda *_a, **_k: True)
+    monkeypatch.setattr(pipeline.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(pipeline.utils, "create_progress_bar", lambda: None)
+    monkeypatch.setattr(pipeline.video, "concatenate_clips", lambda *_a, **_k: True)
     monkeypatch.setattr(pipeline, "_build_reel_transcript", lambda *_a, **_k: [])
 
     # The part was cut, but its wrap soft-failed → cards_applied False.
@@ -1347,7 +1348,7 @@ def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip)
         "_process_single_clip_segments",
         lambda *_a, **_k: (1, [("_reel_part_1.mp4", 0)], False),
     )
-    generated, records = clipgen.process_reel(
+    generated, records = pipeline.process_reel(
         [raw_clip], output_file="reel.mp4", titlecards_enabled=True
     )
     assert generated == 1
@@ -1360,7 +1361,7 @@ def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip)
         "_process_single_clip_segments",
         lambda *_a, **_k: (1, [("_reel_part_2.mp4", 0)], True),
     )
-    _generated, records = clipgen.process_reel(
+    _generated, records = pipeline.process_reel(
         [raw_clip], output_file="reel2.mp4", titlecards_enabled=True
     )
     assert records[0]["titlecards"] is True

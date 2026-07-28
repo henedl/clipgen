@@ -6,9 +6,18 @@
 # PyInstaller picks the right format per host platform from the list below.
 
 import sys
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+
+# Relative paths in a spec are resolved against two *different* bases, which is
+# a trap worth spelling out: `datas`/`binaries` resolve against SPECPATH (this
+# file's directory), but `pathex` resolves against the process CWD. Since the
+# documented build command runs from the repo root, a relative `pathex` entry
+# silently points outside the repo — and PyInstaller reports no error, it just
+# ships an app with no application code in it. Derive it from SPECPATH instead.
+_REPO_ROOT = Path(SPECPATH).parent  # noqa: F821 — SPECPATH is injected by PyInstaller
 
 hiddenimports = []
 hiddenimports += collect_submodules("gspread")
@@ -41,8 +50,12 @@ excludes = [
 # frozen builds.
 
 a = Analysis(
+    # The entry script is the repo-root launcher. Everything it imports lives in
+    # `source/`, so that directory must be on the analysis path or modulegraph
+    # resolves nothing past `from cli import main` — yielding a bundle whose only
+    # Python file is the launcher itself. Guarded immediately below.
     ["../clipgen.py"],
-    pathex=[".."],
+    pathex=[str(_REPO_ROOT / "source")],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -52,6 +65,23 @@ a = Analysis(
     excludes=excludes,
     noarchive=False,
 )
+
+# Fail loudly on an empty bundle. A wrong `pathex` does not error — PyInstaller
+# reports "Build complete!" and ships an app whose only Python file is the
+# launcher, which then dies on its first import with nothing on screen. Compare
+# what Analysis actually resolved against what is on disk, so the build breaks
+# here rather than in a user's Applications folder.
+_wanted = {p.stem for p in (_REPO_ROOT / "source").glob("*.py")}
+_found = {name for name, _path, _kind in a.pure}
+_missing = _wanted - _found
+if _missing:
+    raise SystemExit(
+        f"clipgen.spec: Analysis resolved none/some of source/ "
+        f"({len(_found & _wanted)}/{len(_wanted)} modules). Missing: "
+        f"{sorted(_missing)}. Check `pathex` — relative entries resolve against "
+        f"the CWD, not this spec's directory."
+    )
+
 pyz = PYZ(a.pure)
 
 # One-dir, not one-file. One-file re-extracts the whole archive to a *new* temp
@@ -98,8 +128,6 @@ coll = COLLECT(
 )
 
 if sys.platform == "darwin":
-    from pathlib import Path
-
     _version = (Path(SPECPATH) / "VERSION").read_text().strip()
     app = BUNDLE(
         coll,

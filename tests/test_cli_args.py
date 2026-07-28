@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 import cli
-import clipgen
+import app
 
 
 def _base_args(**overrides):
@@ -474,8 +474,8 @@ def test_run_cli_mode_dispatch(
     completion = Mock()
 
     monkeypatch.setattr(cli.spreadsheet, "generate_list", generate_list)
-    monkeypatch.setattr(clipgen, process_attr, process_fn)
-    monkeypatch.setattr(clipgen, "_print_completion_message", completion)
+    monkeypatch.setattr(app, process_attr, process_fn)
+    monkeypatch.setattr(app, "_print_completion_message", completion)
 
     parsed_defaults = {
         "line_numbers": None,
@@ -531,8 +531,8 @@ def test_select_worksheet_url_skips_drive_listing(monkeypatch):
         seen["url"] = url
         return sentinel
 
-    monkeypatch.setattr(clipgen, "open_spreadsheet_by_url", fake_open_by_url)
-    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda _w: False)
+    monkeypatch.setattr(app, "open_spreadsheet_by_url", fake_open_by_url)
+    monkeypatch.setattr(app, "_is_excel_worksheet", lambda _w: False)
 
     args = _base_args(spreadsheet="http://example.com/sheet")
     result = cli.select_worksheet(Mock(), args, cli_mode=True)
@@ -563,11 +563,11 @@ def test_select_worksheet_cli_falls_back_to_single_xlsx(monkeypatch):
     import google_api
 
     monkeypatch.setattr(google_api, "get_all_spreadsheets", lambda _c: [])
-    monkeypatch.setattr(clipgen, "open_spreadsheet_by_name", lambda *_a, **_kw: None)
+    monkeypatch.setattr(app, "open_spreadsheet_by_name", lambda *_a, **_kw: None)
     sentinel = object()
     monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["only.xlsx"])
     monkeypatch.setattr(excel_io, "open_excel_workbook", lambda _path: sentinel)
-    monkeypatch.setattr(clipgen, "_is_excel_worksheet", lambda _w: True)
+    monkeypatch.setattr(app, "_is_excel_worksheet", lambda _w: True)
 
     result = cli.select_worksheet(Mock(), _base_args(), cli_mode=True)
     assert result is sentinel
@@ -579,7 +579,7 @@ def test_select_worksheet_cli_ambiguous_xlsx_still_exits(monkeypatch, capsys):
     import google_api
 
     monkeypatch.setattr(google_api, "get_all_spreadsheets", lambda _c: [])
-    monkeypatch.setattr(clipgen, "open_spreadsheet_by_name", lambda *_a, **_kw: None)
+    monkeypatch.setattr(app, "open_spreadsheet_by_name", lambda *_a, **_kw: None)
     monkeypatch.setattr(excel_io, "list_excel_in_cwd", lambda: ["a.xlsx", "b.xlsx"])
     monkeypatch.setattr(
         excel_io,

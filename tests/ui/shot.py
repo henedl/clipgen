@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the _ui_* helpers
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "source"))
 
 import _ui_browser
 import _ui_fixtures

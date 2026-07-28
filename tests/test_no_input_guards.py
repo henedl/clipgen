@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import cli
-import clipgen
+import app
 import excel_io
 import utils
 
@@ -64,7 +64,7 @@ def test_suggest_close_match_returns_none_under_no_input(monkeypatch):
     assert utils.suggest_close_match("foobar", ["foobaz"]) is None
 
 
-# ---- clipgen.select_spreadsheet guard ----
+# ---- app.select_spreadsheet guard ----
 
 
 def test_select_spreadsheet_exits_under_no_input(monkeypatch):
@@ -75,11 +75,11 @@ def test_select_spreadsheet_exits_under_no_input(monkeypatch):
 
     monkeypatch.setattr(utils, "read_user_input", _fail)
     with pytest.raises(SystemExit) as exc:
-        clipgen.select_spreadsheet(MagicMock(), ["doc1", "doc2"])
+        app.select_spreadsheet(MagicMock(), ["doc1", "doc2"])
     assert exc.value.code == 2
 
 
-# ---- clipgen.run_interactive_mode guard ----
+# ---- app.run_interactive_mode guard ----
 
 
 def test_run_interactive_mode_exits_under_no_input(monkeypatch):
@@ -90,7 +90,7 @@ def test_run_interactive_mode_exits_under_no_input(monkeypatch):
 
     monkeypatch.setattr(utils, "read_user_input", _fail)
     with pytest.raises(SystemExit) as exc:
-        clipgen.run_interactive_mode(MagicMock())
+        app.run_interactive_mode(MagicMock())
     assert exc.value.code == 2
 
 
