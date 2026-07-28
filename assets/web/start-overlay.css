@@ -293,44 +293,142 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 
-/* Recents list — pushed to bottom via margin-top: auto. */
-.start-overlay .rail__recents {
+/* Recents list — pushed to bottom via margin-top: auto. `position: relative`
+ * anchors the fold-out, which grows upward from the visible rows. The z-index
+ * has to beat the `.rail > *` blanket rule at the top of this file (0,2,1), so
+ * this selector is deliberately three classes deep. */
+.start-overlay .start-panel .rail__recents {
+  position: relative;
   margin-top: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-2-5);
+  z-index: 3;
 }
 
-.start-overlay .rail__recents-list {
+.start-overlay .rail__recents-list,
+.start-overlay .rail__recents-overflow {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
+/* Fold-out. Anchored above the always-visible rows so revealing it never
+ * shifts them; the rail's own overflow:hidden clips it. */
+.start-overlay .rail__recents-overflow {
+  position: absolute;
+  left: calc(var(--space-2) * -1);
+  right: calc(var(--space-2) * -1);
+  bottom: calc(100% + var(--space-2));
+  max-height: min(360px, 40vh);
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklab, var(--bg-elevated) 76%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: var(--shadow-xl);
+  transform-origin: bottom center;
+  animation: rail-recents-in var(--duration-normal) cubic-bezier(.22, 1, .36, 1);
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .start-overlay .rail__recents-overflow {
+    background: var(--bg-elevated);
+  }
+}
+
+.start-overlay .rail__recents-overflow[hidden] {
+  display: none;
+}
+
+@keyframes rail-recents-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Blurs the brand block sitting behind the fold-out. Same three-class depth as
+ * .rail__recents so it clears the `.rail > *` z-index: 1 blanket. */
+.start-overlay .start-panel .rail__recents-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--bg) 40%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition: opacity var(--duration-normal) ease-out;
+}
+
+.start-overlay .rail:has(.rail__recents.is-expanded) .rail__recents-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* "N more projects" / "Show less" toggle. */
+.start-overlay .rail-recents-more {
+  appearance: none;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-2);
+  margin-top: calc(var(--space-1) * -1);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-faint);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition:
+    background var(--duration-instant),
+    border-color var(--duration-instant),
+    color var(--duration-instant);
+}
+
+.start-overlay .rail-recents-more:hover {
+  background: var(--so-hover-tint);
+  border-color: var(--hairline);
+  color: var(--fg-muted);
+}
+
+.start-overlay .rail-recents-more[hidden] {
+  display: none;
+}
+
+/* Ships chevron-down and rotates it: the fold-out opens upward, so the
+ * collapsed state points up and the expanded state points back down. */
+.start-overlay .rail-recents-more__chev {
+  transform: rotate(180deg);
+  transition: transform var(--duration-instant) ease-out;
+}
+
+.start-overlay .rail__recents.is-expanded .rail-recents-more__chev {
+  transform: rotate(0deg);
+}
+
+/* Recent entry — two lines: title + when, then the folder/sheet chips. */
 .start-overlay .rail-recent {
   appearance: none;
   border: 1px solid transparent;
   background: transparent;
   color: var(--fg);
   text-align: left;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: var(--space-1-5) var(--space-2-5);
+  border-radius: var(--radius-md);
   cursor: pointer;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  font-family: inherit;
-  transition: background 120ms, border-color 120ms;
-  position: relative;
-}
-
-.start-overlay .rail-recent__paths {
-  display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
-  flex: 1;
+  font-family: inherit;
+  transition:
+    background var(--duration-instant),
+    border-color var(--duration-instant);
+  position: relative;
 }
 
 .start-overlay .rail-recent:hover {
@@ -348,18 +446,27 @@
   content: "";
   position: absolute;
   left: 2px;
-  top: 8px;
-  bottom: 8px;
+  top: var(--space-2);
+  bottom: var(--space-2);
   width: 2px;
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
   background: rgba(52, 211, 153, 0.9);
 }
 .start-overlay .rail-recent.is-current:hover {
   background: rgba(52, 211, 153, 0.12);
 }
 
-.start-overlay .rail-recent__path {
-  font-size: 12px;
+.start-overlay .rail-recent__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.start-overlay .rail-recent__title {
+  font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -367,21 +474,39 @@
   min-width: 0;
 }
 
-.start-overlay .rail-recent__path--secondary {
-  font-size: 11px;
-  color: var(--fg-faint);
-}
-
 .start-overlay .rail-recent__when {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--fg-faint);
   flex-shrink: 0;
-  align-self: flex-start;
+}
+
+.start-overlay .rail-recent__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.start-overlay .rail-recent__chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--fg-faint);
+  font-size: var(--text-2xs);
+}
+
+.start-overlay .rail-recent__chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .start-overlay .rail-recent--empty {
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: var(--space-2) var(--space-2-5);
+  font-size: var(--text-xs);
   color: var(--fg-faint);
   font-style: italic;
 }
@@ -496,6 +621,12 @@
   color: var(--fg-faint);
   font-weight: 400;
   font-size: 11px;
+}
+
+/* .panel-close floats over the top-right of the main column, right where the
+ * first section's trailing hint lands. Keep the label clear of it. */
+.start-overlay [data-role="name-field"] > label {
+  padding-right: var(--space-6);
 }
 
 /* The cascade transform creates a stacking context that traps the recent-pop;
@@ -1641,8 +1772,13 @@ html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb:hove
     opacity: 1;
   }
   .start-overlay .rail__grid::before,
-  .start-overlay .rail__shimmer::before {
+  .start-overlay .rail__shimmer::before,
+  .start-overlay .rail__recents-overflow {
     animation: none;
+  }
+  .start-overlay .start-panel .rail__recents-scrim,
+  .start-overlay .rail-recents-more__chev {
+    transition: none;
   }
   .start-overlay .tool-tile:hover .art-studio__playhead,
   .start-overlay .tool-tile:hover .art-studio__clip,

@@ -2,6 +2,10 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.45 — 2026-07-28 — Core
+**Name your projects, and a denser Recently-opened rail**
+The Start overlay takes an optional project name, which becomes the title of that project's entry in the left rail. Recent entries now fit four facts on two lines — name, input folder, output folder and spreadsheet — where before they showed two stacked full paths and never mentioned the spreadsheet at all; hover a row for the full paths. The rail lists the three most recent and folds the rest out over the logo behind a blurred scrim, and twelve projects are remembered instead of eight. A name is metadata, not identity: renaming doesn't create a second entry, and relaunching from the CLI won't wipe the label.
+
 ## v0.14.44 — 2026-07-28 — Core
 **16× faster app startup**
 The bundle is now a one-dir build. One-file re-extracted the whole 261 MB archive to a *new* temp directory on every launch, so every large library loaded cold — no OS page cache, and macOS re-validated each code signature from scratch. Double-click to a usable window drops from ~17.6s to ~1.1s. This also clears PyInstaller's deprecation of one-file + windowed on macOS, which becomes a hard error in v7.0. macOS still ships a `.dmg`; Windows now ships a `.zip` of the app folder, and the separate raw-binary download is gone.

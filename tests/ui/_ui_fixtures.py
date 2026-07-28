@@ -24,6 +24,7 @@ input dir is cached by both; the ffmpeg encodes are the only slow part.
 import json
 import shutil
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -248,6 +249,51 @@ def ensure_run_dirs() -> None:
 def _make_run_dirs() -> None:
     for directory in (OUTPUT_DIR, SHOT_DIR, SETTINGS_DIR):
         directory.mkdir(parents=True, exist_ok=True)
+    if not (SETTINGS_DIR / "start.json").is_file():
+        _seed_start_settings()
+
+
+def _seed_start_settings() -> None:
+    """Seed the Start overlay's recent-projects rail.
+
+    Nothing else writes this file, so without it the rail renders "No recent
+    projects yet" and neither the entry layout nor the fold-out is reviewable
+    in a screenshot. The mix is deliberate: named and unnamed projects, with
+    and without a spreadsheet, and one whose output equals its input.
+    """
+    now = datetime.now(UTC)
+    specs = [
+        ("Coffee machine study", "recordings", "clips", "Coffee tracker.xlsx"),
+        ("", "onboarding-2026", "onboarding-out", "Onboarding notes.xlsx"),
+        ("Checkout flow, round 2", "checkout", "checkout", ""),
+        ("Kiosk pilot", "kiosk", "kiosk-out", ""),
+        ("", "banking-app", "banking-out", "Banking sessions.xlsx"),
+        ("Wearables diary study", "wearables", "wearables-out", "Diary.xlsx"),
+    ]
+    projects: list[dict[str, Any]] = []
+    for hours, (name, in_name, out_name, sheet_label) in enumerate(specs):
+        sheet = None
+        if sheet_label:
+            path = str(ROOT / in_name / sheet_label)
+            sheet = {
+                "type": "excel",
+                "id_or_path": path,
+                "label": sheet_label,
+                "worksheet": "Data",
+            }
+        projects.append(
+            {
+                "name": name,
+                "input": str(ROOT / in_name),
+                "output": str(ROOT / out_name),
+                "spreadsheet": sheet,
+                "last_opened": (now - timedelta(hours=1 + hours * 7)).isoformat(),
+            }
+        )
+    (SETTINGS_DIR / "start.json").write_text(
+        json.dumps({"persist_enabled": True, "recent_projects": projects}, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _write(name: str, payload: dict[str, Any]) -> None:

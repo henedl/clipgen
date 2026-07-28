@@ -23,7 +23,7 @@ from typing import Any
 import utils
 
 
-RECENTS_CAP = 8
+RECENTS_CAP = 12
 
 
 def config_dir() -> Path:
@@ -54,9 +54,9 @@ def _defaults() -> dict[str, Any]:
         "recent_outputs": [],
         "last_spreadsheet": None,
         "recent_spreadsheets": [],
-        # Full session records: (input, output, spreadsheet|None, last_opened).
-        # Powers the Start overlay's "Recently opened" rail and lets a click
-        # restore all three picker values at once.
+        # Full session records: (name, input, output, spreadsheet|None,
+        # last_opened). Powers the Start overlay's "Recently opened" rail and
+        # lets a click restore the name plus all three picker values at once.
         "recent_projects": [],
     }
 
@@ -164,37 +164,55 @@ def _spreadsheet_key(spreadsheet: dict[str, Any] | None) -> tuple[str, str] | No
     return (type_, id_or_path)
 
 
+def _project_key(project: dict[str, Any]) -> tuple[Any, Any, tuple[str, str] | None]:
+    return (
+        project.get("input"),
+        project.get("output"),
+        _spreadsheet_key(project.get("spreadsheet")),
+    )
+
+
 def record_project_session(
     input_dir: str,
     output_dir: str,
     spreadsheet: dict[str, Any] | None = None,
+    name: str | None = None,
 ) -> None:
     """Record an "Open workspace" event as a full project session.
 
     A project is identified by the triple ``(input, output, spreadsheet_key)``
     where ``spreadsheet_key`` is ``(type, id_or_path)`` or ``None``. Re-opening
     the same triple moves the entry to the front rather than duplicating it.
+
+    *name* is the user's optional label for the project. It is metadata, never
+    part of the identity triple, and is tri-state: ``None`` keeps whatever the
+    matching entry already had, ``""`` clears it, and a non-empty string sets
+    it. The carry-over matters because only the Start overlay knows the name —
+    the CLI-launch and Studio sheet-switch call sites pass nothing, and without
+    it every relaunch would silently wipe the label.
     """
     settings = load_start_settings()
     if not settings.get("persist_enabled", True):
         return
     if not input_dir or not output_dir:
         return
-    entry = {
+    projects: list[Any] = settings.get("recent_projects", [])
+    entry: dict[str, Any] = {
+        "name": "",
         "input": input_dir,
         "output": output_dir,
         "spreadsheet": spreadsheet if spreadsheet else None,
         "last_opened": datetime.now(UTC).isoformat(),
     }
-    settings["recent_projects"] = _prepend_dedup(
-        settings.get("recent_projects", []),
-        entry,
-        key=lambda x: (
-            x.get("input"),
-            x.get("output"),
-            _spreadsheet_key(x.get("spreadsheet")),
-        ),
-    )
+    if name is None:
+        key = _project_key(entry)
+        for existing in projects:
+            if isinstance(existing, dict) and _project_key(existing) == key:
+                entry["name"] = existing.get("name") or ""
+                break
+    else:
+        entry["name"] = name.strip()
+    settings["recent_projects"] = _prepend_dedup(projects, entry, key=_project_key)
     save_start_settings(settings)
 
 

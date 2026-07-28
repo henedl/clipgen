@@ -223,6 +223,51 @@ def test_sessions_record_no_sheet_path(client, tmp_path):
     assert saved["recent_projects"][0]["spreadsheet"] is None
 
 
+def test_sessions_record_stores_the_project_name(client, tmp_path):
+    resp = client.post(
+        "/api/sessions/record",
+        data=json.dumps(
+            {
+                "input": str(tmp_path / "in"),
+                "output": str(tmp_path / "out"),
+                "name": "  Coffee machine study  ",
+            }
+        ),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    saved = start_settings.load_start_settings()
+    assert saved["recent_projects"][0]["name"] == "Coffee machine study"
+
+
+def test_sessions_record_rejects_non_string_name(client, tmp_path):
+    resp = client.post(
+        "/api/sessions/record",
+        data=json.dumps(
+            {"input": str(tmp_path / "in"), "output": str(tmp_path / "out"), "name": 7}
+        ),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+    assert "name" in resp.get_json()["error"]
+
+
+def test_sessions_record_omitted_name_keeps_the_stored_one(client, tmp_path):
+    payload = {"input": str(tmp_path / "in"), "output": str(tmp_path / "out")}
+    client.post(
+        "/api/sessions/record",
+        data=json.dumps({**payload, "name": "Kept"}),
+        content_type="application/json",
+    )
+    client.post(
+        "/api/sessions/record",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    saved = start_settings.load_start_settings()
+    assert saved["recent_projects"][0]["name"] == "Kept"
+
+
 def test_sessions_record_rejects_non_string_input(client):
     resp = client.post(
         "/api/sessions/record",
@@ -384,6 +429,34 @@ def test_open_excel_with_worksheet_reflected_in_status(client, tmp_path):
     # Confirm the Extra tab's data actually loaded (its participant is P03).
     sheet = client.get("/studio/api/sheet").get_json()
     assert sheet["participants"] == ["P03"]
+
+
+def test_open_excel_records_the_project_name(client, tmp_path):
+    """The Start overlay rides project_name along with the sheet open."""
+    wb_path = tmp_path / "in" / "named.xlsx"
+    _write_valid_workbook(wb_path, [("Data", "P01")])
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "project_name": "Coffee machine study",
+        },
+    )
+    assert resp.get_json()["ok"] is True
+    saved = start_settings.load_start_settings()
+    assert saved["recent_projects"][0]["name"] == "Coffee machine study"
+
+
+def test_open_excel_rejects_non_string_project_name(client, tmp_path):
+    wb_path = tmp_path / "in" / "named.xlsx"
+    _write_valid_workbook(wb_path, [("Data", "P01")])
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": str(wb_path), "project_name": 7},
+    )
+    assert resp.status_code == 400
+    assert "project_name" in resp.get_json()["error"]
 
 
 def test_open_excel_without_worksheet_uses_priority_tab(client, tmp_path):
