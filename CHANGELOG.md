@@ -2,6 +2,10 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.44 — 2026-07-28 — Core
+**16× faster app startup**
+The bundle is now a one-dir build. One-file re-extracted the whole 261 MB archive to a *new* temp directory on every launch, so every large library loaded cold — no OS page cache, and macOS re-validated each code signature from scratch. Double-click to a usable window drops from ~17.6s to ~1.1s. This also clears PyInstaller's deprecation of one-file + windowed on macOS, which becomes a hard error in v7.0. macOS still ships a `.dmg`; Windows now ships a `.zip` of the app folder, and the separate raw-binary download is gone.
+
 ## v0.14.43 — 2026-07-28 — Core
 **Fix: double-clicked app quit immediately on macOS**
 A Finder-launched `.app` does not inherit the shell PATH, so Homebrew's ffmpeg was invisible and startup aborted with `sys.exit(1)` — no window, and the error printed to a stdout nobody could see. The frozen macOS launch now appends the standard package-manager bin directories (`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`), and every hard exit reachable before the window exists surfaces in a native dialog instead of dying silently.

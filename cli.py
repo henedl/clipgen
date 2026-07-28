@@ -834,8 +834,11 @@ def get_runtime_working_dir() -> str:
       points inside ``Contents/MacOS``, which is invisible in Finder and part of
       the code signature, so writing there would both hide files from the user
       and invalidate the signature.
-    * anything else — the executable's own directory, which is already the
-      folder the user dropped the binary into.
+    * a one-dir build (Windows/Linux) — the folder containing the payload
+      directory. One-dir puts ``clipgen.exe`` *inside* ``clipgen/`` alongside
+      ``_internal/``; the folder the user actually dragged somewhere is its
+      parent, so that is where they will drop ``credentials.json``.
+    * anything else — the executable's own directory.
     """
     if not getattr(sys, "frozen", False):
         return str(Path(__file__).resolve().parent)
@@ -846,6 +849,14 @@ def get_runtime_working_dir() -> str:
         bundle = exe_dir.parent.parent
         if bundle.suffix == ".app":
             return str(bundle.parent)
+    # .../clipgen/clipgen.exe with the payload in .../clipgen/_internal/ → .../
+    # Under one-dir, _MEIPASS is that payload directory, i.e. a *child* of the
+    # executable's own directory. (On macOS the payload is Contents/Frameworks,
+    # which is not a child of Contents/MacOS — handled by the .app branch above.)
+    # One-file's _MEIPASS is an unrelated temp dir, so it never matches.
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and Path(meipass).resolve().parent == exe_dir:
+        return str(exe_dir.parent)
     return str(exe_dir)
 
 

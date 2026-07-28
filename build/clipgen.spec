@@ -54,12 +54,17 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+# One-dir, not one-file. One-file re-extracts the whole archive to a *new* temp
+# directory on every launch, so every large dylib (cv2, av, torch) loads cold —
+# no OS page cache, and macOS re-validates each code signature from scratch.
+# Measured double-click to first HTTP response: 17.6 s one-file vs 1.1 s one-dir.
+# PyInstaller also deprecated one-file + windowed on macOS ("clashes with macOS's
+# security") and makes it an error in v7.0.
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,  # binaries/datas are gathered by COLLECT below
     name="clipgen",
     debug=False,
     bootloader_ignore_signals=False,
@@ -82,12 +87,22 @@ exe = EXE(
     icon=("clipgen.icns" if sys.platform == "darwin" else "clipgen.ico"),
 )
 
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=True,
+    upx=True,
+    upx_exclude=[],
+    name="clipgen",
+)
+
 if sys.platform == "darwin":
     from pathlib import Path
 
     _version = (Path(SPECPATH) / "VERSION").read_text().strip()
     app = BUNDLE(
-        exe,
+        coll,
         name="clipgen.app",
         icon="clipgen.icns",
         bundle_identifier="se.signalresearch.clipgen",

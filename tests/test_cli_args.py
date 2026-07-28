@@ -806,7 +806,43 @@ def test_frozen_macos_working_dir_is_beside_the_bundle(monkeypatch):
 def test_frozen_plain_binary_uses_its_own_directory(monkeypatch):
     monkeypatch.setattr("sys.frozen", True, raising=False)
     monkeypatch.setattr("sys.executable", "/opt/tools/clipgen")
+    monkeypatch.delattr("sys._MEIPASS", raising=False)
     assert cli.get_runtime_working_dir() == "/opt/tools"
+
+
+def test_frozen_onefile_temp_meipass_is_ignored(monkeypatch):
+    """One-file's _MEIPASS is an unrelated temp dir and must not shift the CWD."""
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", "/opt/tools/clipgen")
+    monkeypatch.setattr("sys._MEIPASS", "/var/folders/xy/_MEI123456", raising=False)
+    assert cli.get_runtime_working_dir() == "/opt/tools"
+
+
+def test_frozen_onedir_resolves_beside_the_payload_folder(monkeypatch):
+    """One-dir puts the exe inside clipgen/ next to _internal/.
+
+    "Next to the application" is then the folder *containing* clipgen/, which is
+    what the user dragged out of the archive and where they will drop
+    credentials.json — not the folder holding _internal.
+    """
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", "/Users/me/Apps/clipgen/clipgen.exe")
+    monkeypatch.setattr(
+        "sys._MEIPASS", "/Users/me/Apps/clipgen/_internal", raising=False
+    )
+    assert cli.get_runtime_working_dir() == "/Users/me/Apps"
+
+
+def test_frozen_macos_app_wins_over_onedir_branch(monkeypatch):
+    """A one-dir .app has its payload in Contents/Frameworks, not beside the exe."""
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr(
+        "sys.executable", "/Applications/clipgen.app/Contents/MacOS/clipgen"
+    )
+    monkeypatch.setattr(
+        "sys._MEIPASS", "/Applications/clipgen.app/Contents/Frameworks", raising=False
+    )
+    assert cli.get_runtime_working_dir() == "/Applications"
 
 
 # ---- Finder-launched .app startup (regression: silent exit 1) ----
