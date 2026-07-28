@@ -66,6 +66,27 @@ def test_no_live_page_references_a_remote_origin():
         assert not remote, f"{page} still loads remote assets: {remote}"
 
 
+def test_desktop_chrome_script_is_desktop_only():
+    """The native-window flag rides the head partial, and only in that launch."""
+    import config
+
+    assert "desktopChrome" not in utils.render_index_html(WEB, "studio.html")
+
+    utils.DESKTOP_CHROME = "macos"
+    rendered = utils.render_index_html(WEB, "studio.html")
+    assert 'd.dataset.desktopChrome = "macos"' in rendered
+    # The measurements come from config, never hand-written into the CSS.
+    assert f'"{config.DESKTOP_CHROME_BAR_HEIGHT}px"' in rendered
+    assert f'"{config.DESKTOP_TRAFFIC_LIGHT_INSET}px"' in rendered
+    # Ahead of topnav.css, so the bar lays out inset on first paint.
+    assert rendered.index("desktopChrome") < rendered.index('href="topnav.css"')
+
+    # The render cache is keyed on mtimes; without the flag in the key too, a
+    # browser render would be served into a desktop window and vice versa.
+    utils.DESKTOP_CHROME = None
+    assert "desktopChrome" not in utils.render_index_html(WEB, "studio.html")
+
+
 def test_render_index_passthrough_without_marker():
     # Export templates have no marker -> returned unchanged.
     src = (WEB / "gallery.html").read_text(encoding="utf-8")

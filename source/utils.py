@@ -30,6 +30,15 @@ NO_INPUT_MODE: bool = False
 # terminal, so anything printed before the window exists is invisible.
 GUI_LAUNCH: bool = False
 
+# ---- Desktop window-chrome flag ----
+# Set by desktop.launch_desktop before the server starts, cleared when the window
+# closes. Holds the chrome style the native window uses ("macos"), or None for a
+# browser launch. render_index_html() turns it into an html[data-desktop-chrome]
+# attribute so the topnav can inset itself for the traffic lights; it has to be a
+# server-side flag rather than a `window.pywebview` check because pywebview injects
+# its bridge asynchronously, long after the bar has laid out.
+DESKTOP_CHROME: str | None = None
+
 
 # ---- Native (C/ObjC-level) stderr suppression ----
 
@@ -2170,12 +2179,32 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
 # the block lives in one place. Exported viewers don't use it (self-contained).
 _HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
 
-# Rendered-index cache: str(index path) -> (index_mtime_ns, head_mtime_ns|None, rendered).
-# The `/` route re-renders on every GET; the assets never change while the server
-# runs, so memoize by mtime (a live dev edit still bumps mtime and refreshes).
-# head_mtime is None for pages without the marker (they never read _head.html).
-_index_html_cache: dict[str, tuple[int | None, int | None, str]] = {}
+# Rendered-index cache: str(index path) -> (index_mtime_ns, head_mtime_ns|None,
+# desktop_chrome, rendered). The `/` route re-renders on every GET; the assets never
+# change while the server runs, so memoize by mtime (a live dev edit still bumps mtime
+# and refreshes). head_mtime is None for pages without the marker (they never read
+# _head.html). DESKTOP_CHROME is part of the key because it varies per launch, not per
+# file, so an mtime-only key would serve a browser render into a desktop window.
+_index_html_cache: dict[str, tuple[int | None, int | None, str | None, str]] = {}
 _index_html_lock = threading.Lock()
+
+
+def _desktop_chrome_head(chrome: str) -> str:
+    """Inline ``<script>`` telling the page it is hosted in a native window.
+
+    Runs in ``<head>``, so it lands before the deferred ``topnav.js`` reads the
+    attribute — the bar lays out inset for the traffic lights on first paint rather
+    than jumping. The two measurements come from config so AppKit (which positions
+    the real buttons) and CSS (which reserves the space) cannot drift apart.
+    """
+    return (
+        "\n  <script>(function () {\n"
+        "    var d = document.documentElement;\n"
+        f'    d.dataset.desktopChrome = "{chrome}";\n'
+        f'    d.style.setProperty("--desktop-chrome-height", "{config.DESKTOP_CHROME_BAR_HEIGHT}px");\n'
+        f'    d.style.setProperty("--desktop-traffic-inset", "{config.DESKTOP_TRAFFIC_LIGHT_INSET}px");\n'
+        "  })();</script>"
+    )
 
 
 def render_index_html(assets_dir: Path, index_html: str) -> str:
@@ -2187,6 +2216,7 @@ def render_index_html(assets_dir: Path, index_html: str) -> str:
     """
     index_path = assets_dir / index_html
     head_path = assets_dir / "_head.html"
+    chrome = DESKTOP_CHROME
     try:
         index_mtime: int | None = index_path.stat().st_mtime_ns
     except OSError:
@@ -2194,27 +2224,34 @@ def render_index_html(assets_dir: Path, index_html: str) -> str:
 
     with _index_html_lock:
         cached = _index_html_cache.get(str(index_path))
-        if cached is not None and cached[0] == index_mtime:
+        if cached is not None and cached[0] == index_mtime and cached[2] == chrome:
             head_mtime_cached = cached[1]
             if head_mtime_cached is None:
-                return cached[2]
+                return cached[3]
             try:
                 head_mtime: int | None = head_path.stat().st_mtime_ns
             except OSError:
                 head_mtime = None
             if head_mtime == head_mtime_cached:
-                return cached[2]
+                return cached[3]
 
         html = index_path.read_text(encoding="utf-8")
         head_mtime_used: int | None = None
         if _HEAD_MARKER in html:
             head = head_path.read_text(encoding="utf-8").rstrip("\n")
+            if chrome:
+                head += _desktop_chrome_head(chrome)
             html = html.replace(_HEAD_MARKER, head)
             try:
                 head_mtime_used = head_path.stat().st_mtime_ns
             except OSError:
                 head_mtime_used = None
-        _index_html_cache[str(index_path)] = (index_mtime, head_mtime_used, html)
+        _index_html_cache[str(index_path)] = (
+            index_mtime,
+            head_mtime_used,
+            chrome,
+            html,
+        )
         return html
 
 

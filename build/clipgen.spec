@@ -26,6 +26,12 @@ hiddenimports += collect_submodules("rich")
 # desktop.py imports webview lazily, so PyInstaller's static analysis never sees
 # the platform backend modules (WKWebView via pyobjc, WebView2 via clr).
 hiddenimports += collect_submodules("webview")
+if sys.platform == "darwin":
+    # desktop_chrome.py reaches these through importlib.import_module (a literal
+    # `import AppKit` is an unresolved-import error on the Linux typecheck CI),
+    # and a string import is invisible to PyInstaller's static analysis. The
+    # cocoa backend happens to pull both in today; do not rely on that.
+    hiddenimports += ["AppKit", "PyObjCTools.AppHelper"]
 
 datas = []
 datas += collect_data_files("gspread")
