@@ -91,7 +91,7 @@ the dialog path should be platform-neutral so a future failure is not silent the
 
 ---
 
-# Phase 2 — Migrate to `--onedir`
+# Phase 2 — Migrate to `--onedir` — ✅ DONE
 
 ## Why
 
@@ -107,22 +107,29 @@ what started triggering it. Beyond the deprecation, measured on a real onedir bu
 | Files in bundle | 1 | 3,471 |
 | Deprecation warning | yes | none |
 
-**~33× faster startup** on that benchmark. One-file re-extracts the entire 261 MB archive to a
-temp directory on every single launch. The cost is +49 MB of download and +538 MB on disk.
-
-Be careful reading that table, though: `--help` is not a real launch. Measured double-click →
-first HTTP response on the current one-file build:
+**Onedir is the startup fix.** Measured double-click → first HTTP response on a real studio
+launch, with hard preconditions (abort if anything is already listening on 8089):
 
 ```
-warm launch 1: 18.4s
-warm launch 2: 22.6s
+onefile (shipping today)   17.6s   (also seen: 18.2s, 21.8s)
+onedir                      1.1s   (reproduced twice, identical)
 ```
 
-So a user waits ~20 seconds staring at a bouncing dock icon. Onedir removes the ~3 s extraction
-component, not the other ~15 s, which is import cost (flask, and `preload_av_libs_quietly()`
-pulling in both `av` and `cv2` at `server.py`). **Onedir alone will not make this feel fast.** The
-follow-up worth scoping separately is deferring that preload and the heavy imports until a
-subsystem is actually used — the Studio landing page needs neither `av` nor `cv2`.
+**~16× faster, and it is the whole problem.** An earlier draft of this plan claimed onedir would
+only remove a ~3 s extraction and that the remaining ~15 s was Python import cost that needed a
+separate lazy-import pass. **That was wrong**, and it was wrong because it extrapolated from a
+`--help` benchmark — `--help` exits before importing the heavy stack, so it never pays the cost
+that dominates a real launch.
+
+The actual mechanism: onefile extracts to a *new* temp directory on every launch, so every large
+dylib (cv2, av, torch, …) is loaded cold — no OS page cache, and macOS re-validates each code
+signature from scratch. Onedir keeps them at a stable path, so both the page cache and the
+signature validation persist across launches.
+
+For scale: the same startup path costs **406 ms** from a source checkout
+(`import server` 118 ms, `preload_av_libs_quietly()` 249 ms, `build_combined_app()` 38 ms). There
+is no meaningful Python-side inefficiency to chase — deferring `preload_av_libs_quietly()` would
+save ~250 ms against a 16-second problem. Do not spend effort there before doing this.
 
 Verified the onedir build actually works: `/screenspace/` → 200, `utils.js` → 200, vendored font
 → 200, and the banner reports the bundled version. PyInstaller 6 lays it out the macOS-correct

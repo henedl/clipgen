@@ -145,7 +145,7 @@ pip install pyinstaller
 pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
-Output: `dist/clipgen` and `dist/clipgen.app` (macOS), or `dist/clipgen.exe` (Windows).
+Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows — a folder containing `clipgen.exe` and `_internal/`; keep them together and put `credentials.json` beside the folder).
 
 Double-clicking `clipgen.app` opens clipgen in its own desktop window (a native webview over a loopback server) — no Terminal, no browser tab. The same binary is still the full CLI when given arguments:
 
