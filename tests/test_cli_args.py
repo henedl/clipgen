@@ -1,3 +1,4 @@
+import os
 from argparse import Namespace
 from unittest.mock import Mock
 
@@ -806,3 +807,92 @@ def test_frozen_plain_binary_uses_its_own_directory(monkeypatch):
     monkeypatch.setattr("sys.frozen", True, raising=False)
     monkeypatch.setattr("sys.executable", "/opt/tools/clipgen")
     assert cli.get_runtime_working_dir() == "/opt/tools"
+
+
+# ---- Finder-launched .app startup (regression: silent exit 1) ----
+
+
+def test_path_augmentation_only_when_frozen(monkeypatch):
+    """A source run already carries the developer's real PATH; leave it alone."""
+    import utils
+
+    monkeypatch.delattr("sys.frozen", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert utils.augment_path_for_gui_launch() == []
+    assert os.environ["PATH"] == "/usr/bin:/bin"
+
+
+def test_path_augmentation_appends_existing_dirs_only(monkeypatch, tmp_path):
+    """Finder hands a GUI app a PATH without Homebrew, so ffmpeg looks missing.
+
+    Entries are appended rather than prepended: this is about making binaries
+    findable, not about overriding a resolution order the user already has.
+    """
+    import utils
+
+    real = tmp_path / "brew-bin"
+    real.mkdir()
+    missing = tmp_path / "not-installed"
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(utils, "_GUI_PATH_DIRS", (str(real), str(missing)))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    assert utils.augment_path_for_gui_launch() == [str(real)]
+    assert os.environ["PATH"] == f"/usr/bin:/bin{os.pathsep}{real}"
+    # Idempotent: relaunching inside one process must not grow PATH forever.
+    assert utils.augment_path_for_gui_launch() == []
+
+
+def test_path_augmentation_skipped_off_macos(monkeypatch, tmp_path):
+    """Windows GUI processes inherit the machine PATH, so there is nothing to fix."""
+    import utils
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("PATH", "C:\\Windows")
+    assert utils.augment_path_for_gui_launch() == []
+
+
+def test_fatal_startup_error_is_silent_without_gui(monkeypatch):
+    """Console runs keep printing only — no dialog subprocess."""
+    import utils
+
+    called = []
+    monkeypatch.setattr(utils, "_show_native_alert", lambda *a: called.append(a))
+    monkeypatch.setattr(utils, "GUI_LAUNCH", False)
+    utils.fatal_startup_error("boom", ["detail"])
+    assert called == []
+
+
+def test_fatal_startup_error_surfaces_natively_in_gui_launch(monkeypatch):
+    """The actual regression: a windowed launch must not die with a blank screen.
+
+    ffmpeg missing from a Finder-inherited PATH exited 1 with the guidance
+    printed to a stdout nobody could see.
+    """
+    import utils
+
+    called = []
+    monkeypatch.setattr(utils, "_show_native_alert", lambda *a: called.append(a))
+    monkeypatch.setattr(utils, "GUI_LAUNCH", True)
+    utils.fatal_startup_error(
+        "Required video tools are missing from PATH.", ["install ffmpeg"]
+    )
+    assert len(called) == 1
+    assert "install ffmpeg" in called[0][1]
+
+
+def test_missing_ffmpeg_routes_through_fatal_startup_error(monkeypatch):
+    """video.check_ffmpeg_tools_available must use the surfacing path, not error_print."""
+    import video
+
+    monkeypatch.setattr(video.shutil, "which", lambda _tool: None)
+    seen = []
+    monkeypatch.setattr(
+        video.utils, "fatal_startup_error", lambda m, d=None: seen.append((m, d))
+    )
+    assert video.check_ffmpeg_tools_available() is False
+    assert len(seen) == 1
+    assert "ffmpeg" in seen[0][1][0]

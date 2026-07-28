@@ -116,7 +116,9 @@ def check_ffmpeg_tools_available() -> bool:
         "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
     ]
     details.extend(_ffmpeg_install_guidance_lines())
-    utils.error_print("Required video tools are missing from PATH.", details)
+    # Not error_print: this aborts startup, and a windowed launch has no console
+    # to read the guidance above — the app would just quit with nothing on screen.
+    utils.fatal_startup_error("Required video tools are missing from PATH.", details)
     return False
 
 

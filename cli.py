@@ -3746,6 +3746,15 @@ def main() -> None:
         args.studio = True
 
     utils.NO_INPUT_MODE = bool(getattr(args, "no_input", False))
+
+    # A windowed launch has no console, so every hard exit below this point has
+    # to surface natively instead of printing into the void. Set the flag before
+    # the first thing that can abort startup.
+    utils.GUI_LAUNCH = _use_desktop_window(args) and _resolve_web_mode(args) is not None
+    # Finder gives a GUI process a bare PATH that omits Homebrew, so ffmpeg is
+    # invisible and startup aborts. Must run before anything calls shutil.which.
+    utils.augment_path_for_gui_launch()
+
     if config.DEBUGGING:
         config.debug_ic(args)
 
