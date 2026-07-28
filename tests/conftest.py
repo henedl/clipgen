@@ -121,6 +121,23 @@ def _reset_gui_launch():
 
 
 @pytest.fixture(autouse=True)
+def _reset_desktop_chrome():
+    """Restore ``utils.DESKTOP_CHROME`` after every test.
+
+    ``desktop.launch_desktop`` sets it and ``render_index_html`` reads it, so a
+    leak would silently bake the native-window chrome script into every page
+    rendered by every later test.
+    """
+    import utils
+
+    original = utils.DESKTOP_CHROME
+    try:
+        yield
+    finally:
+        utils.DESKTOP_CHROME = original
+
+
+@pytest.fixture(autouse=True)
 def _reset_no_input_mode():
     """Restore ``utils.NO_INPUT_MODE`` after every test.
 

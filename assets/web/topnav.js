@@ -51,6 +51,22 @@
     nav.appendChild(buildCenter());
     nav.appendChild(buildRight());
 
+    // In the native desktop window the title bar is hidden and the bar runs to
+    // the top of the window, so it has to double as the drag handle. WKWebView
+    // ignores -webkit-app-region, so opt into pywebview's substitute: it drags on
+    // mousedown over a .pywebview-drag-region element. desktop.py sets
+    // DRAG_REGION_DIRECT_TARGET_ONLY, so only the bar's own background and the
+    // flex gaps drag — the brand, tabs and buttons are their own event targets
+    // and keep behaving normally. The server sets data-desktop-chrome; a browser
+    // page never has it and is untouched.
+    if (document.documentElement.dataset.desktopChrome) {
+      nav.classList.add("pywebview-drag-region");
+      var columns = nav.children;
+      for (var c = 0; c < columns.length; c++) {
+        columns[c].classList.add("pywebview-drag-region");
+      }
+    }
+
     mount.replaceWith(nav);
     els.nav = nav;
     els.tabs = nav.querySelectorAll(".topnav-tab");

@@ -11,10 +11,11 @@
  * back to a solid `--bg` color in browsers without backdrop-filter support
  * (Firefox without the feature flag). */
 .topnav {
+  --topnav-pad-x: 16px;
   display: flex;
   align-items: center;
   height: var(--topnav-height);
-  padding: 0 16px;
+  padding: 0 var(--topnav-pad-x);
   border-bottom: 1px solid var(--border);
   background: color-mix(in oklab, var(--bg) 72%, transparent);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
@@ -82,6 +83,42 @@ body.modal-open .topnav {
   gap: 28px;
   align-items: center;
   height: 100%;
+}
+
+/* ---- Native desktop window ----
+ *
+ * The macOS shell hides the title bar (NSFullSizeContentView, see
+ * source/desktop_chrome.py) and floats the traffic lights inside this bar, so
+ * the brand has to start clear of them. The gutter goes on .topnav-left rather
+ * than on .topnav's own padding: both side columns are `flex: 1 1 0`, so
+ * padding a column keeps them equal width and the center tabs stay centered in
+ * the window, whereas padding the bar would shove the tabs half the inset right.
+ *
+ * --desktop-chrome-height and --desktop-traffic-inset are written onto <html> by
+ * utils.render_index_html() from config.DESKTOP_*, so AppKit — which positions
+ * the real buttons — and the space reserved here cannot drift apart. The
+ * fallbacks are load-bearing only in the failure case: an unresolvable var()
+ * would make `height` invalid and collapse the bar entirely.
+ *
+ * In native fullscreen macOS moves the lights into the auto-hiding overlay, so
+ * the gutter becomes dead space; desktop_chrome.py toggles the flag.
+ */
+html[data-desktop-chrome="macos"] {
+  --topnav-height: var(--desktop-chrome-height, 48px);
+}
+html[data-desktop-chrome="macos"] .topnav-left {
+  padding-left: calc(var(--desktop-traffic-inset, 78px) - var(--topnav-pad-x));
+}
+html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
+  padding-left: 0;
+}
+
+/* pywebview's drag selector (see topnav.js). Dragging the bar would otherwise
+ * sweep a text selection across the wordmark and tab labels — desktop.py passes
+ * text_select=True, which the frontends need everywhere else. */
+.pywebview-drag-region {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* ---- Brand ---- */

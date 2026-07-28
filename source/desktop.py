@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+import desktop_chrome
 import server
 import start_settings
 import utils
@@ -132,6 +133,11 @@ def launch_desktop(
     """Serve the combined app and show it in a native window until closed."""
     import webview
 
+    # Only clicks landing *directly* on a .pywebview-drag-region element drag the
+    # window. Without this a mousedown anywhere inside the topnav — a tab, the
+    # settings button — would bubble up to the bar and drag it too.
+    webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
+
     live = server.serve_combined_app(
         worksheet=worksheet,
         default_page=default_page,
@@ -140,6 +146,11 @@ def launch_desktop(
     utils.info_print(f"clipgen running at {live.origin}")
 
     try:
+        # render_index_html() bakes this into every page it serves. Set inside the
+        # try so the finally below always clears it — a browser fallback launch
+        # must not inherit a chrome flag. Nothing has requested a page yet: the
+        # server is up but the first GET only happens when the window loads.
+        utils.DESKTOP_CHROME = desktop_chrome.chrome_style()
         window = webview.create_window(
             f"clipgen v{utils.get_version()}",
             live.url,
@@ -157,6 +168,13 @@ def launch_desktop(
         _window = window
         window.expose(open_external, save_file)
         window.events.loaded += lambda: window.run_js(_EXTERNAL_LINK_SHIM)
+        # before_show is a locking event, so this runs inline on AppKit's thread
+        # after the backend has finished its own titlebar styling. The shown hook
+        # is not optional: ordering the window front re-lays out the titlebar and
+        # undoes the button placement.
+        window.events.before_show += lambda: desktop_chrome.apply(window)
+        window.events.shown += lambda: desktop_chrome.on_shown(window)
+        window.events.loaded += lambda: desktop_chrome.reassert(window)
 
         _hide_own_console()
         webview.start(
@@ -170,6 +188,8 @@ def launch_desktop(
         )
     finally:
         globals()["_window"] = None
+        utils.DESKTOP_CHROME = None
+        desktop_chrome.teardown()
         server.stop_combined_app(live)
 
 

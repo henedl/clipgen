@@ -146,6 +146,16 @@ MANIFEST_ENABLED: bool = (
 SERVER_PORT: int = (
     8089  # port for the combined Studio/Screenspace/Transcripts Flask server
 )
+# Desktop-window chrome (see desktop_chrome.py). The native title bar is hidden and
+# the traffic lights float inside the topnav, so AppKit and CSS have to agree on the
+# same two numbers: these flow to the frontend as CSS custom properties via
+# utils.render_index_html(), rather than being written twice.
+DESKTOP_CHROME_BAR_HEIGHT: int = 48  # titlebar band height; drives --topnav-height
+# Left gutter the three buttons need. They are inset from the window edge by the
+# same margin that centering leaves above them ((bar - 16) / 2 = 16) and pitched
+# 20px apart, so the row ends at 16 + 40 + 14 = 70; the rest is breathing room
+# before the brand.
+DESKTOP_TRAFFIC_LIGHT_INSET: int = 87
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"

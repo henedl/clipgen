@@ -2,6 +2,10 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.46 — 2026-07-28 — Core
+**The app window drops its title bar (macOS)**
+The desktop window no longer stacks a native title bar on top of clipgen's own navigation. The window controls sit inside the left end of the top bar, with the clipgen mark shifted clear of them, and the bar itself is a drag handle — grab any empty part of it to move the window. Links, tabs and buttons in the bar behave as before, and resizing, snapping and green-button fullscreen stay native. Browser launches are unchanged.
+
 ## v0.14.45 — 2026-07-28 — Core
 **Name your projects, and a denser Recently-opened rail**
 The Start overlay takes an optional project name, which becomes the title of that project's entry in the left rail. Recent entries now fit four facts on two lines — name, input folder, output folder and spreadsheet — where before they showed two stacked full paths and never mentioned the spreadsheet at all; hover a row for the full paths. The rail lists the three most recent and folds the rest out over the logo behind a blurred scrim, and twelve projects are remembered instead of eight. A name is metadata, not identity: renaming doesn't create a second entry, and relaunching from the CLI won't wipe the label.
