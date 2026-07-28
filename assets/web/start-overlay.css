@@ -293,26 +293,6 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 
-/* The project name typed in the right column, echoed under the wordmark. */
-.start-overlay .rail__project {
-  display: block;
-  max-width: 100%;
-  /* .rail__brand's 18px column gap is tuned for mark → wordmark; the name is
-   * a caption on the wordmark and wants to sit closer under it. */
-  margin-top: calc(var(--space-2) * -1);
-  font-size: var(--text-md);
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.start-overlay .rail__project[hidden] {
-  display: none;
-}
-
 /* Recents list — pushed to bottom via margin-top: auto. `position: relative`
  * anchors the fold-out, which grows upward from the visible rows. The z-index
  * has to beat the `.rail > *` blanket rule at the top of this file (0,2,1), so

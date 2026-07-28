@@ -5,8 +5,8 @@
  *     plays once per browser session, gated by the existing sessionStorage flag)
  *   • section cascade-in (220ms base, 80ms stagger)
  *   • backdrop blur via --host-blur / --veil-alpha on the overlay root
- *   • optional project name, echoed live under the wordmark and stored on the
- *     recent-projects record (there is no server-side "current project name")
+ *   • optional project name, stored on the recent-projects record and shown as
+ *     that entry's title (there is no server-side "current project name")
  *   • the rail's Recently-opened list: RAIL_RECENTS_VISIBLE rows plus a
  *     fold-out that overlays the brand block behind a blurred scrim
  *   • folder + spreadsheet picker (Google / Excel / No spreadsheet)
@@ -77,6 +77,13 @@
     statusData: null,
     recentProjects: [],
     projectName: "",          // the optional label typed in the right column
+    // The name field has no server-side source of truth — it is filled in from
+    // the matching recent-projects entry at the tail of refresh(). These two
+    // flags say whether that value is trustworthy yet, so a fast Cmd+Enter
+    // can't post an empty name that clears a stored label, and a late-landing
+    // prefill can't stomp what the user was typing meanwhile.
+    projectNamePrefilled: false,  // applyCurrentSessionPrefill has run at least once
+    projectNameAuthored: false,   // the user typed it, or picked a recent project
     recentsExpanded: false,   // rail fold-out revealing projects past RAIL_RECENTS_VISIBLE
     worksheetsCache: {},      // "type|id_or_path" -> { worksheets, recommended }
     worksheetReqVer: 0,       // rejects stale worksheet fetches
@@ -158,7 +165,6 @@
 
     els.cascades = root.querySelectorAll(".cascade-in");
 
-    els.railProject = root.querySelector('[data-role="rail-project"]');
     els.railRecentsSection = root.querySelector('[data-role="rail-recents-section"]');
     els.railRecents = root.querySelector('[data-role="rail-recents"]');
     els.railRecentsOverflow = root.querySelector('[data-role="rail-recents-overflow"]');
@@ -231,6 +237,7 @@
     });
 
     on(els.projectName, "input", function () {
+      state.projectNameAuthored = true;
       setProjectName(els.projectName.value || "");
     });
 
@@ -872,17 +879,13 @@
     setRecentsMoreLabel();
   }
 
-  // State first, DOM second — the rail heading is a projection of
-  // state.projectName, never the other way round.
+  // The input is a view of state.projectName, never the store — the guard
+  // keeps a programmatic prefill from stomping the caret mid-typing.
   function setProjectName(value) {
     state.projectName = value || "";
     if (els.projectName && els.projectName.value !== state.projectName) {
       els.projectName.value = state.projectName;
     }
-    if (!els.railProject) return;
-    var trimmed = state.projectName.trim();
-    els.railProject.textContent = trimmed;
-    setHidden(els.railProject, !trimmed);
   }
 
   function projectKey(project) {
@@ -935,6 +938,9 @@
 
   function restoreProject(project) {
     if (!project) return;
+    // Picking a recent project is an explicit authoring act — confirming after
+    // it should write that project's name, not fall back to "leave alone".
+    state.projectNameAuthored = true;
     setProjectName(project.name || "");
     els.inputDir.value = project.input || "";
     els.outputDir.value = project.output || "";
@@ -1360,7 +1366,13 @@
 
     var inputVal = (els.inputDir.value || "").trim();
     var outputVal = (els.outputDir.value || "").trim();
-    var nameVal = state.projectName.trim();
+    // null omits the field, which the server reads as "keep the stored name".
+    // Sending "" is a deliberate clear, so only do it once we actually know
+    // what was stored — a Cmd+Enter that beats refresh() must not wipe a label
+    // the user never saw, let alone edited.
+    var nameVal = (state.projectNameAuthored || state.projectNamePrefilled)
+      ? state.projectName.trim()
+      : null;
 
     clearFieldError(els.inputField);
     clearFieldError(els.outputField);
@@ -1405,18 +1417,19 @@
         });
         return;
       }
+      // Built explicitly rather than posting state.selection verbatim so the
+      // name rides along with the open that records the session server-side.
+      var openPayload = {
+        type: state.selection.type,
+        id_or_path: state.selection.id_or_path,
+        label: state.selection.label,
+        worksheet: state.selection.worksheet || "",
+      };
+      if (nameVal !== null) openPayload.project_name = nameVal;
       fetch("/api/spreadsheets/open", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Built explicitly rather than posting state.selection verbatim so the
-        // name rides along with the open that records the session server-side.
-        body: JSON.stringify({
-          type: state.selection.type,
-          id_or_path: state.selection.id_or_path,
-          label: state.selection.label,
-          worksheet: state.selection.worksheet || "",
-          project_name: nameVal,
-        }),
+        body: JSON.stringify(openPayload),
       })
         .then(function (r) {
           return r.json().then(function (j) { return { ok: r.ok, body: j }; });
@@ -1445,7 +1458,9 @@
     // Fire-and-forget on the no-sheet path. The sheet-open path records on
     // the server during /api/spreadsheets/open, so this is the only call
     // site that needs to invoke /api/sessions/record explicitly.
-    var payload = { input: input, output: output, name: name || "" };
+    var payload = { input: input, output: output };
+    // Omitted (not "") when the stored name isn't known yet — see confirm().
+    if (name !== null && name !== undefined) payload.name = name;
     if (spreadsheet) payload.spreadsheet = spreadsheet;
     return apiPost("/api/sessions/record", payload).catch(function (err) {
       console.warn("Session record failed", err);
@@ -1621,12 +1636,16 @@
     applyFieldStates();
     // The name isn't a server-side field — it lives on the recent-projects
     // record, so the current session's label is whichever stored project
-    // matches the session key.
-    var currentKey = currentSessionKey();
-    var current = currentKey && state.recentProjects.filter(function (p) {
-      return projectKey(p) === currentKey;
-    })[0];
-    setProjectName(current ? (current.name || "") : "");
+    // matches the session key. refresh() is fire-and-forget, so this can land
+    // after the user has already started typing; their value wins.
+    if (!state.projectNameAuthored) {
+      var currentKey = currentSessionKey();
+      var current = currentKey && state.recentProjects.filter(function (p) {
+        return projectKey(p) === currentKey;
+      })[0];
+      setProjectName(current ? (current.name || "") : "");
+    }
+    state.projectNamePrefilled = true;
     // Re-render rail recents now that we know the current session key.
     renderRailRecents(state.recentProjects);
   }

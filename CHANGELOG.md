@@ -4,7 +4,7 @@ Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — 
 
 ## v0.14.45 — 2026-07-28 — Core
 **Name your projects, and a denser Recently-opened rail**
-The Start overlay takes an optional project name. It shows live under the wordmark while you type and becomes the title of that project's entry in the left rail. Recent entries now fit four facts on two lines — name, input folder, output folder and spreadsheet — where before they showed two stacked full paths and never mentioned the spreadsheet at all; hover a row for the full paths. The rail lists the three most recent and folds the rest out over the logo behind a blurred scrim, and twelve projects are remembered instead of eight. A name is metadata, not identity: renaming doesn't create a second entry, and relaunching from the CLI won't wipe the label.
+The Start overlay takes an optional project name, which becomes the title of that project's entry in the left rail. Recent entries now fit four facts on two lines — name, input folder, output folder and spreadsheet — where before they showed two stacked full paths and never mentioned the spreadsheet at all; hover a row for the full paths. The rail lists the three most recent and folds the rest out over the logo behind a blurred scrim, and twelve projects are remembered instead of eight. A name is metadata, not identity: renaming doesn't create a second entry, and relaunching from the CLI won't wipe the label.
 
 ## v0.14.44 — 2026-07-28 — Core
 **16× faster app startup**
