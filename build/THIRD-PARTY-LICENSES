@@ -800,6 +800,23 @@ which is included in this distribution at cv2/LICENSE-3RD-PARTY.txt.
 
 
 ===============================================================================
+===============================================================================
+SIL OPEN FONT LICENSE 1.1 (bundled web fonts)
+===============================================================================
+
+clipgen bundles two typefaces under assets/web/fonts/, subsetted to latin and
+latin-ext and served locally so the interface renders without network access:
+
+  Inter            (c) The Inter Project Authors      SIL OFL 1.1
+  JetBrains Mono   (c) The JetBrains Mono Project Authors   SIL OFL 1.1
+
+Both are licensed under the SIL Open Font License, Version 1.1, which permits
+redistribution and bundling in this form. The full license text is available at
+https://openfontlicense.org and in each upstream project:
+
+  https://github.com/rsms/inter
+  https://github.com/JetBrains/JetBrainsMono
+
 BUILD TOOL NOTICE
 ===============================================================================
 

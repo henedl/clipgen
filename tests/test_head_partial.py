@@ -1,9 +1,14 @@
 """Regression checks for the shared server-injected ``<head>`` partial (C6).
 
 The four live pages embed ``<!-- CLIPGEN_HEAD_HERE -->`` where the shared
-favicon + Google-fonts block belongs; ``utils.render_index_html`` expands it
-from ``assets/web/_head.html``. Exported viewers stay self-contained and must
-not gain the marker.
+favicon + fonts block belongs; ``utils.render_index_html`` expands it from
+``assets/web/_head.html``. Exported viewers stay self-contained and must not
+gain the marker.
+
+Fonts are vendored under ``assets/web/fonts/`` rather than fetched from
+fonts.googleapis.com, so the desktop shell and any offline run render with the
+intended typefaces instead of blocking on a CDN. The no-remote-reference check
+below is what keeps that from regressing.
 """
 
 import utils
@@ -14,15 +19,17 @@ HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
 LIVE_PAGES = ("studio.html", "screenspace.html", "transcripts.html", "workflows.html")
 EXPORT_PAGES = ("viewer.html", "gallery.html", "timeline-viewer.html")
 FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="logos/favicon.svg">'
-FONTS_LINK = "https://fonts.googleapis.com/css2?family=Inter"
+FONTS_LINK = '<link rel="stylesheet" href="fonts.css">'
 
 
 def test_head_partial_holds_shared_block():
     head = (WEB / "_head.html").read_text(encoding="utf-8")
     assert FAVICON_LINK in head
     assert FONTS_LINK in head
-    # All seven favicon/apple-touch links plus preconnect/preload/stylesheet.
-    assert head.count("<link") == 11
+    # Seven favicon/apple-touch links plus the vendored-fonts stylesheet.
+    assert head.count("<link") == 8
+    # The whole point: nothing in the shared head may reach off-machine.
+    assert "https://" not in head.replace("fonts.googleapis.com", "")
 
 
 def test_live_pages_use_marker_not_inline_block():
@@ -47,6 +54,16 @@ def test_render_index_expands_marker():
     assert FONTS_LINK in rendered
     # No empty line left where the marker stood (the partial is rstripped).
     assert '\n\n  <link rel="stylesheet" href="tokens.css">' not in rendered
+
+
+def test_no_live_page_references_a_remote_origin():
+    """Every asset a live page pulls must be served locally (offline-capable)."""
+    import re
+
+    for page in LIVE_PAGES:
+        rendered = utils.render_index_html(WEB, page)
+        remote = re.findall(r'(?:href|src)=["\']https?://[^"\']+', rendered)
+        assert not remote, f"{page} still loads remote assets: {remote}"
 
 
 def test_render_index_passthrough_without_marker():

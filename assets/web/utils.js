@@ -1255,6 +1255,55 @@ var readNDJSONStream = function (response, onLine) {
   return pump();
 };
 
+// ---- File downloads ----
+// Save generated text (JSON/CSV) to disk from any page.
+//
+// Two mechanisms, because the desktop shell cannot use the browser one. In a
+// real browser this is the usual blob + <a download> click. Inside the pywebview
+// window it is not: WKWebView ignores the download attribute for blob:, data:
+// AND for HTTP responses carrying Content-Disposition (the request is made and
+// the body silently discarded), so every export would look like a dead button.
+// desktop.py therefore exposes save_file, which raises a native save dialog and
+// writes the bytes from Python.
+//
+// onDone(path|null, error|null) is optional; path is null when the user
+// cancelled the native dialog.
+var clipgenSaveFile = function (filename, content, mime, onDone) {
+  var api = window.pywebview && window.pywebview.api;
+  if (api && typeof api.save_file === "function") {
+    api.save_file(filename, content).then(
+      function (path) { if (onDone) onDone(path || null, null); },
+      function (err) { if (onDone) onDone(null, err); }
+    );
+    return;
+  }
+  var url = URL.createObjectURL(new Blob([content], { type: mime || "application/octet-stream" }));
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  if (onDone) onDone(filename, null);
+};
+
+// Fetch a server-generated file and hand it to clipgenSaveFile. Needed for
+// endpoints that build the payload server-side (e.g. the Screenspace events
+// export), since navigating to them cannot download inside the desktop window.
+var clipgenSaveFromUrl = function (url, filename, onDone) {
+  fetch(url)
+    .then(function (r) {
+      if (!r.ok) throw new Error("Server error " + r.status);
+      return r.text();
+    })
+    .then(function (text) {
+      var mime = /\.csv$/i.test(filename) ? "text/csv" : "application/json";
+      clipgenSaveFile(filename, text, mime, onDone);
+    })
+    .catch(function (err) { if (onDone) onDone(null, err); });
+};
+
 // ---- Video seek coalescer ----
 // Shared scaffolding for pages that seek a <video> from rapid-fire UI events
 // (scrub drags, timeline clicks): while metadata is not loaded (readyState < 1)

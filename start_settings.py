@@ -26,8 +26,13 @@ import utils
 RECENTS_CAP = 8
 
 
-def _config_dir() -> Path:
-    """Return the per-user clipgen config directory for this platform."""
+def config_dir() -> Path:
+    """Return the per-user clipgen config directory for this platform.
+
+    Public because it is the canonical answer to "where does per-user clipgen
+    state live": desktop.py keeps the webview profile alongside start.json, and
+    cli.py searches here for credentials.json.
+    """
     if sys.platform == "win32":
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
@@ -37,7 +42,7 @@ def _config_dir() -> Path:
 
 
 def _settings_path() -> Path:
-    return _config_dir() / "start.json"
+    return config_dir() / "start.json"
 
 
 def _defaults() -> dict[str, Any]:

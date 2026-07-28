@@ -183,13 +183,10 @@
     function downloadEventsExport(format) {
       var url = "api/export/events?format=" + encodeURIComponent(format);
       if (!state.showExcluded) url += "&excluded=false";
-      var a = document.createElement("a");
-      a.href = url;
       var ext = format === "csv" ? "csv" : "json";
-      a.download = "screenspace_events." + ext;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      clipgenSaveFromUrl(url, "screenspace_events." + ext, function (path, err) {
+        if (err) showToast("Export failed: " + err.message);
+      });
     }
 
     var exportBtn = qs("#exportEventsBtn");

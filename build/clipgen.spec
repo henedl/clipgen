@@ -14,6 +14,9 @@ hiddenimports = []
 hiddenimports += collect_submodules("gspread")
 hiddenimports += collect_submodules("openpyxl")
 hiddenimports += collect_submodules("rich")
+# desktop.py imports webview lazily, so PyInstaller's static analysis never sees
+# the platform backend modules (WKWebView via pyobjc, WebView2 via clr).
+hiddenimports += collect_submodules("webview")
 
 datas = []
 datas += collect_data_files("gspread")
@@ -64,7 +67,13 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    # Windows keeps a console so `clipgen.exe --gif ...` still prints — a
+    # GUI-subsystem build has no stdout at all, and PyInstaller has no dual-mode
+    # option. desktop.py hides that console at runtime when (and only when) this
+    # process owns it, so a double-click shows just the window.
+    # macOS has no such subsystem split: console=False only stops a Terminal
+    # being spawned, and `clipgen.app/Contents/MacOS/clipgen --help` still prints.
+    console=(sys.platform == "win32"),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -74,7 +83,6 @@ exe = EXE(
 )
 
 if sys.platform == "darwin":
-    import stat
     from pathlib import Path
 
     _version = (Path(SPECPATH) / "VERSION").read_text().strip()
@@ -89,21 +97,20 @@ if sys.platform == "darwin":
             "CFBundleVersion": _version,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "11.0",
+            # macOS raises a "find devices on your local network?" prompt on
+            # first launch because the app binds a TCP socket (the UI is served
+            # over loopback to the embedded webview). Without this key the
+            # prompt has no explanation, which reads as spyware. Denying it does
+            # not break anything: nothing outside 127.0.0.1 is ever contacted.
+            "NSLocalNetworkUsageDescription": (
+                "clipgen serves its own interface to the app window on this "
+                "Mac. Nothing is sent off your machine."
+            ),
         },
     )
-
-    # PyInstaller writes the CLI binary to Contents/MacOS/clipgen. clipgen is a
-    # console app, so double-clicking the .app would silently launch the binary
-    # with no visible terminal. Move the real binary aside and put a tiny
-    # shell launcher in its place that opens Terminal pointing at it.
-    _macos_dir = Path(DISTPATH) / "clipgen.app" / "Contents" / "MacOS"
-    _real_bin = _macos_dir / "clipgen-bin"
-    _launcher = _macos_dir / "clipgen"
-    if _launcher.exists() and not _real_bin.exists():
-        _launcher.rename(_real_bin)
-        _launcher.write_text(
-            '#!/bin/bash\n'
-            'DIR="$(cd "$(dirname "$0")" && pwd)"\n'
-            'open -a Terminal "$DIR/clipgen-bin"\n'
-        )
-        _launcher.chmod(_launcher.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # No launcher shim here any more. Contents/MacOS/clipgen is the real binary:
+    # double-clicking opens the pywebview window (cli.main sends frozen + no-argv
+    # straight to desktop mode), and running that same path from a terminal still
+    # behaves as the CLI. The old shim renamed the binary to clipgen-bin and
+    # dropped in a bash script that ran `open -a Terminal`, which is exactly the
+    # "it's really a CLI tool" seam this change removes.

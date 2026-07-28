@@ -1860,7 +1860,10 @@
     }
 
     state.stats = computeStats(data.matrix, data.columns.length);
-    initScene();
+    if (!initScene()) {
+      showNotice("3D view unavailable: no working WebGL support on this system.");
+      return;
+    }
     buildDots();
     renderWeights();
     renderLayerToggles();
@@ -1899,7 +1902,20 @@
     three.scene.background = three.colors.bg;
     three.camera = new THREE.PerspectiveCamera(
       50, wrap.clientWidth / wrap.clientHeight, 0.1, 500);
-    three.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // WebGL can be genuinely absent: a GPU-less VM, a driver blocklist, or an
+    // embedded webview that never got hardware acceleration. Failing here used
+    // to take the whole Map tab down with an uncaught exception.
+    try {
+      three.renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (e) {
+      three.renderer = null;
+      return false;
+    }
+    three.renderer.domElement.addEventListener("webglcontextlost", function (e) {
+      // Without preventDefault the context is never restorable.
+      e.preventDefault();
+      showNotice("3D view paused: the graphics context was lost. Reload the page to restore it.");
+    });
     three.renderer.setPixelRatio(window.devicePixelRatio || 1);
     three.renderer.setSize(wrap.clientWidth, wrap.clientHeight);
     els.canvas.appendChild(three.renderer.domElement);
@@ -1940,6 +1956,7 @@
     // mapActivate()'s onResize() on (re)activation; a direct window listener here
     // would also fire on inactive tabs and double-fire on the Map.
     applyCamera();
+    return true;
   }
 
   function disposeDots() {

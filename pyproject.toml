@@ -17,6 +17,7 @@ dependencies = [
     "imagehash>=4.3.0",
     "scikit-image>=0.22.0",
     "easyocr>=1.7.0",
+    "pywebview>=6.2.1",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +37,7 @@ ui = ["playwright>=1.55"]
 packages = []
 py-modules = [
     "changelog", "cli", "clipgen", "composer_server", "config", "data_export",
-    "excel_io",
+    "desktop", "excel_io",
     "files", "friction", "google_api", "interactive", "ollama_client", "overview",
     "pipeline",
     "screenspace", "screenspace_frames", "screenspace_heatmap",

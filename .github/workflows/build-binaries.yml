@@ -7,7 +7,8 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  # write (not read) so the tagged-build step can publish Release assets.
+  contents: write
   actions: write
 
 jobs:
@@ -59,7 +60,6 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           set -euo pipefail
-          codesign --force --sign - --timestamp=none dist/clipgen.app/Contents/MacOS/clipgen-bin
           codesign --force --deep --sign - --timestamp=none dist/clipgen.app
           codesign --verify --deep --strict dist/clipgen.app
 
@@ -69,20 +69,44 @@ jobs:
           cat > dist/INSTALL.txt <<'EOF'
           clipgen for macOS
 
-          1. Drag clipgen.app anywhere (e.g. /Applications).
+          1. Drag clipgen.app to Applications.
           2. The first time you run it, macOS will say "clipgen is damaged or
              incomplete". This is Gatekeeper blocking an unsigned app downloaded
              from the internet. Clear the quarantine flag with:
 
-                 xattr -dr com.apple.quarantine /path/to/clipgen.app
+                 xattr -dr com.apple.quarantine /Applications/clipgen.app
 
-             (Adjust the path to wherever you put the app.) After that, double-
-             click clipgen.app and a Terminal window will open with clipgen
-             running. You won't see this message again.
+             (Adjust the path if you put it elsewhere.) After that, double-click
+             clipgen.app and it opens in its own window. You won't see this
+             message again.
+
+          clipgen also still works as a command-line tool. Run the binary inside
+          the bundle directly:
+
+              /Applications/clipgen.app/Contents/MacOS/clipgen --help
 
           clipgen is open source and built on GitHub Actions; the binary is not
           notarized because we don't have an Apple Developer account.
           EOF
+
+      - name: Package .app into a .dmg (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          # actions/upload-artifact re-zips its payload and does not preserve
+          # Unix permissions (everything lands as 644), which strips the exec bit
+          # from Contents/MacOS/clipgen and invalidates the codesignature — the
+          # downloaded .app then refuses to launch. A .dmg is an opaque image, so
+          # both survive the round trip.
+          mkdir -p dmg-staging
+          cp -R dist/clipgen.app dmg-staging/
+          cp dist/INSTALL.txt dmg-staging/
+          cp build/THIRD-PARTY-LICENSES dmg-staging/ 2>/dev/null || true
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "clipgen" -srcfolder dmg-staging \
+            -ov -format UDZO "dist/clipgen-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}.dmg"
+          rm -rf dmg-staging
+          ls -la dist/*.dmg
 
       - name: Compute artifact suffix
         id: suffix
@@ -99,9 +123,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
-          path: |
-            dist/clipgen.app
-            dist/INSTALL.txt
+          # The .dmg, not the raw .app — see the packaging step above.
+          path: dist/*.dmg
           if-no-files-found: error
 
       - name: Upload artifact (Windows)
@@ -119,3 +142,12 @@ jobs:
           name: clipgen-macos-bin-${{ steps.suffix.outputs.suffix }}
           path: dist/clipgen
           if-no-files-found: error
+
+      - name: Publish to GitHub Releases (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/clipgen.exe
+          fail_on_unmatched_files: false

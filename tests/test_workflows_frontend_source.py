@@ -473,8 +473,13 @@ def test_blueprint_import_export():
     assert "Import blueprint JSON" in hub
     # Import reuses the existing create endpoint (no new server route).
     assert 'apiPost("api/blueprints"' in hub
-    # Export reuses the canonical Blob-download idiom.
-    assert "URL.createObjectURL" in hub
+    # Export goes through the shared save helper, never a raw Blob download.
+    # The desktop window's WKWebView silently discards <a download> for blob:,
+    # data: and Content-Disposition alike, so a direct download is a dead button
+    # there. clipgenSaveFile keeps the blob path for browsers and routes through
+    # the native save dialog when running inside the app window.
+    assert "clipgenSaveFile(" in hub
+    assert "URL.createObjectURL" not in hub
 
 
 def test_copy_paste_duplicate_nodes():

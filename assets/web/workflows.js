@@ -366,17 +366,11 @@
       edges: state.edges || [],
       viewport: state.viewport || { x: 0, y: 0, zoom: 1 },
     };
-    var blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/json",
-    });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = (bp.name || "blueprint").replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    clipgenSaveFile(
+      (bp.name || "blueprint").replace(/[^a-zA-Z0-9_-]/g, "_") + ".json",
+      JSON.stringify(data, null, 2),
+      "application/json"
+    );
   }
 
   // Parse a JSON file and create a new blueprint from it. Unknown node types are

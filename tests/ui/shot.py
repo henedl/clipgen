@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         page = context.new_page()
         _ui_pages.wire_listeners(page, log)
         try:
-            _ui_pages.open_and_settle(page, live.url, args.page, log, args.wait)
+            _ui_pages.open_and_settle(page, live.origin, args.page, log, args.wait)
             if body:
                 try:
                     result = page.evaluate(f"() => {{ {body} }}")

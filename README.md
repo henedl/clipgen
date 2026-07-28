@@ -145,7 +145,16 @@ pip install pyinstaller
 pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
-Output: `dist/clipgen` and `dist/clipgen.app` (macOS), or `dist/clipgen.exe` (Windows). Double-clicking `clipgen.app` opens Terminal at the interactive CLI prompt; the raw binary inside is at `clipgen.app/Contents/MacOS/clipgen-bin`.
+Output: `dist/clipgen` and `dist/clipgen.app` (macOS), or `dist/clipgen.exe` (Windows).
+
+Double-clicking `clipgen.app` opens clipgen in its own desktop window (a native webview over a loopback server) — no Terminal, no browser tab. The same binary is still the full CLI when given arguments:
+
+```shell
+clipgen.app/Contents/MacOS/clipgen --help          # macOS
+clipgen.exe --help                                 # Windows
+```
+
+Only an argument-less launch opens the window. Use `--desktop` to force a window from a source checkout, or `--browser` to fall back to the default browser. Tagged builds publish a `.dmg` to GitHub Releases; the `.dmg` matters because GitHub's artifact zips do not preserve the executable bit or the code signature.
 
 The macOS build is **unsigned** (no paid Apple Developer account). When downloaded from GitHub, macOS quarantines the app and Gatekeeper blocks the first launch. To clear the quarantine attribute, run:
 
