@@ -154,6 +154,11 @@
   --color-surface-alt:         var(--bg-input);
   --color-text:                var(--fg);
   --color-text-dim:            var(--fg-muted);
+  /* Warning amber. Screenspace referenced this for a year with a #f59e0b
+   * fallback and it was never defined, so every warning there rendered a
+   * slightly different amber from the medium-severity chips everywhere else.
+   * Aliased rather than given its own hex so the two stay in step. */
+  --color-warning:             var(--severity-medium);
   --color-accent:              var(--accent);
   --color-border:              var(--border);
   --color-selected:            rgba(45, 107, 255, 0.18);

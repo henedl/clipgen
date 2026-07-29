@@ -82,6 +82,39 @@ on a `pageerror` or a throwing snippet, so it composes in a shell chain.
 Do not loop `shot.py` over all six pages — it boots its own server per invocation.
 That is what the suite is for.
 
+### States and themes
+
+The six-page smoke renders each page's boot state, in dark, and clicks nothing.
+Most of the frontend is not in that: every modal, every tab past the default, and
+the whole Start overlay (both boot paths pre-dismiss it). Reach the rest with:
+
+```bash
+uv run --extra ui python tests/ui/shot.py studio --theme light
+uv run --extra ui python tests/ui/shot.py studio --state settings
+uv run --extra ui python tests/ui/shot.py screenspace --state tool:template
+uv run --extra ui python tests/ui/shot.py screenspace --all-states   # 20 states, one boot
+```
+
+Every page has `settings`, `settings-hotkeys`, `cheatsheet`, `palette` and
+`start`. Tab states are **discovered from the live DOM**, not hard-coded, so a tab
+added to the HTML becomes a state for free — pass an unknown `--state` name and
+the error lists what that page actually has.
+
+`--all-states` writes `<page>-<state>.png` and drives them all from one boot,
+which is the thing looping `shot.py` cannot do. It reports every state it tried,
+reached or not: an unreachable state prints as `MISS`, never silently skipped.
+`--state` exits non-zero when the named state can't be reached; `--all-states`
+does not, because some states legitimately don't exist in the fixture.
+
+Two honest limits, worth knowing before you read the output:
+
+- Screenspace's 13 tool tabs are hidden whenever the grouped category nav is on.
+  They are activated with a DOM `.click()` — the same delegation the grouped nav
+  itself uses (`screenspace.css:1401-1410`) — and are labelled
+  `hidden; activated via DOM click` so you can tell that from a real gesture.
+- The fixture is small on purpose, so an empty panel in a state screenshot may be
+  "no data" rather than "broken". Check `tests/ui/_ui_fixtures.py` before filing it.
+
 ## Diagnosing a failure
 
 | Symptom | Where to look |

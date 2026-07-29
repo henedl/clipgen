@@ -1,0 +1,106 @@
+"""No new unreferenced top-level function may appear in ``assets/web/*.js``.
+
+Nothing else in the suite can see dead JS. ``node --check`` proves a file parses;
+``test_frontend_satellite_wiring.py`` proves a call *resolves*; neither asks
+whether anything calls a given function at all. So a function can be written,
+wired to nothing, and live in the bundle indefinitely — which is what the five
+below did.
+
+The signal is deliberately narrow: a top-level ``function name(...)`` whose name
+occurs exactly **once** across every ``.js``, ``.html`` and ``source/*.py`` file,
+that one occurrence being its own definition. At that threshold there is no
+judgement call left — nothing references it, under any spelling, including the
+``window.Clipgen*`` namespace publishes and the guarded hub delegators.
+
+The looser "never appears in call position" variant was measured at ~174 hits and
+is dominated by handlers passed by reference (``addEventListener("click", onX)``)
+and namespace exports (``{ foo: foo }``), both legitimate. It would make a decent
+human-reviewed worklist and a terrible gate, so it is not implemented here.
+
+This is a **ratchet**, not a cleanup: the five known-dead functions are listed so
+the current state passes, and the list may only shrink. Deleting one means
+deleting its entry in the same commit; adding a sixth fails ``/check``.
+"""
+
+import re
+from pathlib import Path
+
+from _frontend_source import WEB
+
+_TOP_LEVEL_FUNCTION = re.compile(
+    r"^\s*function\s+([A-Za-z_$][\w$]*)\s*\(", re.MULTILINE
+)
+
+# Unreferenced as of the frontend-cleanup pass. Each is a genuine deletion
+# candidate, tracked in the plan's drawdown step rather than removed here so this
+# commit stays test-only. Shrink this set; never grow it.
+KNOWN_DEAD: frozenset[str] = frozenset(
+    {
+        "pointInPolygon",  # screenspace-utils.js
+        "recallArtifactStash",  # studio-stash.js
+        "recallStash",  # studio-stash.js
+        "stopDiscover",  # workflows-runs.js
+        "trIntakeCategoryColor",  # studio-intake.js
+    }
+)
+
+
+def _consumer_text() -> str:
+    """Everything that could plausibly name a frontend function."""
+    parts = [path.read_text(encoding="utf-8") for path in sorted(WEB.glob("*.js"))]
+    parts += [path.read_text(encoding="utf-8") for path in sorted(WEB.glob("*.html"))]
+    source = Path(WEB).parent.parent / "source"
+    parts += [path.read_text(encoding="utf-8") for path in sorted(source.glob("*.py"))]
+    return "\n".join(parts)
+
+
+def _unreferenced() -> dict[str, str]:
+    """Map each unreferenced function name to the ``file:line`` that defines it."""
+    corpus = _consumer_text()
+    definitions: dict[str, str] = {}
+    for path in sorted(WEB.glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        for match in _TOP_LEVEL_FUNCTION.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            definitions.setdefault(match.group(1), f"{path.name}:{line}")
+
+    return {
+        name: site
+        for name, site in definitions.items()
+        if len(re.findall(rf"\b{re.escape(name)}\b", corpus)) == 1
+    }
+
+
+def test_no_new_unreferenced_functions():
+    unexpected = {
+        name: site for name, site in _unreferenced().items() if name not in KNOWN_DEAD
+    }
+    assert not unexpected, (
+        "These top-level functions are defined and referenced nowhere. Wire them "
+        "up or delete them:\n"
+        + "\n".join(f"  {name}  ({site})" for name, site in sorted(unexpected.items()))
+    )
+
+
+def test_known_dead_list_has_no_stale_entries():
+    """A name that is no longer dead must leave the list.
+
+    Without this the set silently becomes a graveyard of names that were deleted
+    or revived years ago, and the next reader cannot tell which entries still
+    mean anything.
+    """
+    stale = sorted(KNOWN_DEAD - set(_unreferenced()))
+    assert not stale, (
+        "KNOWN_DEAD lists functions that are no longer unreferenced (deleted, or "
+        f"now called). Drop them from the set: {', '.join(stale)}"
+    )
+
+
+def test_the_scan_finds_the_known_dead_functions():
+    """Guard the detector.
+
+    If the regex or the corpus glob silently stops matching, both tests above go
+    green while checking nothing. Pinning that the five known names are still
+    *found* keeps a broken scan from reading as a clean codebase.
+    """
+    assert KNOWN_DEAD <= set(_unreferenced())

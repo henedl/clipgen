@@ -9,9 +9,18 @@ computed styles, count rendered nodes, dump ``state``, call
 
     uv run --extra ui python tests/ui/shot.py studio
     uv run --extra ui python tests/ui/shot.py studio --selector "#sheetGrid"
+    uv run --extra ui python tests/ui/shot.py studio --theme light
+    uv run --extra ui python tests/ui/shot.py studio --state settings
+    uv run --extra ui python tests/ui/shot.py screenspace --all-states
     uv run --extra ui python tests/ui/shot.py transcripts \
         --eval "return document.querySelectorAll('.pill-wrap').length"
     uv run --extra ui python tests/ui/shot.py overview --eval-file /tmp/probe.js --wait 2000
+
+``--theme light`` is worth reaching for: light is a shipped feature reachable from
+every page's theme toggle, and until it was added here nothing in the harness had
+ever rendered it. ``--state`` and ``--all-states`` (see ``_ui_states``) reach the
+modals and tabs the six-page smoke never opens — ``--all-states`` drives them all
+from a single boot, which is the one thing looping this script cannot do.
 
 Not a test: ``norecursedirs = ui`` plus the non-``test_`` filename keep pytest
 away from it. The JS it runs only ever reaches a loopback server serving
@@ -30,10 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "source"))
 import _ui_browser
 import _ui_fixtures
 import _ui_pages
-import _ui_server
-import config
-import start_settings
-import utils
+import _ui_session
+import _ui_states
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -63,6 +70,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--viewport", default="1600x1000", help="Viewport size, e.g. 1280x800."
     )
+    parser.add_argument(
+        "--theme",
+        choices=_ui_session.THEMES,
+        default="dark",
+        help="Boot the page in this theme. Light is a shipped feature the "
+        "harness otherwise never renders.",
+    )
+    parser.add_argument(
+        "--state",
+        help="Drive into one UI state before capturing, e.g. settings, "
+        "cheatsheet, palette, start, tab:map, tool:color. Pass an unknown name "
+        "to be told which states this page has.",
+    )
+    parser.add_argument(
+        "--all-states",
+        action="store_true",
+        help="Capture every reachable state on this page from one boot, to "
+        "<page>-<state>.png. Unreachable states are reported, not skipped.",
+    )
     return parser.parse_args(argv)
 
 
@@ -91,75 +117,61 @@ def main(argv: list[str] | None = None) -> int:
     out = args.out or (_ui_fixtures.SHOT_DIR / f"{args.page}.png")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        _ui_fixtures.ensure_inputs()
-        chromium_path = _ui_browser.resolve_chromium()
-        playwright_factory = _ui_browser.sync_playwright()
-    except _ui_fixtures.UiUnavailable as exc:
-        print(exc, file=sys.stderr)
-        return 1
-    _ui_fixtures.ensure_run_dirs()
-
-    # Same config redirection the pytest fixtures do, minus the monkeypatch: this
-    # is a one-shot process, so plain assignment is enough.
-    config.INPUT_DIR = str(_ui_fixtures.INPUT_DIR)
-    config.OUTPUT_DIR = str(_ui_fixtures.OUTPUT_DIR)
-    # Keep stdout to the screenshot path and the --eval result; sheet-loading
-    # chatter would bury both.
-    config.VERBOSITY = config.QUIET
-    # Redirect the Start-overlay settings file, or build_combined_app's
-    # record_project_session would prepend these fixture dirs to the real
-    # "Recently opened" rail. setattr rather than plain assignment because the
-    # attribute's declared type is the original function; this is the same
-    # rebinding monkeypatch does in tests/ui/conftest.py.
-    setattr(  # noqa: B010
-        start_settings,
-        "_settings_path",
-        lambda: _ui_fixtures.SETTINGS_DIR / "start.json",
-    )
-    utils.NO_INPUT_MODE = True
-
-    workbook, reason = _ui_fixtures.open_workbook()
-    if reason:
-        print(reason, file=sys.stderr)
-        return 1
-
     log = _ui_pages.PageLog()
     result: Any = None
     eval_error: str | None = None
-    live = _ui_server.start(workbook)
-    playwright = playwright_factory().start()
+    shots: list[Path] = []
+    states: list[_ui_states.StateResult] = []
+    state_problem: str = ""
     try:
-        browser = playwright.chromium.launch(
-            executable_path=str(chromium_path),
-            headless=True,
-            args=_ui_browser.LAUNCH_ARGS,
-        )
-        context = browser.new_context(viewport=viewport, device_scale_factor=1)
-        context.add_init_script(
-            "try { sessionStorage.setItem('clipgen.startOverlayDismissed', '1'); }"
-            " catch (e) {}"
-        )
-        page = context.new_page()
-        _ui_pages.wire_listeners(page, log)
-        try:
-            _ui_pages.open_and_settle(page, live.origin, args.page, log, args.wait)
-            if body:
-                try:
-                    result = page.evaluate(f"() => {{ {body} }}")
-                except _ui_browser.playwright_error() as exc:
-                    # A throwing snippet is a normal outcome when probing, not a
-                    # harness crash. Report the JS error, keep the screenshot.
-                    eval_error = str(exc).splitlines()[0]
-        finally:
-            _capture(page, args, out)
-        context.close()
-        browser.close()
-    finally:
-        playwright.stop()
-        _ui_server.stop(live)
+        with _ui_session.ui_session(viewport=viewport, theme=args.theme) as session:
+            page = session.context.new_page()
+            _ui_pages.wire_listeners(page, log)
+            try:
+                _ui_pages.open_and_settle(
+                    page, session.origin, args.page, log, args.wait
+                )
+                if args.all_states:
+                    # Capture the boot state too: --all-states should mean all.
+                    _capture(page, args, out)
+                    shots.append(out)
+                    for state in _ui_states.each_state(page, args.page):
+                        states.append(state)
+                        if not state.reached:
+                            continue
+                        shot = out.with_name(
+                            f"{out.stem}-{state.name.replace(':', '-')}{out.suffix}"
+                        )
+                        _capture(page, args, shot)
+                        shots.append(shot)
+                elif args.state:
+                    state = _ui_states.enter_named(page, args.page, args.state)
+                    states.append(state)
+                    if not state.reached:
+                        state_problem = state.detail
+                if body:
+                    try:
+                        result = page.evaluate(f"() => {{ {body} }}")
+                    except _ui_browser.playwright_error() as exc:
+                        # A throwing snippet is a normal outcome when probing, not
+                        # a harness crash. Report the JS error, keep the screenshot.
+                        eval_error = str(exc).splitlines()[0]
+            finally:
+                if not args.all_states:
+                    _capture(page, args, out)
+                    shots.append(out)
+    except _ui_fixtures.UiUnavailable as exc:
+        print(exc, file=sys.stderr)
+        return 1
 
-    print(f"screenshot: {out.resolve()}")
+    for shot in shots:
+        print(f"screenshot: {shot.resolve()}")
+    # Report every state we tried, reached or not. A silently skipped state reads
+    # as covered, which is the failure mode this whole harness exists to avoid.
+    for state in states:
+        mark = "ok  " if state.reached else "MISS"
+        suffix = f" — {state.detail}" if state.detail else ""
+        print(f"state: {mark} {state.name}{suffix}")
     if body and eval_error is None:
         print("eval: " + json.dumps(result, ensure_ascii=False, default=str))
     if eval_error is not None:
@@ -170,7 +182,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[console]   {text}", file=sys.stderr)
     if log.timeout:
         print(f"[timeout]   {log.timeout}", file=sys.stderr)
-    return 1 if (log.fatal or eval_error is not None) else 0
+    if state_problem:
+        print(f"state failed: {state_problem}", file=sys.stderr)
+    # An explicitly requested --state that could not be reached is a failure; an
+    # unreachable state during --all-states is reported above and is not, since
+    # some states legitimately do not exist in this fixture.
+    return 1 if (log.fatal or eval_error is not None or state_problem) else 0
 
 
 if __name__ == "__main__":
