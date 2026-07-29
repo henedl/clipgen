@@ -58,6 +58,7 @@ node_modules/
 *.gif
 *.png
 *.csv
+*.app/
 
 # Files we want to keep
 !assets/titlecard.png
