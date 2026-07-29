@@ -23,6 +23,8 @@ deleting its entry in the same commit; adding a sixth fails ``/check``.
 """
 
 import re
+from collections import Counter
+from functools import cache
 from pathlib import Path
 
 from _frontend_source import WEB
@@ -30,6 +32,7 @@ from _frontend_source import WEB
 _TOP_LEVEL_FUNCTION = re.compile(
     r"^\s*function\s+([A-Za-z_$][\w$]*)\s*\(", re.MULTILINE
 )
+_WORD = re.compile(r"\w+")
 
 # Unreferenced as of the frontend-cleanup pass. Each is a genuine deletion
 # candidate, tracked in the plan's drawdown step rather than removed here so this
@@ -54,8 +57,22 @@ def _consumer_text() -> str:
     return "\n".join(parts)
 
 
+@cache
 def _unreferenced() -> dict[str, str]:
-    """Map each unreferenced function name to the ``file:line`` that defines it."""
+    """Map each unreferenced function name to the ``file:line`` that defines it.
+
+    Counted from a single tokenizing pass rather than one ``\\bname\\b`` scan per
+    name: the corpus is ~4 MB and there are ~2000 names, so the per-name form cost
+    69 s a call — and all three tests below call this. For a name made only of
+    ``\\w`` characters the two are equivalent by definition, since ``\\b`` on both
+    ends matches exactly when the name is a whole ``\\w+`` token. A ``$`` in a name
+    breaks that equivalence (``$`` is not a ``\\w`` character), so those keep the
+    original scan; there are none today, which is why the fast path is the one
+    worth having.
+
+    Cached because it is pure over files that cannot change mid-run, and the
+    result is a shared read-only mapping — no test mutates it.
+    """
     corpus = _consumer_text()
     definitions: dict[str, str] = {}
     for path in sorted(WEB.glob("*.js")):
@@ -64,11 +81,14 @@ def _unreferenced() -> dict[str, str]:
             line = text.count("\n", 0, match.start()) + 1
             definitions.setdefault(match.group(1), f"{path.name}:{line}")
 
-    return {
-        name: site
-        for name, site in definitions.items()
-        if len(re.findall(rf"\b{re.escape(name)}\b", corpus)) == 1
-    }
+    tokens = Counter(_WORD.findall(corpus))
+
+    def _occurrences(name: str) -> int:
+        if "$" in name:
+            return len(re.findall(rf"\b{re.escape(name)}\b", corpus))
+        return tokens[name]
+
+    return {name: site for name, site in definitions.items() if _occurrences(name) == 1}
 
 
 def test_no_new_unreferenced_functions():
