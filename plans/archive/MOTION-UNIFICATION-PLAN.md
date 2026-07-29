@@ -85,16 +85,16 @@ page without a `#toast` element never shows a toast at all:
 | --- | --- | --- |
 | studio, screenspace | yes | already animated |
 | transcripts, workflows, composer | yes | **toasts now fade instead of snapping** |
-| overview, viewer, gallery, timeline-viewer | **no** | groundwork only — nothing animates there yet |
+| overview | added in the follow-up | its `start-overlay.js` toasts used to vanish entirely |
+| viewer, gallery, timeline-viewer | **no** | groundwork only — nothing toasts there |
 
-Those four were wired anyway for uniform availability (the cost is one deferred, cached ~13 KB
-script) so the next surface added to them doesn't silently hit the `window.ClipgenMotion` guard —
-the exact trap this step exists to remove. The guards themselves stay: `viewer.py`'s inline steps
-each swallow `OSError`, so a partially-failed export must still be able to hide its toast.
+The export templates were wired anyway for uniform availability (the cost is one deferred, cached
+~13 KB script) so the next surface added to them doesn't silently hit the `window.ClipgenMotion`
+guard — the exact trap this step exists to remove. The guards themselves stay: `viewer.py`'s inline
+steps each swallow `OSError`, so a partially-failed export must still be able to hide its toast.
 
-**Adjacent gap found, not fixed:** `overview.html` has no `#toast` element, but it loads
-`start-overlay.js`, which toasts on folder errors (`start-overlay.js:1200/1216/1553`). Those
-messages silently vanish on Overview. Pre-existing and unrelated to motion; worth its own fix.
+Surveying that column is what surfaced the Overview bug: it loads `start-overlay.js`, which toasts on
+folder errors, but had no `#toast` element for `showToast` to find (see the follow-ups below).
 
 ### 4. Continuous-loop dedup — resolved as **CSS-hoist** ✅
 The fork was (a) a JS `loop(el, kind)` handle vs (b) collapsing each family into one shared
@@ -185,11 +185,16 @@ and `so-spinner-rotate` (a byte-identical clone of `spin`).
   360 ms veil, the confirm → status hand-off, and everything once more under
   `prefers-reduced-motion: reduce`.
 
-## Known gaps left open (deliberately)
+## Follow-ups (all closed)
 
-- `overview.html` has no `#toast` element but loads `start-overlay.js`, which toasts on folder
-  errors — those messages vanish silently. Pre-existing, unrelated to motion.
-- Composer's artifact log has no focus trap, where Studio's does. Now that both share one open/close
-  path, adding `openBlockingModal` there is a small follow-up.
-- `start-overlay` keeps its own veil (600 ms, on a real element rather than `::before`) because its
-  intro sequencing is bound up with the launcher's cascade. It is the last copy.
+- ✅ `overview.html` had no `#toast` element while loading `start-overlay.js`, which toasts on folder
+  errors — those messages vanished silently. Element added.
+- ✅ Composer's artifact log had no focus trap. It now runs `openBlockingModal` with Studio's
+  deferred release, and sets `body.modal-open` — which `topnav.css` needs to drop the bar's own
+  `backdrop-filter` so the veil composites over it rather than reading through it.
+- ✅ `start-overlay` was the last veil copy. Its backdrop cannot be `cg-modal-veil`'s `::before`
+  (it is the click-to-dismiss target, and a pseudo-element cannot be an event target), so the veil
+  split into a **host** (`cg-veil` — the properties + the `.is-veiled` ramp) and a **paint layer**
+  (`cg-veil-layer`), one declaration serving both the real element and the pseudo.
+  `cg-modal-veil` is the convenience pairing. The launcher keeps its heavier, slower look through
+  `--veil-blur-open` / `--veil-alpha-open` / `--duration-veil`.
