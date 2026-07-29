@@ -5,14 +5,11 @@ Every module lives in `source/`. This file exists only to put that directory on
 resolving exactly as they did when they sat in the repo root, and then to hand
 off to `cli.main`.
 
-Two details here are load-bearing:
+Two details here are important:
 
 * The path is **absolute and resolved**. `cli.main` calls
-  `os.chdir(get_runtime_working_dir())` early on, and ~40 first-party imports
-  are deferred until after that point (`import screenspace` inside the CLI scan
-  modes, `import server` / `import overview` inside the Flask blueprints). A
-  relative entry would survive startup and then fail the first time a user
-  opened Screenspace from a video directory.
+  `os.chdir(get_runtime_working_dir())` early on, and many first-party imports
+  are deferred until after that point. 
 * The insert is **skipped when frozen**. A PyInstaller bundle has no `source/`
   next to the executable — the modules live in its archive — so the entry would
   point at a directory that does not exist.
