@@ -138,6 +138,29 @@ def _reset_desktop_chrome():
 
 
 @pytest.fixture(autouse=True)
+def _force_software_encoder():
+    """Pin the hardware-encoder capability to "absent" for every test.
+
+    ``config.FFMPEG_VIDEO_ENCODER`` defaults to ``"auto"``, so without this every
+    argv assertion would depend on whether the machine running the suite happens
+    to have VideoToolbox — and each test would shell out to ``ffmpeg -encoders``
+    to find out. Seeding the cache makes ``resolve_video_encoder()`` deterministic
+    (libx264) and probe-free; the hardware tests flip it themselves.
+    """
+    import video
+
+    video._videotoolbox_support_cache = False
+    video._hw_encode_failed = False
+    video._hw_encoder_warned = False
+    try:
+        yield
+    finally:
+        video._videotoolbox_support_cache = None
+        video._hw_encode_failed = False
+        video._hw_encoder_warned = False
+
+
+@pytest.fixture(autouse=True)
 def _reset_no_input_mode():
     """Restore ``utils.NO_INPUT_MODE`` after every test.
 

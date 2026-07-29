@@ -431,12 +431,16 @@ def build_timelapse_command(
     start_seconds: float = 0.0,
     end_seconds: float | None = None,
     sample_interval: float = 0.0,
+    encoder: str = "libx264",
 ) -> list[str]:
     """Construct ffmpeg argv for a cropped timelapse.
 
     *sample_interval* (seconds) controls frame sampling: when > 0, only one
     frame per interval is kept before cropping and speed-up.  0 means every
     frame is used (default).
+
+    *encoder* selects the H.264 encoder for mp4 output (see
+    ``video.resolve_video_encoder``); gif output has no video encoder to pick.
     """
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
     filters: list[str] = []
@@ -466,7 +470,7 @@ def build_timelapse_command(
     if output_format == "gif":
         cmd.extend(["-loop", "0"])
     else:
-        cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
+        cmd.extend(video.video_encoder_args(encoder, crf=23, preset="fast"))
 
     cmd.append(output_path)
     return cmd

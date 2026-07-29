@@ -155,6 +155,12 @@ _webp_missing_warned: bool = False
 _drawtext_support_cache: bool | None = None
 _vp9_support_cache: bool | None = None
 _vp9_missing_warned: bool = False
+_videotoolbox_support_cache: bool | None = None
+_hw_encoder_warned: bool = False
+# Session-sticky: one hardware-encode failure disables the hardware encoder for
+# the rest of the run, so a broken media engine costs one wasted encode, not one
+# per clip. Reset only by restarting clipgen (or by tests).
+_hw_encode_failed: bool = False
 
 
 def check_webp_support() -> bool:
@@ -195,6 +201,140 @@ def check_vp9_support() -> bool:
     if _vp9_support_cache is None:
         _vp9_support_cache = _probe_ffmpeg_listing("-encoders", {"libvpx-vp9"})
     return _vp9_support_cache
+
+
+def check_videotoolbox_support() -> bool:
+    """Return True when ffmpeg can encode H.264 via Apple's VideoToolbox.
+
+    macOS only. Same caveat as libwebp — only the `-encoders` listing is
+    authoritative for "can ffmpeg write this"; the codecs listing says nothing
+    about whether the hardware encoder was compiled in. Result is cached.
+    """
+    global _videotoolbox_support_cache
+    if _videotoolbox_support_cache is None:
+        _videotoolbox_support_cache = (
+            sys.platform == "darwin"
+            and _probe_ffmpeg_listing("-encoders", {"h264_videotoolbox"})
+        )
+    return _videotoolbox_support_cache
+
+
+def resolve_video_encoder() -> str:
+    """Return the H.264 encoder to use for this re-encode: hardware or libx264.
+
+    Honors ``config.FFMPEG_VIDEO_ENCODER``: ``"auto"`` prefers VideoToolbox when
+    it is available, an explicit ``"h264_videotoolbox"`` warns once and degrades
+    if unsupported, and anything else (including ``"libx264"`` and a junk value)
+    means libx264. The junk case is real: ``select`` settings are coerced with
+    ``str()`` and not validated against their options list
+    (``server._coerce_studio_setting``), so an unknown value must degrade quietly
+    rather than raise mid-encode.
+
+    A runtime failure (``_hw_encode_failed``) is session-sticky for **both**
+    hardware modes, not just ``"auto"``. On hardware that lists the encoder but
+    cannot run it, honoring the explicit choice again would spend a doomed
+    hardware attempt on every single encode instead of one per session.
+    """
+    global _hw_encoder_warned
+    choice = str(getattr(config, "FFMPEG_VIDEO_ENCODER", "auto")).strip().lower()
+
+    if choice == "h264_videotoolbox":
+        if _hw_encode_failed:
+            # note_hw_encode_failure already warned when the flag was set.
+            return "libx264"
+        if check_videotoolbox_support():
+            return "h264_videotoolbox"
+        if not _hw_encoder_warned:
+            _hw_encoder_warned = True
+            utils.warning_print(
+                "Hardware encoding requested but ffmpeg has no h264_videotoolbox encoder.",
+                ["Falling back to libx264 for this session."],
+            )
+        return "libx264"
+
+    if choice == "auto" and not _hw_encode_failed and check_videotoolbox_support():
+        return "h264_videotoolbox"
+    return "libx264"
+
+
+def video_encoder_args(
+    encoder: str, *, crf: int | None = None, preset: str | None = None
+) -> list[str]:
+    """Return the ffmpeg output args selecting *encoder* at a comparable quality.
+
+    ``crf``/``preset`` are omitted from the libx264 branch when not given, so
+    every call site reproduces its existing flags exactly and forcing
+    ``FFMPEG_VIDEO_ENCODER="libx264"`` yields byte-identical argv (the sites that
+    passed neither were relying on libx264's own defaults, crf 23 / preset
+    medium, and still are).
+
+    VideoToolbox has no CRF; ``-q:v`` is its constant-quality control on the
+    inverted 0-100 scale, so a CRF is mapped onto roughly the same visual target
+    and clamped to a sane band. ``-q:v`` requires Apple Silicon (Intel Macs
+    reject it — caught by ``run_ffmpeg_encode``'s runtime fallback), and
+    ``-allow_sw 1`` lets the encoder drop to software internally instead of
+    hard-failing when the media engine is unavailable or saturated.
+    """
+    if encoder == "h264_videotoolbox":
+        # No CRF given means the site relied on libx264's default of 23.
+        quality = max(30, min(80, 100 - 2 * (crf if crf is not None else 23)))
+        return [
+            "-c:v",
+            "h264_videotoolbox",
+            "-q:v",
+            str(quality),
+            "-allow_sw",
+            "1",
+        ]
+
+    args = ["-c:v", "libx264"]
+    if preset is not None:
+        args += ["-preset", preset]
+    if crf is not None:
+        args += ["-crf", str(crf)]
+    return args
+
+
+def note_hw_encode_failure(encoder: str) -> None:
+    """Record that *encoder* failed at runtime and warn about it once.
+
+    Makes the fallback one-shot: an encoder that ffmpeg lists but cannot actually
+    run (VMs, older Intel Macs) costs one wasted encode per session, not one per
+    clip. Callers do the actual libx264 retry.
+    """
+    global _hw_encode_failed
+    if _hw_encode_failed:
+        return
+    _hw_encode_failed = True
+    utils.warning_print(
+        f"Hardware encoder '{encoder}' failed; retrying with libx264.",
+        [
+            "Remaining encodes this session use libx264.",
+            "Set FFMPEG_VIDEO_ENCODER to 'libx264' in Settings to skip this attempt.",
+        ],
+    )
+
+
+def run_ffmpeg_encode(
+    build_command: Callable[[str], list[str]],
+    *,
+    encoder: str,
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[str] | None:
+    """Run an encode, retrying once with libx264 if the hardware encoder fails.
+
+    *build_command* takes an encoder name and returns the full argv, so the
+    retry re-builds rather than patching args. ``**kwargs`` pass straight through
+    to ``run_ffmpeg_process``. A ``None`` result (cancellation or an OS-level
+    failure) is returned as-is: a cancel is not an encoder failure and must not
+    burn the retry or set the session flag (see ``note_hw_encode_failure``).
+    """
+    result = run_ffmpeg_process(build_command(encoder), **kwargs)
+    if result is None or result.returncode == 0 or encoder == "libx264":
+        return result
+
+    note_hw_encode_failure(encoder)
+    return run_ffmpeg_process(build_command("libx264"), **kwargs)
 
 
 def _warn_webp_unavailable_once(output_file: str) -> None:
@@ -512,6 +652,7 @@ def build_ffmpeg_cut_command(
     duration_seconds: int,
     reencode: bool,
     audio_normalize: bool,
+    encoder: str | None = None,
 ) -> list[str]:
     """Build ffmpeg argv for cutting a clip. Caller runs subprocess.
 
@@ -522,6 +663,9 @@ def build_ffmpeg_cut_command(
         duration_seconds: Clip duration in seconds
         reencode: If True, re-encode; if False, stream copy
         audio_normalize: If True, apply loudnorm
+        encoder: Video encoder for the re-encode branch. ``None`` or
+            ``"libx264"`` adds no ``-c:v`` at all, leaving ffmpeg on its default
+            (libx264 for mp4) exactly as before hardware encoding existed.
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
@@ -554,9 +698,19 @@ def build_ffmpeg_cut_command(
             ]
         # Stream copy; -avoid_negative_ts 1 fixes timestamp issues when cutting
         return base + ["-c", "copy", "-avoid_negative_ts", "1", output_file]
+    encoder_args = (
+        video_encoder_args(encoder)
+        if encoder is not None and encoder != "libx264"
+        else []
+    )
     if audio_normalize:
-        return base + ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11", output_file]
-    return base + [output_file]
+        return (
+            base
+            + ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+            + encoder_args
+            + [output_file]
+        )
+    return base + encoder_args + [output_file]
 
 
 _SUBTITLE_CODEC_BY_CONTAINER = {
@@ -750,12 +904,24 @@ def run_ffmpeg(
         )
         return False
 
-    ffmpeg_command = build_ffmpeg_cut_command(
-        input_file, output_file, start_pos, duration, reencode, config.AUDIO_NORMALIZE
-    )
-    utils.debug_print(f"ffmpeg_command is '{' '.join(ffmpeg_command)}'")
-    ffmpeg_result = run_ffmpeg_process(
-        ffmpeg_command,
+    def build_command(encoder: str) -> list[str]:
+        return build_ffmpeg_cut_command(
+            input_file,
+            output_file,
+            start_pos,
+            duration,
+            reencode,
+            config.AUDIO_NORMALIZE,
+            encoder=encoder if reencode else None,
+        )
+
+    # A stream copy has no encoder to fail over, so it stays on libx264's
+    # "add nothing" branch and never spends a probe on the hardware listing.
+    encoder = resolve_video_encoder() if reencode else "libx264"
+    utils.debug_print(f"ffmpeg_command is '{' '.join(build_command(encoder))}'")
+    ffmpeg_result = run_ffmpeg_encode(
+        build_command,
+        encoder=encoder,
         input_file=input_file,
         output_file=output_file,
         os_error_message="ffmpeg could not successfully run.",
@@ -1378,6 +1544,33 @@ def get_file_duration(filepath: str) -> int | None:
     return dur
 
 
+def _parallel_probe(items: list[str], probe_fn: Callable[[str], Any]) -> list[Any]:
+    """Map *probe_fn* over *items* in a small thread pool, preserving input order.
+
+    ffprobe is a subprocess, so probing is pure I/O wait and releases the GIL —
+    a reel's worth of clips probes in roughly the time of the slowest single
+    probe instead of the sum. Results land at their original index, which every
+    caller relies on (props lists run parallel to their path list).
+
+    No lock is needed: the probe caches (``_video_properties_cache`` /
+    ``_file_duration_cache``) are plain dicts keyed by
+    ``(resolved_path, mtime_ns)``, the paths in one call are distinct, and a
+    duplicate concurrent probe of the same file is idempotent — both threads
+    write the same value under the same key. Fewer than 2 items skips the pool.
+    """
+    if len(items) < 2:
+        return [probe_fn(item) for item in items]
+
+    results: list[Any] = [None] * len(items)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
+        future_to_idx = {
+            pool.submit(probe_fn, item): idx for idx, item in enumerate(items)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            results[future_to_idx[future]] = future.result()
+    return results
+
+
 def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None:
     """Build a concatenated-timeline view of multiple source videos.
 
@@ -1388,16 +1581,19 @@ def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None
     starts at 0). A global timestamp is mapped into a sub-video by walking these
     ranges (see ``utils.map_global_to_segment``).
 
-    Returns ``None`` if any file's duration cannot be probed — the caller should
-    skip the clip rather than guess offsets. Only called for 2+ paths; the
-    single-video path never probes durations.
+    Durations are probed in parallel (``_parallel_probe``); only the cumulative
+    fold is sequential. Returns ``None`` if any file's duration cannot be probed
+    — the caller should skip the clip rather than guess offsets. Normally called
+    for 2+ paths (``timeline_or_none`` keeps single-video participants from
+    probing at all); a single path still takes the sequential path.
     """
+    durations = _parallel_probe(paths, get_file_duration)
+    if any(duration is None for duration in durations):
+        return None
+
     timeline: list[tuple[str, int, int]] = []
     cumulative = 0
-    for path in paths:
-        duration = get_file_duration(path)
-        if duration is None:
-            return None
+    for path, duration in zip(paths, durations):
         timeline.append((path, duration, cumulative))
         cumulative += duration
     return timeline
@@ -1968,6 +2164,13 @@ def compress_to_size(
 ) -> bool:
     """Recompress video to fit within target filesize using two-pass encoding.
 
+    Always libx264, deliberately ignoring ``config.FFMPEG_VIDEO_ENCODER``: this is
+    the one bitrate-*targeting* path, and hardware encoders have no ``-pass`` and
+    much looser ABR. Measured on a 720p clip asking for 105 kbps video,
+    h264_videotoolbox delivered 246 kbps (2.3x over) where x264 two-pass
+    delivered 127 kbps — so a hardware attempt would overshoot the cap, get
+    discarded, and pay for the two-pass anyway.
+
     Args:
         filepath: Path to the video file to compress
         target_size_mb: Maximum file size in megabytes
@@ -2164,10 +2367,13 @@ def _detect_clip_mismatches(
     Returns:
         (properties_list, has_resolution_mismatch, has_audio_presence_mismatch)
         properties_list parallels clip_paths (None entries for failed probes).
+
+    Probing is parallel; the mismatch detection and its warnings stay on the
+    calling thread so the output order is stable.
     """
-    props_list: list[dict[str, Any] | None] = [
-        probe_video_properties(p) for p in clip_paths
-    ]
+    props_list: list[dict[str, Any] | None] = _parallel_probe(
+        clip_paths, probe_video_properties
+    )
     probed = [p for p in props_list if p is not None]
     if len(probed) < 2:
         return (props_list, False, False)
@@ -2344,19 +2550,26 @@ def _concatenate_filter_complex(
         clip_paths, props_list, target_w, target_h
     )
 
-    ffmpeg_command = ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL]
-    for path in clip_paths:
-        ffmpeg_command.extend(["-i", str(Path(path).resolve())])
-    ffmpeg_command.extend(["-filter_complex", filter_str])
-    ffmpeg_command.extend(["-map", "[outv]"])
-    if has_audio:
-        ffmpeg_command.extend(["-map", "[outa]"])
-    ffmpeg_command.extend(["-c:v", "libx264", "-c:a", "aac", output_file])
+    def build_command(encoder: str) -> list[str]:
+        ffmpeg_command = ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL]
+        for path in clip_paths:
+            ffmpeg_command.extend(["-i", str(Path(path).resolve())])
+        ffmpeg_command.extend(["-filter_complex", filter_str])
+        ffmpeg_command.extend(["-map", "[outv]"])
+        if has_audio:
+            ffmpeg_command.extend(["-map", "[outa]"])
+        ffmpeg_command.extend(video_encoder_args(encoder))
+        ffmpeg_command.extend(["-c:a", "aac", output_file])
+        return ffmpeg_command
 
-    utils.debug_print(f"ffmpeg filter_complex concat: {' '.join(ffmpeg_command)}")
+    encoder = resolve_video_encoder()
+    utils.debug_print(
+        f"ffmpeg filter_complex concat: {' '.join(build_command(encoder))}"
+    )
     try:
-        result = run_ffmpeg_process(
-            ffmpeg_command,
+        result = run_ffmpeg_encode(
+            build_command,
+            encoder=encoder,
             input_file=clip_paths[0],
             output_file=output_file,
             os_error_message="Filter-complex concatenation failed.",
@@ -2427,25 +2640,28 @@ def _concatenate_demuxer(
                 utils.warning_print(
                     "Stream copy concat failed (e.g. codec mismatch), retrying with re-encoding."
                 )
-                ffmpeg_command_reencode = [
-                    "ffmpeg",
-                    "-y",
-                    "-loglevel",
-                    config.FFMPEG_LOGLEVEL,
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    concat_list_file,
-                    "-c:v",
-                    "libx264",
-                    "-c:a",
-                    "aac",
-                    output_file,
-                ]
-                ffmpeg_result = run_ffmpeg_process(
-                    ffmpeg_command_reencode,
+
+                def build_reencode(encoder: str) -> list[str]:
+                    return [
+                        "ffmpeg",
+                        "-y",
+                        "-loglevel",
+                        config.FFMPEG_LOGLEVEL,
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        concat_list_file,
+                        *video_encoder_args(encoder),
+                        "-c:a",
+                        "aac",
+                        output_file,
+                    ]
+
+                ffmpeg_result = run_ffmpeg_encode(
+                    build_reencode,
+                    encoder=resolve_video_encoder(),
                     input_file=concat_list_file,
                     output_file=output_file,
                     os_error_message="Concatenation failed during re-encoding fallback.",

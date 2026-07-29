@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 import config
 import utils
+import video
 from screenspace_primitives import (
     _ConsecutiveBuffer,
     _frame_diff_mask,
@@ -578,16 +579,21 @@ def generate_timelapse(
 
     Returns output file path on success, ``None`` on failure.
     """
-    cmd = build_timelapse_command(
-        video_path,
-        region,
-        speedup_factor,
-        output_path,
-        output_format,
-        start_seconds=start_seconds,
-        end_seconds=end_seconds,
-        sample_interval=sample_interval,
-    )
+    # gif output has no H.264 encoder to choose, so it never probes for one.
+    encoder = video.resolve_video_encoder() if output_format != "gif" else "libx264"
+
+    def build(enc: str) -> list[str]:
+        return build_timelapse_command(
+            video_path,
+            region,
+            speedup_factor,
+            output_path,
+            output_format,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
+            sample_interval=sample_interval,
+            encoder=enc,
+        )
 
     # Estimate output duration for progress calculation.
     input_duration = 0.0
@@ -602,39 +608,61 @@ def generate_timelapse(
         (input_duration / speedup_factor * 1_000_000) if input_duration > 0 else 0
     )
 
-    # Use Popen with -progress to get real-time encoding updates
-    cmd += ["-progress", "pipe:1"]
-    try:
-        # stderr → DEVNULL: only stdout (progress lines) is read, so a PIPE'd
-        # stderr could fill its 64 KB OS buffer and deadlock ffmpeg.
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        assert proc.stdout is not None  # guaranteed by stdout=PIPE
-    except (FileNotFoundError, OSError):
+    def encode(enc: str) -> int | None:
+        """Run one encode attempt; returns ffmpeg's rc, or None if cancelled."""
+        # Use Popen with -progress to get real-time encoding updates
+        cmd = build(enc) + ["-progress", "pipe:1"]
+        try:
+            # stderr → DEVNULL: only stdout (progress lines) is read, so a PIPE'd
+            # stderr could fill its 64 KB OS buffer and deadlock ffmpeg.
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+            )
+            assert proc.stdout is not None  # guaranteed by stdout=PIPE
+        except (FileNotFoundError, OSError):
+            return None
+
+        if on_progress:
+            on_progress(0.0)
+
+        try:
+            for line in proc.stdout:
+                text = line.decode("utf-8", errors="replace").strip()
+                if (
+                    text.startswith("out_time_us=")
+                    and expected_out_us > 0
+                    and on_progress
+                ):
+                    try:
+                        us = int(text.split("=", 1)[1])
+                        on_progress(min(us / expected_out_us, 0.99))
+                    except (ValueError, ZeroDivisionError):
+                        pass
+                if cancel_flag and cancel_flag():
+                    utils.terminate_subprocess(proc)
+                    return None
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            proc.wait()
+        return proc.returncode
+
+    returncode = encode(encoder)
+    if returncode is not None and returncode != 0 and encoder != "libx264":
+        # Same one-shot hardware fallback as video.run_ffmpeg_encode; this path
+        # can't reuse it because progress parsing needs its own Popen loop.
+        video.note_hw_encode_failure(encoder)
+        returncode = encode("libx264")
+
+    # A cancel (or a failed spawn) must not report completion: encode() returns
+    # None for those, and the caller's progress bar would otherwise jump to 100%
+    # on a task the user just stopped.
+    if returncode is None:
         return None
 
     if on_progress:
-        on_progress(0.0)
-
-    try:
-        for line in proc.stdout:
-            text = line.decode("utf-8", errors="replace").strip()
-            if text.startswith("out_time_us=") and expected_out_us > 0 and on_progress:
-                try:
-                    us = int(text.split("=", 1)[1])
-                    on_progress(min(us / expected_out_us, 0.99))
-                except (ValueError, ZeroDivisionError):
-                    pass
-            if cancel_flag and cancel_flag():
-                utils.terminate_subprocess(proc)
-                return None
-    finally:
-        if proc.stdout:
-            proc.stdout.close()
-        proc.wait()
-
-    if on_progress:
         on_progress(1.0)
-    if proc.returncode != 0:
+    if returncode != 0:
         return None
     return output_path
 

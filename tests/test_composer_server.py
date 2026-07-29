@@ -642,6 +642,23 @@ def test_build_overlay_command_seeks_first_and_uses_relative_enable():
     assert "-c:a" in cmd  # audio carried over for video burns
 
 
+def test_build_overlay_command_honors_hardware_encoder():
+    """The burn re-encode follows FFMPEG_VIDEO_ENCODER; pix_fmt stays pinned."""
+    cmd = composer_server._build_overlay_command(
+        "/vids/study_P01.mp4",
+        0.0,
+        4.0,
+        [("/tmp/o1.png", 0.0, 4.0)],
+        "/out/annotated.mp4",
+        gif=False,
+        encoder="h264_videotoolbox",
+    )
+    assert cmd[cmd.index("-c:v") + 1] == "h264_videotoolbox"
+    assert "-q:v" in cmd
+    assert "-crf" not in cmd
+    assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+
+
 def test_build_overlay_command_gif_chain():
     cmd = composer_server._build_overlay_command(
         "/vids/study_P01.mp4",
