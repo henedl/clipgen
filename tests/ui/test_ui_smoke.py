@@ -29,10 +29,17 @@ if os.environ.get("CLIPGEN_UI_CHECK") != "1":
 
 import _ui_fixtures
 import _ui_pages
+import _ui_states
 from _ui_pages import PAGES, PageLog
 from _ui_server import LiveServer
 
 pytestmark = pytest.mark.ui
+
+# Which page to open the shared overlays on. They are page-agnostic code
+# (settings-modal.js, hotkeys.js, command-palette.js, start-overlay.js, all
+# loaded by every hub), so opening them on all six would run the same files six
+# times for the same assertion. Studio boots the most page code around them.
+_OVERLAY_HOST = "studio"
 
 
 @pytest.mark.parametrize("name", sorted(PAGES))
@@ -57,6 +64,46 @@ def test_page_loads_without_errors(
 
     assert not log.fatal, _ui_pages.format_failure(
         name, log, str(shot.resolve()), str(_ui_fixtures.REPORT_PATH.resolve())
+    )
+
+
+@pytest.mark.parametrize("overlay", _ui_states.GLOBAL_OVERLAYS, ids=lambda o: o.name)
+def test_shared_overlay_opens_without_errors(
+    overlay: _ui_states.Overlay, live_server: LiveServer, browser_context: Any
+) -> None:
+    """Open each shared modal and fail on anything it throws on the way up.
+
+    The page-load smoke above clicks nothing, so every modal in the app was
+    unreachable by any automated check: a carve that broke ``openSettingsModal``
+    would ship green. Opening is where that breaks — the overlays are built lazily
+    on first open, not at boot.
+
+    Reaching the state is itself the assertion. ``enter_overlay`` waits for the
+    overlay's own visible root, so a throw during construction surfaces here as a
+    failure to appear, with the ``pageerror`` that caused it reported alongside.
+    """
+    log = PageLog()
+    shot = _ui_fixtures.SHOT_DIR / f"{_OVERLAY_HOST}-{overlay.name}.png"
+    page = browser_context.new_page()
+    _ui_pages.wire_listeners(page, log)
+    try:
+        _ui_pages.open_and_settle(page, live_server.origin, _OVERLAY_HOST, log)
+        result = _ui_states.enter_overlay(page, overlay)
+        try:
+            page.screenshot(path=str(shot), full_page=True)
+        except Exception as exc:  # pragma: no cover - capture is best-effort
+            log.console_errors.append(f"screenshot failed: {exc}")
+    finally:
+        page.close()
+
+    assert result.reached, (
+        f"{overlay.name} did not open on {_OVERLAY_HOST}: {result.detail}\n"
+        + _ui_pages.format_failure(
+            overlay.name, log, str(shot), str(_ui_fixtures.REPORT_PATH)
+        )
+    )
+    assert not log.fatal, _ui_pages.format_failure(
+        overlay.name, log, str(shot), str(_ui_fixtures.REPORT_PATH)
     )
 
 
