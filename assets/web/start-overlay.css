@@ -1181,13 +1181,8 @@
   border-top-color: var(--accent);
   border-radius: 50%;
   flex-shrink: 0;
-  animation: so-spinner-rotate 0.7s linear infinite;
-}
-
-@keyframes so-spinner-rotate {
-  to {
-    transform: rotate(360deg);
-  }
+  /* Shared rotation from tokens.css, same 0.7s as Studio's and Screenspace's. */
+  animation: spin 0.7s linear infinite;
 }
 
 .start-overlay .sheet-panel__paste {
@@ -1442,12 +1437,10 @@
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__solid {
-  animation: so-screenspace-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes so-screenspace-pulse {
-  0%, 100% { opacity: .55; }
-  50%      { opacity: 1; }
+  /* Shared breathe from tokens.css. The -0.8s (half the duration) starts it at
+   * the trough, matching the .55 resting opacity above. */
+  --pulse-trough: .55;
+  animation: cg-pulse 1.6s ease-in-out -0.8s infinite;
 }
 
 /* Geometry-property animation on width/height needs the un-prefixed values

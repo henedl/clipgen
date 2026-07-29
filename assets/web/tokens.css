@@ -429,6 +429,17 @@ html[data-theme="light"] .cg-logo {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+/* Shared opacity breathe for every "working" indicator dot. Like `spin` above,
+ * pages reference it by name rather than redefining it: they set their own
+ * duration and, when they want a different trough than the default, declare
+ * --pulse-trough on the animated selector. To start AT the trough rather than at
+ * full opacity, give the animation a negative delay of half its duration — in
+ * the shorthand's 4th slot, since a trailing animation-delay would be reset by
+ * the shorthand. */
+@keyframes cg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: var(--pulse-trough, 0.35); }
+}
 /* Cross-reference badge icon (mask-image from assets/icons/) */
 .xref-badge-icon {
   display: block;

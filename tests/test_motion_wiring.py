@@ -109,6 +109,54 @@ def test_old_css_stash_landing_removed():
     assert "stash-card-landed" not in css
 
 
+# Continuous CSS loops are the one animation family motion.js deliberately does
+# NOT own — a one-shot promise engine is the wrong tool for an infinite loop, so
+# they stay declarative. The dedup is therefore a CSS hoist: one definition in
+# tokens.css that every page references by name, parameterized by a custom
+# property where the values differed. Redefining either per page is how five
+# near-identical opacity breathes accumulated in the first place.
+_HOISTED_LOOPS = ("spin", "cg-pulse")
+_RETIRED_LOOPS = (
+    "studio-tab-pulse",
+    "status-pulse",
+    "streaming-pulse",
+    "pill-dot-pulse",
+    "so-screenspace-pulse",
+    "so-spinner-rotate",
+)
+
+
+def test_shared_css_loops_live_only_in_tokens():
+    for name in _HOISTED_LOOPS:
+        pattern = re.compile(r"@keyframes\s+" + re.escape(name) + r"\s*\{")
+        owners = [
+            path.name
+            for path in sorted(_WEB.glob("*.css"))
+            if pattern.search(path.read_text(encoding="utf-8"))
+        ]
+        assert owners == ["tokens.css"], (
+            f"@keyframes {name} must be defined once, in tokens.css; found in {owners}"
+        )
+
+
+def test_retired_pulse_keyframes_are_gone():
+    for path in sorted(_WEB.glob("*.css")):
+        text = path.read_text(encoding="utf-8")
+        for name in _RETIRED_LOOPS:
+            assert name not in text, (
+                f"{path.name} still references the retired {name}; "
+                "use the shared cg-pulse / spin from tokens.css instead"
+            )
+
+
+def test_pulse_trough_is_parameterized():
+    # The shared breathe reads a custom property for its trough so one keyframe
+    # covers 0.3 / 0.35 / 0.55 dots. Losing the var() would silently flatten
+    # every consumer onto the default.
+    tokens = (_WEB / "tokens.css").read_text(encoding="utf-8")
+    assert "var(--pulse-trough, 0.35)" in tokens
+
+
 def test_motion_has_generic_fade_and_pop_kinds():
     # Beyond stash/delete/stashLand, the engine exposes two reusable kinds:
     # `fade` (opacity only) and `pop` (translateY + scale + opacity, mirroring the
