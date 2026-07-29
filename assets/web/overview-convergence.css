@@ -158,24 +158,6 @@
   margin-bottom: var(--space-2);
 }
 
-/* ---- Refresh button (toolbar, right-aligned) ---- */
-
-.cv-refresh-btn {
-  margin-left: auto;
-}
-
-/* When upstream data has changed since the last build, color the button so
- * the user notices without a separate banner. */
-.cv-refresh-btn.is-stale {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg, var(--bg));
-}
-.cv-refresh-btn.is-stale:hover {
-  background: var(--accent-hover, var(--accent));
-  border-color: var(--accent-hover, var(--accent));
-}
-
 /* ---- Cluster callouts (below swim-lane) ---- */
 
 .cv-cluster-callouts {
@@ -547,8 +529,10 @@
   --cg-swim-label-w: 152px;
 }
 
+/* Last control in the toolbar — pushed to the right edge, away from the
+ * filter inputs (it inherited this from the removed Refresh sibling). */
 .cv-reset-btn {
-  margin-left: var(--space-1);
+  margin-left: auto;
 }
 
 /* "No data" overlay rendered on a participant's lanes when their convergence

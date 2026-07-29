@@ -510,8 +510,8 @@
     populateEventTypeChips();
     applyFilters();
     render();
-    // collectAllEvents just refreshed _snapshot to current lengths, so
-    // checkStaleness will clear the `is-stale` class on the toolbar button.
+    // collectAllEvents just refreshed _snapshot to the current version, so
+    // checkStaleness will clear the paint on the subheader Refresh button.
     checkStaleness();
   }
 
@@ -632,18 +632,6 @@
       render();
     });
 
-    var refreshBtn = P.createBtn({
-      label: "Refresh",
-      icon: "arrow-path",
-      size: "sm",
-      onClick: function () {
-        window.ClipgenOverview.refreshData().then(recalculate);
-      },
-    });
-    refreshBtn.id = "cvRefreshBtn";
-    refreshBtn.classList.add("cv-refresh-btn");
-    refreshBtn.title = "Re-fetch upstream data and recompute convergence";
-
     var resetBtn = P.createBtn({
       label: "Reset offsets",
       icon: "arrow-uturn-left",
@@ -658,7 +646,6 @@
     controls.appendChild(winCtl.label);
     controls.appendChild(clusCtl.label);
     controls.appendChild(sortSelect);
-    controls.appendChild(refreshBtn);
     controls.appendChild(resetBtn);
 
     // Filters: stream buttons + divider + chip row
@@ -927,15 +914,9 @@
 
   function checkStaleness() {
     if (!cvState._snapshot || !cvState.active) return;
-    var stale = cvState._snapshot.version !== getState().dataVersion;
-
-    var btn = qs("#cvRefreshBtn");
-    if (btn) {
-      btn.classList.toggle("is-stale", stale);
-      btn.title = stale
-        ? "New upstream data available. Click to refresh"
-        : "Re-fetch upstream data and recompute convergence";
-    }
+    // The subheader Refresh carries the signal for every tab.
+    window.ClipgenOverview.setRefreshStale(
+      cvState._snapshot.version !== getState().dataVersion);
   }
 
   // --- Selection ---
@@ -1112,9 +1093,7 @@
     if (cvState.baselines === null) {
       // First activation: the hub's memoized ensureData() supplies all three
       // streams + baselines; only the per-participant alignment offsets are
-      // convergence-specific (they live on the overview blueprint). Subsequent
-      // activations use the staleness banner so the user controls when to
-      // pull in new upstream data.
+      // convergence-specific (they live on the overview blueprint).
       Promise.all([
         window.ClipgenOverview.ensureData(),
         apiGet("api/convergence/offsets").catch(function () { return { ok: false }; }),
@@ -1126,6 +1105,10 @@
         cvState.offsetsLoaded = true;
         recalculate();
       });
+    } else if (cvState._snapshot && cvState._snapshot.version !== getState().dataVersion) {
+      // The hub refetched (subheader Refresh) and re-activated us. Rebuild:
+      // recalculate() re-reads the reassigned baselines and clears the paint.
+      recalculate();
     } else {
       checkStaleness();
     }

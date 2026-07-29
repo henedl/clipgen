@@ -1019,7 +1019,7 @@
   function syncPreviewTab(animate) {
     setActiveTabAttr(state.activePreviewTab);
     var grid = qs("#sheetGrid");
-    var refreshBtn = qs("#refreshSheet");
+    var refreshBtn = qs("#studioRefresh");
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
     var coIntakePanel = qs("#coIntakePanel");
@@ -1029,23 +1029,28 @@
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
     if (coIntakePanel) coIntakePanel.classList.add("hidden");
-    if (refreshBtn) refreshBtn.classList.add("hidden");
+
+    // The Refresh button stays on every tab; only what it refreshes changes.
+    var refreshTitle = "Refresh sheet data from source";
 
     var activePanel = null;
     if (state.activePreviewTab === "sheet") {
       grid.classList.remove("hidden");
       activePanel = grid;
-      if (refreshBtn) refreshBtn.classList.remove("hidden");
     } else if (state.activePreviewTab === "intake") {
       intakePanel.classList.remove("hidden");
       activePanel = intakePanel;
+      refreshTitle = "Refresh Screenspace intake";
     } else if (state.activePreviewTab === "transcript-intake") {
       if (trIntakePanel) trIntakePanel.classList.remove("hidden");
       activePanel = trIntakePanel;
+      refreshTitle = "Refresh transcript intake";
     } else if (state.activePreviewTab === "composer-intake") {
       if (coIntakePanel) coIntakePanel.classList.remove("hidden");
       activePanel = coIntakePanel;
+      refreshTitle = "Refresh Composer intake";
     }
+    if (refreshBtn) refreshBtn.title = refreshTitle;
     if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");
       requestAnimationFrame(function () {
@@ -1182,13 +1187,7 @@
   }
 
   function refreshSheetData() {
-    var btn = qs("#refreshSheet");
-    if (!btn || btn.disabled) return;
-    btn.disabled = true;
-    var svg = btn.querySelector("svg");
-    if (svg) svg.style.animation = "spin 0.7s linear infinite";
-
-    apiPost("api/sheet/refresh")
+    return apiPost("api/sheet/refresh")
       .then(function (data) {
         if (!data.ok) {
           showResult(null, "Refresh failed: " + (data.error || "Unknown error"));
@@ -1198,11 +1197,36 @@
       })
       .catch(function (err) {
         showResult(null, "Refresh failed: " + err);
-      })
-      .then(function () {
-        btn.disabled = false;
-        if (svg) svg.style.animation = "";
       });
+  }
+
+  // The subheader Refresh acts on whatever the user is looking at. The Sheet
+  // tab re-reads the spreadsheet (a rate-limited Google round-trip, so it stays
+  // a Sheet-tab action); each intake tab wakes its own poller, which refetches
+  // now and snaps the cadence back off its idle backoff.
+  function refreshActiveTab() {
+    var btn = qs("#studioRefresh");
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    // Spin the masked icon span — .cg-btn has no inline <svg> to animate.
+    var icon = btn.querySelector(".cg-btn-icon");
+    if (icon) icon.style.animation = "spin 0.7s linear infinite";
+
+    var work;
+    if (state.activePreviewTab === "intake") {
+      work = refreshScreenspaceIntake();
+    } else if (state.activePreviewTab === "transcript-intake") {
+      work = refreshTranscriptIntake();
+    } else if (state.activePreviewTab === "composer-intake") {
+      work = refreshComposerIntake();
+    } else {
+      work = refreshSheetData();
+    }
+
+    Promise.resolve(work).catch(function () {}).then(function () {
+      btn.disabled = false;
+      if (icon) icon.style.animation = "";
+    });
   }
 
   // On page load, reconcile the persisted manifest against the live sheet:
@@ -3233,7 +3257,14 @@
         when: function () { return hotkeyBtnEnabled("#buildHighlightsBtn"); },
         handler: function () { onBuildHighlights(); },
       },
-      { id: "global.refresh", handler: function () { refreshSheetData(); } },
+      // Route through the button so the busy guard and tab dispatch apply.
+      {
+        id: "global.refresh",
+        handler: function () {
+          var btn = qs("#studioRefresh");
+          if (btn) btn.click();
+        },
+      },
       { id: "nav.next", handler: function () { return kbStep(1); } },
       { id: "nav.prev", handler: function () { return kbStep(-1); } },
       { id: "studio.moveRight", handler: function () { return kbStep(1); } },
@@ -3323,7 +3354,7 @@
     qs("#titlecardEnabled").addEventListener("change", persistTitlecardSettings);
     qs("#titlecardDuration").addEventListener("change", persistTitlecardSettings);
 
-    qs("#refreshSheet").addEventListener("click", refreshSheetData);
+    qs("#studioRefresh").addEventListener("click", refreshActiveTab);
     qs("#settingsBtn").addEventListener("click", function () {
       openSettingsModal({
         initialTab: "General",
@@ -4577,6 +4608,9 @@
   function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
   function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
   function pollComposerIntake() { return STUDIO.pollComposerIntake && STUDIO.pollComposerIntake.apply(null, arguments); }
+  function refreshScreenspaceIntake() { return STUDIO.refreshScreenspaceIntake && STUDIO.refreshScreenspaceIntake.apply(null, arguments); }
+  function refreshTranscriptIntake() { return STUDIO.refreshTranscriptIntake && STUDIO.refreshTranscriptIntake.apply(null, arguments); }
+  function refreshComposerIntake() { return STUDIO.refreshComposerIntake && STUDIO.refreshComposerIntake.apply(null, arguments); }
   function focusComposerIntakeItem() { return STUDIO.focusComposerIntakeItem && STUDIO.focusComposerIntakeItem.apply(null, arguments); }
   function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
@@ -4589,17 +4623,12 @@
 
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
-    function clickIfExists(id) {
-      var el = document.getElementById(id);
-      if (el) el.click();
-    }
     function rebuild() {
       window.ClipgenTopNav.setQuickActions([
         { icon: "eye",        label: "Build Viewer",  action: onBuildViewer },
         { icon: "film",       label: "Open Timeline", action: onBuildTimelineViewer },
         { icon: "photo",      label: "Open Gallery",  action: openGalleryDialog },
         window.ClipgenExportActions.exportQuickAction(),
-        { icon: "arrow-path", label: "Refresh sheet", action: function () { clickIfExists("refreshSheet"); } },
       ]);
     }
     rebuild();
@@ -4672,6 +4701,15 @@
         tabCommand("intake", "Show Screenspace Intake tab", "rectangle-stack"),
         tabCommand("transcript-intake", "Show Transcript Intake tab", "rectangle-stack"),
         tabCommand("composer-intake", "Show Composer Intake tab", "rectangle-stack"),
+        {
+          id: "studio:refresh",
+          title: "Refresh current tab",
+          icon: "arrow-path",
+          keywords: "reload fetch update sheet intake",
+          section: "Studio",
+          visible: function () { return !!document.getElementById("studioRefresh"); },
+          run: function () { document.getElementById("studioRefresh").click(); },
+        },
         {
           id: "studio:clear-filters",
           title: "Clear all filters",

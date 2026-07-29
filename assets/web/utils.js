@@ -1068,6 +1068,8 @@ var POLL_INTERVAL = 3000;
 // before scheduling the next tick (so slow polls never overlap). The returned
 // object also gains wake(): snap back to the base cadence and refresh now —
 // call it after a user action so polling both refreshes and speeds back up.
+// wake() returns a promise settling when that refresh has landed, so a caller
+// driving a spinner can await it.
 //
 // fn exceptions are swallowed so a transient error does not kill the loop.
 var createPoller = function (fn, intervalMs, opts) {
@@ -1084,6 +1086,11 @@ var createPoller = function (fn, intervalMs, opts) {
   var quiet = 0;
   var inFlight = false;
   var pendingWake = false;
+  // The promise of the poll currently in flight. Because runAdaptive() chains
+  // any pendingWake follow-up into its own result, this settles only once the
+  // whole queued chain is done — so a wake() that lands mid-poll can hand it
+  // back and its caller's spinner stops at the right moment.
+  var currentRun = null;
 
   function safeFn() {
     try { fn(); } catch (_) {}
@@ -1106,12 +1113,14 @@ var createPoller = function (fn, intervalMs, opts) {
   function schedule() {
     timer = setTimeout(runAdaptive, currentDelay);
   }
+  // Returns a promise that settles once this poll (and any follow-up a wake()
+  // queued mid-flight) has completed, so wake() callers can drive a spinner.
   function runAdaptive() {
     timer = null;
     inFlight = true;
     var result;
     try { result = fn(); } catch (_) { result = false; }
-    Promise.resolve(result).then(
+    currentRun = Promise.resolve(result).then(
       function (active) { applySignal(!!active); },
       function () { applySignal(false); }
     ).then(function () {
@@ -1123,11 +1132,11 @@ var createPoller = function (fn, intervalMs, opts) {
         pendingWake = false;
         currentDelay = intervalMs;
         quiet = 0;
-        runAdaptive();
-        return;
+        return runAdaptive();
       }
       schedule();
     });
+    return currentRun;
   }
   function arm() {
     if (timer != null || inFlight) return;
@@ -1173,21 +1182,24 @@ var createPoller = function (fn, intervalMs, opts) {
         visListener = null;
       }
     },
+    // Returns a promise settling when the refresh it triggered has landed
+    // (already-resolved on the paths that schedule no new work of their own).
     wake: function () {
-      if (!wantRunning || hidden()) return;
+      if (!wantRunning || hidden()) return Promise.resolve();
       if (adaptive) {
         currentDelay = intervalMs;
         quiet = 0;
         // A poll is already running but may predate this action's server-side
-        // effect — queue one fresh poll for when it completes.
-        if (inFlight) { pendingWake = true; return; }
+        // effect — queue one fresh poll for when it completes, and hand back the
+        // in-flight run, which only settles once that follow-up has landed too.
+        if (inFlight) { pendingWake = true; return currentRun || Promise.resolve(); }
         disarm();
-        runAdaptive();
-      } else {
-        disarm();
-        safeFn();
-        timer = setInterval(safeFn, intervalMs);
+        return runAdaptive();
       }
+      disarm();
+      safeFn();
+      timer = setInterval(safeFn, intervalMs);
+      return Promise.resolve();
     },
   };
 };
