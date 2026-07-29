@@ -197,6 +197,20 @@
   OV.refreshData = refreshData;
   OV.buildClusters = buildClusters;
 
+  // Staleness paint. A tab knows whether its view was built against an older
+  // dataVersion; the hub owns the single Refresh button, so the tabs report and
+  // this paints. Replaces the per-tab accent button / banner each used to carry.
+  function setRefreshStale(stale) {
+    var btn = qs("#ovRefresh");
+    if (!btn) return;
+    btn.classList.toggle("is-stale", stale);
+    btn.title = stale
+      ? "New upstream data available — click to refresh"
+      : "Re-fetch sheet, Screenspace, and transcript data";
+  }
+
+  OV.setRefreshStale = setRefreshStale;
+
   // ---- Tabs ----
 
   function setStudyName() {
@@ -259,6 +273,10 @@
     if (OV.convergenceDeactivate) OV.convergenceDeactivate();
     if (OV.metadataDeactivate) OV.metadataDeactivate();
     if (OV.mapDeactivate) OV.mapDeactivate();
+
+    // Drop any paint the outgoing tab asserted; the incoming one re-asserts it
+    // from its own activate path (Map never does — it self-heals silently).
+    setRefreshStale(false);
 
     var activePanel = panels[state.activeTab];
     if (activePanel) activePanel.classList.remove("hidden");
@@ -332,6 +350,9 @@
   // ---- Boot ----
 
   document.addEventListener("DOMContentLoaded", function () {
+    // Resolve mask-image for every static [data-icon] element (the subheader
+    // Refresh button); createBtn does this itself for JS-built primitives.
+    applyIconMasksIn(document);
     // TopNav renders #themeToggle / #settingsBtn synchronously before this
     // hub loads; wire them here as the other surfaces do (utils.js owns the
     // theme logic, settings-modal.js the shared modal).
@@ -346,9 +367,19 @@
     var refreshBtn = qs("#ovRefresh");
     if (refreshBtn) {
       refreshBtn.addEventListener("click", function () {
+        if (refreshBtn.disabled) return;
+        refreshBtn.disabled = true;
+        // Spin the masked icon span — there is no inline <svg> to animate.
+        var icon = refreshBtn.querySelector(".cg-btn-icon");
+        if (icon) icon.style.animation = "spin 0.7s linear infinite";
         refreshData().then(function () {
           // Re-activate the current tab so it re-renders from fresh state.
           syncTab(false);
+        }).catch(function () {
+          // Never leave the button stuck disabled + spinning.
+        }).then(function () {
+          refreshBtn.disabled = false;
+          if (icon) icon.style.animation = "";
         });
       });
     }

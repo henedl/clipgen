@@ -1005,13 +1005,6 @@
 
     var actions = el("div", "md-header-actions");
 
-    var refreshBtn = P.createBtn({
-      label: "Refresh", icon: "arrow-path", size: "sm",
-      onClick: function () { mdState._snapshot = null; refresh(); },
-    });
-    refreshBtn.title = "Re-fetch data and recompute statistics";
-    actions.appendChild(refreshBtn);
-
     var jsonBtn = P.createBtn({
       label: "JSON", icon: "arrow-down-tray", size: "sm", onClick: exportJSON,
     });
@@ -1053,16 +1046,6 @@
       }
       if (running) banner.classList.remove("hidden");
     }).catch(function () {});
-
-    // Staleness banner
-    var staleBanner = el("div", "md-stale-banner hidden");
-    staleBanner.id = "mdStaleBanner";
-    staleBanner.innerHTML = '<span class="md-icon md-icon-info"></span> Data has changed \u2014 <button class="btn btn-small md-banner-refresh">Refresh to update statistics</button>';
-    var staleRefresh = staleBanner.querySelector(".md-banner-refresh");
-    if (staleRefresh) {
-      staleRefresh.addEventListener("click", refetchAndRefresh);
-    }
-    panel.appendChild(staleBanner);
   }
 
   // --- KPI strip ---
@@ -1938,20 +1921,14 @@
 
   function checkStaleness() {
     if (!mdState._snapshot || !mdState.active) return;
-    var stale = mdState._snapshot.version !== state.dataVersion;
-    var banner = qs("#mdStaleBanner");
-    if (banner) {
-      if (stale) {
-        banner.classList.remove("hidden");
-      } else {
-        banner.classList.add("hidden");
-      }
-    }
+    // The subheader Refresh carries the signal for every tab.
+    window.ClipgenOverview.setRefreshStale(
+      mdState._snapshot.version !== state.dataVersion);
   }
 
-  // Shared handler for both banners' Refresh buttons: on this page the data
-  // never changes without a hub refetch, so recomputing alone would be a
-  // no-op — pull fresh data first, then rebuild.
+  // The freshness banner's Refresh button: on this page the data never changes
+  // without a hub refetch, so recomputing alone would be a no-op — pull fresh
+  // data first, then rebuild.
   function refetchAndRefresh() {
     window.ClipgenOverview.refreshData().then(function () {
       mdState._snapshot = null;
@@ -1967,6 +1944,9 @@
     buildSearchIndex(mdState.cache);
     renderAll(mdState.cache);
     takeSnapshot();
+    // takeSnapshot just moved us to the current version, so this clears any
+    // paint activate() put on the subheader Refresh before rebuilding.
+    checkStaleness();
   }
 
   function recomputeCollisions() {

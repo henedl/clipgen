@@ -75,6 +75,20 @@ body {
   line-height: 1.6;
 }
 
+/* Subheader Refresh. When the active tab reports its view was built against an
+ * older hub dataVersion, color the button so the user notices without a
+ * separate banner. It is .cg-btn-bare, so the border has to be set too. */
+#ovRefresh.is-stale {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, var(--bg));
+}
+#ovRefresh.is-stale:hover {
+  background: var(--accent-hover, var(--accent));
+  border-color: var(--accent-hover, var(--accent));
+  color: var(--accent-fg, var(--bg));
+}
+
 #mapPanel,
 #convergencePanel,
 #metadataPanel {

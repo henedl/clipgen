@@ -117,16 +117,22 @@
       });
   }
 
-  // On-demand refresh after a user action: wake the adaptive poller so it
-  // refetches now AND resets its idle backoff to the fast cadence. Falls back to
-  // a direct poll if the poller hasn't been created yet (pre-boot).
+  // On-demand refresh after a user action (or the subheader Refresh button):
+  // wake the adaptive poller so it refetches now AND resets its idle backoff to
+  // the fast cadence. Falls back to a direct poll if the poller hasn't been
+  // created yet (pre-boot). Each returns a promise settling when the refetch
+  // has landed, so the Refresh button can spin until then.
   function refreshScreenspaceIntake() {
-    if (state.ssIntakePoller) state.ssIntakePoller.wake();
-    else pollScreenspaceIntake();
+    if (state.ssIntakePoller) return state.ssIntakePoller.wake();
+    return pollScreenspaceIntake();
   }
   function refreshTranscriptIntake() {
-    if (state.trIntakePoller) state.trIntakePoller.wake();
-    else pollTranscriptIntake();
+    if (state.trIntakePoller) return state.trIntakePoller.wake();
+    return pollTranscriptIntake();
+  }
+  function refreshComposerIntake() {
+    if (state.coIntakePoller) return state.coIntakePoller.wake();
+    return pollComposerIntake();
   }
 
   // Events fed into the intake clustering surface. Navigational (boundary)
@@ -1370,6 +1376,9 @@
   STUDIO.pollScreenspaceIntake = pollScreenspaceIntake;
   STUDIO.pollTranscriptIntake = pollTranscriptIntake;
   STUDIO.pollComposerIntake = pollComposerIntake;
+  STUDIO.refreshScreenspaceIntake = refreshScreenspaceIntake;
+  STUDIO.refreshTranscriptIntake = refreshTranscriptIntake;
+  STUDIO.refreshComposerIntake = refreshComposerIntake;
   STUDIO.focusComposerIntakeItem = focusComposerIntakeItem;
   STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;

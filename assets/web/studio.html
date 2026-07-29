@@ -32,7 +32,8 @@
       <button class="preview-tab hidden" data-tab="composer-intake" data-hotkey="studio.selectTab" data-hotkey-combo="3">Composer Intake <span id="coIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
     </div>
     <div class="subheader-actions">
-      <button id="refreshSheet" class="cg-btn cg-btn-bare cg-btn-sm" data-hotkey="global.refresh" title="Refresh sheet data from source"><span class="cg-btn-icon" data-icon="arrow-path"></span><span>Refresh</span></button>
+      <!-- Tab-aware: syncPreviewTab() swaps the title, refreshActiveTab() the action. -->
+      <button id="studioRefresh" class="cg-btn cg-btn-bare cg-btn-sm" data-hotkey="global.refresh" title="Refresh sheet data from source"><span class="cg-btn-icon" data-icon="arrow-path"></span><span>Refresh</span></button>
       <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
       <button id="studioShortcutsBtn" type="button" class="btn btn-small hk-help-btn"
               data-hotkeys-help data-hotkey="global.cheatsheet"
