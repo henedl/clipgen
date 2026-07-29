@@ -23,6 +23,7 @@ import pytest
 import _ui_browser
 import _ui_fixtures
 import _ui_server
+import _ui_session
 import config
 import start_settings
 import utils
@@ -71,7 +72,11 @@ def live_server(ui_env: None) -> Iterator[_ui_server.LiveServer]:
 
 @pytest.fixture(scope="session")
 def browser_context(live_server: _ui_server.LiveServer) -> Iterator[Any]:
-    """A Chromium context with the blocking start overlay pre-dismissed."""
+    """A Chromium context with the blocking start overlay pre-dismissed.
+
+    The context arguments live in ``_ui_session.new_context`` so this fixture and
+    ``shot.py`` cannot drift apart again — they had already, on locale/timezone.
+    """
     try:
         playwright = _ui_browser.sync_playwright()().start()
     except _ui_fixtures.UiUnavailable as exc:
@@ -84,15 +89,7 @@ def browser_context(live_server: _ui_server.LiveServer) -> Iterator[Any]:
             headless=True,
             args=_ui_browser.LAUNCH_ARGS,
         )
-        context = browser.new_context(
-            viewport={"width": 1600, "height": 1000}, device_scale_factor=1
-        )
-        # shouldAutoOpen() checks this key before anything else, and it is the
-        # only suppression that works uniformly across all six pages.
-        context.add_init_script(
-            "try { sessionStorage.setItem('clipgen.startOverlayDismissed', '1'); }"
-            " catch (e) {}"
-        )
+        context = _ui_session.new_context(browser)
         yield context
     except _ui_fixtures.UiUnavailable as exc:
         pytest.skip(str(exc))
