@@ -190,43 +190,102 @@ def test_animate_in_flushes_layout_before_animating():
     assert "offsetWidth" in src
 
 
-def test_studio_overlays_pop_in_via_motion():
+def test_old_css_overlay_pop_removed():
     # The Studio overlay cards' entrance was migrated off the CSS cg-overlay-pop
     # keyframe onto ClipgenMotion.animateIn(card, "pop"); leaving the keyframe behind
     # would resurrect a parallel second animation system (cf. the stash landing).
+    # A history note in a comment is fine; an orphaned `animation:` rule is not.
     css = (_WEB / "studio.css").read_text(encoding="utf-8")
-    # The keyframe and its animation rule are gone (a history note in a comment is
-    # fine); an orphaned `animation: cg-overlay-pop` would be a parallel system.
     assert "@keyframes cg-overlay-pop" not in css
     assert "animation: cg-overlay-pop" not in css
-    studio = (_WEB / "studio.js").read_text(encoding="utf-8")
-    assert "function popOverlayIn(" in studio
-    assert 'ClipgenMotion.animateIn(cardEl, "pop")' in studio
 
 
-def test_studio_overlays_animate_out_on_dismiss():
-    # The reused overlay surfaces get a symmetric exit: the card pops out while
-    # the container carrying the backdrop veil fades, so the veil cannot snap out
-    # behind the card. Both directions must be WAAPI or a forwards-filled exit
-    # strands the reused card invisible on the next open (see motion.js).
-    studio = (_WEB / "studio.js").read_text(encoding="utf-8")
-    assert "function popOverlayOut(" in studio
-    assert 'ClipgenMotion.animateOut(cardEl, "pop")' in studio
-    assert 'ClipgenMotion.animateOut(overlayEl, "fade")' in studio
-    assert 'ClipgenMotion.animateIn(overlayEl, "fade")' in studio
-    # Generation guard: a stale exit must not hide a freshly-reopened overlay,
-    # and a cancelled exit must be re-entered so neither element stays filled
-    # invisible (mirrors showToast's _toastGen).
-    assert "_popGen" in studio
-    assert "_popExiting" in studio
-    # Every dismiss path routes through the helper rather than snapping .hidden on.
-    # (#logOverlay is deliberately excluded: it owns its own --veil-alpha timing.)
-    for card in (
-        ".status-card",
-        ".confirm-card",
-        ".gallery-card",
-        ".build-status-card",
-    ):
+# Every blocking modal shares ONE reveal/dismiss path (utils.js popModalIn /
+# popModalOut) and ONE backdrop (.cg-modal-veil in tokens.css). Before that,
+# Studio and Composer each carried their own artifact-log copy with different
+# durations and no generation guard, which is why spam-toggling Composer's popped
+# it in and out while the fade played only intermittently.
+
+_MODAL_SURFACES = (
+    # (page script, overlay id, card class)
+    ("studio.js", "#statusOverlay", ".status-card"),
+    ("studio.js", "#confirmOverlay", ".confirm-card"),
+    ("studio.js", "#galleryOverlay", ".gallery-card"),
+    ("studio.js", "#buildStatus", ".build-status-card"),
+    ("studio.js", "#logOverlay", ".log-panel"),
+    ("composer.js", "#logOverlay", ".log-panel"),
+)
+
+
+def test_modal_animation_helpers_are_shared_in_utils():
+    utils = (_WEB / "utils.js").read_text(encoding="utf-8")
+    assert "var popModalIn = function (overlayEl, cardEl)" in utils
+    assert "var popModalOut = function (overlayEl, cardEl, commit)" in utils
+    assert 'ClipgenMotion.animateIn(cardEl, "pop")' in utils
+    assert 'ClipgenMotion.animateOut(cardEl, "pop")' in utils
+    # Generation guard: a stale exit must not hide a freshly-reopened modal, and a
+    # cancelled exit must re-run its entrance or the card stays filled invisible.
+    assert "_cgModalGen" in utils
+    assert "_cgModalExiting" in utils
+    # The veil is a CSS transition, so its duration is read back off the element
+    # instead of being duplicated here as a number that could drift.
+    assert "--duration-veil" in utils
+    # The overlay's own opacity must never be animated — that would establish a
+    # backdrop root and kill the frost (see the tokens.css comment).
+    assert "animateOut(overlayEl" not in utils
+    assert "animateIn(overlayEl" not in utils
+
+
+def test_every_modal_uses_the_shared_helpers():
+    for page, overlay, card in _MODAL_SURFACES:
+        src = (_WEB / page).read_text(encoding="utf-8")
         assert re.search(
-            r"popOverlayOut\([^,]+, qs\(\"" + re.escape(card) + r'"\)', studio
-        ), f"{card} should be dismissed through popOverlayOut()"
+            r"popModalIn\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
+        ), f"{page} {overlay} should reveal through popModalIn()"
+        assert re.search(
+            r"popModalOut\([^,]+, qs\(\"" + re.escape(card) + r'"\)', src
+        ), f"{page} {overlay} should dismiss through popModalOut()"
+
+
+def test_modal_veil_is_defined_once_in_tokens():
+    owners = [
+        path.name
+        for path in sorted(_WEB.glob("*.css"))
+        if "backdrop-filter: blur(var(--host-blur))" in path.read_text(encoding="utf-8")
+    ]
+    # start-overlay keeps its own (600ms, on a real element rather than ::before)
+    # because its intro sequencing is bound up with the launcher's cascade.
+    assert owners == ["start-overlay.css", "tokens.css"], (
+        f"the frosted modal veil should live in tokens.css, not {owners}"
+    )
+
+
+def test_veiled_modals_opt_in_via_class():
+    # The class is what popModalIn/Out branch on, so a modal that wants the frost
+    # has to carry it in markup (or, for JS-built overlays, in the el() call).
+    for page in ("studio.html", "composer.html"):
+        html = (_WEB / page).read_text(encoding="utf-8")
+        assert "cg-modal-veil" in html, f"{page} should opt its overlays into the veil"
+    settings = (_WEB / "settings-modal.js").read_text(encoding="utf-8")
+    assert "cg-modal-veil" in settings
+    assert "is-veiled" in settings
+
+
+def test_composer_log_is_open_only():
+    # A toggle on the topnav button made it a spam surface that fought its own
+    # animation; dismissal is the X, the backdrop, or Escape, as in Studio.
+    composer = (_WEB / "composer.js").read_text(encoding="utf-8")
+    assert "toggleLogPanel" not in composer
+    assert 'logBtn.addEventListener("click", openLog)' in composer
+
+
+def test_motion_exposes_reduced_motion_check():
+    # utils.js pairs a WAAPI exit with the veil's CSS transition and must not
+    # wait on that transition when reduced motion has disabled it. One JS-side
+    # source for the query, rather than a second matchMedia call.
+    src = MOTION_JS.read_text(encoding="utf-8")
+    assert "function isReduced(" in src
+    assert "isReduced: isReduced" in src
+    assert "ClipgenMotion.isReduced()" in (_WEB / "utils.js").read_text(
+        encoding="utf-8"
+    )

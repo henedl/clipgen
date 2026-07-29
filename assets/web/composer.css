@@ -926,8 +926,10 @@ body[data-frontend="composer"] {
 }
 
 /* ---- Artifact log modal (TopNav #logBtn) ----
- * Same structure + styling as Studio's log (studio.css .log-*), minus the
- * modal-trap/motion plumbing; the hub drives --host-blur/--veil-alpha. */
+ * Same structure + styling as Studio's log (studio.css .log-*), and the same
+ * open/close path (utils.js popModalIn/popModalOut). Backdrop comes from the
+ * shared .cg-modal-veil (tokens.css); this page keeps a lighter frost than the
+ * 12px/0.45 default so the timeline stays legible behind the panel. */
 
 #logOverlay {
   position: fixed;
@@ -936,32 +938,12 @@ body[data-frontend="composer"] {
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
-  --host-blur: 0px;
-  --veil-alpha: 0;
-}
-
-#logOverlay::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 10, 11, var(--veil-alpha));
-  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  transition:
-    background 460ms cubic-bezier(.22, 1, .36, 1),
-    backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1),
-    -webkit-backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1);
-  pointer-events: none;
+  --veil-blur-open: 6px;
+  --veil-alpha-open: 0.35;
 }
 
 #logOverlay.hidden {
   display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #logOverlay::before {
-    transition: none;
-  }
 }
 
 .log-panel {

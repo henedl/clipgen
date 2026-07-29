@@ -244,6 +244,9 @@
   --duration-fast: 150ms;
   --duration-normal: 250ms;
   --duration-slow: 350ms;
+  /* Modal backdrop ramp. utils.js reads this off the overlay rather than
+   * hardcoding a matching number, so the two can't drift (see .cg-modal-veil). */
+  --duration-veil: 360ms;
 
   /* Z-index layers */
   --z-float: 10;
@@ -726,6 +729,56 @@ audio.cg-audiotrack { display: none; }
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
+}
+
+/* Frosted modal backdrop — the shared treatment for every blocking modal
+   (Studio's dialogs + artifact log, Composer's log, Settings). Opt in by adding
+   `cg-modal-veil` to the overlay; JS ramps it by toggling `.is-veiled` (see
+   popModalIn / popModalOut in utils.js).
+
+   The blur has to live on a pseudo-element driven by custom properties — it
+   CANNOT be faded by animating the overlay's own opacity, because opacity on an
+   ancestor establishes a backdrop root and the backdrop-filter then samples
+   nothing. That is not a subtle degradation: measured on sharp stripes, even
+   `opacity: .999` removes the frost entirely. Hence the property ramp.
+
+   Per-surface intensity: override --veil-blur-open / --veil-alpha-open. The
+   ramp duration is --duration-veil, which utils.js reads back off the element,
+   so the JS hide-commit always matches the CSS transition. */
+.cg-modal-veil {
+  --host-blur: 0px;
+  --veil-alpha: 0;
+}
+
+.cg-modal-veil::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 11, var(--veil-alpha));
+  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  transition:
+    background var(--duration-veil) cubic-bezier(.22, 1, .36, 1),
+    backdrop-filter var(--duration-veil) cubic-bezier(.22, 1, .36, 1),
+    -webkit-backdrop-filter var(--duration-veil) cubic-bezier(.22, 1, .36, 1);
+  pointer-events: none;
+}
+
+.cg-modal-veil.is-veiled {
+  --host-blur: var(--veil-blur-open, 12px);
+  --veil-alpha: var(--veil-alpha-open, 0.45);
+}
+
+/* The card has to paint above the ::before, or the veil dims and blurs the
+   dialog itself. */
+.cg-modal-veil > * {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cg-modal-veil::before {
+    transition: none;
+  }
 }
 
 /* Thin custom scrollbar — theme-aware thumb (adapts to light mode via --border).

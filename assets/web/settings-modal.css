@@ -5,34 +5,15 @@
  * that includes settings-modal.js.
  */
 
-/* Shell (fixed/centered/z-modal) comes from .cg-modal-overlay (tokens.css). */
-.settings-overlay {
-  /* Backdrop blur + dark veil are animated via these custom props on the
-   * overlay root; the ::before pseudo paints them. Mirrors start-overlay. */
-  --host-blur: 0px;
-  --veil-alpha: 0;
-}
-
-.settings-overlay::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 10, 11, var(--veil-alpha));
-  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  transition:
-    background 460ms cubic-bezier(.22, 1, .36, 1),
-    backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1),
-    -webkit-backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1);
-  pointer-events: none;
-}
-
+/* Shell (fixed/centered/z-modal) comes from .cg-modal-overlay and the frosted
+ * backdrop from .cg-modal-veil, both in tokens.css — this modal was the pattern
+ * the shared veil was lifted from, so it now consumes it rather than declaring
+ * its own copy. settings-modal.js toggles `.is-veiled` to ramp it. */
 .settings-overlay.hidden {
   display: none;
 }
 
 .settings-panel {
-  position: relative;
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-panel-border);

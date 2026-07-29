@@ -2027,7 +2027,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2227,18 +2226,18 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Status overlay */
 
 /* Studio overlay cards (.status-card / .confirm-card / .gallery-card / .log-panel
- * / .build-status-card) pop in and out via the shared motion engine: studio.js's
- * popOverlayIn/popOverlayOut pop the card while fading the container that carries
- * the backdrop veil, so no CSS transition is wanted on these backdrops. The former
+ * / .build-status-card) pop in and out via utils.js's popModalIn/popModalOut,
+ * which also ramps the shared .cg-modal-veil backdrop (tokens.css) — hence no
+ * background and no transition on the overlay shells here. The former
  * cg-overlay-pop @keyframes was retired to keep a single animation system;
  * motion.js handles the prefers-reduced-motion fallback (a short opacity fade).
- * #logOverlay is the exception — it drives its own veil via --veil-alpha below. */
+ * #buildStatus is the one exception: a non-blocking corner card, so it carries no
+ * veil and only its card animates. */
 
 #statusOverlay {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2344,7 +2343,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2436,6 +2434,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* ---- Artifact Log overlay ---- */
 
+/* Backdrop + the `position: relative` that lifts .log-panel above it both come
+ * from .cg-modal-veil (tokens.css). */
 #logOverlay {
   position: fixed;
   inset: 0;
@@ -2443,40 +2443,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
-  /* Animated backdrop blur + dark veil, driven by these custom props from
-   * openLog/closeLog. Mirrors .settings-overlay / .start-overlay. */
-  --host-blur: 0px;
-  --veil-alpha: 0;
-}
-
-#logOverlay::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 10, 11, var(--veil-alpha));
-  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  transition:
-    background 460ms cubic-bezier(.22, 1, .36, 1),
-    backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1),
-    -webkit-backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1);
-  pointer-events: none;
 }
 
 #logOverlay.hidden {
   display: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  #logOverlay::before {
-    transition: none;
-  }
-}
-
 .log-panel {
-  /* Positioned so it paints above the absolutely-positioned #logOverlay::before
-   * veil (mirrors .settings-panel); otherwise the veil dims/blurs the dialog. */
-  position: relative;
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-panel-border);

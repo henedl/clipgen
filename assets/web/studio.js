@@ -3966,7 +3966,7 @@
     if (isAnyStudioJobRunning()) return;
     var overlay = qs("#galleryOverlay");
     if (!overlay) return;
-    popOverlayIn(overlay, qs(".gallery-card"));
+    popModalIn(overlay, qs(".gallery-card"));
     openModalTrap(overlay, closeGalleryDialog);
     var sel = qs("#galleryParticipant");
     if (sel) sel.focus();
@@ -3977,7 +3977,7 @@
     if (!overlay) return;
     // Trap released now; the visual hide trails the fade.
     closeModalTrap(overlay);
-    popOverlayOut(overlay, qs(".gallery-card"), function () {
+    popModalOut(overlay, qs(".gallery-card"), function () {
       overlay.classList.add("hidden");
     });
   }
@@ -4077,50 +4077,6 @@
     closeBlockingModal(overlayEl);
   }
 
-  // Enter/exit for Studio's reused overlay surfaces. The CONTAINER carries the
-  // backdrop veil, so it fades while the CARD pops — animating only the card
-  // would leave the veil snapping out 150ms behind it. Both directions go
-  // through WAAPI so a forwards-filled exit is always superseded by the next
-  // entrance (see the reused-DOM note in motion.js). Where the card is the
-  // container's only child (#buildStatus, which has no veil) the two opacities
-  // multiply into a slightly steeper 150ms fade — that is not a bug, and one
-  // helper for all four surfaces is worth more than the micro-detail.
-  //
-  // A content update on an already-open overlay (e.g. a build flipping
-  // in-progress → done) must NOT re-pop, hence the wasHidden gate.
-  function popOverlayIn(overlayEl, cardEl) {
-    if (!overlayEl) return;
-    overlayEl._popGen = (overlayEl._popGen || 0) + 1;
-    var wasHidden = overlayEl.classList.contains("hidden");
-    // A cancelled exit leaves BOTH elements mid-fade holding a forwards fill,
-    // and only a fresh WAAPI entrance clears that — so re-enter on either.
-    var wasExiting = !!overlayEl._popExiting;
-    overlayEl._popExiting = false;
-    overlayEl.classList.remove("hidden");
-    if ((!wasHidden && !wasExiting) || !window.ClipgenMotion) return;
-    ClipgenMotion.animateIn(overlayEl, "fade");
-    if (cardEl) ClipgenMotion.animateIn(cardEl, "pop");
-  }
-
-  // `commit` does the VISUAL hide only. Logical cleanup — focus trap, listeners,
-  // state — stays synchronous at the call site so a dismiss is never swallowed
-  // by the fade. The generation token makes a stale commit a no-op when the
-  // overlay is re-opened mid-exit (mirrors showToast's _toastGen in utils.js).
-  function popOverlayOut(overlayEl, cardEl, commit) {
-    if (!overlayEl) return;
-    var gen = (overlayEl._popGen = (overlayEl._popGen || 0) + 1);
-    if (!window.ClipgenMotion) {
-      commit();
-      return;
-    }
-    overlayEl._popExiting = true;
-    if (cardEl) ClipgenMotion.animateOut(cardEl, "pop");
-    ClipgenMotion.animateOut(overlayEl, "fade").then(function () {
-      if (overlayEl._popGen !== gen) return;
-      overlayEl._popExiting = false;
-      commit();
-    });
-  }
 
   // ---- Status overlay ----
 
@@ -4128,7 +4084,7 @@
 
   function revealStatusOverlay() {
     var overlay = qs("#statusOverlay");
-    popOverlayIn(overlay, qs(".status-card"));
+    popModalIn(overlay, qs(".status-card"));
     openModalTrap(overlay, hideOverlay);
   }
 
@@ -4168,7 +4124,7 @@
     var overlay = qs("#statusOverlay");
     // Release the trap immediately — only the visual hide waits for the fade.
     closeModalTrap(overlay);
-    popOverlayOut(overlay, qs(".status-card"), function () {
+    popModalOut(overlay, qs(".status-card"), function () {
       overlay.classList.add("hidden");
     });
   }
@@ -4214,7 +4170,7 @@
       cancelBtn.classList.add("hidden");
       _buildStatusCancelCleanup = null;
     }
-    popOverlayIn(qs("#buildStatus"), qs(".build-status-card"));
+    popModalIn(qs("#buildStatus"), qs(".build-status-card"));
   }
 
   function showBuildResult(successMsg, errorMsg, filePath) {
@@ -4234,7 +4190,7 @@
       qs("#buildStatusOpen").classList.toggle("hidden", !filePath);
     }
     qs("#buildStatusDismiss").classList.remove("hidden");
-    popOverlayIn(qs("#buildStatus"), qs(".build-status-card"));
+    popModalIn(qs("#buildStatus"), qs(".build-status-card"));
   }
 
   function hideBuildStatus() {
@@ -4243,7 +4199,7 @@
     var buildEl = qs("#buildStatus");
     // The elapsed clock is blanked with the hide, not before it, so it doesn't
     // vanish out from under a card that is still on screen fading.
-    popOverlayOut(buildEl, qs(".build-status-card"), function () {
+    popModalOut(buildEl, qs(".build-status-card"), function () {
       qs("#buildElapsed").textContent = "";
       buildEl.classList.add("hidden");
     });
@@ -4258,7 +4214,7 @@
     qs("#confirmTitle").textContent = title;
     qs("#confirmMessage").textContent = message;
     var confirmEl = qs("#confirmOverlay");
-    popOverlayIn(confirmEl, qs(".confirm-card"));
+    popModalIn(confirmEl, qs(".confirm-card"));
 
     var yesBtn = qs("#confirmYes");
     var noBtn = qs("#confirmNo");
@@ -4271,7 +4227,7 @@
       yesBtn.removeEventListener("click", handleYes);
       noBtn.removeEventListener("click", handleNo);
       _confirmCleanup = null;
-      popOverlayOut(confirmEl, qs(".confirm-card"), function () {
+      popModalOut(confirmEl, qs(".confirm-card"), function () {
         confirmEl.classList.add("hidden");
       });
     }
@@ -4292,67 +4248,34 @@
       return;
     }
     var overlay = qs("#confirmOverlay");
-    popOverlayOut(overlay, qs(".confirm-card"), function () {
+    popModalOut(overlay, qs(".confirm-card"), function () {
       overlay.classList.add("hidden");
     });
   }
 
   // ---- Artifact log ----
 
-  // Backdrop veil animation, mirroring the shared Settings modal.
-  var LOG_BLUR_PX = 12;
-  var LOG_VEIL_ALPHA = 0.45;
-  var LOG_EXIT_MS = 360;
-  var _logCloseTimer = null;
-
-  // The log overlay owns its own veil timing (--veil-alpha / --host-blur over
-  // LOG_EXIT_MS), so it animates only its card and does NOT go through
-  // popOverlayIn/popOverlayOut — a container fade there would fight the veil
-  // transition. A pending close timer means the card is mid-exit holding a
-  // forwards fill, which only a fresh WAAPI entrance clears, so that counts as
-  // a reveal for animation purposes even though the container never hid.
+  // Same open/close path as the dialogs above — the log's veil is no longer
+  // hand-rolled here, it is the shared .cg-modal-veil that popModalIn/Out ramps.
   function openLog() {
     var overlay = qs("#logOverlay");
-    var reenter = overlay.classList.contains("hidden") || !!_logCloseTimer;
-    if (_logCloseTimer) {
-      clearTimeout(_logCloseTimer);
-      _logCloseTimer = null;
-    }
-    overlay.style.setProperty("--host-blur", "0px");
-    overlay.style.setProperty("--veil-alpha", "0");
-    overlay.classList.remove("hidden");
+    popModalIn(overlay, qs(".log-panel"));
     document.body.classList.add("modal-open");
     openModalTrap(overlay, closeLog);
-    // Next frame: build in the backdrop blur + dark veil.
-    requestAnimationFrame(function () {
-      overlay.style.setProperty("--host-blur", LOG_BLUR_PX + "px");
-      overlay.style.setProperty("--veil-alpha", String(LOG_VEIL_ALPHA));
-    });
-    var logCard = qs(".log-panel");
-    if (reenter && logCard && window.ClipgenMotion) {
-      ClipgenMotion.animateIn(logCard, "pop");
-    }
     renderLog();
   }
 
   function closeLog() {
     var overlay = qs("#logOverlay");
-    overlay.style.setProperty("--host-blur", "0px");
-    overlay.style.setProperty("--veil-alpha", "0");
-    // Animate the card out alongside the veil fade (pop exits in 150ms, well
-    // inside LOG_EXIT_MS); animateIn on the next open supersedes the held state.
-    var card = qs(".log-panel");
-    if (card && window.ClipgenMotion) ClipgenMotion.animateOut(card, "pop");
-    // Release the focus trap + topnav gate only once the overlay actually hides,
-    // so focus stays trapped in the dialog through the fade (not restored to the
-    // trigger while the veil is still visible). Matches Settings' timing.
-    if (_logCloseTimer) clearTimeout(_logCloseTimer);
-    _logCloseTimer = setTimeout(function () {
+    // Unlike the dialogs, the trap and the topnav gate are released with the
+    // visual hide rather than immediately: this is a panel, and focus escaping
+    // to the trigger while the veil is still up reads as the modal already being
+    // gone. popModalOut's generation guard is what makes deferring them safe.
+    popModalOut(overlay, qs(".log-panel"), function () {
       closeModalTrap(overlay);
       overlay.classList.add("hidden");
       document.body.classList.remove("modal-open");
-      _logCloseTimer = null;
-    }, LOG_EXIT_MS);
+    });
   }
 
   function renderLog() {

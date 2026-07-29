@@ -1485,6 +1485,86 @@ var isBlockingModalOpen = function () {
   return _activeBlockingModal !== null;
 };
 
+// ---- Modal reveal / dismiss animation ----
+//
+// The visual half of a modal's lifecycle, paired with openBlockingModal's
+// logical half (focus trap, Escape, focus restore). Every blocking modal in the
+// app runs through this pair, so they all behave identically when spam-toggled.
+//
+// Two backdrop treatments, chosen by whether the overlay carries
+// `cg-modal-veil` (see tokens.css):
+//   veiled  — the frosted ::before is ramped by toggling `.is-veiled`. The
+//     overlay's own opacity is deliberately left alone: animating it would
+//     establish a backdrop root and the backdrop-filter would sample nothing,
+//     killing the frost outright. The CSS transition therefore owns the exit
+//     timing, and we read it back off the element (--duration-veil) rather than
+//     keeping a matching number here that could drift.
+//   plain   — no backdrop at all (e.g. Studio's non-blocking #buildStatus
+//     corner card), so only the card animates.
+//
+// Reused DOM is the shared hazard: these surfaces toggle `.hidden` and never
+// rebuild their card, so a fill:"forwards" exit strands the card invisible on
+// the next open unless the entrance is WAAPI too. Hence the two bits of state
+// parked on the overlay: `_cgModalGen` makes a stale exit's commit a no-op after
+// a re-open, and `_cgModalExiting` forces the entrance to re-run after a
+// *cancelled* exit, which would otherwise leave the card filled invisible.
+// (Same shape as showToast's _toastGen.)
+
+var _cgVeilMs = function (overlayEl) {
+  var raw = getComputedStyle(overlayEl).getPropertyValue("--duration-veil");
+  var ms = parseFloat(raw);
+  return isFinite(ms) && ms > 0 ? ms : 360;
+};
+
+var popModalIn = function (overlayEl, cardEl) {
+  if (!overlayEl) return;
+  var gen = (overlayEl._cgModalGen = (overlayEl._cgModalGen || 0) + 1);
+  var wasHidden = overlayEl.classList.contains("hidden");
+  var wasExiting = !!overlayEl._cgModalExiting;
+  overlayEl._cgModalExiting = false;
+  overlayEl.classList.remove("hidden");
+  if (overlayEl.classList.contains("cg-modal-veil")) {
+    // Next frame: the element was display:none a moment ago, so the transition
+    // needs a painted start value to ramp from. Re-checked against `gen` so a
+    // dismiss landing in the same frame isn't overridden by this callback.
+    requestAnimationFrame(function () {
+      if (overlayEl._cgModalGen === gen) overlayEl.classList.add("is-veiled");
+    });
+  }
+  // A content update on an already-open modal (e.g. a build flipping
+  // in-progress → done) must not re-pop the card.
+  if ((!wasHidden && !wasExiting) || !window.ClipgenMotion) return;
+  if (cardEl) ClipgenMotion.animateIn(cardEl, "pop");
+};
+
+// `commit` performs the VISUAL hide only (classList.add("hidden") and any
+// content clears). Logical cleanup — focus trap, listeners, page state — must
+// stay synchronous at the call site, or a dismiss can be swallowed by the fade.
+var popModalOut = function (overlayEl, cardEl, commit) {
+  if (!overlayEl) return;
+  var gen = (overlayEl._cgModalGen = (overlayEl._cgModalGen || 0) + 1);
+  var veiled = overlayEl.classList.contains("cg-modal-veil");
+  overlayEl.classList.remove("is-veiled");
+  if (!window.ClipgenMotion) {
+    commit();
+    return;
+  }
+  overlayEl._cgModalExiting = true;
+  var done = function () {
+    if (overlayEl._cgModalGen !== gen) return; // superseded by a re-open
+    overlayEl._cgModalExiting = false;
+    commit();
+  };
+  var cardExit = cardEl
+    ? ClipgenMotion.animateOut(cardEl, "pop")
+    : Promise.resolve();
+  // Veiled modals wait for the backdrop, which outlasts the card so the frost
+  // doesn't cut out from under a dialog that has already left. With reduced
+  // motion the veil transition is disabled in CSS, so don't wait on it.
+  if (veiled && !ClipgenMotion.isReduced()) setTimeout(done, _cgVeilMs(overlayEl));
+  else cardExit.then(done);
+};
+
 // ---- Mark categories ----
 // Hardcoded fallback that mirrors config.MARK_CATEGORIES defaults; the live
 // values are repopulated in place by setMarkCategories() once the page fetches
