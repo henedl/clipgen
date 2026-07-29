@@ -156,6 +156,7 @@ Plus: measure startup (above); DMG round-trip preserves exec bit + symlinks + si
 ## Related
 
 - [agents/skills/check/SKILL.md](../check/SKILL.md) — the pre-commit gate
-- [plans/DESKTOP-PACKAGING-PLAN.md](../../../plans/DESKTOP-PACKAGING-PLAN.md) — how the current
-  shape was arrived at, including the deferred ffmpeg-bundling decision and its GPL implications
+- [plans/archive/DESKTOP-PACKAGING-PLAN.md](../../../plans/archive/DESKTOP-PACKAGING-PLAN.md) — how
+  the current shape was arrived at, including the deferred ffmpeg-bundling decision and its GPL
+  implications
 - [desktop.py](../../../source/desktop.py) — the window host and its two JS bridges

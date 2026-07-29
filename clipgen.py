@@ -9,7 +9,7 @@ Two details here are important:
 
 * The path is **absolute and resolved**. `cli.main` calls
   `os.chdir(get_runtime_working_dir())` early on, and many first-party imports
-  are deferred until after that point. 
+  are deferred until after that point.
 * The insert is **skipped when frozen**. A PyInstaller bundle has no `source/`
   next to the executable — the modules live in its archive — so the entry would
   point at a directory that does not exist.
