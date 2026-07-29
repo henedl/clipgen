@@ -13,7 +13,12 @@ is size-aware, and **always resolves** so callers can "animate, then commit." It
 `tests/test_motion_wiring.py`.
 
 Public API: `animateOut(el, kind)` (`stash`/`delete`/`pop`/`fade`), `animateOutAll(els, kind)`
-(staggered exit), `animateIn(el, kind)` (`stashLand`/`pop`/`fade`), `flyTo` (stubbed FLIP seam).
+(staggered exit), `animateIn(el, kind)` (`stashLand`/`pop`/`fade`), `isReduced()` (the single
+JS-side reduced-motion check), `flyTo` (stubbed FLIP seam).
+
+Built on top of it, in `utils.js`: `popModalIn` / `popModalOut`, the shared reveal/dismiss path for
+every blocking modal, paired with `openBlockingModal`'s focus-trap half and with the
+`.cg-modal-veil` backdrop in `tokens.css`.
 
 ## Done
 
@@ -29,26 +34,42 @@ Public API: `animateOut(el, kind)` (`stash`/`delete`/`pop`/`fade`), `animateOutA
   on elements revealed from `display:none` in the same tick actually ease in (see Gotchas).
 
 ### 1. Dismiss / exit animations for reused surfaces ✅
-`popOverlayCardIn(cardEl, wasHidden)` became a symmetric `popOverlayIn` / `popOverlayOut` pair in
-`studio.js` that owns the reveal/hide itself, so the call sites stopped hand-rolling the
-capture-`wasHidden` dance. Applied to `#statusOverlay`, `#confirmOverlay`, `#galleryOverlay`, and
-`#buildStatus`.
+`popOverlayCardIn(cardEl, wasHidden)` became a symmetric **`popModalIn` / `popModalOut`** pair that
+owns the reveal/hide itself, so the call sites stopped hand-rolling the capture-`wasHidden` dance.
+It lives in `utils.js` beside `openBlockingModal`, whose logical half it pairs with, and **every**
+blocking modal in the app uses it: Studio's `#statusOverlay` / `#confirmOverlay` /
+`#galleryOverlay` / `#buildStatus` / `#logOverlay` and Composer's `#logOverlay`.
 
-- The **container** carries the backdrop veil, so it fades (`fade`) while the **card** pops
-  (`pop`). Animating only the card left the veil snapping out ~150 ms behind it. Where the card is
-  the container's only child (`#buildStatus`, no veil) the two opacities multiply into a slightly
-  steeper fade — intentional; one helper for all four surfaces is worth more than the micro-detail.
 - Both directions are WAAPI, which is what stops a `fill:"forwards"` exit from stranding a reused
-  card invisible on the next open. `_popGen` makes a stale commit a no-op after a re-open;
-  `_popExiting` re-enters a *cancelled* exit so neither element is left filled invisible.
+  card invisible on the next open. `_cgModalGen` makes a stale commit a no-op after a re-open;
+  `_cgModalExiting` re-runs the entrance after a *cancelled* exit so nothing is left filled
+  invisible.
 - Logical cleanup (focus trap, listeners, confirm state) stays **synchronous**; only the visual
   hide waits on the fade, so no dismiss is ever swallowed. `handleYes()`'s `onYes()` — which
-  usually opens another overlay — therefore still sequences correctly.
-- **`#logOverlay` deliberately does not use the pair.** It owns its own veil timing
-  (`--veil-alpha` / `--host-blur` over `LOG_EXIT_MS`), and a container fade would fight that. It
-  already had a card-only exit; this pass additionally fixed a latent bug where re-opening during
-  the 360 ms close read `wasHidden === false`, skipped the entrance, and left the panel holding its
-  exit's end state.
+  usually opens another overlay — therefore still sequences correctly. Studio's log is the one
+  surface that defers its trap release too: it is a panel, and focus escaping to the trigger while
+  the veil is still up reads as the modal already being gone.
+- **Backdrop: one shared `.cg-modal-veil`** (tokens.css) for all of them, replacing three
+  byte-identical `::before` copies (Studio log, Composer log, Settings) *and* the flat
+  `--color-backdrop` the three Studio dialogs used. Per-surface intensity via
+  `--veil-blur-open` / `--veil-alpha-open`.
+- The veil is ramped by toggling `.is-veiled`, **not** by fading the overlay's opacity. That is not
+  a style preference: opacity on an ancestor establishes a backdrop root, so the `backdrop-filter`
+  samples nothing. Measured on sharp stripes, even `opacity: .999` takes the frost from stdev 0.34
+  to 69.88 against a 127 unblurred reference. The first cut of this step *did* fade the container,
+  which is why the log had to keep a bespoke veil; unifying the backdrop is what removed that split.
+- **One duration**, `--duration-veil` (360 ms), which `utils.js` reads back off the element rather
+  than duplicating as a JS number. Before this the log raced three (150 ms card, 360 ms hide timer,
+  460 ms veil) and the hide cut the veil at ~78 %.
+- `#buildStatus` is the sole exception and carries no veil: a non-blocking corner card that must
+  never cover the page, so only its card animates.
+
+**What this fixed.** Composer's artifact log was a second, divergent copy of Studio's — its own
+`LOG_*` constants and close timer, no card animation, no generation guard, and a *toggling* topnav
+button where Studio's only opens. Spam-clicking it popped the panel in and out with the fade playing
+only intermittently. Composer's button is now open-only too. A latent Studio bug went with it:
+re-opening the log during its close read `wasHidden === false`, skipped the entrance, and left the
+panel holding its exit's end state.
 
 ### 2. motion.js on every page ✅
 The script tag went onto all nine templates (it was on studio + screenspace only), and
@@ -123,7 +144,16 @@ and `so-spinner-rotate` (a byte-identical clone of `spin`).
   rebuilt) strands the element invisible on the next open **unless** the entrance is also WAAPI —
   and the hide commit must be generation-guarded so a stale exit can't hide a freshly-reopened
   surface. A *cancelled* exit needs the entrance re-run too, or it stays filled invisible. See
-  `popOverlayIn`/`popOverlayOut` and `showToast`'s `_toastGen`.
+  `popModalIn`/`popModalOut` and `showToast`'s `_toastGen`.
+- **A `backdrop-filter` cannot be faded via an ancestor's opacity.** Opacity on an ancestor
+  establishes a backdrop root and the filter then samples nothing — measured, even `opacity: .999`
+  removes the frost entirely. Ramp the custom properties the blur reads instead (`.cg-modal-veil` /
+  `.is-veiled`). This is why the modal veil is a CSS transition rather than a WAAPI fade, and why
+  its duration has to be published to JS (`--duration-veil`) instead of guessed.
+- **Two copies of a surface will diverge.** The artifact log existed twice (Studio + Composer) and
+  drifted into different constants, a missing card animation, a missing generation guard, and an
+  extra toggle — which is what produced the spam-popping bug. Shared surfaces belong in `utils.js` /
+  `tokens.css`, not copy-pasted per page.
 - **Keep it `transform`+`opacity` only** (compositor thread) — the reason "clear 40 cards" is cheap.
 - New durations/easings belong in `PARAMS` (no Python↔JS constant duplication); `tokens.css` has
   `--duration-*` if a bridge is ever wanted.
@@ -134,15 +164,32 @@ and `so-spinner-rotate` (a byte-identical clone of `spin`).
 ## Verification (what was run)
 
 - `tests/test_motion_wiring.py` covers the API, the per-page load order across all nine templates,
-  the mutation sites, the overlay exit helpers + generation guard, and the CSS-loop hoist (shared
-  keyframes live only in `tokens.css`; the six retired names appear nowhere).
+  the mutation sites, the shared modal helpers + generation guard, that all six modal surfaces route
+  through them, that the veil is defined once in `tokens.css`, that Composer's log is open-only, and
+  the CSS-loop hoist (shared keyframes only in `tokens.css`; the six retired names appear nowhere).
   `tests/test_viewer_inline.py` covers the export inlining.
 - `/check` green; `/ui-check` clean on all six live pages (no page errors, no `motion.js` 404).
-- In-browser probes via `tests/ui/shot.py --eval` confirmed `var(--pulse-trough)` resolves inside
-  `@keyframes` (0.3 / 0.35 default / 0.55) and that the negative-delay phase shift preserves the
-  old look exactly: `.streaming-dot` reads 0.3 at t=0 and 1.0 at mid-cycle.
+- In-browser probes via `tests/ui/shot.py --eval`, since all three risky mechanisms here are
+  engine-dependent:
+  - `var(--pulse-trough)` resolves inside `@keyframes` (0.3 / 0.35 default / 0.55), and the
+    negative-delay phase shift preserves the old look exactly — `.streaming-dot` reads 0.3 at t=0
+    and 1.0 at mid-cycle.
+  - the backdrop-root measurement above (stripe stdev 0.34 → 69.88 at `opacity: .999`).
+  - the spam race, driven for real: close-then-instant-reopen settles **open** with the card at
+    opacity 1 (previously stranded invisible); five rapid clicks on Composer's log button can no
+    longer close it; Escape still dismisses it; and the newly-veiled dialogs render the frost
+    (screenshot-confirmed against Settings).
 - Exports generated from all three templates: engine inlined, no dangling `<script src>`; the
   offline file boots with `window.ClipgenMotion` present.
-- **Left to a human eye** (a screenshot cannot judge these): the overlay exits' feel, re-opening a
-  surface mid-fade, the confirm → status hand-off, and everything once more under
+- **Left to a human eye** (a screenshot cannot judge these): the exits' *feel* at 150 ms card /
+  360 ms veil, the confirm → status hand-off, and everything once more under
   `prefers-reduced-motion: reduce`.
+
+## Known gaps left open (deliberately)
+
+- `overview.html` has no `#toast` element but loads `start-overlay.js`, which toasts on folder
+  errors — those messages vanish silently. Pre-existing, unrelated to motion.
+- Composer's artifact log has no focus trap, where Studio's does. Now that both share one open/close
+  path, adding `openBlockingModal` there is a small follow-up.
+- `start-overlay` keeps its own veil (600 ms, on a real element rather than `::before`) because its
+  intro sequencing is bound up with the launcher's cascade. It is the last copy.
