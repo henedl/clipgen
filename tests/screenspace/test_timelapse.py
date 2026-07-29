@@ -129,7 +129,7 @@ class TestGenerateTimelapseProgress:
         assert 1.0 in progress_values  # final
 
     def test_cancel_flag_terminates_process(self, monkeypatch):
-        """cancel_flag=True stops ffmpeg and returns None."""
+        """cancel_flag=True stops ffmpeg, returns None, and never reports 100%."""
         # Output enough lines so the loop iterates
         progress_output = b"out_time_us=0\nprogress=continue\n" * 5
 
@@ -141,6 +141,7 @@ class TestGenerateTimelapseProgress:
 
         monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
 
+        progress_values = []
         result = screenspace.generate_timelapse(
             "/video.mp4",
             {"x": 0, "y": 0, "w": 100, "h": 100},
@@ -149,10 +150,54 @@ class TestGenerateTimelapseProgress:
             start_seconds=0.0,
             end_seconds=100.0,
             cancel_flag=lambda: True,
+            on_progress=lambda p: progress_values.append(p),
         )
 
         assert result is None
         fake_proc.terminate.assert_called_once()
+        # A stopped task must not leave the caller's bar showing completion.
+        assert 1.0 not in progress_values
+
+    def test_failed_spawn_reports_no_completion(self, monkeypatch):
+        """An unspawnable ffmpeg returns None without claiming 100%."""
+
+        def boom(*_a, **_kw):
+            raise FileNotFoundError("no ffmpeg")
+
+        monkeypatch.setattr("subprocess.Popen", boom)
+
+        progress_values = []
+        result = screenspace.generate_timelapse(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            on_progress=lambda p: progress_values.append(p),
+        )
+
+        assert result is None
+        assert 1.0 not in progress_values
+
+    def test_encode_failure_still_reports_completion(self, monkeypatch):
+        """A non-zero rc keeps the pre-refactor behavior: bar completes, None returned."""
+        fake_proc = mock.MagicMock()
+        fake_proc.stdout = io.BytesIO(b"progress=end\n")
+        fake_proc.returncode = 1
+        fake_proc.wait = mock.MagicMock()
+
+        monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
+
+        progress_values = []
+        result = screenspace.generate_timelapse(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            on_progress=lambda p: progress_values.append(p),
+        )
+
+        assert result is None
+        assert 1.0 in progress_values
 
 
 class TestTimelapseDispatchPassesMarkers:

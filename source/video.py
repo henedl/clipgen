@@ -223,17 +223,25 @@ def resolve_video_encoder() -> str:
     """Return the H.264 encoder to use for this re-encode: hardware or libx264.
 
     Honors ``config.FFMPEG_VIDEO_ENCODER``: ``"auto"`` prefers VideoToolbox when
-    it is available and has not already failed this session, an explicit
-    ``"h264_videotoolbox"`` warns once and degrades if unsupported, and anything
-    else (including ``"libx264"`` and a junk value) means libx264. The junk case
-    is real: ``select`` settings are coerced with ``str()`` and not validated
-    against their options list (``server._coerce_studio_setting``), so an
-    unknown value must degrade quietly rather than raise mid-encode.
+    it is available, an explicit ``"h264_videotoolbox"`` warns once and degrades
+    if unsupported, and anything else (including ``"libx264"`` and a junk value)
+    means libx264. The junk case is real: ``select`` settings are coerced with
+    ``str()`` and not validated against their options list
+    (``server._coerce_studio_setting``), so an unknown value must degrade quietly
+    rather than raise mid-encode.
+
+    A runtime failure (``_hw_encode_failed``) is session-sticky for **both**
+    hardware modes, not just ``"auto"``. On hardware that lists the encoder but
+    cannot run it, honoring the explicit choice again would spend a doomed
+    hardware attempt on every single encode instead of one per session.
     """
     global _hw_encoder_warned
     choice = str(getattr(config, "FFMPEG_VIDEO_ENCODER", "auto")).strip().lower()
 
     if choice == "h264_videotoolbox":
+        if _hw_encode_failed:
+            # note_hw_encode_failure already warned when the flag was set.
+            return "libx264"
         if check_videotoolbox_support():
             return "h264_videotoolbox"
         if not _hw_encoder_warned:

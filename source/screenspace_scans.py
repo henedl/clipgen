@@ -648,11 +648,17 @@ def generate_timelapse(
         return proc.returncode
 
     returncode = encode(encoder)
-    if returncode != 0 and returncode is not None and encoder != "libx264":
+    if returncode is not None and returncode != 0 and encoder != "libx264":
         # Same one-shot hardware fallback as video.run_ffmpeg_encode; this path
         # can't reuse it because progress parsing needs its own Popen loop.
         video.note_hw_encode_failure(encoder)
         returncode = encode("libx264")
+
+    # A cancel (or a failed spawn) must not report completion: encode() returns
+    # None for those, and the caller's progress bar would otherwise jump to 100%
+    # on a task the user just stopped.
+    if returncode is None:
+        return None
 
     if on_progress:
         on_progress(1.0)

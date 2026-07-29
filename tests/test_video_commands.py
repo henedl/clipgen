@@ -5,6 +5,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 import config
 import utils
 import video
@@ -133,10 +135,15 @@ def test_resolve_video_encoder_degrades_when_unsupported(monkeypatch):
     assert len(warnings) == 1
 
 
-def test_resolve_video_encoder_respects_sticky_failure(monkeypatch):
-    """Once a hardware encode has failed, auto stays on libx264 for the session."""
+@pytest.mark.parametrize("choice", ["auto", "h264_videotoolbox"])
+def test_resolve_video_encoder_respects_sticky_failure(monkeypatch, choice):
+    """A runtime failure is session-sticky for both hardware modes.
+
+    Including the *explicit* choice: on hardware that lists the encoder but can't
+    run it, honoring the request again would spend a doomed attempt per encode.
+    """
     monkeypatch.setattr(video, "check_videotoolbox_support", lambda: True)
-    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "auto")
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", choice)
     assert video.resolve_video_encoder() == "h264_videotoolbox"
 
     video._hw_encode_failed = True
