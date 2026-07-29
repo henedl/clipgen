@@ -30,6 +30,27 @@ class TestBuildTimelapseCommand:
         )
         assert "-loop" in cmd
 
+    def test_mp4_defaults_to_libx264(self):
+        cmd = screenspace.build_timelapse_command(
+            "/video.mp4", {"x": 0, "y": 0, "w": 100, "h": 100}, 10.0, "/out.mp4"
+        )
+        assert cmd[cmd.index("-c:v") + 1] == "libx264"
+        assert cmd[cmd.index("-preset") + 1] == "fast"
+        assert cmd[cmd.index("-crf") + 1] == "23"
+
+    def test_mp4_honors_hardware_encoder(self):
+        cmd = screenspace.build_timelapse_command(
+            "/video.mp4",
+            {"x": 0, "y": 0, "w": 100, "h": 100},
+            10.0,
+            "/out.mp4",
+            encoder="h264_videotoolbox",
+        )
+        assert cmd[cmd.index("-c:v") + 1] == "h264_videotoolbox"
+        assert "-q:v" in cmd
+        assert "libx264" not in cmd
+        assert "-crf" not in cmd
+
 
 class TestBuildTimelapseCommandMarkers:
     def test_start_seconds_adds_ss_flag(self):

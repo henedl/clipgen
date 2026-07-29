@@ -73,6 +73,192 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
     assert "-c:a" in captured_commands[1] and "aac" in captured_commands[1]
 
 
+# -- hardware encoder selection --
+
+
+def test_check_videotoolbox_support_needs_darwin_and_encoder(monkeypatch):
+    """macOS gate first, then the -encoders listing; both cached."""
+    probes = []
+
+    def fake_probe(listing_arg, tokens):
+        probes.append((listing_arg, tokens))
+        return True
+
+    monkeypatch.setattr(video, "_probe_ffmpeg_listing", fake_probe)
+
+    monkeypatch.setattr(video.sys, "platform", "linux")
+    video._videotoolbox_support_cache = None
+    assert video.check_videotoolbox_support() is False
+    assert probes == []  # never shells out off macOS
+
+    monkeypatch.setattr(video.sys, "platform", "darwin")
+    video._videotoolbox_support_cache = None
+    assert video.check_videotoolbox_support() is True
+    assert probes == [("-encoders", {"h264_videotoolbox"})]
+
+    # Cached: a second call does not re-probe.
+    assert video.check_videotoolbox_support() is True
+    assert len(probes) == 1
+
+
+def test_resolve_video_encoder_honors_knob(monkeypatch):
+    monkeypatch.setattr(video, "check_videotoolbox_support", lambda: True)
+
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "auto")
+    assert video.resolve_video_encoder() == "h264_videotoolbox"
+
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "h264_videotoolbox")
+    assert video.resolve_video_encoder() == "h264_videotoolbox"
+
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "libx264")
+    assert video.resolve_video_encoder() == "libx264"
+
+    # A select setting is coerced with str() and never validated against its
+    # options list, so junk must degrade quietly rather than raise.
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "nonsense")
+    assert video.resolve_video_encoder() == "libx264"
+
+
+def test_resolve_video_encoder_degrades_when_unsupported(monkeypatch):
+    """Explicit hardware request on a machine without it warns once, then libx264."""
+    monkeypatch.setattr(video, "check_videotoolbox_support", lambda: False)
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "h264_videotoolbox")
+    warnings = []
+    monkeypatch.setattr(
+        video.utils, "warning_print", lambda msg, *a, **kw: warnings.append(msg)
+    )
+
+    assert video.resolve_video_encoder() == "libx264"
+    assert video.resolve_video_encoder() == "libx264"
+    assert len(warnings) == 1
+
+
+def test_resolve_video_encoder_respects_sticky_failure(monkeypatch):
+    """Once a hardware encode has failed, auto stays on libx264 for the session."""
+    monkeypatch.setattr(video, "check_videotoolbox_support", lambda: True)
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "auto")
+    assert video.resolve_video_encoder() == "h264_videotoolbox"
+
+    video._hw_encode_failed = True
+    assert video.resolve_video_encoder() == "libx264"
+
+
+def test_video_encoder_args_software_omits_unset_flags():
+    """Sites that passed no crf/preset keep relying on libx264's own defaults."""
+    assert video.video_encoder_args("libx264") == ["-c:v", "libx264"]
+    assert video.video_encoder_args("libx264", crf=23, preset="fast") == [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "23",
+    ]
+    assert video.video_encoder_args("libx264", crf=20, preset="veryfast") == [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+    ]
+
+
+def test_video_encoder_args_videotoolbox_maps_crf_to_quality():
+    """VideoToolbox has no CRF: -q:v carries the quality, clamped to 30-80."""
+    assert video.video_encoder_args("h264_videotoolbox") == [
+        "-c:v",
+        "h264_videotoolbox",
+        "-q:v",
+        "54",  # crf 23 (libx264's default) -> 100 - 46
+        "-allow_sw",
+        "1",
+    ]
+    assert "-q:v" in video.video_encoder_args("h264_videotoolbox", crf=20)
+    assert "-crf" not in video.video_encoder_args("h264_videotoolbox", crf=20)
+    assert "-pass" not in video.video_encoder_args("h264_videotoolbox", crf=20)
+    # Clamped at both ends rather than emitting a nonsense -q:v.
+    assert video.video_encoder_args("h264_videotoolbox", crf=51)[3] == "30"
+    assert video.video_encoder_args("h264_videotoolbox", crf=0)[3] == "80"
+
+
+def test_run_ffmpeg_encode_falls_back_to_libx264_once(monkeypatch):
+    """A failing hardware encode retries in software and disables hw for the run."""
+    encoders = []
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda cmd, **_kw: subprocess.CompletedProcess(
+            args=cmd, returncode=1 if cmd[0] == "h264_videotoolbox" else 0, stderr=""
+        ),
+    )
+
+    def build(encoder):
+        encoders.append(encoder)
+        return [encoder]
+
+    result = video.run_ffmpeg_encode(build, encoder="h264_videotoolbox")
+    assert result is not None and result.returncode == 0
+    assert encoders == ["h264_videotoolbox", "libx264"]
+    assert video._hw_encode_failed is True
+
+    # The flag sticks, so the next resolve keeps everything in software.
+    monkeypatch.setattr(video, "check_videotoolbox_support", lambda: True)
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "auto")
+    assert video.resolve_video_encoder() == "libx264"
+
+
+def test_run_ffmpeg_encode_no_retry_on_success_or_cancel(monkeypatch):
+    """Success runs once; a cancel (None) must not burn the retry or set the flag."""
+    calls = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    video.run_ffmpeg_encode(lambda enc: [enc], encoder="h264_videotoolbox")
+    assert calls == [["h264_videotoolbox"]]
+    assert video._hw_encode_failed is False
+
+    calls.clear()
+    monkeypatch.setattr(video, "run_ffmpeg_process", lambda cmd, **_kw: None)
+    assert (
+        video.run_ffmpeg_encode(lambda enc: [enc], encoder="h264_videotoolbox") is None
+    )
+    assert video._hw_encode_failed is False
+
+
+def test_concatenate_clips_reencode_uses_hardware_encoder(monkeypatch):
+    """With hardware encoding on, the concat fallback targets VideoToolbox."""
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda _path: dict(_MATCHING_PROPS)
+    )
+    monkeypatch.setattr(video, "check_videotoolbox_support", lambda: True)
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "auto")
+
+    captured = []
+    results = [
+        subprocess.CompletedProcess(
+            args=["ffmpeg"], returncode=1, stderr="copy failed"
+        ),
+        subprocess.CompletedProcess(args=["ffmpeg"], returncode=0, stderr=""),
+    ]
+    monkeypatch.setattr(
+        video,
+        "run_ffmpeg_process",
+        lambda command, **_kw: (captured.append(command), results.pop(0))[1],
+    )
+
+    assert video.concatenate_clips(
+        ["a.mp4", "b.mp4"], "reel.mp4", reencode_on_fail=True
+    )
+    assert "h264_videotoolbox" in captured[1]
+    assert "libx264" not in captured[1]
+
+
 def test_detect_clip_mismatches_parallels_clip_paths(monkeypatch):
     """props_list stays index-aligned with clip_paths, None where a probe fails."""
 
@@ -1403,6 +1589,37 @@ def test_compress_to_size_forwards_cancel_flag_to_both_passes(monkeypatch, tmp_p
     # Target tiny size so compression runs both passes.
     video.compress_to_size(str(big), 0.0001, cancel_flag=sentinel)
     assert captured == [sentinel, sentinel]
+
+
+def test_compress_to_size_stays_on_libx264_with_hardware_available(
+    monkeypatch, tmp_path
+):
+    """Size capping is bitrate targeting — deliberately never hardware-encoded.
+
+    VideoToolbox has no -pass and overshoots a -b:v target badly (measured 2.3x),
+    so a hardware attempt would be discarded and the two-pass paid for anyway.
+    """
+    big = tmp_path / "big.mp4"
+    big.write_bytes(b"x" * 4096)
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: 10)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video, "check_videotoolbox_support", lambda: True)
+    monkeypatch.setattr(config, "FFMPEG_VIDEO_ENCODER", "auto")
+    monkeypatch.setattr(video.os, "replace", lambda *_a, **_kw: None)
+
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+
+    video.compress_to_size(str(big), 0.001)
+    assert len(commands) == 2  # still exactly the two libx264 passes
+    assert all("h264_videotoolbox" not in cmd for cmd in commands)
+    assert commands[0][commands[0].index("-pass") + 1] == "1"
+    assert commands[1][commands[1].index("-pass") + 1] == "2"
 
 
 # -- mux_subtitles tests --

@@ -21,7 +21,7 @@ actually found, so a future pass can re-verify cheaply rather than re-grepping f
 | 3 | Titlecard concat-demuxer stream copy | feat | L | ☑ | `video.py:2480` `concat_copy`; `titlecards.py:72` `_body_is_copy_safe` + dispatch at `:640`; `agents/PERFORMANCE.md:36` rewritten. Landed with deviations — see "Item 3 follow-ups" below |
 | 4 | Ollama model prewarm during transcription | feat | S–M | ☐ | no `prewarm_model`, `on_task_start`, or `OLLAMA_PREWARM_ENABLED` anywhere in the repo (the `prewarm` hits in `transcripts_server.py` are the pre-existing Whisper prewarm) |
 | 5 | Bounded frame-0 preload (Screenspace) | feat | S | ☐ | `screenspace.js:5031` still an unbounded `forEach`, and `pickId` is still computed *below* it |
-| 6 | Hardware video encoding (VideoToolbox) | feat | M | ☐ | zero `videotoolbox` hits outside `plans/`; `libx264` still hardcoded at `video.py:2026/2076/2354/2442` |
+| 6 | Hardware video encoding (VideoToolbox) | feat | M | ☑ | `video.py` `check_videotoolbox_support` / `resolve_video_encoder` / `video_encoder_args` / `note_hw_encode_failure` / `run_ffmpeg_encode`; five call sites converted. Measured 1080p/60s re-encode 48.4s → 12.5s wall (524s → 20.6s CPU); reel concat end-to-end 35.5s → 8.8s. Landed with deviations — see "Item 6 follow-ups" below |
 | 7 | Skeleton coverage for initial loads | feat | S | ☐ | `transcripts.html:51` still ships a literal `No participants`; `:170` `#transcriptEmpty` has no `hidden`; `workflows.html:138/142` unseeded; no `.pill-skeleton` |
 | 8 | Small backlog (each optional, S) | mixed | S | ◑ | 8a/8c/8e landed via their own PRs; 8b open (retargeted); 8d half open, half superseded — see the per-bullet markers in the Item 8 section |
 
@@ -130,6 +130,42 @@ No `-hwaccel`/`h264_videotoolbox` anywhere today (verified). Clips default to st
 - **Config**: `FFMPEG_VIDEO_ENCODER: str = "auto"` (options auto/libx264/h264_videotoolbox) + `SETTINGS_DESCRIPTIONS` (state the size/quality-per-bit trade-off) + `STUDIO_SETTINGS` select. Document both knobs in the `agents/PERFORMANCE.md` table.
 - **Tests** (`tests/test_video_commands.py`, timelapse tests): capability parse; argv byte-identical with encoder forced to libx264; VT args (`-q:v`, no `-crf`, no `-pass`); fallback wrapper rc=1→rc=0 rewrites to libx264 and the flag sticks; timelapse honors the knob. Since default is `auto`, tests that pin argv must force `libx264` via config (and one test covers auto-detection separately with `check_videotoolbox_support` monkeypatched both ways).
 - **Risk**: encoder listed but broken (VMs) → one-shot runtime fallback covers it. Larger files per quality — documented; users can pick libx264 in Settings.
+
+### Item 6 follow-ups (shipped, but not as written above)
+
+Measured on an M-series Mac with `h264_videotoolbox` present. Read this before building on it.
+
+- **`compress_to_size` was deliberately NOT converted** — the item text above is wrong on this
+  point. Measured: asking for 105 kbps video, `h264_videotoolbox` delivered **246 kbps** (2.3× over
+  target) where x264 two-pass delivered 127 kbps. The planned "single pass + fall back to two-pass
+  on overshoot" therefore overshoots essentially always, so it pays for the hardware attempt *and*
+  the two-pass — measured 2.4× slower for byte-identical output. Size capping stays libx264
+  two-pass, locked in by
+  `test_compress_to_size_stays_on_libx264_with_hardware_available`. The planned
+  `_compress_two_pass` / `_compress_single_pass` split was reverted with it (one caller each).
+- **The win needs a real workload.** On a short 720p clip the filter graph plus encoder setup
+  dominate and VideoToolbox came out *slower* (2.67s vs 1.31s). The 4× numbers in the status table
+  are 1080p/30s+ sources. Do not quote a hardware speedup for small artifacts.
+- `note_hw_encode_failure(encoder)` is public because the timelapse runner
+  (`screenspace_scans.generate_timelapse`) needs the sticky flag but cannot use `run_ffmpeg_encode`
+  — its progress parsing owns its own `Popen` loop. Its retry mirrors the wrapper by hand.
+- `video_encoder_args(encoder, crf=None, preset=None)` omits `-crf`/`-preset` when unset, so the two
+  concat sites (which passed neither and relied on libx264's own crf 23 / preset medium) keep
+  **byte-identical** software argv. Same reason `build_ffmpeg_cut_command` adds no `-c:v` at all
+  unless a non-libx264 encoder is passed — `tests/test_video_commands.py`'s
+  `assert "-c:v" not in cmd_reencode` still holds unmodified.
+- Composer's annotation burn (`composer_server._build_overlay_command`) was added to the site list
+  (it post-dates the item text); gif output never resolves an encoder.
+- `tests/conftest.py` gained an autouse `_force_software_encoder` fixture. Without it the `"auto"`
+  default makes every argv assertion depend on the host's ffmpeg build **and** every test shells out
+  to `ffmpeg -encoders`.
+- Drive-by: `settings-modal.js`'s label humanizer rendered `FFMPEG_*` as "Ffmpeg"; now "FFmpeg".
+- **Deferred, not missing:** the optional `SCREENSPACE_HWACCEL_DECODE` second commit (hw *decode* in
+  `_ffmpeg_pipe_frames`) was consciously left out — separate risk, needs its own zero-frames
+  containment state machine, and only helps decode-bound 4K/HEVC scans. Do not re-propose it as an
+  oversight.
+- Not verified: the runtime fallback on hardware that lists the encoder but cannot run it (no Intel
+  Mac / VM available here). Unit-tested only (`test_run_ffmpeg_encode_falls_back_to_libx264_once`).
 
 ## Item 7 — Skeleton coverage for initial loads — perceived polish
 

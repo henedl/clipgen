@@ -426,6 +426,12 @@ SECONDS_PER_MINUTE: int = 60
 
 # ── FFmpeg ────────────────────────────────────────────────────────────
 FFMPEG_LOGLEVEL: str = "16"  # ffmpeg -loglevel value (16 = error)
+# H.264 encoder for the re-encode paths (reel concat, clip re-encode, timelapse,
+# Composer burn). "auto" uses Apple's VideoToolbox hardware encoder when ffmpeg
+# lists it and it hasn't failed this session, else libx264. compress_to_size is
+# deliberately excluded — see its docstring.
+# See video.resolve_video_encoder / video.video_encoder_args.
+FFMPEG_VIDEO_ENCODER: str = "auto"  # "auto" | "libx264" | "h264_videotoolbox"
 FFMPEG_SCREENSHOT_QUALITY: str = "2"  # -q:v value for screenshots (1=best, 31=worst)
 # x264 settings for title/endcard generation and the card-wrap re-encode. The
 # wrap stream-copies a copy-safe clip body (titlecards._body_is_copy_safe) and
@@ -609,6 +615,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "REENCODING": "Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.",
     "AUDIO_NORMALIZE": "Normalize audio levels across generated clips for consistent volume.",
     "FILEFORMAT": "Output container format for generated video clips.",
+    "FFMPEG_VIDEO_ENCODER": "H.264 encoder used whenever clipgen re-encodes (reel concat, clip re-encode, timelapse, Composer burn-in). auto picks Apple's VideoToolbox hardware encoder on Macs that have it — several times faster, at the cost of somewhat larger files for the same visual quality — and falls back to libx264 if it is missing or fails. Pick libx264 to always encode in software. Size-capped compression (Max filesize) always uses libx264 regardless: hardware encoders cannot hit a bitrate target accurately.",
     "MAX_FILESIZE_MB": "Compress output to stay under this size limit. Set to 0 to disable.",
     "DEFAULT_DURATION_SECONDS": "Clip length when only a start time is provided.",
     "MAX_CLIP_DURATION_SECONDS": "Prompt for confirmation before generating clips longer than this.",
@@ -735,6 +742,12 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "Video Output",
         "type": "select",
         "options": [".mp4", ".webm", ".mkv"],
+    },
+    "FFMPEG_VIDEO_ENCODER": {
+        "tab": "Video & Clips",
+        "group": "Video Output",
+        "type": "select",
+        "options": ["auto", "libx264", "h264_videotoolbox"],
     },
     "MAX_FILESIZE_MB": {
         "tab": "Video & Clips",
