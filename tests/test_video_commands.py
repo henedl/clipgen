@@ -73,6 +73,36 @@ def test_concatenate_clips_reencode_fallback(monkeypatch):
     assert "-c:a" in captured_commands[1] and "aac" in captured_commands[1]
 
 
+def test_detect_clip_mismatches_parallels_clip_paths(monkeypatch):
+    """props_list stays index-aligned with clip_paths, None where a probe fails."""
+
+    def fake_probe(path):
+        return None if path == "b.mp4" else dict(_MATCHING_PROPS)
+
+    monkeypatch.setattr(video, "probe_video_properties", fake_probe)
+
+    props_list, res_mismatch, audio_mismatch = video._detect_clip_mismatches(
+        ["a.mp4", "b.mp4", "c.mp4"]
+    )
+    assert [p is None for p in props_list] == [False, True, False]
+    assert res_mismatch is False
+    assert audio_mismatch is False
+
+
+def test_detect_clip_mismatches_single_clip_stays_inline(monkeypatch):
+    """One clip probes on the calling thread — no pool for the common case."""
+    probe_threads = []
+
+    def recording_probe(_path):
+        probe_threads.append(threading.current_thread())
+        return dict(_MATCHING_PROPS)
+
+    monkeypatch.setattr(video, "probe_video_properties", recording_probe)
+
+    video._detect_clip_mismatches(["only.mp4"])
+    assert probe_threads == [threading.current_thread()]
+
+
 # -- probe_video_properties tests --
 
 

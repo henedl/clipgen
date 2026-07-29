@@ -16,7 +16,7 @@ actually found, so a future pass can re-verify cheaply rather than re-grepping f
 
 | # | Item | PR type | Effort | Status | Evidence |
 |---|------|---------|--------|--------|----------|
-| 1 | Parallel ffprobe loops | feat | S | ☐ | `video.py:2168` still a sequential list comprehension; `video.py:1395` still a sequential fold; no `_parallel_map_ordered` in `video.py` (it exists in `pipeline.py:711` — that is the pattern to copy, not evidence of landing) |
+| 1 | Parallel ffprobe loops | feat | S | ☑ | `video.py:1381` `_parallel_probe`; wired at `_detect_clip_mismatches` (`video.py:2201`) and `build_source_timeline` (`video.py:1424`). Measured 4.2× on a 20-clip probe (852 ms → 202 ms), identical results. Helper name and shape differ slightly from the item text — see below |
 | 2 | SSE-primary / poller-fallback fix | fix | S | ☐ | `screenspace-tasks.js:1224` — `startSSE()` still passes no `onUnsupported`, and `onOpen` still has no `stopPolling()` |
 | 3 | Titlecard concat-demuxer stream copy | feat | L | ☑ | `video.py:2480` `concat_copy`; `titlecards.py:72` `_body_is_copy_safe` + dispatch at `:640`; `agents/PERFORMANCE.md:36` rewritten. Landed with deviations — see "Item 3 follow-ups" below |
 | 4 | Ollama model prewarm during transcription | feat | S–M | ☐ | no `prewarm_model`, `on_task_start`, or `OLLAMA_PREWARM_ENABLED` anywhere in the repo (the `prewarm` hits in `transcripts_server.py` are the pre-existing Whisper prewarm) |
@@ -41,6 +41,18 @@ Reel validation probes every clip sequentially; multi-file participants probe ea
 - Workers must resolve `probe_video_properties` via module attribute at call time so monkeypatched tests keep working.
 - **Tests** (`tests/test_video_commands.py`): ordering + cumulative math with a recorder probe; `None` propagation; single-item takes sequential path; existing concat tests stay green.
 - No config knob (ffprobe too cheap to justify one).
+
+### Item 1 notes (as shipped)
+
+- The helper is `video._parallel_probe(items, probe_fn)` (`video.py:1381`), not
+  `_parallel_map_ordered(fn, items, max_workers)`: no `cancel_flag` / `on_error` / caller-owned
+  results list. Both call sites already treat a `None` probe as "skip", and ffprobe is short enough
+  that mid-probe cancellation isn't worth the surface area. `pipeline._parallel_map_ordered`
+  (`pipeline.py:711`) keeps the full signature for clip generation; the two are deliberately not
+  merged (`pipeline` imports `video`, so the dependency can only point one way).
+- Ordering is asserted rather than assumed: `test_build_source_timeline_order_survives_parallel_probes`
+  (`tests/test_multi_video.py:92`) makes the probes complete in reverse order and checks both the
+  timeline and the completion order.
 
 ## Item 2 — SSE-primary / poller-fallback fix (`screenspace-tasks.js`) — latency + redundant requests
 

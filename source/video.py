@@ -1378,6 +1378,33 @@ def get_file_duration(filepath: str) -> int | None:
     return dur
 
 
+def _parallel_probe(items: list[str], probe_fn: Callable[[str], Any]) -> list[Any]:
+    """Map *probe_fn* over *items* in a small thread pool, preserving input order.
+
+    ffprobe is a subprocess, so probing is pure I/O wait and releases the GIL —
+    a reel's worth of clips probes in roughly the time of the slowest single
+    probe instead of the sum. Results land at their original index, which every
+    caller relies on (props lists run parallel to their path list).
+
+    No lock is needed: the probe caches (``_video_properties_cache`` /
+    ``_file_duration_cache``) are plain dicts keyed by
+    ``(resolved_path, mtime_ns)``, the paths in one call are distinct, and a
+    duplicate concurrent probe of the same file is idempotent — both threads
+    write the same value under the same key. Fewer than 2 items skips the pool.
+    """
+    if len(items) < 2:
+        return [probe_fn(item) for item in items]
+
+    results: list[Any] = [None] * len(items)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
+        future_to_idx = {
+            pool.submit(probe_fn, item): idx for idx, item in enumerate(items)
+        }
+        for future in concurrent.futures.as_completed(future_to_idx):
+            results[future_to_idx[future]] = future.result()
+    return results
+
+
 def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None:
     """Build a concatenated-timeline view of multiple source videos.
 
@@ -1388,16 +1415,19 @@ def build_source_timeline(paths: list[str]) -> list[tuple[str, int, int]] | None
     starts at 0). A global timestamp is mapped into a sub-video by walking these
     ranges (see ``utils.map_global_to_segment``).
 
-    Returns ``None`` if any file's duration cannot be probed — the caller should
-    skip the clip rather than guess offsets. Only called for 2+ paths; the
-    single-video path never probes durations.
+    Durations are probed in parallel (``_parallel_probe``); only the cumulative
+    fold is sequential. Returns ``None`` if any file's duration cannot be probed
+    — the caller should skip the clip rather than guess offsets. Normally called
+    for 2+ paths (``timeline_or_none`` keeps single-video participants from
+    probing at all); a single path still takes the sequential path.
     """
+    durations = _parallel_probe(paths, get_file_duration)
+    if any(duration is None for duration in durations):
+        return None
+
     timeline: list[tuple[str, int, int]] = []
     cumulative = 0
-    for path in paths:
-        duration = get_file_duration(path)
-        if duration is None:
-            return None
+    for path, duration in zip(paths, durations):
         timeline.append((path, duration, cumulative))
         cumulative += duration
     return timeline
@@ -2164,10 +2194,13 @@ def _detect_clip_mismatches(
     Returns:
         (properties_list, has_resolution_mismatch, has_audio_presence_mismatch)
         properties_list parallels clip_paths (None entries for failed probes).
+
+    Probing is parallel; the mismatch detection and its warnings stay on the
+    calling thread so the output order is stable.
     """
-    props_list: list[dict[str, Any] | None] = [
-        probe_video_properties(p) for p in clip_paths
-    ]
+    props_list: list[dict[str, Any] | None] = _parallel_probe(
+        clip_paths, probe_video_properties
+    )
     probed = [p for p in props_list if p is not None]
     if len(probed) < 2:
         return (props_list, False, False)
