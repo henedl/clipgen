@@ -455,7 +455,7 @@ body {
   margin-right: calc(-1 * var(--space-1));
   padding-left: var(--space-1);
   padding-right: var(--space-1);
-  transition: background var(--transition-fast, 0.1s);
+  transition: background var(--duration-fast);
 }
 
 .ss-info-issue--clickable:hover {
@@ -871,7 +871,7 @@ body[data-frontend="screenspace"] {
   border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: pointer;
-  background: var(--color-bg-elevated, var(--color-bg));
+  background: var(--bg-elevated);
   transition: box-shadow var(--duration-fast), transform var(--duration-fast);
 }
 
@@ -1799,7 +1799,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   display: inline-block;
   width: var(--icon-size-xs);
   height: var(--icon-size-xs);
-  background: var(--color-warning, #f59e0b);
+  background: var(--color-warning);
   mask-size: contain;
   mask-repeat: no-repeat;
   -webkit-mask-size: contain;
@@ -1837,12 +1837,12 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 }
 
 .scan-toggle-btn.active {
-  background: color-mix(in srgb, var(--color-warning, #f59e0b) 12%, transparent);
-  border-color: var(--color-warning, #f59e0b);
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+  border-color: var(--color-warning);
 }
 
 .scan-toggle-btn.active .scan-toggle-icon {
-  background: var(--color-warning, #f59e0b);
+  background: var(--color-warning);
 }
 
 .task-fast-badge {
@@ -1850,7 +1850,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   align-items: center;
   gap: var(--space-1);
   font-size: var(--text-xs);
-  color: var(--color-warning, #f59e0b);
+  color: var(--color-warning);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -1871,9 +1871,9 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   align-items: center;
   gap: var(--space-1);
   font-size: var(--text-xs);
-  color: var(--color-warning, #f59e0b);
+  color: var(--color-warning);
   padding: var(--space-1) var(--space-2);
-  background: color-mix(in srgb, var(--color-warning, #f59e0b) 8%, transparent);
+  background: color-mix(in srgb, var(--color-warning) 8%, transparent);
   border-radius: var(--radius-sm);
   margin-bottom: var(--space-2);
 }
@@ -2386,7 +2386,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 }
 
 .multitool-step-header:hover {
-  background: var(--color-surface-hover);
+  background: var(--bg-hover);
 }
 
 .multitool-step-num {
@@ -2416,7 +2416,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 .multitool-step-remove:hover {
   color: var(--color-text);
-  background: var(--color-surface-hover);
+  background: var(--bg-hover);
 }
 
 .multitool-step-drag-handle {
@@ -2495,7 +2495,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 .multitool-operator-btn:hover {
   color: var(--color-text);
   border-color: var(--color-accent);
-  background: var(--color-surface-hover);
+  background: var(--bg-hover);
 }
 
 .multitool-operator-btn.is-not {
@@ -2552,7 +2552,7 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 .multitool-offset-btn:hover {
   color: var(--color-text);
   border-color: var(--color-accent);
-  background: var(--color-surface-hover);
+  background: var(--bg-hover);
 }
 
 .multitool-offset-btn.is-active {
@@ -2865,7 +2865,9 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   height: 24px;
   width: auto;
   border-radius: var(--radius-sm);
-  background: var(--color-bg-checkered, repeating-conic-gradient(var(--color-border) 0% 25%, transparent 0% 50%) 50% / 8px 8px);
+  /* Transparency checkerboard. Inlined rather than var()-wrapped: the token it
+   * used to reference was never defined, so this fallback was always the value. */
+  background: repeating-conic-gradient(var(--color-border) 0% 25%, transparent 0% 50%) 50% / 8px 8px;
 }
 
 .color-preview {

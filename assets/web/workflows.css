@@ -2006,7 +2006,7 @@ body[data-frontend="workflows"] {
 .wf-dialog-body {
   margin: 0;
   font-size: var(--text-sm);
-  color: var(--color-text-muted);
+  color: var(--color-text-dim);
 }
 
 .wf-dialog form {
