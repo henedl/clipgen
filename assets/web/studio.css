@@ -2230,10 +2230,12 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Status overlay */
 
 /* Studio overlay cards (.status-card / .confirm-card / .gallery-card / .log-panel
- * / .build-status-card) pop in via the shared motion engine: studio.js calls
- * ClipgenMotion.animateIn(card, "pop") on reveal (see popOverlayCardIn). The
- * former cg-overlay-pop @keyframes was retired to keep a single animation system;
- * motion.js handles the prefers-reduced-motion fallback (a short opacity fade). */
+ * / .build-status-card) pop in and out via the shared motion engine: studio.js's
+ * popOverlayIn/popOverlayOut pop the card while fading the container that carries
+ * the backdrop veil, so no CSS transition is wanted on these backdrops. The former
+ * cg-overlay-pop @keyframes was retired to keep a single animation system;
+ * motion.js handles the prefers-reduced-motion fallback (a short opacity fade).
+ * #logOverlay is the exception — it drives its own veil via --veil-alpha below. */
 
 #statusOverlay {
   position: fixed;

@@ -1,16 +1,36 @@
 """Static wiring checks for the shared ClipgenMotion animation module (motion.js).
 
-Locks the contract that makes the exit/entry animations work across Studio and
-Screenspace: the module exists and exports its API, both pages load it after
-utils.js, every mutation site calls it, and the old CSS landing animation stays
-retired (so a refactor can't silently drop the script tag or resurrect two
-parallel animation systems).
+Locks the contract that makes the exit/entry animations work: the module exists
+and exports its API, every page loads it after utils.js, every mutation site
+calls it, and the CSS animations it replaced stay retired — so a refactor can't
+silently drop the script tag or resurrect two parallel animation systems.
+
+The last group covers the other half of that boundary. Continuous loops (the
+spinner rotation, the "working" opacity breathe) deliberately stay in CSS, so
+they get deduped by hoisting into tokens.css rather than by moving onto the
+engine; these tests keep both halves from regrowing per-page copies.
 """
+
+import re
 
 from _frontend_source import WEB as _WEB
 from _frontend_source import concat_js
 
 MOTION_JS = _WEB / "motion.js"
+
+# Same list as tests/test_hotkeys_frontend_source.py — every page ships the shared
+# engine, and the two exportable templates get it inlined by source/viewer.py.
+ALL_TEMPLATES = (
+    "studio.html",
+    "screenspace.html",
+    "transcripts.html",
+    "composer.html",
+    "overview.html",
+    "workflows.html",
+    "viewer.html",
+    "gallery.html",
+    "timeline-viewer.html",
+)
 
 
 def test_motion_module_exists_and_exports_api():
@@ -128,5 +148,33 @@ def test_studio_overlays_pop_in_via_motion():
     assert "@keyframes cg-overlay-pop" not in css
     assert "animation: cg-overlay-pop" not in css
     studio = (_WEB / "studio.js").read_text(encoding="utf-8")
-    assert "function popOverlayCardIn(" in studio
+    assert "function popOverlayIn(" in studio
     assert 'ClipgenMotion.animateIn(cardEl, "pop")' in studio
+
+
+def test_studio_overlays_animate_out_on_dismiss():
+    # The reused overlay surfaces get a symmetric exit: the card pops out while
+    # the container carrying the backdrop veil fades, so the veil cannot snap out
+    # behind the card. Both directions must be WAAPI or a forwards-filled exit
+    # strands the reused card invisible on the next open (see motion.js).
+    studio = (_WEB / "studio.js").read_text(encoding="utf-8")
+    assert "function popOverlayOut(" in studio
+    assert 'ClipgenMotion.animateOut(cardEl, "pop")' in studio
+    assert 'ClipgenMotion.animateOut(overlayEl, "fade")' in studio
+    assert 'ClipgenMotion.animateIn(overlayEl, "fade")' in studio
+    # Generation guard: a stale exit must not hide a freshly-reopened overlay,
+    # and a cancelled exit must be re-entered so neither element stays filled
+    # invisible (mirrors showToast's _toastGen).
+    assert "_popGen" in studio
+    assert "_popExiting" in studio
+    # Every dismiss path routes through the helper rather than snapping .hidden on.
+    # (#logOverlay is deliberately excluded: it owns its own --veil-alpha timing.)
+    for card in (
+        ".status-card",
+        ".confirm-card",
+        ".gallery-card",
+        ".build-status-card",
+    ):
+        assert re.search(
+            r"popOverlayOut\([^,]+, qs\(\"" + re.escape(card) + r'"\)', studio
+        ), f"{card} should be dismissed through popOverlayOut()"
