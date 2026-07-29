@@ -6,7 +6,19 @@ Phase 2 is a build-system migration that needs a Windows CI run to verify.
 
 ---
 
-# Phase 1 — Finder-launched app exits immediately (BLOCKING)
+# Phase 1 — Finder-launched app exits immediately (BLOCKING) — ✅ DONE
+
+Landed in `cb607168` (#638): `utils.augment_path_for_gui_launch()` (`source/utils.py:534`, called
+from `source/cli.py:3768` ahead of both abortable steps), `utils.fatal_startup_error()` +
+`_show_native_alert()` (`source/utils.py:558-597` — `osascript … display alert … as critical` on
+darwin, `MessageBoxW` on Windows), both enumerated hard exits routed through it
+(`source/utils.py:609`, `source/video.py:121`, the latter carrying the `brew install ffmpeg`
+guidance from `_ffmpeg_install_guidance_lines()`), and the three PATH tests at
+`tests/test_cli_args.py:851-891`.
+
+One deliberate deviation from the text below: the directories are **appended**, not prepended —
+see `source/utils.py:545-547`, which argues discoverability over overriding the user's own
+resolution order.
 
 ## The bug
 
@@ -206,3 +218,25 @@ onedir a bundled ffmpeg is a real file at a stable path that can be signed indiv
 visibly user-replaceable — the strongest form of the arm's-length GPL argument. Under one-file it
 would be extracted to temp on every launch, adding ~80 MB to a startup cost we are trying to
 remove.
+
+---
+
+## Open follow-ups
+
+Both phases are implemented, so this plan is archived. Three things it did not close, kept here
+so they are findable rather than lost:
+
+1. **One silent-exit path survives.** `utils.validate_runtime_directories()` has a *second* hard
+   exit — the output-dir `mkdir` failure at `source/utils.py:624-633` — which still uses
+   `error_print` + `SystemExit(1)` instead of `fatal_startup_error()`. It falls outside the two
+   exits Phase 1b enumerated, but it contradicts that helper's own docstring
+   (`source/utils.py:591`: "Every hard exit reachable before the window exists must route through
+   here") and reproduces exactly the bug Phase 1b existed to kill: a windowed launch that dies
+   with nothing on screen. Cheap to fix; worth doing next time this file is open.
+2. **Windows was never verified.** Phase 2 verification step 6 (`workflow_dispatch`: zipped
+   folder unpacks and runs, `clipgen.exe --help` prints in cmd, double-click opens the window,
+   `credentials.json` beside the app folder is found) has not been run — `88b883a3`'s own commit
+   message says as much. The `get_runtime_working_dir()` onedir walk-up (`source/cli.py:862`) is
+   covered by unit tests but not by a real Windows build.
+3. **Inno Setup installer not done.** Floated in §2c as "worth considering" and never required;
+   the Windows artifact is a zipped folder (`.github/workflows/build-binaries.yml:110-118`).
