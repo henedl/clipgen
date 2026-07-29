@@ -60,8 +60,11 @@ def test_motion_wiggle_is_tunable():
     assert "Math.max(0, p.wiggleCycles" in src
 
 
-def test_motion_loaded_after_utils_on_both_pages():
-    for page in ("screenspace.html", "studio.html"):
+def test_motion_loaded_after_utils_on_every_page():
+    # Every template loads the engine, not just the two that animate cards: the
+    # shared showToast fade lives in utils.js and is guarded on
+    # window.ClipgenMotion, so a page missing the script snaps its toasts.
+    for page in ALL_TEMPLATES:
         html = (_WEB / page).read_text(encoding="utf-8")
         assert '<script src="motion.js" defer></script>' in html, (
             f"{page} must load motion.js"
@@ -122,8 +125,9 @@ def test_motion_has_generic_fade_and_pop_kinds():
 
 def test_toast_uses_shared_fade():
     # showToast is the first reused (hide/re-show) surface to adopt the engine: it
-    # fades in on show and out on dismiss, guarded on window.ClipgenMotion so pages
-    # without motion.js still hide the toast (it just snaps as before).
+    # fades in on show and out on dismiss. Every page loads motion.js now, but the
+    # window.ClipgenMotion guard stays: viewer.py's inline steps each swallow
+    # OSError, so a partially-failed export must still hide its toast.
     utils = (_WEB / "utils.js").read_text(encoding="utf-8")
     assert 'ClipgenMotion.animateIn(toastEl, "fade")' in utils
     assert 'ClipgenMotion.animateOut(toastEl, "fade")' in utils

@@ -31,6 +31,11 @@ def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     assert "clipgenCardScrubber" in html
     assert ".waveform-canvas" in html
 
+    # So is the shared motion engine — an export has no asset routes, so a left
+    # behind <script src> would 404 and showToast's guarded fade would no-op.
+    assert '<script src="motion.js" defer></script>' not in html
+    assert "global.ClipgenMotion" in html
+
     # Inlined blocks present, with the data payload bound.
     assert "<style>" in html
     assert "<script defer>" in html
