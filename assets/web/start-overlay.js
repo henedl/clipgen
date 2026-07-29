@@ -4,7 +4,7 @@
  *   • brand-mark + wordmark intro (reuses window.clipgenInitBrandMark; cascade
  *     plays once per browser session, gated by the existing sessionStorage flag)
  *   • section cascade-in (220ms base, 80ms stagger)
- *   • backdrop blur via --host-blur / --veil-alpha on the overlay root
+ *   • backdrop blur via the shared .cg-veil / .cg-veil-layer (tokens.css)
  *   • optional project name, stored on the recent-projects record and shown as
  *     that entry's title (there is no server-side "current project name")
  *   • the rail's Recently-opened list: RAIL_RECENTS_VISIBLE rows plus a
@@ -23,8 +23,6 @@
   "use strict";
 
   var DISMISSED_KEY = "clipgen.startOverlayDismissed";
-  var INTRO_BLUR_PX = 14;
-  var INTRO_VEIL_ALPHA = 0.55;
   var CASCADE_BASE_MS = 220;
   var CASCADE_STEP_MS = 80;
   // Google-auth poll lifecycle: the server's /api/spreadsheets/google/auth
@@ -1662,8 +1660,7 @@
     }
     // Animate the panel and backdrop out, then hide.
     if (els.panel) els.panel.classList.remove("is-in");
-    root.style.setProperty("--host-blur", "0px");
-    root.style.setProperty("--veil-alpha", "0");
+    root.classList.remove("is-veiled");
     setTimeout(function () {
       // Guard against a re-open during the fade (open() flips state.open back).
       if (state.open) return;
@@ -1705,11 +1702,9 @@
     if (els.panel) els.panel.classList.remove("is-in");
 
     // Backdrop builds in 100ms after mount so the panel is in place first.
-    root.style.setProperty("--host-blur", "0px");
-    root.style.setProperty("--veil-alpha", "0");
+    root.classList.remove("is-veiled");
     setTimeout(function () {
-      root.style.setProperty("--host-blur", INTRO_BLUR_PX + "px");
-      root.style.setProperty("--veil-alpha", String(INTRO_VEIL_ALPHA));
+      root.classList.add("is-veiled");
     }, 100);
 
     // Panel slide-in.

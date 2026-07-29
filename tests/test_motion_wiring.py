@@ -248,27 +248,77 @@ def test_every_modal_uses_the_shared_helpers():
 
 
 def test_modal_veil_is_defined_once_in_tokens():
+    # Five copies of this declaration is what the hoist removed (Studio's log,
+    # Composer's log, Settings, Start, plus the flat backdrop the dialogs used).
     owners = [
         path.name
         for path in sorted(_WEB.glob("*.css"))
         if "backdrop-filter: blur(var(--host-blur))" in path.read_text(encoding="utf-8")
     ]
-    # start-overlay keeps its own (600ms, on a real element rather than ::before)
-    # because its intro sequencing is bound up with the launcher's cascade.
-    assert owners == ["start-overlay.css", "tokens.css"], (
-        f"the frosted modal veil should live in tokens.css, not {owners}"
+    assert owners == ["tokens.css"], (
+        f"the frosted modal veil should live only in tokens.css, not {owners}"
     )
 
 
-def test_veiled_modals_opt_in_via_class():
-    # The class is what popModalIn/Out branch on, so a modal that wants the frost
-    # has to carry it in markup (or, for JS-built overlays, in the el() call).
+def test_veiled_surfaces_opt_in_via_class():
+    # The class is what popModalIn/Out branch on, so a surface that wants the
+    # frost has to carry it in markup (or, for JS-built overlays, in the el()
+    # call). `cg-modal-veil` generates the layer as a ::before; `cg-veil` +
+    # `cg-veil-layer` is for a surface whose backdrop must be a real element.
     for page in ("studio.html", "composer.html"):
         html = (_WEB / page).read_text(encoding="utf-8")
         assert "cg-modal-veil" in html, f"{page} should opt its overlays into the veil"
     settings = (_WEB / "settings-modal.js").read_text(encoding="utf-8")
     assert "cg-modal-veil" in settings
     assert "is-veiled" in settings
+    # Start overlay: host on the root, layer on the real backdrop element.
+    start = (_WEB / "start-overlay.html").read_text(encoding="utf-8")
+    assert "start-overlay cg-veil hidden" in start
+    assert 'class="cg-veil-layer" data-role="backdrop"' in start
+    assert "is-veiled" in (_WEB / "start-overlay.js").read_text(encoding="utf-8")
+
+
+def test_start_overlay_backdrop_stays_an_element():
+    # It is the click-to-dismiss target, and a pseudo-element cannot be an event
+    # target — so this surface must NOT be switched to cg-modal-veil's ::before.
+    js = (_WEB / "start-overlay.js").read_text(encoding="utf-8")
+    assert 'on(els.backdrop, "click", close)' in js
+    start = (_WEB / "start-overlay.html").read_text(encoding="utf-8")
+    assert "cg-modal-veil" not in start
+
+
+def test_veil_layer_paint_is_shared_by_both_carriers():
+    # One paint definition, two selectors. Splitting them would let the real
+    # element and the pseudo drift apart again.
+    tokens = (_WEB / "tokens.css").read_text(encoding="utf-8")
+    assert ".cg-veil-layer,\n.cg-modal-veil::before {" in tokens
+    # Only the pseudo may ignore pointer events; a real layer is clickable.
+    assert '.cg-modal-veil::before {\n  content: "";\n  pointer-events: none;' in tokens
+
+
+def test_toast_element_exists_wherever_something_toasts():
+    # showToast no-ops without #toast, so a page that loads a toasting script
+    # needs the element. start-overlay.js and export-actions.js both toast.
+    toasting = ("start-overlay.js", "export-actions.js")
+    for page in ALL_TEMPLATES:
+        html = (_WEB / page).read_text(encoding="utf-8")
+        loads_toaster = any(f'src="{name}"' in html for name in toasting)
+        if not loads_toaster:
+            continue
+        assert 'id="toast"' in html, (
+            f"{page} loads a script that calls showToast but has no #toast element"
+        )
+
+
+def test_composer_log_traps_focus_like_studio():
+    # It was the one modal without a trap: Tab walked out into the timeline
+    # behind the veil and Escape fell through to the page's back-out cascade.
+    composer = (_WEB / "composer.js").read_text(encoding="utf-8")
+    assert "openBlockingModal(overlay, {" in composer
+    assert "closeBlockingModal(overlay)" in composer
+    assert 'document.body.classList.add("modal-open")' in composer
+    # With the trap owning Escape, a cascade branch for the log would be dead code.
+    assert "logOverlayVisible" not in composer
 
 
 def test_composer_log_is_open_only():

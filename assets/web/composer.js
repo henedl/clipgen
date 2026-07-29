@@ -1374,22 +1374,33 @@
     countEl.textContent = okCount + " clip(s) generated this session";
   }
 
-  function logOverlayVisible() {
-    // Mid-exit counts as not-visible so the Escape cascade falls through to the
-    // next handler instead of re-closing a panel that is already leaving.
-    var overlay = qs("#logOverlay");
-    return !overlay._cgModalExiting && !overlay.classList.contains("hidden");
-  }
-
   function openLog() {
-    popModalIn(qs("#logOverlay"), qs(".log-panel"));
+    var overlay = qs("#logOverlay");
+    popModalIn(overlay, qs(".log-panel"));
+    // Gates the topnav's own backdrop-filter so this modal's veil composites
+    // over the bar instead of reading through it (see topnav.css).
+    document.body.classList.add("modal-open");
+    // Escape, Tab-trapping and focus restore, same as Studio's log. The trap
+    // owns Escape while it is active, so the page's back-out cascade does not
+    // need a branch for this overlay.
+    openBlockingModal(overlay, {
+      onEscape: closeLog,
+      trapFocus: true,
+      restoreFocus: true,
+    });
     renderLog();
   }
 
   function closeLog() {
     var overlay = qs("#logOverlay");
+    // Trap and topnav gate are released with the visual hide, not before it:
+    // focus jumping back to the trigger while the veil is still up reads as the
+    // panel already being gone. popModalOut's generation guard makes deferring
+    // them safe against a re-open mid-exit.
     popModalOut(overlay, qs(".log-panel"), function () {
+      closeBlockingModal(overlay);
       overlay.classList.add("hidden");
+      document.body.classList.remove("modal-open");
     });
   }
 
@@ -1498,8 +1509,9 @@
 
     // Back-out cascade, one level per press (order matters: overlay first,
     // then pending in-point, then tool, then selections).
+    // The artifact log is absent here on purpose: it now runs a blocking-modal
+    // trap that owns Escape while open, so hotkeys.js never reaches this cascade.
     window.ClipgenHotkeys.registerEscape(function () {
-      if (logOverlayVisible()) { closeLog(); return true; }
       if (state.pendingIn !== null) {
         state.pendingIn = null;
         updatePendingInfo();
