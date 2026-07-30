@@ -135,7 +135,7 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 
 - **CLI modes and flags** — `uv run clipgen.py --help`. Gotchas: `-H/--highlights` scores a reel by severity/uniqueness/annotations (default 180s budget; pass seconds e.g. `-H 120`). `--studio`, `--screenspace`, and `--transcripts` share one Flask app but are mutually exclusive.
 - **Spreadsheet layout** — required columns: **ID**, **Observation**, **Category**; participant columns start with `P` or `G`; optional `Baseline time` row. Details in [spreadsheet.py](source/spreadsheet.py) module docstring and [README.md](README.md).
-- **Tests** — [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md). Every new CLI mode, flag, or selector needs at least one smoke test.
+- **Tests** — [agents/skills/test/SKILL.md](agents/skills/test/SKILL.md). Every new CLI mode, flag, or selector needs at least one smoke test. A test that lands in `--durations=20` gets [agents/skills/test-perf/SKILL.md](agents/skills/test-perf/SKILL.md) before it ships.
 - **Performance** — [agents/PERFORMANCE.md](agents/PERFORMANCE.md).
 - **Code review** — [agents/CODE-REVIEW.md](agents/CODE-REVIEW.md).
 - **CLI command recipes** — [agents/skills/generate/SKILL.md](agents/skills/generate/SKILL.md).

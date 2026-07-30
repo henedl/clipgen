@@ -8,6 +8,7 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 - [build](build/SKILL.md) — build, verify, and ship the desktop bundle
 - [ui-check](ui-check/SKILL.md) — headless page smoke, screenshots, and in-page probing
 - [test](test/SKILL.md) — run the test suite
+- [test-perf](test-perf/SKILL.md) — verify new tests are not slow, and fix the ones that are
 - [bump](bump/SKILL.md) — increment patch version
 - [new-mode](new-mode/SKILL.md) — checklist for adding a CLI mode or flag
 - [new-screenspace-tool](new-screenspace-tool/SKILL.md) — checklist for adding a Screenspace tool
