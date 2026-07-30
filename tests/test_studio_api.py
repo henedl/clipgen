@@ -3624,6 +3624,7 @@ def test_api_generate_persists_artifacts_after_disconnect(
     in the manifest. Validates that _extend_generated_artifacts moved into the
     per-clip worker."""
     import threading
+    import time
     import types
 
     monkeypatch.setattr(server, "_worksheet", object())
@@ -3648,17 +3649,24 @@ def test_api_generate_persists_artifacts_after_disconnect(
     )
 
     started_count = [0]
+    finished_count = [0]
     started_lock = threading.Lock()
-    proceed = threading.Event()
+
+    # Hold each worker long enough that the disconnect below lands while the
+    # second pool batch is still in flight. It has to be a plain sleep, not a
+    # wait-for-signal: post() does not return until the *first* batch finishes,
+    # and resp.close() then blocks draining the pool, so there is no point on the
+    # test thread from which the first batch could ever be released. This was a
+    # `proceed.wait(timeout=2)` paired with a `proceed.set()` after close() —
+    # every one of the four workers provably timed out instead, the set() was
+    # unreachable, and the test paid 2 batches x 2 s. The in-flight assertion
+    # after close() is what keeps this constant honest if it is ever too short.
+    HOLD_SECONDS = 0.15
 
     def fake_process_clips(clip_list, **kwargs):
         with started_lock:
             started_count[0] += 1
-        # Block briefly so the client has time to disconnect while futures are
-        # mid-flight. The thread-pool's shutdown(wait=True) will keep us alive.
-        # resp.close() blocks on this drain, so the timeout bounds the test's
-        # wall time; the disconnect is already registered when close() starts.
-        proceed.wait(timeout=2)
+        time.sleep(HOLD_SECONDS)
         clip = clip_list[0]
         artifact = {
             "id": f"a{clip['cell'].row}",
@@ -3667,6 +3675,8 @@ def test_api_generate_persists_artifacts_after_disconnect(
             "cellRow": clip["cell"].row,
             "cellCol": clip["cell"].col,
         }
+        with started_lock:
+            finished_count[0] += 1
         return (1, [artifact])
 
     monkeypatch.setattr("pipeline.process_clips", fake_process_clips)
@@ -3678,14 +3688,21 @@ def test_api_generate_persists_artifacts_after_disconnect(
             "format": "clip",
         },
     )
-    # Werkzeug's test client iterates the streaming body in the background,
-    # so the worker pool has already started by the time post() returns.
-    # Wait for at least two workers to be in flight, then disconnect.
+    # post() returns once the first pool batch has drained and the next one has
+    # been submitted, so some worker is always mid-flight here.
     assert _poll_until(lambda: started_count[0] >= 2)
+    with started_lock:
+        in_flight_at_disconnect = started_count[0] - finished_count[0]
     resp.close()
-    # Release the workers; shutdown(wait=True) lets them all finish + persist.
-    proceed.set()
 
+    # The whole point of the test is that a worker still running at disconnect
+    # gets its artifact persisted. If HOLD_SECONDS is ever cut so fine that every
+    # worker has already finished by now, the row assertion below would still pass
+    # while proving nothing — so fail loudly on that instead.
+    assert in_flight_at_disconnect >= 1, (
+        "no worker was still in flight when the client disconnected; "
+        f"raise HOLD_SECONDS ({started_count[0]} started, {finished_count[0]} done)"
+    )
     assert _poll_until(lambda: server._generate_in_progress is False)
     persisted_rows = {a["cellRow"] for a in server._generated_artifacts}
     assert persisted_rows == {5, 6, 7, 8}
@@ -3901,26 +3918,27 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
 
     started = threading.Event()
 
-    def slow_clip(clip_list, **kwargs):
+    def one_clip(clip_list, **kwargs):
         started.set()
         cancel_flag = kwargs.get("cancel_flag")
-        # Busy-loop long enough for the test to post a cancel mid-run, but no
-        # longer than needed (cancellation is detected between clips / at the
-        # stream level, so this bounds the test's wall time).
-        for _ in range(150):
-            if cancel_flag and cancel_flag():
-                return (0, [])
-            threading.Event().wait(0.01)
+        if cancel_flag and cancel_flag():
+            return (0, [])
         return (1, [{"id": "a", "type": "clip", "file": "x.mp4"}])
 
-    monkeypatch.setattr("pipeline.process_clips", slow_clip)
+    monkeypatch.setattr("pipeline.process_clips", one_clip)
     server._generate_cancel_event.clear()
 
     resp = client.post(
         "/studio/api/generate", json={"cells": ["P01.5", "P01.6"], "format": "clip"}
     )
-    # The streaming body is iterated by Werkzeug in the background, so the
-    # first clip's process_clips call is already running.
+    # `client.post` does not run the stream in the background: it returns having
+    # buffered the first cell's chunk, and `resp.data` below drains the rest. So
+    # the cancel is posted between the two cells by program order, and the route
+    # sees it when it checks between clips — no timing window to hit. This used to
+    # spin a 150 x 10 ms busy-loop here to "post a cancel mid-run"; the cancel
+    # provably landed only after that loop finished, so the 2 s bought nothing.
+    # If Werkzeug ever drained both cells inside post(), the `cancelled`
+    # assertion below fails loudly rather than passing vacuously.
     assert started.wait(timeout=5)
 
     cancel_resp = client.post("/studio/api/generate/cancel")
