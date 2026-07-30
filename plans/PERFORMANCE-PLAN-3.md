@@ -17,16 +17,18 @@ actually found, so a future pass can re-verify cheaply rather than re-grepping f
 | # | Item | PR type | Effort | Status | Evidence |
 |---|------|---------|--------|--------|----------|
 | 1 | Parallel ffprobe loops | feat | S | ☑ | `video.py:1381` `_parallel_probe`; wired at `_detect_clip_mismatches` (`video.py:2201`) and `build_source_timeline` (`video.py:1424`). Measured 4.2× on a 20-clip probe (852 ms → 202 ms), identical results. Helper name and shape differ slightly from the item text — see below |
-| 2 | SSE-primary / poller-fallback fix | fix | S | ☐ | `screenspace-tasks.js:1224` — `startSSE()` still passes no `onUnsupported`, and `onOpen` still has no `stopPolling()` |
+| 2 | SSE-primary / poller-fallback fix | fix | S | ☑ | `screenspace-tasks.js:1226` — `onUnsupported: startPolling` plus `stopPolling()` in `onOpen`; guarded by `test_task_stream_retires_the_poller_when_it_reconnects`. Landed in the frontend packet (see below), not as its own `fix:` PR |
 | 3 | Titlecard concat-demuxer stream copy | feat | L | ☑ | `video.py:2480` `concat_copy`; `titlecards.py:72` `_body_is_copy_safe` + dispatch at `:640`; `agents/PERFORMANCE.md:36` rewritten. Landed with deviations — see "Item 3 follow-ups" below |
 | 4 | Ollama model prewarm during transcription | feat | S–M | ☐ | no `prewarm_model`, `on_task_start`, or `OLLAMA_PREWARM_ENABLED` anywhere in the repo (the `prewarm` hits in `transcripts_server.py` are the pre-existing Whisper prewarm) |
-| 5 | Bounded frame-0 preload (Screenspace) | feat | S | ☐ | `screenspace.js:5031` still an unbounded `forEach`, and `pickId` is still computed *below* it |
+| 5 | Bounded frame-0 preload (Screenspace) | feat | S | ☑ | `screenspace.js:288` `queueFrameZeroPreload` (concurrency 2); `pickId`/`selectParticipant` now resolve above it. Landed with deviations — see "Item 5 follow-ups" below |
 | 6 | Hardware video encoding (VideoToolbox) | feat | M | ☑ | `video.py` `check_videotoolbox_support` / `resolve_video_encoder` / `video_encoder_args` / `note_hw_encode_failure` / `run_ffmpeg_encode`; five call sites converted. Measured 1080p/60s re-encode 48.4s → 12.5s wall (524s → 20.6s CPU); reel concat end-to-end 35.5s → 8.8s. Landed with deviations — see "Item 6 follow-ups" below |
-| 7 | Skeleton coverage for initial loads | feat | S | ☐ | `transcripts.html:51` still ships a literal `No participants`; `:170` `#transcriptEmpty` has no `hidden`; `workflows.html:138/142` unseeded; no `.pill-skeleton` |
-| 8 | Small backlog (each optional, S) | mixed | S | ◑ | 8a/8c/8e landed via their own PRs; 8b open (retargeted); 8d half open, half superseded — see the per-bullet markers in the Item 8 section |
+| 7 | Skeleton coverage for initial loads | feat | S | ☑ | `.pill-skeleton` (transcripts) and `.wf-row-skeleton` (workflows palette + stashes); `#transcriptEmpty` ships `.hidden`. Landed with deviations — see "Item 7 follow-ups" below |
+| 8 | Small backlog (each optional, S) | mixed | S | ◑ | 8a/8c/8e landed via their own PRs; 8c's scroll half and 8d's xref half landed in the frontend packet; **8b is the only one still open** — see the per-bullet markers in the Item 8 section |
 
-Recommended landing order for what remains: #1 lands `video.py` groundwork; #6 lands after #3
-(done) so the encode call-site list is stable.
+Items #2, #5, #7 and the open halves of #8c/#8d landed together as one frontend packet
+(2026-07-30) — one PR, one `/ui-check` pass, since they touch four overlapping files and share
+their browser verification. **What remains: #4 (Ollama prewarm) and #8b (Sheets meta TTL
+cache), both backend.**
 
 ---
 
@@ -59,6 +61,7 @@ Reel validation probes every clip sequentially; multi-file participants probe ea
 Verified behavior: SSE and the 3s poller do **not** run concurrently at boot. The real gap: after an SSE drop the poller starts, and a later `startSSE()` (from queueing, results, or the `visibilitychange` handler at screenspace-tasks.js:1143) opens a new stream while the poller keeps running → both transports run concurrently from then on. Also `startSSE()` passes no `onUnsupported`, so no-EventSource environments get zero task updates.
 
 - In `startSSE()` (screenspace-tasks.js:1062–1079): add `onUnsupported: startPolling` (`createSSEStream` supports it, utils.js:931) and call `stopPolling()` in `onOpen` next to the existing `state.sseFellBack = false`. workflows-runs.js already implements this pattern — mirror it.
+- **As shipped:** exactly that. Worth recording for a future pass: `onUnsupported` is parity-only (no browser this ships in lacks `EventSource`); the `stopPolling()` in `onOpen` is the fix that matters. Safe because `make_sse_channel`'s streamer yields the current payload on connect (`server_utils.py:303`), so retiring the poller there cannot open a data gap.
 - **Transcripts 3s task poll: leave as-is** (wontfix). No SSE endpoint exists in transcripts_server.py; tasks run minutes, ≤3s latency is invisible; the poller is entangled with `POST_COMPLETION_GRACE_CYCLES` and agent rearming and already self-gates. Record in the PR description.
 - **Test**: source-level assertion (pattern of `tests/test_studio_frontend_source.py`) that the `createSSEStream("api/tasks/stream"` options include `onUnsupported` and `onOpen` contains `stopPolling()`.
 - `fix:` — no VERSION bump.
@@ -115,6 +118,26 @@ Today the summary agent's first `generate()` after transcription pays the 5–30
 
 - Reorder the `apiGet("api/participants")` handler: compute `pickId` (localStorage-restore block currently *below* the loop) **first**, call `selectParticipant(pickId, initialTs)` so its request wins, then pump a bounded queue (selected first, then the rest) at concurrency 2 — the `studio-scrubber.js` prefetch-queue pattern (lines ~27–52). Keep `_videoVersions` seeding above everything (`?v=` cache-bust contract) and the existing `TODO: apiGetBlob` comment. ES5 note: release the slot in a final `.then()` after `.catch()` so it always decrements.
 - No config change. Verify with `/ui-check` — `tests/ui/shot.py screenspace --eval` can read back `performance.getEntriesByType("resource")` to confirm ≤2 concurrent `frame/*/0` requests with the selected participant first, rather than reading DevTools Network by hand.
+
+### Item 5 follow-ups (shipped, but not as written above)
+
+- **The selected participant is enqueued last, not first.** The item text above is wrong on this
+  point: `_fetchFrame` consults `_preloadedFrames` only at request time (`screenspace.js:1571`),
+  so a blob that lands after `selectParticipant` already issued its `<img>` request buys nothing
+  at boot. The queue exists for the participants the user might switch *to*.
+- Two hazards the item text didn't anticipate, both fixed in the same change because spreading
+  the preload over seconds turns them from theoretical into likely:
+  - **Stale-version writes.** `selectParticipant`'s `api/video/info` handler drops
+    `_preloadedFrames[pid]` when the source mtime changed (`:1096-1101`); the queue captures
+    `_videoVersions[pid]` at enqueue and discards a result whose version moved.
+  - **`pagehide` leak.** The handler now sets `_preloadStopped` and clears the queue, and an
+    in-flight `.then` revokes its own blob instead of storing it.
+- **Not done:** capping the queue to the first N participants. Concurrency 2 already removes the
+  boot burst; a cap would silently drop the instant-switch payoff for later participants.
+- Measured in the `/ui-check` fixture (2 participants): three `frame/*/0` requests, the selected
+  participant's own request issued in the same tick as the queue's first item, and the queue's
+  own selected-participant entry served from the memory cache (identical `responseEnd`) rather
+  than costing a second extraction.
 
 ## Item 6 — Opt-in hardware encoding, default `auto` (VideoToolbox) — real speedup on Apple Silicon
 
@@ -178,12 +201,32 @@ Studio sheet (`populateSheetSkeleton`, studio.js:1082) and the Screenspace frame
 - **Tests**: DOM-wiring/source assertions (`tests/test_transcripts_dom_wiring.py`, `tests/test_workflows_frontend_source.py`) that the skeleton classes exist and `#transcriptEmpty` carries `hidden`.
 - **Risk**: a failed fetch leaves shimmer instead of a message — acceptable; the fetch `.catch` already toasts.
 
+### Item 7 follow-ups (shipped, but not as written above)
+
+- **That last risk bullet was wrong, and the change would have shipped a bug on it.**
+  `loadParticipants` (`transcripts.js:605`) had *no* `.catch` at all and returned early on
+  `!data.ok`, so a failed boot fetch would have left the pills shimmering forever **and** the
+  transcript pane permanently blank — a truthful terminal state converted into a permanent lie.
+  Both exits now call `_clearBootPlaceholders()`, which falls back to the real empty states and
+  no-ops when a list is already rendered (so a *refresh* failing stays harmless). Workflows had
+  the same hole: `setCanvasState("error")` now clears both sidebar containers, because a
+  catalog/blueprint rejection never reaches `renderPalette`/`renderStashPalette`.
+- `#transcriptEmpty` ships the `hidden` **class**, not the attribute — every JS site toggles
+  `.hidden` (rule at `transcripts.css:39`), so the attribute would never have been removed.
+- Skeleton geometry classes are `.pill-skeleton` (transcripts.css) and `.wf-row-skeleton`
+  (workflows.css, one class for both the palette and the stash list). Both are geometry-only over
+  the shared `.skeleton` shimmer, following `.skeleton-cell`'s raw-px precedent.
+- Containers carry `aria-busy="true"` in the HTML, cleared by `renderPills` / `renderPalette` /
+  `renderStashPalette`; the skeleton spans themselves are `aria-hidden`.
+- The plan's line numbers for workflows were wrong (`31/35`); the containers are at
+  `workflows.html:138/142`.
+
 ## Item 8 — Small backlog (optional; verified but low individual impact)
 
 - **8a ☑ Lazy `import gspread`** in clipgen.py:21 → first Google-Sheets use. Measured: gspread is ~200ms of the ~260ms module import (`-X importtime`); Excel-only and `--help` flows never need it. `fix:`/`perf:`-class change; check `ty` on the deferred-import pattern. **Landed** via `2f84d24b` (#563) rather than an Item-8 packet: `clipgen.py` imports only `sys`/`pathlib`, and `cli.py` defers gspread into function bodies (`cli.py:884/911/934/956`).
 - **8b ☐ TTL cache for `google_api.get_all_spreadsheets`** (server.py:3411, 3498): module-level list + timestamp, ~300s TTL, refresh param — settings opens stop paying a Sheets round-trip (and its 429 backoff risk). **Retarget before building**: `a609844b` (#618) moved the picker route to the richer `get_all_spreadsheet_meta` (it needs `modifiedTime`), so today the two sites are `server.py:3239` (`get_all_spreadsheets`) and `server.py:3497` (`get_all_spreadsheet_meta`). Cache the *meta* call — `get_all_spreadsheets` (`google_api.py:114`) is just the name-only wrapper over it.
-- **8c ◑ Transcripts segment list**: `renderSegments()` (transcripts.js:812–896) rebuilds one big innerHTML string per render. Cheap wins: `content-visibility: auto` (+ `contain-intrinsic-size`) on segment rows in transcripts.css; preserve scroll position across rebuilds. Virtualize only if profiling shows >2000-segment sessions hurting. **CSS half landed** via `0c9716bd` (#560): `transcripts.css:1233` carries both properties, with a comment on the `auto` fallback for `scrollToSegment()`'s rect math. The scroll-preservation half is unverified — still open.
-- **8d ◑ Gate always-on pollers**: transcripts xref poller (transcripts.js:119, 30s) could start lazily on first xref use — **still open**, it starts eagerly at boot (`transcripts.js:2733` → `:110` → `:125`, gated on backend availability, not on first xref use). Studio's intake pollers — **superseded, treat as wontfix**: there are now three (endpoints were combined per-domain), they carry `{ maxIntervalMs: 30000 }` idle backoff which removes most of the cost, and `studio.js:4786-4791` documents a deliberate decision to poll regardless of visible sub-tab so the start-overlay pills and sub-tab badges stay fresh.
+- **8c ◑ Transcripts segment list**: `renderSegments()` (transcripts.js:812–896) rebuilds one big innerHTML string per render. Cheap wins: `content-visibility: auto` (+ `contain-intrinsic-size`) on segment rows in transcripts.css; preserve scroll position across rebuilds. Virtualize only if profiling shows >2000-segment sessions hurting. **CSS half landed** via `0c9716bd` (#560): `transcripts.css:1233` carries both properties, with a comment on the `auto` fallback for `scrollToSegment()`'s rect math. The scroll-preservation half **landed** in the frontend packet: `renderSegments` captures and restores `#trMain`'s `scrollTop` (scroll lives there, not on `#segmentList` — same probe `renderPartialSegments` uses), gated on a module-local `_renderedSegmentsPid` so a participant switch resets to 0 and a same-transcript rebuild (heatmap toggle, tooltip toggle, streaming→final swap) holds position. Two things the item text didn't mention and that a re-implementation would get wrong: the restore has to be marked programmatic via the new `TS.ignoreNextScroll()` or `initAutoFollowScrollPause` (`transcripts-video.js:1161`) reads it as a reader scroll and kills playhead follow for 3 s; and it has to be written in the same task as the `innerHTML` wipe so `initPipScroll`'s rAF-coalesced listener never sees the transient top. Verified in-browser (300 filler segments): same-participant re-render held 900 px, participant switch reset to 0.
+- **8d ◑ Gate always-on pollers**: transcripts xref poller (transcripts.js:119, 30s) could start lazily on first xref use — **retargeted and landed** in the frontend packet. "Lazily on first xref use" was dropped: the indexes also feed cross-transcript search, so there is no clean first-use trigger. What shipped instead: the poller's `/studio/api/sheet` leg goes idle (`_sheetXrefIdle`) once a response reports `sheet_loaded: false`, since that route can only keep answering with no rows, and re-arms in `startXrefPolling` (which also runs on tab focus — a spreadsheet opened from another tab reloads only *that* document). The first tick always runs: that handler is this page's only caller of `clipgenApplyConfig`, so `CLIPGEN_CONFIG` on Transcripts now refreshes per focus rather than every 30 s. Small win, recorded honestly: two requests a minute to a route in the same Flask process. Studio's intake pollers — **superseded, treat as wontfix**: there are now three (endpoints were combined per-domain), they carry `{ maxIntervalMs: 30000 }` idle backoff which removes most of the cost, and `studio.js:4786-4791` documents a deliberate decision to poll regardless of visible sub-tab so the start-overlay pills and sub-tab badges stay fresh.
 - **8e ☑ `decoding="async"`** on dynamically created thumbnails/imgs (queue cards, results) — trivial, prevents main-thread decode jank. **Landed** across ~18 sites including both the plan named (`screenspace-results.js:652/764`, `studio.js:2591`). The remaining misses are `new Image()` preload/measure objects that never enter the DOM, where the attribute is a no-op.
 - **Studio grid filter re-render** (studio.js:1432 region): known deferred item (PERF-PLAN-2 §4.1), still gated on profiling — profile before building incremental filtering.
 

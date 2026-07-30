@@ -118,3 +118,47 @@ def test_param_restore_fires_change_as_well_as_input():
 def test_param_reset_button_classes_have_css_rules():
     for name in ("param-reset", "param-reset-icon"):
         assert f".{name}" in SCREENSPACE_CSS, f".{name} is built in JS but never styled"
+
+
+def _tasks_fn(name: str) -> str:
+    start = TASKS_JS.index(f"function {name}(")
+    return TASKS_JS[start : TASKS_JS.index("\n  }", start)]
+
+
+def test_task_stream_retires_the_poller_when_it_reconnects():
+    """Both transports running at once is invisible — the UI just costs twice
+    the requests. onError starts the poller; only onOpen can retire it."""
+    body = _tasks_fn("startSSE")
+    assert "onUnsupported: startPolling" in body, (
+        "startSSE must fall back to polling where EventSource is absent"
+    )
+    open_handler = body[body.index("onOpen:") : body.index("onUnsupported:")]
+    assert "stopPolling()" in open_handler, (
+        "a reconnected stream must stop the fallback poller, or a drop-and-recover "
+        "leaves SSE and the 3s poller running together"
+    )
+
+
+def test_frame_preload_runs_behind_the_selected_participant():
+    """An unbounded preload races the one frame the user is waiting for: every
+    request is a server-side extraction against a 3-slot capture pool."""
+    boot = SCREENSPACE_JS[SCREENSPACE_JS.index('apiGet("api/participants")') :]
+    boot = boot[: boot.index('apiGet("api/regions")')]
+    assert boot.index("selectParticipant(pickId") < boot.index(
+        "queueFrameZeroPreload("
+    ), "the selected participant's own frame request must be issued first"
+    assert re.search(r"var PRELOAD_CONCURRENCY = \d+;", SCREENSPACE_JS)
+
+
+def test_frame_preload_drops_results_for_a_replaced_source_file():
+    """A queued preload can now resolve seconds after selectParticipant saw a
+    newer mtime and dropped the stale blob; storing it anyway would repaint the
+    old frame with no error anywhere."""
+    start = SCREENSPACE_JS.index("function _preloadFrameZero(")
+    body = SCREENSPACE_JS[start : SCREENSPACE_JS.index("\n  }", start)]
+    assert "_videoVersions[item.pid]" in body, (
+        "_preloadFrameZero must compare the enqueue-time version before storing"
+    )
+    assert "_preloadStopped" in body, (
+        "a preload that resolves after pagehide must revoke its own blob URL"
+    )
