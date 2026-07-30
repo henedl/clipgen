@@ -180,11 +180,14 @@
        default tab, so it starts visible) -->
   <div id="metadataPanel"></div>
 
+  <div id="toast" class="toast hidden"></div>
+
   <!-- Deps order is a contract: utils → primitives → chrome → settings →
        intake-cluster (hub clustering) → vendored Three.js (global THREE,
        r147 UMD — see vendor/README.md) → overview hub → satellites. -->
   <script src="utils.js" defer></script>
   <script src="hotkeys.js" defer></script>
+  <script src="motion.js" defer></script>
   <script src="primitives.js" defer></script>
   <script src="topnav.js" defer></script>
   <script src="start-overlay.js" defer></script>

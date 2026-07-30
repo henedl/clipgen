@@ -21,8 +21,13 @@
   padding: var(--space-6);
   font-family: var(--font-sans);
   color: var(--fg);
-  --host-blur: 0px;
-  --veil-alpha: 0;
+
+  /* Backdrop is the shared veil (tokens.css .cg-veil / .cg-veil-layer), ramped
+   * by toggling .is-veiled. Heavier and slower than the modal default: this is a
+   * full-screen launcher, not a dialog. */
+  --veil-blur-open: 14px;
+  --veil-alpha-open: 0.55;
+  --duration-veil: 600ms;
 
   /* Local surfaces not covered by global tokens. Dark defaults == the values
    * this overlay historically hardcoded, so dark mode is unchanged; the
@@ -45,17 +50,9 @@
   display: none;
 }
 
-.start-overlay-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 10, 11, var(--veil-alpha));
-  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  transition:
-    background 600ms cubic-bezier(.22, 1, .36, 1),
-    backdrop-filter 600ms cubic-bezier(.22, 1, .36, 1),
-    -webkit-backdrop-filter 600ms cubic-bezier(.22, 1, .36, 1);
-}
+/* The backdrop element itself is styled by tokens.css .cg-veil-layer. It stays a
+ * real element rather than the ::before that .cg-modal-veil generates, because
+ * it is the click-to-dismiss target and a pseudo-element cannot be one. */
 
 /* ---- Panel ---------------------------------------------------------- */
 
@@ -1181,13 +1178,8 @@
   border-top-color: var(--accent);
   border-radius: 50%;
   flex-shrink: 0;
-  animation: so-spinner-rotate 0.7s linear infinite;
-}
-
-@keyframes so-spinner-rotate {
-  to {
-    transform: rotate(360deg);
-  }
+  /* Shared rotation from tokens.css, same 0.7s as Studio's and Screenspace's. */
+  animation: spin 0.7s linear infinite;
 }
 
 .start-overlay .sheet-panel__paste {
@@ -1442,12 +1434,10 @@
 }
 
 .start-overlay .tool-tile:hover .art-screenspace__solid {
-  animation: so-screenspace-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes so-screenspace-pulse {
-  0%, 100% { opacity: .55; }
-  50%      { opacity: 1; }
+  /* Shared breathe from tokens.css. The -0.8s (half the duration) starts it at
+   * the trough, matching the .55 resting opacity above. */
+  --pulse-trough: .55;
+  animation: cg-pulse 1.6s ease-in-out -0.8s infinite;
 }
 
 /* Geometry-property animation on width/height needs the un-prefixed values
@@ -1854,9 +1844,10 @@ html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb:hove
 /* ---- Reduced motion ------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {
+  /* The backdrop's own transition is disabled by tokens.css's .cg-veil-layer
+   * reduced-motion rule. */
   .start-overlay .start-panel,
-  .start-overlay .cascade-in,
-  .start-overlay .start-overlay-backdrop {
+  .start-overlay .cascade-in {
     transition: none;
   }
   .start-overlay .rail__wordmark {

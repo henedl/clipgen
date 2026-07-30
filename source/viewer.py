@@ -310,6 +310,22 @@ def _generate_viewer_html(
                 pass
         template_html = template_html.replace(hk_js_tag, "")
 
+    # Inline the shared motion engine (ClipgenMotion) so exported viewers animate
+    # the same way the live pages do — an export has no asset routes, so without
+    # this the toast's guarded fade silently no-ops and it snaps instead. JS-only:
+    # motion.js ships no stylesheet. Position among these blocks is immaterial —
+    # utils.js is prepended last (so it always ends up first) and every consumer
+    # reads window.ClipgenMotion lazily inside a function, never at load time.
+    mo_js_tag = '<script src="motion.js" defer></script>'
+    if mo_js_tag in template_html:
+        mo_js_path = assets_dir / "motion.js"
+        if mo_js_path.is_file():
+            try:
+                js_text = _read_bundled_asset(str(mo_js_path)) + "\n" + js_text
+            except OSError:
+                pass
+        template_html = template_html.replace(mo_js_tag, "")
+
     # Inline the card-scrubber module into viewers that reference it (timeline,
     # not gallery). Its CSS/JS join the shared bundles so the export stays
     # self-contained; the external tags are stripped below.

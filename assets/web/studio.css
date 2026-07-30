@@ -463,21 +463,12 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   background: var(--color-pulse);
   margin-right: var(--space-1);
   vertical-align: middle;
-  animation: studio-tab-pulse 1s ease-in-out infinite;
+  /* Shared breathe from tokens.css; 0.35 is its default trough. */
+  animation: cg-pulse 1s ease-in-out infinite;
 }
 
 .tab-status-dot.hidden {
   display: none;
-}
-
-@keyframes studio-tab-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2036,7 +2027,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2159,6 +2149,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   fill: var(--color-accent);
 }
 
+/* Bouncing-dots loader. Deliberately NOT the shared cg-pulse: this translates
+ * rather than fading, so it is a different animation, not a duplicate one. */
 @keyframes pulse-dot {
   0%, 80%, 100% { transform: translateY(0); }
   40% { transform: translateY(-4px); }
@@ -2167,6 +2159,10 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 .card-gen-overlay svg circle:nth-child(1) { animation: pulse-dot 0.9s ease-in-out infinite; }
 .card-gen-overlay svg circle:nth-child(2) { animation: pulse-dot 0.9s ease-in-out 0.15s infinite; }
 .card-gen-overlay svg circle:nth-child(3) { animation: pulse-dot 0.9s ease-in-out 0.3s infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card-gen-overlay svg circle { animation: none; }
+}
 
 .queue-card-success {
   border-color: #16a34a;
@@ -2230,16 +2226,18 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 /* Status overlay */
 
 /* Studio overlay cards (.status-card / .confirm-card / .gallery-card / .log-panel
- * / .build-status-card) pop in via the shared motion engine: studio.js calls
- * ClipgenMotion.animateIn(card, "pop") on reveal (see popOverlayCardIn). The
- * former cg-overlay-pop @keyframes was retired to keep a single animation system;
- * motion.js handles the prefers-reduced-motion fallback (a short opacity fade). */
+ * / .build-status-card) pop in and out via utils.js's popModalIn/popModalOut,
+ * which also ramps the shared .cg-modal-veil backdrop (tokens.css) — hence no
+ * background and no transition on the overlay shells here. The former
+ * cg-overlay-pop @keyframes was retired to keep a single animation system;
+ * motion.js handles the prefers-reduced-motion fallback (a short opacity fade).
+ * #buildStatus is the one exception: a non-blocking corner card, so it carries no
+ * veil and only its card animates. */
 
 #statusOverlay {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2345,7 +2343,6 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   position: fixed;
   inset: 0;
   z-index: var(--z-dropdown);
-  background: var(--color-backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2437,6 +2434,8 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* ---- Artifact Log overlay ---- */
 
+/* Backdrop + the `position: relative` that lifts .log-panel above it both come
+ * from .cg-modal-veil (tokens.css). */
 #logOverlay {
   position: fixed;
   inset: 0;
@@ -2444,40 +2443,13 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
-  /* Animated backdrop blur + dark veil, driven by these custom props from
-   * openLog/closeLog. Mirrors .settings-overlay / .start-overlay. */
-  --host-blur: 0px;
-  --veil-alpha: 0;
-}
-
-#logOverlay::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 10, 11, var(--veil-alpha));
-  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
-  transition:
-    background 460ms cubic-bezier(.22, 1, .36, 1),
-    backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1),
-    -webkit-backdrop-filter 460ms cubic-bezier(.22, 1, .36, 1);
-  pointer-events: none;
 }
 
 #logOverlay.hidden {
   display: none;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  #logOverlay::before {
-    transition: none;
-  }
-}
-
 .log-panel {
-  /* Positioned so it paints above the absolutely-positioned #logOverlay::before
-   * veil (mirrors .settings-panel); otherwise the veil dims/blurs the dialog. */
-  position: relative;
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-panel-border);

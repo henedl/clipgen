@@ -367,11 +367,19 @@
     return animateOut(el, opts.fallbackKind || "stash", opts);
   }
 
+  // Single JS-side source for the reduced-motion question. Callers that pair a
+  // WAAPI animation with a CSS transition (utils.js popModalOut waiting on the
+  // modal veil) need it too, and should not re-query matchMedia themselves.
+  function isReduced() {
+    return !!REDUCED.matches || !HAS_WAAPI;
+  }
+
   global.ClipgenMotion = {
     PARAMS: PARAMS,
     animateOut: animateOut,
     animateOutAll: animateOutAll,
     animateIn: animateIn,
     flyTo: flyTo,
+    isReduced: isReduced,
   };
 })(window);

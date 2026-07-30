@@ -1313,12 +1313,12 @@
     if (_generateAbort) _generateAbort.abort();
   }
 
-  // ---- Artifact log (TopNav #logBtn; Studio-style modal) ----
-
-  var LOG_BLUR_PX = 6;
-  var LOG_VEIL_ALPHA = 0.35;
-  var LOG_EXIT_MS = 360; // hold the overlay mounted through the veil fade before display:none
-  var _logCloseTimer = null;
+  // ---- Artifact log (TopNav #logBtn) ----
+  //
+  // Shares Studio's markup, styling AND open/close path: utils.js's
+  // popModalIn/popModalOut drive the card pop and ramp the shared
+  // .cg-modal-veil backdrop. This used to be a separate copy with its own veil
+  // constants and exit timer, which is why spam-toggling it popped.
 
   function logArtifactResult(data, cut) {
     var artifact = data.artifact || {};
@@ -1374,47 +1374,34 @@
     countEl.textContent = okCount + " clip(s) generated this session";
   }
 
-  function logOverlayVisible() {
-    // A pending close timer means the panel is mid-fade (still not .hidden) —
-    // report it as not-visible so a toggle during the fade reopens instead of
-    // re-closing and leaving the panel stuck without its backdrop.
-    return !_logCloseTimer && !qs("#logOverlay").classList.contains("hidden");
-  }
-
   function openLog() {
     var overlay = qs("#logOverlay");
-    if (_logCloseTimer) {
-      clearTimeout(_logCloseTimer);
-      _logCloseTimer = null;
-    }
-    overlay.style.setProperty("--host-blur", "0px");
-    overlay.style.setProperty("--veil-alpha", "0");
-    overlay.classList.remove("hidden");
-    // Next frame: build in the backdrop blur + dark veil (Studio's pattern).
-    requestAnimationFrame(function () {
-      overlay.style.setProperty("--host-blur", LOG_BLUR_PX + "px");
-      overlay.style.setProperty("--veil-alpha", String(LOG_VEIL_ALPHA));
+    popModalIn(overlay, qs(".log-panel"));
+    // Gates the topnav's own backdrop-filter so this modal's veil composites
+    // over the bar instead of reading through it (see topnav.css).
+    document.body.classList.add("modal-open");
+    // Escape, Tab-trapping and focus restore, same as Studio's log. The trap
+    // owns Escape while it is active, so the page's back-out cascade does not
+    // need a branch for this overlay.
+    openBlockingModal(overlay, {
+      onEscape: closeLog,
+      trapFocus: true,
+      restoreFocus: true,
     });
     renderLog();
   }
 
   function closeLog() {
     var overlay = qs("#logOverlay");
-    overlay.style.setProperty("--host-blur", "0px");
-    overlay.style.setProperty("--veil-alpha", "0");
-    // Defer display:none until the veil fade finishes; adding .hidden
-    // synchronously would blink the overlay out in a single frame.
-    if (_logCloseTimer) clearTimeout(_logCloseTimer);
-    _logCloseTimer = setTimeout(function () {
+    // Trap and topnav gate are released with the visual hide, not before it:
+    // focus jumping back to the trigger while the veil is still up reads as the
+    // panel already being gone. popModalOut's generation guard makes deferring
+    // them safe against a re-open mid-exit.
+    popModalOut(overlay, qs(".log-panel"), function () {
+      closeBlockingModal(overlay);
       overlay.classList.add("hidden");
-      _logCloseTimer = null;
-    }, LOG_EXIT_MS);
-  }
-
-  function toggleLogPanel(force) {
-    var show = force !== undefined ? force : !logOverlayVisible();
-    if (show) openLog();
-    else closeLog();
+      document.body.classList.remove("modal-open");
+    });
   }
 
   // ---- Keyboard (shared hotkeys.js registry) ----
@@ -1522,8 +1509,9 @@
 
     // Back-out cascade, one level per press (order matters: overlay first,
     // then pending in-point, then tool, then selections).
+    // The artifact log is absent here on purpose: it now runs a blocking-modal
+    // trap that owns Escape while open, so hotkeys.js never reaches this cascade.
     window.ClipgenHotkeys.registerEscape(function () {
-      if (logOverlayVisible()) { closeLog(); return true; }
       if (state.pendingIn !== null) {
         state.pendingIn = null;
         updatePendingInfo();
@@ -1695,8 +1683,10 @@
     qs("#coCancelBtn").addEventListener("click", onCancelGenerate);
     qs("#coUndoBtn").addEventListener("click", undo);
     qs("#coRedoBtn").addEventListener("click", redo);
+    // Open-only, matching Studio: dismiss is the X, the backdrop, or Escape. A
+    // toggle here made the button a spam surface that fought its own animation.
     var logBtn = qs("#logBtn");
-    if (logBtn) logBtn.addEventListener("click", function () { toggleLogPanel(); });
+    if (logBtn) logBtn.addEventListener("click", openLog);
     qs("#logClose").addEventListener("click", closeLog);
     qs("#logOverlay").addEventListener("click", function (e) {
       if (e.target === qs("#logOverlay")) closeLog();

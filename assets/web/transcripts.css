@@ -93,11 +93,8 @@ body {
 .status-indicator--error { background: var(--sev-critical); }
 .status-indicator--working {
   background: var(--color-pulse);
-  animation: status-pulse 1s ease-in-out infinite;
-}
-@keyframes status-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  /* Shared breathe from tokens.css; 0.35 is its default trough. */
+  animation: cg-pulse 1s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .status-indicator--working { animation: none; }
@@ -1261,12 +1258,14 @@ body {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  animation: streaming-pulse 1.5s ease-in-out infinite;
+  /* Shared breathe from tokens.css. The -0.75s (half the duration) starts it at
+   * the trough, so this dot still fades UP from dim the way it always has. */
+  --pulse-trough: 0.3;
+  animation: cg-pulse 1.5s ease-in-out -0.75s infinite;
 }
 
-@keyframes streaming-pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .streaming-dot { animation: none; }
 }
 
 /* Live elapsed/ETA text keeps a stable width as the digits change. */
@@ -1479,17 +1478,14 @@ body {
 .pill-dot--running {
   background: var(--color-text);
   border-color: var(--color-text);
-  animation: pill-dot-pulse 1.4s ease-in-out infinite;
+  /* Shared breathe from tokens.css, dimmer trough than its 0.35 default. */
+  --pulse-trough: 0.3;
+  animation: cg-pulse 1.4s ease-in-out infinite;
 }
 
 .pill-dot--queued {
   background: var(--color-text-dim);
   border-color: var(--color-text-dim);
-}
-
-@keyframes pill-dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
 }
 
 @media (prefers-reduced-motion: reduce) {

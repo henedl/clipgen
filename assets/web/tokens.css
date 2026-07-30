@@ -244,6 +244,9 @@
   --duration-fast: 150ms;
   --duration-normal: 250ms;
   --duration-slow: 350ms;
+  /* Modal backdrop ramp. utils.js reads this off the overlay rather than
+   * hardcoding a matching number, so the two can't drift (see .cg-modal-veil). */
+  --duration-veil: 360ms;
 
   /* Z-index layers */
   --z-float: 10;
@@ -428,6 +431,17 @@ html[data-theme="light"] .cg-logo {
  * on the animated selector and reference this keyframe by name. */
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+/* Shared opacity breathe for every "working" indicator dot. Like `spin` above,
+ * pages reference it by name rather than redefining it: they set their own
+ * duration and, when they want a different trough than the default, declare
+ * --pulse-trough on the animated selector. To start AT the trough rather than at
+ * full opacity, give the animation a negative delay of half its duration — in
+ * the shorthand's 4th slot, since a trailing animation-delay would be reset by
+ * the shorthand. */
+@keyframes cg-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: var(--pulse-trough, 0.35); }
 }
 /* Cross-reference badge icon (mask-image from assets/icons/) */
 .xref-badge-icon {
@@ -715,6 +729,72 @@ audio.cg-audiotrack { display: none; }
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal);
+}
+
+/* Frosted modal backdrop — the shared treatment for every blocking modal
+   (Studio's dialogs + artifact log, Composer's log, Settings, Start). Opt in by
+   adding `cg-modal-veil` to the overlay; JS ramps it by toggling `.is-veiled`
+   (see popModalIn / popModalOut in utils.js).
+
+   The blur has to be driven by custom properties — it CANNOT be faded by
+   animating the overlay's own opacity, because opacity on an ancestor
+   establishes a backdrop root and the backdrop-filter then samples nothing. That
+   is not a subtle degradation: measured on sharp stripes, even `opacity: .999`
+   removes the frost entirely. Hence the property ramp.
+
+   Per-surface intensity: override --veil-blur-open / --veil-alpha-open. The
+   ramp duration is --duration-veil, which utils.js reads back off the element,
+   so the JS hide-commit always matches the CSS transition. */
+/* HOST — declares the properties the paint reads, and `.is-veiled` ramps them.
+   `cg-modal-veil` is the common case (host + a generated ::before layer);
+   `cg-veil` is the host alone, for a surface that needs a REAL backdrop element
+   instead — the Start overlay's is its click-to-dismiss target, and a
+   pseudo-element cannot be an event target. */
+.cg-veil,
+.cg-modal-veil {
+  --host-blur: 0px;
+  --veil-alpha: 0;
+}
+
+.cg-veil.is-veiled,
+.cg-modal-veil.is-veiled {
+  --host-blur: var(--veil-blur-open, 12px);
+  --veil-alpha: var(--veil-alpha-open, 0.45);
+}
+
+/* PAINT — one definition, two carriers: the generated pseudo, or a real element
+   wearing `cg-veil-layer` inside a `cg-veil` host. */
+.cg-veil-layer,
+.cg-modal-veil::before {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 11, var(--veil-alpha));
+  backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  -webkit-backdrop-filter: blur(var(--host-blur)) saturate(0.9);
+  transition:
+    background var(--duration-veil) cubic-bezier(.22, 1, .36, 1),
+    backdrop-filter var(--duration-veil) cubic-bezier(.22, 1, .36, 1),
+    -webkit-backdrop-filter var(--duration-veil) cubic-bezier(.22, 1, .36, 1);
+}
+
+/* The pseudo needs generating, and must not swallow the clicks that drive
+   backdrop-dismiss. A real .cg-veil-layer element stays clickable on purpose. */
+.cg-modal-veil::before {
+  content: "";
+  pointer-events: none;
+}
+
+/* The card has to paint above the ::before, or the veil dims and blurs the
+   dialog itself. (A `cg-veil` host orders its own children instead.) */
+.cg-modal-veil > * {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cg-veil-layer,
+  .cg-modal-veil::before {
+    transition: none;
+  }
 }
 
 /* Thin custom scrollbar — theme-aware thumb (adapts to light mode via --border).

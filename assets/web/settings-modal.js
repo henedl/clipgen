@@ -20,11 +20,10 @@
     "CLI",
   ];
 
-  // Entry/exit animation tuning. Mirrors the Start overlay's vocabulary
-  // (--host-blur / --veil-alpha on the overlay root, .is-in on the panel)
-  // but dialled lighter — Settings is a sheet, not a full-screen launcher.
-  var INTRO_BLUR_PX = 12;
-  var INTRO_VEIL_ALPHA = 0.45;
+  // Entry/exit animation. The backdrop is the shared .cg-modal-veil, ramped by
+  // toggling `.is-veiled`; the panel slides in on `.is-in`. EXIT_MS must stay in
+  // step with --duration-veil (tokens.css) so the veil finishes fading exactly
+  // as the overlay is hidden.
   var EXIT_MS = 360;
 
   var _root = null;
@@ -126,7 +125,7 @@
   function _buildDom() {
     if (_root) return;
 
-    var overlay = el("div", "settings-overlay cg-modal-overlay hidden");
+    var overlay = el("div", "settings-overlay cg-modal-overlay cg-modal-veil hidden");
     overlay.id = "settingsOverlay";
 
     var panel = el("div", "settings-panel");
@@ -195,8 +194,7 @@
 
     var panel = _root.querySelector(".settings-panel");
     if (panel) panel.classList.remove("is-in");
-    _root.style.setProperty("--host-blur", "0px");
-    _root.style.setProperty("--veil-alpha", "0");
+    _root.classList.remove("is-veiled");
 
     _root.classList.remove("hidden");
     document.body.classList.add("modal-open");
@@ -213,8 +211,7 @@
 
     // Next frame: build in the backdrop blur and slide/scale the panel.
     requestAnimationFrame(function () {
-      _root.style.setProperty("--host-blur", INTRO_BLUR_PX + "px");
-      _root.style.setProperty("--veil-alpha", String(INTRO_VEIL_ALPHA));
+      _root.classList.add("is-veiled");
       if (panel) panel.classList.add("is-in");
     });
   }
@@ -235,8 +232,7 @@
     _selectNavRow(null, false);
     var panel = _root.querySelector(".settings-panel");
     if (panel) panel.classList.remove("is-in");
-    _root.style.setProperty("--host-blur", "0px");
-    _root.style.setProperty("--veil-alpha", "0");
+    _root.classList.remove("is-veiled");
     if (_closeTimer) clearTimeout(_closeTimer);
     _closeTimer = setTimeout(function () {
       if (_root) _root.classList.add("hidden");
