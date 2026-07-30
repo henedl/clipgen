@@ -12,8 +12,11 @@ has no JS DOM harness), but it catches HTML/JS drift for the elements that the
 render flow assumes exist.
 """
 
-from _frontend_source import concat_js, read
+import re
 
+from _frontend_source import WEB, concat_js, read
+
+_ICONS = WEB.parent / "icons"
 _CSS = read("transcripts.css")
 _HTML = read("transcripts.html")
 # The page script is a hub (transcripts.js) plus feature satellites
@@ -120,3 +123,32 @@ def test_a_failed_boot_fetch_clears_the_placeholders():
         "both the !data.ok branch and the .catch must fall back to the real "
         "empty states"
     )
+
+
+def test_every_thinking_agent_tab_carries_the_local_ai_badge():
+    """Summary and Friction are the two tabs rendered by Ollama thinking agents,
+    so both must show the badge that says so. A tab that grows an agent later
+    (or an agent-backed tab added to another page) is the thing this catches."""
+    tabbar = _HTML[_HTML.index('class="panel-tabbar"') : _HTML.index('id="summaryTab"')]
+    assert tabbar.count('class="ai-agent-badge"') == 2, (
+        "both #tabBtnSummary and #tabBtnFriction must carry .ai-agent-badge"
+    )
+    for tab_id in ("tabBtnSummary", "tabBtnFriction"):
+        button = tabbar[
+            tabbar.index(tab_id) : tabbar.index("</button>", tabbar.index(tab_id))
+        ]
+        assert "ai-agent-badge" in button, f"#{tab_id} is agent-backed but has no badge"
+        assert "data-tooltip=" in button, f"#{tab_id}'s badge must explain itself"
+
+
+def test_local_ai_badge_is_styled_and_its_icon_exists():
+    """The badge is a pure CSS mask with no JS behind it, so an unstyled class or
+    a mistyped icon path renders a zero-size invisible span with no error."""
+    assert ".ai-agent-badge {" in _CSS, (
+        ".ai-agent-badge is used in HTML but never styled"
+    )
+    masks = re.findall(r"mask-image:\s*url\((?:'|\")?([^'\")]+)", _CSS)
+    referenced = {m for m in masks if m.startswith("icons/")}
+    assert "icons/octicon/dependabot-16.svg" in referenced
+    missing = [m for m in referenced if not (_ICONS / m[len("icons/") :]).is_file()]
+    assert not missing, f"transcripts.css masks nonexistent icons: {missing}"

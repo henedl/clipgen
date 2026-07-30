@@ -564,6 +564,25 @@ body {
   -webkit-mask-image: url(icons/fire.svg);
 }
 
+/* Marks a tab whose contents come from a local Ollama thinking agent. Lives
+   here rather than in tokens.css because viewer.py inlines tokens.css into
+   exported viewers, which have no /icons/ route — shared tokens stay free of
+   icons/ URLs. Copy this rule verbatim into overview.css when the Overview
+   agent-summary tab lands. */
+.ai-agent-badge {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  opacity: 0.6;
+  background-color: currentColor;
+  mask-image: url(icons/octicon/dependabot-16.svg);
+  -webkit-mask-image: url(icons/octicon/dependabot-16.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+
 .panel-tab-dot {
   width: 7px;
   height: 7px;

@@ -134,7 +134,7 @@ uv run clipgen.py --overview -i ./videos -o ./out
 
 ## Third-party code
 
-The web UIs are hand-written vanilla JavaScript with one exception: the Overview map vendors a single-file [Three.js](https://threejs.org) build (MIT) for WebGL rendering. See [assets/web/vendor/README.md](assets/web/vendor/README.md) for version and provenance. SVG icons are [Heroicons](https://heroicons.com) (MIT).
+The web UIs are hand-written vanilla JavaScript with one exception: the Overview map vendors a single-file [Three.js](https://threejs.org) build (MIT) for WebGL rendering. See [assets/web/vendor/README.md](assets/web/vendor/README.md) for version and provenance. SVG icons are [Heroicons](https://heroicons.com) (MIT) plus GitHub's [Octicons](https://primer.style/octicons/) (MIT); see [assets/icons/octicon/README.md](assets/icons/octicon/README.md).
 
 ## Building from source
 
