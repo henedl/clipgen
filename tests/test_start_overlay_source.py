@@ -1,10 +1,11 @@
-"""Source-level wiring assertions for the Start overlay's Google panel.
+"""Source-level wiring assertions for the Start overlay's spreadsheet panels.
 
-The refresh button is the only user-facing escape hatch from the server's
-5-minute Drive-listing cache (``server._cached_spreadsheet_meta``), and every
-part of it is invisible to the Python tests: the markup, the ``?refresh=true``
-query it sends, and the fact that it lives *outside* the status node that three
-code paths rewrite.
+The two Refresh buttons and their failure handling are invisible to the Python
+tests: the markup, the ``?refresh=true`` query the Google one sends (the only
+user-facing escape hatch from ``server._cached_spreadsheet_meta``'s 5-minute
+TTL), the fact that both buttons live *outside* the status node that several
+code paths rewrite, and the recovery each loader owes its panel when a fetch
+fails mid-load.
 """
 
 from __future__ import annotations
@@ -14,34 +15,66 @@ import re
 from _frontend_source import assert_es5, read, strip_comments
 
 
-def test_google_refresh_button_markup():
+def _button(html: str, role: str) -> str:
+    match = re.search(rf"<button[^>]*data-role=\"{role}\"[^>]*>", html)
+    assert match, f"no <button data-role={role!r}> in start-overlay.html"
+    return match.group(0)
+
+
+def test_both_panels_ship_a_refresh_button():
     html = read("start-overlay.html")
-    assert 'data-role="google-refresh"' in html
-    assert 'data-icon="arrow-path"' in html
-    # Ships hidden: the unauthenticated panel shows a Connect CTA instead.
-    button = re.search(r"<button[^>]*data-role=\"google-refresh\"[^>]*>", html)
-    assert button and "hidden" in button.group(0)
+    for role in ("google-refresh", "excel-refresh"):
+        button = _button(html, role)
+        assert 'class="sheet-panel__refresh"' in button
+        assert 'data-icon="arrow-path"' in html
+    # Google ships hidden (the unauthenticated panel shows a Connect CTA
+    # instead); Excel has no auth gate, so it is visible from the start.
+    assert "hidden" in _button(html, "google-refresh")
+    assert "hidden" not in _button(html, "excel-refresh")
 
 
-def test_google_refresh_button_is_not_inside_the_status_node():
+def test_refresh_buttons_are_not_inside_the_status_node():
     """loadGoogleSheets / renderGoogleConnectCTA rewrite the status node."""
     html = read("start-overlay.html")
-    status = html.index('data-role="google-status"')
-    # The status <div> is self-contained: it closes before the button opens.
-    closes = html.index("</div>", status)
-    assert closes < html.index('data-role="google-refresh"')
+    for status, refresh in (
+        ("google-status", "google-refresh"),
+        ("excel-status", "excel-refresh"),
+    ):
+        opens = html.index(f'data-role="{status}"')
+        # The status <div> is self-contained: it closes before the button opens.
+        assert html.index("</div>", opens) < html.index(f'data-role="{refresh}"')
 
 
-def test_refresh_click_forces_a_relist_and_always_clears_the_spinner():
+def test_refresh_always_clears_its_spinner():
     js = read("start-overlay.js")
     assert_es5(js, "start-overlay.js")
     src = strip_comments(js)
     assert '"?refresh=true"' in src
     assert "loadGoogleSheets(true)" in src
-    # The spinner teardown is a final .then() after .catch(), so a failed
-    # refresh can't leave the button spinning forever.
-    handler = src[src.index("loadGoogleSheets(true)") :][:400]
-    assert handler.index(".catch(") < handler.index('classList.remove("is-spinning")')
+    # The teardown is a final .then() after .catch(), so a failed refresh can't
+    # leave the button spinning and disabled forever.
+    helper = src[src.index("function runPanelRefresh") :][:500]
+    assert helper.index(".catch(") < helper.index('classList.remove("is-spinning")')
+
+
+def test_failed_listings_leave_the_panels_usable():
+    """A rejected fetch must not strand a panel in its loading state."""
+    src = strip_comments(read("start-overlay.js"))
+    google = src[
+        src.index("function loadGoogleSheets") : src.index(
+            "function keepPreviousGoogleList"
+        )
+    ]
+    assert ".catch(" in google, "loadGoogleSheets hides the picker with no recovery"
+    # Both the transport failure and the server-reported auth_error land on the
+    # same recovery, which re-reveals the last list rather than leaving the
+    # picker hidden with sheets still in state.
+    assert google.count("keepPreviousGoogleList(") == 2
+
+    excel = src[
+        src.index("function loadExcelFiles") : src.index("function renderExcelList")
+    ]
+    assert ".catch(" in excel, "loadExcelFiles leaves the status on 'Scanning…'"
 
 
 def test_refresh_button_has_its_css():

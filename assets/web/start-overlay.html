@@ -152,7 +152,12 @@
             </div>
 
             <div data-tabpanel="excel" class="sheet-panel" hidden>
-              <div class="sheet-panel__status" data-role="excel-status">Scanning input folder…</div>
+              <div class="sheet-panel__status-row">
+                <div class="sheet-panel__status" data-role="excel-status">Scanning input folder…</div>
+                <button type="button" class="sheet-panel__refresh" data-role="excel-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
+                  <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
+                </button>
+              </div>
               <div class="sheet-picker" data-role="excel-picker">
                 <button type="button" class="sheet-picker__trigger" data-role="excel-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
                   <span class="sheet-picker__label" data-role="excel-picker-label">Select an Excel file…</span>
