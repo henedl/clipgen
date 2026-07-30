@@ -277,8 +277,14 @@ class TestGenerate:
 
         resp = MagicMock()
         resp.readline.side_effect = _readline_blocking
-        # When close() is called, unblock the readline so the worker exits.
-        resp.close.side_effect = lambda: block_event.set()
+        # Unblock on the socket shutdown, which is what actually frees a blocked
+        # read in production: _shutdown_response_socket documents that it must
+        # NOT call resp.close() (that races the blocked reader), so hanging the
+        # release off close() left the watcher unable to wake us and the test
+        # only ever finished by letting the 2 s timeout above expire — 2 s of
+        # wall clock, and the cancel path never actually proved it can interrupt
+        # a read. Releasing on shutdown() exercises the real mechanism.
+        resp.fp.raw._sock.shutdown.side_effect = lambda *a: block_event.set()
         mock_urlopen.return_value = resp
 
         evt = threading.Event()
@@ -292,6 +298,11 @@ class TestGenerate:
             block_event.set()  # safety net
         assert result is None
         assert resp.close.called
+        # Pin the interrupt mechanism itself. Without this the test still passes
+        # when the watcher never reaches the socket: readline just falls through
+        # its own timeout and generate() returns None because the cancel event is
+        # set. That would be a 2 s test asserting nothing about cancellation.
+        assert resp.fp.raw._sock.shutdown.called
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_no_cancel_event_works_normally(self, mock_urlopen):
@@ -468,9 +479,12 @@ class TestAutoStartServer:
     @patch("ollama_client.subprocess.Popen")
     @patch("ollama_client.is_available")
     def test_start_server_polls_until_available(
-        self, mock_avail, mock_popen, mock_which
+        self, mock_avail, mock_popen, mock_which, monkeypatch
     ):
         """_start_server polls is_available until it returns True."""
+        # What is under test is the poll *loop*, not the production 0.5 s spacing
+        # between attempts — leaving it real just slept through two intervals.
+        monkeypatch.setattr(ollama_client, "_START_POLL_INTERVAL", 0)
         mock_avail.side_effect = [False, False, True]
         assert ollama_client._start_server() is True
         assert mock_avail.call_count == 3
