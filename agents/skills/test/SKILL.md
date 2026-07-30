@@ -28,3 +28,12 @@ CLI argument tests use a local `_args(**overrides)` helper that builds a full ar
 CLI args, CLI modes, clip pipeline, file/artifact handling, Google/Excel adapters, manifest, selectors, spreadsheet generation, studio API, titlecards, transcripts, timestamp utilities, video commands, viewer data, viewer inlining, Screenspace, shared constants.
 
 Every new CLI mode, flag, or selector needs at least one smoke test.
+
+## Speed
+
+The suite runs on every `/check` and every push, so a slow test is a permanent tax. If a test
+you added shows up in `--durations=20`, work through
+[test-perf](../test-perf/SKILL.md) — it covers the four patterns that have actually cost this
+repo minutes of CI (waits whose release never fires, per-item regex over a whole corpus,
+uncached scan helpers, real production poll intervals) and how to fix one without quietly
+turning the test into a no-op.
