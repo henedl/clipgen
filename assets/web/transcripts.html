@@ -47,8 +47,15 @@
       </div>
     </div>
     <div id="trPillBar">
-      <div id="participantPills" class="pill-row" role="tablist" aria-label="Participants">
-        <span class="pill-row-empty">No participants</span>
+      <!-- Skeleton placeholders, not an empty state: "No participants" is the
+           truth only after the fetch resolves. renderPills() replaces these
+           wholesale (they carry no data-pid, so its in-place patch path can't
+           match) and clears aria-busy. -->
+      <div id="participantPills" class="pill-row" role="tablist" aria-label="Participants" aria-busy="true">
+        <span class="skeleton pill-skeleton" aria-hidden="true"></span>
+        <span class="skeleton pill-skeleton" aria-hidden="true"></span>
+        <span class="skeleton pill-skeleton" aria-hidden="true"></span>
+        <span class="skeleton pill-skeleton" aria-hidden="true"></span>
       </div>
     </div>
   </header>
@@ -167,7 +174,10 @@
 
     <section id="transcriptSection">
       <div id="segmentList"></div>
-      <div id="transcriptEmpty" class="transcript-empty">
+      <!-- Ships hidden: "No transcript available" is only true once we know
+           which participant is selected. Every reveal path removes .hidden
+           (renderEmptyState / renderSegments' zero-segment branch). -->
+      <div id="transcriptEmpty" class="transcript-empty hidden">
         <p>No transcript available</p>
         <p class="empty-hint">Use the Queue panel to transcribe this participant's video</p>
       </div>

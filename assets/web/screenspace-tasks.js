@@ -1224,8 +1224,17 @@
   function startSSE() {
     if (state.eventSource) return;
     state.eventSource = createSSEStream("api/tasks/stream", {
-      // A live connection re-arms the one-shot drop notice for any later drop.
-      onOpen: function () { state.sseFellBack = false; },
+      // SSE is primary: a live stream makes the fallback poller redundant, so
+      // retire it here. Without this a drop-and-recover (onError starts the
+      // poller, visibilitychange or a re-queue reopens the stream) leaves both
+      // transports running until the queue happens to drain. The server yields
+      // the current payload on connect, so there is no gap between the two.
+      // A live connection also re-arms the one-shot drop notice for any later drop.
+      onOpen: function () {
+        stopPolling();
+        state.sseFellBack = false;
+      },
+      onUnsupported: startPolling,
       onMessage: handleTaskData,
       onError: function () {
         // Connection lost — fall back to polling. onError can fire repeatedly,

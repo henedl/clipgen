@@ -318,6 +318,22 @@ def test_css_defines_stash_styles():
     assert ".wf-stash-builtin" in css  # read-only built-in variant
 
 
+def test_sidebar_ships_skeletons_and_clears_them_on_a_failed_load():
+    """Both containers are blank until their fetch resolves. The skeletons only
+    work if every exit from the load path removes them — a load failure never
+    reaches the renderers, so shimmer would sit next to the error overlay."""
+    html = WORKFLOWS_HTML.read_text(encoding="utf-8")
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    src = _workflows_js()
+    assert html.count('class="skeleton wf-row-skeleton"') >= 6
+    assert ".wf-row-skeleton" in css, "skeleton rows are unstyled (zero height)"
+    start = src.index("function setCanvasState(")
+    body = src[start : src.index("\n  function ", start + 1)]
+    assert '"#wfPalette", "#wfStashList"' in body, (
+        "setCanvasState('error') must clear both skeleton containers"
+    )
+
+
 def test_universal_control_port_for_gate_wiring():
     """A Gate's `control` output wires into any node via a universal optional
     `__gate__` input (exact-match) — the M4 control-edge gating decision."""

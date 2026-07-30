@@ -283,7 +283,61 @@
   // blob caches together. Empty string means "no version known yet".
   var _videoVersions = {};
 
+  // Frame 0 of every participant is preloaded so switching participants paints
+  // instantly. Bounded, because each request is a server-side frame extraction
+  // against a 3-slot capture pool: an unbounded fan-out on a 40-participant
+  // study starves the one frame the user is actually waiting for at boot.
+  var PRELOAD_CONCURRENCY = 2;
+  var _preloadQueue = [];
+  var _preloadActive = 0;
+  var _preloadStopped = false;
+
+  function queueFrameZeroPreload(participantIds) {
+    participantIds.forEach(function (pid) {
+      // Version at enqueue time: a preload that resolves after selectParticipant
+      // saw a newer mtime and dropped the stale blob must not put the old ?v=
+      // frame back.
+      _preloadQueue.push({ pid: pid, version: _videoVersions[pid] || "" });
+    });
+    _pumpFrameZeroPreload();
+  }
+
+  function _pumpFrameZeroPreload() {
+    while (!_preloadStopped && _preloadActive < PRELOAD_CONCURRENCY && _preloadQueue.length) {
+      var item = _preloadQueue.shift();
+      if (_preloadedFrames[item.pid]) continue;
+      _preloadActive++;
+      _preloadFrameZero(item);
+    }
+  }
+
+  function _preloadFrameZero(item) {
+    apiGetBlob(frameUrl(item.pid, 0))
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        if (_preloadStopped || (_videoVersions[item.pid] || "") !== item.version) {
+          try { URL.revokeObjectURL(url); } catch (_) {}
+          return;
+        }
+        if (_preloadedFrames[item.pid]) {
+          try { URL.revokeObjectURL(_preloadedFrames[item.pid]); } catch (_) {}
+        }
+        _preloadedFrames[item.pid] = url;
+      })
+      // Fire-and-forget: a failed preload just skips the cache warm. The trailing
+      // .then runs on both paths so the slot is always released.
+      .catch(function () {})
+      .then(function () {
+        _preloadActive--;
+        _pumpFrameZeroPreload();
+      });
+  }
+
   window.addEventListener("pagehide", function () {
+    // Stop draining and mark in-flight preloads as unowned, so a blob that lands
+    // after teardown revokes itself instead of leaking.
+    _preloadStopped = true;
+    _preloadQueue.length = 0;
     Object.keys(_preloadedFrames).forEach(function (pid) {
       try { URL.revokeObjectURL(_preloadedFrames[pid]); } catch (_) {}
       delete _preloadedFrames[pid];
@@ -5023,27 +5077,15 @@
         if (data.config) clipgenApplyConfig(data.config);
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
         // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
-        // preload loop below already includes the ?v= cache-bust suffix.
+        // preload queue below already includes the ?v= cache-bust suffix.
         state.participants.forEach(function (p) {
           if (p.version != null) _videoVersions[p.id] = String(p.version);
         });
         renderParticipantSelect();
-        // Preload frame 0 for all participants (instant first-frame display)
-        state.participants.forEach(function (p) {
-          var url = frameUrl(p.id, 0);
-          // Fire-and-forget preload; failures just skip the cache warm.
-          apiGetBlob(url)
-            .then(function (blob) {
-              if (_preloadedFrames[p.id]) {
-                try { URL.revokeObjectURL(_preloadedFrames[p.id]); } catch (_) {}
-              }
-              _preloadedFrames[p.id] = URL.createObjectURL(blob);
-            })
-            .catch(function () {});
-        });
+        var pickId = null;
         if (state.participants.length > 0) {
           var stored = getStoredUIState("screenspace");
-          var pickId = state.participants[0].id;
+          pickId = state.participants[0].id;
           if (stored.selectedParticipant) {
             for (var spi = 0; spi < state.participants.length; spi++) {
               if (state.participants[spi].id === stored.selectedParticipant) {
@@ -5076,6 +5118,16 @@
             if (wfTab) wfTab.click();
           }
         }
+        // Warm frame 0 for the participants the user might switch to. The
+        // selected one goes last: selectParticipant above already issued its own
+        // frame request, and _fetchFrame only consults _preloadedFrames at
+        // request time, so warming it first would just duplicate that work.
+        var preloadOrder = [];
+        state.participants.forEach(function (p) {
+          if (p.id !== pickId) preloadOrder.push(p.id);
+        });
+        if (pickId) preloadOrder.push(pickId);
+        queueFrameZeroPreload(preloadOrder);
         renderRunParticipantPicker();
         renderScanModePicker();
       })

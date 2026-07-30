@@ -1443,6 +1443,16 @@ body {
   font-style: italic;
 }
 
+/* Pre-fetch placeholder in #participantPills. Geometry only — the shimmer and
+   the reduced-motion opt-out come from the shared .skeleton in tokens.css.
+   Sized to a typical pill so the bar doesn't jump when the real ones land. */
+.pill-skeleton {
+  flex: 0 0 auto;
+  width: 74px;
+  height: 30px;
+  border-radius: var(--radius-full);
+}
+
 .pill-wrap {
   position: relative;
   display: inline-block;

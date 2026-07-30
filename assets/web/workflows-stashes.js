@@ -67,6 +67,7 @@
   function renderStashPalette() {
     var list = qs("#wfStashList");
     if (!list) return;
+    list.removeAttribute("aria-busy"); // boot skeletons are about to go
     list.innerHTML = "";
     var stashes = state.stashes || [];
     if (!stashes.length) {

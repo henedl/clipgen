@@ -1158,6 +1158,14 @@
     return Date.now() < _autoFollowPausedUntil;
   }
 
+  // Any programmatic write to #trMain.scrollTop fires the listener below, which
+  // cannot tell it from a reader scrolling and would pause following for three
+  // seconds. renderSegments' scroll restore is the other caller (scrollToSegment
+  // sets the window inline).
+  function ignoreNextScroll() {
+    _ignoreScrollUntil = Date.now() + 120;
+  }
+
   function initAutoFollowScrollPause() {
     var scroller = qs("#trMain");
     if (!scroller) return;
@@ -1204,6 +1212,7 @@
   TS.updateTranscribeFill = updateTranscribeFill;
   TS.seekVideo = seekVideo;
   TS.scrollToSegment = scrollToSegment;
+  TS.ignoreNextScroll = ignoreNextScroll;
   TS.applyCaptionMode = applyCaptionMode;
   TS._partForGlobal = _partForGlobal;
   TS._partMediaUrl = _partMediaUrl;

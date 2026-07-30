@@ -120,6 +120,9 @@
 
   function startXrefPolling() {
     if (!state.xrefEligible || state.xrefPoller) return;
+    // Re-arm the sheet leg: this also runs on tab focus, and a spreadsheet may
+    // have been opened from another tab since we last looked.
+    _sheetXrefIdle = false;
     // createPoller runs loadCrossRefData once immediately (runImmediately
     // default), then every 30s.
     state.xrefPoller = createPoller(loadCrossRefData, 30000);
@@ -149,6 +152,14 @@
     updateStatusIndicator();
   }
 
+  // With no spreadsheet open, /studio/api/sheet answers {ok, sheet_loaded: false}
+  // with no rows — nothing this page can index — so stop asking after the first
+  // such answer. Cleared on tab focus (see startXrefPolling's resume): a sheet
+  // opened from another tab reloads only that document, not this one. The first
+  // tick always runs, which matters because this handler is the page's only
+  // caller of clipgenApplyConfig.
+  var _sheetXrefIdle = false;
+
   function loadCrossRefData() {
     fetch("../screenspace/api/events?excluded=false")
       .then(function (r) {
@@ -165,6 +176,7 @@
       })
       .catch(function () { _markXrefSource("screenspace", true); });
 
+    if (_sheetXrefIdle) return;
     fetch("../studio/api/sheet")
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -172,6 +184,7 @@
       })
       .then(function (data) {
         _markXrefSource("studio", false);
+        if (data.ok && data.sheet_loaded === false) _sheetXrefIdle = true;
         if (data.ok) {
           clipgenApplyConfig(data.config);
           state.sheetRows = data.rows || [];
@@ -602,9 +615,24 @@
   // later participant-list refreshes after the user has moved on.
   var _hashPidApplied = false;
 
+  // The pill row and the transcript pane both ship placeholders (skeleton pills,
+  // a hidden #transcriptEmpty) that only the first successful render replaces.
+  // If that render never happens the page shimmers forever and the transcript
+  // pane stays blank, which reads as "still loading" rather than "unreachable" —
+  // so a failed *boot* fetch has to fall back to the real empty states. A later
+  // refresh failing is harmless: the already-rendered list stays put.
+  function _clearBootPlaceholders() {
+    if (state.participants.length) return;
+    renderPills();
+    renderEmptyState();
+  }
+
   function loadParticipants() {
     return apiGet("api/participants").then(function (data) {
-      if (!data.ok) return;
+      if (!data.ok) {
+        _clearBootPlaceholders();
+        return;
+      }
       state.participants = data.participants;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
@@ -656,6 +684,8 @@
       if (!first && state.participants.length > 0) first = state.participants[0];
       if (first) selectParticipant(first.id);
       else renderEmptyState();
+    }).catch(function () {
+      _clearBootPlaceholders();
     });
   }
 
@@ -882,6 +912,15 @@
     // indicator so a paused-tab RAF can't re-insert it over the real segments.
     _cancelStreamingIndicator();
 
+    // Scroll lives on #trMain, not on #segmentList (the floating nav scrolls
+    // under it) — same probe renderPartialSegments uses. A full rebuild of a
+    // same-participant list (heatmap toggle, tooltip toggle, streaming→final
+    // swap) must not drop the reader to the top; a participant change must.
+    var scrollHost = qs("#trMain") || container;
+    var samePid = _renderedSegmentsPid === state.selectedParticipant;
+    var restoreTop = samePid ? scrollHost.scrollTop : 0;
+    _renderedSegmentsPid = state.selectedParticipant;
+
     if (state.segments.length === 0) {
       container.innerHTML = "";
       empty.classList.remove("hidden");
@@ -963,6 +1002,15 @@
       html += '</div>';
     }
     container.innerHTML = html;
+    // Same task as the wipe, so the new scrollHeight is already laid out and the
+    // browser can't clamp us to 0 — and initPipScroll's rAF-coalesced listener
+    // reads the restored value rather than the transient top. The write itself
+    // looks like a reader scroll to the auto-follow pause, hence the marker.
+    // Written unconditionally: on a participant switch restoreTop is 0, and
+    // without the write the browser keeps the outgoing transcript's offset and
+    // drops the reader into the middle of the new one.
+    ignoreNextScroll();
+    scrollHost.scrollTop = restoreTop;
 
     _ensureSegmentListDelegation();
     _partialRender.count = 0;
@@ -970,6 +1018,12 @@
     _partialRender.segments = null;
     _partialRender.marksVersion = _streamingMarksVersion;
   }
+
+  // Which participant #segmentList currently shows, so a rebuild can tell a
+  // same-transcript re-render (restore scroll) from a participant switch (top).
+  // renderPartialSegments keeps it current too — the streaming→final swap is
+  // exactly when the reader is deepest in the list.
+  var _renderedSegmentsPid = null;
 
   // Append-only state for renderPartialSegments. Each streaming poll appends new
   // trailing segments to #segmentList instead of rebuilding the entire list. A
@@ -1223,6 +1277,9 @@
     _partialRender.count = segments.length;
     _partialRender.segments = segments;
     _partialRender.marksVersion = _streamingMarksVersion;
+    // The list now shows this participant, so the finalized render that replaces
+    // it counts as a same-participant rebuild and keeps the reader's position.
+    _renderedSegmentsPid = pid;
 
     if (nearBottom) {
       scrollHost.scrollTop = scrollHost.scrollHeight;
@@ -1406,6 +1463,7 @@
   function updateTranscribeFill() { return TS.updateTranscribeFill && TS.updateTranscribeFill(); }
   function seekVideo() { return TS.seekVideo && TS.seekVideo.apply(null, arguments); }
   function scrollToSegment() { return TS.scrollToSegment && TS.scrollToSegment.apply(null, arguments); }
+  function ignoreNextScroll() { return TS.ignoreNextScroll && TS.ignoreNextScroll(); }
   function applyCaptionMode() { return TS.applyCaptionMode && TS.applyCaptionMode(); }
   function _partForGlobal() { return TS._partForGlobal && TS._partForGlobal.apply(null, arguments); }
   function _partMediaUrl() { return TS._partMediaUrl && TS._partMediaUrl.apply(null, arguments); }
