@@ -1036,6 +1036,7 @@ def _build_overlay_command(
     out_path: str,
     *,
     gif: bool,
+    encoder: str = "libx264",
 ) -> list[str]:
     """ffmpeg argv burning overlay PNGs into a span of *input_path*.
 
@@ -1043,6 +1044,9 @@ def _build_overlay_command(
     relative to the span start — input seeking (``-ss`` before ``-i``) resets
     the filter clock to 0, so ``enable='between(t,...)'`` uses span-relative
     times. Only the requested span is decoded/encoded, never the whole file.
+
+    *encoder* selects the H.264 encoder for video output (see
+    ``video.resolve_video_encoder``); gif output has none to pick.
     """
     cmd = [
         "ffmpeg",
@@ -1075,17 +1079,11 @@ def _build_overlay_command(
     if gif:
         cmd += ["-t", f"{duration:.3f}", out_path]
     else:
+        cmd += ["-map", "0:a?"]
+        # veryfast: spans are short and re-encoded once; quality over speed
+        # tuning is not worth a config knob here.
+        cmd += video.video_encoder_args(encoder, crf=20, preset="veryfast")
         cmd += [
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            # veryfast: spans are short and re-encoded once; quality over speed
-            # tuning is not worth a config knob here.
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
@@ -1300,16 +1298,22 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
                 (png_path, window["start"] - start, window["end"] - start)
             )
             overlay.save(png_path)
-        cmd = _build_overlay_command(
-            overlay_input,
-            overlay_local_start,
-            end - start,
-            overlay_specs,
-            out_path,
-            gif=gif,
-        )
-        result = video.run_ffmpeg_process(
-            cmd,
+
+        def build_command(encoder: str) -> list[str]:
+            return _build_overlay_command(
+                overlay_input,
+                overlay_local_start,
+                end - start,
+                overlay_specs,
+                out_path,
+                gif=gif,
+                encoder=encoder,
+            )
+
+        # gif output has no H.264 encoder to choose, so it never probes for one.
+        result = video.run_ffmpeg_encode(
+            build_command,
+            encoder="libx264" if gif else video.resolve_video_encoder(),
             input_file=overlay_input,
             output_file=out_path,
             os_error_message="Annotated export failed.",

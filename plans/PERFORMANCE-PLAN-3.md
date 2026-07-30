@@ -10,18 +10,23 @@ This is a thorough review of where clipgen can gain performance — real speedup
 
 ## Status
 
-| # | Item | PR type | Effort | Status |
-|---|------|---------|--------|--------|
-| 1 | Parallel ffprobe loops | feat | S | ☐ |
-| 2 | SSE-primary / poller-fallback fix | fix | S | ☐ |
-| 3 | Titlecard concat-demuxer stream copy | feat | L | ☐ |
-| 4 | Ollama model prewarm during transcription | feat | S–M | ☐ |
-| 5 | Bounded frame-0 preload (Screenspace) | feat | S | ☐ |
-| 6 | Hardware video encoding (VideoToolbox) | feat | M | ☐ |
-| 7 | Skeleton coverage for initial loads | feat | S | ☐ |
-| 8 | Small backlog (each optional, S) | mixed | S | ☐ |
+Status audited against the tree on 2026-07-29 (the table had drifted — every item still read
+☐ although #3 and three of #8's sub-items had landed). Evidence column records what the audit
+actually found, so a future pass can re-verify cheaply rather than re-grepping from scratch.
 
-Recommended landing order = table order: #1 lands `video.py` groundwork before #3 touches the same file; #6 lands after #3 so the encode call-site list is stable.
+| # | Item | PR type | Effort | Status | Evidence |
+|---|------|---------|--------|--------|----------|
+| 1 | Parallel ffprobe loops | feat | S | ☑ | `video.py:1381` `_parallel_probe`; wired at `_detect_clip_mismatches` (`video.py:2201`) and `build_source_timeline` (`video.py:1424`). Measured 4.2× on a 20-clip probe (852 ms → 202 ms), identical results. Helper name and shape differ slightly from the item text — see below |
+| 2 | SSE-primary / poller-fallback fix | fix | S | ☐ | `screenspace-tasks.js:1224` — `startSSE()` still passes no `onUnsupported`, and `onOpen` still has no `stopPolling()` |
+| 3 | Titlecard concat-demuxer stream copy | feat | L | ☑ | `video.py:2480` `concat_copy`; `titlecards.py:72` `_body_is_copy_safe` + dispatch at `:640`; `agents/PERFORMANCE.md:36` rewritten. Landed with deviations — see "Item 3 follow-ups" below |
+| 4 | Ollama model prewarm during transcription | feat | S–M | ☐ | no `prewarm_model`, `on_task_start`, or `OLLAMA_PREWARM_ENABLED` anywhere in the repo (the `prewarm` hits in `transcripts_server.py` are the pre-existing Whisper prewarm) |
+| 5 | Bounded frame-0 preload (Screenspace) | feat | S | ☐ | `screenspace.js:5031` still an unbounded `forEach`, and `pickId` is still computed *below* it |
+| 6 | Hardware video encoding (VideoToolbox) | feat | M | ☑ | `video.py` `check_videotoolbox_support` / `resolve_video_encoder` / `video_encoder_args` / `note_hw_encode_failure` / `run_ffmpeg_encode`; five call sites converted. Measured 1080p/60s re-encode 48.4s → 12.5s wall (524s → 20.6s CPU); reel concat end-to-end 35.5s → 8.8s. Landed with deviations — see "Item 6 follow-ups" below |
+| 7 | Skeleton coverage for initial loads | feat | S | ☐ | `transcripts.html:51` still ships a literal `No participants`; `:170` `#transcriptEmpty` has no `hidden`; `workflows.html:138/142` unseeded; no `.pill-skeleton` |
+| 8 | Small backlog (each optional, S) | mixed | S | ◑ | 8a/8c/8e landed via their own PRs; 8b open (retargeted); 8d half open, half superseded — see the per-bullet markers in the Item 8 section |
+
+Recommended landing order for what remains: #1 lands `video.py` groundwork; #6 lands after #3
+(done) so the encode call-site list is stable.
 
 ---
 
@@ -36,6 +41,18 @@ Reel validation probes every clip sequentially; multi-file participants probe ea
 - Workers must resolve `probe_video_properties` via module attribute at call time so monkeypatched tests keep working.
 - **Tests** (`tests/test_video_commands.py`): ordering + cumulative math with a recorder probe; `None` propagation; single-item takes sequential path; existing concat tests stay green.
 - No config knob (ffprobe too cheap to justify one).
+
+### Item 1 notes (as shipped)
+
+- The helper is `video._parallel_probe(items, probe_fn)` (`video.py:1381`), not
+  `_parallel_map_ordered(fn, items, max_workers)`: no `cancel_flag` / `on_error` / caller-owned
+  results list. Both call sites already treat a `None` probe as "skip", and ffprobe is short enough
+  that mid-probe cancellation isn't worth the surface area. `pipeline._parallel_map_ordered`
+  (`pipeline.py:711`) keeps the full signature for clip generation; the two are deliberately not
+  merged (`pipeline` imports `video`, so the dependency can only point one way).
+- Ordering is asserted rather than assumed: `test_build_source_timeline_order_survives_parallel_probes`
+  (`tests/test_multi_video.py:92`) makes the probes complete in reverse order and checks both the
+  timeline and the completion order.
 
 ## Item 2 — SSE-primary / poller-fallback fix (`screenspace-tasks.js`) — latency + redundant requests
 
@@ -58,6 +75,29 @@ The acknowledged future win in `agents/PERFORMANCE.md`: `wrap_clip_with_cards()`
 - **Config**: `TITLECARD_FAST_WRAP: bool = True` near `TITLECARD_ENCODE_PRESET` + `SETTINGS_DESCRIPTIONS` entry; *not* in `STUDIO_SETTINGS` (debugging escape hatch). Update the `agents/PERFORMANCE.md` knob table and its "(A future win …)" sentence in the same PR.
 - **Tests** (`tests/test_titlecards.py`, `tests/test_video_commands.py`): probe extension; fast path asserts final command uses `-f concat`+`-c copy` with no `-filter_complex` and card commands carry the matched flags; fallback triggers (concat rc≠0, duration mismatch, hevc ineligible); endcard cache keys per spec; `concat_stream_copy` unit test.
 - **Risks**: mismatched SPS/PPS gives garbled playback without an ffmpeg error — mitigated by matching at encode time (gates), not just the duration check. AAC priming tick at joins — same artifact reels already accept. Homebrew drawtext caveat unchanged (`check_drawtext_support()` stays authoritative).
+
+### Item 3 follow-ups (shipped, but not as written above)
+
+The speedup works and is covered by five tests (`tests/test_titlecards.py:307–460`), so these are
+**optional hardening, not regressions**. Recorded because the item text above no longer describes
+the code — read this before building on it.
+
+- Helper is `video.concat_copy` (`video.py:2480`), not `concat_stream_copy`, and the planned reuse
+  did not happen: `_concatenate_demuxer` (`video.py:2388`) still builds its own concat-copy
+  command. The two share only `_concat_list_file` (`video.py:481`).
+- **No `TITLECARD_FAST_WRAP` knob.** The fast path is unconditional whenever the body is
+  copy-safe, so there is no escape hatch if some source shape corrupts. The most worthwhile
+  follow-up of the five.
+- **No post-concat duration verification.** `concat_copy` calls `verify_output_file` only
+  (`video.py:2526`); `expected_duration_sec` feeds progress reporting, not validation.
+- Eligibility gates are narrower than specified. `_body_is_copy_safe` (`titlecards.py:72`) checks
+  h264 + yuv420p + fps > 0 + aac but **not** even dimensions, `fps <= 120`, or
+  `profile in baseline/main/high`; `profile`/`level` were never added to the probe
+  (`video.py:1472`), and pix_fmt is hardcoded in `_x264_video_args` (`titlecards.py:49`) rather
+  than matched. Combined with the missing duration check, the "garbled playback with no ffmpeg
+  error" risk noted above is guarded at encode time only.
+- No standalone `concat_copy` unit test — it is exercised only indirectly through the titlecards
+  tests.
 
 ## Item 4 — Ollama model prewarm during transcription — perceived win
 
@@ -91,6 +131,42 @@ No `-hwaccel`/`h264_videotoolbox` anywhere today (verified). Clips default to st
 - **Tests** (`tests/test_video_commands.py`, timelapse tests): capability parse; argv byte-identical with encoder forced to libx264; VT args (`-q:v`, no `-crf`, no `-pass`); fallback wrapper rc=1→rc=0 rewrites to libx264 and the flag sticks; timelapse honors the knob. Since default is `auto`, tests that pin argv must force `libx264` via config (and one test covers auto-detection separately with `check_videotoolbox_support` monkeypatched both ways).
 - **Risk**: encoder listed but broken (VMs) → one-shot runtime fallback covers it. Larger files per quality — documented; users can pick libx264 in Settings.
 
+### Item 6 follow-ups (shipped, but not as written above)
+
+Measured on an M-series Mac with `h264_videotoolbox` present. Read this before building on it.
+
+- **`compress_to_size` was deliberately NOT converted** — the item text above is wrong on this
+  point. Measured: asking for 105 kbps video, `h264_videotoolbox` delivered **246 kbps** (2.3× over
+  target) where x264 two-pass delivered 127 kbps. The planned "single pass + fall back to two-pass
+  on overshoot" therefore overshoots essentially always, so it pays for the hardware attempt *and*
+  the two-pass — measured 2.4× slower for byte-identical output. Size capping stays libx264
+  two-pass, locked in by
+  `test_compress_to_size_stays_on_libx264_with_hardware_available`. The planned
+  `_compress_two_pass` / `_compress_single_pass` split was reverted with it (one caller each).
+- **The win needs a real workload.** On a short 720p clip the filter graph plus encoder setup
+  dominate and VideoToolbox came out *slower* (2.67s vs 1.31s). The 4× numbers in the status table
+  are 1080p/30s+ sources. Do not quote a hardware speedup for small artifacts.
+- `note_hw_encode_failure(encoder)` is public because the timelapse runner
+  (`screenspace_scans.generate_timelapse`) needs the sticky flag but cannot use `run_ffmpeg_encode`
+  — its progress parsing owns its own `Popen` loop. Its retry mirrors the wrapper by hand.
+- `video_encoder_args(encoder, crf=None, preset=None)` omits `-crf`/`-preset` when unset, so the two
+  concat sites (which passed neither and relied on libx264's own crf 23 / preset medium) keep
+  **byte-identical** software argv. Same reason `build_ffmpeg_cut_command` adds no `-c:v` at all
+  unless a non-libx264 encoder is passed — `tests/test_video_commands.py`'s
+  `assert "-c:v" not in cmd_reencode` still holds unmodified.
+- Composer's annotation burn (`composer_server._build_overlay_command`) was added to the site list
+  (it post-dates the item text); gif output never resolves an encoder.
+- `tests/conftest.py` gained an autouse `_force_software_encoder` fixture. Without it the `"auto"`
+  default makes every argv assertion depend on the host's ffmpeg build **and** every test shells out
+  to `ffmpeg -encoders`.
+- Drive-by: `settings-modal.js`'s label humanizer rendered `FFMPEG_*` as "Ffmpeg"; now "FFmpeg".
+- **Deferred, not missing:** the optional `SCREENSPACE_HWACCEL_DECODE` second commit (hw *decode* in
+  `_ffmpeg_pipe_frames`) was consciously left out — separate risk, needs its own zero-frames
+  containment state machine, and only helps decode-bound 4K/HEVC scans. Do not re-propose it as an
+  oversight.
+- Not verified: the runtime fallback on hardware that lists the encoder but cannot run it (no Intel
+  Mac / VM available here). Unit-tested only (`test_run_ffmpeg_encode_falls_back_to_libx264_once`).
+
 ## Item 7 — Skeleton coverage for initial loads — perceived polish
 
 Studio sheet (`populateSheetSkeleton`, studio.js:1082) and the Screenspace frame (`.skeleton-frame`) already have skeletons. Verified gaps show *misleading* empty states during the first fetch:
@@ -104,11 +180,11 @@ Studio sheet (`populateSheetSkeleton`, studio.js:1082) and the Screenspace frame
 
 ## Item 8 — Small backlog (optional; verified but low individual impact)
 
-- **Lazy `import gspread`** in clipgen.py:21 → first Google-Sheets use. Measured: gspread is ~200ms of the ~260ms module import (`-X importtime`); Excel-only and `--help` flows never need it. `fix:`/`perf:`-class change; check `ty` on the deferred-import pattern.
-- **TTL cache for `google_api.get_all_spreadsheets`** (server.py:3411, 3498): module-level list + timestamp, ~300s TTL, refresh param — settings opens stop paying a Sheets round-trip (and its 429 backoff risk).
-- **Transcripts segment list**: `renderSegments()` (transcripts.js:812–896) rebuilds one big innerHTML string per render. Cheap wins: `content-visibility: auto` (+ `contain-intrinsic-size`) on segment rows in transcripts.css; preserve scroll position across rebuilds. Virtualize only if profiling shows >2000-segment sessions hurting.
-- **Gate always-on pollers**: transcripts xref poller (transcripts.js:119, 30s) could start lazily on first xref use; Studio's four intake pollers (studio.js:4409–4413, 5–10s) could pause while the intake panel isn't the active tab (`createPoller` only gates on `document.hidden`).
-- **`decoding="async"`** on dynamically created thumbnails/imgs (queue cards, results) — trivial, prevents main-thread decode jank.
+- **8a ☑ Lazy `import gspread`** in clipgen.py:21 → first Google-Sheets use. Measured: gspread is ~200ms of the ~260ms module import (`-X importtime`); Excel-only and `--help` flows never need it. `fix:`/`perf:`-class change; check `ty` on the deferred-import pattern. **Landed** via `2f84d24b` (#563) rather than an Item-8 packet: `clipgen.py` imports only `sys`/`pathlib`, and `cli.py` defers gspread into function bodies (`cli.py:884/911/934/956`).
+- **8b ☐ TTL cache for `google_api.get_all_spreadsheets`** (server.py:3411, 3498): module-level list + timestamp, ~300s TTL, refresh param — settings opens stop paying a Sheets round-trip (and its 429 backoff risk). **Retarget before building**: `a609844b` (#618) moved the picker route to the richer `get_all_spreadsheet_meta` (it needs `modifiedTime`), so today the two sites are `server.py:3239` (`get_all_spreadsheets`) and `server.py:3497` (`get_all_spreadsheet_meta`). Cache the *meta* call — `get_all_spreadsheets` (`google_api.py:114`) is just the name-only wrapper over it.
+- **8c ◑ Transcripts segment list**: `renderSegments()` (transcripts.js:812–896) rebuilds one big innerHTML string per render. Cheap wins: `content-visibility: auto` (+ `contain-intrinsic-size`) on segment rows in transcripts.css; preserve scroll position across rebuilds. Virtualize only if profiling shows >2000-segment sessions hurting. **CSS half landed** via `0c9716bd` (#560): `transcripts.css:1233` carries both properties, with a comment on the `auto` fallback for `scrollToSegment()`'s rect math. The scroll-preservation half is unverified — still open.
+- **8d ◑ Gate always-on pollers**: transcripts xref poller (transcripts.js:119, 30s) could start lazily on first xref use — **still open**, it starts eagerly at boot (`transcripts.js:2733` → `:110` → `:125`, gated on backend availability, not on first xref use). Studio's intake pollers — **superseded, treat as wontfix**: there are now three (endpoints were combined per-domain), they carry `{ maxIntervalMs: 30000 }` idle backoff which removes most of the cost, and `studio.js:4786-4791` documents a deliberate decision to poll regardless of visible sub-tab so the start-overlay pills and sub-tab badges stay fresh.
+- **8e ☑ `decoding="async"`** on dynamically created thumbnails/imgs (queue cards, results) — trivial, prevents main-thread decode jank. **Landed** across ~18 sites including both the plan named (`screenspace-results.js:652/764`, `studio.js:2591`). The remaining misses are `new Image()` preload/measure objects that never enter the DOM, where the attribute is a no-op.
 - **Studio grid filter re-render** (studio.js:1432 region): known deferred item (PERF-PLAN-2 §4.1), still gated on profiling — profile before building incremental filtering.
 
 ## Rejected findings (verified against code — do not re-propose)

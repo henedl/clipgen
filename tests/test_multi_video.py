@@ -1,5 +1,7 @@
 """Tests for multiple source videos per participant (one continuous timeline)."""
 
+import threading
+import time
 from typing import cast
 from unittest.mock import Mock
 
@@ -85,6 +87,27 @@ def test_build_source_timeline_none_when_unprobeable(monkeypatch):
         video, "get_file_duration", lambda p: None if p == "b.mp4" else 10
     )
     assert video.build_source_timeline(["a.mp4", "b.mp4"]) is None
+
+
+def test_build_source_timeline_order_survives_parallel_probes(monkeypatch):
+    """Probes complete in reverse order; the timeline still follows input order."""
+    durations = {"a.mp4": 80, "b.mp4": 120, "c.mp4": 30}
+    delays = {"a.mp4": 0.06, "b.mp4": 0.03, "c.mp4": 0.0}
+    completed: list[str] = []
+    lock = threading.Lock()
+
+    def slow_duration(path):
+        time.sleep(delays[path])
+        with lock:
+            completed.append(path)
+        return durations[path]
+
+    monkeypatch.setattr(video, "get_file_duration", slow_duration)
+    timeline = video.build_source_timeline(["a.mp4", "b.mp4", "c.mp4"])
+
+    assert timeline == [("a.mp4", 80, 0), ("b.mp4", 120, 80), ("c.mp4", 30, 200)]
+    # The probes really did finish out of order — ordering above is enforced, not luck.
+    assert completed == ["c.mp4", "b.mp4", "a.mp4"]
 
 
 # ---- Filename resolution (files) ----

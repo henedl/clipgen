@@ -405,7 +405,9 @@
     var friendlyName = s.name
       .replace(/_/g, " ").toLowerCase()
       .replace(/\b\w/g, function (c) { return c.toUpperCase(); })
-      .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)");
+      .replace(/Mb$/i, "(MB)").replace(/Seconds$/i, "(s)")
+      // Title-casing turns the FFMPEG_* prefix into "Ffmpeg"; restore the brand.
+      .replace(/^Ffmpeg\b/, "FFmpeg");
     labelDiv.appendChild(el("div", "settings-label-name", friendlyName));
     labelDiv.appendChild(el("div", "settings-label-desc", s.description));
 
