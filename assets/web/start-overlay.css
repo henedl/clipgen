@@ -927,12 +927,58 @@
   color: var(--fg);
 }
 
+.start-overlay .sheet-panel__status-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
 .start-overlay .sheet-panel__status {
   font-size: 12px;
   color: var(--fg-muted);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Without this the status text refuses to shrink and squeezes out Refresh. */
+  flex: 1;
+  min-width: 0;
+}
+
+/* Re-list the Google picker from Drive (the server caches it). Same chrome as
+ * .sheet-picker__trigger, sized as a square icon button. */
+.start-overlay .sheet-panel__refresh {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--so-field-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.start-overlay .sheet-panel__refresh[hidden] {
+  display: none;
+}
+
+.start-overlay .sheet-panel__refresh:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.start-overlay .sheet-panel__refresh:disabled {
+  cursor: default;
+}
+
+.start-overlay .sheet-panel__refresh.is-spinning .so-icon {
+  /* Shared rotation from tokens.css, same 0.7s as .so-spinner above. */
+  animation: spin 0.7s linear infinite;
 }
 
 /* Compact dropdown picker shared by the Google + Excel tabs. Same chrome

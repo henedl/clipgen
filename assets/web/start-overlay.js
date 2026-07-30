@@ -117,6 +117,22 @@
     else node.classList.add("hidden");
   }
 
+  // Spin a panel's Refresh button while its reload runs. Shared by the Google
+  // and Excel buttons; both loaders recover from their own failures, so this
+  // only owns the button state.
+  function runPanelRefresh(btn, load) {
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    btn.classList.add("is-spinning");
+    load()
+      .catch(function (err) { console.error("Panel refresh failed", err); })
+      .then(function () {
+        // Final link, after .catch(), so the spinner always stops.
+        btn.disabled = false;
+        btn.classList.remove("is-spinning");
+      });
+  }
+
   function setHidden(node, hidden) {
     if (!node) return;
     if (hidden) node.setAttribute("hidden", "");
@@ -192,12 +208,14 @@
     els.excelPanel = root.querySelector('[data-tabpanel="excel"]');
     els.nonePanel = root.querySelector('[data-tabpanel="none"]');
     els.googleStatus = root.querySelector('[data-role="google-status"]');
+    els.googleRefresh = root.querySelector('[data-role="google-refresh"]');
     els.googlePicker = root.querySelector('[data-role="google-picker"]');
     els.googlePickerTrigger = root.querySelector('[data-role="google-picker-trigger"]');
     els.googlePickerLabel = root.querySelector('[data-role="google-picker-label"]');
     els.googlePickerMenu = root.querySelector('[data-role="google-picker-menu"]');
     els.googlePaste = root.querySelector("#startGooglePaste");
     els.excelStatus = root.querySelector('[data-role="excel-status"]');
+    els.excelRefresh = root.querySelector('[data-role="excel-refresh"]');
     els.excelPicker = root.querySelector('[data-role="excel-picker"]');
     els.excelPickerTrigger = root.querySelector('[data-role="excel-picker-trigger"]');
     els.excelPickerLabel = root.querySelector('[data-role="excel-picker-label"]');
@@ -288,6 +306,16 @@
     on(els.googlePickerTrigger, "click", function (e) {
       e.stopPropagation();
       togglePicker("google");
+    });
+    on(els.googleRefresh, "click", function () {
+      // The server caches Drive's listing for 5 minutes; this is the escape
+      // hatch for a spreadsheet created mid-session.
+      runPanelRefresh(els.googleRefresh, function () {
+        return loadGoogleSheets(true);
+      });
+    });
+    on(els.excelRefresh, "click", function () {
+      runPanelRefresh(els.excelRefresh, loadExcelFiles);
     });
     on(els.excelPickerTrigger, "click", function (e) {
       e.stopPropagation();
@@ -1220,17 +1248,21 @@
     card.classList.remove("has-error", "is-error");
   }
 
-  function loadGoogleSheets() {
+  // force=true asks the server to re-list from Drive instead of serving its
+  // 5-minute cache — the Refresh button's path.
+  function loadGoogleSheets(force) {
     if (!els.googleStatus) return Promise.resolve();
     els.googleStatus.textContent = "Checking authentication…";
     setHidden(els.googlePicker, true);
-    return apiGet("/api/spreadsheets/google").then(function (g) {
+    var url = "/api/spreadsheets/google" + (force ? "?refresh=true" : "");
+    return apiGet(url).then(function (g) {
       if (!g.authenticated) {
         renderGoogleConnectCTA(g.auth_in_flight, g.auth_error);
         return;
       }
       if (g.auth_error) {
-        els.googleStatus.textContent = "Google: " + g.auth_error;
+        // Signed in, but Drive didn't answer (rate limit, network).
+        keepPreviousGoogleList("Google: " + g.auth_error);
         return;
       }
       state.googleSheets = g.sheets || [];
@@ -1239,12 +1271,32 @@
         : "No spreadsheets found in your account";
       renderGoogleList(state.googleSheets);
       setHidden(els.googlePicker, false);
+      setHidden(els.googleRefresh, false);
+    }).catch(function (err) {
+      // Recovers rather than re-throwing, for two reasons: the panel is
+      // mid-load (status replaced, picker hidden) and nothing downstream would
+      // put it back, and on boot this sits in refresh()'s chain ahead of
+      // loadExcelFiles + applyCurrentSessionPrefill, which must still run.
+      console.error("Google sheet list failed", err);
+      keepPreviousGoogleList("Couldn't reach clipgen.");
     });
+  }
+
+  // Leave a failed listing recoverable: whatever we already had stays
+  // selectable, and Refresh stays reachable so the user can retry in place.
+  function keepPreviousGoogleList(message) {
+    var had = (state.googleSheets || []).length;
+    els.googleStatus.textContent = had
+      ? message + " Showing the last list."
+      : message;
+    if (had) setHidden(els.googlePicker, false);
+    setHidden(els.googleRefresh, false);
   }
 
   function renderGoogleConnectCTA(inFlight, errorMsg) {
     els.googleStatus.innerHTML = "";
     setHidden(els.googlePicker, true);
+    setHidden(els.googleRefresh, true);
     if (errorMsg) {
       els.googleStatus.appendChild(el("div", "sheet-panel__status-error", errorMsg));
     }
@@ -1289,6 +1341,7 @@
       : "No spreadsheets found in your account";
     renderGoogleList(state.googleSheets);
     setHidden(els.googlePicker, false);
+    setHidden(els.googleRefresh, false);
   }
 
   function pollGoogleAuth() {
@@ -1357,6 +1410,8 @@
     });
   }
 
+  // No server-side cache to bust here — the route re-globs the input folder on
+  // every call, so the Refresh button just re-runs this.
   function loadExcelFiles() {
     if (!els.excelStatus) return Promise.resolve();
     els.excelStatus.textContent = "Scanning input folder…";
@@ -1366,6 +1421,13 @@
         ? state.excelFiles.length + " .xlsx in " + r.input_dir
         : "No .xlsx files in " + r.input_dir;
       renderExcelList(state.excelFiles);
+    }).catch(function (err) {
+      // Same contract as loadGoogleSheets: never strand the panel on
+      // "Scanning…", and never break the rest of refresh()'s boot chain.
+      console.error("Excel scan failed", err);
+      els.excelStatus.textContent = (state.excelFiles || []).length
+        ? "Couldn't re-scan the input folder. Showing the last list."
+        : "Could not scan the input folder.";
     });
   }
 
@@ -1734,7 +1796,10 @@
     loadStatus()
       .then(loadDirs)
       .then(loadStartSettings)
-      .then(loadGoogleSheets)
+      // Wrapped, not passed by reference: loadGoogleSheets(force) would
+      // otherwise receive the previous link's resolved value as `force` and
+      // re-list from Drive on every overlay open.
+      .then(function () { return loadGoogleSheets(); })
       .then(loadExcelFiles)
       .then(applyCurrentSessionPrefill)
       .catch(function (err) {

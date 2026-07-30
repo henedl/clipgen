@@ -1,5 +1,11 @@
 # Performance Review & Plan — clipgen (PERFORMANCE-PLAN-3)
 
+> **Status: closed 2026-07-30.** Seven of eight items shipped; the last one (**8b**, the Drive
+> listing TTL cache) landed with the archive commit. **Item 4 (Ollama prewarm) is deferred
+> indefinitely** on RAM grounds — see the note in its section; it is a decision, not a backlog
+> entry, so a future perf pass should not re-propose it. Items **8c** and **8d** shipped as
+> partial-by-design: the halves that were dropped are recorded inline with the reasoning.
+
 ## Context
 
 This is a thorough review of where clipgen can gain performance — real speedups *and* perceived-responsiveness improvements (warm-ups, preloads, wait coverage). Two prior passes (`plans/archive/PERFORMANCE-PLAN.md`, `PERFORMANCE-PLAN-2.md`) landed nearly everything they identified, so this review focused on (a) explicitly deferred wins, (b) gaps those passes didn't cover, and (c) perceived-latency polish. Every finding below was **verified against the current code** (many candidate findings from exploration were rejected as already-done or wrong — see "Rejected" at the end, kept so future passes don't re-propose them).
@@ -11,24 +17,25 @@ This is a thorough review of where clipgen can gain performance — real speedup
 ## Status
 
 Status audited against the tree on 2026-07-29 (the table had drifted — every item still read
-☐ although #3 and three of #8's sub-items had landed). Evidence column records what the audit
-actually found, so a future pass can re-verify cheaply rather than re-grepping from scratch.
+☐ although #3 and three of #8's sub-items had landed), then closed out on 2026-07-30 with 8b's
+landing and item 4's deferral. Evidence column records what the audit actually found, so a future
+pass can re-verify cheaply rather than re-grepping from scratch.
 
 | # | Item | PR type | Effort | Status | Evidence |
 |---|------|---------|--------|--------|----------|
 | 1 | Parallel ffprobe loops | feat | S | ☑ | `video.py:1381` `_parallel_probe`; wired at `_detect_clip_mismatches` (`video.py:2201`) and `build_source_timeline` (`video.py:1424`). Measured 4.2× on a 20-clip probe (852 ms → 202 ms), identical results. Helper name and shape differ slightly from the item text — see below |
 | 2 | SSE-primary / poller-fallback fix | fix | S | ☑ | `screenspace-tasks.js:1226` — `onUnsupported: startPolling` plus `stopPolling()` in `onOpen`; guarded by `test_task_stream_retires_the_poller_when_it_reconnects`. Landed in the frontend packet (see below), not as its own `fix:` PR |
 | 3 | Titlecard concat-demuxer stream copy | feat | L | ☑ | `video.py:2480` `concat_copy`; `titlecards.py:72` `_body_is_copy_safe` + dispatch at `:640`; `agents/PERFORMANCE.md:36` rewritten. Landed with deviations — see "Item 3 follow-ups" below |
-| 4 | Ollama model prewarm during transcription | feat | S–M | ☐ | no `prewarm_model`, `on_task_start`, or `OLLAMA_PREWARM_ENABLED` anywhere in the repo (the `prewarm` hits in `transcripts_server.py` are the pre-existing Whisper prewarm) |
+| 4 | Ollama model prewarm during transcription | feat | S–M | ⊘ | **Deferred indefinitely (2026-07-30) — RAM.** Never built; see the note in the Item 4 section |
 | 5 | Bounded frame-0 preload (Screenspace) | feat | S | ☑ | `screenspace.js:288` `queueFrameZeroPreload` (concurrency 2); `pickId`/`selectParticipant` now resolve above it. Landed with deviations — see "Item 5 follow-ups" below |
 | 6 | Hardware video encoding (VideoToolbox) | feat | M | ☑ | `video.py` `check_videotoolbox_support` / `resolve_video_encoder` / `video_encoder_args` / `note_hw_encode_failure` / `run_ffmpeg_encode`; five call sites converted. Measured 1080p/60s re-encode 48.4s → 12.5s wall (524s → 20.6s CPU); reel concat end-to-end 35.5s → 8.8s. Landed with deviations — see "Item 6 follow-ups" below |
 | 7 | Skeleton coverage for initial loads | feat | S | ☑ | `.pill-skeleton` (transcripts) and `.wf-row-skeleton` (workflows palette + stashes); `#transcriptEmpty` ships `.hidden`. Landed with deviations — see "Item 7 follow-ups" below |
-| 8 | Small backlog (each optional, S) | mixed | S | ◑ | 8a/8c/8e landed via their own PRs; 8c's scroll half and 8d's xref half landed in the frontend packet; **8b is the only one still open** — see the per-bullet markers in the Item 8 section |
+| 8 | Small backlog (each optional, S) | mixed | S | ☑ | 8a/8c/8e landed via their own PRs; 8c's scroll half and 8d's xref half landed in the frontend packet; 8b landed 2026-07-30 — see the per-bullet markers in the Item 8 section |
 
 Items #2, #5, #7 and the open halves of #8c/#8d landed together as one frontend packet
 (2026-07-30) — one PR, one `/ui-check` pass, since they touch four overlapping files and share
-their browser verification. **What remains: #4 (Ollama prewarm) and #8b (Sheets meta TTL
-cache), both backend.**
+their browser verification. **Nothing remains:** #8b landed the same day and #4 is deferred
+indefinitely.
 
 ---
 
@@ -103,6 +110,17 @@ the code — read this before building on it.
   tests.
 
 ## Item 4 — Ollama model prewarm during transcription — perceived win
+
+> **Deferred indefinitely (2026-07-30). Do not build; do not re-propose as an oversight.**
+> The whole point of the item is to hold an Ollama model resident *while Whisper is still
+> loaded and decoding* — on the limited-RAM machines clipgen runs on, that is two multi-GB
+> models at once. Swapping (or an OOM) mid-transcription loses minutes of real work and can
+> take the transcript with it; the thing it buys is a one-time, already-visible 5–30 s wait
+> behind a "generating…" label. Wrong side of that trade at any RAM level we can assume.
+> An `OLLAMA_PREWARM_ENABLED` knob doesn't rescue it either: a default-on knob ships the
+> hazard, and a default-off knob is a feature nobody finds. Revisit only if clipgen ever
+> gains a reliable free-RAM probe *and* a reason to trust it. The design below is kept
+> intact for whoever revisits it.
 
 Today the summary agent's first `generate()` after transcription pays the 5–30s Ollama model load while the user watches "generating…". Page the model in while Whisper is still running.
 
@@ -224,13 +242,19 @@ Studio sheet (`populateSheetSkeleton`, studio.js:1082) and the Screenspace frame
 ## Item 8 — Small backlog (optional; verified but low individual impact)
 
 - **8a ☑ Lazy `import gspread`** in clipgen.py:21 → first Google-Sheets use. Measured: gspread is ~200ms of the ~260ms module import (`-X importtime`); Excel-only and `--help` flows never need it. `fix:`/`perf:`-class change; check `ty` on the deferred-import pattern. **Landed** via `2f84d24b` (#563) rather than an Item-8 packet: `clipgen.py` imports only `sys`/`pathlib`, and `cli.py` defers gspread into function bodies (`cli.py:884/911/934/956`).
-- **8b ☐ TTL cache for `google_api.get_all_spreadsheets`** (server.py:3411, 3498): module-level list + timestamp, ~300s TTL, refresh param — settings opens stop paying a Sheets round-trip (and its 429 backoff risk). **Retarget before building**: `a609844b` (#618) moved the picker route to the richer `get_all_spreadsheet_meta` (it needs `modifiedTime`), so today the two sites are `server.py:3239` (`get_all_spreadsheets`) and `server.py:3497` (`get_all_spreadsheet_meta`). Cache the *meta* call — `get_all_spreadsheets` (`google_api.py:114`) is just the name-only wrapper over it.
+- **8b ☑ TTL cache for the Drive spreadsheet listing** (`server._cached_spreadsheet_meta`, 300 s): module-level `(monotonic stamp, metas)` + a dedicated lock. **Landed 2026-07-30** with three deviations from the item text worth recording:
+  - **Three call sites, not two.** The item counted the picker route (`server.py:3497`) and open-by-name (`:3239`); the worksheet dropdown is a third, one level down — `app.list_worksheet_titles` (`app.py:272`) listed Drive again. It now takes an optional `doc_list` (the `PERFORMANCE.md` "accept what the caller already holds" pattern), so one pick-a-sheet flow went from **three** identical `files.list` calls to one. The URL branch still skips the listing entirely (`35a7a606`).
+  - **Staleness needed two escape hatches, not one.** `?refresh=true` (wired to a new Refresh button in the Google picker) covers the *visible* list; `_spreadsheet_names_for()` re-lists once when a name isn't in the cache, so a spreadsheet created mid-session is still openable by paste. The cache is also dropped when a new client authenticates, or a second account would inherit the first's listing.
+  - **The lock is held across the fetch on purpose** (single-flight: concurrent misses queue behind one Drive call, waiters re-check freshness after acquiring). Only successful fetches are stored, so a 429 can't poison it. Cached in `server.py`, deliberately *not* in `google_api.py` — a process-lifetime TTL would be wrong for interactive CLI sessions, which already have a per-invocation cache (`cli.py:1033`).
+  - Gotcha for anyone touching `refresh()` in `start-overlay.js`: `loadGoogleSheets` is chained as `.then(function () { return loadGoogleSheets(); })`, not by reference — passed by reference it receives the previous link's resolved value as its `force` argument and re-lists on every overlay open.
 - **8c ◑ Transcripts segment list**: `renderSegments()` (transcripts.js:812–896) rebuilds one big innerHTML string per render. Cheap wins: `content-visibility: auto` (+ `contain-intrinsic-size`) on segment rows in transcripts.css; preserve scroll position across rebuilds. Virtualize only if profiling shows >2000-segment sessions hurting. **CSS half landed** via `0c9716bd` (#560): `transcripts.css:1233` carries both properties, with a comment on the `auto` fallback for `scrollToSegment()`'s rect math. The scroll-preservation half **landed** in the frontend packet: `renderSegments` captures and restores `#trMain`'s `scrollTop` (scroll lives there, not on `#segmentList` — same probe `renderPartialSegments` uses), gated on a module-local `_renderedSegmentsPid` so a participant switch resets to 0 and a same-transcript rebuild (heatmap toggle, tooltip toggle, streaming→final swap) holds position. Two things the item text didn't mention and that a re-implementation would get wrong: the restore has to be marked programmatic via the new `TS.ignoreNextScroll()` or `initAutoFollowScrollPause` (`transcripts-video.js:1161`) reads it as a reader scroll and kills playhead follow for 3 s; and it has to be written in the same task as the `innerHTML` wipe so `initPipScroll`'s rAF-coalesced listener never sees the transient top. Verified in-browser (300 filler segments): same-participant re-render held 900 px, participant switch reset to 0.
 - **8d ◑ Gate always-on pollers**: transcripts xref poller (transcripts.js:119, 30s) could start lazily on first xref use — **retargeted and landed** in the frontend packet. "Lazily on first xref use" was dropped: the indexes also feed cross-transcript search, so there is no clean first-use trigger. What shipped instead: the poller's `/studio/api/sheet` leg goes idle (`_sheetXrefIdle`) once a response reports `sheet_loaded: false`, since that route can only keep answering with no rows, and re-arms in `startXrefPolling` (which also runs on tab focus — a spreadsheet opened from another tab reloads only *that* document). The first tick always runs: that handler is this page's only caller of `clipgenApplyConfig`, so `CLIPGEN_CONFIG` on Transcripts now refreshes per focus rather than every 30 s. Small win, recorded honestly: two requests a minute to a route in the same Flask process. Studio's intake pollers — **superseded, treat as wontfix**: there are now three (endpoints were combined per-domain), they carry `{ maxIntervalMs: 30000 }` idle backoff which removes most of the cost, and `studio.js:4786-4791` documents a deliberate decision to poll regardless of visible sub-tab so the start-overlay pills and sub-tab badges stay fresh.
 - **8e ☑ `decoding="async"`** on dynamically created thumbnails/imgs (queue cards, results) — trivial, prevents main-thread decode jank. **Landed** across ~18 sites including both the plan named (`screenspace-results.js:652/764`, `studio.js:2591`). The remaining misses are `new Image()` preload/measure objects that never enter the DOM, where the attribute is a no-op.
 - **Studio grid filter re-render** (studio.js:1432 region): known deferred item (PERF-PLAN-2 §4.1), still gated on profiling — profile before building incremental filtering.
 
 ## Rejected findings (verified against code — do not re-propose)
+
+- Ollama model prewarm during transcription (**Item 4**): deferred indefinitely on RAM grounds, not an oversight. Reasoning in that item's banner.
 
 - `defer` on `<script>` tags: all scripts already sit at end of `<body>`, pages are served from localhost, and satellite load order is a documented contract. No meaningful FCP win.
 - Screenspace boot fetch "waterfall": the four boot fetches (participants/regions/stashes/tasks) are already parallel independent chains.

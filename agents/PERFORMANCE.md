@@ -6,7 +6,7 @@ Patterns to apply from the start when writing new features, so dedicated optimiz
 
 - **Never re-fetch what you already have.** If a function needs data that a caller already holds (e.g. `SheetContext`, parsed manifest), accept it as an optional parameter rather than re-reading from disk or network. `generate_list()` now takes `ctx: Optional[SheetContext]`; follow this pattern for any function that calls `build_sheet_context`, `get_all_values`, or reads a manifest file.
 - **Read a file once, extract multiple keys.** When you need both artifacts and reels (or any two keys) from the same JSON file, use a single read/parse. See `viewer._load_manifest_both()`. Never call two separate load functions that each read the same file.
-- **Google Sheets API calls are precious.** Every `sheet.get_all_values()` / `sheet.find()` / `generate_list()` is a network round-trip subject to rate limits. In server routes, always reuse the cached `_sheet_context` rather than rebuilding it.
+- **Google Sheets API calls are precious.** Every `sheet.get_all_values()` / `sheet.find()` / `generate_list()` is a network round-trip subject to rate limits. In server routes, always reuse the cached `_sheet_context` rather than rebuilding it. Drive's spreadsheet *listing* is likewise cached — go through `server._cached_spreadsheet_meta()` (300 s TTL, single-flight, dropped when a new account authenticates) rather than calling `google_api.get_all_spreadsheet_meta` from a route; `_spreadsheet_names_for()` re-lists once when a name isn't in the cache, and `?refresh=true` on `/api/spreadsheets/google` is the picker's manual escape hatch.
 
 ## Design for parallelism from the start
 
