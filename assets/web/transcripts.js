@@ -899,6 +899,15 @@
     // indicator so a paused-tab RAF can't re-insert it over the real segments.
     _cancelStreamingIndicator();
 
+    // Scroll lives on #trMain, not on #segmentList (the floating nav scrolls
+    // under it) — same probe renderPartialSegments uses. A full rebuild of a
+    // same-participant list (heatmap toggle, tooltip toggle, streaming→final
+    // swap) must not drop the reader to the top; a participant change must.
+    var scrollHost = qs("#trMain") || container;
+    var samePid = _renderedSegmentsPid === state.selectedParticipant;
+    var restoreTop = samePid ? scrollHost.scrollTop : 0;
+    _renderedSegmentsPid = state.selectedParticipant;
+
     if (state.segments.length === 0) {
       container.innerHTML = "";
       empty.classList.remove("hidden");
@@ -980,6 +989,15 @@
       html += '</div>';
     }
     container.innerHTML = html;
+    // Same task as the wipe, so the new scrollHeight is already laid out and the
+    // browser can't clamp us to 0 — and initPipScroll's rAF-coalesced listener
+    // reads the restored value rather than the transient top. The write itself
+    // looks like a reader scroll to the auto-follow pause, hence the marker.
+    // Written unconditionally: on a participant switch restoreTop is 0, and
+    // without the write the browser keeps the outgoing transcript's offset and
+    // drops the reader into the middle of the new one.
+    ignoreNextScroll();
+    scrollHost.scrollTop = restoreTop;
 
     _ensureSegmentListDelegation();
     _partialRender.count = 0;
@@ -987,6 +1005,12 @@
     _partialRender.segments = null;
     _partialRender.marksVersion = _streamingMarksVersion;
   }
+
+  // Which participant #segmentList currently shows, so a rebuild can tell a
+  // same-transcript re-render (restore scroll) from a participant switch (top).
+  // renderPartialSegments keeps it current too — the streaming→final swap is
+  // exactly when the reader is deepest in the list.
+  var _renderedSegmentsPid = null;
 
   // Append-only state for renderPartialSegments. Each streaming poll appends new
   // trailing segments to #segmentList instead of rebuilding the entire list. A
@@ -1240,6 +1264,9 @@
     _partialRender.count = segments.length;
     _partialRender.segments = segments;
     _partialRender.marksVersion = _streamingMarksVersion;
+    // The list now shows this participant, so the finalized render that replaces
+    // it counts as a same-participant rebuild and keeps the reader's position.
+    _renderedSegmentsPid = pid;
 
     if (nearBottom) {
       scrollHost.scrollTop = scrollHost.scrollHeight;
@@ -1423,6 +1450,7 @@
   function updateTranscribeFill() { return TS.updateTranscribeFill && TS.updateTranscribeFill(); }
   function seekVideo() { return TS.seekVideo && TS.seekVideo.apply(null, arguments); }
   function scrollToSegment() { return TS.scrollToSegment && TS.scrollToSegment.apply(null, arguments); }
+  function ignoreNextScroll() { return TS.ignoreNextScroll && TS.ignoreNextScroll(); }
   function applyCaptionMode() { return TS.applyCaptionMode && TS.applyCaptionMode(); }
   function _partForGlobal() { return TS._partForGlobal && TS._partForGlobal.apply(null, arguments); }
   function _partMediaUrl() { return TS._partMediaUrl && TS._partMediaUrl.apply(null, arguments); }
