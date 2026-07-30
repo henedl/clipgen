@@ -123,6 +123,19 @@ body[data-frontend="workflows"] {
   color: var(--fg-faint);
 }
 
+/* Pre-fetch placeholder rows in #wfPalette and #wfStashList. Geometry only —
+   the shimmer and the reduced-motion opt-out live on .skeleton (tokens.css).
+   Sized to .wf-palette-item / .wf-stash-item so the sidebar doesn't jump. */
+.wf-row-skeleton {
+  display: block;
+  height: 34px;
+  border-radius: var(--radius-sm);
+}
+
+.wf-palette > .wf-row-skeleton {
+  margin-bottom: var(--space-1);
+}
+
 .wf-empty-hint {
   margin: 0;
   font-size: var(--text-sm);

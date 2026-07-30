@@ -97,6 +97,9 @@
   function renderPills() {
     var container = qs("#participantPills");
     if (!container) return;
+    // Whatever we render now is the real answer, so the boot skeletons (and the
+    // aria-busy that announces them) are done.
+    container.removeAttribute("aria-busy");
 
     if (state.participants.length === 0) {
       container.innerHTML = '<span class="pill-row-empty">No participants</span>';

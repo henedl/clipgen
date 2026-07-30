@@ -135,11 +135,24 @@
       <input id="wfPaletteSearch" class="wf-palette-search" type="text"
              autocomplete="off" placeholder="Search nodes…"
              aria-label="Search nodes" />
-      <div id="wfPalette" class="wf-palette"></div>
+      <!-- Skeleton rows until the catalog fetch resolves; renderPalette() bails
+           while state.catalog is falsy, so these survive exactly that window and
+           are then replaced wholesale. -->
+      <div id="wfPalette" class="wf-palette" aria-busy="true">
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+      </div>
       <!-- Stashes (M5): built-in recipes + saved sub-graphs. Drag or click an
            item to stamp it onto the canvas (the stashes satellite remaps ids). -->
       <div class="wf-sidebar-header">Stashes</div>
-      <div id="wfStashList" class="wf-stash-list"></div>
+      <div id="wfStashList" class="wf-stash-list" aria-busy="true">
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+        <span class="skeleton wf-row-skeleton" aria-hidden="true"></span>
+      </div>
       <!-- Port-type legend: the five data-type families and their wire colours.
            Collapsed by default; the swatches reuse the same --wf-type-* vars the
            port dots are coloured from (workflows.css). -->

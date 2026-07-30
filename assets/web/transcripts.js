@@ -602,9 +602,24 @@
   // later participant-list refreshes after the user has moved on.
   var _hashPidApplied = false;
 
+  // The pill row and the transcript pane both ship placeholders (skeleton pills,
+  // a hidden #transcriptEmpty) that only the first successful render replaces.
+  // If that render never happens the page shimmers forever and the transcript
+  // pane stays blank, which reads as "still loading" rather than "unreachable" —
+  // so a failed *boot* fetch has to fall back to the real empty states. A later
+  // refresh failing is harmless: the already-rendered list stays put.
+  function _clearBootPlaceholders() {
+    if (state.participants.length) return;
+    renderPills();
+    renderEmptyState();
+  }
+
   function loadParticipants() {
     return apiGet("api/participants").then(function (data) {
-      if (!data.ok) return;
+      if (!data.ok) {
+        _clearBootPlaceholders();
+        return;
+      }
       state.participants = data.participants;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
@@ -656,6 +671,8 @@
       if (!first && state.participants.length > 0) first = state.participants[0];
       if (first) selectParticipant(first.id);
       else renderEmptyState();
+    }).catch(function () {
+      _clearBootPlaceholders();
     });
   }
 

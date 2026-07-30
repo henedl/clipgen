@@ -189,6 +189,7 @@
   function renderPalette() {
     var palette = qs("#wfPalette");
     if (!palette || !state.catalog) return;
+    palette.removeAttribute("aria-busy"); // boot skeletons are about to go
     palette.innerHTML = "";
     var searchInput = qs("#wfPaletteSearch");
     var query = (searchInput ? searchInput.value : "").trim().toLowerCase();
@@ -911,6 +912,17 @@
 
   function setCanvasState(mode) {
     state.ready = mode === "ready";
+    if (mode === "error") {
+      // The sidebar ships skeleton rows that only a successful render replaces.
+      // A load failure never reaches renderPalette/renderStashPalette, so clear
+      // them here — shimmer next to "Couldn't load workflows" reads as a bug.
+      ["#wfPalette", "#wfStashList"].forEach(function (sel) {
+        var host = qs(sel);
+        if (!host) return;
+        host.innerHTML = "";
+        host.removeAttribute("aria-busy");
+      });
+    }
     var overlay = qs("#wfCanvasOverlay");
     if (overlay) overlay.classList.toggle("hidden", state.ready);
     var msg = qs("#wfOverlayMsg");
