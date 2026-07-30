@@ -65,6 +65,7 @@
     persistEnabled: true,
     googlePollTimer: null,
     googlePollDeadline: 0,
+    googleRefreshing: false,  // a Refresh-button re-list is in flight
     confirmInFlight: false,
     activeTab: "google",    // 'google' | 'excel' | 'none'
     extrasTab: "tools",     // 'tools' | 'updates' | 'about'
@@ -192,6 +193,7 @@
     els.excelPanel = root.querySelector('[data-tabpanel="excel"]');
     els.nonePanel = root.querySelector('[data-tabpanel="none"]');
     els.googleStatus = root.querySelector('[data-role="google-status"]');
+    els.googleRefresh = root.querySelector('[data-role="google-refresh"]');
     els.googlePicker = root.querySelector('[data-role="google-picker"]');
     els.googlePickerTrigger = root.querySelector('[data-role="google-picker-trigger"]');
     els.googlePickerLabel = root.querySelector('[data-role="google-picker-label"]');
@@ -288,6 +290,22 @@
     on(els.googlePickerTrigger, "click", function (e) {
       e.stopPropagation();
       togglePicker("google");
+    });
+    on(els.googleRefresh, "click", function () {
+      // The server caches Drive's listing for 5 minutes; this is the escape
+      // hatch for a spreadsheet created mid-session.
+      if (state.googleRefreshing) return;
+      state.googleRefreshing = true;
+      els.googleRefresh.disabled = true;
+      els.googleRefresh.classList.add("is-spinning");
+      loadGoogleSheets(true)
+        .catch(function (err) { console.error("Google refresh failed", err); })
+        .then(function () {
+          // Final link, after .catch(), so the spinner always stops.
+          state.googleRefreshing = false;
+          els.googleRefresh.disabled = false;
+          els.googleRefresh.classList.remove("is-spinning");
+        });
     });
     on(els.excelPickerTrigger, "click", function (e) {
       e.stopPropagation();
@@ -1220,17 +1238,23 @@
     card.classList.remove("has-error", "is-error");
   }
 
-  function loadGoogleSheets() {
+  // force=true asks the server to re-list from Drive instead of serving its
+  // 5-minute cache — the Refresh button's path.
+  function loadGoogleSheets(force) {
     if (!els.googleStatus) return Promise.resolve();
     els.googleStatus.textContent = "Checking authentication…";
     setHidden(els.googlePicker, true);
-    return apiGet("/api/spreadsheets/google").then(function (g) {
+    var url = "/api/spreadsheets/google" + (force ? "?refresh=true" : "");
+    return apiGet(url).then(function (g) {
       if (!g.authenticated) {
         renderGoogleConnectCTA(g.auth_in_flight, g.auth_error);
         return;
       }
       if (g.auth_error) {
         els.googleStatus.textContent = "Google: " + g.auth_error;
+        // Signed in but the listing failed (rate limit, network): keep Refresh
+        // reachable so the user can retry without reopening the overlay.
+        setHidden(els.googleRefresh, false);
         return;
       }
       state.googleSheets = g.sheets || [];
@@ -1239,12 +1263,14 @@
         : "No spreadsheets found in your account";
       renderGoogleList(state.googleSheets);
       setHidden(els.googlePicker, false);
+      setHidden(els.googleRefresh, false);
     });
   }
 
   function renderGoogleConnectCTA(inFlight, errorMsg) {
     els.googleStatus.innerHTML = "";
     setHidden(els.googlePicker, true);
+    setHidden(els.googleRefresh, true);
     if (errorMsg) {
       els.googleStatus.appendChild(el("div", "sheet-panel__status-error", errorMsg));
     }
@@ -1289,6 +1315,7 @@
       : "No spreadsheets found in your account";
     renderGoogleList(state.googleSheets);
     setHidden(els.googlePicker, false);
+    setHidden(els.googleRefresh, false);
   }
 
   function pollGoogleAuth() {
@@ -1734,7 +1761,10 @@
     loadStatus()
       .then(loadDirs)
       .then(loadStartSettings)
-      .then(loadGoogleSheets)
+      // Wrapped, not passed by reference: loadGoogleSheets(force) would
+      // otherwise receive the previous link's resolved value as `force` and
+      // re-list from Drive on every overlay open.
+      .then(function () { return loadGoogleSheets(); })
       .then(loadExcelFiles)
       .then(applyCurrentSessionPrefill)
       .catch(function (err) {

@@ -106,6 +106,12 @@ _worksheet: Any = None
 _sheet_context: spreadsheet.SheetContext | None = None
 _sheet_payload_cache: tuple[Any, dict[str, Any]] | None = None
 _sheet_payload_cache_lock = threading.Lock()
+# Drive's spreadsheet listing, cached as (monotonic stamp, metas). One picker
+# flow asks for it three times (list → worksheet dropdown → open-by-name); see
+# _cached_spreadsheet_meta. Cleared when a new Google client authenticates.
+_google_sheet_list_cache: tuple[float, list[dict[str, str]]] | None = None
+_google_sheet_list_lock = threading.Lock()
+_GOOGLE_SHEET_LIST_TTL_SEC = 300.0
 # Metadata for the active spreadsheet — used by /api/status so the Start
 # overlay can pre-select the right tab (Google/Excel) and re-highlight the
 # right item. Only set when the spreadsheet was opened via the runtime
@@ -3204,6 +3210,61 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         raise
 
 
+def _cached_spreadsheet_meta(*, force: bool = False) -> list[dict[str, str]]:
+    """Return Drive's spreadsheet listing, cached for ``_GOOGLE_SHEET_LIST_TTL_SEC``.
+
+    One "pick a sheet" flow asked Drive for the same ``files.list`` three times
+    (picker list, worksheet dropdown, open-by-name), each one retried with 2/4/8s
+    backoff on a 429 — so the redundancy cost the most exactly when Drive was
+    rate-limiting. ``force=True`` (the picker's Refresh button, or a name missing
+    from the cached list) re-lists.
+
+    The lock is deliberately held across the fetch: concurrent misses should queue
+    behind one Drive call rather than each spend a round-trip, and a waiter
+    re-checks freshness after acquiring. Nothing else takes this lock, so a slow
+    listing can only block another listing. Only successful fetches are stored, so
+    a rate-limited call never poisons the cache.
+    """
+    global _google_sheet_list_cache
+    import google_api
+
+    with _google_sheet_list_lock:
+        cached = _google_sheet_list_cache
+        if (
+            not force
+            and cached is not None
+            and time.monotonic() - cached[0] < _GOOGLE_SHEET_LIST_TTL_SEC
+        ):
+            return list(cached[1])
+        metas = google_api.get_all_spreadsheet_meta(_google_auth.client)
+        _google_sheet_list_cache = (time.monotonic(), metas)
+        # Hand back a copy so a caller can't mutate what the next reader sees.
+        return list(metas)
+
+
+def _invalidate_spreadsheet_meta() -> None:
+    """Drop the cached Drive listing (a different account may have signed in)."""
+    global _google_sheet_list_cache
+
+    with _google_sheet_list_lock:
+        _google_sheet_list_cache = None
+
+
+def _spreadsheet_names_for(name: str) -> list[str]:
+    """Cached Drive spreadsheet names, re-listed once when ``name`` isn't among them.
+
+    Keeps a spreadsheet created *after* the cache filled openable instead of
+    failing for the rest of the TTL. Uses the same fuzzy matcher the open path
+    does, so a "did you mean" hit doesn't trigger a needless re-list.
+    """
+    import google_api
+
+    names = [m["name"] for m in _cached_spreadsheet_meta()]
+    if google_api.find_spreadsheet_by_name(name, names) < 0:
+        names = [m["name"] for m in _cached_spreadsheet_meta(force=True)]
+    return names
+
+
 def _open_worksheet_for(
     type_: str, id_or_path: str, worksheet: str | None
 ) -> tuple[Any, str]:
@@ -3229,14 +3290,13 @@ def _open_worksheet_for(
             "Not authenticated with Google — click 'Connect Google' first."
         )
     import app as _app
-    import google_api
 
     if id_or_path.startswith(("http://", "https://")):
         new_ws = _app.open_spreadsheet_by_url(
             _google_auth.client, id_or_path, worksheet_name=worksheet
         )
     else:
-        doc_list = google_api.get_all_spreadsheets(_google_auth.client)
+        doc_list = _spreadsheet_names_for(id_or_path)
         new_ws = _app.open_spreadsheet_by_name(
             _google_auth.client, doc_list, id_or_path, worksheet_name=worksheet
         )
@@ -3484,6 +3544,12 @@ def build_combined_app(
 
     @combined.route("/api/spreadsheets/google", methods=["GET"])
     def api_spreadsheets_google() -> Response:
+        """List the account's spreadsheets for the Start overlay picker.
+
+        Served from the ``_cached_spreadsheet_meta`` TTL cache; ``?refresh=true``
+        (the picker's Refresh button) re-lists from Drive so a spreadsheet created
+        mid-session shows up without waiting out the TTL.
+        """
         if _google_auth.client is None:
             return ok(
                 authenticated=False,
@@ -3491,10 +3557,10 @@ def build_combined_app(
                 auth_error=_google_auth.error,
                 sheets=[],
             )
-        import google_api
-
         try:
-            metas = google_api.get_all_spreadsheet_meta(_google_auth.client)
+            metas = _cached_spreadsheet_meta(
+                force=request.args.get("refresh") == "true"
+            )
         except Exception as exc:
             return ok(
                 authenticated=True,
@@ -3544,8 +3610,15 @@ def build_combined_app(
                     return err("Not authenticated with Google.")
                 import app as _app
 
+                # A URL resolves without a Drive listing (see 35a7a606); only
+                # name lookups need the cached doc list handed down.
+                doc_list = (
+                    None
+                    if id_or_path.startswith(("http://", "https://"))
+                    else _spreadsheet_names_for(id_or_path)
+                )
                 titles, recommended = _app.list_worksheet_titles(
-                    _google_auth.client, id_or_path
+                    _google_auth.client, id_or_path, doc_list=doc_list
                 )
         except Exception as exc:
             return err(str(exc), 500)
@@ -3642,6 +3715,9 @@ def build_combined_app(
                     )
                 else:
                     _google_auth.client = client
+                    # A different account may have signed in; the previous
+                    # account's spreadsheet listing must not survive.
+                    _invalidate_spreadsheet_meta()
             except Exception as exc:
                 # Daemon-thread exceptions otherwise vanish; surface to logs
                 # so a misconfigured credentials.json is debuggable.

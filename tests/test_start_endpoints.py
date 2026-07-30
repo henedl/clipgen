@@ -45,8 +45,11 @@ def app(monkeypatch, tmp_path):
         start_settings, "_settings_path", lambda: tmp_path / "start.json"
     )
 
-    # Reset Google-auth state between tests.
+    # Reset Google-auth state between tests. The Drive listing cache goes with
+    # it: the suite runs -n auto with a random seed, so a listing cached by one
+    # test would otherwise answer another test's request.
     monkeypatch.setattr(server, "_google_auth", server._GoogleAuthState())
+    monkeypatch.setattr(server, "_google_sheet_list_cache", None)
 
     # /api/spreadsheets/open reassigns these module globals directly (no
     # fixture owns them), so an opened workbook would otherwise outlive the
@@ -654,6 +657,175 @@ def test_google_list_surfaces_api_error(client, monkeypatch):
     assert body["authenticated"] is True
     assert "rate limited" in body["auth_error"]
     assert body["sheets"] == []
+
+
+def _count_drive_listings(monkeypatch, metas=None):
+    """Patch the Drive listing with a call counter. Returns the counter list."""
+    import google_api
+
+    calls: list[int] = []
+    rows = metas if metas is not None else [{"name": "Alpha", "id": "a"}]
+
+    def _list(_c):
+        calls.append(1)
+        return [dict(m) for m in rows]
+
+    monkeypatch.setattr(google_api, "get_all_spreadsheet_meta", _list)
+    return calls
+
+
+def test_google_list_second_call_is_served_from_cache(client, monkeypatch):
+    """Within the TTL a repeat listing costs no Drive round-trip."""
+    server._google_auth.client = object()
+    calls = _count_drive_listings(monkeypatch)
+
+    first = client.get("/api/spreadsheets/google").get_json()
+    second = client.get("/api/spreadsheets/google").get_json()
+
+    assert len(calls) == 1
+    assert first["sheets"] == second["sheets"]
+
+
+def test_google_list_refresh_param_relists(client, monkeypatch):
+    """?refresh=true is the picker's escape hatch for a mid-session sheet."""
+    server._google_auth.client = object()
+    calls = _count_drive_listings(monkeypatch)
+
+    client.get("/api/spreadsheets/google")
+    client.get("/api/spreadsheets/google", query_string={"refresh": "true"})
+
+    assert len(calls) == 2
+
+
+def test_google_list_cache_expires(client, monkeypatch):
+    server._google_auth.client = object()
+    calls = _count_drive_listings(monkeypatch)
+    monkeypatch.setattr(server, "_GOOGLE_SHEET_LIST_TTL_SEC", 0)
+
+    client.get("/api/spreadsheets/google")
+    client.get("/api/spreadsheets/google")
+
+    assert len(calls) == 2
+
+
+def test_google_list_failure_is_not_cached(client, monkeypatch):
+    """A rate-limited listing must not poison the cache with an empty result."""
+    server._google_auth.client = object()
+    import google_api
+
+    def _boom(_c):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(google_api, "get_all_spreadsheet_meta", _boom)
+    assert (
+        "rate limited"
+        in client.get("/api/spreadsheets/google").get_json()["auth_error"]
+    )
+
+    _count_drive_listings(monkeypatch)
+    body = client.get("/api/spreadsheets/google").get_json()
+    assert [s["name"] for s in body["sheets"]] == ["Alpha"]
+
+
+def test_google_auth_invalidates_the_listing_cache(client, monkeypatch):
+    """A newly signed-in account must not inherit the previous one's listing."""
+    import threading
+
+    server._google_sheet_list_cache = (1.0, [{"name": "Stale", "id": "s"}])
+
+    def fake_thread(target, daemon=True):
+        target()
+
+        class _Joined:
+            def start(self_inner):
+                pass
+
+        return _Joined()
+
+    monkeypatch.setattr(threading, "Thread", fake_thread)
+    import cli
+
+    monkeypatch.setattr(cli, "authenticate_google", lambda: object())
+
+    client.post("/api/spreadsheets/google/auth", json={})
+    assert server._google_sheet_list_cache is None
+
+
+def test_open_by_name_relists_when_the_name_is_missing(monkeypatch):
+    """A sheet created after the cache filled stays openable inside the TTL."""
+    import app as _app
+
+    monkeypatch.setattr(server, "_google_auth", server._GoogleAuthState())
+    server._google_auth.client = object()
+    monkeypatch.setattr(server, "_google_sheet_list_cache", None)
+    calls = _count_drive_listings(monkeypatch, [{"name": "Alpha", "id": "a"}])
+
+    seen: list[list[str]] = []
+
+    def _open(_client, doc_list, _name, worksheet_name=None):
+        seen.append(list(doc_list))
+        return object()
+
+    monkeypatch.setattr(_app, "open_spreadsheet_by_name", _open)
+
+    server._open_worksheet_for("google", "Alpha", None)
+    assert len(calls) == 1  # cached name: no second listing
+
+    server._open_worksheet_for("google", "Brand New", None)
+    assert len(calls) == 2  # unknown name: one forced re-list
+    assert seen == [["Alpha"], ["Alpha"]]
+
+
+def test_worksheets_route_reuses_the_cached_names(client, monkeypatch):
+    """The worksheet dropdown takes the cached doc list instead of re-listing."""
+    import app as _app
+
+    server._google_auth.client = object()
+    calls = _count_drive_listings(monkeypatch)
+
+    received: list[list[str] | None] = []
+
+    def _titles(_client, _id_or_path, doc_list=None):
+        received.append(doc_list)
+        return ["Data"], "Data"
+
+    monkeypatch.setattr(_app, "list_worksheet_titles", _titles)
+
+    client.get("/api/spreadsheets/google")  # primes the cache
+    resp = client.get(
+        "/api/spreadsheets/worksheets",
+        query_string={"type": "google", "id_or_path": "Alpha"},
+    )
+
+    assert resp.get_json()["worksheets"] == ["Data"]
+    assert received == [["Alpha"]]
+    assert len(calls) == 1
+
+
+def test_worksheets_route_google_url_skips_the_drive_listing(client, monkeypatch):
+    """A URL resolves without a listing — the doc list stays None."""
+    import app as _app
+
+    server._google_auth.client = object()
+    calls = _count_drive_listings(monkeypatch)
+
+    received: list[list[str] | None] = []
+
+    def _titles(_client, _id_or_path, doc_list=None):
+        received.append(doc_list)
+        return ["Data"], "Data"
+
+    monkeypatch.setattr(_app, "list_worksheet_titles", _titles)
+    client.get(
+        "/api/spreadsheets/worksheets",
+        query_string={
+            "type": "google",
+            "id_or_path": "https://docs.google.com/spreadsheets/d/abc",
+        },
+    )
+
+    assert received == [None]
+    assert calls == []
 
 
 def test_google_auth_short_circuits_when_already_authenticated(client):

@@ -61,6 +61,7 @@ _CACHE_MODULES = (
 # Each entry names what bounds it -- add here only with a real justification.
 _NATURALLY_BOUNDED = {
     "_sheet_payload_cache": "single entry (the one open worksheet)",
+    "_google_sheet_list_cache": "single entry, TTL-expired (the Drive listing)",
     "_participant_timeline_cache": "one entry per participant in the cohort",
     "_video_metadata_cache": "one entry per participant video",
     "_corrected_cache": "one entry per participant transcript",

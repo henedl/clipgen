@@ -254,7 +254,7 @@ def open_spreadsheet_by_name(
 
 
 def list_worksheet_titles(
-    gspread_client: Any, id_or_path: str
+    gspread_client: Any, id_or_path: str, doc_list: list[str] | None = None
 ) -> tuple[list[str], str]:
     """Return ``(titles, recommended)`` for a Google spreadsheet by URL or name.
 
@@ -262,6 +262,9 @@ def list_worksheet_titles(
     Start overlay's worksheet dropdown can list a spreadsheet's tabs before it
     is opened. ``recommended`` is the priority auto-pick. Returns ``([], "")``
     when the name can't be resolved or a gspread error occurs.
+
+    ``doc_list`` lets a caller that already holds Drive's spreadsheet names (the
+    Studio server caches them) skip the listing round-trip; absent, it is fetched.
     """
     import gspread
 
@@ -269,7 +272,8 @@ def list_worksheet_titles(
         if id_or_path.startswith(config.COMMAND_HTTP_PREFIX):
             ss = gspread_client.open_by_url(id_or_path)
         else:
-            doc_list = google_api.get_all_spreadsheets(gspread_client)
+            if doc_list is None:
+                doc_list = google_api.get_all_spreadsheets(gspread_client)
             chosen_index = google_api.find_spreadsheet_by_name(id_or_path, doc_list)
             if chosen_index < 0:
                 return [], ""
