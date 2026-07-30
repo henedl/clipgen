@@ -120,6 +120,9 @@
 
   function startXrefPolling() {
     if (!state.xrefEligible || state.xrefPoller) return;
+    // Re-arm the sheet leg: this also runs on tab focus, and a spreadsheet may
+    // have been opened from another tab since we last looked.
+    _sheetXrefIdle = false;
     // createPoller runs loadCrossRefData once immediately (runImmediately
     // default), then every 30s.
     state.xrefPoller = createPoller(loadCrossRefData, 30000);
@@ -149,6 +152,14 @@
     updateStatusIndicator();
   }
 
+  // With no spreadsheet open, /studio/api/sheet answers {ok, sheet_loaded: false}
+  // with no rows — nothing this page can index — so stop asking after the first
+  // such answer. Cleared on tab focus (see startXrefPolling's resume): a sheet
+  // opened from another tab reloads only that document, not this one. The first
+  // tick always runs, which matters because this handler is the page's only
+  // caller of clipgenApplyConfig.
+  var _sheetXrefIdle = false;
+
   function loadCrossRefData() {
     fetch("../screenspace/api/events?excluded=false")
       .then(function (r) {
@@ -165,6 +176,7 @@
       })
       .catch(function () { _markXrefSource("screenspace", true); });
 
+    if (_sheetXrefIdle) return;
     fetch("../studio/api/sheet")
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
@@ -172,6 +184,7 @@
       })
       .then(function (data) {
         _markXrefSource("studio", false);
+        if (data.ok && data.sheet_loaded === false) _sheetXrefIdle = true;
         if (data.ok) {
           clipgenApplyConfig(data.config);
           state.sheetRows = data.rows || [];
