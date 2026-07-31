@@ -153,6 +153,41 @@ def reassert(window: Any) -> None:
         _set_page_fullscreen(window, True)
 
 
+def set_appearance(window: Any, theme: str) -> None:
+    """Match *window*'s NSAppearance to the page's ``data-theme``.
+
+    A window resize exposes area that AppKit fills with an appearance-derived
+    colour for the one frame before WebKit repaints it. In Light appearance that
+    fill is pure white, so zooming a dark-themed page flashes white — measured as
+    exactly one frame of ``(255, 255, 255)``. Matching the appearance to the page
+    makes the fill and the page agree, in both directions.
+
+    Also has the side benefit of theming the webview's native furniture
+    (scrollbars, form controls) to the app rather than to the system.
+    """
+    native = getattr(window, "native", None)
+    if not is_supported() or native is None:
+        return
+    name = "NSAppearanceNameAqua" if theme == "light" else "NSAppearanceNameDarkAqua"
+    try:
+        AppKit = _appkit()
+        # The constants are their own names; getattr is belt-and-braces.
+        appearance = AppKit.NSAppearance.appearanceNamed_(getattr(AppKit, name, name))
+        # Imported by name for the same reason as AppKit — see _appkit().
+        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+
+        def apply_appearance() -> None:
+            native.setAppearance_(appearance)
+            # Switching appearance re-lays out the titlebar, which puts the
+            # traffic lights back where AppKit wants them.
+            _reposition_traffic_lights(AppKit, native)
+
+        app_helper.callAfter(apply_appearance)
+    except Exception as exc:
+        # Cosmetic: the worst case is the flash this exists to remove.
+        utils.warning_print(f"Could not match the window appearance: {exc}")
+
+
 def titlebar_double_click(window: Any) -> None:
     """Run the user's title-bar double-click action for *window*.
 

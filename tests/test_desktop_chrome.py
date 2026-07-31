@@ -24,6 +24,7 @@ DESKTOP_SOURCE = Path(desktop.__file__).read_text(encoding="utf-8")
 # the -webkit-app-region property we cannot.
 TOPNAV_JS = strip_comments(read("topnav.js"))
 TOPNAV_CSS = read("topnav.css")
+UTILS_JS = strip_comments(read("utils.js"))
 
 
 def test_chrome_is_a_no_op_off_macos(monkeypatch):
@@ -125,6 +126,38 @@ def test_double_click_is_bridged_to_the_page():
     assert TOPNAV_JS.index("dataset.desktopChrome") < TOPNAV_JS.index(
         'addEventListener("dblclick"'
     )
+
+
+def test_set_appearance_is_a_no_op_without_a_window(monkeypatch):
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "linux")
+    desktop_chrome.set_appearance(object(), "dark")
+
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "darwin")
+
+    class Window:
+        native = None
+
+    desktop_chrome.set_appearance(Window(), "dark")
+
+
+def test_window_appearance_follows_the_page_theme():
+    """Light appearance over a dark page flashes white for a frame on zoom.
+
+    Measured as one frame of (255, 255, 255) in the exposed area, so the window
+    has to be told the theme — on load and on every toggle, not just one of them.
+    """
+    assert "NSAppearanceNameAqua" in SOURCE and "NSAppearanceNameDarkAqua" in SOURCE
+    expose = DESKTOP_SOURCE[DESKTOP_SOURCE.index("window.expose(") :]
+    assert "set_window_appearance" in expose[: expose.index(")")]
+
+    for setter in ("applyStoredThemePreference", "toggleThemePreference"):
+        body = UTILS_JS[UTILS_JS.index("var " + setter + " = function") :]
+        assert "syncDesktopAppearance" in body[: body.index("\n};")], setter
+    sync = UTILS_JS[UTILS_JS.index("var syncDesktopAppearance") :]
+    sync = sync[: sync.index("\n};")]
+    # Desktop-only, and the bridge does not exist yet on the first page load.
+    assert "dataset.desktopChrome" in sync
+    assert "pywebviewready" in sync
 
 
 def test_topnav_css_insets_the_left_column_not_the_bar():
