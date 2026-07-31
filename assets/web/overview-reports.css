@@ -1,8 +1,8 @@
-/* Overview Summary tab — per-participant mini-report surface.
+/* Overview Reports tab — per-participant mini-report surface.
  * Panel shell mirrors the sibling tab panels in overview.css; everything
  * below uses tokens.css values only. */
 
-#summaryPanel {
+#reportsPanel {
   height: 100vh;
   padding-top: var(--chrome-height);
   box-sizing: border-box;
@@ -10,7 +10,7 @@
   overflow-y: auto;
 }
 
-.sm-layout {
+.rp-layout {
   display: flex;
   gap: var(--space-4);
   padding: var(--space-3);
@@ -19,14 +19,14 @@
 
 /* ---- Participant sidebar ---- */
 
-.sm-sidebar {
+.rp-sidebar {
   flex: 0 0 auto;
   width: 180px;
   position: sticky;
   top: 0;
 }
 
-.sm-sidebar-header {
+.rp-sidebar-header {
   font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -35,21 +35,21 @@
   margin-bottom: var(--space-2);
 }
 
-.sm-pills {
+.rp-pills {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   align-items: stretch;
 }
 
-.sm-pills .participant-pill {
+.rp-pills .participant-pill {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
 /* Report status on a pill: solid dot = report exists, pulsing = generating. */
-.sm-pill-dot {
+.rp-pill-dot {
   width: var(--space-1-5);
   height: var(--space-1-5);
   border-radius: var(--radius-full);
@@ -57,40 +57,40 @@
   flex: 0 0 auto;
 }
 
-.sm-pill-dot.is-running {
-  animation: sm-dot-pulse 1.2s ease-in-out infinite;
+.rp-pill-dot.is-running {
+  animation: rp-dot-pulse 1.2s ease-in-out infinite;
 }
 
-@keyframes sm-dot-pulse {
+@keyframes rp-dot-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sm-pill-dot.is-running { animation: none; }
+  .rp-pill-dot.is-running { animation: none; }
 }
 
 /* ---- Main column ---- */
 
-.sm-main {
+.rp-main {
   flex: 1;
   min-width: 0;
   max-width: 720px;
 }
 
-.sm-empty {
+.rp-empty {
   color: var(--color-text-dim);
   padding: var(--space-6) 0;
   text-align: center;
 }
 
-.sm-empty-sub {
+.rp-empty-sub {
   font-size: var(--text-sm);
 }
 
 /* ---- Data-source checklist ---- */
 
-.sm-sources {
+.rp-sources {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--color-border);
@@ -99,7 +99,7 @@
   margin-bottom: var(--space-3);
 }
 
-.sm-source-row {
+.rp-source-row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -108,56 +108,56 @@
   box-sizing: border-box;
 }
 
-.sm-source-row + .sm-source-row {
+.rp-source-row + .rp-source-row {
   border-top: 1px solid var(--color-border);
 }
 
-.sm-source-dot {
+.rp-source-dot {
   width: var(--space-2);
   height: var(--space-2);
   border-radius: var(--radius-full);
   flex: 0 0 auto;
 }
 
-.sm-source-dot.is-ok { background: var(--cell-data-positive-fg); }
-.sm-source-dot.is-warn { background: var(--sev-medium); }
-.sm-source-dot.is-off { background: var(--color-text-dim); opacity: 0.5; }
-.sm-source-dot.is-busy {
+.rp-source-dot.is-ok { background: var(--cell-data-positive-fg); }
+.rp-source-dot.is-warn { background: var(--sev-medium); }
+.rp-source-dot.is-off { background: var(--color-text-dim); opacity: 0.5; }
+.rp-source-dot.is-busy {
   background: var(--accent);
-  animation: sm-dot-pulse 1.2s ease-in-out infinite;
+  animation: rp-dot-pulse 1.2s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sm-source-dot.is-busy { animation: none; }
+  .rp-source-dot.is-busy { animation: none; }
 }
 
-.sm-source-label {
+.rp-source-label {
   font-weight: 600;
   font-size: var(--text-sm);
   flex: 0 0 auto;
   width: 160px;
 }
 
-.sm-source-status {
+.rp-source-status {
   color: var(--color-text-dim);
   font-size: var(--text-sm);
   flex: 1;
   min-width: 0;
 }
 
-.sm-source-action {
+.rp-source-action {
   flex: 0 0 auto;
 }
 
-.sm-source-status a,
-.sm-note a,
-.sm-empty a {
+.rp-source-status a,
+.rp-note a,
+.rp-empty a {
   color: var(--accent);
 }
 
 /* ---- Notices (download gate, trigger failures) ---- */
 
-.sm-note {
+.rp-note {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -171,63 +171,63 @@
 
 /* ---- Report ---- */
 
-.sm-report-head {
+.rp-report-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
 }
 
-.sm-report-title {
+.rp-report-title {
   font-size: var(--text-lg);
   font-weight: 600;
   margin: 0;
 }
 
-.sm-report-actions {
+.rp-report-actions {
   display: flex;
   gap: var(--space-2);
 }
 
-.sm-report-meta {
+.rp-report-meta {
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   margin-top: var(--space-1);
   min-height: var(--space-3);
 }
 
-.sm-report-body {
+.rp-report-body {
   margin-top: var(--space-2);
   font-size: var(--text-base);
   line-height: 1.55;
 }
 
-.sm-report-body h3 {
+.rp-report-body h3 {
   font-size: var(--text-md);
   margin: var(--space-3) 0 var(--space-1);
 }
 
-.sm-report-body h4 {
+.rp-report-body h4 {
   font-size: var(--text-base);
   margin: var(--space-2) 0 var(--space-1);
 }
 
-.sm-report-body p {
+.rp-report-body p {
   margin: var(--space-1) 0;
 }
 
-.sm-report-body ul {
+.rp-report-body ul {
   margin: var(--space-1) 0;
   padding-left: var(--space-5);
 }
 
-.sm-report-hint {
+.rp-report-hint {
   color: var(--color-text-dim);
 }
 
 /* Streaming partial text keeps the model's raw line breaks until the final
  * markdown render replaces it. */
-.sm-report-partial {
+.rp-report-partial {
   white-space: pre-wrap;
   color: var(--color-text-dim);
   font-size: var(--text-sm);
@@ -235,76 +235,76 @@
 
 /* ---- Inline report chips (timestamps, severity) ---- */
 
-.sm-ts {
+.rp-ts {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--color-text-dim);
   white-space: nowrap;
 }
 
-.sm-ts--linked {
+.rp-ts--linked {
   color: var(--accent);
   cursor: pointer;
 }
 
-.sm-ts--linked:hover {
+.rp-ts--linked:hover {
   text-decoration: underline;
 }
 
-.sm-sev { font-weight: 600; }
-.sm-sev.sev-critical { color: var(--sev-critical); }
-.sm-sev.sev-high { color: var(--sev-high); }
-.sm-sev.sev-medium { color: var(--sev-medium); }
-.sm-sev.sev-low { color: var(--sev-low); }
-.sm-sev.sev-na { color: var(--sev-na); }
-.sm-sev.sev-positive { color: var(--sev-positive); }
-.sm-sev.sev-very-positive { color: var(--sev-very-positive); }
-.sm-sev.sev-unknown { color: var(--sev-unknown); }
+.rp-sev { font-weight: 600; }
+.rp-sev.sev-critical { color: var(--sev-critical); }
+.rp-sev.sev-high { color: var(--sev-high); }
+.rp-sev.sev-medium { color: var(--sev-medium); }
+.rp-sev.sev-low { color: var(--sev-low); }
+.rp-sev.sev-na { color: var(--sev-na); }
+.rp-sev.sev-positive { color: var(--sev-positive); }
+.rp-sev.sev-very-positive { color: var(--sev-very-positive); }
+.rp-sev.sev-unknown { color: var(--sev-unknown); }
 
 /* ---- Clips strip ---- */
 
-.sm-clips {
+.rp-clips {
   margin-top: var(--space-5);
 }
 
-.sm-clips-head {
+.rp-clips-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
 }
 
-.sm-clips-title {
+.rp-clips-title {
   font-size: var(--text-lg);
   font-weight: 600;
   margin: 0;
 }
 
-.sm-clips-meta {
+.rp-clips-meta {
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   flex: 1;
   min-width: 0;
 }
 
-.sm-clips-actions {
+.rp-clips-actions {
   display: flex;
   gap: var(--space-2);
 }
 
-.sm-clips-strip {
+.rp-clips-strip {
   display: flex;
   gap: var(--space-2);
   overflow-x: auto;
   padding: var(--space-2) 0;
 }
 
-.sm-clips-hint {
+.rp-clips-hint {
   color: var(--color-text-dim);
   font-size: var(--text-sm);
   margin: var(--space-1) 0;
 }
 
-.sm-clip {
+.rp-clip {
   position: relative;
   flex: 0 0 auto;
   width: 132px;
@@ -320,18 +320,18 @@
   color: inherit;
 }
 
-.sm-clip.is-playing {
+.rp-clip.is-playing {
   border-color: var(--accent);
 }
 
-.sm-clip.sev-critical { border-bottom-color: var(--sev-critical); }
-.sm-clip.sev-high { border-bottom-color: var(--sev-high); }
-.sm-clip.sev-medium { border-bottom-color: var(--sev-medium); }
-.sm-clip.sev-low { border-bottom-color: var(--sev-low); }
-.sm-clip.sev-positive { border-bottom-color: var(--sev-positive); }
-.sm-clip.sev-very-positive { border-bottom-color: var(--sev-very-positive); }
+.rp-clip.sev-critical { border-bottom-color: var(--sev-critical); }
+.rp-clip.sev-high { border-bottom-color: var(--sev-high); }
+.rp-clip.sev-medium { border-bottom-color: var(--sev-medium); }
+.rp-clip.sev-low { border-bottom-color: var(--sev-low); }
+.rp-clip.sev-positive { border-bottom-color: var(--sev-positive); }
+.rp-clip.sev-very-positive { border-bottom-color: var(--sev-very-positive); }
 
-.sm-clip-thumb {
+.rp-clip-thumb {
   display: block;
   width: 100%;
   height: 74px;
@@ -339,11 +339,11 @@
   background: var(--color-surface-alt);
 }
 
-.sm-clip--noposter .sm-clip-thumb {
+.rp-clip--noposter .rp-clip-thumb {
   visibility: hidden;
 }
 
-.sm-clip-meta {
+.rp-clip-meta {
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -351,28 +351,28 @@
   font-size: var(--text-2xs);
 }
 
-.sm-clip-time {
+.rp-clip-time {
   color: var(--color-text-dim);
 }
 
-.sm-clip-sev {
+.rp-clip-sev {
   margin-left: auto;
   font-weight: 600;
   white-space: nowrap;
 }
 
-.sm-clip-sev.sev-critical { color: var(--sev-critical); }
-.sm-clip-sev.sev-high { color: var(--sev-high); }
-.sm-clip-sev.sev-medium { color: var(--sev-medium); }
-.sm-clip-sev.sev-low { color: var(--sev-low); }
-.sm-clip-sev.sev-na { color: var(--sev-na); }
-.sm-clip-sev.sev-positive { color: var(--sev-positive); }
-.sm-clip-sev.sev-very-positive { color: var(--sev-very-positive); }
-.sm-clip-sev.sev-unknown { color: var(--sev-unknown); }
+.rp-clip-sev.sev-critical { color: var(--sev-critical); }
+.rp-clip-sev.sev-high { color: var(--sev-high); }
+.rp-clip-sev.sev-medium { color: var(--sev-medium); }
+.rp-clip-sev.sev-low { color: var(--sev-low); }
+.rp-clip-sev.sev-na { color: var(--sev-na); }
+.rp-clip-sev.sev-positive { color: var(--sev-positive); }
+.rp-clip-sev.sev-very-positive { color: var(--sev-very-positive); }
+.rp-clip-sev.sev-unknown { color: var(--sev-unknown); }
 
 /* ---- Inline player ---- */
 
-.sm-player {
+.rp-player {
   margin: var(--space-2) 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -380,7 +380,7 @@
   overflow: hidden;
 }
 
-.sm-player-head {
+.rp-player-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -388,7 +388,7 @@
   padding: var(--space-1-5) var(--space-2);
 }
 
-.sm-player-title {
+.rp-player-title {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   overflow: hidden;
@@ -397,7 +397,7 @@
   min-width: 0;
 }
 
-.sm-player-video {
+.rp-player-video {
   display: block;
   width: 100%;
   max-height: 380px;

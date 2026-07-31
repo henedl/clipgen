@@ -729,7 +729,7 @@ def _format_report_observations(
     """Format *participant*'s sheet observations as ``- [M:SS] text (category, severity)`` lines.
 
     The leading timestamp (the cell's first parsed start time) is what lets the
-    model cite video times the Summary tab can then link to generated clips;
+    model cite video times the Reports tab can then link to generated clips;
     text-only cells get no bracket. Deduplicates on observation text: the
     getter emits one record per (row × cell), so a participant listed twice on
     a row would otherwise repeat the same note.

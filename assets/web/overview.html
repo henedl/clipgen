@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="overview.css">
   <link rel="stylesheet" href="overview-convergence.css">
   <link rel="stylesheet" href="overview-metadata.css">
-  <link rel="stylesheet" href="overview-summary.css">
+  <link rel="stylesheet" href="overview-reports.css">
   <link rel="stylesheet" href="settings-modal.css">
   <link rel="stylesheet" href="hotkeys.css">
   <link rel="stylesheet" href="command-palette.css">
@@ -36,7 +36,7 @@
       <button class="preview-tab" type="button" role="tab" data-tab="map" data-hotkey="overview.tabMap">Map
         <span class="ov-wip-badge" title="The similarity map is a work in progress">WIP</span>
       </button>
-      <button class="preview-tab" type="button" role="tab" data-tab="summary" data-hotkey="overview.tabSummary">Summary
+      <button class="preview-tab" type="button" role="tab" data-tab="reports" data-hotkey="overview.tabReports">Reports
         <span class="ov-wip-badge" title="The mini-report is a work in progress">WIP</span>
       </button>
     </nav>
@@ -184,8 +184,8 @@
        default tab, so it starts visible) -->
   <div id="metadataPanel"></div>
 
-  <!-- Summary tab (overview-summary.js renders into it wholesale) -->
-  <div id="summaryPanel" class="hidden"></div>
+  <!-- Reports tab (overview-reports.js renders into it wholesale) -->
+  <div id="reportsPanel" class="hidden"></div>
 
   <div id="toast" class="toast hidden"></div>
 
@@ -208,6 +208,6 @@
   <script src="overview-map.js" defer></script>
   <script src="overview-convergence.js" defer></script>
   <script src="overview-metadata.js" defer></script>
-  <script src="overview-summary.js" defer></script>
+  <script src="overview-reports.js" defer></script>
 </body>
 </html>

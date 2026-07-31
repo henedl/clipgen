@@ -4432,7 +4432,7 @@ def test_static_cache_headers():
 
 def test_media_route_serves_generated_artifacts(client, tmp_path, monkeypatch):
     """/studio/media/<file> serves the *current* output dir (the Overview
-    Summary tab plays generated clips from it). The getter resolves per
+    Reports tab plays generated clips from it). The getter resolves per
     request, so a mid-session OUTPUT_DIR change is picked up immediately —
     unlike screenspace's startup-snapshot media dir."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))

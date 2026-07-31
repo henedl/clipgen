@@ -512,7 +512,7 @@ studio_bp = Blueprint("studio", __name__)
 # media_dir_getter resolves per request (not a snapshot like screenspace's
 # _output_dir) so /studio/media/<file> keeps serving generated artifacts even
 # after POST /api/dirs moves config.OUTPUT_DIR mid-session. The Overview
-# Summary tab's clip strip plays clips from here.
+# Reports tab's clip strip plays clips from here.
 utils.register_static_routes(
     studio_bp,
     "studio.html",
