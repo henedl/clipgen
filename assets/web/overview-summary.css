@@ -1,0 +1,234 @@
+/* Overview Summary tab — per-participant mini-report surface.
+ * Panel shell mirrors the sibling tab panels in overview.css; everything
+ * below uses tokens.css values only. */
+
+#summaryPanel {
+  height: 100vh;
+  padding-top: var(--chrome-height);
+  box-sizing: border-box;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.sm-layout {
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  align-items: flex-start;
+}
+
+/* ---- Participant sidebar ---- */
+
+.sm-sidebar {
+  flex: 0 0 auto;
+  width: 180px;
+  position: sticky;
+  top: 0;
+}
+
+.sm-sidebar-header {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-2);
+}
+
+.sm-pills {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: stretch;
+}
+
+.sm-pills .participant-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Report status on a pill: solid dot = report exists, pulsing = generating. */
+.sm-pill-dot {
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+.sm-pill-dot.is-running {
+  animation: sm-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes sm-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sm-pill-dot.is-running { animation: none; }
+}
+
+/* ---- Main column ---- */
+
+.sm-main {
+  flex: 1;
+  min-width: 0;
+  max-width: 720px;
+}
+
+.sm-empty {
+  color: var(--color-text-dim);
+  padding: var(--space-6) 0;
+  text-align: center;
+}
+
+.sm-empty-sub {
+  font-size: var(--text-sm);
+}
+
+/* ---- Data-source checklist ---- */
+
+.sm-sources {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  margin-bottom: var(--space-3);
+}
+
+.sm-source-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  min-height: var(--space-6);
+  box-sizing: border-box;
+}
+
+.sm-source-row + .sm-source-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.sm-source-dot {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-full);
+  flex: 0 0 auto;
+}
+
+.sm-source-dot.is-ok { background: var(--cell-data-positive-fg); }
+.sm-source-dot.is-warn { background: var(--sev-medium); }
+.sm-source-dot.is-off { background: var(--color-text-dim); opacity: 0.5; }
+.sm-source-dot.is-busy {
+  background: var(--accent);
+  animation: sm-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sm-source-dot.is-busy { animation: none; }
+}
+
+.sm-source-label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  flex: 0 0 auto;
+  width: 160px;
+}
+
+.sm-source-status {
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  flex: 1;
+  min-width: 0;
+}
+
+.sm-source-action {
+  flex: 0 0 auto;
+}
+
+.sm-source-status a,
+.sm-note a,
+.sm-empty a {
+  color: var(--accent);
+}
+
+/* ---- Notices (download gate, trigger failures) ---- */
+
+.sm-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border: 1px solid var(--sev-medium);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+/* ---- Report ---- */
+
+.sm-report-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sm-report-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin: 0;
+}
+
+.sm-report-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.sm-report-meta {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  margin-top: var(--space-1);
+  min-height: var(--space-3);
+}
+
+.sm-report-body {
+  margin-top: var(--space-2);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.sm-report-body h3 {
+  font-size: var(--text-md);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.sm-report-body h4 {
+  font-size: var(--text-base);
+  margin: var(--space-2) 0 var(--space-1);
+}
+
+.sm-report-body p {
+  margin: var(--space-1) 0;
+}
+
+.sm-report-body ul {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-5);
+}
+
+.sm-report-hint {
+  color: var(--color-text-dim);
+}
+
+/* Streaming partial text keeps the model's raw line breaks until the final
+ * markdown render replaces it. */
+.sm-report-partial {
+  white-space: pre-wrap;
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+}
