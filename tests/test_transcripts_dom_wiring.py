@@ -45,14 +45,15 @@ REQUIRED_IDS = [
     "frictionEmptyHint",
     "frictionGenerating",
     "frictionContent",
-    "frictionStats",
-    "frictionThreshold",
-    "frictionThresholdVal",
-    "frictionCategoryToggles",
+    "frictionModeMount",
+    "frictionCounter",
     "frictionMarkAll",
-    "frictionMoments",
+    "frictionHistogram",
+    "frictionChips",
+    "frictionJumpStrip",
+    "frictionJumpPrev",
+    "frictionJumpNext",
     "frictionStaleDot",
-    "frictionHeatmapBtn",
 ]
 
 
@@ -98,6 +99,72 @@ def test_segment_rebuild_keeps_the_reader_in_place():
         "mark the scroll as programmatic before writing it, or the auto-follow "
         "pause treats the restore as a reader scroll"
     )
+    assert body.index("applyFrictionDecorations()") < body.index(
+        "ignoreNextScroll()"
+    ), (
+        "friction Isolate hides rows and the moment callouts add height, so the "
+        "decoration pass must run before the scroll restore — otherwise the "
+        "browser clamps the restored offset against a stale scrollHeight"
+    )
+
+
+def test_friction_decorations_are_the_only_friction_writer_on_the_segment_list():
+    """renderSegments builds one big HTML string; applyFrictionDecorations then
+    toggles classes on the result. If the string ALSO emitted friction markup the
+    two paths would drift, and a threshold drag (which only runs the decoration
+    pass) would disagree with the next full rebuild."""
+    start = _JS.index("function renderSegments(")
+    body = _JS[start : _JS.index("\n  // Which participant", start)]
+    assert "segment-friction" not in body and "seg-friction-alpha" not in body, (
+        "friction markup must not be emitted by renderSegments' HTML string; "
+        "applyFrictionDecorations owns every friction class and inline var"
+    )
+
+
+def test_isolate_mode_hides_rows_without_breaking_the_index_cache():
+    """state.cachedSegmentRows is indexed positionally against state.segments, so
+    Isolate must hide rows rather than remove them — and the hide rule needs the
+    compound selector, since .segment-row's own display:flex is equal specificity
+    and would otherwise win purely on source order."""
+    assert ".segment-row.segment-hidden {" in _CSS, (
+        "a bare .segment-hidden rule ties Isolate mode to CSS source order"
+    )
+    assert 'classList.toggle("segment-hidden"' in _JS, (
+        "Isolate must toggle a class; removing rows misaligns cachedSegmentRows"
+    )
+
+
+def test_scroll_to_segment_bails_on_an_isolated_row():
+    """A display:none row reports an all-zero getBoundingClientRect(), so the
+    scroll math lands ~188px above the reader. With PiP forcing auto-follow, that
+    fires on every playhead transition — a continuous upward yank."""
+    start = _JS.index("function scrollToSegment(")
+    body = _JS[start : _JS.index("\n  }", start)]
+    assert 'classList.contains("segment-hidden")' in body, (
+        "scrollToSegment must return before any layout read on a hidden row"
+    )
+    assert body.index("segment-hidden") < body.index("getBoundingClientRect"), (
+        "the guard has to precede the rect read it exists to prevent"
+    )
+
+
+def test_friction_consumers_all_read_the_shared_match_map():
+    """The threshold/category filter must drive the pane, the segment tints AND
+    the timeline band. Before the redesign the band and the tints used raw
+    score > 0, so the transcript disagreed with the tab that filtered it."""
+    for name in ("transcripts.js", "transcripts-video.js", "transcripts-agents.js"):
+        assert "frictionMatchBySegId" in read(name), (
+            f"{name} must read the derived match map, not raw friction scores"
+        )
+    assert "frictionHeatmapEnabled" not in _JS, (
+        "the boolean heatmap flag was replaced by the three-way state.frictionMode"
+    )
+
+
+def test_transcripts_does_not_pull_in_the_studio_primitives():
+    """primitives.{js,css} are Studio/Overview-only; the friction chips are
+    deliberately page-local so this page keeps its current asset set."""
+    assert "primitives.js" not in _HTML and "primitives.css" not in _HTML
 
 
 def test_sheet_xref_leg_stops_polling_an_empty_studio():

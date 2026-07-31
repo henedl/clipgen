@@ -54,9 +54,12 @@ Friction detection (depends on `summary`; surfaces moments of likely interest):
   in the Studio settings **Summaries → AI Summary** tab). Friction uses the same Ollama
   model as summaries/citations (`OLLAMA_SUMMARY_MODEL`); set `OLLAMA_FRICTION_MODEL` only
   to pin friction to a different model (blank = follow the summary model).
-- Drive it from the **Transcripts UI**: the **Friction tab** in the analysis panel (stats,
-  score/category filter, top moments, "Mark all matching") and the **friction heatmap**
-  toggle on the timeline; run/re-run/stop also live in the participant pill dropdown.
+- Drive it from the **Transcripts UI**: the **Friction tab** is a control surface over the
+  transcript below it — an `Off / Highlight / Isolate` mode switch, a score histogram whose
+  marker is the threshold, category chips, "Mark all matching", and a jump strip of the LLM
+  moments (whose rationales render as inline callouts under the segments they quote).
+  Highlight tints matching segments and draws the timeline density band; Isolate hides
+  everything else. Run/re-run/stop also live in the participant pill dropdown.
 - Results persist to `transcripts_manifest.json` under each participant's `friction` field
   and flow into `--export` (`clipgen_export_friction_moments.*` / `_friction_segments.*`).
 

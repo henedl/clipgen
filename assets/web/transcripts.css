@@ -778,15 +778,6 @@ body {
 
 /* ── Friction tab ───────────────────────────────────────────── */
 
-.friction-heatmap-icon {
-  -webkit-mask-image: url(icons/fire.svg);
-  mask-image: url(icons/fire.svg);
-}
-
-#frictionHeatmapBtn.active {
-  color: var(--color-friction);
-}
-
 .friction-header {
   display: flex;
   align-items: center;
@@ -843,17 +834,113 @@ body {
   flex-shrink: 0;
 }
 
-.friction-stats {
-  margin-bottom: var(--space-3);
-}
-
-.friction-stat-chips {
+/* ── Control surface ────────────────────────────────────────
+ *
+ * Everything in .friction-controls acts on #segmentList below — it filters,
+ * tints and navigates the transcript rather than holding results of its own.
+ * The block is deliberately fixed-height (one control row, a 2rem histogram, a
+ * chip row that wraps to at most two lines): before the redesign an unbounded
+ * stack of moment cards pushed #transcriptSection off-screen entirely. Do NOT
+ * give .panel-pane a max-height/overflow to bound it instead — a nested
+ * scroller fights initPipScroll, which reads #trMain's scrollTop.
+ */
+.friction-controls {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border);
   margin-bottom: var(--space-2);
 }
 
+.friction-controls-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.friction-mode-mount {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.friction-counter {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Pushes "Mark all matching" to the right edge of the control row. */
+#frictionMarkAll {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Score-distribution histogram; the marker is the min-score threshold and is
+ * draggable. Ported from Screenspace's .conf-hist, tinted with --color-friction.
+ * The whole track is the drag surface, hence ew-resize + touch-action:none. */
+.friction-hist {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: var(--space-6);
+  background: var(--bg-input);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.friction-hist-bar {
+  flex: 1 1 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.friction-hist-bar-fill {
+  width: 100%;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  background: var(--color-friction);
+}
+
+/* Bins below the threshold are dimmed so the cut point reads at a glance. */
+.friction-hist-bar.is-below .friction-hist-bar-fill {
+  opacity: 0.28;
+}
+
+.friction-hist-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px; /* center the line on the threshold position */
+  background: var(--color-text);
+  pointer-events: none;
+}
+
+.friction-hist-label {
+  position: absolute;
+  top: var(--space-1);
+  left: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--color-text-dim);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.friction-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* Toggleable category filter. Replaces the old pairing of a non-interactive
+ * stat chip row plus a duplicate row of checkboxes for the same six categories.
+ * Counts are computed client-side against the live threshold (stats.by_category
+ * counts marker hits, not segments, and never moves with the slider). */
 .friction-chip {
   display: inline-flex;
   align-items: center;
@@ -861,100 +948,193 @@ body {
   padding: 2px var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
+  background: transparent;
+  font-family: inherit;
   font-size: var(--text-xs);
   color: var(--color-text-dim);
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
+}
+
+.friction-chip:hover:not(.is-empty) {
+  border-color: var(--color-friction);
+}
+
+.friction-chip.is-on {
+  color: var(--color-friction);
+  border-color: color-mix(in srgb, var(--color-friction) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-friction) 12%, transparent);
+}
+
+/* No segments in this category at the current threshold — shown (so the absence
+ * is itself information) but not clickable. */
+.friction-chip.is-empty {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .friction-chip-count {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  color: var(--color-text);
+  color: inherit;
 }
 
-.friction-stat-line {
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.friction-filter {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) 0;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-  margin-bottom: var(--space-3);
-}
-
-.friction-filter-row {
+/* ── Moment jump strip ──────────────────────────────────────
+ *
+ * One line, always: the strip scrolls horizontally rather than growing, and the
+ * moments' quote/rationale lives on the transcript segments (.friction-callout)
+ * instead of in cards here.
+ */
+.friction-jump {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
-.friction-threshold-label {
-  font-size: var(--text-xs);
+.friction-jump-step {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-5);
+  height: var(--space-5);
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--color-text-dim);
-  white-space: nowrap;
+  cursor: pointer;
 }
 
-.friction-threshold-label span {
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text);
+.friction-jump-step:hover:not(:disabled) {
+  color: var(--color-friction);
+  border-color: var(--color-friction);
 }
 
-#frictionThreshold {
+.friction-jump-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.friction-jump-step-icon {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.friction-jump-icon-prev {
+  -webkit-mask-image: url(icons/chevron-left.svg);
+  mask-image: url(icons/chevron-left.svg);
+}
+
+.friction-jump-icon-next {
+  -webkit-mask-image: url(icons/chevron-right.svg);
+  mask-image: url(icons/chevron-right.svg);
+}
+
+.friction-jump-strip {
   flex: 1;
-  accent-color: var(--color-friction);
-}
-
-.friction-cat-toggles {
+  min-width: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-3);
+  gap: var(--space-1);
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
 }
 
-.friction-cat-toggle {
+.friction-jump-chip {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-family: inherit;
   font-size: var(--text-xs);
-  color: var(--color-text);
+  color: var(--color-text-dim);
   cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast);
 }
 
-.friction-cat-toggle input {
-  accent-color: var(--color-friction);
+.friction-jump-chip:hover {
+  background: var(--color-surface-alt);
+  border-color: var(--color-friction);
 }
 
-.friction-moments {
+.friction-jump-chip.is-current {
+  color: var(--color-friction);
+  border-color: color-mix(in srgb, var(--color-friction) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-friction) 12%, transparent);
+}
+
+.friction-jump-chip-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.friction-jump-chip-time {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.friction-jump-empty {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  font-style: italic;
+}
+
+/* ── Inline moment callout, rendered into #segmentList ──────
+ *
+ * A SIBLING of .segment-row, never a child: every delegated segment-list
+ * handler starts with closest(".segment-row"), so nesting would make a click on
+ * a rationale seek the video and a dblclick open the segment editor.
+ */
+.friction-callout {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-}
-
-.friction-moment {
+  gap: var(--space-1);
+  /* Indented under the passage it closes, and inset on the right to match
+     .segment-row's padding so it reads as nested rather than full-bleed. */
+  margin: var(--space-1) var(--space-3) var(--space-2) var(--space-5);
   padding: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--color-friction) 35%, var(--color-border));
   border-left: 3px solid var(--color-friction);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-friction) 7%, transparent);
 }
 
-.friction-moment--seekable {
-  cursor: pointer;
-  transition: background var(--duration-fast);
-}
-
-.friction-moment--seekable:hover {
-  background: var(--color-surface-alt);
-}
-
-.friction-moment-head {
+.friction-callout-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-bottom: var(--space-1);
+}
+
+.friction-callout-num {
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--color-friction);
+}
+
+.friction-callout-score {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-dim);
+}
+
+.friction-callout-rationale {
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--color-text);
 }
 
 .friction-cat-badge {
@@ -973,47 +1153,16 @@ body {
   font-weight: 500;
 }
 
-.friction-moment-score {
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-dim);
-}
-
-.friction-moment-time {
-  margin-left: auto;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-dim);
-}
-
-.friction-moment-quote {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-2);
-  border-left: 2px solid var(--color-friction);
-  color: var(--color-text);
-  font-style: italic;
-  font-size: var(--text-sm);
-  line-height: 1.45;
-}
-
-.friction-moment-rationale {
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  color: var(--color-text-dim);
-}
-
-.friction-moments-empty {
-  font-size: var(--text-sm);
-  color: var(--color-text-dim);
-  font-style: italic;
-  margin: 0;
-}
-
-/* Inline tint on hot segments while the heatmap is on. Lower specificity than
+/* Inline tint on hot segments while friction mode is on. Lower specificity than
  * .segment-row.active / :hover so selection/hover still win. */
 .segment-friction {
   background: color-mix(in srgb, var(--color-friction) calc(var(--seg-friction-alpha, 0) * 40%), transparent);
+}
+
+/* Segments an LLM moment quotes. The run of cited rows reads as one passage
+ * ending in its .friction-callout, and isolate mode always keeps them. */
+.segment-cited {
+  box-shadow: inset 2px 0 0 var(--color-friction);
 }
 
 .tr-tooltip-friction-cats {
@@ -1257,6 +1406,15 @@ body {
 .segment-row.active {
   background: var(--color-selected);
   border-left-color: var(--color-accent);
+}
+
+/* Friction "Isolate" mode. Compound selector on purpose: .segment-row sets
+ * display:flex at equal (0,1,0) specificity, so a bare .segment-hidden would
+ * only win on source order and would silently stop working if either rule
+ * moved. Rows are hidden, never removed — state.cachedSegmentRows is indexed
+ * positionally against state.segments. */
+.segment-row.segment-hidden {
+  display: none;
 }
 
 .segment-streaming {

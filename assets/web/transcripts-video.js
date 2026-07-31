@@ -175,9 +175,11 @@
   // Per-pixel averaging of overlapping segment scores (mirrors the Screenspace
   // amplitude graph's binning) gives a continuous band without a separate
   // smoothing constant; alpha scales with score. Reads the shared friction state
-  // the agents satellite writes (state.frictionHeatmapEnabled / frictionBySegId).
+  // the agents satellite writes (state.frictionMode / frictionMatchBySegId) —
+  // the match map, not the raw scores, so the band shows exactly the segments the
+  // pane's threshold + category filter currently select.
   function _drawFrictionBand(ctx, timeToX, bandY, bandH, cssW) {
-    if (!state.frictionHeatmapEnabled) return;
+    if (state.frictionMode === "off") return;
     if (!state.segments.length) return;
     var fcolor = getCSSVar("--color-friction", "#ea580c");
     if (fcolor.charAt(0) !== "#") fcolor = "#ea580c";
@@ -188,8 +190,7 @@
     var any = false;
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
-      var frow = state.frictionBySegId[seg.id];
-      var sc = frow ? (frow.score || 0) : 0;
+      var sc = state.frictionMatchBySegId[seg.id] || 0;
       if (sc <= 0) continue;
       any = true;
       var x0 = Math.max(0, Math.floor(timeToX(seg.start)));
@@ -807,6 +808,16 @@
     return row ? row.querySelector(".segment-mark") : null;
   }
 
+  // True when friction's Isolate mode has hidden this segment's row. Arrow-key
+  // navigation must skip those, or the keys read as dead while the video jumps
+  // around behind rows the reader can't see.
+  function _segmentIsolatedOut(idx) {
+    if (state.frictionMode !== "isolate") return false;
+    var seg = state.segments[idx];
+    if (!seg) return false;
+    return !(state.frictionMatchBySegId[seg.id] !== undefined || state.frictionCitedBySegId[seg.id]);
+  }
+
   // Move the active segment by *delta*, seeking + scrolling to it. Establishes an
   // active segment at an edge when none is selected yet.
   function _moveActiveSegment(delta) {
@@ -814,8 +825,8 @@
     if (!n) return;
     var cur = state.activeSegmentIndex;
     var next = cur < 0 ? (delta > 0 ? 0 : n - 1) : cur + delta;
-    if (next < 0) next = 0;
-    if (next > n - 1) next = n - 1;
+    while (next >= 0 && next < n && _segmentIsolatedOut(next)) next += delta;
+    if (next < 0 || next > n - 1) return; // no visible segment that way
     setActiveSegment(next, { seek: true, follow: true, force: true });
   }
 
@@ -828,7 +839,7 @@
       i += dir;
       if (i < 0 || i >= n) return;
       var marks = state.segments[i].marks;
-      if (marks && marks.length > 0) {
+      if (marks && marks.length > 0 && !_segmentIsolatedOut(i)) {
         setActiveSegment(i, { seek: true, follow: true, force: true });
         return;
       }
@@ -1176,6 +1187,11 @@
   }
 
   function scrollToSegment(row) {
+    // A display:none row (friction Isolate mode) reports an all-zero rect, which
+    // would compute a target of roughly scrollTop - 188 and yank the transcript
+    // upward — once per highlightActiveSegment transition during playback, since
+    // PiP forces auto-follow on. Bail before any layout read.
+    if (!row || !row.isConnected || row.classList.contains("segment-hidden")) return;
     // Pass 6 floating-nav scroll-under: #trMain is the scroll container; the
     // top 148px of its viewport sits *under* the fixed chrome strip, so the
     // visible top edge is at scroller.top + TR_CHROME_TOP, not at scroller.top.
