@@ -9,6 +9,14 @@
  * summary); marks are hand-made, so their empty state deep-links to
  * /transcripts/#<pid> instead.
  *
+ * The Clips section cuts the participant's sheet timestamps into real clips
+ * through Studio's streaming ../studio/api/generate (skip-on-repeat is free —
+ * the cell-keyed artifact cache serves prior runs instantly), lists them from
+ * ../studio/api/manifest, posters them via ../studio/api/thumbnail, and plays
+ * them from the /studio/media/ output-dir route. Report [M:SS] stamps that a
+ * clip covers become playable chips; severity labels inside (category,
+ * severity) groups are painted with the shared .sev-* palette.
+ *
  * All hub data comes from the overview.js hub via window.ClipgenOverview
  * (lazy reads inside activate(), never top-level destructures). Lifecycle:
  * OV.summaryActivate / summaryDeactivate / summaryResize. Participant
@@ -43,6 +51,13 @@
     reportPoll: null,
     taskPoll: null,
     taskIdleTicks: 0,
+    clips: [], // studio-manifest clip artifacts for the selected participant
+    clipsLoaded: false,
+    clipsGenerating: false,
+    clipsDone: 0,
+    clipsTotal: 0,
+    clipsAbort: null, // AbortController for the streaming generate fetch
+    playingClip: null, // artifact id in the inline player
   };
 
   var dom = {}; // scaffold refs, filled by initDom()
@@ -192,6 +207,31 @@
     report.appendChild(dom.body);
     dom.content.appendChild(report);
 
+    // Report timestamps are re-rendered wholesale, so clip playback rides one
+    // delegated listener instead of per-span handlers.
+    dom.body.addEventListener("click", function (ev) {
+      var target = ev.target && ev.target.closest ? ev.target.closest(".sm-ts--linked") : null;
+      if (!target) return;
+      var sec = parseFloat(target.getAttribute("data-seconds"));
+      if (isNaN(sec)) return;
+      var clip = findClipAt(sec);
+      if (clip) playClip(clip, Math.max(0, sec - (clip.start || 0)));
+    });
+
+    dom.clipsSection = el("div", "sm-clips hidden");
+    var clipsHead = el("div", "sm-clips-head");
+    clipsHead.appendChild(el("h2", "sm-clips-title", "Clips"));
+    dom.clipsMeta = el("span", "sm-clips-meta");
+    clipsHead.appendChild(dom.clipsMeta);
+    dom.clipsActions = el("div", "sm-clips-actions");
+    clipsHead.appendChild(dom.clipsActions);
+    dom.clipsSection.appendChild(clipsHead);
+    dom.player = el("div", "sm-player hidden");
+    dom.clipsSection.appendChild(dom.player);
+    dom.clipsStrip = el("div", "sm-clips-strip");
+    dom.clipsSection.appendChild(dom.clipsStrip);
+    dom.content.appendChild(dom.clipsSection);
+
     main.appendChild(dom.content);
     layout.appendChild(main);
     panel.appendChild(layout);
@@ -304,10 +344,14 @@
     } else if (summary === "done") {
       frag.appendChild(sourceRow("Transcript summary", "ready", "ok", null));
     } else {
-      frag.appendChild(sourceRow(
-        "Transcript summary", "no summary", "warn",
-        P.createBtn({ label: "Generate summary", icon: "sparkles", size: "sm", onClick: generateSummary })
-      ));
+      var summaryBtn = P.createBtn({
+        label: "Generate summary",
+        icon: "octicon/dependabot-16",
+        size: "sm",
+        onClick: generateSummary,
+      });
+      summaryBtn.setAttribute("data-tooltip", "Runs a local AI thinking agent");
+      frag.appendChild(sourceRow("Transcript summary", "no summary", "warn", summaryBtn));
     }
 
     // 3. Marked lines — hand-made in Transcripts, so link instead of trigger.
@@ -344,9 +388,64 @@
     return parts.join(" · ");
   }
 
+  function tsToSeconds(ts) {
+    var parts = ts.split(":");
+    var sec = 0;
+    for (var i = 0; i < parts.length; i++) sec = sec * 60 + parseInt(parts[i], 10);
+    return sec;
+  }
+
+  function findClipAt(sec) {
+    // ±2 s tolerance: report timestamps are whole seconds while clip bounds
+    // carry sub-second starts.
+    for (var i = 0; i < smState.clips.length; i++) {
+      var c = smState.clips[i];
+      if (sec >= (c.start || 0) - 2 && sec <= (c.end || 0) + 2) return c;
+    }
+    return null;
+  }
+
+  // Wrap [M:SS] / [H:MM:SS] stamps in mono chips; ones a generated clip covers
+  // become playable (the delegated dom.body handler). Runs on escaped HTML.
+  function decorateTimestamps(html) {
+    return html.replace(/\[(\d{1,2}:\d{2}(?::\d{2})?)\]/g, function (m, ts) {
+      var sec = tsToSeconds(ts);
+      var cls = findClipAt(sec) ? "sm-ts sm-ts--linked" : "sm-ts";
+      return '<span class="' + cls + '" data-seconds="' + sec + '">[' + ts + "]</span>";
+    });
+  }
+
+  // Color severity labels, but only inside tag-free parenthesized groups —
+  // the "(category, severity)" shape the prompt's source lines carry — so a
+  // bare "high" in prose is never painted. Longest label first, one hit per
+  // group ("Very Positive" must not be re-matched by "Positive").
+  function decorateSeverity(html) {
+    var sevs = (CLIPGEN_CONFIG.severity || []).slice();
+    sevs.sort(function (a, b) { return b.label.length - a.label.length; });
+    return html.replace(/\(([^()<]*)\)/g, function (m, inner) {
+      for (var i = 0; i < sevs.length; i++) {
+        var esc = sevs[i].label.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+        var re = new RegExp("(^|[\\s,])(" + esc + ")(?=$|[\\s,])", "i");
+        if (re.test(inner)) {
+          inner = inner.replace(
+            re,
+            '$1<span class="sm-sev ' + sevs[i].cssClass + '">$2</span>'
+          );
+          break;
+        }
+      }
+      return "(" + inner + ")";
+    });
+  }
+
+  function decorateReportInline(text) {
+    return decorateSeverity(decorateTimestamps(clipgenRenderInlineMarkdown(text)));
+  }
+
   // Minimal markdown for the report shape the prompt asks for (## headings,
-  // "- " bullets, paragraphs). Everything passes through escapeHtml; the model
-  // never gets to inject markup.
+  // "- " bullets, paragraphs) plus inline emphasis, timestamp chips, and
+  // severity coloring. Everything passes through escapeHtml (inside
+  // clipgenRenderInlineMarkdown); the model never gets to inject markup.
   function renderReportText(text) {
     var lines = String(text || "").split("\n");
     var html = "";
@@ -361,13 +460,13 @@
       if (heading) {
         if (inList) { html += "</ul>"; inList = false; }
         var tag = heading[1].length === 2 ? "h3" : "h4";
-        html += "<" + tag + ">" + escapeHtml(heading[2]) + "</" + tag + ">";
+        html += "<" + tag + ">" + clipgenRenderInlineMarkdown(heading[2]) + "</" + tag + ">";
       } else if (line.indexOf("- ") === 0 || line.indexOf("* ") === 0) {
         if (!inList) { html += "<ul>"; inList = true; }
-        html += "<li>" + escapeHtml(line.substring(2)) + "</li>";
+        html += "<li>" + decorateReportInline(line.substring(2)) + "</li>";
       } else {
         if (inList) { html += "</ul>"; inList = false; }
-        html += "<p>" + escapeHtml(line) + "</p>";
+        html += "<p>" + decorateReportInline(line) + "</p>";
       }
     }
     if (inList) html += "</ul>";
@@ -402,14 +501,16 @@
 
     var canGenerate = !!r.has_transcript && agentState(r, "summary") === "done";
     var gate = ollamaGate();
-    dom.actions.appendChild(P.createBtn({
+    var genBtn = P.createBtn({
       label: smState.report ? "Regenerate" : "Generate report",
-      icon: "sparkles",
+      icon: "octicon/dependabot-16",
       variant: "solid",
       size: "sm",
       disabled: !canGenerate || !!gate,
       onClick: generateReport,
-    }));
+    });
+    genBtn.setAttribute("data-tooltip", "Runs a local AI thinking agent");
+    dom.actions.appendChild(genBtn);
 
     if (smState.report) {
       dom.meta.textContent = metaLine(smState.report);
@@ -455,16 +556,21 @@
 
   function selectParticipant(pid) {
     if (smState.selected === pid) return;
+    if (smState.clipsGenerating) cancelClips();
     smState.selected = pid;
     smState.gen++;
     stopReportPoll();
     clearNotice();
+    closePlayer();
     smState.report = null;
     smState.reportGenerating = false;
     smState.reportPartial = "";
     smState.reportMissing = false;
+    smState.clips = [];
+    smState.clipsLoaded = false;
     renderAll();
     fetchReport(pid, smState.gen);
+    loadClips(pid, smState.gen);
   }
 
   function ensureSelection() {
@@ -605,6 +711,220 @@
       .catch(function () {});
   }
 
+  // ---- Clips (generated from the participant's sheet timestamps) ----
+
+  function sheetCellsFor(pid) {
+    var cells = [];
+    if (!state.sheetData || !state.sheetData.rows) return cells;
+    for (var i = 0; i < state.sheetData.rows.length; i++) {
+      var row = state.sheetData.rows[i];
+      var cell = row.cells[pid];
+      if (cell && cell.valid) cells.push(pid + "." + row.rowNum);
+    }
+    return cells;
+  }
+
+  function loadClips(pid, g) {
+    apiGet("../studio/api/manifest")
+      .then(function (data) {
+        if (g !== smState.gen || !smState.active) return;
+        var arts = (data && data.artifacts) || [];
+        var clips = [];
+        for (var i = 0; i < arts.length; i++) {
+          if (arts[i].participant === pid && arts[i].type === "clip") clips.push(arts[i]);
+        }
+        clips.sort(function (a, b) { return (a.start || 0) - (b.start || 0); });
+        smState.clips = clips;
+        smState.clipsLoaded = true;
+        renderClips();
+        // Timestamp chips in the report link up only where a clip covers them.
+        renderReportArea();
+      })
+      .catch(function () {
+        if (g !== smState.gen || !smState.active) return;
+        smState.clips = [];
+        smState.clipsLoaded = true;
+        renderClips();
+      });
+  }
+
+  function generateClips() {
+    var pid = smState.selected;
+    var g = smState.gen;
+    var cells = sheetCellsFor(pid);
+    if (!pid || !cells.length || smState.clipsGenerating) return;
+    clearNotice();
+    smState.clipsGenerating = true;
+    smState.clipsDone = 0;
+    smState.clipsTotal = cells.length;
+    var ctrl = new AbortController();
+    smState.clipsAbort = ctrl;
+    renderClips();
+    fetch("../studio/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cells: cells, format: "clip" }),
+      signal: ctrl.signal,
+    })
+      .then(function (resp) {
+        if (resp.status === 409) throw new Error("generate-busy");
+        if (!resp.ok) throw new Error("Server error " + resp.status);
+        return readNDJSONStream(resp, function (line) {
+          if (!line || line.cancelled) return;
+          smState.clipsDone++;
+          renderClipsProgress();
+        });
+      })
+      .then(function () {
+        resetClipsGeneration();
+        if (g !== smState.gen || !smState.active) return;
+        loadClips(pid, g);
+      })
+      .catch(function (err) {
+        resetClipsGeneration();
+        if (g !== smState.gen || !smState.active) return;
+        if (err && err.message === "generate-busy") {
+          showNotice("Studio is already generating — wait for it to finish, then try again.", null, null, null);
+        } else if (!(err && err.name === "AbortError")) {
+          showNotice("Clip generation failed.", null, null, null);
+        }
+        // Cancelled or partial runs still produced clips — pick them up.
+        loadClips(pid, g);
+      });
+  }
+
+  function resetClipsGeneration() {
+    smState.clipsGenerating = false;
+    smState.clipsAbort = null;
+    smState.clipsDone = 0;
+    smState.clipsTotal = 0;
+  }
+
+  function cancelClips() {
+    apiPost("../studio/api/generate/cancel", {}).catch(function () {});
+    if (smState.clipsAbort) smState.clipsAbort.abort();
+  }
+
+  function renderClipsProgress() {
+    if (!smState.clipsGenerating || !dom.clipsMeta) return;
+    dom.clipsMeta.textContent = smState.clipsDone + "/" + smState.clipsTotal + " cells";
+    if (dom.clipsGenBtn) {
+      var frac = smState.clipsTotal ? smState.clipsDone / smState.clipsTotal : 0;
+      window.ClipgenPrimitives.setButtonProgress(dom.clipsGenBtn, frac);
+    }
+  }
+
+  function clipTile(a) {
+    var tile = el("button", "sm-clip");
+    tile.type = "button";
+    var sev = severityClass(a.severity);
+    if (sev) tile.classList.add(sev);
+    if (smState.playingClip === a.id) tile.classList.add("is-playing");
+    var img = document.createElement("img");
+    img.className = "sm-clip-thumb";
+    img.loading = "lazy";
+    img.alt = "";
+    img.src =
+      "../studio/api/thumbnail/" +
+      encodeURIComponent(a.participant) +
+      "/" +
+      Math.max(0, Math.floor(a.start || 0));
+    img.addEventListener("error", function () {
+      tile.classList.add("sm-clip--noposter");
+    });
+    tile.appendChild(img);
+    var meta = el("span", "sm-clip-meta");
+    meta.appendChild(el("span", "sm-clip-time cg-mono", formatTime(a.start || 0)));
+    if (a.severity) {
+      meta.appendChild(el("span", "sm-clip-sev " + (sev || ""), a.severity));
+    }
+    tile.appendChild(meta);
+    if (a.description) tile.setAttribute("data-tooltip", a.description);
+    tile.addEventListener("click", function () {
+      playClip(a, 0);
+    });
+    return tile;
+  }
+
+  function renderClips() {
+    if (!dom.clipsSection) return;
+    var pid = smState.selected;
+    var cells = pid ? sheetCellsFor(pid) : [];
+    var show = !!pid && (cells.length > 0 || smState.clips.length > 0);
+    dom.clipsSection.classList.toggle("hidden", !show);
+    if (!show) {
+      closePlayer();
+      return;
+    }
+
+    dom.clipsActions.innerHTML = "";
+    dom.clipsGenBtn = null;
+    var P = window.ClipgenPrimitives;
+    if (smState.clipsGenerating) {
+      dom.clipsGenBtn = P.createBtn({ label: "Generating…", icon: "film", size: "sm", disabled: true });
+      dom.clipsActions.appendChild(dom.clipsGenBtn);
+      dom.clipsActions.appendChild(P.createBtn({ label: "Cancel", size: "sm", onClick: cancelClips }));
+      renderClipsProgress();
+    } else {
+      if (cells.length) {
+        var genBtn = P.createBtn({ label: "Generate clips", icon: "film", size: "sm", onClick: generateClips });
+        genBtn.setAttribute(
+          "data-tooltip",
+          "Cut this participant's sheet timestamps into clips (already-generated ones are skipped)"
+        );
+        dom.clipsActions.appendChild(genBtn);
+      }
+      dom.clipsMeta.textContent = smState.clips.length
+        ? clipgenPluralUnit(smState.clips.length, "clip", "clips")
+        : (smState.clipsLoaded ? "no clips yet" : "");
+    }
+
+    dom.clipsStrip.innerHTML = "";
+    if (smState.clips.length) {
+      var frag = document.createDocumentFragment();
+      for (var i = 0; i < smState.clips.length; i++) {
+        frag.appendChild(clipTile(smState.clips[i]));
+      }
+      dom.clipsStrip.appendChild(frag);
+    } else if (smState.clipsLoaded && !smState.clipsGenerating && cells.length) {
+      dom.clipsStrip.appendChild(
+        el("p", "sm-clips-hint", "No clips yet — generate them from this participant's sheet timestamps.")
+      );
+    }
+  }
+
+  function playClip(a, offset) {
+    smState.playingClip = a.id;
+    dom.player.innerHTML = "";
+    dom.player.classList.remove("hidden");
+    var head = el("div", "sm-player-head");
+    head.appendChild(el("span", "sm-player-title", a.description || a.file || ""));
+    head.appendChild(window.ClipgenPrimitives.createBtn({ label: "Close", size: "sm", onClick: closePlayer }));
+    dom.player.appendChild(head);
+    var vid = document.createElement("video");
+    vid.className = "sm-player-video";
+    vid.controls = true;
+    vid.autoplay = true;
+    vid.src = "../studio/media/" + encodeURIComponent(a.file);
+    if (offset > 0.5) {
+      vid.addEventListener("loadedmetadata", function () {
+        if (vid.duration && offset < vid.duration) vid.currentTime = offset;
+      });
+    }
+    dom.player.appendChild(vid);
+    renderClips(); // move the is-playing highlight
+  }
+
+  function closePlayer() {
+    if (smState.playingClip === null) return;
+    smState.playingClip = null;
+    if (dom.player) {
+      dom.player.innerHTML = "";
+      dom.player.classList.add("hidden");
+    }
+    renderClips();
+  }
+
   // ---- Upstream triggers (transcription, summary) ----
 
   function generateSummary() {
@@ -614,9 +934,20 @@
     apiPost("../transcripts/api/agent/summary/" + pid + "/regenerate", {})
       .then(function () {
         if (!smState.active) return;
+        // The backend clears dependent agent results (report included) when
+        // the summary regenerates — drop the in-memory copy too, or the stale
+        // mini-report keeps rendering until the participant is re-selected.
+        stopReportPoll();
+        smState.report = null;
+        smState.reportGenerating = false;
+        smState.reportPartial = "";
+        smState.reportMissing = true;
         var r = rec();
-        if (r && r.agents) r.agents.summary = "running";
-        renderMain();
+        if (r && r.agents) {
+          r.agents.summary = "running";
+          r.agents.report = "idle"; // renderAll refreshes the pill dot too
+        }
+        renderAll();
         startTaskPoll();
       })
       .catch(function () {
@@ -718,6 +1049,9 @@
         if (!smState.active) return;
         takeSnapshot();
         checkStaleness();
+        // Re-activation keeps the selection, so selectParticipant's clip load
+        // never fires — refresh the strip here (new clips may have landed).
+        if (smState.selected) loadClips(smState.selected, smState.gen);
       });
     });
     loadModels();
@@ -727,6 +1061,8 @@
     smState.active = false;
     stopReportPoll();
     stopTaskPoll();
+    var vid = dom.player ? dom.player.querySelector("video") : null;
+    if (vid) vid.pause();
   }
 
   function resize() {

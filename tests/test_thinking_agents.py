@@ -541,12 +541,21 @@ class TestRunReport:
                     "category": "Navigation",
                     "severity": "Major",
                     "text": "Could not find export",
+                    "seconds": [723.0],
+                },
+                {
+                    "participant": "P01",
+                    "category": "Notes",
+                    "severity": "",
+                    "text": "Text-only cell",
+                    "seconds": [],
                 },
                 {
                     "participant": "P02",
                     "category": "Navigation",
                     "severity": "",
                     "text": "Someone else's note",
+                    "seconds": [10.0],
                 },
             ],
         )
@@ -567,11 +576,13 @@ class TestRunReport:
         assert result is not None
         assert result["text"] == "## Overview\nWent fine."
         assert result["model"] == "m1"
-        assert result["sources"] == {"observations": 1, "bookmarks": 1}
+        assert result["sources"] == {"observations": 2, "bookmarks": 1}
         assert result["generated_at"]
 
         prompt = mock_generate.call_args[0][0]
-        assert "- Could not find export (Navigation, Major)" in prompt
+        # Timestamped cell carries its first start time; text-only cell doesn't.
+        assert "- [12:03] Could not find export (Navigation, Major)" in prompt
+        assert "- Text-only cell (Notes)" in prompt
         assert "[1:05] (Pain Point) This is confusing" in prompt
         assert "Someone else's note" not in prompt
         assert "P01" in prompt

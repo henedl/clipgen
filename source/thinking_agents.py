@@ -726,11 +726,13 @@ def report_model() -> str:
 def _format_report_observations(
     rows: list[dict[str, Any]], participant: str
 ) -> list[str]:
-    """Format *participant*'s sheet observations as ``- text (category, severity)`` lines.
+    """Format *participant*'s sheet observations as ``- [M:SS] text (category, severity)`` lines.
 
-    Deduplicates on observation text: the getter emits one record per
-    (row × cell), so a participant listed twice on a row would otherwise
-    repeat the same note.
+    The leading timestamp (the cell's first parsed start time) is what lets the
+    model cite video times the Summary tab can then link to generated clips;
+    text-only cells get no bracket. Deduplicates on observation text: the
+    getter emits one record per (row × cell), so a participant listed twice on
+    a row would otherwise repeat the same note.
     """
     lines: list[str] = []
     seen: set[str] = set()
@@ -744,7 +746,9 @@ def _format_report_observations(
         category = str(rec.get("category") or "").strip() or "uncategorized"
         severity = str(rec.get("severity") or "").strip()
         qualifier = f"({category}, {severity})" if severity else f"({category})"
-        lines.append(f"- {text} {qualifier}")
+        seconds = rec.get("seconds") or []
+        stamp = f"[{utils.seconds_to_timestamp(int(seconds[0]))}] " if seconds else ""
+        lines.append(f"- {stamp}{text} {qualifier}")
     return lines
 
 

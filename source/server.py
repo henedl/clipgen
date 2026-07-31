@@ -509,7 +509,16 @@ def _override_config(**overrides: Any) -> Iterator[None]:
 
 studio_bp = Blueprint("studio", __name__)
 
-utils.register_static_routes(studio_bp, "studio.html", icons=True)
+# media_dir_getter resolves per request (not a snapshot like screenspace's
+# _output_dir) so /studio/media/<file> keeps serving generated artifacts even
+# after POST /api/dirs moves config.OUTPUT_DIR mid-session. The Overview
+# Summary tab's clip strip plays clips from here.
+utils.register_static_routes(
+    studio_bp,
+    "studio.html",
+    icons=True,
+    media_dir_getter=lambda: str(utils.get_effective_output_dir()),
+)
 
 
 # ---- Helpers ----
