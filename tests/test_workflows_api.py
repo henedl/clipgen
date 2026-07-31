@@ -20,11 +20,22 @@ import workflows
 import workflows_server
 
 
-@pytest.fixture
-def wf_client(tmp_path, monkeypatch):
+@pytest.fixture(scope="module")
+def wf_app():
+    """The Flask app, built once for the module.
+
+    Registering the blueprint compiles ~26 Werkzeug URL rules, which dominates
+    this fixture's cost — and the app object holds no per-test state: everything
+    these tests touch lives in ``workflows_server`` module globals, re-pinned per
+    test by the function-scoped ``wf_client`` below.
+    """
     app = Flask(__name__)
     app.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
+    return app
 
+
+@pytest.fixture
+def wf_client(wf_app, tmp_path, monkeypatch):
     # Seed module globals via monkeypatch so they auto-restore on teardown —
     # otherwise a later test that reads these globals without the fixture would
     # inherit this test's state (matters under random ordering).
@@ -53,7 +64,7 @@ def wf_client(tmp_path, monkeypatch):
     # Sandbox save_workflows_manifest's write into tmp (it targets the output dir).
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
 
-    with app.test_client() as c:
+    with wf_app.test_client() as c:
         yield c
 
 

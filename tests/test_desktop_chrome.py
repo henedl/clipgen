@@ -38,6 +38,12 @@ def test_chrome_is_a_no_op_off_macos(monkeypatch):
 def test_apply_declines_a_window_without_a_native_handle(monkeypatch):
     """Backends other than cocoa never set `native`; that is not a crash."""
     monkeypatch.setattr(desktop_chrome.sys, "platform", "darwin")
+    # apply() imports AppKit before it looks at `native`, and on a real Mac that
+    # drags the whole pyobjc stack in (~2 s cold) for a branch that never touches
+    # it. Stubbing the accessor also makes the test hermetic: the `native is None`
+    # path is now exercised on Linux and macOS alike, rather than passing on Linux
+    # only because the import happens to fail first.
+    monkeypatch.setattr(desktop_chrome, "_appkit", lambda: object())
 
     class Window:
         native = None

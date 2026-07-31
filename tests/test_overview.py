@@ -386,12 +386,19 @@ def test_feature_matrix_windows_shape_and_null_policy(seeded_output_dir):
 # ---- Route smokes ----------------------------------------------------------
 
 
-@pytest.fixture
-def overview_client(seeded_output_dir):
+@pytest.fixture(scope="module")
+def overview_app():
+    """The Flask app, built once for the module — see ``client`` in
+    tests/test_screenspace_api.py for why the build is safe to share."""
     Flask = pytest.importorskip("flask").Flask
     app = Flask(__name__)
     app.register_blueprint(overview.overview_bp, url_prefix="/overview")
-    with app.test_client() as c:
+    return app
+
+
+@pytest.fixture
+def overview_client(overview_app, seeded_output_dir):
+    with overview_app.test_client() as c:
         yield c
 
 

@@ -16,11 +16,22 @@ def _set_artifacts(monkeypatch, artifacts):
     server._rebuild_artifact_index()
 
 
-@pytest.fixture
-def client(monkeypatch):
+@pytest.fixture(scope="module")
+def studio_app():
+    """The Flask app, built once for the module.
+
+    Registering the blueprint compiles ~40 Werkzeug URL rules, which dominates
+    this fixture's cost — and the app object holds no per-test state: everything
+    these tests touch lives in ``server`` module globals, re-pinned per test by
+    the function-scoped ``client`` below.
+    """
     app = Flask(__name__)
     app.register_blueprint(server.studio_bp, url_prefix="/studio")
+    return app
 
+
+@pytest.fixture
+def client(studio_app, monkeypatch):
     # Default: no worksheet/context loaded (error state)
     monkeypatch.setattr(server, "_worksheet", None)
     monkeypatch.setattr(server, "_sheet_context", None)
@@ -30,7 +41,7 @@ def client(monkeypatch):
     server._release_busy("generate")
     server._release_busy("reel")
 
-    with app.test_client() as c:
+    with studio_app.test_client() as c:
         yield c
 
     server._release_busy("generate")
