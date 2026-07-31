@@ -19,9 +19,12 @@ leaves them riding high in a 48px bar. ``_reposition_traffic_lights`` grows the
 it — the same approach Electron uses for ``trafficLightPosition``. AppKit resets
 that layout on resize and on leaving fullscreen, hence the observers.
 
-Dragging is *not* handled here. ``-webkit-app-region: drag`` does nothing in
-WKWebView, so the topnav opts into pywebview's ``.pywebview-drag-region``
-mechanism instead (see ``assets/web/topnav.js``).
+The drag *region* is not defined here. ``-webkit-app-region: drag`` does nothing
+in WKWebView, so the topnav opts into pywebview's ``.pywebview-drag-region``
+mechanism instead (see ``assets/web/topnav.js``). The other half of the title-bar
+contract does land here: that same surface reports double-clicks back through the
+JS bridge, and ``titlebar_double_click`` performs whatever the user has configured
+in System Settings → Desktop & Dock.
 
 Every entry point is a no-op off macOS and degrades to the standard title bar on
 any AppKit surprise — losing the styling must never cost the user their window.
@@ -150,7 +153,88 @@ def reassert(window: Any) -> None:
         _set_page_fullscreen(window, True)
 
 
+def set_appearance(window: Any, theme: str) -> None:
+    """Match *window*'s NSAppearance to the page's ``data-theme``.
+
+    A window resize exposes area that AppKit fills with an appearance-derived
+    colour for the one frame before WebKit repaints it. In Light appearance that
+    fill is pure white, so zooming a dark-themed page flashes white — measured as
+    exactly one frame of ``(255, 255, 255)``. Matching the appearance to the page
+    makes the fill and the page agree, in both directions.
+
+    Also has the side benefit of theming the webview's native furniture
+    (scrollbars, form controls) to the app rather than to the system.
+    """
+    native = getattr(window, "native", None)
+    if not is_supported() or native is None:
+        return
+    name = "NSAppearanceNameAqua" if theme == "light" else "NSAppearanceNameDarkAqua"
+    try:
+        AppKit = _appkit()
+        # The constants are their own names; getattr is belt-and-braces.
+        appearance = AppKit.NSAppearance.appearanceNamed_(getattr(AppKit, name, name))
+        # Imported by name for the same reason as AppKit — see _appkit().
+        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+
+        def apply_appearance() -> None:
+            native.setAppearance_(appearance)
+            # Switching appearance re-lays out the titlebar, which puts the
+            # traffic lights back where AppKit wants them.
+            _reposition_traffic_lights(AppKit, native)
+
+        app_helper.callAfter(apply_appearance)
+    except Exception as exc:
+        # Cosmetic: the worst case is the flash this exists to remove.
+        utils.warning_print(f"Could not match the window appearance: {exc}")
+
+
+def titlebar_double_click(window: Any) -> None:
+    """Run the user's title-bar double-click action for *window*.
+
+    Called from the page when a double-click lands on the drag region. The real
+    title bar is hidden, so AppKit never sees the gesture and we have to perform
+    it ourselves — reading the same preference AppKit would.
+    """
+    native = getattr(window, "native", None)
+    if not is_supported() or native is None:
+        return
+    try:
+        AppKit = _appkit()
+        if _is_fullscreen(AppKit, native):
+            return  # AppKit owns the window's size in fullscreen
+        defaults = AppKit.NSUserDefaults.standardUserDefaults()
+        action = _double_click_action(
+            defaults.stringForKey_("AppleActionOnDoubleClick")
+        )
+        if action is None:
+            return
+        # Imported by name for the same reason as AppKit — see _appkit(). The
+        # hop matters: the JS bridge may deliver this on a worker thread.
+        app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+        if action == "minimize":
+            app_helper.callAfter(lambda: native.performMiniaturize_(None))
+        else:
+            app_helper.callAfter(lambda: native.performZoom_(None))
+    except Exception as exc:
+        # A gesture that does nothing is a cosmetic loss, not a broken window.
+        utils.warning_print(f"Could not run the title-bar double-click action: {exc}")
+
+
 # ---- Internals ----
+
+
+def _double_click_action(setting: str | None) -> str | None:
+    """Map ``AppleActionOnDoubleClick`` onto the action to perform, or None.
+
+    Unset means macOS's own default, which is zoom. "Fill" (the tiling option
+    added in Sequoia) has no public ``NSWindow`` equivalent — zoom is the closest
+    honest approximation, and closer than doing nothing.
+    """
+    if setting == "Minimize":
+        return "minimize"
+    if setting == "None":
+        return None
+    return "zoom"
 
 
 def _mask_bit(AppKit: Any, name: str, fallback: int) -> int:

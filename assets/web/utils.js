@@ -1813,12 +1813,31 @@ function categoryColor(label, alpha) {
 var THEME_STORAGE_KEY = "clipgen-theme";
 var TOOLTIP_STORAGE_KEY = "clipgen-tooltips";
 
+// In the native window the theme is not just the page's business: AppKit fills
+// the area a resize exposes with an appearance-derived colour for the frame
+// before WebKit repaints, and Light appearance makes that fill white — a flash
+// on every zoom of a dark page. Hand the theme to the window so the two agree.
+var syncDesktopAppearance = function (theme) {
+  if (!document.documentElement.dataset.desktopChrome) return;
+  var send = function () {
+    var api = window.pywebview && window.pywebview.api;
+    if (api && typeof api.set_window_appearance === "function") {
+      api.set_window_appearance(theme);
+    }
+  };
+  // On first load the bridge is injected after this runs; pywebviewready is the
+  // signal that it is there. A toggle later can call straight through.
+  if (window.pywebview && window.pywebview.api) send();
+  else window.addEventListener("pywebviewready", send, { once: true });
+};
+
 var applyStoredThemePreference = function () {
   var stored = null;
   try { stored = window.localStorage.getItem(THEME_STORAGE_KEY); } catch (_) {}
   var theme = stored === "light" ? "light" : "dark";
   document.documentElement.setAttribute("data-theme", theme);
   updateThemeToggleButton(theme);
+  syncDesktopAppearance(theme);
 };
 
 var toggleThemePreference = function () {
@@ -1828,6 +1847,7 @@ var toggleThemePreference = function () {
   root.setAttribute("data-theme", next);
   try { window.localStorage.setItem(THEME_STORAGE_KEY, next); } catch (_) {}
   updateThemeToggleButton(next);
+  syncDesktopAppearance(next);
   refreshDetectorColors();
 };
 

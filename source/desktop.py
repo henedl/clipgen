@@ -90,6 +90,27 @@ def save_file(filename: str, content: str) -> str | None:
     return str(target)
 
 
+def set_window_appearance(theme: str) -> None:
+    """Follow the page theme. Exposed to JS as ``set_window_appearance``.
+
+    Called on load and on every theme toggle; see
+    ``desktop_chrome.set_appearance`` for why the window has to agree with the
+    page rather than with the system.
+    """
+    if _window is not None and isinstance(theme, str):
+        desktop_chrome.set_appearance(_window, theme)
+
+
+def titlebar_double_click() -> None:
+    """Zoom (or minimize) the window. Exposed to JS as ``titlebar_double_click``.
+
+    The topnav stands in for the hidden title bar, so the page has to forward the
+    gesture; AppKit never sees it. See ``desktop_chrome.titlebar_double_click``.
+    """
+    if _window is not None:
+        desktop_chrome.titlebar_double_click(_window)
+
+
 def _hide_own_console() -> None:
     """Hide the console window on Windows, but only if this process owns it.
 
@@ -166,7 +187,9 @@ def launch_desktop(
         assert window is not None  # create_window only returns None when hidden
         global _window
         _window = window
-        window.expose(open_external, save_file)
+        window.expose(
+            open_external, save_file, titlebar_double_click, set_window_appearance
+        )
         window.events.loaded += lambda: window.run_js(_EXTERNAL_LINK_SHIM)
         # before_show is a locking event, so this runs inline on AppKit's thread
         # after the backend has finished its own titlebar styling. The shown hook

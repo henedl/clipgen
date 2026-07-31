@@ -11,16 +11,20 @@ bar has to opt into pywebview's drag selector for the desktop launch only.
 import re
 from pathlib import Path
 
+import desktop
 import desktop_chrome
+import pytest
 
 from _frontend_source import read, strip_comments
 
 SOURCE = Path(desktop_chrome.__file__).read_text(encoding="utf-8")
+DESKTOP_SOURCE = Path(desktop.__file__).read_text(encoding="utf-8")
 
 # Comment-stripped: the prose around this code names both the selector we use and
 # the -webkit-app-region property we cannot.
 TOPNAV_JS = strip_comments(read("topnav.js"))
 TOPNAV_CSS = read("topnav.css")
+UTILS_JS = strip_comments(read("utils.js"))
 
 
 def test_chrome_is_a_no_op_off_macos(monkeypatch):
@@ -81,6 +85,79 @@ def test_topnav_opts_into_the_drag_selector_only_for_the_desktop_launch():
     assert "dataset.desktopChrome" in TOPNAV_JS
     gate = TOPNAV_JS.index("dataset.desktopChrome")
     assert gate < TOPNAV_JS.index("pywebview-drag-region")
+
+
+@pytest.mark.parametrize(
+    "setting,expected",
+    [
+        ("Maximize", "zoom"),  # the macOS default
+        ("Fill", "zoom"),  # Sequoia's tiling option; no public NSWindow call
+        (None, "zoom"),  # never written — AppKit falls back to zoom too
+        ("Minimize", "minimize"),
+        ("None", None),
+    ],
+)
+def test_double_click_honours_the_system_preference(setting, expected):
+    assert desktop_chrome._double_click_action(setting) == expected
+
+
+def test_double_click_is_a_no_op_without_a_window(monkeypatch):
+    """Off macOS, and on a backend with no `native`, the gesture just does nothing."""
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "linux")
+    desktop_chrome.titlebar_double_click(object())
+
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "darwin")
+
+    class Window:
+        native = None
+
+    desktop_chrome.titlebar_double_click(Window())
+
+
+def test_double_click_is_bridged_to_the_page():
+    """The page can only reach the action if desktop.py exposes it to JS."""
+    expose = DESKTOP_SOURCE[DESKTOP_SOURCE.index("window.expose(") :]
+    assert "titlebar_double_click" in expose[: expose.index(")")]
+    # Same direct-target rule as the drag, so both gestures cover the same pixels.
+    handler = TOPNAV_JS[TOPNAV_JS.index('addEventListener("dblclick"') :]
+    body = handler[: handler.index("});")]
+    assert body.index("pywebview-drag-region") < body.index("titlebar_double_click")
+    # Inside the desktop gate: a browser page must never call the bridge.
+    assert TOPNAV_JS.index("dataset.desktopChrome") < TOPNAV_JS.index(
+        'addEventListener("dblclick"'
+    )
+
+
+def test_set_appearance_is_a_no_op_without_a_window(monkeypatch):
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "linux")
+    desktop_chrome.set_appearance(object(), "dark")
+
+    monkeypatch.setattr(desktop_chrome.sys, "platform", "darwin")
+
+    class Window:
+        native = None
+
+    desktop_chrome.set_appearance(Window(), "dark")
+
+
+def test_window_appearance_follows_the_page_theme():
+    """Light appearance over a dark page flashes white for a frame on zoom.
+
+    Measured as one frame of (255, 255, 255) in the exposed area, so the window
+    has to be told the theme — on load and on every toggle, not just one of them.
+    """
+    assert "NSAppearanceNameAqua" in SOURCE and "NSAppearanceNameDarkAqua" in SOURCE
+    expose = DESKTOP_SOURCE[DESKTOP_SOURCE.index("window.expose(") :]
+    assert "set_window_appearance" in expose[: expose.index(")")]
+
+    for setter in ("applyStoredThemePreference", "toggleThemePreference"):
+        body = UTILS_JS[UTILS_JS.index("var " + setter + " = function") :]
+        assert "syncDesktopAppearance" in body[: body.index("\n};")], setter
+    sync = UTILS_JS[UTILS_JS.index("var syncDesktopAppearance") :]
+    sync = sync[: sync.index("\n};")]
+    # Desktop-only, and the bridge does not exist yet on the first page load.
+    assert "dataset.desktopChrome" in sync
+    assert "pywebviewready" in sync
 
 
 def test_topnav_css_insets_the_left_column_not_the_bar():
