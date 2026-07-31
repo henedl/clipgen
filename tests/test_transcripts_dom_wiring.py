@@ -241,20 +241,53 @@ def test_a_failed_boot_fetch_clears_the_placeholders():
     )
 
 
-def test_every_thinking_agent_tab_carries_the_local_ai_badge():
-    """Summary and Friction are the two tabs rendered by Ollama thinking agents,
-    so both must show the badge that says so. A tab that grows an agent later
-    (or an agent-backed tab added to another page) is the thing this catches."""
+def test_every_thinking_agent_run_button_carries_the_local_ai_badge():
+    """The badge marks the control that *starts* an Ollama run, not the pane that
+    shows its output — so it belongs on the run buttons and not on the tabs (which
+    could never mark Citations, having no tab of its own)."""
     tabbar = _HTML[_HTML.index('class="panel-tabbar"') : _HTML.index('id="summaryTab"')]
-    assert tabbar.count('class="ai-agent-badge"') == 2, (
-        "both #tabBtnSummary and #tabBtnFriction must carry .ai-agent-badge"
+    assert "ai-agent-badge" not in tabbar, (
+        "the badge moved to the run buttons; a tab must not carry it again"
     )
-    for tab_id in ("tabBtnSummary", "tabBtnFriction"):
-        button = tabbar[
-            tabbar.index(tab_id) : tabbar.index("</button>", tabbar.index(tab_id))
-        ]
-        assert "ai-agent-badge" in button, f"#{tab_id} is agent-backed but has no badge"
-        assert "data-tooltip=" in button, f"#{tab_id}'s badge must explain itself"
+    for btn_id in ("summaryRunCta", "frictionRerun", "frictionStaleRerun"):
+        start = _HTML.index(f'id="{btn_id}"')
+        button = _HTML[start : _HTML.index("</button>", start)]
+        assert "ai-agent-badge" in button, f"#{btn_id} starts an agent but has no badge"
+        assert "data-tooltip=" in button, f"#{btn_id}'s badge must explain itself"
+        # The badge would not survive a textContent relabel of the button.
+        assert "agent-run-label" in button, (
+            f"#{btn_id}'s label must be its own span, beside the badge"
+        )
+
+
+def test_icon_only_agent_buttons_name_the_local_ai_in_their_tooltip():
+    """The 24px action-row buttons have no room for a second glyph, so the tooltip
+    is the only place they can say the click spends local compute."""
+    for btn_id in ("summaryRegenerate", "citationsRegenerate"):
+        start = _HTML.index(f'id="{btn_id}"')
+        button = _HTML[start : _HTML.index("</button>", start)]
+        assert "local AI" in button, f"#{btn_id} must name the local AI in its tooltip"
+
+
+def test_pill_dropdown_badges_the_thinking_agents_but_not_transcription():
+    """Transcription is Whisper, not an Ollama thinking agent — badging its row
+    would make the marker meaningless. All four rows share one builder, so the
+    flag is the only thing keeping them apart."""
+    pills = read("transcripts-pills.js")
+    section = pills[pills.index("function buildPillAgentsSection(") :]
+    section = section[: section.index("\n  function buildAgentRow(")]
+    for agent in ("summary", "citations", "friction"):
+        row = section[section.index(f'agent: "{agent}"') :]
+        assert "aiBadge: true" in row[: row.index("onStart")], (
+            f"the {agent} pill row is Ollama-backed but passes no aiBadge"
+        )
+    transcription = section[section.index('agent: "transcription"') :]
+    assert "aiBadge" not in transcription[: transcription.index("onStart")], (
+        "Transcription is Whisper, not a thinking agent — it must stay unbadged"
+    )
+    assert 'className = "ai-agent-badge"' in pills, (
+        "buildAgentRow must actually build the badge node"
+    )
 
 
 def test_local_ai_badge_is_styled_and_its_icon_exists():
@@ -262,6 +295,11 @@ def test_local_ai_badge_is_styled_and_its_icon_exists():
     a mistyped icon path renders a zero-size invisible span with no error."""
     assert ".ai-agent-badge {" in _CSS, (
         ".ai-agent-badge is used in HTML but never styled"
+    )
+    # .btn is not a flex container, so without an explicit display the inline
+    # span collapses to zero size inside every run button.
+    assert ".btn > .ai-agent-badge {" in _CSS, (
+        "the badge needs its in-button display rule or it renders invisible"
     )
     masks = re.findall(r"mask-image:\s*url\((?:'|\")?([^'\")]+)", _CSS)
     referenced = {m for m in masks if m.startswith("icons/")}
