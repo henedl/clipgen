@@ -89,13 +89,16 @@
         renderCitations();
       },
       onEmpty: function () {
-        // The poll only runs while a citations run is in flight, and the route
-        // 404s (which apiGet rejects) once that run ends without persisting —
-        // after find_citations' failure return, the Ollama-unavailable path.
-        // Either way the run is over with nothing to show, so say so instead of
-        // just dropping "Finding sources…". Cause is a suggestion, not a claim:
-        // a transport blip lands here too, and the fix is the same. Navigating
-        // away and the poll timeout go to onStale, which stays silent.
+        // Cancel clears the flag (via _clearCitationsStatus) but cannot recall a
+        // GET already on the wire, so that response still lands here — stay
+        // silent, a deliberate abort is not a failure.
+        if (!state.citationsGenerating) return;
+        // Otherwise the run is genuinely over with nothing to show: the route
+        // 404s (which apiGet rejects) once it ends without persisting — after
+        // find_citations' failure return, the Ollama-unavailable path. Say so
+        // instead of just dropping "Finding sources…". The cause is a
+        // suggestion, not a claim: a transport blip lands here too, and the fix
+        // is the same. Participant switch and poll timeout go to onStale.
         state.citationsGenerating = false;
         _renderCitationsNote("Couldn't find sources. Check that Ollama is running, then re-run citations.");
       },
@@ -264,6 +267,11 @@
     var ver = state.participantReqVer;
     apiGet(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid).then(function (data) {
       if (ver !== state.participantReqVer || state.selectedParticipant !== pid) return;
+      // A run may have started while this GET was in flight (Regenerate, or the
+      // chain reaching citations). Restoring the old result now would replace
+      // the live "Finding sources…" line — renderCitations() removes it — with
+      // superscripts the run is about to supersede.
+      if (state.citationsGenerating) return;
       if (!data.ok || !data.citations) return;
       state.summaryCitations = data.citations;
       renderCitations();

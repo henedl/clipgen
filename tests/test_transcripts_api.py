@@ -1265,6 +1265,62 @@ def test_friction_force_eligible_regardless_of_flag(
     assert agent is not None and agent["key"] == "friction"
 
 
+def test_next_eligible_honors_skip(tr_client, _agent_state_clean, monkeypatch):
+    """skip lets the chain advance past an agent that stored nothing.
+
+    Its manifest field is still empty, so without skip it is picked straight
+    back and the chain spins on it instead of reaching its siblings.
+    """
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    _seed_friction_entry()  # summary present; citations + friction both pending
+
+    agent = transcripts_server._orchestrator.next_eligible("P01")
+    assert agent is not None and agent["key"] == "citations"
+
+    agent = transcripts_server._orchestrator.next_eligible("P01", skip={"citations"})
+    assert agent is not None and agent["key"] == "friction"
+
+
+def test_failed_citations_still_chains_to_friction(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """A citations run that stores nothing must not strand friction.
+
+    find_citations returns None when the model call fails, so nothing is
+    committed. Friction depends only on the summary, so the chain has to carry
+    on past the failure rather than stopping at the uncommitted step.
+    """
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry()
+
+    started: list[str] = []
+    orch = transcripts_server._orchestrator
+    real_run_agent = orch.run_agent
+
+    def _spy(agent_key, participant, force=False):
+        started.append(agent_key)
+        if agent_key == "citations":
+            # Simulate the model-call failure: run for real, but with the agent's
+            # run callable returning None so nothing is committed.
+            monkeypatch.setitem(
+                thinking_agents.get_agent("citations"),  # type: ignore[arg-type]
+                "run",
+                lambda entry, cancel, on_token=None: None,
+            )
+            real_run_agent(agent_key, participant, force=force)
+
+    monkeypatch.setattr(orch, "run_agent", _spy)
+    orch.run_chain("P01")
+    _join_orchestrator_threads(orch)
+
+    assert started[0] == "citations"
+    assert "friction" in started, f"chain stalled after citations: {started}"
+    assert "citations" not in transcripts_server._manifest["source_transcripts"]["P01"]
+
+
 def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
     monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
