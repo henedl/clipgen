@@ -303,8 +303,10 @@ def find_citations(
     to avoid multi-chunk latency. Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an
     explicit *model* override is provided. If *cancel_event* is set during the
     model call, the request is aborted and ``None`` is returned. Returns an
-    ordered list of ``{"sentence", "refs": [...]}`` dicts, or ``None`` if inputs
-    are empty or the run was cancelled.
+    ordered list of ``{"sentence", "refs": [...]}`` dicts — one entry per claim,
+    with an empty ``refs`` for claims the model found no support for — or
+    ``None`` if inputs are empty, the run was cancelled, or the model call
+    itself failed.
     """
     sentences = _split_summary_sentences(summary)
     if not sentences or not segments:
@@ -334,9 +336,15 @@ def find_citations(
         cancel_event=cancel_event,
     )
 
-    parsed: dict[int, list[dict[str, Any]]] = {}
-    if response:
-        parsed = _parse_citation_response(_strip_think(response), segments)
+    if not response:
+        # The model call itself failed (Ollama down, model missing, aborted
+        # mid-request). Returning a full list of empty refs here would persist a
+        # success-shaped result the UI cannot tell apart from "no sources
+        # exist", so report the failure and let the caller retry.
+        utils.warning_print("Citations: no response from the model")
+        return None
+
+    parsed = _parse_citation_response(_strip_think(response), segments)
 
     citations: list[dict[str, Any]] = []
     for i, sentence in enumerate(sentences):

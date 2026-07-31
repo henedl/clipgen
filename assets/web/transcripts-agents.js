@@ -88,7 +88,17 @@
         state.citationsGenerating = false;
         renderCitations();
       },
-      onEmpty: function () { _clearCitationsStatus(); },
+      onEmpty: function () {
+        // The poll only runs while a citations run is in flight, and the route
+        // 404s (which apiGet rejects) once that run ends without persisting —
+        // after find_citations' failure return, the Ollama-unavailable path.
+        // Either way the run is over with nothing to show, so say so instead of
+        // just dropping "Finding sources…". Cause is a suggestion, not a claim:
+        // a transport blip lands here too, and the fix is the same. Navigating
+        // away and the poll timeout go to onStale, which stays silent.
+        state.citationsGenerating = false;
+        _renderCitationsNote("Couldn't find sources. Check that Ollama is running, then re-run citations.");
+      },
       onStale: function () { _clearCitationsStatus(); },
     },
     friction: {
@@ -493,9 +503,11 @@
 
     if (!state.summaryCitations) return;
 
+    var dataRefs = 0;
     var refNum = 1;
     for (var i = 0; i < state.summaryCitations.length; i++) {
       var cite = state.summaryCitations[i];
+      dataRefs += (cite.refs || []).length;
       if (!cite.refs || cite.refs.length === 0) continue;
       var el = qs('#summaryContent [data-cite-index="' + i + '"]');
       if (!el) continue;
@@ -516,6 +528,29 @@
         refNum++;
       }
     }
+
+    // Rendering nothing is itself a result: say so, rather than leaving the
+    // panel looking like citations never ran. dataRefs separates "the model
+    // found no supporting segments" from "it found some, but renderSummary's
+    // sentence split didn't line up with the backend's" \u2014 the two splits are
+    // independent implementations, and that mismatch is otherwise silent.
+    if (refNum === 1) {
+      _renderCitationsNote(dataRefs === 0
+        ? "No supporting segments found for this summary."
+        : "Sources were found but couldn't be matched to the summary text. Re-run citations.");
+    }
+  }
+
+  // Terminal one-line status in the summary panel (nothing found / run failed).
+  // Shares .citations-status with the in-flight "Finding sources\u2026" line, minus
+  // its elapsed clock and Cancel button.
+  function _renderCitationsNote(text) {
+    var existing = qs("#summaryContent .citations-status");
+    if (existing) existing.remove();
+    var p = document.createElement("p");
+    p.className = "citations-status";
+    p.textContent = text;
+    qs("#summaryContent").appendChild(p);
   }
 
   // startedAtMs (optional): server-recorded run start in epoch ms \u2014 seeds the
@@ -866,6 +901,12 @@
       } else if (fd.stale) {
         statusEl.textContent = "Stale: segments edited since last run" +
           (fd.model ? " · " + fd.model : "");
+      } else if (!(fd.moments && fd.moments.length)) {
+        // A completed run that surfaced nothing. Without this the header reads
+        // like any successful run and the only hint is the jump strip's one
+        // italic line, well below the fold of the eye.
+        statusEl.textContent = "No friction moments found · computed " +
+          _friendlyTimeAgo(fd.computed_at) + (fd.model ? " · " + fd.model : "");
       } else {
         statusEl.textContent = "Computed " + _friendlyTimeAgo(fd.computed_at) +
           (fd.model ? " · " + fd.model : "");
@@ -1028,11 +1069,14 @@
     // numbering and the set of inline callouts can't drift apart.
     var visible = [];
     var cited = {};
+    var unsourced = 0;
     var all = (fd && fd.moments) || [];
     for (i = 0; i < all.length; i++) {
       if (!_frictionMomentMatches(all[i])) continue;
       var idxs = _momentSegmentIndices(all[i]);
-      if (idxs.length === 0) continue; // unsourced moment: nothing to quote or seek to
+      // Unsourced moment: nothing to quote or seek to. Counted, not just
+      // dropped, so the empty strip can name this cause instead of the filter.
+      if (idxs.length === 0) { unsourced++; continue; }
       visible.push({ moment: all[i], idxs: idxs });
       for (j = 0; j < idxs.length; j++) {
         var seg = state.segments[idxs[j]];
@@ -1041,6 +1085,7 @@
     }
     state.frictionVisibleMoments = visible;
     state.frictionCitedBySegId = cited;
+    state.frictionUnsourcedMoments = unsourced;
   }
 
   // The single entry point for "the filter changed": recompute, then reflect it
@@ -1412,8 +1457,14 @@
         : "Run Summary to surface AI-refined friction moments.";
     }
     if (fd.llm_ok === false) return "Moment detection failed. Re-run with an installed Ollama model.";
-    if (fd.moments && fd.moments.length) return "No moments match the current filter.";
-    return "No moments detected.";
+    if (!(fd.moments && fd.moments.length)) return "No friction moments found in this transcript.";
+    // Moments exist but none reached the strip. Either the filter excluded them
+    // all, or they cite segments that are gone — different causes, different
+    // fixes, so don't blame the filter for both.
+    if (state.frictionUnsourcedMoments) {
+      return "Moments found, but the segments they cite are no longer in the transcript. Re-run friction.";
+    }
+    return "No moments match the current filter.";
   }
 
   function renderFrictionJumpStrip() {

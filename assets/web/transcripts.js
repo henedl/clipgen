@@ -66,6 +66,10 @@
     frictionMatchBySegId: {},
     frictionVisibleMoments: [],
     frictionCitedBySegId: {},
+    // Moments that passed the filter but cite segment ids absent from
+    // state.segments (transcript edited since the run). Counted alongside the
+    // three maps above so the jump strip can say *why* it came out empty.
+    frictionUnsourcedMoments: 0,
     frictionMomentIndex: -1,
     transcribePrewarm: "queue_open",
     modelStatus: null,
