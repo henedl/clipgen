@@ -451,6 +451,49 @@ def test_probe_video_properties_file_not_found():
     assert video.probe_video_properties("/nonexistent/missing.mp4") is None
 
 
+# -- pick_speech_audio_track tests --
+
+
+def _named_tracks(*labels):
+    """Track dicts shaped like probe_video_properties' audio_tracks entries."""
+    return [
+        {"index": i, "title": label, "handler": "", "label": label}
+        for i, label in enumerate(labels)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("labels", "expected"),
+    [
+        # A named mic beats a named system-audio track.
+        (("Microphone", "System Audio"), 0),
+        (("System Audio", "Participant"), 1),
+        # Nothing named → track 0, i.e. exactly what whisper did before this
+        # heuristic existed. This is the no-silent-behaviour-change guard.
+        (("Track 1", "Track 2"), 0),
+        # Only a *negative* signal still moves off track 0.
+        (("Speakers", "Track 2"), 1),
+        # Two speech-looking tracks tie → lowest index wins.
+        (("Mic", "Interview"), 0),
+        # Word boundaries: "mic" must not match "dynamic".
+        (("Dynamic Range",), 0),
+        (("Screen Recording", "Participant Mic"), 1),
+        ((), 0),
+    ],
+)
+def test_pick_speech_audio_track(labels, expected):
+    assert video.pick_speech_audio_track(_named_tracks(*labels)) == expected
+
+
+def test_pick_speech_audio_track_reads_handler_and_returns_track_index():
+    """Scores the handler name too, and returns the track's own index field."""
+    tracks = [
+        {"index": 0, "title": "", "handler": "Screen Capture", "label": "Track 1"},
+        {"index": 1, "title": "", "handler": "Interview Mic", "label": "Track 2"},
+    ]
+    assert video.pick_speech_audio_track(tracks) == 1
+
+
 # -- extract_audio_track tests --
 
 

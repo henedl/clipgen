@@ -395,6 +395,30 @@
     langRow.appendChild(langSelect);
     pane.appendChild(langRow);
 
+    // Audio track row — multitrack sources only. Rendered synchronously off the
+    // hub's warm cache when possible: the 3 s poll rebuilds this whole pane via
+    // _refreshPillOptionsContent, and an async insert on every rebuild would
+    // strobe the row and shift the keyboard cursor under the user.
+    var audioInfo = TS.audioInfoCached(p.id, p.video_version);
+    if (audioInfo) {
+      if (audioInfo.count > 1) pane.appendChild(buildAudioTrackRow(p, audioInfo, ov));
+    } else if (p.has_video) {
+      TS._trFetchAudioInfo(p.id, p.video_version).then(function (info) {
+        // The pane we captured may already have been swapped out by a poll tick;
+        // appending to the detached node would silently drop the row.
+        var live = document.querySelector("body > .pill-options[data-pid='" + p.id + "']");
+        if (live !== pane || !info || info.count <= 1) return;
+        pane.insertBefore(
+          buildAudioTrackRow(p, info, state.pillOverrides[p.id] || {}),
+          pane.querySelector(".pill-options-agents")
+        );
+        // The row lands *above* the agent buttons, so a cursor painted on one of
+        // them now points at the wrong control.
+        if (state.pillOptionsCursor >= 2) state.pillOptionsCursor += 1;
+        pillNavPaint();
+      });
+    }
+
     // Agent rows — manual run / re-run / stop controls with dependency gating.
     // Order: Transcription → Summary → Citations. Summary requires
     // transcription; citations requires summary. Re-running summary cascades
@@ -402,6 +426,56 @@
     pane.appendChild(buildPillAgentsSection(p, s));
 
     return pane;
+  }
+
+  // Track labels come from the container's stream metadata and can be long
+  // ("Blackhole 16ch (Participant Mic)"); the popover is 220px wide, so clip
+  // them here rather than letting a <select> stretch the pane.
+  function _trackOptionLabel(track, index) {
+    var label = String((track && track.label) || "Track " + (index + 1));
+    if (label.length > 20) label = label.slice(0, 19) + "…";
+    return "Track " + (index + 1) + " · " + label;
+  }
+
+  function buildAudioTrackRow(p, info, ov) {
+    // Wrapper, not a bare row: .pill-options-row is a horizontal flex line, so
+    // the "Last run" hint has to stack beneath it rather than sit beside the
+    // select. pillNavControls still finds the select via ".pill-options-row select".
+    var group = document.createElement("div");
+    group.className = "pill-options-group";
+    var row = document.createElement("div");
+    row.className = "pill-options-row";
+    var label = document.createElement("label");
+    label.textContent = "Audio track";
+    var select = document.createElement("select");
+    var auto = info.tracks[info.auto] || null;
+    // The server computes the auto pick (video.pick_speech_audio_track) so the
+    // heuristic has exactly one implementation; this only labels it.
+    var html = '<option value="">' +
+      escapeHtml("Auto (" + _trackOptionLabel(auto, info.auto) + ")") + "</option>";
+    for (var i = 0; i < info.tracks.length; i++) {
+      html += '<option value="' + i + '">' +
+        escapeHtml(_trackOptionLabel(info.tracks[i], i)) + "</option>";
+    }
+    select.innerHTML = html;
+    select.value = ov.audioTrack || "";
+    select.addEventListener("change", function () {
+      _setOverride(p.id, "audioTrack", this.value);
+    });
+    row.appendChild(label);
+    row.appendChild(select);
+    group.appendChild(row);
+
+    // What the last completed run actually used — the only way to explain a
+    // transcript that changed because auto-detect moved off track 1.
+    if (p.audio_track_label) {
+      var hint = document.createElement("div");
+      hint.className = "pill-options-hint";
+      hint.textContent = "Last run: " +
+        _trackOptionLabel({ label: p.audio_track_label }, p.audio_index || 0);
+      group.appendChild(hint);
+    }
+    return group;
   }
 
   function buildPillAgentsSection(p, s) {
@@ -701,10 +775,14 @@
   function startTranscribe(pid, force) {
     var overrides = {};
     var ov = state.pillOverrides[pid];
-    if (ov && (ov.model || ov.language)) {
+    // ov.audioTrack is a <select> value, so track 0 arrives as the string "0" —
+    // truthy, unlike the number. The server parses it back to an int and treats
+    // absent (not falsy) as "auto-detect".
+    if (ov && (ov.model || ov.language || ov.audioTrack)) {
       overrides[pid] = {};
       if (ov.model) overrides[pid].model = ov.model;
       if (ov.language) overrides[pid].language = ov.language;
+      if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
     }
     transcribeParticipants([pid], force, overrides);
   }

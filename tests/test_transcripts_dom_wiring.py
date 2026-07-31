@@ -152,3 +152,23 @@ def test_local_ai_badge_is_styled_and_its_icon_exists():
     assert "icons/octicon/dependabot-16.svg" in referenced
     missing = [m for m in referenced if not (_ICONS / m[len("icons/") :]).is_file()]
     assert not missing, f"transcripts.css masks nonexistent icons: {missing}"
+
+
+def test_audio_track_override_survives_track_zero():
+    """`<select>.value` for track 0 is the string "0" (truthy), so the falsy gate
+    in startTranscribe is correct — but only by accident of that stringiness. A
+    refactor to a numeric override would silently drop "transcribe track 1"."""
+    start = _JS.index("function startTranscribe(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "ov.audioTrack" in body, (
+        "startTranscribe must forward the pill's audio-track override"
+    )
+    assert "audio_index" in body, "the POST key the server parses is audio_index"
+
+
+def test_audio_track_row_is_labelled_and_styled():
+    """The row is built in JS, so an unstyled wrapper class collapses the hint
+    onto the select's line with no error anywhere."""
+    assert '"Audio track"' in _JS, "the pill dropdown must label the track picker"
+    for cls in (".pill-options-group", ".pill-options-hint"):
+        assert cls + " {" in _CSS, f"{cls} is created in JS but never styled"
