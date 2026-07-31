@@ -1296,7 +1296,6 @@ def _start_watch_thread() -> None:
 
 def _init_workflows_state(
     sheet_context: Any = None,
-    participant_list: list[str] | None = None,
     worksheet: Any = None,
 ) -> None:
     """Initialize module-level state for Workflows routes.
@@ -1304,8 +1303,7 @@ def _init_workflows_state(
     Loads the workflows manifest and records the active input dir + sheet
     context + worksheet (the latter feeds the ``sheet_selection`` executor), then
     seeds the watch-dir baseline and starts the trigger daemon (P6).
-    ``participant_list`` is accepted for parity with the other blueprints' init
-    signatures; per-participant video paths are resolved on demand.
+    Per-participant video paths are resolved on demand.
     """
     global _input_dir, _sheet_context, _worksheet, _manifest
 

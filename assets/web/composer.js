@@ -18,6 +18,7 @@
 
   var state = {
     participants: [],       // [{id, parts:[{name,duration,offset}], total_duration}]
+    hasSheet: false,        // a spreadsheet is loaded — gates the off-sheet suffix
     participant: null,      // active participant id
     parts: [],              // active participant's parts
     duration: 0,            // stitched total (seconds)
@@ -359,7 +360,11 @@
     placeholder.value = "";
     select.appendChild(placeholder);
     state.participants.forEach(function (p) {
-      var opt = el("option", "", p.id);
+      // An <option> can't hold a badge element, so an off-sheet participant —
+      // video on disk, no column in the loaded sheet — gets a label suffix.
+      // Only when a sheet is loaded: without one everything is off-sheet.
+      var label = state.hasSheet && p.in_sheet === false ? p.id + " (off-sheet)" : p.id;
+      var opt = el("option", "", label);
       opt.value = p.id;
       select.appendChild(opt);
     });
@@ -1740,6 +1745,7 @@
       if (!data.ok) return;
       if (data.config) clipgenApplyConfig(data.config);
       updateTimelineHint(); // the double-click hint follows the fetched config
+      state.hasSheet = !!data.has_sheet;
       state.participants = data.participants || [];
       populateParticipantSelect();
       return manifestLoaded.then(function () {

@@ -44,6 +44,10 @@ def tr_client(tmp_path, monkeypatch):
             }
         ],
     )
+    # None = "not configured", so _refresh_participants() is a no-op and the list
+    # pinned above stays authoritative instead of being rebuilt from the real
+    # input dir. A prior test that ran _init_transcripts_state leaves this set.
+    monkeypatch.setattr(transcripts_server, "_participant_source", None)
     monkeypatch.setattr(transcripts_server, "_worker", None)
     monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
     monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)
@@ -67,6 +71,32 @@ def test_participants_includes_transcribe_prewarm(tr_client):
     data = resp.get_json()
     assert data["ok"] is True
     assert data["transcribe_prewarm"] in ("off", "queue_open", "page_load")
+    assert data["has_sheet"] is False
+
+
+def test_participants_payload_reports_in_sheet(tr_client, monkeypatch):
+    # The route builds its response dict field-by-field, so in_sheet only
+    # survives if it is explicitly copied across.
+    monkeypatch.setattr(
+        transcripts_server,
+        "_participants",
+        [
+            {
+                "id": "P01",
+                "video_paths": ["/tmp/clipgen-test_P01.mp4"],
+                "has_video": False,
+                "in_sheet": True,
+            },
+            {
+                "id": "P13",
+                "video_paths": ["/tmp/study_P13.mp4"],
+                "has_video": False,
+                "in_sheet": False,
+            },
+        ],
+    )
+    data = tr_client.get("/transcripts/api/participants").get_json()
+    assert [p["in_sheet"] for p in data["participants"]] == [True, False]
 
 
 def test_audio_info_reports_tracks(tr_client, monkeypatch):

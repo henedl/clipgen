@@ -159,7 +159,7 @@ def _participant_parts(video_paths: list[str]) -> list[dict[str, Any]] | None:
 
 def _participant_duration(participant: str) -> float | None:
     """Total stitched duration for a participant, or None when unknown."""
-    for p in utils.discover_participant_videos():
+    for p in files.resolve_participant_videos(_sheet_context):
         if p["id"] == participant and p.get("has_video"):
             parts = _participant_parts(p["video_paths"])
             if parts is None:
@@ -172,7 +172,7 @@ def _participant_duration(participant: str) -> float | None:
 def api_participants() -> Any:
     """Participants with source videos, plus part timelines for stitched seeks."""
     participants: list[dict[str, Any]] = []
-    for p in utils.discover_participant_videos():
+    for p in files.resolve_participant_videos(_sheet_context):
         if not p.get("has_video"):
             continue
         parts = _participant_parts(p["video_paths"])
@@ -189,6 +189,7 @@ def api_participants() -> Any:
             {
                 "id": p["id"],
                 "has_video": True,
+                "in_sheet": p.get("in_sheet", False),
                 "parts": parts or [{"name": Path(vp).name} for vp in p["video_paths"]],
                 "total_duration": (
                     sum(part["duration"] for part in parts) if parts else None
@@ -200,7 +201,13 @@ def api_participants() -> Any:
                 "audio_track_count": props.get("audio_track_count") if props else 0,
             }
         )
-    return ok(participants=participants, config=utils.get_frontend_config())
+    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
+    # is ``in_sheet: False`` and marking them all would be noise.
+    return ok(
+        participants=participants,
+        has_sheet=_sheet_context is not None,
+        config=utils.get_frontend_config(),
+    )
 
 
 # ---- Manifest + cuts CRUD ----
@@ -837,7 +844,7 @@ MAX_OVERLAY_WINDOWS = 20
 
 def _find_participant_parts(participant: str) -> list[dict[str, Any]] | None:
     """Ordered ``{name, path, duration, offset}`` parts, or None."""
-    for p in utils.discover_participant_videos():
+    for p in files.resolve_participant_videos(_sheet_context):
         if p["id"] == participant and p.get("has_video"):
             parts = _participant_parts(p["video_paths"])
             if parts is None:
@@ -1368,14 +1375,11 @@ def api_export_gif() -> Any:
 # ---- State init ----
 
 
-def _init_composer_state(
-    sheet_context: Any = None,
-    participant_list: list[str] | None = None,
-) -> None:
+def _init_composer_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Composer routes.
 
-    ``participant_list`` is accepted for parity with the other blueprints' init
-    signatures; participants are discovered from the input dir on demand.
+    Participants are resolved from ``_sheet_context`` + the input dir on demand
+    (:func:`files.resolve_participant_videos`), so nothing is snapshotted here.
     """
     global _input_dir, _sheet_context, _manifest
 

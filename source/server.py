@@ -3097,17 +3097,6 @@ def _init_studio_state(worksheet: Any) -> None:
 # ---- Entry point ----
 
 
-def _resolve_participants() -> list[str] | None:
-    """Extract participant IDs from the loaded sheet context."""
-    if _sheet_context is None:
-        return None
-    return spreadsheet.get_participant_list(
-        _sheet_context.header_row,
-        _sheet_context.id_cell,
-        _sheet_context.num_participants,
-    )
-
-
 def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
     """Return ``{type, id_or_path, label}`` for a CLI-loaded worksheet.
 
@@ -3177,11 +3166,9 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         _init_studio_state(new_worksheet)
         screenspace_server._init_screenspace_state(
             sheet_context=_sheet_context,
-            participant_list=_resolve_participants(),
         )
         transcripts_server._init_transcripts_state(
             sheet_context=_sheet_context,
-            participant_list=_resolve_participants(),
         )
     except Exception:
         _worksheet = prev_worksheet
@@ -3196,14 +3183,12 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         try:
             screenspace_server._init_screenspace_state(
                 sheet_context=_sheet_context,
-                participant_list=_resolve_participants(),
             )
         except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
         try:
             transcripts_server._init_transcripts_state(
                 sheet_context=_sheet_context,
-                participant_list=_resolve_participants(),
             )
         except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
@@ -3378,7 +3363,6 @@ def build_combined_app(
 
     screenspace_server._init_screenspace_state(
         sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
     )
     combined.register_blueprint(
         screenspace_server.screenspace_bp, url_prefix="/screenspace"
@@ -3386,7 +3370,6 @@ def build_combined_app(
 
     transcripts_server._init_transcripts_state(
         sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
     )
     combined.register_blueprint(
         transcripts_server.transcripts_bp, url_prefix="/transcripts"
@@ -3394,14 +3377,12 @@ def build_combined_app(
 
     workflows_server._init_workflows_state(
         sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
         worksheet=_worksheet,
     )
     combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
 
     composer_server._init_composer_state(
         sheet_context=_sheet_context,
-        participant_list=_resolve_participants(),
     )
     combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
 

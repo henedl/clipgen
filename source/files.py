@@ -5,6 +5,7 @@ import re
 import threading
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 import config
 import utils
@@ -229,6 +230,78 @@ def discover_numbered_source_videos(
         )
         return []
     return [p for _, p in matches]
+
+
+def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]]:
+    """Return every participant the tools should list — sheet columns, then disk.
+
+    Neither source alone is the truth, so this is their union:
+
+    - The sheet's participant columns, resolved override-aware through
+      :func:`resolve_source_video_paths`. A column whose file is missing stays in
+      the list with ``has_video: False`` so the gap is visible rather than silent.
+    - Every participant :func:`utils.discover_participant_videos` finds on disk
+      that the sheet does not mention, carrying its own discovered paths verbatim.
+      Discovery accepts any ``*_P<x>`` / ``*_G<x>`` name regardless of study
+      prefix, so ``study_P13.mp4`` must NOT be re-resolved against the sheet's
+      study name — that would invent a ``clipgen-test_P13.mp4`` that is not there.
+
+    Sheet order first, then disk-only ids sorted; deduped by id with the sheet
+    winning. ``in_sheet`` lets the frontend mark the disk-only ones. With
+    ``sheet_context=None`` this is a plain scan and every entry is
+    ``in_sheet: False``.
+
+    The input directory is derived here rather than passed in: letting a caller
+    hand the sheet half a different directory than ``discover_participant_videos``
+    (which always derives its own) would be a silent-mismatch bug.
+
+    Returns:
+        ``[{"id", "video_paths", "has_video", "in_sheet"}]`` — freshly built dicts.
+        Never the memoized ones ``discover_participant_videos`` returns; those are
+        shared with the Workflows blueprint and must not be stamped on.
+    """
+    import spreadsheet  # lazy: files.py is CLI-hot; spreadsheet pulls in google_api
+
+    study = ""
+    sheet_ids: list[str] = []
+    overrides: dict[str, str | None] = {}
+    if sheet_context is not None:
+        study = getattr(sheet_context, "study_name", "")
+        sheet_ids = spreadsheet.get_participant_list(
+            sheet_context.header_row,
+            sheet_context.id_cell,
+            sheet_context.num_participants,
+        )
+        overrides = spreadsheet.participant_filename_overrides(sheet_context)
+
+    input_dir = Path(utils.get_effective_input_dir())
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pid in sheet_ids:
+        if pid in seen:  # a sheet with a duplicated column header
+            continue
+        seen.add(pid)
+        paths = resolve_source_video_paths(study, pid, overrides.get(pid), input_dir)
+        entries.append(
+            {
+                "id": pid,
+                "video_paths": [str(p) for p in paths],
+                "has_video": paths[0].is_file(),
+                "in_sheet": True,
+            }
+        )
+    for found in utils.discover_participant_videos():  # already sorted by id
+        if found["id"] in seen:
+            continue
+        entries.append(
+            {
+                "id": found["id"],
+                "video_paths": list(found["video_paths"]),  # copy — source is memoized
+                "has_video": found["has_video"],
+                "in_sheet": False,
+            }
+        )
+    return entries
 
 
 def prepare_clip(clip: ClipRecord) -> ClipRecord:

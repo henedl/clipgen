@@ -139,6 +139,8 @@
 
   var state = {
     participants: [],
+    // Whether a spreadsheet is loaded at all — gates the off-sheet label suffix.
+    hasSheet: false,
     selectedParticipant: null,
     videoInfo: null,
     audioPanel: null, // ClipgenVideoControls audio-popover controller
@@ -461,6 +463,14 @@
 
   // ---- Participants ----
 
+  // Both pickers are plain text (an <option> can't hold a badge element), so an
+  // off-sheet participant — video on disk, no column in the loaded sheet — is
+  // marked with a label suffix instead. Only when a sheet is loaded: without one
+  // everything is off-sheet and the suffix would be noise.
+  function participantLabel(p) {
+    return state.hasSheet && p.in_sheet === false ? p.id + " (off-sheet)" : p.id;
+  }
+
   function renderParticipantSelect() {
     var sel = qs("#participantSelect");
     sel.innerHTML = "";
@@ -471,7 +481,7 @@
       return;
     }
     state.participants.forEach(function (p) {
-      var opt = el("option", null, p.id);
+      var opt = el("option", null, participantLabel(p));
       opt.value = p.id;
       sel.appendChild(opt);
     });
@@ -519,7 +529,7 @@
         updateRunButton();
       });
       lbl.appendChild(cb);
-      lbl.appendChild(document.createTextNode(p.id));
+      lbl.appendChild(document.createTextNode(participantLabel(p)));
       panel.appendChild(lbl);
     });
 
@@ -5075,6 +5085,7 @@
       .then(function (data) {
         if (!data.ok) return;
         if (data.config) clipgenApplyConfig(data.config);
+        state.hasSheet = !!data.has_sheet;
         state.participants = (data.participants || []).filter(function (p) { return p.has_video; });
         // Seed _videoVersions before any frameUrl/videoStreamUrl call so the
         // preload queue below already includes the ?v= cache-bust suffix.

@@ -44,6 +44,10 @@ def client(tmp_path, monkeypatch):
             {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
         ],
     )
+    # None = "not configured", so _refresh_participants() is a no-op and the list
+    # pinned above stays authoritative instead of being rebuilt from the real
+    # input dir. A prior test that ran _init_screenspace_state leaves this set.
+    monkeypatch.setattr(screenspace_server, "_participant_source", None)
     monkeypatch.setattr(screenspace_server, "_events_version", 0)
     monkeypatch.setattr(screenspace_server, "_output_dir", str(tmp_path))
     monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
@@ -99,6 +103,20 @@ def test_list_participants(client):
     assert data["ok"] is True
     assert len(data["participants"]) == 2
     assert data["participants"][0]["id"] == "P01"
+    assert data["has_sheet"] is False
+
+
+def test_participants_payload_reports_in_sheet(client, monkeypatch):
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [
+            {"id": "P01", "video_paths": [], "has_video": False, "in_sheet": True},
+            {"id": "P13", "video_paths": [], "has_video": False, "in_sheet": False},
+        ],
+    )
+    data = client.get("/screenspace/api/participants").get_json()
+    assert [p["in_sheet"] for p in data["participants"]] == [True, False]
 
 
 def test_video_info_reports_audio_tracks(client, monkeypatch):
