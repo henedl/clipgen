@@ -55,6 +55,8 @@ class TestRegistry:
         keys = {a["key"] for a in thinking_agents.AGENTS}
         assert "summary" in keys
         assert "citations" in keys
+        assert "friction" in keys
+        assert "report" in keys
 
     def test_resolve_model_uses_agent_model(self, monkeypatch):
         import config
@@ -75,6 +77,15 @@ class TestRegistry:
         friction = thinking_agents.get_agent("friction")
         assert friction is not None
         assert thinking_agents.resolve_model(friction) == "llama3.1:8b"
+
+    def test_resolve_model_blank_report_inherits_summary(self, monkeypatch):
+        import config
+
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.1:8b")
+        monkeypatch.setattr(config, "OLLAMA_REPORT_MODEL", "")
+        report = thinking_agents.get_agent("report")
+        assert report is not None
+        assert thinking_agents.resolve_model(report) == "llama3.1:8b"
 
 
 class TestSummarizeTranscript:
@@ -480,3 +491,172 @@ class TestAgentRunCallables:
         }
         agent["run"](entry, evt)
         assert mock_find.call_args[1]["cancel_event"] is evt
+
+
+class TestRunReport:
+    """The report agent: summary + injected sheet observations + marks →
+    per-participant mini-report."""
+
+    def _clear_getters(self, monkeypatch):
+        monkeypatch.setattr(thinking_agents, "_observation_rows_getter", None)
+        monkeypatch.setattr(thinking_agents, "_participant_marks_getter", None)
+
+    def test_configure_sets_and_clears_getters(self, monkeypatch):
+        self._clear_getters(monkeypatch)
+
+        def rows():
+            return []
+
+        def marks(pid):
+            return []
+
+        thinking_agents.configure(
+            observation_rows_getter=rows, participant_marks_getter=marks
+        )
+        assert thinking_agents._observation_rows_getter is rows
+        assert thinking_agents._participant_marks_getter is marks
+        thinking_agents.configure()
+        assert thinking_agents._observation_rows_getter is None
+        assert thinking_agents._participant_marks_getter is None
+
+    def test_returns_none_without_summary(self, monkeypatch):
+        self._clear_getters(monkeypatch)
+        agent = thinking_agents.get_agent("report")
+        assert agent is not None
+        assert agent["run"]({"participant": "P01", "segments": []}, None) is None
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_happy_path_result_shape_and_prompt(self, mock_generate, monkeypatch):
+        import config
+
+        mock_generate.return_value = "## Overview\nWent fine."
+        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "m1")
+        monkeypatch.setattr(config, "OLLAMA_REPORT_MODEL", "")
+        monkeypatch.setattr(
+            thinking_agents,
+            "_observation_rows_getter",
+            lambda: [
+                {
+                    "participant": "P01",
+                    "category": "Navigation",
+                    "severity": "Major",
+                    "text": "Could not find export",
+                },
+                {
+                    "participant": "P02",
+                    "category": "Navigation",
+                    "severity": "",
+                    "text": "Someone else's note",
+                },
+            ],
+        )
+        monkeypatch.setattr(
+            thinking_agents,
+            "_participant_marks_getter",
+            lambda pid: [
+                {
+                    "start": 65.0,
+                    "category": "pain_point",
+                    "label": "",
+                    "text": "This is confusing",
+                },
+            ],
+        )
+        entry = {"participant": "P01", "summary": "A summary."}
+        result = thinking_agents._run_report(entry, None)
+        assert result is not None
+        assert result["text"] == "## Overview\nWent fine."
+        assert result["model"] == "m1"
+        assert result["sources"] == {"observations": 1, "bookmarks": 1}
+        assert result["generated_at"]
+
+        prompt = mock_generate.call_args[0][0]
+        assert "- Could not find export (Navigation, Major)" in prompt
+        assert "[1:05] (Pain Point) This is confusing" in prompt
+        assert "Someone else's note" not in prompt
+        assert "P01" in prompt
+        kwargs = mock_generate.call_args[1]
+        assert kwargs["system"] == config.OLLAMA_REPORT_SYSTEM
+        assert kwargs["think"] is False
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_mark_label_wins_over_category_bucket(self, mock_generate, monkeypatch):
+        mock_generate.return_value = "report"
+        monkeypatch.setattr(thinking_agents, "_observation_rows_getter", None)
+        monkeypatch.setattr(
+            thinking_agents,
+            "_participant_marks_getter",
+            lambda pid: [
+                {
+                    "start": 0,
+                    "category": "friction",
+                    "label": "Friction · frustration",
+                    "text": "Ugh",
+                },
+            ],
+        )
+        thinking_agents._run_report({"participant": "P01", "summary": "S."}, None)
+        prompt = mock_generate.call_args[0][0]
+        assert "[0:00] (Friction · frustration) Ugh" in prompt
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_degrades_to_placeholders_without_getters(self, mock_generate, monkeypatch):
+        self._clear_getters(monkeypatch)
+        mock_generate.return_value = "report text"
+        result = thinking_agents._run_report(
+            {"participant": "P01", "summary": "S."}, None
+        )
+        assert result is not None
+        assert result["sources"] == {"observations": 0, "bookmarks": 0}
+        prompt = mock_generate.call_args[0][0]
+        assert "(none recorded)" in prompt
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_marks_getter_receives_participant(self, mock_generate, monkeypatch):
+        mock_generate.return_value = "r"
+        monkeypatch.setattr(thinking_agents, "_observation_rows_getter", None)
+        calls: list[str] = []
+
+        def marks(pid):
+            calls.append(pid)
+            return []
+
+        monkeypatch.setattr(thinking_agents, "_participant_marks_getter", marks)
+        thinking_agents._run_report({"participant": "P07", "summary": "S."}, None)
+        assert calls == ["P07"]
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_returns_none_when_generate_fails(self, mock_generate, monkeypatch):
+        self._clear_getters(monkeypatch)
+        mock_generate.return_value = None
+        result = thinking_agents._run_report(
+            {"participant": "P01", "summary": "S."}, None
+        )
+        assert result is None
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_returns_none_when_cancelled_before_generate(
+        self, mock_generate, monkeypatch
+    ):
+        self._clear_getters(monkeypatch)
+        evt = threading.Event()
+        evt.set()
+        result = thinking_agents._run_report(
+            {"participant": "P01", "summary": "S."}, evt
+        )
+        assert result is None
+        mock_generate.assert_not_called()
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_forwards_cancel_event_and_on_token(self, mock_generate, monkeypatch):
+        self._clear_getters(monkeypatch)
+        mock_generate.return_value = "r"
+        evt = threading.Event()
+
+        def sink(tok):
+            pass
+
+        thinking_agents._run_report({"participant": "P01", "summary": "S."}, evt, sink)
+        kwargs = mock_generate.call_args[1]
+        assert kwargs["cancel_event"] is evt
+        assert kwargs["on_token"] is sink

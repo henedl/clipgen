@@ -794,14 +794,17 @@ def _set_sheet_context(ctx: spreadsheet.SheetContext | None) -> None:
 
 
 def _sheet_observation_rows() -> list[dict[str, Any]]:
-    """Reduced sheet-timestamp records for the Overview Map's feature matrix.
+    """Reduced per-participant sheet-observation records.
 
-    One record per (sheet row x participant) cell with valid timestamps:
-    ``{"participant", "category", "severity", "timestamps": N, "seconds":
-    [start_seconds, ...]}`` (``seconds`` feeds the per-window trajectory
-    features). Injected into overview.py via ``overview.configure()`` so the
-    Map is populated as soon as timestamps exist in the sheet — no artifact
-    generation required.
+    One record per (sheet row x participant) cell that marks the observation
+    as applying to that participant — valid timestamps or plain cell text:
+    ``{"participant", "category", "severity", "text", "timestamps": N,
+    "seconds": [start_seconds, ...]}`` (text-only cells carry ``timestamps: 0``
+    and empty ``seconds``). Injected into overview.py via
+    ``overview.configure()`` (the Map's feature matrix ignores records without
+    timestamps) and into thinking_agents via ``thinking_agents.configure()``
+    (the report agent reads ``text``), so both work off live sheet state — no
+    artifact generation required.
     """
     if _sheet_context is None:
         return []
@@ -809,12 +812,12 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for row in payload["rows"]:
         for pid, cell in row["cells"].items():
-            if not cell.get("valid"):
+            if not (cell.get("valid") or cell.get("hasText")):
                 continue
-            cleaned, _, _ = utils.parse_cell_annotations(cell["value"])
-            pairs = utils.parse_timestamps(cleaned)
-            if not pairs:
-                continue
+            pairs: list[tuple[str, str]] = []
+            if cell.get("valid"):
+                cleaned, _, _ = utils.parse_cell_annotations(cell["value"])
+                pairs = utils.parse_timestamps(cleaned)
             seconds = [
                 s
                 for s in (utils.timestamp_to_seconds(start) for start, _ in pairs)
@@ -825,6 +828,7 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
                     "participant": pid,
                     "category": row["category"],
                     "severity": row["severity"],
+                    "text": row["observation"],
                     "timestamps": len(pairs),
                     "seconds": seconds,
                 }
@@ -3390,6 +3394,17 @@ def build_combined_app(
 
     overview.configure(observation_rows_getter=_sheet_observation_rows)
     combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
+
+    # The report thinking agent reads sheet observations and transcript marks,
+    # both of which live in other modules' process state — inject them the same
+    # way overview gets its observation rows (import cycles rule out direct
+    # imports from thinking_agents).
+    import thinking_agents
+
+    thinking_agents.configure(
+        observation_rows_getter=_sheet_observation_rows,
+        participant_marks_getter=transcripts_server.marks_for_participant,
+    )
 
     combined.after_request(_set_cache_headers)
 

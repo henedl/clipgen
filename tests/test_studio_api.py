@@ -233,8 +233,12 @@ def test_settings_records_include_ollama_model_pickers(client):
     assert by_name["OLLAMA_SUMMARY_MODEL"]["provider"] == "ollama"
     assert by_name["OLLAMA_FRICTION_MODEL"]["type"] == "model_select"
     assert by_name["OLLAMA_FRICTION_MODEL"]["provider"] == "ollama"
-    # Friction inherits the summary model via a blank value, shown as a label.
+    # Friction and report inherit the summary model via a blank value, shown as
+    # a label.
     assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
+    assert by_name["OLLAMA_REPORT_MODEL"]["type"] == "model_select"
+    assert by_name["OLLAMA_REPORT_MODEL"]["provider"] == "ollama"
+    assert by_name["OLLAMA_REPORT_MODEL"]["emptyLabel"]
 
 
 def test_settings_records_include_agent_prompts(client):
@@ -246,6 +250,8 @@ def test_settings_records_include_agent_prompts(client):
         "OLLAMA_CITATIONS_PROMPT",
         "OLLAMA_FRICTION_SYSTEM",
         "OLLAMA_FRICTION_PROMPT",
+        "OLLAMA_REPORT_SYSTEM",
+        "OLLAMA_REPORT_PROMPT",
     ):
         assert by_name[name]["type"] == "prompt"
         assert by_name[name]["tab"] == "Summaries"
@@ -261,9 +267,16 @@ def test_settings_records_include_agent_prompts(client):
         "segments",
         "limit",
     ]
+    assert by_name["OLLAMA_REPORT_PROMPT"]["placeholders"] == [
+        "participant",
+        "summary",
+        "observations",
+        "bookmarks",
+    ]
     # System prompts are sent verbatim — no placeholders.
     assert by_name["OLLAMA_CITATIONS_SYSTEM"]["placeholders"] == []
     assert by_name["OLLAMA_FRICTION_SYSTEM"]["placeholders"] == []
+    assert by_name["OLLAMA_REPORT_SYSTEM"]["placeholders"] == []
 
 
 def test_settings_put_persists_custom_prompt(client, tmp_path, monkeypatch):

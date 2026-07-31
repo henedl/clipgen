@@ -531,6 +531,10 @@ OLLAMA_SUMMARY_MODEL: str = (
 OLLAMA_FRICTION_MODEL: str = (
     ""  # friction agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
 )
+OLLAMA_REPORT_ENABLED: bool = False  # mini-report is manual-only (Overview → Summary); True adds it to the auto-chain
+OLLAMA_REPORT_MODEL: str = (
+    ""  # report agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
+)
 OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
 OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
 
@@ -589,6 +593,38 @@ Output a JSON array only — no prose, no markdown fences, no <think> blocks:
   {{"segment_ids": ["P01:7", "P01:8"], "category": "frustration",
     "rationale": "Participant repeatedly tried to find the save button", "score": 0.85}}
 ]"""
+OLLAMA_REPORT_SYSTEM: str = (
+    "You are a UX research assistant writing a short per-participant session "
+    "report. Ground every statement in the provided data. Never invent quotes, "
+    "observations, or timestamps; if the data does not support a claim, leave "
+    "it out."
+)
+OLLAMA_REPORT_PROMPT: str = """\
+Write a concise research mini-report for participant {participant}, using only \
+the data below.
+
+Session summary:
+{summary}
+
+Sheet observations (researcher notes, "- text (category, severity)"):
+{observations}
+
+Marked transcript moments ("[M:SS] (Category) text"):
+{bookmarks}
+
+Structure the report as short markdown sections:
+## Overview
+2-3 sentences on what happened in the session.
+## Key findings
+3-5 bullet points, most important first.
+## Pain points & friction
+Bullet points grounded in the observations and marked moments above; include \
+the timestamp when one is given.
+## Notable moments
+Quotes or delight moments worth sharing, with timestamps.
+
+Keep the whole report under 300 words. If a section has no supporting data, \
+write "No data." under it instead of inventing content."""
 
 # ── Friction detection ───────────────────────────────────────────────
 # Ordered category keys → display labels. Single source of truth, mirrored to
@@ -667,6 +703,10 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "OLLAMA_CITATIONS_PROMPT": "Prompt that links summary claims to transcript segments. Keep the {claims} and {transcript} placeholders.",
     "OLLAMA_FRICTION_SYSTEM": "System instruction that frames the friction agent's behavior. Sent verbatim; no placeholders.",
     "OLLAMA_FRICTION_PROMPT": "Prompt that detects friction moments. Keep the {summary}, {segments}, and {limit} placeholders.",
+    "OLLAMA_REPORT_ENABLED": "Auto-generate a per-participant mini-report after the summary completes. Off by default: generate reports from the Overview page's Summary tab instead.",
+    "OLLAMA_REPORT_MODEL": "Ollama model for mini-report generation. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
+    "OLLAMA_REPORT_SYSTEM": "System instruction that frames the report agent's behavior. Sent verbatim; no placeholders.",
+    "OLLAMA_REPORT_PROMPT": "Prompt that writes the per-participant mini-report. Keep the {participant}, {summary}, {observations}, and {bookmarks} placeholders.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
@@ -943,6 +983,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "AI Summary",
         "type": "bool",
     },
+    "OLLAMA_REPORT_ENABLED": {
+        "tab": "Summaries",
+        "group": "AI Summary",
+        "type": "bool",
+    },
     "OLLAMA_SUMMARY_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
@@ -950,6 +995,14 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "provider": "ollama",
     },
     "OLLAMA_FRICTION_MODEL": {
+        "tab": "Summaries",
+        "group": "AI Summary",
+        "type": "model_select",
+        "provider": "ollama",
+        # Blank value inherits OLLAMA_SUMMARY_MODEL; surfaced as this option.
+        "emptyLabel": "Same as summary model",
+    },
+    "OLLAMA_REPORT_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
@@ -987,6 +1040,18 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["summary", "segments", "limit"],
+    },
+    "OLLAMA_REPORT_SYSTEM": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": [],
+    },
+    "OLLAMA_REPORT_PROMPT": {
+        "tab": "Summaries",
+        "group": "Agent prompts",
+        "type": "prompt",
+        "placeholders": ["participant", "summary", "observations", "bookmarks"],
     },
     "SCREENSPACE_CV_RESOLUTION_SCALE": {
         "tab": "Screenspace",

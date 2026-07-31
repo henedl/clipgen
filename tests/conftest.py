@@ -230,6 +230,26 @@ def _reset_overview_observation_getter():
         overview._observation_rows_getter = original
 
 
+@pytest.fixture(autouse=True)
+def _reset_thinking_agents_getters():
+    """Restore thinking_agents' injected getters after every test.
+
+    Same leak as ``_reset_overview_observation_getter`` above:
+    ``server.build_combined_app`` wires ``thinking_agents.configure()`` with
+    live sheet/marks getters and never unsets them, so a later report-agent
+    test would silently read another test's process state.
+    """
+    import thinking_agents
+
+    original_rows = thinking_agents._observation_rows_getter
+    original_marks = thinking_agents._participant_marks_getter
+    try:
+        yield
+    finally:
+        thinking_agents._observation_rows_getter = original_rows
+        thinking_agents._participant_marks_getter = original_marks
+
+
 @pytest.fixture
 def make_clip():
     def _make_clip(
