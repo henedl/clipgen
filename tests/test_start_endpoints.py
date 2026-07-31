@@ -28,8 +28,24 @@ import server
 import start_settings
 
 
+@pytest.fixture(scope="module")
+def combined_app():
+    """The combined Flask app, built once for the module.
+
+    A build costs ~23 ms, almost all of it compiling the six blueprints' ~200
+    Werkzeug URL rules; the app object itself carries no per-test state. What it
+    *cannot* share is the process-state wiring ``build_combined_app`` also does —
+    ``conftest``'s autouse ``_reset_overview_observation_getter`` /
+    ``_reset_thinking_agents_getters`` snapshot-and-restore exactly those getters
+    around every test, so a once-only build would have its wiring torn down by
+    the first test's teardown. Hence the split: routes here, state per test in
+    ``app`` below via ``server._init_combined_state``.
+    """
+    return server.build_combined_app(worksheet=None, default_page="studio")
+
+
 @pytest.fixture
-def app(monkeypatch, tmp_path):
+def app(combined_app, monkeypatch, tmp_path):
     """Combined Flask app with the worksheet unset and dirs pinned to tmp."""
     in_dir = tmp_path / "in"
     out_dir = tmp_path / "out"
@@ -60,7 +76,12 @@ def app(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_sheet_payload_cache", None)
     monkeypatch.setattr(server, "_active_sheet_meta", None)
 
-    return server.build_combined_app(worksheet=None, default_page="studio")
+    # Re-run only the state half of the app build. The monkeypatch calls above
+    # already reset what this test file drives directly; this re-wires the
+    # cross-module getters the autouse conftest fixtures restore after each test.
+    server._init_combined_state(worksheet=None)
+
+    return combined_app
 
 
 @pytest.fixture

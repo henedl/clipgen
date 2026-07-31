@@ -3334,29 +3334,25 @@ def _set_cache_headers(response):
     return response
 
 
-def build_combined_app(
+def _init_combined_state(
     worksheet: Any = None,
-    default_page: str = "studio",
     gspread_client: Any = None,
-) -> Flask:
-    """Build the combined Studio + Screenspace + Transcripts + Workflows Flask app.
+) -> None:
+    """Wire every blueprint's process state for a combined-app launch.
 
-    Same setup as :func:`start_combined_server` but stops short of
-    ``app.run`` so tests (and any embedding caller) can hold the live
-    ``Flask`` instance and exercise routes via ``app.test_client()``.
+    Split out of :func:`build_combined_app` so the state wiring can be re-run on
+    its own, without also recompiling the app's ~200 Werkzeug URL rules — that
+    compilation is ~90 % of an app build, and the tests reuse one app across a
+    module while re-initialising state per test.
+
+    Order matters: ``_init_studio_state`` populates the ``_sheet_context`` /
+    ``_worksheet`` globals that every sibling initialiser below reads.
     """
     import composer_server
     import screenspace_server
     import start_settings
     import transcripts_server
     import workflows_server
-
-    combined = Flask(__name__, static_folder=None)
-    # Preserve insertion order in JSON responses. Flask defaults to sorting object
-    # keys alphabetically, which would clobber manifest-ordered data such as the
-    # region list (drag-to-reorder relies on GET /api/regions echoing manifest order).
-    assert isinstance(combined.json, DefaultJSONProvider)  # Flask's stock provider
-    combined.json.sort_keys = False
 
     _init_studio_state(worksheet)
     # Seed the meta + recent-projects rail for CLI launches that already
@@ -3372,37 +3368,24 @@ def build_combined_app(
             str(utils.get_effective_output_dir()),
             _active_sheet_meta,
         )
-    combined.register_blueprint(studio_bp, url_prefix="/studio")
 
     screenspace_server._init_screenspace_state(
         sheet_context=_sheet_context,
     )
-    combined.register_blueprint(
-        screenspace_server.screenspace_bp, url_prefix="/screenspace"
-    )
-
     transcripts_server._init_transcripts_state(
         sheet_context=_sheet_context,
     )
-    combined.register_blueprint(
-        transcripts_server.transcripts_bp, url_prefix="/transcripts"
-    )
-
     workflows_server._init_workflows_state(
         sheet_context=_sheet_context,
         worksheet=_worksheet,
     )
-    combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
-
     composer_server._init_composer_state(
         sheet_context=_sheet_context,
     )
-    combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
 
     import overview
 
     overview.configure(observation_rows_getter=_sheet_observation_rows)
-    combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
 
     # The report thinking agent reads sheet observations and transcript marks,
     # both of which live in other modules' process state — inject them the same
@@ -3414,6 +3397,44 @@ def build_combined_app(
         observation_rows_getter=_sheet_observation_rows,
         participant_marks_getter=transcripts_server.marks_for_participant,
     )
+
+
+def build_combined_app(
+    worksheet: Any = None,
+    default_page: str = "studio",
+    gspread_client: Any = None,
+) -> Flask:
+    """Build the combined Studio + Screenspace + Transcripts + Workflows Flask app.
+
+    Same setup as :func:`start_combined_server` but stops short of
+    ``app.run`` so tests (and any embedding caller) can hold the live
+    ``Flask`` instance and exercise routes via ``app.test_client()``.
+    """
+    import composer_server
+    import overview
+    import screenspace_server
+    import transcripts_server
+    import workflows_server
+
+    combined = Flask(__name__, static_folder=None)
+    # Preserve insertion order in JSON responses. Flask defaults to sorting object
+    # keys alphabetically, which would clobber manifest-ordered data such as the
+    # region list (drag-to-reorder relies on GET /api/regions echoing manifest order).
+    assert isinstance(combined.json, DefaultJSONProvider)  # Flask's stock provider
+    combined.json.sort_keys = False
+
+    _init_combined_state(worksheet, gspread_client)
+
+    combined.register_blueprint(studio_bp, url_prefix="/studio")
+    combined.register_blueprint(
+        screenspace_server.screenspace_bp, url_prefix="/screenspace"
+    )
+    combined.register_blueprint(
+        transcripts_server.transcripts_bp, url_prefix="/transcripts"
+    )
+    combined.register_blueprint(workflows_server.workflows_bp, url_prefix="/workflows")
+    combined.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
+    combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
 
     combined.after_request(_set_cache_headers)
 

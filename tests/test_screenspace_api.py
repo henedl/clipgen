@@ -14,12 +14,24 @@ import screenspace_preview
 import screenspace_server
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
+@pytest.fixture(scope="module")
+def ss_app():
+    """The Flask app, built once for the module.
+
+    Registering the blueprint compiles ~50 Werkzeug URL rules, which costs far
+    more than everything else this fixture pair does — and the app object itself
+    is inert: every piece of state these tests touch lives in ``screenspace_server``
+    module globals, which the function-scoped ``client`` below re-pins per test.
+    So the build is module-scoped and only the reset is per-test.
+    """
     app = Flask(__name__)
     app.json.sort_keys = False  # mirror start_combined_server: preserve manifest order
     app.register_blueprint(screenspace_server.screenspace_bp, url_prefix="/screenspace")
+    return app
 
+
+@pytest.fixture
+def client(ss_app, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
     # Seed module globals via monkeypatch so they auto-restore on teardown —
     # otherwise a later test that reads these globals without the fixture would
@@ -59,7 +71,7 @@ def client(tmp_path, monkeypatch):
         ),
     )
 
-    with app.test_client() as c:
+    with ss_app.test_client() as c:
         yield c
     # Cancel any debounced manifest write armed during the test so a stray Timer
     # doesn't fire _do_persist into torn-down state after the fixture exits.

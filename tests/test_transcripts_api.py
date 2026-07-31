@@ -16,11 +16,22 @@ import video
 import viewer
 
 
-@pytest.fixture
-def tr_client(tmp_path, monkeypatch):
+@pytest.fixture(scope="module")
+def tr_app():
+    """The Flask app, built once for the module.
+
+    Registering the blueprint compiles ~35 Werkzeug URL rules, which dominates
+    this fixture's cost — and the app object holds no per-test state: everything
+    these tests touch lives in ``transcripts_server`` module globals, re-pinned
+    per test by the function-scoped ``tr_client`` below.
+    """
     app = Flask(__name__)
     app.register_blueprint(transcripts_server.transcripts_bp, url_prefix="/transcripts")
+    return app
 
+
+@pytest.fixture
+def tr_client(tr_app, tmp_path, monkeypatch):
     # Seed module globals via monkeypatch so they auto-restore on teardown —
     # otherwise a later test that reads these globals without the fixture would
     # inherit this test's state (matters under random ordering).
@@ -54,7 +65,7 @@ def tr_client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(viewer, "load_manifest_artifacts", list)
 
-    with app.test_client() as c:
+    with tr_app.test_client() as c:
         yield c
     # Cancel any debounced manifest write armed during the test so a stray Timer
     # doesn't fire _do_persist into torn-down state after the fixture exits.
@@ -1472,18 +1483,32 @@ def test_chain_terminates_when_every_agent_stores_nothing(
         lambda entry, cancel, on_token=None: None,
     )
 
-    def _slow_none(entry, cancel, on_token=None):
+    orch = transcripts_server._orchestrator
+    saw_citations_retire: list[bool] = []
+
+    def _wait_out_citations(entry, cancel, on_token=None):
         # Falls off the end, i.e. returns None: "ran, stored nothing".
-        time.sleep(0.15)
+        #
+        # Hold friction open until citations has actually left the in-flight set
+        # — that overlap *is* the regression window, so wait on the real signal
+        # rather than sleeping a fixed span past it. run_chain fires from inside
+        # citations' `try` (transcripts_server.py:2011) while its slot is still
+        # claimed, and the `finally` (:2026) releases it a moment later, so this
+        # normally returns in well under a millisecond.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if not orch.is_generating("P01", "citations"):
+                saw_citations_retire.append(True)
+                return
+            time.sleep(0.001)
 
     monkeypatch.setitem(
         thinking_agents.get_agent("friction"),  # type: ignore[arg-type]
         "run",
-        _slow_none,
+        _wait_out_citations,
     )
 
     started: list[str] = []
-    orch = transcripts_server._orchestrator
     real_run_agent = orch.run_agent
 
     def _spy(agent_key, participant, force=False, skip=None):
@@ -1498,6 +1523,14 @@ def test_chain_terminates_when_every_agent_stores_nothing(
     orch.run_chain("P01")
     _join_orchestrator_threads(orch)
 
+    # Assert the window held before reading anything into the chain order. If
+    # friction never observed citations retire, the state this test exists to
+    # cover never occurred and `started` proves nothing about the skip set.
+    assert saw_citations_retire, (
+        "friction ran but never saw citations leave the in-flight set, so the "
+        "re-qualification window never opened; this assertion is the only thing "
+        "standing between a real regression check and a vacuous one"
+    )
     assert started == ["citations", "friction"]
 
 

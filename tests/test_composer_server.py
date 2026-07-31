@@ -19,11 +19,22 @@ import utils
 import video
 
 
-@pytest.fixture
-def co_client(tmp_path, monkeypatch):
+@pytest.fixture(scope="module")
+def co_app():
+    """The Flask app, built once for the module.
+
+    Registering the blueprint compiles ~23 Werkzeug URL rules, which dominates
+    this fixture's cost — and the app object holds no per-test state: everything
+    these tests touch lives in ``composer_server`` module globals, re-pinned per
+    test by the function-scoped ``co_client`` below.
+    """
     app = Flask(__name__)
     app.register_blueprint(composer_server.composer_bp, url_prefix="/composer")
+    return app
 
+
+@pytest.fixture
+def co_client(co_app, tmp_path, monkeypatch):
     # Seed module globals via monkeypatch so they auto-restore on teardown.
     monkeypatch.setattr(composer_server, "_manifest", composer_server._empty_manifest())
     monkeypatch.setattr(composer_server, "_input_dir", str(tmp_path))
@@ -48,7 +59,7 @@ def co_client(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(video, "get_file_duration", lambda path: 10)
 
-    with app.test_client() as c:
+    with co_app.test_client() as c:
         yield c
 
 
