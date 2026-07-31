@@ -411,12 +411,31 @@ var createTooltip = function (opts) {
   if (opts.multiline) cls += " cg-tooltip--multiline";
   var tip = document.createElement("div");
   tip.className = cls;
+  // Icon sidecar + text live in separate nodes so show()'s third argument can
+  // hang a glyph off the left edge — the only way to mark a control whose own
+  // hit area is too small to carry one (e.g. the 24px Regenerate buttons on
+  // Transcripts, which start a local AI agent). Both nodes always exist; the
+  // sidecar stays display:none until an icon name arrives.
+  var iconEl = document.createElement("span");
+  iconEl.className = "cg-tooltip-icon";
+  var textEl = document.createElement("span");
+  textEl.className = "cg-tooltip-text";
+  tip.appendChild(iconEl);
+  tip.appendChild(textEl);
   document.body.appendChild(tip);
   return {
     el: tip,
-    show: function (anchor, text) {
-      tip.textContent = text || "";
-      // Set text before measuring so offsetHeight reflects final size.
+    // `icon` is an icon basename as taken by applyIconMask ("check",
+    // "octicon/dependabot-16"); omit it for a plain text tooltip.
+    show: function (anchor, text, icon) {
+      textEl.textContent = text || "";
+      if (icon) {
+        applyIconMask(iconEl, icon, opts.iconBasePath);
+        tip.classList.add("cg-tooltip--has-icon");
+      } else {
+        tip.classList.remove("cg-tooltip--has-icon");
+      }
+      // Set content before measuring so offsetHeight reflects final size.
       positionTooltipAnchored(tip, anchor.getBoundingClientRect());
       tip.classList.add("is-visible");
     },
@@ -458,12 +477,15 @@ var clipgenInitDataTooltips = function () {
     }
     return false;
   };
+  // An optional data-tooltip-icon="<basename>" hangs a glyph off the tooltip's
+  // left edge (see createTooltip). It rides along with data-tooltip and never
+  // shows on its own — an element with only the icon attribute returns below.
   var showFor = function (el) {
     if (shouldSuppress(el)) return;
     var text = el.getAttribute("data-tooltip");
     if (!text) return;
     current = el;
-    ensureTip().show(el, text);
+    ensureTip().show(el, text, el.getAttribute("data-tooltip-icon"));
   };
   var hide = function () {
     if (!current) return;

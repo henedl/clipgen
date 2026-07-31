@@ -536,6 +536,7 @@
       pid: p.id,
       label: "Summary",
       agent: "summary",
+      aiBadge: true,
       depLabel: "transcription",
       depMet: s.agents.transcription === "done",
       agentState: s.agents.summary,
@@ -565,6 +566,7 @@
       pid: p.id,
       label: "Citations",
       agent: "citations",
+      aiBadge: true,
       depLabel: "summary",
       depMet: s.agents.summary === "done",
       agentState: s.agents.citations,
@@ -594,6 +596,7 @@
       pid: p.id,
       label: "Friction",
       agent: "friction",
+      aiBadge: true,
       depLabel: "summary",
       depMet: s.agents.summary === "done",
       agentState: s.agents.friction,
@@ -637,6 +640,18 @@
     btn.type = "button";
     btn.className = "btn btn-small pill-agent-btn";
     btn.setAttribute("data-nav-id", "agent:" + opts.agent);
+    // Ollama-backed rows carry the local-AI badge; Transcription (Whisper) does
+    // not. The label is its own node so the Run/Re-run/Stop swaps below leave
+    // the badge alone.
+    if (opts.aiBadge) {
+      var badge = document.createElement("span");
+      badge.className = "ai-agent-badge";
+      badge.setAttribute("aria-hidden", "true");
+      btn.appendChild(badge);
+    }
+    var btnLabel = document.createElement("span");
+    btnLabel.className = "agent-run-label";
+    btn.appendChild(btnLabel);
     // Alt-hold hint: while the dropdown is open, digits 1-4 route to these rows
     // (triggerPillOption). Tag each with the markCategory combo index so the
     // "1".."4" chips show (mirrors how Screenspace reuses selectTool for menus).
@@ -651,23 +666,26 @@
     var title = "";
 
     if (running) {
-      btn.textContent = "Stop";
+      btnLabel.textContent = "Stop";
       btn.classList.add("pill-agent-btn--stop");
       mode = "stop";
     } else if (!opts.depMet) {
-      btn.textContent = "Run";
+      btnLabel.textContent = "Run";
       mode = "disabled";
       title = "Requires " + opts.depLabel + " to finish first";
     } else if (opts.hasResult) {
-      btn.textContent = "Re-run";
+      btnLabel.textContent = "Re-run";
       if (opts.cascadeWarning) {
         title = opts.agent === "transcription"
           ? "Re-transcribing invalidates Summary and Citations"
           : "Re-running will also re-run Citations";
       }
     } else {
-      btn.textContent = "Run";
+      btnLabel.textContent = "Run";
     }
+    // Fallback so the badge always has wording behind it; the dependency and
+    // cascade warnings above are more specific and keep precedence.
+    if (!title && opts.aiBadge) title = "Runs a local AI thinking agent";
 
     if (mode === "disabled") btn.setAttribute("disabled", "disabled");
     if (title) btn.setAttribute("data-tooltip", title);
@@ -677,11 +695,11 @@
       if (btn.hasAttribute("disabled")) return;
       // Optimistic UI swap; the next poll re-renders via _refreshPillOptionsContent.
       if (mode === "stop") {
-        btn.textContent = "Stopping…";
+        btnLabel.textContent = "Stopping…";
         btn.setAttribute("disabled", "disabled");
         opts.onStop();
       } else {
-        btn.textContent = "Starting…";
+        btnLabel.textContent = "Starting…";
         btn.setAttribute("disabled", "disabled");
         opts.onStart();
       }

@@ -8,7 +8,7 @@ filename and so provenance stays obvious at a glance.
 - **Source:** https://registry.npmjs.org/@primer/octicons/-/octicons-19.32.0.tgz
 - **License:** MIT, © GitHub Inc.
 - **Used by:** `.ai-agent-badge` in `transcripts.css` (`dependabot-16.svg`) — the
-  glyph marking a tab whose contents come from a local Ollama thinking agent.
+  glyph marking a button that starts a local Ollama thinking agent.
 
 Only the **380 `*-16.svg`** files are vendored (~215 KB). Upstream also ships
 12/24/48/96 px variants, but every icon already in `assets/icons/` is authored at

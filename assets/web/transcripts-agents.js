@@ -900,14 +900,15 @@
     cancel.classList.add("hidden");
     rerun.classList.remove("hidden");
     // The deterministic-only placeholder has no AI result yet, so it reads "Run",
-    // not "Re-run".
+    // not "Re-run". Write the label span, not the button: the button also holds
+    // the .ai-agent-badge, which a textContent write would delete.
     var isDeterministic = !!(state.frictionData && state.frictionData.deterministic);
-    rerun.textContent =
+    rerun.querySelector(".agent-run-label").textContent =
       state.frictionData && !isDeterministic ? "Re-run friction" : "Run friction analysis";
     var depMet = _frictionDepMet();
     if (depMet) {
       rerun.removeAttribute("disabled");
-      rerun.removeAttribute("data-tooltip");
+      rerun.setAttribute("data-tooltip", "Runs a local AI thinking agent on this transcript");
     } else {
       rerun.setAttribute("disabled", "disabled");
       rerun.setAttribute("data-tooltip", "Requires a summary first");

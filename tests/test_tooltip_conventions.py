@@ -101,6 +101,38 @@ def _js_functions(src: str):
     yield from parts[1:]
 
 
+def test_tooltip_icon_sidecar_rides_along_with_a_tooltip():
+    """`data-tooltip-icon` is opt-in decoration on the [data-tooltip] singleton.
+
+    `showFor` in utils.js returns early when there is no `data-tooltip`, so an
+    element carrying only the icon attribute shows nothing at all — a silent
+    no-op with no error, exactly the failure mode this file exists to catch.
+    """
+    offenders = [
+        f"{path.name}: {tag}"
+        for path, tag in _tags()
+        if "data-tooltip-icon=" in tag and not re.search(r"\sdata-tooltip=", tag)
+    ]
+    assert not offenders, (
+        "data-tooltip-icon without data-tooltip never renders:\n" + "\n".join(offenders)
+    )
+
+
+def test_tooltip_icon_sidecar_names_an_icon_that_exists():
+    """The sidecar is a CSS mask built from the attribute value; a mistyped name
+    renders an invisible zero-content span beside the text, with no 404 visible
+    to the user."""
+    icons = WEB.parent / "icons"
+    missing = []
+    for path, tag in _tags():
+        m = re.search(r'data-tooltip-icon="([^"]+)"', tag)
+        if m and not (icons / f"{m.group(1)}.svg").is_file():
+            missing.append(f"{path.name}: {m.group(1)}.svg")
+    assert not missing, "data-tooltip-icon names a nonexistent icon:\n" + "\n".join(
+        missing
+    )
+
+
 def test_native_title_is_not_set_on_a_draggable_element():
     """Native `title` does not render on an element with `draggable="true"`.
 
