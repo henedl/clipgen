@@ -891,6 +891,104 @@ def test_transcript_worker_multi_video_builds_timeline(monkeypatch):
     assert captured["timeline"][1][0] == "b.mp4"
 
 
+def test_transcript_worker_records_the_audio_track_it_used(monkeypatch):
+    """The task's audio_index reaches transcribe_timeline and lands on the result.
+
+    The manifest entry is what explains a transcript that changed because
+    auto-detect moved off track 1, so it has to survive the worker.
+    """
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["a.mp4", "b.mp4"], audio_index=1)
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {
+            "audio_codec": "aac",
+            "duration": 80.0,
+            "audio_tracks": [
+                {"index": 0, "label": "System"},
+                {"index": 1, "label": "Interview"},
+            ],
+            "audio_track_count": 2,
+        },
+    )
+    monkeypatch.setattr(
+        video, "timeline_or_none", lambda paths: [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    )
+    captured = {}
+
+    def fake_timeline(timeline, **kwargs):
+        captured.update(kwargs)
+        return {
+            "segments": [],
+            "language": "en",
+            "model": "base",
+            "source_file": "a.mp4 + b.mp4",
+        }
+
+    monkeypatch.setattr(transcripts, "transcribe_timeline", fake_timeline)
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+    assert captured["audio_index"] == 1
+    assert task["result"]["audio_index"] == 1
+    assert task["result"]["audio_track_label"] == "Interview"
+
+
+def test_transcript_worker_rejects_out_of_range_audio_track(monkeypatch):
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["a.mp4"], audio_index=4)
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {
+            "audio_codec": "aac",
+            "duration": 10.0,
+            "audio_tracks": [{"index": 0, "label": "Mic"}],
+            "audio_track_count": 1,
+        },
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    monkeypatch.setattr(
+        transcripts, "transcribe_video", lambda *a, **k: pytest.fail("must not run")
+    )
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_FAILED
+    assert "Audio track 5 does not exist" in task["error"]
+
+
+def test_transcribe_timeline_resolves_the_audio_track_once(monkeypatch):
+    """Auto-detect runs on part 1 only; every part gets the same concrete index.
+
+    Per-part detection could splice two different microphones into one transcript
+    if the recorder's stream order shifted between files.
+    """
+    probes = {
+        "a.mp4": [{"index": 0, "label": "System"}, {"index": 1, "label": "Mic"}],
+        "b.mp4": [{"index": 0, "label": "Mic"}, {"index": 1, "label": "System"}],
+    }
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_tracks": probes[p], "audio_track_count": 2},
+    )
+    seen: list[int | None] = []
+
+    def fake_video(path, **kwargs):
+        seen.append(kwargs.get("audio_index"))
+        return {"segments": [], "language": "en", "model": "base", "source_file": path}
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+
+    transcripts.transcribe_timeline([("a.mp4", 80, 0), ("b.mp4", 120, 80)])
+    assert seen == [1, 1]
+
+
 def test_transcript_worker_single_video_no_timeline(monkeypatch):
     worker = transcripts.TranscriptWorker()
     task = transcripts.create_transcript_task("P01", ["solo.mp4"])

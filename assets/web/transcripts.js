@@ -757,13 +757,14 @@
 
     if (p.has_video) {
       // Lazily probe the audio-track layout for the volume popover's caption +
-      // per-track mixer, then reconfigure once the layout arrives. Guarded by
-      // participantReqVer so a stale response can't overwrite the current tracks.
+      // per-track mixer, then reconfigure once the layout arrives. Shares the
+      // pill picker's cache (_trFetchAudioInfo). Guarded by participantReqVer so
+      // a stale response can't overwrite the current tracks.
       (function (ver) {
-        apiGet("api/audio-info/" + encodeURIComponent(pid))
-          .then(function (data) {
+        _trFetchAudioInfo(pid, p.video_version)
+          .then(function (info) {
             if (ver !== state.participantReqVer) return;
-            if (data && data.ok) state.audioTracks = data.audio_tracks || [];
+            if (info) state.audioTracks = info.tracks;
             if (state.audioPanel) state.audioPanel.refresh();
           })
           .catch(function () {});
@@ -2386,6 +2387,48 @@
     return _trModelsCachePromise;
   }
 
+  // Audio-track layout per participant, shared by the volume mixer (which only
+  // ever wants the *selected* participant) and the pill transcribe picker (which
+  // opens for any pill). One endpoint, one cache — two independent fetchers of
+  // /api/audio-info would drift. Keyed by pid + video_version (an mtime sum from
+  // /api/participants) so replacing a source file re-probes; bounded by the
+  // participant count. Never cached on a failed response.
+  var _trAudioInfoCache = {};
+  var _trAudioInfoPromises = {};
+
+  function _trAudioInfoKey(pid, videoVersion) {
+    return pid + ":" + (videoVersion == null ? "" : videoVersion);
+  }
+
+  // Synchronous peek — returns the cached layout or null. Lets the pill popover
+  // render its track row in the same tick when warm, so the 3 s poll's pane
+  // rebuild doesn't strobe the row in and out.
+  function audioInfoCached(pid, videoVersion) {
+    return _trAudioInfoCache[_trAudioInfoKey(pid, videoVersion)] || null;
+  }
+
+  function _trFetchAudioInfo(pid, videoVersion) {
+    var key = _trAudioInfoKey(pid, videoVersion);
+    if (_trAudioInfoCache[key]) return Promise.resolve(_trAudioInfoCache[key]);
+    if (_trAudioInfoPromises[key]) return _trAudioInfoPromises[key];
+    _trAudioInfoPromises[key] = apiGet("api/audio-info/" + encodeURIComponent(pid))
+      .then(function (data) {
+        if (!data || !data.ok) {
+          delete _trAudioInfoPromises[key];
+          return null;
+        }
+        var info = {
+          tracks: data.audio_tracks || [],
+          count: data.audio_track_count || 0,
+          auto: data.auto_index || 0
+        };
+        _trAudioInfoCache[key] = info;
+        return info;
+      })
+      .catch(function () { delete _trAudioInfoPromises[key]; return null; });
+    return _trAudioInfoPromises[key];
+  }
+
   // ---- Local-model install confirmation ----
   // Both whisper transcription models and Ollama agent models are "local
   // models" that get installed on demand. We never download one silently:
@@ -2932,6 +2975,8 @@
   TS.startPolling = startPolling; // pills
   TS._refreshAgentStateNow = _refreshAgentStateNow; // pills
   TS._trFetchModels = _trFetchModels; // pills
+  TS._trFetchAudioInfo = _trFetchAudioInfo; // pills (audio-track picker)
+  TS.audioInfoCached = audioInfoCached; // pills (synchronous warm-cache peek)
   TS.ensureAgentModelInstalled = ensureAgentModelInstalled; // pills, agents
   TS._confirmUncachedWhisperModels = _confirmUncachedWhisperModels; // pills (model-install kept in hub)
   // Hub helpers the agents satellite calls outward (loadFriction is owned by the

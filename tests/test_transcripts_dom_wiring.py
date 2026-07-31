@@ -268,3 +268,46 @@ def test_local_ai_badge_is_styled_and_its_icon_exists():
     assert "icons/octicon/dependabot-16.svg" in referenced
     missing = [m for m in referenced if not (_ICONS / m[len("icons/") :]).is_file()]
     assert not missing, f"transcripts.css masks nonexistent icons: {missing}"
+
+
+def test_audio_track_override_survives_track_zero():
+    """`<select>.value` for track 0 is the string "0" (truthy), so the falsy gate
+    in startTranscribe is correct — but only by accident of that stringiness. A
+    refactor to a numeric override would silently drop "transcribe track 1"."""
+    start = _JS.index("function startTranscribe(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "ov.audioTrack" in body, (
+        "startTranscribe must forward the pill's audio-track override"
+    )
+    assert "audio_index" in body, "the POST key the server parses is audio_index"
+
+
+def test_audio_track_row_is_labelled_and_styled():
+    """The row is built in JS, so an unstyled wrapper class collapses the hint
+    onto the select's line with no error anywhere."""
+    assert '"Audio track"' in _JS, "the pill dropdown must label the track picker"
+    for cls in (".pill-options-group", ".pill-options-hint"):
+        assert cls + " {" in _CSS, f"{cls} is created in JS but never styled"
+
+
+def test_pill_nav_cursor_survives_a_pane_rebuild_by_identity():
+    """The options pane is rebuilt wholesale by the poll and can gain the
+    audio-track row between two builds (its layout is fetched asynchronously, and
+    a rebuild can race that fetch). The cursor therefore has to be carried across
+    by control identity: index arithmetic cannot work, because replaceChild drops
+    the old pane before anything could count what the index was measured against.
+    Getting this wrong silently moves the highlight onto a different control."""
+    start = _JS.index("function _refreshPillOptionsContent(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_pillNavCursorId()" in body and "_pillNavRestoreCursor(" in body, (
+        "the pane rebuild must capture the cursor before the swap and restore it "
+        "after, or a pane that gained a row repaints the cursor one control off"
+    )
+    # Every control pillNavControls() can land on needs a stable identity.
+    assert _JS.count('setAttribute("data-nav-id"') >= 4, (
+        "model/language/audio-track selects and the agent buttons must all carry "
+        "data-nav-id for the cursor to be restorable"
+    )
+    assert "pillOptionsCursor +=" not in _JS, (
+        "cursor index arithmetic is the bug this replaced — restore by nav id"
+    )

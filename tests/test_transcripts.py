@@ -368,6 +368,151 @@ class TestTranscribeVideoWhisperKwargs:
 
 
 # ---------------------------------------------------------------------------
+# transcribe_video audio-track selection
+# ---------------------------------------------------------------------------
+
+
+def _multitrack_probe(*labels):
+    """probe_video_properties stub for a file with the given named audio tracks."""
+
+    def _probe(_path):
+        return {
+            "width": 1920,
+            "height": 1080,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "fps": 60.0,
+            "duration": 10.0,
+            "nb_frames": 600,
+            "audio_tracks": [
+                {"index": i, "title": label, "handler": "", "label": label}
+                for i, label in enumerate(labels)
+            ],
+            "audio_track_count": len(labels),
+        }
+
+    return _probe
+
+
+class TestTranscribeVideoAudioTrack:
+    """faster-whisper always decodes stream 0, so a non-default track has to be
+    demuxed first. These pin which path actually reaches the model."""
+
+    def _install_model(self, monkeypatch):
+        captured: dict = {}
+
+        class FakeSeg:
+            text = " hello"
+            start = 0.0
+            end = 1.0
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, path: str, **_kwargs):
+                captured["path"] = path
+                return iter([FakeSeg()]), FakeInfo()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        return captured
+
+    def test_track_zero_passes_the_video_path_and_never_extracts(self, monkeypatch):
+        import video as video_mod
+
+        captured = self._install_model(monkeypatch)
+        monkeypatch.setattr(
+            video_mod, "probe_video_properties", _multitrack_probe("Mic", "System")
+        )
+        monkeypatch.setattr(
+            video_mod,
+            "extract_audio_track",
+            lambda *_a: pytest.fail("track 0 must not be extracted"),
+        )
+
+        result = transcripts.transcribe_video("/fake/video.mp4", audio_index=0)
+        assert result is not None
+        assert captured["path"] == "/fake/video.mp4"
+        # The extracted .m4a is a cache artifact; source_file stays the video.
+        assert result["source_file"] == "/fake/video.mp4"
+
+    def test_nonzero_track_transcribes_the_extracted_audio(self, monkeypatch, tmp_path):
+        import video as video_mod
+
+        captured = self._install_model(monkeypatch)
+        extracted = tmp_path / "track1.m4a"
+        extracted.write_bytes(b"x")
+        calls: list = []
+        monkeypatch.setattr(
+            video_mod, "probe_video_properties", _multitrack_probe("System", "Mic")
+        )
+        monkeypatch.setattr(
+            video_mod,
+            "extract_audio_track",
+            lambda path, idx: calls.append((path, idx)) or extracted,
+        )
+
+        result = transcripts.transcribe_video("/fake/video.mp4", audio_index=1)
+        assert result is not None
+        assert calls == [("/fake/video.mp4", 1)]
+        assert captured["path"] == str(extracted)
+        assert result["source_file"] == "/fake/video.mp4"
+
+    def test_auto_detects_the_speech_track(self, monkeypatch, tmp_path):
+        import video as video_mod
+
+        captured = self._install_model(monkeypatch)
+        extracted = tmp_path / "track1.m4a"
+        extracted.write_bytes(b"x")
+        monkeypatch.setattr(
+            video_mod,
+            "probe_video_properties",
+            _multitrack_probe("System Audio", "Participant Mic"),
+        )
+        monkeypatch.setattr(
+            video_mod, "extract_audio_track", lambda _path, _idx: extracted
+        )
+
+        result = transcripts.transcribe_video("/fake/video.mp4")
+        assert result is not None
+        assert captured["path"] == str(extracted)
+
+    def test_failed_extraction_fails_loudly(self, monkeypatch, capsys):
+        """Never fall back to track 0 — that transcribes the wrong audio."""
+        import video as video_mod
+
+        self._install_model(monkeypatch)
+        monkeypatch.setattr(
+            video_mod, "probe_video_properties", _multitrack_probe("System", "Mic")
+        )
+        monkeypatch.setattr(video_mod, "extract_audio_track", lambda _path, _idx: None)
+
+        assert transcripts.transcribe_video("/fake/video.mp4", audio_index=1) is None
+        assert "Could not extract audio track 2" in capsys.readouterr().out
+
+    def test_out_of_range_track_returns_none_without_loading_model(
+        self, monkeypatch, capsys
+    ):
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            video_mod, "probe_video_properties", _multitrack_probe("Mic", "System")
+        )
+
+        def _fail_load(model_name=None):
+            raise AssertionError("_load_model must not be called for a bad index")
+
+        monkeypatch.setattr(transcripts, "_load_model", _fail_load)
+
+        assert transcripts.transcribe_video("/fake/video.mp4", audio_index=5) is None
+        assert "has 2 audio track(s)" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
 # transcribe_video in debug mode
 # ---------------------------------------------------------------------------
 
