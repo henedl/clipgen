@@ -10,11 +10,18 @@ Chromium, so ``navigator.clipboard`` keeps working too.
 
 The engine is the OS webview — WKWebView on macOS, WebView2 on Windows — not a
 bundled Chromium. See ``agents/ARCHITECTURE.md`` for the trade-offs that implies.
+
+The window remembers its size and position across launches (persisted to
+``start.json``, the per-user config file this module already keeps the webview
+profile beside). Holding Shift while the app starts resets it to the default
+rect — the standard escape hatch for a saved geometry that has become unusable.
 """
 
 import ctypes
+import importlib
 import os
 import sys
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -22,6 +29,7 @@ from typing import Any
 import config
 import desktop_chrome
 import server
+import server_utils
 import start_settings
 import utils
 
@@ -31,6 +39,9 @@ import utils
 _WINDOW_BACKGROUND = "#0a0a0b"
 _WINDOW_SIZE = (1440, 900)
 _WINDOW_MIN_SIZE = (960, 600)
+# A restored window must expose at least this much of itself on some screen.
+# Roughly the topnav's drag strip: enough to grab and pull back into view.
+_MIN_VISIBLE = (200, 48)
 
 # Rewrites target="_blank" clicks into a call back into Python. A webview has no
 # back button, so letting one navigate the app window to GitHub would strand the
@@ -111,6 +122,184 @@ def titlebar_double_click() -> None:
         desktop_chrome.titlebar_double_click(_window)
 
 
+# --- Window geometry --------------------------------------------------------
+#
+# The last rect is persisted to start.json and restored on the next launch.
+# Two things shape the implementation:
+#
+# - pywebview's moved/resized events carry the new values directly, and each
+#   fires on its own thread, per frame, for the whole of a drag. So the handlers
+#   only stash a tuple and the disk write is debounced. Reading window.x/.width
+#   instead would round-trip to the GUI thread on every one of those events.
+# - x/y are reported and applied *relative to the window's current screen*
+#   (cocoa.py's move() offsets from self.screen.origin, windowDidMove_ flips
+#   against window.screen()). A window dragged to a secondary display therefore
+#   comes back at the same offset on the primary one. _window_kwargs guarantees
+#   it is at least visible; matching the exact display is not worth the
+#   per-backend screen bookkeeping.
+
+# Latched by _sample_reset_modifier: the user held Shift while the app started.
+_reset_requested = False
+# Last known rect as (x, y, width, height); None until the window is on screen.
+_geometry: tuple[int, int, int, int] | None = None
+
+
+def _shift_held() -> bool:
+    """Whether Shift is physically down right now.
+
+    Sampled with no running event loop — both calls below are HID queries, not
+    event-stream reads, so they work before the GUI toolkit starts.
+    """
+    try:
+        if sys.platform == "darwin":
+            # Imported by name and typed Any for the two reasons spelled out in
+            # desktop_chrome._appkit: pyobjc does not exist on the Linux
+            # typecheck CI, where a literal import is an unresolved-import
+            # error, and its stubs omit half the framework (NSEvent included).
+            appkit: Any = importlib.import_module("AppKit")
+            flags = appkit.NSEvent.modifierFlags()
+            return bool(flags & appkit.NSEventModifierFlagShift)
+        if sys.platform == "win32":
+            # VK_SHIFT. The high bit means "down at this moment".
+            return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
+    except (ImportError, AttributeError, OSError):
+        # Losing the reset gesture is survivable; failing to launch is not.
+        pass
+    return False
+
+
+def _sample_reset_modifier() -> None:
+    """Latch a Shift-at-launch request for the default window rect.
+
+    Called twice, both *before* the window is created. A frozen bundle spends
+    seconds on PyInstaller unpack, imports and the Flask boot before any of this
+    runs, and nobody holds Shift that precisely; sampling again once the server
+    is up widens the window in which the gesture counts. Sampling from
+    before_show would be too late to affect the initial size.
+    """
+    global _reset_requested
+    if _shift_held():
+        _reset_requested = True
+
+
+def _persist_geometry() -> None:
+    """Write the tracked rect. Runs on the debounce timer thread."""
+    rect = _geometry
+    if rect is not None:
+        start_settings.record_window_geometry(*rect)
+
+
+# The lambda defers the _persist_geometry lookup to call time, per
+# make_debounced_persist's contract, so tests can monkeypatch it. The cancel
+# handle it returns has no caller here: every write path wants flush.
+_schedule_geometry_persist, _flush_geometry, _ = server_utils.make_debounced_persist(
+    lambda: _persist_geometry(),
+    threading.Lock(),
+    debounce_seconds=1.0,
+)
+
+
+def _on_shown(window: Any) -> None:
+    """Seed the tracked rect from the window's real on-screen geometry.
+
+    The moved/resized events each carry only their own axis, and the initial
+    position may have been left to the OS, so this is the only way to learn the
+    starting rect. If it cannot be read the rect stays None and nothing is ever
+    persisted this session — better than saving a half-known frame.
+    """
+    global _geometry
+    try:
+        rect = (window.x, window.y, window.width, window.height)
+    except RuntimeError:
+        # get_position raises when the backend cannot resolve a screen.
+        return
+    if all(isinstance(value, (int, float)) for value in rect):
+        _geometry = (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
+
+
+def _on_moved(x: float, y: float) -> None:
+    global _geometry
+    current = _geometry
+    if current is None:
+        return
+    _geometry = (int(x), int(y), current[2], current[3])
+    _schedule_geometry_persist()
+
+
+def _on_resized(width: float, height: float) -> None:
+    global _geometry
+    current = _geometry
+    if current is None:
+        return
+    _geometry = (current[0], current[1], int(width), int(height))
+    _schedule_geometry_persist()
+
+
+def _on_closing() -> None:
+    """Flush the pending rect before the window goes away.
+
+    Must not return False: closing is a locking event and Event.set treats a
+    False from any handler as "cancel the close", which would leave the user
+    with an unclosable window.
+    """
+    _flush_geometry()
+
+
+def _is_visible_on(x: int, y: int, width: int, height: int, screens: list[Any]) -> bool:
+    """Whether enough of the rect lands on some screen to be grabbable."""
+    for screen in screens:
+        left, top = int(screen.x), int(screen.y)
+        right, bottom = left + int(screen.width), top + int(screen.height)
+        if (
+            min(x + width, right) - max(x, left) >= _MIN_VISIBLE[0]
+            and min(y + height, bottom) - max(y, top) >= _MIN_VISIBLE[1]
+        ):
+            return True
+    return False
+
+
+def _window_kwargs(saved: dict[str, int] | None, screens: list[Any]) -> dict[str, int]:
+    """Turn a persisted rect into create_window kwargs, or fall back to defaults.
+
+    Size is clamped to the window's own minimum and to the largest screen. The
+    position is only honoured when the resulting rect is actually reachable —
+    dropping it (and letting the OS place the window) is the guard against a
+    saved rect from a monitor that is no longer attached, which would otherwise
+    open the app off-screen with no way to get it back.
+    """
+    if not saved:
+        return {"width": _WINDOW_SIZE[0], "height": _WINDOW_SIZE[1]}
+    width = max(saved["width"], _WINDOW_MIN_SIZE[0])
+    height = max(saved["height"], _WINDOW_MIN_SIZE[1])
+    if screens:
+        width = min(width, max(int(screen.width) for screen in screens))
+        height = min(height, max(int(screen.height) for screen in screens))
+    kwargs = {"width": width, "height": height}
+    if _is_visible_on(saved["x"], saved["y"], width, height, screens):
+        kwargs["x"] = saved["x"]
+        kwargs["y"] = saved["y"]
+    return kwargs
+
+
+def _restore_geometry() -> dict[str, int]:
+    """The create_window geometry kwargs for this launch."""
+    import webview
+
+    if _reset_requested:
+        # Cleared now rather than at quit so a crash still leaves defaults.
+        start_settings.clear_window_geometry()
+        return {"width": _WINDOW_SIZE[0], "height": _WINDOW_SIZE[1]}
+    try:
+        # A lazy proxy that resolves the display list on access, which works
+        # before webview.start(). It also initialises the GUI toolkit, so a
+        # headless box raises here — swallow it and let create_window report the
+        # real problem, which launch() turns into the browser fallback.
+        screens = list(webview.screens)
+    except (RuntimeError, OSError, AttributeError, webview.WebViewException):
+        screens = []
+    return _window_kwargs(start_settings.load_window_geometry(), screens)
+
+
 def _hide_own_console() -> None:
     """Hide the console window on Windows, but only if this process owns it.
 
@@ -154,6 +343,8 @@ def launch_desktop(
     """Serve the combined app and show it in a native window until closed."""
     import webview
 
+    _sample_reset_modifier()
+
     # Only clicks landing *directly* on a .pywebview-drag-region element drag the
     # window. Without this a mousedown anywhere inside the topnav — a tab, the
     # settings button — would bubble up to the bar and drag it too.
@@ -166,17 +357,25 @@ def launch_desktop(
     )
     utils.info_print(f"clipgen running at {live.origin}")
 
+    # Second sample: the server boot above is the slow part of a cold start.
+    _sample_reset_modifier()
+
     try:
         # render_index_html() bakes this into every page it serves. Set inside the
         # try so the finally below always clears it — a browser fallback launch
         # must not inherit a chrome flag. Nothing has requested a page yet: the
         # server is up but the first GET only happens when the window loads.
         utils.DESKTOP_CHROME = desktop_chrome.chrome_style()
+        geometry = _restore_geometry()
         window = webview.create_window(
             f"clipgen v{utils.get_version()}",
             live.url,
-            width=_WINDOW_SIZE[0],
-            height=_WINDOW_SIZE[1],
+            width=geometry["width"],
+            height=geometry["height"],
+            # None on both means "no saved position we trust" — pywebview then
+            # centers the window, which is the pre-persistence behaviour.
+            x=geometry.get("x"),
+            y=geometry.get("y"),
             min_size=_WINDOW_MIN_SIZE,
             background_color=_WINDOW_BACKGROUND,
             # pywebview disables both by default. Transcripts is unusable without
@@ -198,6 +397,10 @@ def launch_desktop(
         window.events.before_show += lambda: desktop_chrome.apply(window)
         window.events.shown += lambda: desktop_chrome.on_shown(window)
         window.events.loaded += lambda: desktop_chrome.reassert(window)
+        window.events.shown += lambda: _on_shown(window)
+        window.events.moved += _on_moved
+        window.events.resized += _on_resized
+        window.events.closing += _on_closing
 
         _hide_own_console()
         webview.start(
@@ -210,7 +413,12 @@ def launch_desktop(
             storage_path=str(start_settings.config_dir() / "webview"),
         )
     finally:
+        # closing already flushed on a normal quit; this covers the paths that
+        # never fire it (a create_window/start failure, a forced teardown).
+        _flush_geometry()
         globals()["_window"] = None
+        globals()["_geometry"] = None
+        globals()["_reset_requested"] = False
         utils.DESKTOP_CHROME = None
         desktop_chrome.teardown()
         server.stop_combined_app(live)

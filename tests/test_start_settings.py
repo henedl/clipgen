@@ -77,6 +77,7 @@ def test_save_and_reload_roundtrip(settings_file):
             {"type": "excel", "id_or_path": "/x.xlsx", "label": "x"}
         ],
         "recent_projects": [],
+        "window": None,
     }
     start_settings.save_start_settings(payload)
     assert settings_file.is_file()
@@ -216,3 +217,41 @@ def test_record_ignores_unknown_spreadsheet_type(settings_file):
     start_settings.record_recent_spreadsheet("postgres", "abc", "abc")
     settings = start_settings.load_start_settings()
     assert settings["recent_spreadsheets"] == []
+
+
+def test_window_geometry_defaults_to_none(settings_file):
+    assert start_settings.load_window_geometry() is None
+
+
+def test_window_geometry_roundtrip(settings_file):
+    start_settings.record_window_geometry(120, 64, 1600, 1000)
+    assert start_settings.load_window_geometry() == {
+        "x": 120,
+        "y": 64,
+        "width": 1600,
+        "height": 1000,
+    }
+
+
+def test_window_geometry_rejects_malformed_entries(settings_file):
+    for window in ({"x": 0, "y": 0, "width": 800}, {"x": "0"}, [], "1440x900"):
+        settings_file.write_text(json.dumps({"window": window}), encoding="utf-8")
+        assert start_settings.load_window_geometry() is None
+
+
+def test_window_geometry_ignores_nonpositive_size(settings_file):
+    start_settings.record_window_geometry(0, 0, 0, 900)
+    assert start_settings.load_window_geometry() is None
+
+
+def test_record_window_geometry_respects_persist_disabled(settings_file):
+    start_settings.set_persist_enabled(False)
+    start_settings.record_window_geometry(10, 20, 1200, 800)
+    assert start_settings.load_window_geometry() is None
+
+
+def test_clear_window_geometry_works_with_persist_disabled(settings_file):
+    start_settings.record_window_geometry(10, 20, 1200, 800)
+    start_settings.set_persist_enabled(False)
+    start_settings.clear_window_geometry()
+    assert start_settings.load_window_geometry() is None
