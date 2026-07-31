@@ -1173,6 +1173,10 @@ def test_friction_regenerate_404_without_summary(tr_client, _agent_state_clean):
 
 
 def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch):
+    # The stub stores nothing, so the chain advances — without this the seeded
+    # entry (summary, no citations) would spawn the REAL citations agent, a
+    # live Ollama generation leaking past the end of the test.
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
 
@@ -1193,6 +1197,7 @@ def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch
     # friction was cleared before the re-trigger so the agent recomputes.
     assert "friction" not in transcripts_server._manifest["source_transcripts"]["P01"]
     done.wait(timeout=2)
+    _join_orchestrator_threads(transcripts_server._orchestrator)
 
 
 def test_friction_regenerate_returns_generating_when_in_flight(
@@ -1225,6 +1230,11 @@ def test_report_regenerate_runs_when_disabled(
     orchestrator's snapshot must also carry the participant id for the report
     agent's injected getters."""
     monkeypatch.setattr(config, "OLLAMA_REPORT_ENABLED", False)
+    # The seeded entry has no citations, and the post-run chain advance would
+    # otherwise spawn the REAL citations agent (enabled by default) — a live
+    # Ollama call in a daemon thread that outlives this test and corrupts the
+    # shared orchestrator for whichever chain test runs next.
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -1246,6 +1256,7 @@ def test_report_regenerate_runs_when_disabled(
     assert data["generating"] is True
     assert done.wait(timeout=2)
     assert seen["participant"] == "P01"
+    _join_orchestrator_threads(transcripts_server._orchestrator)
 
 
 def test_friction_stop_sets_cancel_event(tr_client, _agent_state_clean):
@@ -1407,6 +1418,15 @@ def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monke
         thinking_agents.get_agent("citations"),  # type: ignore[arg-type]
         "run",
         _boom,
+    )
+    # The spy passes friction through to the real run_agent; without a stub
+    # that is a REAL Ollama generation on machines where Ollama runs. It
+    # outlives the 2 s thread join, then commits into a later test's manifest
+    # and squats the shared in-flight slot — the suite's flakiest interleaving.
+    monkeypatch.setitem(
+        thinking_agents.get_agent("friction"),  # type: ignore[arg-type]
+        "run",
+        lambda entry, cancel, on_token=None: None,
     )
 
     started: list[str] = []
