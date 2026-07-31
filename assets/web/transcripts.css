@@ -169,23 +169,46 @@ body {
   white-space: nowrap;
 }
 
-#searchMarkAllBtn {
-  flex-shrink: 0;
-}
-
+/* 150% of #headerSearch — result text is the whole point of the dropdown, and
+   the input's width is a subheader-layout constraint the results need not
+   inherit. Left-anchored (not `right: 0`) so the extra width grows rightward
+   under the empty subheader space. */
 #searchResults {
   position: absolute;
   top: 100%;
   left: 0;
-  right: 0;
-  max-height: 50vh;
-  overflow-y: auto;
+  width: 150%;
+  max-width: 90vw;
   background: var(--color-panel-bg);
   border: 1px solid var(--color-panel-border);
   border-top: none;
   border-radius: 0 0 var(--radius-md) var(--radius-md);
+  /* The inner list scrolls now, so this box needs its own clip or the last row
+     squares off the rounded bottom corners. */
+  overflow: hidden;
   box-shadow: var(--shadow-lg);
   z-index: var(--z-dropdown);
+}
+
+/* Pinned above the scrolling result list, so the count and Mark All stay
+   reachable however far you scroll. */
+#searchResultsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-alt);
+  border-bottom: 1px solid var(--color-border);
+}
+
+#searchMarkAllBtn {
+  flex-shrink: 0;
+}
+
+#searchResultsList {
+  max-height: 50vh;
+  overflow-y: auto;
 }
 
 .search-group-header {
@@ -1895,6 +1918,25 @@ body {
   padding: 1px var(--space-2);
   border: 1px solid currentColor;
   border-radius: var(--radius-sm);
+}
+
+/* Bare muted glyph, no border/chip — this is informational (the video simply
+   has no sheet column), not a warning about wrong output like the stale badge. */
+.pill-offsheet-badge {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  display: inline-block;
+  flex: none;
+  color: var(--color-text-dim);
+  background: currentColor;
+  mask-image: url(icons/link-slash.svg);
+  -webkit-mask-image: url(icons/link-slash.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
 }
 
 .pill-options {

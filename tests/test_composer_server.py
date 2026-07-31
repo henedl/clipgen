@@ -74,6 +74,10 @@ def test_participants_reports_parts_and_total(co_client):
     assert [part["offset"] for part in p["parts"]] == [0, 10]
     assert p["total_duration"] == 20
     assert "defaultDuration" in body["config"]
+    # No sheet loaded → everything is off-sheet, and has_sheet tells the frontend
+    # to skip the badge rather than marking every participant.
+    assert p["in_sheet"] is False
+    assert body["has_sheet"] is False
 
 
 def test_participants_reports_audio_tracks(co_client, monkeypatch):

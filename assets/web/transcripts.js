@@ -33,6 +33,8 @@
     sheetRows: [],
     sheetParticipants: [],
     sheetLoaded: false,
+    // Whether a spreadsheet is loaded at all — gates the per-pill off-sheet badge.
+    hasSheet: false,
     xrefPoller: null,
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
@@ -654,6 +656,7 @@
         return;
       }
       state.participants = data.participants;
+      state.hasSheet = !!data.has_sheet;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
       refreshTopNavActions();

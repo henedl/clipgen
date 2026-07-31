@@ -99,6 +99,20 @@ def test_list_participants(client):
     assert data["ok"] is True
     assert len(data["participants"]) == 2
     assert data["participants"][0]["id"] == "P01"
+    assert data["has_sheet"] is False
+
+
+def test_participants_payload_reports_in_sheet(client, monkeypatch):
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participants",
+        [
+            {"id": "P01", "video_paths": [], "has_video": False, "in_sheet": True},
+            {"id": "P13", "video_paths": [], "has_video": False, "in_sheet": False},
+        ],
+    )
+    data = client.get("/screenspace/api/participants").get_json()
+    assert [p["in_sheet"] for p in data["participants"]] == [True, False]
 
 
 def test_video_info_reports_audio_tracks(client, monkeypatch):

@@ -94,6 +94,16 @@
     return { status: status, progress: progress, taskId: taskId, agents: agents };
   }
 
+  // "1" when the participant's video is on disk but has no column in the loaded
+  // sheet. Only meaningful with a sheet loaded — without one everything is
+  // off-sheet and the badge would be noise. Returned as a string so it can also
+  // feed the in-place-patch guard's data-attribute comparison below: opening a
+  // sheet leaves the pill count and statuses untouched, so without it the patch
+  // path would short-circuit and the badges would never appear.
+  function offSheetFlag(p) {
+    return state.hasSheet && p.in_sheet === false ? "1" : "0";
+  }
+
   function renderPills() {
     var container = qs("#participantPills");
     if (!container) return;
@@ -125,7 +135,8 @@
         if (existing[k].getAttribute("data-pid") !== p0.id ||
             existing[k].getAttribute("data-status") !== s0.status ||
             existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0") ||
-            existing[k].getAttribute("data-agents") !== agentsAttr) {
+            existing[k].getAttribute("data-agents") !== agentsAttr ||
+            existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0)) {
           canPatch = false; break;
         }
       }
@@ -198,6 +209,7 @@
     wrap.setAttribute("data-status", s.status);
     wrap.setAttribute("data-active", isActive ? "1" : "0");
     wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," + s.agents.friction);
+    wrap.setAttribute("data-offsheet", offSheetFlag(p));
     wrap.appendChild(buildPill(p, s, isActive));
     wrap.appendChild(buildPillDots(p, s));
     if (state.pillOptionsOpen === p.id) {
@@ -268,6 +280,17 @@
     idSpan.className = "pill-id";
     idSpan.textContent = p.id;
     pill.appendChild(idSpan);
+
+    // Off-sheet marker (inline) — a source video found on disk that the loaded
+    // sheet has no column for. A bare link-slash glyph rather than a labelled
+    // chip: it sits on every non-sheet pill, so it has to stay quiet.
+    if (offSheetFlag(p) === "1") {
+      var offSheet = document.createElement("span");
+      offSheet.className = "pill-offsheet-badge";
+      offSheet.setAttribute("aria-label", "Not in sheet");
+      offSheet.title = "Source video found on disk; not a column in the loaded sheet";
+      pill.appendChild(offSheet);
+    }
 
     // Stale badge (inline)
     if (p.has_stale_artifacts) {

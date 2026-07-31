@@ -43,6 +43,13 @@
 
   function initSearch() {
     var input = qs("#searchInput");
+
+    // Static markup now, so it is wired once here rather than re-created on
+    // every render (which is what the old inject-on-first-result path did).
+    qs("#searchMarkAllBtn").addEventListener("click", function () {
+      markAllSearchResults();
+    });
+
     input.addEventListener("input", function () {
       clearTimeout(_searchTimer);
       var q = input.value.trim();
@@ -71,10 +78,10 @@
 
   function _renderSearchError() {
     var container = qs("#searchResults");
-    var countEl = qs("#searchCount");
-    if (countEl) countEl.textContent = "";
-    if (!container) return;
-    container.innerHTML =
+    var list = qs("#searchResultsList");
+    if (!container || !list) return;
+    qs("#searchResultsHeader").classList.add("hidden");
+    list.innerHTML =
       '<div class="search-result-row" style="justify-content:center;color:var(--sev-high)">Search failed — try again</div>';
     container.classList.remove("hidden");
   }
@@ -123,28 +130,20 @@
 
   function renderSearchResults(data) {
     var container = qs("#searchResults");
-    var countEl = qs("#searchCount");
+    var list = qs("#searchResultsList");
+    var header = qs("#searchResultsHeader");
 
+    // No header on an empty result set: the "No matches found" row already says
+    // it, and a Mark All button with nothing to mark is a dead control.
     if (data.total_count === 0) {
-      countEl.textContent = "0 results";
-      container.innerHTML = '<div class="search-result-row" style="justify-content:center;color:var(--color-text-dim)">No matches found</div>';
+      header.classList.add("hidden");
+      list.innerHTML = '<div class="search-result-row" style="justify-content:center;color:var(--color-text-dim)">No matches found</div>';
       container.classList.remove("hidden");
       return;
     }
 
-    countEl.textContent = data.total_count + " match" + (data.total_count === 1 ? "" : "es");
-
-    // Add "Mark All" button next to count
-    var markAllBtn = qs("#searchMarkAllBtn");
-    if (!markAllBtn) {
-      markAllBtn = document.createElement("button");
-      markAllBtn.id = "searchMarkAllBtn";
-      markAllBtn.className = "btn btn-small";
-      markAllBtn.textContent = "Mark All";
-      countEl.parentNode.insertBefore(markAllBtn, countEl.nextSibling);
-      markAllBtn.addEventListener("click", function () { markAllSearchResults(); });
-    }
-    markAllBtn.classList.remove("hidden");
+    qs("#searchCount").textContent = clipgenPluralUnit(data.total_count, "match", "matches");
+    header.classList.remove("hidden");
 
     // Group results by participant
     var groups = {};
@@ -169,13 +168,13 @@
       });
     });
 
-    var prevScrollTop = container.scrollTop;
-    container.innerHTML = html;
-    container.scrollTop = prevScrollTop;
+    var prevScrollTop = list.scrollTop;
+    list.innerHTML = html;
+    list.scrollTop = prevScrollTop;
     container.classList.remove("hidden");
 
     // Attach click handlers
-    var rows = container.querySelectorAll(".search-result-row[data-participant]");
+    var rows = list.querySelectorAll(".search-result-row[data-participant]");
     for (var i = 0; i < rows.length; i++) {
       rows[i].addEventListener("click", function () {
         var pid = this.getAttribute("data-participant");
@@ -195,9 +194,8 @@
 
   function hideSearchResults() {
     qs("#searchResults").classList.add("hidden");
+    qs("#searchResultsHeader").classList.add("hidden");
     qs("#searchCount").textContent = "";
-    var markAllBtn = qs("#searchMarkAllBtn");
-    if (markAllBtn) markAllBtn.classList.add("hidden");
     state.searchResults = null;
   }
 

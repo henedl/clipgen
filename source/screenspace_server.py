@@ -144,6 +144,12 @@ _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
 _output_dir: str = ""
 _participants: list[dict[str, Any]] = []
+# What the current _participants list was built from: {"sheet_context", "dir",
+# "mtime"}, or None before _init_screenspace_state has run (same "not configured
+# yet" state _worker = None expresses). While None, _refresh_participants() is a
+# no-op, so a directly-assigned _participants survives.
+_participant_source: dict[str, Any] | None = None
+_participants_lock = threading.Lock()
 # Per-participant source timeline for multi-video participants (one continuous
 # recording across several files). Keyed by participant id; value is
 # (parts_mtimes, timeline) so a re-encoded part invalidates the cached offsets.
@@ -236,7 +242,44 @@ utils.register_static_routes(
 _NOTES_MAX_BYTES = 64 * 1024
 
 
+def _refresh_participants() -> None:
+    """Rebuild ``_participants`` when the input directory changed since the last build.
+
+    Keyed on the input dir's ``st_mtime_ns`` (which advances on add/remove/rename),
+    mirroring ``utils.discover_participant_videos``' own memo — the steady-state
+    cost is one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
+    show up without a server restart.
+
+    No-op until :func:`_init_screenspace_state` has configured the source. The
+    rebuild rebinds ``_participants`` (atomic under the GIL), so a concurrent
+    reader sees either the old list or the new one, never a torn one.
+    """
+    global _participants
+
+    source = _participant_source
+    if source is None:
+        return
+    input_dir = str(Path(utils.get_effective_input_dir()))
+    try:
+        mtime: int | None = Path(input_dir).stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    if source["dir"] == input_dir and source["mtime"] == mtime:
+        return
+    with _participants_lock:
+        # A racing request may have rebuilt, or a sheet swap may have replaced the
+        # source entirely, while we waited on the lock.
+        if _participant_source is not source:
+            return
+        if source["dir"] == input_dir and source["mtime"] == mtime:
+            return
+        _participants = files.resolve_participant_videos(source["sheet_context"])
+        source["dir"] = input_dir
+        source["mtime"] = mtime
+
+
 def _participant_exists(pid: str) -> bool:
+    _refresh_participants()
     return any(p["id"] == pid for p in _participants)
 
 
@@ -248,6 +291,7 @@ def api_participants() -> FlaskResponse:
     file) so the frontend can cache-bust the preloaded frame-0 URL from the
     first paint instead of waiting on a follow-up ``/api/video/info`` call.
     """
+    _refresh_participants()
     payload: list[dict[str, Any]] = []
     for p in _participants:
         entry = dict(p)
@@ -269,7 +313,13 @@ def api_participants() -> FlaskResponse:
         payload.append(entry)
     # Bootstrap channel for shared frontend config (hotkey overrides etc.);
     # this page has no sheet-data fetch, so the config rides along here.
-    return ok(participants=payload, config=utils.get_frontend_config())
+    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
+    # is ``in_sheet: False`` and marking them all would be noise.
+    return ok(
+        participants=payload,
+        has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
+        config=utils.get_frontend_config(),
+    )
 
 
 @screenspace_bp.route("/api/participants/<pid>/notes")
@@ -320,8 +370,6 @@ def api_participant_issues(pid: str) -> FlaskResponse:
     ctx = getattr(server, "_sheet_context", None)
     if ctx is None:
         return ok(issues=[])
-
-    import spreadsheet
 
     participants = spreadsheet.get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
@@ -813,7 +861,14 @@ def _participant_video_paths(participant_id: str) -> list[str]:
 
     A multi-video participant (recording split across files) returns all parts
     in timeline order; a normal participant returns a single-element list.
+
+    Refreshes first: the frame/stream/task routes are reachable directly (API
+    use, automation) without ``/api/participants`` having run since the video
+    landed, and without this they would 404 on a participant that is on disk.
+    The refresh is one ``stat()`` in the steady state — nothing against the
+    ffmpeg work these callers are about to do.
     """
+    _refresh_participants()
     for p in _participants:
         if p["id"] == participant_id:
             return list(p["video_paths"]) if p.get("has_video") else []
@@ -2766,45 +2821,28 @@ def _backfill_missing_events(manifest: dict[str, Any]) -> None:
         )
 
 
-def _init_screenspace_state(
-    sheet_context: Any = None,
-    participant_list: list[str] | None = None,
-) -> None:
+def _init_screenspace_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Screenspace routes.
 
     Loads manifest, resolves participant video paths, and starts the
     background worker thread.
+
+    Keeps a reference to *sheet_context* so :func:`_refresh_participants` can
+    re-derive the participant union when the input directory changes.
+    ``server._swap_worksheet`` re-inits this blueprint on every sheet swap, so
+    the stored reference is replaced rather than going stale.
     """
     import screenspace
 
-    global _manifest, _worker, _output_dir, _participants
+    global _manifest, _worker, _output_dir, _participant_source
 
     _output_dir = str(utils.get_effective_output_dir())
     _manifest = screenspace.load_screenspace_manifest()
     _backfill_missing_events(_manifest)
 
-    _participants = []
-    study_name = ""
-    overrides: dict[str, str | None] = {}
-    if sheet_context is not None:
-        study_name = getattr(sheet_context, "study_name", "")
-        overrides = spreadsheet.participant_filename_overrides(sheet_context)
-
-    if participant_list:
-        input_dir = utils.get_effective_input_dir()
-        for pid in participant_list:
-            paths = files.resolve_source_video_paths(
-                study_name, pid, overrides.get(pid), input_dir
-            )
-            _participants.append(
-                {
-                    "id": pid,
-                    "video_paths": [str(p) for p in paths],
-                    "has_video": paths[0].is_file(),
-                }
-            )
-    else:
-        _discover_participant_videos(study_name)
+    # mtime None forces the first _refresh_participants() call to build.
+    _participant_source = {"sheet_context": sheet_context, "dir": "", "mtime": None}
+    _refresh_participants()
     _participant_timeline_cache.clear()
 
     _worker = screenspace.ScreenspaceWorker()
@@ -2816,12 +2854,6 @@ def _init_screenspace_state(
     # Reclaim a stale empty manifest left by a prior abandoned session: the
     # guarded save removes the file when empty, idempotent rewrite otherwise.
     _persist_manifest()
-
-
-def _discover_participant_videos(study_name: str) -> None:
-    """Scan input directory for source video files and populate _participants."""
-    global _participants
-    _participants = utils.discover_participant_videos(study_name)
 
 
 def _do_persist(*, drain_events: bool = True) -> None:

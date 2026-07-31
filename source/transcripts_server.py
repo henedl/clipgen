@@ -54,7 +54,6 @@ from flask import Blueprint, Response, jsonify, request, send_file, stream_with_
 import config
 import files
 import friction
-import spreadsheet
 import ollama_client
 import thinking_agents
 import transcripts
@@ -70,6 +69,12 @@ _manifest: dict[str, Any] = {}
 _worker: transcripts.TranscriptWorker | None = None
 _input_dir: str = ""
 _participants: list[dict[str, Any]] = []
+# What the current _participants list was built from: {"sheet_context", "dir",
+# "mtime"}, or None before _init_transcripts_state has run (same "not configured
+# yet" state _worker = None expresses). While None, _refresh_participants() is a
+# no-op, so a directly-assigned _participants survives.
+_participant_source: dict[str, Any] | None = None
+_participants_lock = threading.Lock()
 _manifest_lock = threading.Lock()
 # Task ids whose result has already been merged into the in-memory manifest.
 # Merging is idempotent per task so a later persist cannot re-apply a task's
@@ -224,11 +229,48 @@ utils.register_static_routes(
 # ---- Participants ----
 
 
+def _refresh_participants() -> None:
+    """Rebuild ``_participants`` when the input directory changed since the last build.
+
+    Keyed on the input dir's ``st_mtime_ns`` (which advances on add/remove/rename),
+    mirroring ``utils.discover_participant_videos``' own memo — the steady-state
+    cost is one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
+    show up without a server restart.
+
+    No-op until :func:`_init_transcripts_state` has configured the source. The
+    rebuild rebinds ``_participants`` (atomic under the GIL), so a concurrent
+    reader sees either the old list or the new one, never a torn one.
+    """
+    global _participants
+
+    source = _participant_source
+    if source is None:
+        return
+    input_dir = str(Path(utils.get_effective_input_dir()))
+    try:
+        mtime: int | None = Path(input_dir).stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    if source["dir"] == input_dir and source["mtime"] == mtime:
+        return
+    with _participants_lock:
+        # A racing request may have rebuilt, or a sheet swap may have replaced the
+        # source entirely, while we waited on the lock.
+        if _participant_source is not source:
+            return
+        if source["dir"] == input_dir and source["mtime"] == mtime:
+            return
+        _participants = files.resolve_participant_videos(source["sheet_context"])
+        source["dir"] = input_dir
+        source["mtime"] = mtime
+
+
 @transcripts_bp.route("/api/participants")
 def api_participants() -> FlaskResponse:
     """List discovered source videos with transcription status."""
     import viewer
 
+    _refresh_participants()
     result = []
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
@@ -253,6 +295,7 @@ def api_participants() -> FlaskResponse:
                 "video_path": first_path,
                 "video_paths": video_paths,
                 "has_video": p["has_video"],
+                "in_sheet": p.get("in_sheet", False),
                 "has_transcript": has_transcript,
                 "segment_count": len(entry.get("segments", [])),
                 "video_filename": Path(first_path).name,
@@ -314,8 +357,11 @@ def api_participants() -> FlaskResponse:
                 break
         info["has_stale_artifacts"] = has_stale
 
+    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
+    # is ``in_sheet: False`` and marking them all would be noise.
     return ok(
         participants=result,
+        has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
         transcribe_prewarm=_transcribe_prewarm_setting(),
     )
 
@@ -494,6 +540,7 @@ def api_vtt(participant: str) -> FlaskResponse:
 
 def _video_paths_for_participant(participant: str) -> list[str]:
     """Return the ordered source video path(s) for *participant*, or [] if unknown."""
+    _refresh_participants()
     for p in _participants:
         if p["id"] == participant:
             return list(p["video_paths"])
@@ -1445,7 +1492,9 @@ def api_transcribe() -> FlaskResponse:
     if not participant_ids:
         return err("No participants specified")
 
-    # Build a lookup of available participants
+    # Build a lookup of available participants (refresh first so a video dropped
+    # into the input dir since page load can be enqueued rather than 404'd).
+    _refresh_participants()
     available = {p["id"]: p for p in _participants}
     enqueued = []
 
@@ -2012,48 +2061,27 @@ _orchestrator = AgentOrchestrator(_manifest_lock)
 # ---- State initialization ----
 
 
-def _init_transcripts_state(
-    sheet_context: Any = None,
-    participant_list: list[str] | None = None,
-) -> None:
+def _init_transcripts_state(sheet_context: Any = None) -> None:
     """Initialize module-level state for Transcript routes.
 
     Loads manifest, resolves participant video paths, and starts the
     background worker thread.
+
+    Keeps a reference to *sheet_context* so :func:`_refresh_participants` can
+    re-derive the participant union when the input directory changes.
+    ``server._swap_worksheet`` re-inits this blueprint on every sheet swap, so
+    the stored reference is replaced rather than going stale.
     """
-    global _manifest, _worker, _input_dir, _participants
+    global _manifest, _worker, _input_dir, _participant_source
 
     _input_dir = str(utils.get_effective_input_dir())
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()
     _pending_chain_pids.clear()
 
-    _participants = []
-    study_name = ""
-    overrides: dict[str, str | None] = {}
-    if sheet_context is not None:
-        study_name = getattr(sheet_context, "study_name", "")
-        overrides = spreadsheet.participant_filename_overrides(sheet_context)
-
-    # Resolve every participant's source video(s) through one override-aware path
-    # so the discovery fallback honors spreadsheet Filename overrides too. Without
-    # an explicit participant_list, discover the ids from disk (overrides is empty
-    # when there is no sheet_context, so that case stays a plain scan).
-    pids = participant_list or [
-        entry["id"] for entry in utils.discover_participant_videos(study_name)
-    ]
-    input_dir = utils.get_effective_input_dir()
-    for pid in pids:
-        paths = files.resolve_source_video_paths(
-            study_name, pid, overrides.get(pid), input_dir
-        )
-        _participants.append(
-            {
-                "id": pid,
-                "video_paths": [str(p) for p in paths],
-                "has_video": paths[0].is_file(),
-            }
-        )
+    # mtime None forces the first _refresh_participants() call to build.
+    _participant_source = {"sheet_context": sheet_context, "dir": "", "mtime": None}
+    _refresh_participants()
 
     _worker = transcripts.TranscriptWorker()
     _worker.on_task_complete = _on_task_complete
