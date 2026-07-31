@@ -92,9 +92,6 @@
         <button id="videoFollowBtn" class="player-btn" title="Auto-scroll transcript with playback" aria-label="Auto-scroll transcript with playback" aria-pressed="true">
           <span class="player-btn-icon player-icon-follow"></span>
         </button>
-        <button id="frictionHeatmapBtn" class="player-btn" title="Toggle friction heatmap" aria-label="Toggle friction heatmap" aria-pressed="false" disabled>
-          <span class="player-btn-icon friction-heatmap-icon"></span>
-        </button>
         <span id="videoTime" class="player-time">0:00 / 0:00</span>
       </div>
       <div id="timelineRow">
@@ -160,16 +157,29 @@
             <span class="agent-stale-banner-text">Segments were edited since this analysis ran. Results may be out of date.</span>
             <button id="frictionStaleRerun" type="button" class="btn btn-small">Re-run</button>
           </div>
-          <div id="frictionStats" class="friction-stats"></div>
-          <div class="friction-filter">
-            <div class="friction-filter-row">
-              <label class="friction-threshold-label" for="frictionThreshold">Min score <span id="frictionThresholdVal">0.50</span></label>
-              <input id="frictionThreshold" type="range" min="0" max="1" step="0.05" value="0.5">
+          <!-- The control surface. Everything here filters/tints/navigates
+               #segmentList below; nothing here is a results list of its own. -->
+          <div class="friction-controls">
+            <div class="friction-controls-row">
+              <span id="frictionModeMount" class="friction-mode-mount"></span>
+              <span id="frictionCounter" class="friction-counter"></span>
+              <button id="frictionMarkAll" type="button" class="btn btn-small">Mark all matching</button>
             </div>
-            <div id="frictionCategoryToggles" class="friction-cat-toggles"></div>
-            <button id="frictionMarkAll" type="button" class="btn btn-small">Mark all matching</button>
+            <div id="frictionHistogram" class="friction-hist"></div>
+            <div id="frictionBounds" class="friction-hist-bounds"></div>
+            <div id="frictionChips" class="friction-chips"></div>
           </div>
-          <div id="frictionMoments" class="friction-moments"></div>
+          <!-- LLM moments as a one-line jump strip; their quote + rationale
+               render as callouts under the cited segments in the transcript. -->
+          <div class="friction-jump">
+            <button id="frictionJumpPrev" type="button" class="friction-jump-step" title="Previous friction moment" aria-label="Previous friction moment">
+              <span class="friction-jump-step-icon friction-jump-icon-prev"></span>
+            </button>
+            <div id="frictionJumpStrip" class="friction-jump-strip"></div>
+            <button id="frictionJumpNext" type="button" class="friction-jump-step" title="Next friction moment" aria-label="Next friction moment">
+              <span class="friction-jump-step-icon friction-jump-icon-next"></span>
+            </button>
+          </div>
         </div>
       </div>
     </section>

@@ -48,9 +48,25 @@
     // Server-recorded friction run start (epoch ms) so the elapsed clock
     // survives page navigation; null while idle or for a just-clicked run.
     frictionStartedAt: null,
-    frictionHeatmapEnabled: false,
-    frictionThreshold: 0.5,
+    // "off" | "highlight" | "isolate" — what the friction filter does to
+    // #segmentList. Persisted; owned by transcripts-agents.js, read here and by
+    // the video satellite's timeline band.
+    frictionMode: "off",
+    // Score band the filter keeps, both ends draggable on the histogram. Opens
+    // fully open (every segment the scorer flagged) — the histogram makes the
+    // distribution visible, so narrowing from everything beats opening
+    // pre-filtered to something the user can't see.
+    frictionMin: 0,
+    frictionMax: 1,
     frictionCategoryFilter: null,
+    // Derived from (threshold, categoryFilter, frictionData, segments) by
+    // _recomputeFrictionMatches. The single source every friction consumer reads:
+    // segment id -> score for matching segments, the visible moments resolved to
+    // segment indices, and segment id -> 1-based moment number for cited rows.
+    frictionMatchBySegId: {},
+    frictionVisibleMoments: [],
+    frictionCitedBySegId: {},
+    frictionMomentIndex: -1,
     transcribePrewarm: "queue_open",
     modelStatus: null,
     modelFailSince: 0,
@@ -893,7 +909,9 @@
   function initPanelTabs() { return TS.initPanelTabs && TS.initPanelTabs(); }
   function initSummaryActions() { return TS.initSummaryActions && TS.initSummaryActions(); }
   function initFriction() { return TS.initFriction && TS.initFriction(); }
-  function initFrictionHeatmapToggle() { return TS.initFrictionHeatmapToggle && TS.initFrictionHeatmapToggle(); }
+  function initFrictionMode() { return TS.initFrictionMode && TS.initFrictionMode(); }
+  function applyFrictionDecorations() { return TS.applyFrictionDecorations && TS.applyFrictionDecorations(); }
+  function cycleFrictionMode() { return TS.cycleFrictionMode && TS.cycleFrictionMode(); }
   function _stopSummaryPoll() { return TS._stopSummaryPoll && TS._stopSummaryPoll(); }
   function _stopCitationsPoll() { return TS._stopCitationsPoll && TS._stopCitationsPoll(); }
   function _stopFrictionPoll() { return TS._stopFrictionPoll && TS._stopFrictionPoll(); }
@@ -952,17 +970,10 @@
         sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" title="' + escapeHtml(markObj.severity) + '"></span>';
       }
 
-      var frictionClass = "";
-      var frictionStyle = "";
-      if (state.frictionHeatmapEnabled) {
-        var frow = state.frictionBySegId[seg.id];
-        var fScore = frow ? (frow.score || 0) : 0;
-        if (fScore > 0) {
-          frictionClass = " segment-friction";
-          frictionStyle = ' style="--seg-friction-alpha:' + fScore + '"';
-        }
-      }
-      html += '<div class="segment-row' + activeClass + correctedClass + frictionClass + '" data-index="' + i + '" data-start="' + seg.start + '"' + frictionStyle + '>';
+      // No friction markup here on purpose: applyFrictionDecorations() below owns
+      // every friction class/inline var, so the rebuild path and the live filter
+      // path can't drift apart.
+      html += '<div class="segment-row' + activeClass + correctedClass + '" data-index="' + i + '" data-start="' + seg.start + '">';
       html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(seg.id) + '"' + markStyle + markLabel + '></span>';
       html += sevDotHtml;
       html += '<span class="segment-timestamp">' + formatTime(seg.start);
@@ -1003,6 +1014,10 @@
       html += '</div>';
     }
     container.innerHTML = html;
+    // Before the scroll restore, not after: isolate mode hides rows and the
+    // callouts add height, so decorating afterwards would let the browser clamp
+    // the restored offset against a stale scrollHeight.
+    applyFrictionDecorations();
     // Same task as the wipe, so the new scrollHeight is already laid out and the
     // browser can't clamp us to 0 — and initPipScroll's rAF-coalesced listener
     // reads the restored value rather than the transient top. The write itself
@@ -1383,7 +1398,7 @@
       startSegmentEditing(textEl);
     });
 
-    // Friction tooltip on hot segments (only while the heatmap is on).
+    // Friction tooltip on hot segments (only while friction mode is on).
     // RAF-coalesced like the timeline canvas so getBoundingClientRect isn't
     // called on every mousemove event.
     container.addEventListener("mousemove", function (e) {
@@ -1391,14 +1406,14 @@
       var cx = e.clientX, cy = e.clientY, tgt = e.target;
       _segTooltipRaf = requestAnimationFrame(function () {
         _segTooltipRaf = 0;
-        if (!state.frictionHeatmapEnabled) { _hideFrictionTooltip(); return; }
+        if (state.frictionMode === "off") { _hideFrictionTooltip(); return; }
         var row = tgt.closest && tgt.closest(".segment-row");
         if (!row) { _hideFrictionTooltip(); return; }
         var idx = parseInt(row.getAttribute("data-index"), 10);
         var seg = state.segments[idx];
         var frow = seg ? state.frictionBySegId[seg.id] : null;
         if (!frow || !(frow.score > 0)) { _hideFrictionTooltip(); return; }
-        _showFrictionTooltip(frow, cx, cy);
+        _showFrictionTooltip(frow, seg, cx, cy);
       });
     });
     container.addEventListener("mouseleave", function () { _hideFrictionTooltip(); });
@@ -2799,16 +2814,18 @@
         clickCommand("transcripts:toggle-captions", "Toggle captions", "language",
           "subtitles cc text", "videoCcBtn"),
         {
-          id: "transcripts:toggle-heatmap",
-          title: "Toggle friction heatmap",
-          icon: "sparkles",
-          keywords: "friction analysis overlay timeline",
+          id: "transcripts:cycle-friction-mode",
+          title: "Cycle friction mode (off / highlight / isolate)",
+          icon: "fire",
+          keywords: "friction analysis overlay heatmap filter isolate highlight timeline",
           section: "Transcripts",
+          // Gated on data, not on a control: the mode track only means anything
+          // once the selected participant has friction scores.
           enabled: function () {
-            var b = document.getElementById("frictionHeatmapBtn");
-            return !!b && !b.disabled;
+            var fd = state.frictionData;
+            return !!(fd && fd.segments && fd.segments.length);
           },
-          run: function () { document.getElementById("frictionHeatmapBtn").click(); },
+          run: function () { cycleFrictionMode(); },
         },
       ];
       // "Jump to … in Transcripts" = stays here and selects in place; the
@@ -2852,7 +2869,7 @@
     }
     initSummaryActions();
     initFriction();
-    initFrictionHeatmapToggle();
+    initFrictionMode();
     initTranscriptSettings();
     initTopNavActions();
     initCommandPalette();

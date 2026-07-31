@@ -1,8 +1,9 @@
 /* clipgen Transcripts analysis-panel satellite — transcripts-agents.js
  *
  * The tabbed analysis panel: the AI summary (+ inline edit + citations) and the
- * friction pass (scores, moments, filters, heatmap toggle, hot-segment tooltip),
- * plus the panel tab switching. These are the Ollama "thinking agent" results
+ * friction pass (mode switch, score histogram, category chips, moment jump strip,
+ * and the decorations they drive on the transcript below), plus the panel tab
+ * switching. These are the Ollama "thinking agent" results
  * surfaced per participant. Loaded LAST (after transcripts.js + the other
  * satellites); reads the hub's shared state + helpers through
  * window.ClipgenTranscripts (TS) and publishes its load/clear/stop/init entry
@@ -22,7 +23,6 @@
   var TS = window.ClipgenTranscripts;
   var state = TS.state;
   var showToast = TS.showToast,
-    renderSegments = TS.renderSegments,
     renderTimeline = TS.renderTimeline,
     seekVideo = TS.seekVideo,
     scrollToSegment = TS.scrollToSegment,
@@ -152,7 +152,7 @@
   }
 
   // Timer-only teardown (mirrors the old per-agent _stop*Poll): does NOT reset
-  // ETA trackers — render*Status/*Generating reset-then-seed, so resetting here
+  // ETA trackers — render*Status / render*Generating reset-then-seed, so resetting here
   // would wipe the seed when a poll restarts.
   function _stopAgentPoll(desc) {
     if (desc._poller) {
@@ -703,10 +703,13 @@
   // ---- Friction detection (Pass 3) ----
   //
   // Programmatic scores + LLM moments land together in the manifest's
-  // `friction` field. The tab renders stats, a score/category filter, and the
-  // top moments; the timeline heatmap + segment tints read the per-segment
-  // scores. Generation mirrors summary/citations (poll until done; manual
-  // run/cancel bypass the global flag).
+  // `friction` field. The tab is a CONTROL SURFACE over #segmentList rather than
+  // a results list: a mode switch, a score histogram and category chips filter
+  // the transcript below (tinting it, or isolating it down to the matches), and
+  // the moments are a jump strip whose rationales render as inline callouts under
+  // the segments they quote. Everything downstream reads one derived map — see
+  // _recomputeFrictionMatches. Generation mirrors summary/citations (poll until
+  // done; manual run/cancel bypass the global flag).
 
   function _currentParticipant() {
     var pid = state.selectedParticipant;
@@ -773,17 +776,16 @@
       } else {
         renderFrictionEmpty();
       }
-      _refreshHeatmapAffordances();
     }).catch(function () {
       if (ver !== state.participantReqVer) return;
       renderFrictionEmpty();
-      _refreshHeatmapAffordances();
     });
   }
 
   function _setFrictionData(friction) {
     state.frictionData = friction;
     state.frictionGenerating = false;
+    state.frictionMomentIndex = -1;
     var byId = {};
     var segs = (friction && friction.segments) || [];
     for (var i = 0; i < segs.length; i++) {
@@ -792,11 +794,9 @@
     state.frictionBySegId = byId;
     renderFriction();
     updateFrictionStaleDot();
-    _refreshHeatmapAffordances();
-    if (state.frictionHeatmapEnabled) {
-      renderSegments();
-      renderTimeline();
-    }
+    // renderFriction's applyFrictionDecorations already re-decorated the existing
+    // rows in place, so no segment-list rebuild is needed — only the canvas band.
+    renderTimeline();
   }
 
   function clearFriction() {
@@ -804,11 +804,14 @@
     state.frictionData = null;
     state.frictionBySegId = {};
     state.frictionGenerating = false;
+    state.frictionMomentIndex = -1;
     qs("#frictionContent").classList.add("hidden");
     qs("#frictionGenerating").classList.add("hidden");
     qs("#frictionEmpty").classList.add("hidden");
     updateFrictionStaleDot();
-    _refreshHeatmapAffordances();
+    // Strip tints / hidden rows / callouts left over from the previous participant.
+    applyFrictionDecorations();
+    renderTimeline();
   }
 
   function _renderFrictionHeader() {
@@ -893,9 +896,10 @@
         // the header already explains with its own re-run guidance).
         banner.classList.toggle("hidden", !(fd.stale && fd.llm_ok !== false));
       }
-      renderFrictionStats();
-      renderFrictionFilterControls();
-      renderFrictionMoments();
+      // Bins change only when the data does; the marker, chips, strip and the
+      // transcript decorations all follow from applyFrictionDecorations.
+      renderFrictionHistogram();
+      applyFrictionDecorations();
     } else {
       renderFrictionEmpty();
     }
@@ -906,6 +910,7 @@
     qs("#frictionContent").classList.add("hidden");
     qs("#frictionGenerating").classList.add("hidden");
     qs("#frictionEmpty").classList.remove("hidden");
+    applyFrictionDecorations();
     qs("#frictionEmptyHint").textContent = _frictionDepMet()
       ? "Run the analysis to surface moments of likely friction."
       : "Requires a summary first. Run Summary, then friction.";
@@ -966,67 +971,398 @@
     renderFriction();
   }
 
-  function renderFrictionStats() {
-    var el2 = qs("#frictionStats");
-    el2.innerHTML = "";
-    var fd = state.frictionData;
-    if (!fd || !fd.stats) return;
-    var byCat = fd.stats.by_category || {};
-    var cats = CLIPGEN_CONFIG.frictionCategories || [];
-    var chips = document.createElement("div");
-    chips.className = "friction-stat-chips";
-    cats.forEach(function (c) {
-      var chip = document.createElement("span");
-      chip.className = "friction-chip";
-      var lab = el("span", "", c.label);
-      var cnt = el("span", "friction-chip-count", String(byCat[c.key] || 0));
-      chip.appendChild(lab);
-      chip.appendChild(cnt);
-      chips.appendChild(chip);
-    });
-    el2.appendChild(chips);
-    var line = document.createElement("div");
-    line.className = "friction-stat-line";
-    var mpm = fd.stats.markers_per_minute != null ? fd.stats.markers_per_minute : 0;
-    var total = fd.stats.total_markers != null ? fd.stats.total_markers : 0;
-    line.textContent = mpm + " markers/min · " + total + " total";
-    el2.appendChild(line);
-  }
-
   function _ensureFrictionFilter() {
-    if (state.frictionCategoryFilter) return;
-    var f = {};
+    var f = state.frictionCategoryFilter || {};
     var cats = CLIPGEN_CONFIG.frictionCategories || [];
-    for (var i = 0; i < cats.length; i++) f[cats[i].key] = true;
+    // Fill in rather than replace: a persisted filter from an older category set
+    // keeps whatever the user chose and picks up new categories enabled.
+    for (var i = 0; i < cats.length; i++) {
+      if (f[cats[i].key] === undefined) f[cats[i].key] = true;
+    }
     state.frictionCategoryFilter = f;
   }
 
-  function renderFrictionFilterControls() {
+  // Both ends of the score band are user-controlled (the histogram's two
+  // handles), so every score test goes through here rather than comparing
+  // against a lone threshold.
+  function _frictionScoreInBand(score) {
+    return score >= state.frictionMin && score <= state.frictionMax;
+  }
+
+  // ---- The one derived filter product ----
+  //
+  // (threshold, category filter, friction data, segments) -> the three shared
+  // fields every consumer reads: state.frictionMatchBySegId (segment id -> score),
+  // state.frictionVisibleMoments and state.frictionCitedBySegId. The segment
+  // tints, isolate hiding, the timeline density band, "Mark all matching", the
+  // counter and the isolate-aware keyboard nav all read these, so the pane and
+  // the transcript below it can never disagree about what counts as friction.
+  //
+  // A segment matches when its programmatic score clears the threshold and at
+  // least one of its categories is still enabled, OR when a visible moment cites
+  // it. That second clause is not redundant: the segment score comes from the
+  // regex scorer (friction.py) while the moment score is the model's, so a moment
+  // can clear the threshold while the line it quotes scores 0. Without it,
+  // isolate mode would hide the very row the jump strip seeks to.
+  function _recomputeFrictionMatches() {
     _ensureFrictionFilter();
-    var wrap = qs("#frictionCategoryToggles");
-    wrap.innerHTML = "";
-    var cats = CLIPGEN_CONFIG.frictionCategories || [];
-    cats.forEach(function (c) {
-      var lab = document.createElement("label");
-      lab.className = "friction-cat-toggle";
-      var cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = state.frictionCategoryFilter[c.key] !== false;
-      cb.addEventListener("change", function () {
-        state.frictionCategoryFilter[c.key] = cb.checked;
-        renderFrictionMoments();
-      });
-      lab.appendChild(cb);
-      lab.appendChild(document.createTextNode(" " + c.label));
-      wrap.appendChild(lab);
+    var fd = state.frictionData;
+    var segs = (fd && fd.segments) || [];
+    var filter = state.frictionCategoryFilter;
+    var matches = {};
+    var i, j;
+    for (i = 0; i < segs.length; i++) {
+      var frow = segs[i];
+      var score = frow.score || 0;
+      // score <= 0 is excluded outright so a lower bound of 0 still means "every
+      // segment the scorer flagged", not "every segment in the transcript".
+      if (score <= 0 || !_frictionScoreInBand(score)) continue;
+      var cats = frow.categories || [];
+      for (j = 0; j < cats.length; j++) {
+        if (filter[cats[j]] !== false) { matches[frow.id] = score; break; }
+      }
+    }
+    state.frictionMatchBySegId = matches;
+
+    // Resolve moments to segment indices exactly once, so the jump strip's
+    // numbering and the set of inline callouts can't drift apart.
+    var visible = [];
+    var cited = {};
+    var all = (fd && fd.moments) || [];
+    for (i = 0; i < all.length; i++) {
+      if (!_frictionMomentMatches(all[i])) continue;
+      var idxs = _momentSegmentIndices(all[i]);
+      if (idxs.length === 0) continue; // unsourced moment: nothing to quote or seek to
+      visible.push({ moment: all[i], idxs: idxs });
+      for (j = 0; j < idxs.length; j++) {
+        var seg = state.segments[idxs[j]];
+        if (seg) cited[seg.id] = visible.length; // 1-based strip number
+      }
+    }
+    state.frictionVisibleMoments = visible;
+    state.frictionCitedBySegId = cited;
+  }
+
+  // The single entry point for "the filter changed": recompute, then reflect it
+  // everywhere. Called by the hub from renderSegments (before the scroll restore)
+  // and by every control in the pane. Cheap enough to run per animation frame
+  // during a threshold drag — it only writes classes and inline custom
+  // properties, and never rebuilds the segment list.
+  function applyFrictionDecorations() {
+    _recomputeFrictionMatches();
+    renderFrictionChips();
+    _updateFrictionBounds(null);
+    renderFrictionJumpStrip();
+    _decorateSegmentList();
+  }
+
+  // ---- "Why was this selected" ----
+  //
+  // The scores are opaque on their own, so every friction hover surface — a
+  // histogram bin, a hot segment row, the timeline density band — answers the
+  // same question with the same words: what the segment scored, which categories
+  // fired, the phrases that matched, and the line itself. One builder, so the
+  // three can't end up explaining the same segment differently.
+
+  var _FRICTION_TOOLTIP_SEGMENTS = 4; // per histogram bin, before "+N more"
+
+  function _frictionQuote(seg, maxChars) {
+    var text = (seg && seg.text ? seg.text : "").trim();
+    if (!text) return "";
+    if (text.length > maxChars) text = text.slice(0, maxChars - 1).replace(/\s+\S*$/, "") + "…";
+    return "“" + text + "”";
+  }
+
+  // One compact line: 0:12 · 0.45 · Confusion · “where is the export button”
+  function _frictionWhyLine(frow, seg) {
+    var parts = [formatTime(seg.start), (frow.score || 0).toFixed(2)];
+    var cats = (frow.categories || []).map(_frictionCatLabel);
+    if (cats.length) parts.push(cats.join(", "));
+    var quote = _frictionQuote(seg, 60);
+    if (quote) parts.push(quote);
+    return parts.join(" · ");
+  }
+
+  // Scored segments whose score falls in [lo, hi) — the top bin takes 1.0 too.
+  function _frictionSegmentsInBin(lo, hi) {
+    var rows = (state.frictionData && state.frictionData.segments) || [];
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var sc = rows[i].score || 0;
+      if (sc <= 0) continue;
+      if (sc < lo) continue;
+      if (hi < 1 ? sc >= hi : sc > hi) continue;
+      out.push(rows[i]);
+    }
+    return out;
+  }
+
+  function _frictionBinTooltip(lo, hi) {
+    var rows = _frictionSegmentsInBin(lo, hi);
+    var head = "Score " + lo.toFixed(2) + "–" + hi.toFixed(2) + " · " +
+      clipgenPluralUnit(rows.length, "segment", "segments");
+    if (!rows.length) return head;
+    var lines = [head];
+    // Resolve text only for the handful shown — a busy bin can hold hundreds of
+    // rows and _segmentIndexById is a linear scan.
+    for (var i = 0; i < rows.length && i < _FRICTION_TOOLTIP_SEGMENTS; i++) {
+      var idx = _segmentIndexById(rows[i].id);
+      var seg = idx >= 0 ? state.segments[idx] : null;
+      lines.push(seg ? _frictionWhyLine(rows[i], seg)
+        : formatTime(0) + " · " + (rows[i].score || 0).toFixed(2));
+    }
+    if (rows.length > _FRICTION_TOOLTIP_SEGMENTS) {
+      lines.push("+" + (rows.length - _FRICTION_TOOLTIP_SEGMENTS) + " more");
+    }
+    return lines.join("\n");
+  }
+
+  // ---- Score histogram (the score-band control) ----
+
+  var _FRICTION_HIST_BINS = 10;
+
+  function renderFrictionHistogram() {
+    var host = qs("#frictionHistogram");
+    if (!host) return;
+    host.innerHTML = "";
+    var segs = (state.frictionData && state.frictionData.segments) || [];
+    var counts = [];
+    var i;
+    for (i = 0; i < _FRICTION_HIST_BINS; i++) counts[i] = 0;
+    var scored = 0;
+    for (i = 0; i < segs.length; i++) {
+      var s = Number(segs[i].score) || 0;
+      // Only scored segments are binned. score_segments emits a row for every
+      // segment and most score exactly 0, so including them makes bin 0 a spike
+      // that flattens every other bin against the 6% floor.
+      if (s <= 0) continue;
+      if (s > 1) s = 1;
+      scored++;
+      counts[Math.min(_FRICTION_HIST_BINS - 1, Math.floor(s * _FRICTION_HIST_BINS))]++;
+    }
+    var maxCount = 0;
+    for (i = 0; i < _FRICTION_HIST_BINS; i++) if (counts[i] > maxCount) maxCount = counts[i];
+    for (i = 0; i < _FRICTION_HIST_BINS; i++) {
+      var n = counts[i];
+      var pct = maxCount > 0 ? (n / maxCount) * 100 : 0;
+      if (n > 0 && pct < 6) pct = 6; // floor so a single-segment bin stays visible
+      var bar = el("div", "friction-hist-bar");
+      var fill = el("div", "friction-hist-bar-fill");
+      fill.style.height = pct.toFixed(1) + "%";
+      bar.appendChild(fill);
+      (function (lo, hi) {
+        // Built lazily on hover, not captured here: the histogram can be rendered
+        // before the transcript lands, and the explanation needs segment text.
+        attachHoverTooltip(bar, function () { return _frictionBinTooltip(lo, hi); },
+          { multiline: true });
+      })(i / _FRICTION_HIST_BINS, (i + 1) / _FRICTION_HIST_BINS);
+      host.appendChild(bar);
+    }
+    host.appendChild(el("span", "friction-hist-label",
+      clipgenPluralUnit(scored, "scored segment", "scored segments")));
+    host.appendChild(_buildFrictionHandle("min"));
+    host.appendChild(_buildFrictionHandle("max"));
+
+    var bounds = qs("#frictionBounds");
+    if (bounds) {
+      bounds.innerHTML = "";
+      bounds.appendChild(_buildFrictionBoundLabel("min"));
+      bounds.appendChild(_buildFrictionBoundLabel("max"));
+    }
+  }
+
+  function _buildFrictionHandle(which) {
+    var m = el("div", "friction-hist-marker");
+    m.setAttribute("data-bound", which);
+    return m;
+  }
+
+  function _buildFrictionBoundLabel(which) {
+    var s = el("span", "friction-hist-bound");
+    s.setAttribute("data-bound", which);
+    return s;
+  }
+
+  // Handle positions, per-bar dimming and the bound readouts. Split from
+  // renderFrictionHistogram so a drag never wipes the track's innerHTML
+  // mid-gesture (which would drop the pointer capture the drag depends on).
+  function _updateFrictionBounds(activeBound) {
+    var host = qs("#frictionHistogram");
+    if (!host) return;
+    var lo = state.frictionMin;
+    var hi = state.frictionMax;
+    var markers = host.querySelectorAll(".friction-hist-marker");
+    for (var m = 0; m < markers.length; m++) {
+      var which = markers[m].getAttribute("data-bound");
+      markers[m].style.left = ((which === "min" ? lo : hi) * 100) + "%";
+      markers[m].classList.toggle("is-active", which === activeBound);
+    }
+    var bars = host.querySelectorAll(".friction-hist-bar");
+    for (var i = 0; i < bars.length; i++) {
+      // A bar is outside when its whole range falls beyond either bound.
+      var barLo = i / _FRICTION_HIST_BINS;
+      var barHi = (i + 1) / _FRICTION_HIST_BINS;
+      bars[i].classList.toggle("is-outside", barHi <= lo || barLo >= hi);
+    }
+
+    // Labels sit under their own handle. When the two bounds nearly coincide the
+    // labels would overlap, so nudge them apart — the positions stay indicative,
+    // and the numbers stay readable, which is the point of the readout.
+    var loPct = lo * 100;
+    var hiPct = hi * 100;
+    if (hiPct - loPct < 8) {
+      var mid = (loPct + hiPct) / 2;
+      loPct = Math.max(0, mid - 4);
+      hiPct = Math.min(100, mid + 4);
+    }
+    var labels = (qs("#frictionBounds") || host).querySelectorAll(".friction-hist-bound");
+    for (var j = 0; j < labels.length; j++) {
+      var isMin = labels[j].getAttribute("data-bound") === "min";
+      labels[j].style.left = (isMin ? loPct : hiPct) + "%";
+      labels[j].textContent = (isMin ? lo : hi).toFixed(2);
+      labels[j].classList.toggle("is-active", labels[j].getAttribute("data-bound") === activeBound);
+    }
+  }
+
+  function _initFrictionHistogramDrag() {
+    var host = qs("#frictionHistogram");
+    if (!host) return;
+    var raf = 0;
+    var pending = null;
+    var grabbed = null; // "min" | "max" — which handle this gesture moves
+
+    function scoreAt(clientX) {
+      var r = host.getBoundingClientRect();
+      if (!r.width) return null;
+      // 0.05 steps, matching the range input this replaced.
+      return Math.max(0, Math.min(1, Math.round(((clientX - r.left) / r.width) * 20) / 20));
+    }
+
+    function commit(v) {
+      if (v === null || !grabbed) return;
+      // Bounds clamp against each other rather than swapping: dragging one end
+      // past the other collapses the band instead of silently inverting it.
+      if (grabbed === "min") v = Math.min(v, state.frictionMax);
+      else v = Math.max(v, state.frictionMin);
+      var key = grabbed === "min" ? "frictionMin" : "frictionMax";
+      if (state[key] === v) {
+        _updateFrictionBounds(grabbed); // still reflect the grabbed handle
+        return;
+      }
+      state[key] = v;
+      applyFrictionDecorations();
+      _updateFrictionBounds(grabbed);
+      renderTimeline();
+    }
+
+    // Pointer capture keeps the gesture on the track while the pointer wanders
+    // off it, so nothing is bound at document scope and there is nothing to tear
+    // down on pagehide. The handlers gate on `grabbed`, not on hasPointerCapture:
+    // capture is a nicety some engines refuse (and WKWebView hosts this app in
+    // the desktop bundle), and a drag that silently stops tracking is worse than
+    // one that merely stops following the pointer past the edges. A move with no
+    // button held means we missed the pointerup, so the gesture self-heals.
+    host.addEventListener("pointerdown", function (e) {
+      var v = scoreAt(e.clientX);
+      if (v === null) return;
+      // A press outside the band always grabs the bound on that side, so it
+      // widens toward the press. Nearest-handle only applies inside. Without the
+      // outside case, a band dragged shut (min === max) would be unrecoverable:
+      // every press would tie, ties would pick min, and min can never exceed max.
+      if (v > state.frictionMax) grabbed = "max";
+      else if (v < state.frictionMin) grabbed = "min";
+      else grabbed = Math.abs(v - state.frictionMin) <= Math.abs(v - state.frictionMax) ? "min" : "max";
+      try { host.setPointerCapture(e.pointerId); } catch (err) { /* capture is optional */ }
+      pending = v;
+      commit(v);
+      e.preventDefault();
     });
-    var slider = qs("#frictionThreshold");
-    slider.value = String(state.frictionThreshold);
-    qs("#frictionThresholdVal").textContent = state.frictionThreshold.toFixed(2);
+    host.addEventListener("pointermove", function (e) {
+      if (!grabbed) return;
+      if (e.buttons === 0) { endDrag(e); return; }
+      pending = scoreAt(e.clientX);
+      if (raf) return;
+      raf = requestAnimationFrame(function () { raf = 0; commit(pending); });
+    });
+    function endDrag(e) {
+      if (!grabbed) return;
+      try { host.releasePointerCapture(e.pointerId); } catch (err) { /* never captured */ }
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      commit(pending);
+      grabbed = null;
+      _updateFrictionBounds(null);
+      // Persist once per gesture, not per frame — the stored UI state is a
+      // parse/stringify of the whole page blob.
+      setStoredUIStateField("transcripts", "frictionMin", state.frictionMin);
+      setStoredUIStateField("transcripts", "frictionMax", state.frictionMax);
+    }
+    host.addEventListener("pointerup", endDrag);
+    host.addEventListener("pointercancel", endDrag);
+  }
+
+  // ---- Category chips ----
+  //
+  // One toggleable chip per category, replacing the old pairing of a read-only
+  // stat-chip row with a duplicate row of checkboxes. Counts are computed here
+  // rather than read from stats.by_category, which counts marker hits (not
+  // segments) and is threshold-independent, so it would never move with the
+  // histogram and an empty category would never read as empty.
+  function _frictionCategoryCounts() {
+    var out = {};
+    var segs = (state.frictionData && state.frictionData.segments) || [];
+    for (var i = 0; i < segs.length; i++) {
+      var sc = segs[i].score || 0;
+      if (sc <= 0 || !_frictionScoreInBand(sc)) continue;
+      var cats = segs[i].categories || [];
+      for (var j = 0; j < cats.length; j++) out[cats[j]] = (out[cats[j]] || 0) + 1;
+    }
+    return out;
+  }
+
+  function _buildFrictionChip(cat) {
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "friction-chip";
+    btn.setAttribute("data-cat", cat.key);
+    btn.appendChild(el("span", "", cat.label));
+    btn.appendChild(el("span", "friction-chip-count", "0"));
+    btn.addEventListener("click", function () {
+      if (btn.classList.contains("is-empty")) return;
+      _ensureFrictionFilter();
+      state.frictionCategoryFilter[cat.key] = state.frictionCategoryFilter[cat.key] === false;
+      setStoredUIStateField("transcripts", "frictionCategoryFilter", state.frictionCategoryFilter);
+      applyFrictionDecorations();
+      renderTimeline();
+    });
+    return btn;
+  }
+
+  function renderFrictionChips() {
+    var host = qs("#frictionChips");
+    if (!host) return;
+    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    // Structure is built once; a threshold drag then only rewrites counts and
+    // state classes instead of rebuilding six buttons per animation frame.
+    if (host.childElementCount !== cats.length) {
+      host.innerHTML = "";
+      for (var i = 0; i < cats.length; i++) host.appendChild(_buildFrictionChip(cats[i]));
+    }
+    _ensureFrictionFilter();
+    var counts = _frictionCategoryCounts();
+    var chips = host.children;
+    for (var j = 0; j < chips.length; j++) {
+      var key = chips[j].getAttribute("data-cat");
+      var n = counts[key] || 0;
+      var on = state.frictionCategoryFilter[key] !== false;
+      chips[j].lastChild.textContent = String(n);
+      chips[j].classList.toggle("is-empty", n === 0);
+      chips[j].classList.toggle("is-on", n > 0 && on);
+      chips[j].setAttribute("aria-pressed", on ? "true" : "false");
+    }
   }
 
   function _frictionMomentMatches(m) {
-    if ((m.score || 0) < state.frictionThreshold) return false;
+    if (!_frictionScoreInBand(m.score || 0)) return false;
     var f = state.frictionCategoryFilter;
     if (f && m.category && f[m.category] === false) return false;
     return true;
@@ -1061,66 +1397,151 @@
     return idxs;
   }
 
-  function _buildMomentRow(m) {
-    var idxs = _momentSegmentIndices(m);
-    // An unsourced moment can't be quoted or seeked to — skip it entirely.
-    if (idxs.length === 0) return null;
-    var firstIdx = idxs[0];
+  // ---- Moment jump strip ----
+  //
+  // Moments are navigation, not content: one chip per moment, one line, always.
+  // The evidence they used to carry as a blockquote is the transcript itself, and
+  // their rationale renders as a .friction-callout under the quoted passage.
 
-    var row = document.createElement("div");
-    row.className = "friction-moment friction-moment--seekable";
-
-    var head = document.createElement("div");
-    head.className = "friction-moment-head";
-    head.appendChild(el("span", "friction-cat-badge", _frictionCatLabel(m.category)));
-    head.appendChild(el("span", "friction-moment-score", (m.score != null ? m.score : 0).toFixed(2)));
-    head.appendChild(el("span", "friction-moment-time", formatTime(state.segments[firstIdx].start)));
-    row.appendChild(head);
-
-    // Quote the transcript line(s) the moment was detected on.
-    var quote = idxs
-      .map(function (i) { return (state.segments[i].text || "").trim(); })
-      .filter(Boolean)
-      .join(" ");
-    if (quote) row.appendChild(el("blockquote", "friction-moment-quote", quote));
-
-    if (m.rationale) row.appendChild(el("div", "friction-moment-rationale", m.rationale));
-
-    row.addEventListener("click", function () { _seekToSegmentIndex(firstIdx); });
-    return row;
+  function _frictionJumpEmptyText() {
+    var fd = state.frictionData;
+    if (!fd) return "No moments detected.";
+    if (fd.deterministic) {
+      return _frictionDepMet()
+        ? "Run friction analysis to surface AI-refined moments."
+        : "Run Summary to surface AI-refined friction moments.";
+    }
+    if (fd.llm_ok === false) return "Moment detection failed. Re-run with an installed Ollama model.";
+    if (fd.moments && fd.moments.length) return "No moments match the current filter.";
+    return "No moments detected.";
   }
 
-  function renderFrictionMoments() {
-    _ensureFrictionFilter();
-    var el2 = qs("#frictionMoments");
-    el2.innerHTML = "";
-    var fd = state.frictionData;
-    if (!fd) return;
-    var moments = (fd.moments || []).filter(_frictionMomentMatches).filter(function (m) {
-      return _momentSegmentIndices(m).length > 0;
-    });
+  function renderFrictionJumpStrip() {
+    var strip = qs("#frictionJumpStrip");
+    if (!strip) return;
+    strip.innerHTML = "";
+    var moments = state.frictionVisibleMoments || [];
+    var prev = qs("#frictionJumpPrev");
+    var next = qs("#frictionJumpNext");
+    if (prev) prev.disabled = moments.length === 0;
+    if (next) next.disabled = moments.length === 0;
     if (moments.length === 0) {
-      var msg;
-      if (fd.deterministic) {
-        msg = _frictionDepMet()
-          ? "Run friction analysis to surface AI-refined moments."
-          : "Run Summary to surface AI-refined friction moments.";
-      } else if (fd.llm_ok === false) {
-        msg = "Moment detection failed. Re-run with an installed Ollama model.";
-      } else if (fd.moments && fd.moments.length) {
-        msg = "No moments match the current filter.";
-      } else {
-        msg = "No moments detected.";
-      }
-      el2.appendChild(el("p", "friction-moments-empty", msg));
+      state.frictionMomentIndex = -1;
+      strip.appendChild(el("span", "friction-jump-empty", _frictionJumpEmptyText()));
       return;
     }
+    // A filter change can shrink the list out from under the current selection.
+    if (state.frictionMomentIndex >= moments.length) state.frictionMomentIndex = -1;
     var frag = document.createDocumentFragment();
-    moments.forEach(function (m) {
-      var rowEl = _buildMomentRow(m);
-      if (rowEl) frag.appendChild(rowEl);
+    moments.forEach(function (entry, i) {
+      var seg = state.segments[entry.idxs[0]];
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "friction-jump-chip" + (i === state.frictionMomentIndex ? " is-current" : "");
+      if (entry.moment.rationale) btn.title = entry.moment.rationale;
+      btn.appendChild(el("span", "friction-jump-chip-num", String(i + 1)));
+      btn.appendChild(el("span", "", _frictionCatLabel(entry.moment.category)));
+      btn.appendChild(el("span", "friction-jump-chip-time", formatTime(seg.start)));
+      btn.addEventListener("click", function () { _goToFrictionMoment(i); });
+      frag.appendChild(btn);
     });
-    el2.appendChild(frag);
+    strip.appendChild(frag);
+  }
+
+  function _goToFrictionMoment(i) {
+    var moments = state.frictionVisibleMoments || [];
+    if (moments.length === 0) return;
+    if (i < 0) i = moments.length - 1;
+    if (i >= moments.length) i = 0;
+    state.frictionMomentIndex = i;
+    renderFrictionJumpStrip();
+    // Seek to the FIRST cited segment so the reader lands at the start of the
+    // quoted passage and reads down into the callout that closes it.
+    _seekToSegmentIndex(moments[i].idxs[0]);
+  }
+
+  function _stepFrictionMoment(dir) {
+    var moments = state.frictionVisibleMoments || [];
+    if (moments.length === 0) return;
+    var cur = state.frictionMomentIndex;
+    _goToFrictionMoment(cur < 0 ? (dir > 0 ? 0 : moments.length - 1) : cur + dir);
+  }
+
+  // ---- Decorating the transcript itself ----
+
+  function _buildFrictionCallout(entry, number) {
+    var box = el("div", "friction-callout");
+    var head = el("div", "friction-callout-head");
+    head.appendChild(el("span", "friction-callout-num", String(number)));
+    head.appendChild(el("span", "friction-cat-badge friction-cat-badge--sm",
+      _frictionCatLabel(entry.moment.category)));
+    head.appendChild(el("span", "friction-callout-score",
+      (entry.moment.score != null ? entry.moment.score : 0).toFixed(2)));
+    box.appendChild(head);
+    if (entry.moment.rationale) {
+      box.appendChild(el("div", "friction-callout-rationale", entry.moment.rationale));
+    }
+    return box;
+  }
+
+  // Tints, isolate hiding, inline callouts and the counter. The ONLY place
+  // friction touches #segmentList — renderSegments deliberately emits no friction
+  // markup, so the full-rebuild path and this update path cannot diverge.
+  function _decorateSegmentList() {
+    var list = qs("#segmentList");
+    if (!list) return;
+    // renderPartialSegments appends by ordinal while a transcript streams in; a
+    // callout inserted mid-list would corrupt that fast path.
+    if (state.streamingParticipant) return;
+
+    var stale = list.querySelectorAll(".friction-callout");
+    for (var s = 0; s < stale.length; s++) stale[s].parentNode.removeChild(stale[s]);
+
+    var on = state.frictionMode !== "off";
+    var isolate = state.frictionMode === "isolate";
+    var matches = state.frictionMatchBySegId || {};
+    var cited = state.frictionCitedBySegId || {};
+    var rows = list.querySelectorAll(".segment-row");
+    var matched = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var seg = state.segments[i];
+      var score = seg ? matches[seg.id] : undefined;
+      var isCited = !!(seg && cited[seg.id]);
+      if (score !== undefined || isCited) matched++;
+      var row = rows[i];
+      if (on && score !== undefined) {
+        row.classList.add("segment-friction");
+        row.style.setProperty("--seg-friction-alpha", score);
+      } else {
+        row.classList.remove("segment-friction");
+        row.style.removeProperty("--seg-friction-alpha");
+      }
+      row.classList.toggle("segment-cited", on && isCited);
+      // Hidden, never removed: state.cachedSegmentRows is indexed positionally
+      // against state.segments, so removing a row would misalign every consumer.
+      row.classList.toggle("segment-hidden", isolate && !(score !== undefined || isCited));
+    }
+
+    if (on) {
+      var moments = state.frictionVisibleMoments || [];
+      for (var k = 0; k < moments.length; k++) {
+        // Anchor on the LAST cited row so the callout closes the quoted passage.
+        var anchor = rows[moments[k].idxs[moments[k].idxs.length - 1]];
+        if (!anchor) continue;
+        list.insertBefore(_buildFrictionCallout(moments[k], k + 1), anchor.nextSibling);
+      }
+    }
+
+    var counter = qs("#frictionCounter");
+    if (counter) {
+      var total = state.segments.length;
+      var text = matched + " of " + clipgenPluralUnit(total, "segment", "segments");
+      var stats = state.frictionData && state.frictionData.stats;
+      if (stats && stats.markers_per_minute != null) {
+        text += " · " + stats.markers_per_minute + " markers/min";
+      }
+      counter.textContent = text;
+    }
   }
 
   function _primaryCategory(frow) {
@@ -1138,18 +1559,24 @@
   function _frictionMarkAll() {
     var fd = state.frictionData;
     if (!fd || !fd.segments) return;
-    _ensureFrictionFilter();
+    // Same predicate as the tints, the band and the counter — read the shared map
+    // rather than re-deriving "matching" a second time here.
+    _recomputeFrictionMatches();
+    var matches = state.frictionMatchBySegId;
     var groups = {};
     fd.segments.forEach(function (frow) {
-      if ((frow.score || 0) < state.frictionThreshold) return;
-      var cats = frow.categories || [];
-      var matched = [];
-      for (var i = 0; i < cats.length; i++) {
-        if (state.frictionCategoryFilter[cats[i]] !== false) matched.push(cats[i]);
-      }
-      if (matched.length === 0) return;
+      if (matches[frow.id] === undefined) return;
       var primary = _primaryCategory(frow);
-      if (!primary || state.frictionCategoryFilter[primary] === false) primary = matched[0];
+      // The row matched on some enabled category; prefer the dominant one, but
+      // never label a group with a category the user filtered out.
+      if (!primary || state.frictionCategoryFilter[primary] === false) {
+        primary = null;
+        var cats = frow.categories || [];
+        for (var i = 0; i < cats.length; i++) {
+          if (state.frictionCategoryFilter[cats[i]] !== false) { primary = cats[i]; break; }
+        }
+      }
+      if (!primary) return;
       if (!groups[primary]) groups[primary] = [];
       groups[primary].push(frow.id);
     });
@@ -1178,48 +1605,68 @@
     }
   }
 
-  function _refreshHeatmapAffordances() {
-    var btn = qs("#frictionHeatmapBtn");
-    if (!btn) return;
-    var has = !!(state.frictionData && state.frictionData.segments && state.frictionData.segments.length);
-    btn.disabled = !has;
-    // Only show the pressed/active styling when the toggle is both enabled and
-    // actionable — otherwise a stored-enabled toggle renders active-but-greyed
-    // on load before friction data arrives.
-    var showActive = has && state.frictionHeatmapEnabled;
-    btn.classList.toggle("active", showActive);
-    btn.setAttribute("aria-pressed", showActive ? "true" : "false");
-  }
-
   function initFriction() {
     qs("#frictionRerun").addEventListener("click", function () { _startFrictionRun(); });
     qs("#frictionCancel").addEventListener("click", function () { _stopFrictionRun(); });
     var staleRerun = qs("#frictionStaleRerun");
     if (staleRerun) staleRerun.addEventListener("click", function () { _startFrictionRun(); });
     qs("#frictionMarkAll").addEventListener("click", function () { _frictionMarkAll(); });
-    var slider = qs("#frictionThreshold");
-    slider.addEventListener("input", function () {
-      state.frictionThreshold = parseFloat(slider.value);
-      qs("#frictionThresholdVal").textContent = state.frictionThreshold.toFixed(2);
-      renderFrictionMoments();
-    });
+    qs("#frictionJumpPrev").addEventListener("click", function () { _stepFrictionMoment(-1); });
+    qs("#frictionJumpNext").addEventListener("click", function () { _stepFrictionMoment(1); });
   }
 
-  function initFrictionHeatmapToggle() {
-    var btn = qs("#frictionHeatmapBtn");
-    if (!btn) return;
-    var stored = getStoredUIState("transcripts");
-    state.frictionHeatmapEnabled = !!(stored && stored.frictionHeatmapEnabled);
-    // Defer the active/aria-pressed visual to _refreshHeatmapAffordances so it
-    // only lights up once friction data is actually present.
-    _refreshHeatmapAffordances();
-    btn.addEventListener("click", function () {
-      state.frictionHeatmapEnabled = !state.frictionHeatmapEnabled;
-      setStoredUIStateField("transcripts", "frictionHeatmapEnabled", state.frictionHeatmapEnabled);
-      _refreshHeatmapAffordances();
-      renderSegments();
-      renderTimeline();
-    });
+  // ---- Friction mode (Off / Highlight / Isolate) ----
+  //
+  // Replaces the old player-bar heatmap button. "Highlight" is what that toggle
+  // did (tint hot segments + draw the timeline density band); "Isolate" adds
+  // hiding every row that doesn't match the filter, turning the transcript into
+  // the result list. The control lives with the filters it belongs to.
+  var FRICTION_MODES = [
+    { value: "off", icon: "no-symbol", title: "Friction off" },
+    { value: "highlight", icon: "fire", title: "Highlight matching segments in the transcript" },
+    { value: "isolate", icon: "funnel", title: "Show only matching segments" },
+  ];
+  var FRICTION_MODE_ORDER = ["off", "highlight", "isolate"];
+
+  function _frictionMode(v) {
+    return v === "highlight" || v === "isolate" ? v : "off";
+  }
+
+  function initFrictionMode() {
+    var mount = qs("#frictionModeMount");
+    if (!mount) return;
+    var stored = getStoredUIState("transcripts") || {};
+    state.frictionMode = _frictionMode(stored.frictionMode);
+    if (typeof stored.frictionMin === "number") state.frictionMin = stored.frictionMin;
+    if (typeof stored.frictionMax === "number") state.frictionMax = stored.frictionMax;
+    if (stored.frictionCategoryFilter) {
+      state.frictionCategoryFilter = stored.frictionCategoryFilter;
+    }
+    mount.appendChild(createSegTrack({
+      id: "frictionModeInput",
+      value: state.frictionMode,
+      options: FRICTION_MODES,
+      size: "sm",
+      onChange: _setFrictionMode,
+    }));
+    _initFrictionHistogramDrag();
+  }
+
+  function _setFrictionMode(mode) {
+    state.frictionMode = _frictionMode(mode);
+    setStoredUIStateField("transcripts", "frictionMode", state.frictionMode);
+    applyFrictionDecorations();
+    renderTimeline();
+  }
+
+  // Keyboard/palette entry point: the segmented control has no single toggle.
+  function cycleFrictionMode() {
+    var next = FRICTION_MODE_ORDER[
+      (FRICTION_MODE_ORDER.indexOf(state.frictionMode) + 1) % FRICTION_MODE_ORDER.length
+    ];
+    var hidden = qs("#frictionModeInput");
+    if (hidden && hidden.parentNode) segTrackSetValue(hidden.parentNode, next);
+    _setFrictionMode(next);
   }
 
   // Friction tooltip on hot segments (reuses the shared #trTooltip element).
@@ -1228,7 +1675,7 @@
   // _hideFrictionTooltip's TS.hasTimelineHover() guard). The segment-list
   // mousemove that calls _showFrictionTooltip — and its coalescing _segTooltipRaf
   // — live in the hub's segment-list delegation, not here.
-  function _showFrictionTooltip(frow, clientX, clientY) {
+  function _showFrictionTooltip(frow, seg, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
     tip.textContent = "";
@@ -1241,14 +1688,23 @@
       });
       tip.appendChild(badges);
     }
+    // The line itself, so the hover answers "why is this flagged" without
+    // needing to look back at the transcript (it is the whole point on the
+    // timeline band, where there is no text nearby at all).
+    var quote = _frictionQuote(seg, 90);
+    if (quote) {
+      tip.appendChild(el("span", "tr-tooltip-friction-quote", quote));
+      tip.appendChild(document.createElement("br"));
+    }
     var markers = frow.markers || [];
     if (markers.length) {
       var shown = markers.slice(0, 5).join(", ");
       if (markers.length > 5) shown += " +" + (markers.length - 5) + " more";
-      tip.appendChild(document.createTextNode(shown));
+      tip.appendChild(el("span", "tr-tooltip-friction-markers", "matched: " + shown));
       tip.appendChild(document.createElement("br"));
     }
-    tip.appendChild(el("span", "tr-tooltip-friction-score", "Score " + (frow.score || 0).toFixed(2)));
+    tip.appendChild(el("span", "tr-tooltip-friction-score",
+      (seg ? formatTime(seg.start) + " · " : "") + "score " + (frow.score || 0).toFixed(2)));
     tip.classList.remove("hidden");
     var tipRect = tip.getBoundingClientRect();
     var x = clientX + 12;
@@ -1269,11 +1725,13 @@
   }
 
   // ---- Published back to the hub ----
-  // Boot wires initPanelTabs/initSummaryActions/initFriction/initFrictionHeatmapToggle;
+  // Boot wires initPanelTabs/initSummaryActions/initFriction/initFrictionMode;
   // selectParticipant + the poller + the visibility/focus handlers drive
-  // load*/clear*/stop*/_restoreActiveTab; the segment-list hover calls the
-  // friction tooltips; the poller asks isSummaryPolling. loadFriction is also
-  // reached by the pills satellite's friction run/stop rows.
+  // load*/clear*/stop*/_restoreActiveTab; renderSegments calls
+  // applyFrictionDecorations; the command palette calls cycleFrictionMode; the
+  // segment-list hover calls the friction tooltips; the poller asks
+  // isSummaryPolling. loadFriction is also reached by the pills satellite's
+  // friction run/stop rows.
   TS.loadSummary = loadSummary;
   TS.loadFriction = loadFriction;
   TS.clearAnalysisPanel = clearAnalysisPanel;
@@ -1282,7 +1740,9 @@
   TS.initPanelTabs = initPanelTabs;
   TS.initSummaryActions = initSummaryActions;
   TS.initFriction = initFriction;
-  TS.initFrictionHeatmapToggle = initFrictionHeatmapToggle;
+  TS.initFrictionMode = initFrictionMode;
+  TS.applyFrictionDecorations = applyFrictionDecorations;
+  TS.cycleFrictionMode = cycleFrictionMode;
   TS._stopSummaryPoll = _stopSummaryPoll;
   TS._stopCitationsPoll = _stopCitationsPoll;
   TS._stopFrictionPoll = _stopFrictionPoll;
