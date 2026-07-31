@@ -1,8 +1,9 @@
 /* Overview hub — shared state, data loading, and tab switching for /overview/.
  *
- * The Overview page hosts three cohort-level tabs as satellites: Map
+ * The Overview page hosts four cohort-level tabs as satellites: Map
  * (overview-map.js, the 3D similarity space), Convergence
- * (overview-convergence.js), and Metadata (overview-metadata.js). They share
+ * (overview-convergence.js), Metadata (overview-metadata.js), and Reports
+ * (overview-reports.js, the per-participant mini-report). They share
  * this hub's state through the window.ClipgenOverview (OV) namespace — the
  * same hub-plus-satellite pattern Studio/Screenspace/Transcripts use.
  *
@@ -264,6 +265,7 @@
       map: qs("#mapPanel"),
       convergence: qs("#convergencePanel"),
       metadata: qs("#metadataPanel"),
+      reports: qs("#reportsPanel"),
     };
     var key;
     for (key in panels) {
@@ -273,6 +275,7 @@
     if (OV.convergenceDeactivate) OV.convergenceDeactivate();
     if (OV.metadataDeactivate) OV.metadataDeactivate();
     if (OV.mapDeactivate) OV.mapDeactivate();
+    if (OV.reportsDeactivate) OV.reportsDeactivate();
 
     // Drop any paint the outgoing tab asserted; the incoming one re-asserts it
     // from its own activate path (Map never does — it self-heals silently).
@@ -283,6 +286,7 @@
     if (state.activeTab === "map" && OV.mapActivate) OV.mapActivate();
     if (state.activeTab === "convergence" && OV.convergenceActivate) OV.convergenceActivate();
     if (state.activeTab === "metadata" && OV.metadataActivate) OV.metadataActivate();
+    if (state.activeTab === "reports" && OV.reportsActivate) OV.reportsActivate();
 
     if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");
@@ -321,6 +325,7 @@
       tabCommand("metadata", "Show Metadata tab", "table-cells"),
       tabCommand("convergence", "Show Convergence tab", "arrows-pointing-in"),
       tabCommand("map", "Show Map tab", "map"),
+      tabCommand("reports", "Show Reports tab", "document-text"),
       {
         id: "overview:refresh",
         title: "Refresh Overview data",
@@ -388,6 +393,7 @@
       if (state.activeTab === "map" && OV.mapResize) OV.mapResize();
       if (state.activeTab === "convergence" && OV.convergenceResize) OV.convergenceResize();
       if (state.activeTab === "metadata" && OV.metadataResize) OV.metadataResize();
+      if (state.activeTab === "reports" && OV.reportsResize) OV.reportsResize();
     });
 
     ensureData();
@@ -413,6 +419,7 @@
       { id: "overview.tabMap", handler: function () { switchToTab("map"); } },
       { id: "overview.tabConvergence", handler: function () { switchToTab("convergence"); } },
       { id: "overview.tabMetadata", handler: function () { switchToTab("metadata"); } },
+      { id: "overview.tabReports", handler: function () { switchToTab("reports"); } },
       {
         id: "global.refresh",
         handler: function () {

@@ -233,8 +233,12 @@ def test_settings_records_include_ollama_model_pickers(client):
     assert by_name["OLLAMA_SUMMARY_MODEL"]["provider"] == "ollama"
     assert by_name["OLLAMA_FRICTION_MODEL"]["type"] == "model_select"
     assert by_name["OLLAMA_FRICTION_MODEL"]["provider"] == "ollama"
-    # Friction inherits the summary model via a blank value, shown as a label.
+    # Friction and report inherit the summary model via a blank value, shown as
+    # a label.
     assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
+    assert by_name["OLLAMA_REPORT_MODEL"]["type"] == "model_select"
+    assert by_name["OLLAMA_REPORT_MODEL"]["provider"] == "ollama"
+    assert by_name["OLLAMA_REPORT_MODEL"]["emptyLabel"]
 
 
 def test_settings_records_include_agent_prompts(client):
@@ -246,6 +250,8 @@ def test_settings_records_include_agent_prompts(client):
         "OLLAMA_CITATIONS_PROMPT",
         "OLLAMA_FRICTION_SYSTEM",
         "OLLAMA_FRICTION_PROMPT",
+        "OLLAMA_REPORT_SYSTEM",
+        "OLLAMA_REPORT_PROMPT",
     ):
         assert by_name[name]["type"] == "prompt"
         assert by_name[name]["tab"] == "Summaries"
@@ -261,9 +267,16 @@ def test_settings_records_include_agent_prompts(client):
         "segments",
         "limit",
     ]
+    assert by_name["OLLAMA_REPORT_PROMPT"]["placeholders"] == [
+        "participant",
+        "summary",
+        "observations",
+        "bookmarks",
+    ]
     # System prompts are sent verbatim — no placeholders.
     assert by_name["OLLAMA_CITATIONS_SYSTEM"]["placeholders"] == []
     assert by_name["OLLAMA_FRICTION_SYSTEM"]["placeholders"] == []
+    assert by_name["OLLAMA_REPORT_SYSTEM"]["placeholders"] == []
 
 
 def test_settings_put_persists_custom_prompt(client, tmp_path, monkeypatch):
@@ -4415,3 +4428,22 @@ def test_static_cache_headers():
         assert etag
         resp = c.get("/studio/utils.js", headers={"If-None-Match": etag})
         assert resp.status_code == 304
+
+
+def test_media_route_serves_generated_artifacts(client, tmp_path, monkeypatch):
+    """/studio/media/<file> serves the *current* output dir (the Overview
+    Reports tab plays generated clips from it). The getter resolves per
+    request, so a mid-session OUTPUT_DIR change is picked up immediately —
+    unlike screenspace's startup-snapshot media dir."""
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    (tmp_path / "Study P01 clip.mp4").write_bytes(b"not-really-mp4")
+    resp = client.get("/studio/media/Study%20P01%20clip.mp4")
+    assert resp.status_code == 200
+    assert resp.data == b"not-really-mp4"
+
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "moved.mp4").write_bytes(b"x")
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(other))
+    assert client.get("/studio/media/moved.mp4").status_code == 200
+    assert client.get("/studio/media/Study%20P01%20clip.mp4").status_code == 404

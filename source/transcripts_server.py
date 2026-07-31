@@ -13,7 +13,7 @@ API endpoints (all under /transcripts/):
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
   POST /api/embed-subtitle/<participant>          - mux participant transcript into a copy of their video
   POST /api/embed-all-subtitles                   - mux every participant's transcript into a subtitled copy of their video
-  GET  /api/agent/<key>/<participant>            - a thinking agent's result (summary/citations/friction), status, or 404
+  GET  /api/agent/<key>/<participant>            - a thinking agent's result (summary/citations/friction/report), status, or 404
   POST /api/agent/<key>/<participant>/regenerate - clear + re-trigger an agent (forces past its enabled config)
   POST /api/agent/<key>/<participant>/stop       - flag an in-flight agent run for discard
   GET  /api/agent/summary/<participant>/stream   - SSE token stream of the summary as it generates (summary-only)
@@ -306,6 +306,7 @@ def api_participants() -> FlaskResponse:
                     "summary": _step_state_agent(pid, entry, "summary"),
                     "citations": _step_state_agent(pid, entry, "citations"),
                     "friction": _step_state_agent(pid, entry, "friction"),
+                    "report": _step_state_agent(pid, entry, "report"),
                 },
             }
             # Multi-video: expose the timeline so the frontend can switch the
@@ -909,13 +910,17 @@ def api_summary_save(participant: str) -> FlaskResponse:
     data = request.get_json(silent=True)
     if not data or not data.get("summary", "").strip():
         return err("Summary text is required")
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None  # built-in agent, always registered
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
             return err("Participant not found", 404)
         entry["summary"] = data["summary"].strip()
-        entry.pop("citations", None)  # invalidate citations on edit
-        _mark_friction_stale(entry)  # summary text feeds the friction prompt
+        # An edited summary feeds every downstream agent: clear citations and
+        # the report, flag friction stale — same invalidation as the summary
+        # regenerate route.
+        _invalidate_dependents(entry, summary_agent)
     _schedule_persist()
     return ok()
 
@@ -1955,6 +1960,11 @@ class AgentOrchestrator:
                     # Snapshot the entry so the agent does not hold the lock
                     # during the (potentially slow) model call.
                     snapshot = dict(entry)
+                    # Manifest entries do not carry their own id; the report
+                    # agent's injected getters need it. The snapshot is never
+                    # written back (only entry[manifest_field] is committed),
+                    # so this key cannot leak into the manifest.
+                    snapshot["participant"] = participant
 
                 def _sink(tok: str) -> None:
                     with self._partial_lock:

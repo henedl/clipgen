@@ -1173,6 +1173,10 @@ def test_friction_regenerate_404_without_summary(tr_client, _agent_state_clean):
 
 
 def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch):
+    # The stub stores nothing, so the chain advances — without this the seeded
+    # entry (summary, no citations) would spawn the REAL citations agent, a
+    # live Ollama generation leaking past the end of the test.
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
 
@@ -1193,6 +1197,7 @@ def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch
     # friction was cleared before the re-trigger so the agent recomputes.
     assert "friction" not in transcripts_server._manifest["source_transcripts"]["P01"]
     done.wait(timeout=2)
+    _join_orchestrator_threads(transcripts_server._orchestrator)
 
 
 def test_friction_regenerate_returns_generating_when_in_flight(
@@ -1205,6 +1210,53 @@ def test_friction_regenerate_returns_generating_when_in_flight(
     assert resp.get_json()["generating"] is True
     # In-flight short-circuit must not clear the existing friction.
     assert "friction" in transcripts_server._manifest["source_transcripts"]["P01"]
+
+
+def test_report_regenerate_404_without_summary(tr_client, _agent_state_clean):
+    """The report agent depends on summary; the regenerate route must refuse
+    until one exists (the Overview tab offers the summary trigger first)."""
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+    }
+    resp = tr_client.post("/transcripts/api/agent/report/P01/regenerate")
+    assert resp.status_code == 404
+
+
+def test_report_regenerate_runs_when_disabled(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """Manual-trigger contract: OLLAMA_REPORT_ENABLED=False keeps report out of
+    the auto-chain, but the regenerate route runs it anyway (force=True). The
+    orchestrator's snapshot must also carry the participant id for the report
+    agent's injected getters."""
+    monkeypatch.setattr(config, "OLLAMA_REPORT_ENABLED", False)
+    # The seeded entry has no citations, and the post-run chain advance would
+    # otherwise spawn the REAL citations agent (enabled by default) — a live
+    # Ollama call in a daemon thread that outlives this test and corrupts the
+    # shared orchestrator for whichever chain test runs next.
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry()
+
+    done = threading.Event()
+    seen: dict = {}
+
+    def stub_run(snapshot, cancel_event, on_token=None):
+        seen["participant"] = snapshot.get("participant")
+        done.set()
+
+    rp_agent = thinking_agents.get_agent("report")
+    assert rp_agent is not None
+    monkeypatch.setitem(rp_agent, "run", stub_run)
+
+    resp = tr_client.post("/transcripts/api/agent/report/P01/regenerate")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["generating"] is True
+    assert done.wait(timeout=2)
+    assert seen["participant"] == "P01"
+    _join_orchestrator_threads(transcripts_server._orchestrator)
 
 
 def test_friction_stop_sets_cancel_event(tr_client, _agent_state_clean):
@@ -1366,6 +1418,15 @@ def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monke
         thinking_agents.get_agent("citations"),  # type: ignore[arg-type]
         "run",
         _boom,
+    )
+    # The spy passes friction through to the real run_agent; without a stub
+    # that is a REAL Ollama generation on machines where Ollama runs. It
+    # outlives the 2 s thread join, then commits into a later test's manifest
+    # and squats the shared in-flight slot — the suite's flakiest interleaving.
+    monkeypatch.setitem(
+        thinking_agents.get_agent("friction"),  # type: ignore[arg-type]
+        "run",
+        lambda entry, cancel, on_token=None: None,
     )
 
     started: list[str] = []
@@ -1688,6 +1749,18 @@ def test_participants_includes_friction_step_state(tr_client):
     assert by_id["P01"]["agents"]["friction"] == "idle"
 
 
+def test_participants_includes_report_step_state(tr_client):
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "x"}],
+        "summary": "A summary.",
+        "report": {"text": "## Overview\nFine.", "model": "m"},
+    }
+    resp = tr_client.get("/transcripts/api/participants")
+    assert resp.status_code == 200
+    by_id = {p["id"]: p for p in resp.get_json()["participants"]}
+    assert by_id["P01"]["agents"]["report"] == "done"
+
+
 def test_citations_regenerate_does_not_run_disabled_friction(
     tr_client, _agent_state_clean, monkeypatch
 ):
@@ -1921,8 +1994,9 @@ def test_api_models_includes_cached_and_agents(monkeypatch):
     assert tiny["cached"] is False
 
     agents = data["ollama"]["agents"]
-    assert {a["key"] for a in agents} == {"summary", "citations", "friction"}
-    # The configured summary/friction model is present in the faked install list.
+    assert {a["key"] for a in agents} == {"summary", "citations", "friction", "report"}
+    # The configured summary model is present in the faked install list, and the
+    # blank friction/report models resolve to it.
     assert all(a["installed"] for a in agents)
 
 

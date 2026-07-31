@@ -403,16 +403,18 @@
       if (!line) continue;
       if (line.indexOf("- ") === 0 || line.indexOf("* ") === 0) {
         inBullets = true;
-        bullets.push(escapeHtml(line.substring(2)));
+        bullets.push(clipgenRenderInlineMarkdown(line.substring(2)));
       } else if (!inBullets) {
         // Split paragraph into individual sentences for citation targeting
         var parts = line.split(/(?<=[.!?])\s+/);
         for (var k = 0; k < parts.length; k++) {
           var part = parts[k].trim();
-          if (part) paragraphSentences.push(escapeHtml(part));
+          // Models emit **bold** / `code` emphasis; render it instead of
+          // showing literal asterisks (same helper as the Overview report).
+          if (part) paragraphSentences.push(clipgenRenderInlineMarkdown(part));
         }
       } else {
-        bullets.push(escapeHtml(line));
+        bullets.push(clipgenRenderInlineMarkdown(line));
       }
     }
 

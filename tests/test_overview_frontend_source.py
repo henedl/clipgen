@@ -1,7 +1,7 @@
 """Static regression checks for Overview frontend sources.
 
 The Overview page is a hub (overview.js) + tab satellites
-(overview-{map,convergence,metadata}.js) sharing state through the
+(overview-{map,convergence,metadata,reports}.js) sharing state through the
 window.ClipgenOverview (OV) namespace. These checks pin the contracts the
 satellite-wiring test can't see (bare cross-file *reads*, script order,
 namespace hygiene).
@@ -38,20 +38,22 @@ def test_script_order_three_before_map_hub_before_satellites():
         "overview-map.js",
         "overview-convergence.js",
         "overview-metadata.js",
+        "overview-reports.js",
     ):
         assert hub < scripts.index(satellite), f"{satellite} loads before the hub"
     assert scripts.index("intake-cluster.js") < hub
 
 
 def test_tab_order_and_wip_badge():
-    """Tabs read Metadata | Convergence | Map; the Map tab carries the WIP
-    pill (the similarity map is the newest surface)."""
+    """Tabs read Metadata | Convergence | Map | Reports; the Map and Reports
+    tabs carry the WIP pill (the newest surfaces)."""
     html = OVERVIEW_HTML.read_text(encoding="utf-8")
     tabs = re.findall(r'data-tab="(\w+)"', html)
-    assert tabs == ["metadata", "convergence", "map"]
-    map_tab = html[html.index('data-tab="map"') :]
-    map_tab = map_tab[: map_tab.index("</button>")]
-    assert "ov-wip-badge" in map_tab
+    assert tabs == ["metadata", "convergence", "map", "reports"]
+    for tab in ("map", "reports"):
+        button = html[html.index('data-tab="' + tab + '"') :]
+        button = button[: button.index("</button>")]
+        assert "ov-wip-badge" in button, f"{tab} tab lost its WIP badge"
 
 
 def test_staleness_is_version_based_and_running_check_is_strict():
@@ -65,7 +67,9 @@ def test_staleness_is_version_based_and_running_check_is_strict():
     assert 's === "queued" || s === "running"' in md
     cv = (_WEB / "overview-convergence.js").read_text(encoding="utf-8")
     assert "cvState._snapshot = { version: state.dataVersion }" in cv
-    for src in (md, cv):
+    sm = (_WEB / "overview-reports.js").read_text(encoding="utf-8")
+    assert "rpState._snapshot = { version: state.dataVersion }" in sm
+    for src in (md, cv, sm):
         assert "_snapshot.ss" not in src  # old length-compare heuristic
     # The Map follows the same contract: re-activation with a newer hub
     # version re-fetches api/data (a stale matrix froze the layout after

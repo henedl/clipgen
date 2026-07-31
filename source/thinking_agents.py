@@ -1,15 +1,18 @@
 """Thinking-agent registry for clipgen.
 
 A "thinking agent" is a small, self-contained unit of Ollama-powered reasoning
-over a transcript: summary generation, citation linking, and (in the future)
-things like keyword extraction, pain-point tagging, or follow-up-question
-generation.
+over a transcript: summary generation, citation linking, friction detection,
+and mini-report writing.
 
 This module owns:
   - The ``Agent`` shape (prompt building, model selection, response parsing,
     dependency metadata, manifest field).
   - The ``AGENTS`` registry, ordered so dependencies come before dependents.
-  - The two built-in agents: ``summary`` (Pass 1) and ``citations`` (Pass 2).
+  - The built-in agents: ``summary`` (Pass 1), ``citations`` (Pass 2),
+    ``friction`` (Pass 3), and ``report`` (Pass 4 — a per-participant
+    mini-report over the summary, sheet observations, and transcript marks;
+    the latter two arrive via the ``configure()`` injection seam and the
+    agent is disabled by default, so it only runs when triggered manually).
 
 It does *not* own HTTP transport — that stays in ``ollama_client.generate()``.
 It does *not* own orchestration — that stays in ``transcripts_server._run_agent_chain()``.
@@ -71,8 +74,9 @@ class Agent(TypedDict):
                           dict), an optional ``threading.Event`` that, when
                           set, signals the agent to abort its in-flight model
                           call, and an optional ``on_token`` callback for
-                          streaming partial text (only the summary agent uses
-                          it — structured agents ignore it). Returns the value
+                          streaming partial text (the summary and report
+                          agents use it — structured agents ignore it).
+                          Returns the value
                           to store under ``manifest_field``, or ``None`` to skip
                           storage. Typed loosely (``Callable[..., Any]``) so the
                           orchestrator's 3-arg call and 2-arg test calls both
@@ -671,6 +675,208 @@ def _run_friction(
 
 
 # ---------------------------------------------------------------------------
+# Report agent (Pass 4) — per-participant mini-report
+# ---------------------------------------------------------------------------
+
+_MAX_REPORT_SUMMARY_CHARS = 2000
+_MAX_REPORT_OBSERVATIONS_CHARS = 4000
+_MAX_REPORT_MARKS_CHARS = 6000
+_REPORT_EMPTY_SECTION = "(none recorded)"
+
+# The report agent needs data that lives outside the transcript entry: sheet
+# observation rows (studio-blueprint process state in server.py) and resolved
+# transcript marks (transcripts_server manifest state). Both reach this module
+# by injection — mirroring overview.configure() — because importing either
+# owner from here would be an import cycle (transcripts_server imports this
+# module). Either getter may be None (CLI runs, tests); the report then
+# degrades to the sources that exist.
+_observation_rows_getter: Any = None
+_participant_marks_getter: Any = None
+
+
+def configure(
+    observation_rows_getter: Any = None,
+    participant_marks_getter: Any = None,
+) -> None:
+    """Wire process-state providers into the report agent (called by server.py).
+
+    *observation_rows_getter*: ``() -> list[dict]`` of per-(sheet row ×
+    participant) records carrying at least ``participant``, ``text``,
+    ``category``, and ``severity`` (server.py's ``_sheet_observation_rows``).
+    *participant_marks_getter*: ``(pid) -> list[dict]`` of resolved marks
+    carrying ``start``, ``category``, ``label``, and ``text``
+    (``transcripts_server.marks_for_participant`` — it takes the transcripts
+    manifest lock internally, which is safe here because the orchestrator
+    invokes ``run`` outside that lock).
+    """
+    global _observation_rows_getter, _participant_marks_getter
+    _observation_rows_getter = observation_rows_getter
+    _participant_marks_getter = participant_marks_getter
+
+
+def report_model() -> str:
+    """Resolve the Ollama model the report agent should use.
+
+    Blank ``OLLAMA_REPORT_MODEL`` means "follow the summary model", matching
+    the friction agent's inherit behavior.
+    """
+    return config.OLLAMA_REPORT_MODEL or config.OLLAMA_SUMMARY_MODEL
+
+
+def _format_report_observations(
+    rows: list[dict[str, Any]], participant: str
+) -> list[str]:
+    """Format *participant*'s sheet observations as ``- [M:SS] text (category, severity)`` lines.
+
+    The leading timestamp (the cell's first parsed start time) is what lets the
+    model cite video times the Reports tab can then link to generated clips;
+    text-only cells get no bracket. Deduplicates on observation text: the
+    getter emits one record per (row × cell), so a participant listed twice on
+    a row would otherwise repeat the same note.
+    """
+    lines: list[str] = []
+    seen: set[str] = set()
+    for rec in rows:
+        if rec.get("participant") != participant:
+            continue
+        text = str(rec.get("text") or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        category = str(rec.get("category") or "").strip() or "uncategorized"
+        severity = str(rec.get("severity") or "").strip()
+        qualifier = f"({category}, {severity})" if severity else f"({category})"
+        seconds = rec.get("seconds") or []
+        stamp = f"[{utils.seconds_to_timestamp(int(seconds[0]))}] " if seconds else ""
+        lines.append(f"- {stamp}{text} {qualifier}")
+    return lines
+
+
+def _format_report_marks(marks: list[dict[str, Any]]) -> list[str]:
+    """Format resolved marks as ``[M:SS] (Label) text`` lines.
+
+    Prefers the mark's own label (e.g. "Friction · frustration") over the
+    category bucket's display label; skips marks with no resolved text.
+    """
+    lines: list[str] = []
+    for mark in marks:
+        text = str(mark.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = int(float(mark.get("start", 0)))
+        except (TypeError, ValueError):
+            start = 0
+        category = str(mark.get("category") or "")
+        label = (
+            str(mark.get("label") or "").strip()
+            or config.MARK_CATEGORIES.get(category, {}).get("label")
+            or "Mark"
+        )
+        lines.append(f"[{utils.seconds_to_timestamp(start)}] ({label}) {text}")
+    return lines
+
+
+def build_report(
+    summary: str,
+    observations_text: str,
+    marks_text: str,
+    *,
+    participant: str,
+    model: str | None = None,
+    cancel_event: threading.Event | None = None,
+    on_token: Callable[[str], None] | None = None,
+) -> str | None:
+    """Generate the mini-report text from the three formatted sources.
+
+    Empty sources are sent as a "(none recorded)" placeholder rather than
+    omitted, so the prompt's structure is stable and the model is told
+    explicitly that a source has no data. Streams tokens through *on_token*
+    (surfaced as ``partial`` by the generic agent GET). Returns the cleaned
+    report text, or ``None`` when the model call failed.
+    """
+    if model is None:
+        model = report_model()
+    prompt = config.OLLAMA_REPORT_PROMPT.format(
+        participant=participant or "unknown",
+        summary=_truncate_middle(summary, _MAX_REPORT_SUMMARY_CHARS)
+        or _REPORT_EMPTY_SECTION,
+        observations=_truncate_middle(observations_text, _MAX_REPORT_OBSERVATIONS_CHARS)
+        or _REPORT_EMPTY_SECTION,
+        bookmarks=_truncate_middle(marks_text, _MAX_REPORT_MARKS_CHARS)
+        or _REPORT_EMPTY_SECTION,
+    )
+    utils.verbose_print(f"Generating mini-report for {participant} with model {model}")
+    response = ollama_client.generate(
+        prompt,
+        model=model,
+        system=config.OLLAMA_REPORT_SYSTEM,
+        think=False,
+        cancel_event=cancel_event,
+        on_token=on_token,
+    )
+    if not response:
+        utils.warning_print(
+            f"Mini-report generation failed (no response from model {model})"
+        )
+        return None
+    return _strip_think(response)
+
+
+def _run_report(
+    entry: dict[str, Any],
+    cancel_event: threading.Event | None,
+    on_token: Callable[[str], None] | None = None,
+) -> dict[str, Any] | None:
+    """Assemble the mini-report from summary + sheet observations + marks.
+
+    Returns the dict stored under ``source_transcripts[pid].report``, or
+    ``None`` when there is no summary yet or the model call failed/was
+    cancelled. ``entry["participant"]`` is injected by the orchestrator's
+    snapshot (manifest entries do not carry their own id).
+    """
+    summary = entry.get("summary") or ""
+    if not summary:
+        return None
+    participant = str(entry.get("participant") or "")
+
+    obs_rows = _observation_rows_getter() if _observation_rows_getter else []
+    marks = (
+        _participant_marks_getter(participant)
+        if (_participant_marks_getter and participant)
+        else []
+    )
+    observation_lines = _format_report_observations(obs_rows, participant)
+    mark_lines = _format_report_marks(marks)
+
+    if cancel_event is not None and cancel_event.is_set():
+        return None
+
+    model = report_model()
+    text = build_report(
+        summary,
+        "\n".join(observation_lines),
+        "\n".join(mark_lines),
+        participant=participant,
+        model=model,
+        cancel_event=cancel_event,
+        on_token=on_token,
+    )
+    if not text:
+        return None
+
+    return {
+        "text": text,
+        "model": model,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "sources": {
+            "observations": len(observation_lines),
+            "bookmarks": len(mark_lines),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -706,6 +912,16 @@ AGENTS: list[Agent] = [
         thread_name_prefix="friction",
         on_upstream_change="stale",
         run=_run_friction,
+    ),
+    Agent(
+        key="report",
+        enabled_config_key="OLLAMA_REPORT_ENABLED",
+        model_config_key="OLLAMA_REPORT_MODEL",
+        manifest_field="report",
+        depends_on=["summary"],
+        thread_name_prefix="report",
+        on_upstream_change="clear",
+        run=_run_report,
     ),
 ]
 
