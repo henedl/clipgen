@@ -617,6 +617,9 @@ Structure the report as short markdown sections:
 2-3 sentences on what happened in the session.
 ## Key findings
 3-5 bullet points, most important first.
+## What went well
+Positives: things that worked smoothly, delights, favorable reactions. Omit \
+this section entirely if the data shows none.
 ## Pain points & friction
 Bullet points grounded in the observations and marked moments above; include \
 the timestamp when one is given.

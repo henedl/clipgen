@@ -45,14 +45,15 @@ def test_script_order_three_before_map_hub_before_satellites():
 
 
 def test_tab_order_and_wip_badge():
-    """Tabs read Metadata | Convergence | Map | Summary; the Map tab carries
-    the WIP pill (the similarity map is the newest surface)."""
+    """Tabs read Metadata | Convergence | Map | Summary; the Map and Summary
+    tabs carry the WIP pill (the newest surfaces)."""
     html = OVERVIEW_HTML.read_text(encoding="utf-8")
     tabs = re.findall(r'data-tab="(\w+)"', html)
     assert tabs == ["metadata", "convergence", "map", "summary"]
-    map_tab = html[html.index('data-tab="map"') :]
-    map_tab = map_tab[: map_tab.index("</button>")]
-    assert "ov-wip-badge" in map_tab
+    for tab in ("map", "summary"):
+        button = html[html.index('data-tab="' + tab + '"') :]
+        button = button[: button.index("</button>")]
+        assert "ov-wip-badge" in button, f"{tab} tab lost its WIP badge"
 
 
 def test_staleness_is_version_based_and_running_check_is_strict():
