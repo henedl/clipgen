@@ -16,6 +16,11 @@
 
   var audioPanel = null; // ClipgenVideoControls audio-popover controller
 
+  // Playback-speed cycle. Coarse like Screenspace's (not Transcripts' fine
+  // 0.75–2x list): Composer plays whole session recordings, where the point of
+  // the control is skimming rather than close listening.
+  var VIDEO_SPEEDS = [0.5, 1, 2, 3, 5];
+
   var state = {
     participants: [],       // [{id, parts:[{name,duration,offset}], total_duration}]
     hasSheet: false,        // a spreadsheet is loaded — gates the off-sheet suffix
@@ -26,6 +31,7 @@
     playhead: 0,            // global seconds (kept current by timeupdate)
     playing: false,
     videoMuted: false,      // player mute state (icon + video.muted)
+    videoPlaybackRate: 1,   // playback speed (session-only, as in Screenspace/Transcripts)
     cuts: [],               // all cuts from the composer manifest (all participants)
     trims: {},              // marker key → {start, end} span overrides
     annotations: [],        // all annotation records (all participants)
@@ -150,6 +156,7 @@
     var onMeta = function () {
       video.removeEventListener("loadedmetadata", onMeta);
       video.currentTime = localTime;
+      applyPlaybackRate(); // load() reset the element to its default rate
       if (resume) video.play();
     };
     video.addEventListener("loadedmetadata", onMeta);
@@ -173,6 +180,17 @@
     // Accent tint while sound is on — matches Screenspace/Transcripts mute btns.
     var btn = qs("#coMuteBtn");
     if (btn) btn.classList.toggle("active", !state.videoMuted);
+  }
+
+  function applyPlaybackRate() {
+    window.ClipgenVideoControls.applyPlaybackRate(qs("#coVideo"), state.videoPlaybackRate);
+  }
+
+  function updateSpeedButton() {
+    var btn = qs("#coSpeedBtn");
+    if (!btn) return;
+    btn.textContent = state.videoPlaybackRate + "x";
+    btn.classList.toggle("active", state.videoPlaybackRate !== 1);
   }
 
   function updateTimeLabel() {
@@ -219,6 +237,14 @@
       updatePlayButton();
     });
     video.addEventListener("ended", function () {
+      // A part can end before timeupdate ever lands inside the hand-off window
+      // below — timeupdate fires ~4x/s, so at 5x the element jumps ~1.25 s per
+      // event and steps clean over it. Hand off here too, or fast playback
+      // stalls at every part boundary.
+      if (state.activePart < state.parts.length - 1) {
+        switchToPart(state.activePart + 1, 0.001, true);
+        return;
+      }
       state.playing = false;
       updatePlayButton();
     });
@@ -254,6 +280,13 @@
     });
     qs("#coPlayBtn").addEventListener("click", togglePlay);
 
+    qs("#coSpeedBtn").addEventListener("click", function () {
+      state.videoPlaybackRate = window.ClipgenVideoControls.nextSpeed(
+        VIDEO_SPEEDS, state.videoPlaybackRate);
+      applyPlaybackRate();
+      updateSpeedButton();
+    });
+
     // Hover the mute button for a glassy 0–200% volume popover (click still
     // mutes). getTracks reads the active participant's probed audio layout;
     // trackAudioUrl enables per-track mixing for single-file participants.
@@ -277,6 +310,7 @@
       updateMuteButton();
     });
     updateMuteButton();
+    updateSpeedButton();
   }
 
   // ---- Participant selection ----
@@ -319,6 +353,7 @@
     if (state.parts.length) {
       video.src = "media/" + encodeURIComponent(state.parts[0].name);
       video.load();
+      applyPlaybackRate(); // load() reset the element to its default rate
       qs("#coVideoFrame").classList.add("has-video");
     } else {
       video.removeAttribute("src");
@@ -328,7 +363,7 @@
     // down the previous participant's track mix for this new participant.
     if (audioPanel) audioPanel.refresh();
 
-    ["#coPlayBtn", "#coMuteBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
+    ["#coPlayBtn", "#coMuteBtn", "#coSpeedBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
       qs(sel).disabled = false;
     });
     qs("#coAnnotateBar").classList.remove("hidden");
