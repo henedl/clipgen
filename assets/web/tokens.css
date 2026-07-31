@@ -610,17 +610,20 @@ html[data-theme="light"] .cg-logo {
 .cg-tooltip--has-icon .cg-tooltip-icon {
   display: block;
   width: var(--icon-size-xs);
-  height: var(--icon-size-xs);
+  /* One text line tall, with the glyph centered inside it, so the icon centers
+     on the FIRST line whether or not the tooltip wraps. Sizing the box to the
+     glyph instead leaves it riding ~2px high: flex-start pins a 12px box to the
+     top of an 18px line. 1.5em is every page's body line-height. */
+  height: 1.5em;
   flex-shrink: 0;
-  /* Optically centers the glyph on the first line of text rather than on the
-     padding box, which sits high next to a wrapped multiline tooltip. */
-  margin-top: 1px;
   opacity: 0.75;
   background-color: currentColor;
   mask-size: contain;
   -webkit-mask-size: contain;
   mask-repeat: no-repeat;
   -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
 }
 /* Long unbroken text (a path, a URL) would otherwise refuse to shrink and push
    past the max-width instead of wrapping. */
