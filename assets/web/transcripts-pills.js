@@ -174,6 +174,10 @@
     }
     if (!p) return;
     var s = pillState(p, taskByPid);
+    // Captured before the swap: the rebuilt pane may carry an audio-track row
+    // the old one lacked (the layout arrives asynchronously, and a rebuild can
+    // race that fetch), which shifts every control below it down one.
+    var navId = _pillNavCursorId();
     var fresh = buildPillOptions(p, s);
     fresh.setAttribute("data-pid", pid);
     floating.parentNode.replaceChild(fresh, floating);
@@ -182,7 +186,7 @@
     // by _pillMenuActive, so it would look like nothing has focus until the next
     // keypress. This poll fires most often while a transcription is running,
     // which is exactly when the dropdown is likely open.
-    pillNavPaint();
+    _pillNavRestoreCursor(navId);
   }
 
   function buildPillWrap(p, taskByPid) {
@@ -350,6 +354,9 @@
     var modelLabel = document.createElement("label");
     modelLabel.textContent = "Model";
     var modelSelect = document.createElement("select");
+    // data-nav-id keys the keyboard cursor to a control's identity rather than
+    // its position — see _pillNavRestoreCursor.
+    modelSelect.setAttribute("data-nav-id", "model");
     modelSelect.innerHTML = '<option value="">Loading…</option>';
     _trFetchModels().then(function (data) {
       var models = (data && data.whisper && data.whisper.models) || [];
@@ -381,6 +388,7 @@
     var langLabel = document.createElement("label");
     langLabel.textContent = "Language";
     var langSelect = document.createElement("select");
+    langSelect.setAttribute("data-nav-id", "language");
     var lh = "";
     for (var i = 0; i < PILL_LANGUAGES.length; i++) {
       var L = PILL_LANGUAGES[i];
@@ -408,14 +416,14 @@
         // appending to the detached node would silently drop the row.
         var live = document.querySelector("body > .pill-options[data-pid='" + p.id + "']");
         if (live !== pane || !info || info.count <= 1) return;
+        // The row lands *above* the agent buttons, so a cursor painted on one of
+        // them would otherwise end up pointing one control too high.
+        var navId = _pillNavCursorId();
         pane.insertBefore(
           buildAudioTrackRow(p, info, state.pillOverrides[p.id] || {}),
           pane.querySelector(".pill-options-agents")
         );
-        // The row lands *above* the agent buttons, so a cursor painted on one of
-        // them now points at the wrong control.
-        if (state.pillOptionsCursor >= 2) state.pillOptionsCursor += 1;
-        pillNavPaint();
+        _pillNavRestoreCursor(navId);
       });
     }
 
@@ -448,6 +456,7 @@
     var label = document.createElement("label");
     label.textContent = "Audio track";
     var select = document.createElement("select");
+    select.setAttribute("data-nav-id", "audio-track");
     var auto = info.tracks[info.auto] || null;
     // The server computes the auto pick (video.pick_speech_audio_track) so the
     // heuristic has exactly one implementation; this only labels it.
@@ -604,6 +613,7 @@
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-small pill-agent-btn";
+    btn.setAttribute("data-nav-id", "agent:" + opts.agent);
     // Alt-hold hint: while the dropdown is open, digits 1-4 route to these rows
     // (triggerPillOption). Tag each with the markCategory combo index so the
     // "1".."4" chips show (mirrors how Screenspace reuses selectTool for menus).
@@ -849,6 +859,33 @@
     return Array.prototype.slice.call(
       pane.querySelectorAll(".pill-options-row select, .pill-agent-btn")
     );
+  }
+
+  // The pane is rebuilt wholesale every poll tick and can gain the audio-track
+  // row between two builds (the layout arrives asynchronously), so the cursor is
+  // carried across a rebuild by the control's identity, not its index. Index
+  // arithmetic at each mutation site cannot work: _refreshPillOptionsContent
+  // replaces the node, so by the time it could count controls the old pane —
+  // and the number of rows the cursor was measured against — is already gone.
+  function _pillNavCursorId() {
+    if (state.pillOptionsCursor < 0) return null;
+    var cur = pillNavControls()[state.pillOptionsCursor];
+    return cur ? cur.getAttribute("data-nav-id") : null;
+  }
+
+  function _pillNavRestoreCursor(navId) {
+    if (state.pillOptionsCursor < 0) return; // nothing painted; nothing to keep
+    if (navId) {
+      var controls = pillNavControls();
+      for (var i = 0; i < controls.length; i++) {
+        if (controls[i].getAttribute("data-nav-id") === navId) {
+          state.pillOptionsCursor = i;
+          break;
+        }
+      }
+    }
+    // Repaints, and clamps if that control is gone from the rebuilt pane.
+    pillNavPaint();
   }
 
   function pillNavPaint() {

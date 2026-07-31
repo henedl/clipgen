@@ -172,3 +172,26 @@ def test_audio_track_row_is_labelled_and_styled():
     assert '"Audio track"' in _JS, "the pill dropdown must label the track picker"
     for cls in (".pill-options-group", ".pill-options-hint"):
         assert cls + " {" in _CSS, f"{cls} is created in JS but never styled"
+
+
+def test_pill_nav_cursor_survives_a_pane_rebuild_by_identity():
+    """The options pane is rebuilt wholesale by the poll and can gain the
+    audio-track row between two builds (its layout is fetched asynchronously, and
+    a rebuild can race that fetch). The cursor therefore has to be carried across
+    by control identity: index arithmetic cannot work, because replaceChild drops
+    the old pane before anything could count what the index was measured against.
+    Getting this wrong silently moves the highlight onto a different control."""
+    start = _JS.index("function _refreshPillOptionsContent(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_pillNavCursorId()" in body and "_pillNavRestoreCursor(" in body, (
+        "the pane rebuild must capture the cursor before the swap and restore it "
+        "after, or a pane that gained a row repaints the cursor one control off"
+    )
+    # Every control pillNavControls() can land on needs a stable identity.
+    assert _JS.count('setAttribute("data-nav-id"') >= 4, (
+        "model/language/audio-track selects and the agent buttons must all carry "
+        "data-nav-id for the cursor to be restorable"
+    )
+    assert "pillOptionsCursor +=" not in _JS, (
+        "cursor index arithmetic is the bug this replaced — restore by nav id"
+    )
