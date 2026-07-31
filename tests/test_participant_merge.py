@@ -152,7 +152,7 @@ def test_does_not_mutate_the_discovery_cache(input_dir):
 def test_refresh_is_a_noop_before_init(monkeypatch, module_name):
     module = __import__(module_name)
     pinned = [{"id": "P99", "video_paths": ["/tmp/x.mp4"], "has_video": False}]
-    monkeypatch.setattr(module, "_participant_source", None)
+    # _participant_source is already None (conftest's _clear_participant_source).
     monkeypatch.setattr(module, "_participants", pinned)
 
     module._refresh_participants()
@@ -195,3 +195,28 @@ def test_refresh_picks_up_a_new_file(monkeypatch, input_dir, module_name, bp_nam
     assert [p["id"] for p in data["participants"]] == ["P01", "P99"]
     assert all(p["in_sheet"] is False for p in data["participants"])
     assert data["has_sheet"] is False
+
+
+def test_screenspace_path_lookup_refreshes(monkeypatch, input_dir):
+    """The video/frame/task routes resolve a video that landed after page load.
+
+    These are reachable directly (API use, automation) without
+    ``/api/participants`` having run since the file appeared, so the path lookup
+    has to refresh itself rather than trust the last snapshot.
+    """
+    import screenspace_server
+
+    (input_dir / "study_P01.mp4").write_text("v")
+    monkeypatch.setattr(screenspace_server, "_participants", [])
+    monkeypatch.setattr(
+        screenspace_server,
+        "_participant_source",
+        {"sheet_context": None, "dir": "", "mtime": None},
+    )
+    screenspace_server._refresh_participants()
+    assert screenspace_server._participant_video_paths("P99") == []
+
+    (input_dir / "study_P99.mp4").write_text("v")
+
+    paths = screenspace_server._participant_video_paths("P99")
+    assert [Path(p).name for p in paths] == ["study_P99.mp4"]

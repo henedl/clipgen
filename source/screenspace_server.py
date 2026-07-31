@@ -861,7 +861,14 @@ def _participant_video_paths(participant_id: str) -> list[str]:
 
     A multi-video participant (recording split across files) returns all parts
     in timeline order; a normal participant returns a single-element list.
+
+    Refreshes first: the frame/stream/task routes are reachable directly (API
+    use, automation) without ``/api/participants`` having run since the video
+    landed, and without this they would 404 on a participant that is on disk.
+    The refresh is one ``stat()`` in the steady state — nothing against the
+    ffmpeg work these callers are about to do.
     """
+    _refresh_participants()
     for p in _participants:
         if p["id"] == participant_id:
             return list(p["video_paths"]) if p.get("has_video") else []

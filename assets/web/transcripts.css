@@ -1897,15 +1897,23 @@ body {
   border-radius: var(--radius-sm);
 }
 
-/* Same shape as the stale badge but muted — this is informational (the video
-   simply has no sheet column), not a warning about wrong output. */
+/* Bare muted glyph, no border/chip — this is informational (the video simply
+   has no sheet column), not a warning about wrong output like the stale badge. */
 .pill-offsheet-badge {
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
   display: inline-block;
-  font-size: var(--text-xs);
+  flex: none;
   color: var(--color-text-dim);
-  padding: 1px var(--space-2);
-  border: 1px solid currentColor;
-  border-radius: var(--radius-sm);
+  background: currentColor;
+  mask-image: url(icons/link-slash.svg);
+  -webkit-mask-image: url(icons/link-slash.svg);
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-position: center;
 }
 
 .pill-options {

@@ -44,10 +44,6 @@ def tr_client(tmp_path, monkeypatch):
             }
         ],
     )
-    # None = "not configured", so _refresh_participants() is a no-op and the list
-    # pinned above stays authoritative instead of being rebuilt from the real
-    # input dir. A prior test that ran _init_transcripts_state leaves this set.
-    monkeypatch.setattr(transcripts_server, "_participant_source", None)
     monkeypatch.setattr(transcripts_server, "_worker", None)
     monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
     monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)

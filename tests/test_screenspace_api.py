@@ -44,10 +44,6 @@ def client(tmp_path, monkeypatch):
             {"id": "P02", "video_paths": ["/tmp/test_P02.mp4"], "has_video": False},
         ],
     )
-    # None = "not configured", so _refresh_participants() is a no-op and the list
-    # pinned above stays authoritative instead of being rebuilt from the real
-    # input dir. A prior test that ran _init_screenspace_state leaves this set.
-    monkeypatch.setattr(screenspace_server, "_participant_source", None)
     monkeypatch.setattr(screenspace_server, "_events_version", 0)
     monkeypatch.setattr(screenspace_server, "_output_dir", str(tmp_path))
     monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())

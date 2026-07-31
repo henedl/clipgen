@@ -281,12 +281,13 @@
     idSpan.textContent = p.id;
     pill.appendChild(idSpan);
 
-    // Off-sheet badge (inline) — a source video found on disk that the loaded
-    // sheet has no column for.
+    // Off-sheet marker (inline) — a source video found on disk that the loaded
+    // sheet has no column for. A bare link-slash glyph rather than a labelled
+    // chip: it sits on every non-sheet pill, so it has to stay quiet.
     if (offSheetFlag(p) === "1") {
       var offSheet = document.createElement("span");
       offSheet.className = "pill-offsheet-badge";
-      offSheet.textContent = "no sheet";
+      offSheet.setAttribute("aria-label", "Not in sheet");
       offSheet.title = "Source video found on disk; not a column in the loaded sheet";
       pill.appendChild(offSheet);
     }

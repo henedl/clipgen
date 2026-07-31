@@ -179,6 +179,36 @@ def _reset_no_input_mode():
 
 
 @pytest.fixture(autouse=True)
+def _clear_participant_source():
+    """Unset ``_participant_source`` in both blueprints around every test.
+
+    ``_init_screenspace_state`` / ``_init_transcripts_state`` set it and never
+    unset it, so under ``pytest-randomly`` any test that builds a combined app
+    leaves the two modules "configured" for the rest of the worker process. The
+    dozens of tests that pin ``_participants`` directly would then have their
+    list silently rebuilt from the real input dir the moment a route called
+    ``_refresh_participants()`` — which is every participant/video/task route.
+
+    ``None`` is the "not configured yet" state that makes the refresh a no-op,
+    so clearing it up front makes a pinned list authoritative by default. A test
+    that *wants* the refresh (tests/test_participant_merge.py) sets the dict
+    itself. Snapshot + restore keeps it isolated per test either way.
+    """
+    import screenspace_server
+    import transcripts_server
+
+    modules = (screenspace_server, transcripts_server)
+    originals = [m._participant_source for m in modules]
+    for module in modules:
+        module._participant_source = None
+    try:
+        yield
+    finally:
+        for module, original in zip(modules, originals):
+            module._participant_source = original
+
+
+@pytest.fixture(autouse=True)
 def _reset_overview_observation_getter():
     """Restore ``overview._observation_rows_getter`` after every test.
 
