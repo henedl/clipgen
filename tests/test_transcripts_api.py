@@ -1086,7 +1086,10 @@ def test_citations_get_generating_includes_started_at(tr_client, _agent_state_cl
 
 def test_summary_get_includes_citations_started_at(tr_client, _agent_state_clean):
     """On a fresh load with the summary done but citations still running, the
-    citations start rides on the summary response (the only call the UI makes)."""
+    citations start rides on the summary response, so the UI can seed the
+    elapsed clock without waiting a poll interval. Only the *status* rides
+    along; a settled load fetches the payload from the citations endpoint (see
+    test_summary_get_omits_citations_payload)."""
     _seed_friction_entry()  # summary present, no citations yet
     _claim_slot("citations", "P01", 3000.0)
     resp = tr_client.get("/transcripts/api/agent/summary/P01")
@@ -1095,6 +1098,33 @@ def test_summary_get_includes_citations_started_at(tr_client, _agent_state_clean
     assert data["ok"] is True
     assert data["citations_generating"] is True
     assert data["citations_started_at"] == 3000.0
+
+
+def test_summary_get_omits_citations_payload(tr_client, _agent_state_clean):
+    """The summary response carries citations' status but not their payload —
+    the generic agent GET returns only its own manifest field, and inlining the
+    dependents would put the whole friction blob on the 1.2s summary poll.
+
+    The frontend therefore re-fetches stored citations from their own endpoint
+    after a settled summary load (_loadStoredCitations). Without that second
+    call, every loadSummary renders the summary with its superscripts stripped.
+    """
+    cites = [
+        {
+            "sentence": "A session summary.",
+            "refs": [{"start": 0.0, "end": 1.0, "segment_index": 0}],
+        }
+    ]
+    _seed_friction_entry(citations=cites)
+
+    summary = tr_client.get("/transcripts/api/agent/summary/P01").get_json()
+    assert summary["ok"] is True
+    assert summary["citations_generating"] is False
+    assert "citations" not in summary
+
+    stored = tr_client.get("/transcripts/api/agent/citations/P01").get_json()
+    assert stored["ok"] is True
+    assert stored["citations"] == cites
 
 
 def test_friction_get_generating_includes_started_at(tr_client, _agent_state_clean):

@@ -227,9 +227,9 @@
   }
 
   // Summary landed (via initial load OR the fallback poll's onResult hook):
-  // render it, then — if citations are still generating server-side — surface
-  // their status and start the citations poll. Shared so the loader and the
-  // poll stay in lockstep (the summary poll's descriptor onResult delegates here).
+  // render it, then attach citations — still generating (surface the status and
+  // poll), or already stored (fetch them). Shared so the loader and the poll
+  // stay in lockstep (the summary poll's descriptor onResult delegates here).
   function _onSummaryResult(pid, data) {
     // Clear any citation state carried over from a previous participant before
     // rendering — renderSummary() reapplies state.summaryCitations, so stale
@@ -249,7 +249,28 @@
       );
       _startCitationsPoll(pid);
       _refreshAgentStateNow();
+    } else {
+      _loadStoredCitations(pid);
     }
+  }
+
+  // The summary response carries citations' *status* but not their payload (the
+  // generic agent GET returns only its own manifest field, and inlining the
+  // dependents would put the whole friction blob on the 1.2s summary poll). So
+  // a settled load has to ask for them separately, or every loadSummary —
+  // participant switch, tab refocus, post-cancel re-sync — would render the
+  // summary with its superscripts permanently stripped.
+  function _loadStoredCitations(pid) {
+    var ver = state.participantReqVer;
+    apiGet(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid).then(function (data) {
+      if (ver !== state.participantReqVer || state.selectedParticipant !== pid) return;
+      if (!data.ok || !data.citations) return;
+      state.summaryCitations = data.citations;
+      renderCitations();
+    }).catch(function () {
+      // 404 = citations never ran (or are disabled). Not a failed run, so stay
+      // quiet — the poll's onEmpty owns the "a run just ended empty" message.
+    });
   }
 
   // Open the SSE token stream for a generating summary. Falls back to the GET
