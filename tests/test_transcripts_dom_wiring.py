@@ -260,13 +260,19 @@ def test_every_thinking_agent_run_button_carries_the_local_ai_badge():
         )
 
 
-def test_icon_only_agent_buttons_name_the_local_ai_in_their_tooltip():
-    """The 24px action-row buttons have no room for a second glyph, so the tooltip
-    is the only place they can say the click spends local compute."""
+def test_icon_only_agent_buttons_get_the_badge_via_the_tooltip_sidecar():
+    """The 24px action-row buttons have no room for a second glyph, so the badge
+    rides in on the tooltip's icon sidecar. The accessible name still says it in
+    words — the sidecar is decorative and screen readers never see it."""
     for btn_id in ("summaryRegenerate", "citationsRegenerate"):
         start = _HTML.index(f'id="{btn_id}"')
         button = _HTML[start : _HTML.index("</button>", start)]
-        assert "local AI" in button, f"#{btn_id} must name the local AI in its tooltip"
+        assert 'data-tooltip-icon="octicon/dependabot-16"' in button, (
+            f"#{btn_id} starts an agent but its tooltip carries no badge"
+        )
+        assert "local AI" in button, (
+            f"#{btn_id}'s aria-label must name the local AI; the sidecar is decorative"
+        )
 
 
 def test_pill_dropdown_badges_the_thinking_agents_but_not_transcription():

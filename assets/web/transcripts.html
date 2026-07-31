@@ -126,11 +126,12 @@
       <div id="summaryTab" class="panel-pane" role="tabpanel" aria-labelledby="tabBtnSummary">
         <div id="summaryActions" class="summary-actions hidden">
           <!-- Too small for the .ai-agent-badge the text run buttons carry, so
-               these say "local AI" in the tooltip instead. -->
-          <button id="summaryRegenerate" type="button" class="summary-action-btn" data-tooltip="Regenerate summary (local AI)" aria-label="Regenerate summary (local AI)">
+               the same glyph rides in as the tooltip's icon sidecar instead. The
+               aria-label spells it out; the sidecar is decorative. -->
+          <button id="summaryRegenerate" type="button" class="summary-action-btn" data-tooltip="Regenerate summary" data-tooltip-icon="octicon/dependabot-16" aria-label="Regenerate summary (local AI)">
             <span class="summary-action-icon summary-action-regenerate"></span>
           </button>
-          <button id="citationsRegenerate" type="button" class="summary-action-btn" data-tooltip="Regenerate citations (local AI)" aria-label="Regenerate citations (local AI)">
+          <button id="citationsRegenerate" type="button" class="summary-action-btn" data-tooltip="Regenerate citations" data-tooltip-icon="octicon/dependabot-16" aria-label="Regenerate citations (local AI)">
             <span class="summary-action-icon summary-action-citations"></span>
           </button>
           <button id="summaryCopy" type="button" class="summary-action-btn" data-tooltip="Copy summary" aria-label="Copy summary">

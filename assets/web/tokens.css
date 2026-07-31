@@ -596,6 +596,36 @@ html[data-theme="light"] .cg-logo {
   max-width: var(--tooltip-max-width);
 }
 
+/* Optional icon sidecar, opted into per element with data-tooltip-icon (or
+   show()'s third argument). The icon URL always arrives as an inline mask-image
+   from applyIconMask — never from here — because viewer.py inlines tokens.css
+   into exported viewers, which have no /icons/ route. Layout only flips to flex
+   on the --has-icon variant so the plain pill keeps its existing box. */
+.cg-tooltip-icon { display: none; }
+.cg-tooltip--has-icon {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.cg-tooltip--has-icon .cg-tooltip-icon {
+  display: block;
+  width: var(--icon-size-xs);
+  height: var(--icon-size-xs);
+  flex-shrink: 0;
+  /* Optically centers the glyph on the first line of text rather than on the
+     padding box, which sits high next to a wrapped multiline tooltip. */
+  margin-top: 1px;
+  opacity: 0.75;
+  background-color: currentColor;
+  mask-size: contain;
+  -webkit-mask-size: contain;
+  mask-repeat: no-repeat;
+  -webkit-mask-repeat: no-repeat;
+}
+/* Long unbroken text (a path, a URL) would otherwise refuse to shrink and push
+   past the max-width instead of wrapping. */
+.cg-tooltip--has-icon .cg-tooltip-text { min-width: 0; }
+
 /* Re-enable mouse events on disabled tooltip buttons so the singleton
    data-tooltip handler in utils.js can detect hover. <button disabled>
    still blocks click regardless of pointer-events. */
