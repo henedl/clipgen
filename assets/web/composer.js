@@ -884,8 +884,12 @@
     var btn = qs("#coToolHide");
     if (btn) {
       btn.setAttribute("aria-pressed", state.annHidden ? "true" : "false");
-      btn.title = (state.annHidden ? "Show" : "Hide") +
-        " annotations (B — hold to peek, tap to toggle)";
+      // No key hint here — the hotkey registry renders its own chip for
+      // [data-hotkey] controls on Alt-hold, and a hand-written one goes stale
+      // the moment the user rebinds.
+      var hideLabel = (state.annHidden ? "Show" : "Hide") + " annotations";
+      btn.setAttribute("aria-label", hideLabel);
+      btn.setAttribute("data-tooltip", hideLabel + " (hold to peek, tap to toggle)");
       var icon = btn.querySelector(".co-btn-icon");
       if (icon) {
         icon.classList.toggle("co-icon-eye", state.annHidden);
@@ -1060,19 +1064,20 @@
       });
       if (hasAnn) {
         var annBadge = el("span", "co-btn-icon co-icon-draw co-cut-ann-badge");
-        annBadge.title = "Has annotations";
+        annBadge.setAttribute("data-tooltip", "Has annotations");
         nameRow.appendChild(annBadge);
       }
       if (cut._genStatus) {
         var okStatus = cut._genStatus === "ok";
         var statusIcon = el("span", "co-cut-status co-btn-icon " + cut._genStatus +
           (okStatus ? " co-icon-check" : " co-icon-x-mark"));
-        statusIcon.title = okStatus ? "Generated" : "Generation failed";
+        statusIcon.setAttribute("data-tooltip",
+          okStatus ? "Generated" : "Generation failed");
         nameRow.appendChild(statusIcon);
       }
       var del = el("button", "co-cut-delete");
       del.type = "button";
-      del.title = "Delete cut";
+      del.setAttribute("data-tooltip", "Delete cut");
       del.setAttribute("aria-label", "Delete cut");
       del.appendChild(el("span", "co-btn-icon co-icon-trash"));
       del.addEventListener("click", function (e) {
@@ -1124,7 +1129,7 @@
         m.label || m.eventType || source));
       var copyBtn = el("button", "co-cut-delete");
       copyBtn.type = "button";
-      copyBtn.title = "Copy to cuts";
+      copyBtn.setAttribute("data-tooltip", "Copy to cuts");
       copyBtn.setAttribute("aria-label", "Copy to cuts");
       copyBtn.appendChild(el("span", "co-btn-icon co-icon-scissors"));
       copyBtn.addEventListener("click", function (e) {
@@ -1143,12 +1148,13 @@
       }
       if (m.trimmed) {
         var trimBadge = el("span", "co-trim-badge", "trimmed");
-        trimBadge.title = "Original: " + formatTime(m.origStart, { decimals: 1 }) +
-          " – " + formatTime(m.origEnd, { decimals: 1 });
+        trimBadge.setAttribute("data-tooltip",
+          "Original: " + formatTime(m.origStart, { decimals: 1 }) +
+          " – " + formatTime(m.origEnd, { decimals: 1 }));
         timeRow.appendChild(trimBadge);
         var resetBtn = el("button", "co-cut-delete");
         resetBtn.type = "button";
-        resetBtn.title = "Reset trim to the source span";
+        resetBtn.setAttribute("data-tooltip", "Reset trim to the source span");
         resetBtn.setAttribute("aria-label", "Reset trim");
         resetBtn.appendChild(el("span", "co-btn-icon co-icon-undo"));
         resetBtn.addEventListener("click", function (e) {
@@ -1159,7 +1165,10 @@
       }
       item.appendChild(timeRow);
 
-      item.title = m.label || "";
+      // Set-or-remove: an empty data-tooltip would still make the row a hover
+      // anchor, swallowing the child buttons' tooltips on the way past.
+      if (m.label) item.setAttribute("data-tooltip", m.label);
+      else item.removeAttribute("data-tooltip");
       item.addEventListener("click", function () {
         seekVideo(m.start);
       });

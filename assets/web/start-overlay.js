@@ -884,7 +884,12 @@
   function updateConfirmEnabled() {
     if (!els.confirmBtn) return;
     els.confirmBtn.disabled = state.confirmInFlight || state.worksheetLoading;
-    els.confirmBtn.title = state.worksheetLoading ? "Checking worksheets…" : "";
+    // Set-or-remove: an empty data-tooltip would leave the button a hover anchor.
+    if (state.worksheetLoading) {
+      els.confirmBtn.setAttribute("data-tooltip", "Checking worksheets…");
+    } else {
+      els.confirmBtn.removeAttribute("data-tooltip");
+    }
   }
 
   // ---- Data loading ----

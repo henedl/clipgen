@@ -4,7 +4,8 @@
  * Reads page-specific Quick Actions from window.CLIPGEN_QUICK_ACTIONS, an
  * array of { icon, label, action, disabled?, title? } | { divider: true } |
  * { header } items. Items with disabled=true render grayed and ignore clicks;
- * the title field becomes a hover tooltip explaining why.
+ * the title field becomes a hover tooltip explaining why (rendered through the
+ * [data-tooltip] singleton in utils.js, not the native attribute).
  * Pages may also call ClipgenTopNav.setQuickActions(items) post-mount to
  * update the menu as state changes, and ClipgenTopNav.onBeforeOpen(cb) to
  * refresh state right before the menu opens.
@@ -152,7 +153,7 @@
     startBtn.type = "button";
     startBtn.id = "startBtn";
     startBtn.className = "topnav-icon-btn";
-    startBtn.title = "Start panel";
+    startBtn.setAttribute("data-tooltip", "Start panel");
     startBtn.setAttribute("aria-label", "Start panel");
     var startIcon = document.createElement("span");
     startIcon.className = "topnav-icon";
@@ -168,7 +169,7 @@
       logBtn.type = "button";
       logBtn.id = "logBtn";
       logBtn.className = "topnav-icon-btn";
-      logBtn.title = "Artifact Log";
+      logBtn.setAttribute("data-tooltip", "Artifact Log");
       logBtn.setAttribute("aria-label", "Artifact Log");
       var logIcon = document.createElement("span");
       logIcon.className = "topnav-icon";
@@ -182,7 +183,7 @@
     settingsBtn.type = "button";
     settingsBtn.id = "settingsBtn";
     settingsBtn.className = "topnav-icon-btn";
-    settingsBtn.title = "Settings";
+    settingsBtn.setAttribute("data-tooltip", "Settings");
     settingsBtn.setAttribute("aria-label", "Settings");
     var settingsIcon = document.createElement("span");
     settingsIcon.className = "topnav-icon";
@@ -198,7 +199,7 @@
       tooltipBtn.type = "button";
       tooltipBtn.id = "tooltipToggle";
       tooltipBtn.className = "topnav-icon-btn";
-      tooltipBtn.title = "Toggle cross-reference tooltips";
+      tooltipBtn.setAttribute("data-tooltip", "Toggle cross-reference tooltips");
       tooltipBtn.setAttribute("aria-label", "Toggle cross-reference tooltips");
       tooltipBtn.setAttribute("aria-pressed", "true");
       var tooltipIcon = document.createElement("span");
@@ -322,7 +323,7 @@
       btn.setAttribute("aria-disabled", "true");
     }
     if (item.title) {
-      btn.title = item.title;
+      btn.setAttribute("data-tooltip", item.title);
     }
     if (item.icon) {
       var ic = document.createElement("span");

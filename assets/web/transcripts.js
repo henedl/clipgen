@@ -961,7 +961,7 @@
       var markColor = markCat ? markCat.color : null;
       var markClass = markObj ? "segment-mark marked" : "segment-mark";
       var markStyle = markColor ? ' style="background:' + markColor + '"' : "";
-      var markLabel = markObj && markObj.label ? ' title="' + escapeHtml(markObj.label) + '"' : "";
+      var markLabel = markObj && markObj.label ? ' data-tooltip="' + escapeHtml(markObj.label) + '"' : "";
       var annoBadgeHtml = "";
       if (markObj && markObj.label && markColor) {
         var bgMix = "color-mix(in oklch, " + markColor + " 18%, transparent)";
@@ -971,7 +971,7 @@
       }
       var sevDotHtml = "";
       if (markObj && markObj.severity) {
-        sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" title="' + escapeHtml(markObj.severity) + '"></span>';
+        sevDotHtml = '<span class="segment-sev-dot ' + severityClass(markObj.severity) + '" data-tooltip="' + escapeHtml(markObj.severity) + '"></span>';
       }
 
       // No friction markup here on purpose: applyFrictionDecorations() below owns
@@ -993,11 +993,11 @@
               var et = xref.screenspaceEvents[ei].event_type || xref.screenspaceEvents[ei].detector;
               if (!evSeen[et]) { evSeen[et] = true; evTypes.push(et); }
             }
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" title="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.screenspace.icon) + '"></span></span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.screenspace.color + '" data-tooltip="' + escapeHtml(evTypes.join(", ")) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.screenspace.icon) + '"></span></span>';
           }
           if (xref.sheetObservations.length > 0) {
             var obsTitle = xref.sheetObservations[0].observation;
-            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" title="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
+            html += '<span class="segment-xref-badge" style="background:' + XREF_BADGES.sheet.color + '" data-tooltip="' + escapeHtml(obsTitle) + '"><span class="xref-badge-icon" style="' + iconMaskStyle(XREF_BADGES.sheet.icon) + '"></span></span>';
           }
           html += '</span>';
         }
@@ -1014,7 +1014,7 @@
         }
       }
       html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + annoBadgeHtml + wordHtml + '</span>';
-      html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
+      html += '<span class="segment-copy" data-tooltip="Copy text"><span class="segment-copy-icon"></span></span>';
       html += '</div>';
     }
     container.innerHTML = html;
@@ -1105,14 +1105,14 @@
     var markStyle = cachedColor ? ' style="background:' + cachedColor + '"' : "";
     var sevDotHtml = "";
     if (cachedMark && cachedMark.severity) {
-      sevDotHtml = '<span class="segment-sev-dot ' + severityClass(cachedMark.severity) + '" title="' + escapeHtml(cachedMark.severity) + '"></span>';
+      sevDotHtml = '<span class="segment-sev-dot ' + severityClass(cachedMark.severity) + '" data-tooltip="' + escapeHtml(cachedMark.severity) + '"></span>';
     }
     var html = '<div class="segment-row segment-streaming" data-index="' + i + '" data-start="' + seg.start + '">';
     html += '<span class="' + markClass + '" data-segment-id="' + escapeHtml(segId) + '"' + markStyle + '></span>';
     html += sevDotHtml;
     html += '<span class="segment-timestamp">' + formatTime(seg.start) + '</span>';
     html += '<span class="segment-text">' + escapeHtml(seg.text) + '</span>';
-    html += '<span class="segment-copy" title="Copy text"><span class="segment-copy-icon"></span></span>';
+    html += '<span class="segment-copy" data-tooltip="Copy text"><span class="segment-copy-icon"></span></span>';
     html += '</div>';
     return html;
   }
@@ -1687,11 +1687,11 @@
       if (markObj.severity) {
         var sevDot = document.createElement("span");
         sevDot.className = "segment-sev-dot " + severityClass(markObj.severity);
-        sevDot.title = markObj.severity;
+        sevDot.setAttribute("data-tooltip", markObj.severity);
         dot.insertAdjacentElement("afterend", sevDot);
       }
       if (markObj.label) {
-        dot.title = markObj.label;
+        dot.setAttribute("data-tooltip", markObj.label);
         if (textEl) {
           var bgMix = "color-mix(in oklch, " + cat.color + " 18%, transparent)";
           var borderMix = "color-mix(in oklch, " + cat.color + " 50%, transparent)";
@@ -1703,12 +1703,12 @@
           textEl.insertBefore(badge, textEl.firstChild);
         }
       } else {
-        dot.removeAttribute("title");
+        dot.removeAttribute("data-tooltip");
       }
     } else {
       dot.classList.remove("marked");
       dot.style.background = "";
-      dot.removeAttribute("title");
+      dot.removeAttribute("data-tooltip");
     }
   }
 
@@ -1924,7 +1924,7 @@
         pill.className = "mark-cat-pill" + (markObj.category === key ? " active" : "");
         if (markObj.category === key) activeIdx = idx;
         pill.style.background = cat.color;
-        pill.title = cat.label;
+        pill.setAttribute("data-tooltip", cat.label);
         pill.setAttribute("aria-label", cat.label);
         pill.addEventListener("click", function (e) {
           e.stopPropagation();

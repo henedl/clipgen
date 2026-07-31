@@ -56,7 +56,11 @@
     if (playBtn) {
       var pIcon = playBtn.querySelector(".player-btn-icon");
       setIconClass(pIcon, state.videoPlaying ? "player-icon-pause" : "player-icon-play");
-      playBtn.title = state.videoPlaying ? "Pause (Space)" : "Play/Pause (Space)";
+      // No "(Space)" here — the hotkey registry renders its own chip for
+      // [data-hotkey] controls, and a hand-written hint goes stale on rebind.
+      var playLabel = state.videoPlaying ? "Pause" : "Play";
+      playBtn.setAttribute("data-tooltip", playLabel);
+      playBtn.setAttribute("aria-label", playLabel);
     }
     if (muteBtn) {
       var mIcon = muteBtn.querySelector(".player-btn-icon");
@@ -77,16 +81,18 @@
     }
     var collapseBtn = qs("#videoCollapseBtn");
     if (collapseBtn) {
-      collapseBtn.title = state.videoCollapsed ? "Show video" : "Hide video";
+      var collapseLabel = state.videoCollapsed ? "Show video" : "Hide video";
+      collapseBtn.setAttribute("data-tooltip", collapseLabel);
+      collapseBtn.setAttribute("aria-label", collapseLabel);
       collapseBtn.setAttribute("aria-expanded", state.videoCollapsed ? "false" : "true");
     }
     var followBtn = qs("#videoFollowBtn");
     if (followBtn) {
       followBtn.classList.toggle("active", !!state.autoFollow);
       followBtn.setAttribute("aria-pressed", state.autoFollow ? "true" : "false");
-      followBtn.title = state.autoFollow
+      followBtn.setAttribute("data-tooltip", state.autoFollow
         ? "Auto-scroll transcript with playback (on)"
-        : "Auto-scroll transcript with playback (off)";
+        : "Auto-scroll transcript with playback (off)");
     }
   }
 

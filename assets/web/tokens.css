@@ -258,6 +258,7 @@
   /* Layout */
   --layout-max-width: 1120px;
   --layout-padding-x: var(--space-5);
+  --tooltip-max-width: 320px;
 
   /* Floating chrome — the fixed TopNav + subheader strip. --chrome-height
    * (48 + 44 = 92px) is the combined offset content clears below both bars. */
@@ -586,7 +587,14 @@ html[data-theme="light"] .cg-logo {
   transition: opacity var(--duration-fast);
 }
 .cg-tooltip.is-visible { opacity: 1; }
-.cg-tooltip--multiline { white-space: pre-line; }
+/* The [data-tooltip] singleton always runs multiline, and its text can be long
+   (LLM-written friction rationales, path lists) — cap the width so it wraps
+   instead of stretching most of the viewport. Only on the multiline variant:
+   the base pill is nowrap, where a max-width would overflow rather than wrap. */
+.cg-tooltip--multiline {
+  white-space: pre-line;
+  max-width: var(--tooltip-max-width);
+}
 
 /* Re-enable mouse events on disabled tooltip buttons so the singleton
    data-tooltip handler in utils.js can detect hover. <button disabled>

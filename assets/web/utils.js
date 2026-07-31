@@ -356,7 +356,13 @@ var createSegTrack = function (opts) {
     btn.type = "button";
     btn.setAttribute("data-value", spec.value);
     if (spec.desc) btn.setAttribute("data-desc", spec.desc);
-    if (spec.title) btn.title = spec.title;
+    // Tooltip through the [data-tooltip] singleton, not native title. Mirror it
+    // into aria-label too: icon-only segments have no other accessible name,
+    // and data-tooltip carries none.
+    if (spec.title) {
+      btn.setAttribute("data-tooltip", spec.title);
+      if (!spec.label) btn.setAttribute("aria-label", spec.title);
+    }
     if (spec.hotkey) btn.setAttribute("data-hotkey", spec.hotkey);
     if (spec.icon) {
       btn.appendChild(iconMaskSpan(spec.icon, { className: "cg-segtrack-icon", basePath: opts.basePath }));
