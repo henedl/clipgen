@@ -587,11 +587,13 @@ body {
   -webkit-mask-image: url(icons/fire.svg);
 }
 
-/* Marks a tab whose contents come from a local Ollama thinking agent. Lives
-   here rather than in tokens.css because viewer.py inlines tokens.css into
-   exported viewers, which have no /icons/ route — shared tokens stay free of
-   icons/ URLs. Copy this rule verbatim into overview.css when the Overview
-   agent-summary tab lands. */
+/* Marks a control that starts a local Ollama thinking agent (the Summary /
+   Citations / Friction run buttons, in the panel and in the pill dropdown), so
+   the glyph sits on the action that spends local compute rather than on the
+   pane showing its output. Lives here rather than in tokens.css because
+   viewer.py inlines tokens.css into exported viewers, which have no /icons/
+   route — shared tokens stay free of icons/ URLs. Copy this rule verbatim into
+   overview.css when the Overview agent-summary tab lands. */
 .ai-agent-badge {
   width: 12px;
   height: 12px;
@@ -604,6 +606,14 @@ body {
   -webkit-mask-size: contain;
   mask-repeat: no-repeat;
   -webkit-mask-repeat: no-repeat;
+}
+
+/* .btn is not a flex container and the badge sets no display of its own, so
+   without this it collapses to zero size inside a run button. */
+.btn > .ai-agent-badge {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-right: var(--space-1);
 }
 
 .panel-tab-dot {
@@ -2005,8 +2015,10 @@ body {
   border-top: 1px solid var(--color-border);
 }
 
+/* Wide enough that the label swap (Run / Re-run / Stop / Stopping…) never
+   reflows the row, badge included. */
 .pill-agent-btn {
-  min-width: 72px;
+  min-width: 92px;
 }
 
 .pill-agent-btn--stop {
