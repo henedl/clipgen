@@ -871,6 +871,19 @@ var escapeHtml = function (str) {
   return div.innerHTML;
 };
 
+// Inline-markdown for model output (Transcripts summaries, Overview reports).
+// Escapes first, then converts only inline spans — `code`, **bold**, and a
+// conservative *italic* (must hug non-space content, so "5 * 3" survives).
+// Block structure (headings, bullets, paragraphs) stays the callers' concern;
+// underscore emphasis is deliberately unsupported (snake_case would mangle).
+var clipgenRenderInlineMarkdown = function (str) {
+  var html = escapeHtml(str == null ? "" : String(str));
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[\s(])\*([^*\s](?:[^*]*[^*\s])?)\*(?=$|[\s).,;:!?])/g, "$1<em>$2</em>");
+  return html;
+};
+
 var hexToRgba = function (hex, alpha) {
   var r = parseInt(hex.slice(1, 3), 16);
   var g = parseInt(hex.slice(3, 5), 16);
