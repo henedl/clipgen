@@ -282,6 +282,11 @@ def _exec_transcribe(
     language = str(params.get("language", "") or "").strip()
     lang = None if language in ("", "auto") else language
     model_name = str(params.get("model", "") or "").strip() or None
+    # No audio-track param on purpose: passing no audio_index gets speech-track
+    # auto-detection, and a *pinned index* would be portable-looking and wrong —
+    # "track 1" is the mic for P01 and system audio for P07 whose recorder wrote
+    # the streams in the other order. If control is ever wanted here it should be
+    # a name hint ("audio_track_contains"), not an index.
 
     result: Any = None
     if len(paths) >= 2:

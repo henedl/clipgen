@@ -240,11 +240,30 @@ def _build_transcribe_kwargs(
     return kwargs
 
 
+def _resolve_audio_index(video_path: str, requested: int | None) -> int:
+    """Resolve which audio stream to transcribe: explicit index, else auto-detect.
+
+    An explicit *requested* index (including 0) always wins. ``None`` runs
+    ``video.pick_speech_audio_track`` over the file's track names, so a session
+    whose participant mic landed on track 2 transcribes the mic rather than the
+    system audio. The probe is cached by (path, mtime_ns) in video.py, so callers
+    that already probed pay a dict lookup, not a second ffprobe.
+    """
+    if requested is not None:
+        return requested
+    import video as video_mod
+
+    props = video_mod.probe_video_properties(video_path)
+    tracks = (props or {}).get("audio_tracks") or []
+    return video_mod.pick_speech_audio_track(tracks)
+
+
 def transcribe_video(
     video_path: str,
     *,
     model_name: str | None = None,
     language: str | None = None,
+    audio_index: int | None = None,
     initial_prompt: str | None = None,
     context_keywords: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
@@ -257,6 +276,8 @@ def transcribe_video(
         model_name: Whisper model size override (e.g. "tiny", "large-v3").
             None uses ``config.TRANSCRIBE_MODEL``.
         language: Language code (e.g. "en"). None = auto-detect.
+        audio_index: Which audio stream (``0:a:N``) to transcribe. None
+            auto-detects a speech-looking track from the stream names.
         initial_prompt: Override the default initial prompt.
         context_keywords: Extra keywords to append to the prompt.
         on_segment: Optional callback invoked after each segment with the
@@ -291,11 +312,25 @@ def transcribe_video(
     import video as video_mod
 
     props = video_mod.probe_video_properties(video_path)
-    if props is not None and not props.get("audio_codec"):
+    tracks: list[dict[str, Any]] = (props or {}).get("audio_tracks") or []
+    if props is not None and not props.get("audio_codec") and not tracks:
         utils.warning_print(
             f"No audio stream in {Path(video_path).name} — skipping transcription."
         )
         return None
+
+    idx = _resolve_audio_index(video_path, audio_index)
+    if tracks and not 0 <= idx < len(tracks):
+        utils.warning_print(
+            f"{Path(video_path).name} has {len(tracks)} audio track(s); "
+            f"track {idx + 1} was requested — skipping transcription."
+        )
+        return None
+    if audio_index is None and idx > 0:
+        utils.verbose_print(
+            f"Auto-selected audio track {idx + 1} "
+            f"({tracks[idx].get('label') or 'unnamed'}) in {Path(video_path).name}"
+        )
 
     model = _load_model(resolved_model)
     if model is None:
@@ -309,11 +344,29 @@ def transcribe_video(
 
     lang = language or config.TRANSCRIBE_LANGUAGE
 
+    # faster-whisper's decoder always reads the container's first audio stream —
+    # there is no index parameter — so a non-default track has to be demuxed to
+    # its own file first. Track 0 keeps the raw video path (byte-identical to the
+    # pre-track-picker behaviour); the extraction is the same cached, locked one
+    # the browser's per-track volume mixer uses.
+    audio_source = str(video_path)
+    if idx > 0:
+        extracted = video_mod.extract_audio_track(video_path, idx)
+        if extracted is None:
+            # Never fall back to track 0 — that would silently transcribe the
+            # wrong audio, which reads as "clipgen is broken", not "it failed".
+            utils.warning_print(
+                f"Could not extract audio track {idx + 1} from "
+                f"{Path(video_path).name} — skipping transcription."
+            )
+            return None
+        audio_source = str(extracted)
+
     try:
         transcribe_kwargs = _build_transcribe_kwargs(
             language=lang, initial_prompt=prompt
         )
-        segments_iter, info = model.transcribe(str(video_path), **transcribe_kwargs)
+        segments_iter, info = model.transcribe(audio_source, **transcribe_kwargs)
         if _is_cancelled():
             raise _TranscriptionCancelled
         segments: list[TranscriptSegment] = []
@@ -352,6 +405,7 @@ def transcribe_timeline(
     *,
     model_name: str | None = None,
     language: str | None = None,
+    audio_index: int | None = None,
     context_keywords: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
@@ -372,6 +426,13 @@ def transcribe_timeline(
     merged: list[TranscriptSegment] = []
     out_language = ""
     out_model = ""
+    # Resolve the audio track ONCE, from the first part, and pass the concrete
+    # index to every part. Auto-detecting per part would splice two different
+    # microphones into one transcript if the recorder's track order shifted
+    # between files.
+    resolved_audio_index = (
+        _resolve_audio_index(timeline[0][0], audio_index) if timeline else 0
+    )
     for path, _duration, cumulative in timeline:
         part_on_segment: Callable[[float, TranscriptSegment], None] | None = None
         if on_segment is not None:
@@ -398,6 +459,7 @@ def transcribe_timeline(
             path,
             model_name=model_name,
             language=language,
+            audio_index=resolved_audio_index,
             context_keywords=context_keywords,
             on_segment=part_on_segment,
             cancel_flag=cancel_flag,
@@ -903,14 +965,16 @@ def create_transcript_task(
     *,
     model: str | None = None,
     language: str | None = None,
+    audio_index: int | None = None,
 ) -> dict[str, Any]:
     """Create a new transcription task dict ready to enqueue.
 
     *video_paths* is the participant's ordered source video(s) — one entry for a
     normal participant, several for a multi-video participant whose session spans
-    files (transcribed as one continuous timeline). *model* and *language* are
-    optional per-participant overrides; when None, the worker falls back to
-    ``config.TRANSCRIBE_MODEL`` and whisper auto-detect respectively.
+    files (transcribed as one continuous timeline). *model*, *language* and
+    *audio_index* are optional per-participant overrides; when None, the worker
+    falls back to ``config.TRANSCRIBE_MODEL``, whisper auto-detect, and
+    speech-track auto-detection respectively.
     """
     return {
         "id": f"tr_{uuid.uuid4().hex[:8]}",
@@ -918,6 +982,7 @@ def create_transcript_task(
         "video_paths": video_paths,
         "model": model,
         "language": language,
+        "audio_index": audio_index,
         "status": TASK_STATUS_QUEUED,
         "progress": 0.0,
         "partial_segments": [],
@@ -1092,11 +1157,27 @@ class TranscriptWorker:
         # Probe the first part for the audio guard; derive the progress
         # denominator from the whole timeline for multi-video.
         props = video_mod.probe_video_properties(video_paths[0])
-        if props is not None and not props.get("audio_codec"):
+        tracks: list[dict[str, Any]] = (props or {}).get("audio_tracks") or []
+        if props is not None and not props.get("audio_codec") and not tracks:
             with self._lock:
                 task["status"] = TASK_STATUS_FAILED
                 task["error"] = (
                     "No audio stream — this video has no audio track to transcribe."
+                )
+                task["partial_segments"] = []
+                task["completed_at"] = datetime.now(UTC).isoformat()
+            return
+
+        # Resolve here rather than inside transcribe_video so the task can record
+        # which track was actually used (the inner guard would only surface a
+        # generic "returned None").
+        audio_index = _resolve_audio_index(video_paths[0], task.get("audio_index"))
+        if tracks and not 0 <= audio_index < len(tracks):
+            with self._lock:
+                task["status"] = TASK_STATUS_FAILED
+                task["error"] = (
+                    f"Audio track {audio_index + 1} does not exist — "
+                    f"this video has {len(tracks)}."
                 )
                 task["partial_segments"] = []
                 task["completed_at"] = datetime.now(UTC).isoformat()
@@ -1128,6 +1209,7 @@ class TranscriptWorker:
                     timeline,
                     model_name=task.get("model"),
                     language=task.get("language"),
+                    audio_index=audio_index,
                     context_keywords=context_kw,
                     on_segment=_on_seg,
                     cancel_flag=lambda: bool(task.get("_cancelled")),
@@ -1137,6 +1219,7 @@ class TranscriptWorker:
                     video_paths[0],
                     model_name=task.get("model"),
                     language=task.get("language"),
+                    audio_index=audio_index,
                     context_keywords=context_kw,
                     on_segment=_on_seg,
                     cancel_flag=lambda: bool(task.get("_cancelled")),
@@ -1158,6 +1241,15 @@ class TranscriptWorker:
                     "language": result["language"],
                     "model": result["model"],
                     "source_file": result["source_file"],
+                    # Recorded so a transcript that changed after an auto-detect
+                    # deviation can be explained (surfaced as the pill's
+                    # "Last run: Track 2 · Interview" hint).
+                    "audio_index": audio_index,
+                    "audio_track_label": (
+                        tracks[audio_index].get("label", "")
+                        if audio_index < len(tracks)
+                        else ""
+                    ),
                     "transcribed_at": datetime.now(UTC).isoformat(),
                 }
                 task["completed_at"] = datetime.now(UTC).isoformat()

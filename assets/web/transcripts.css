@@ -1740,6 +1740,19 @@ body {
   min-width: 110px;
 }
 
+/* Stacks a row with a sub-line beneath it (audio track + its "Last run" hint). */
+.pill-options-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pill-options-hint {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
 .pill-options-footer {
   display: flex;
   justify-content: flex-end;

@@ -283,6 +283,10 @@ def api_participants() -> FlaskResponse:
                 info["language"] = entry.get("language", "")
                 info["model"] = entry.get("model", "")
                 info["transcribed_at"] = entry.get("transcribed_at", "")
+                # What the last run actually transcribed — the picker shows it
+                # back so an auto-detect deviation is explainable after the fact.
+                info["audio_index"] = entry.get("audio_index", 0)
+                info["audio_track_label"] = entry.get("audio_track_label", "")
                 info["has_summary"] = bool(entry.get("summary"))
             result.append(info)
 
@@ -503,6 +507,10 @@ def api_audio_info(participant: str) -> FlaskResponse:
     Lazy per-participant probe (cached in ``video`` by file mtime) so the
     ``/api/participants`` list endpoint stays free of an ffprobe per participant.
     Multi-part participants share the first part's audio setup.
+
+    ``auto_index`` is the track transcription would auto-pick, computed by the
+    same helper the worker uses — the transcribe picker labels its Auto option
+    from this rather than re-deriving the heuristic in JS.
     """
     video_paths = _video_paths_for_participant(participant)
     if not video_paths:
@@ -510,9 +518,11 @@ def api_audio_info(participant: str) -> FlaskResponse:
     props = video.probe_video_properties(video_paths[0])
     if props is None:
         return err("Could not probe video file", 500)
+    tracks = props.get("audio_tracks") or []
     return ok(
-        audio_tracks=props.get("audio_tracks") or [],
+        audio_tracks=tracks,
         audio_track_count=props.get("audio_track_count") or 0,
+        auto_index=video.pick_speech_audio_track(tracks),
     )
 
 
@@ -1444,7 +1454,9 @@ def api_transcribe() -> FlaskResponse:
 
         # Resolve the participants that would actually be enqueued, with the
         # effective Whisper model for each (per-participant override → default).
-        eligible: list[tuple[dict[str, Any], str | None, str | None, str]] = []
+        eligible: list[
+            tuple[dict[str, Any], str | None, str | None, int | None, str]
+        ] = []
         for pid in participant_ids:
             p = available.get(pid)
             if not p or not p.get("has_video"):
@@ -1457,15 +1469,30 @@ def api_transcribe() -> FlaskResponse:
             o = overrides.get(pid) or {}
             model_override = o.get("model") or None
             language_override = o.get("language") or None
+            # Explicitly, not `or None`: track 0 is a valid selection and would
+            # be swallowed as "no override" by a falsy test.
+            raw_index = o.get("audio_index")
+            audio_override: int | None = None
+            if raw_index is not None and str(raw_index).strip() != "":
+                try:
+                    audio_override = int(raw_index)
+                except (TypeError, ValueError):
+                    return err(f"Invalid audio_index for {pid}")
+                if audio_override < 0:
+                    return err(f"Invalid audio_index for {pid}")
+            # No upper bound here — that needs an ffprobe per participant, and
+            # the worker already fails the task with the real track count.
             effective_model = model_override or config.TRANSCRIBE_MODEL
-            eligible.append((p, model_override, language_override, effective_model))
+            eligible.append(
+                (p, model_override, language_override, audio_override, effective_model)
+            )
 
         # Authoritative download gate: never let a worker silently pull an
         # uncached faster-whisper model. The browser confirmation is advisory;
         # this enforces it for direct API calls and the /api/models fallback.
         if not allow_download:
             uncached: list[str] = []
-            for _p, _mo, _lo, effective_model in eligible:
+            for _p, _mo, _lo, _ao, effective_model in eligible:
                 if (
                     effective_model not in uncached
                     and not transcripts.is_whisper_model_cached(effective_model)
@@ -1483,12 +1510,13 @@ def api_transcribe() -> FlaskResponse:
                     }
                 )
 
-        for p, model_override, language_override, _effective_model in eligible:
+        for p, model_override, language_override, audio_override, _em in eligible:
             task = transcripts.create_transcript_task(
                 p["id"],
                 p["video_paths"],
                 model=model_override,
                 language=language_override,
+                audio_index=audio_override,
             )
             if _worker:
                 _worker.enqueue(task)

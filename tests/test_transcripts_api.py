@@ -74,8 +74,8 @@ def test_audio_info_reports_tracks(tr_client, monkeypatch):
         "probe_video_properties",
         lambda p: {
             "audio_tracks": [
-                {"index": 0, "label": "Microphone"},
-                {"index": 1, "label": "System"},
+                {"index": 0, "label": "System"},
+                {"index": 1, "label": "Microphone"},
             ],
             "audio_track_count": 2,
         },
@@ -83,7 +83,10 @@ def test_audio_info_reports_tracks(tr_client, monkeypatch):
     data = tr_client.get("/transcripts/api/audio-info/P01").get_json()
     assert data["ok"] is True
     assert data["audio_track_count"] == 2
-    assert [t["label"] for t in data["audio_tracks"]] == ["Microphone", "System"]
+    assert [t["label"] for t in data["audio_tracks"]] == ["System", "Microphone"]
+    # The picker labels its Auto option from this rather than re-deriving the
+    # heuristic in JS.
+    assert data["auto_index"] == 1
 
 
 def test_audio_info_unknown_participant_404(tr_client):
@@ -380,6 +383,72 @@ def test_transcribe_without_overrides_defaults_to_none(tr_client, monkeypatch):
     assert len(captured) == 1
     assert captured[0]["model"] is None
     assert captured[0]["language"] is None
+    assert captured[0]["audio_index"] is None
+
+
+def _stub_transcribe_worker(monkeypatch) -> list[dict]:
+    """Point the transcribe route at a capture-only worker with a cached model."""
+    captured: list[dict] = []
+
+    class _StubWorker:
+        def enqueue(self, task):
+            captured.append(task)
+
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
+    ]
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    return captured
+
+
+@pytest.mark.parametrize("sent", [0, "0"])
+def test_transcribe_keeps_audio_track_zero(tr_client, monkeypatch, sent):
+    """Track 0 is a real selection, not "no override" — a falsy test loses it."""
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"audio_index": sent}},
+        },
+    )
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0]["audio_index"] == 0
+
+
+def test_transcribe_applies_audio_track_override(tr_client, monkeypatch):
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"audio_index": 2}},
+        },
+    )
+    assert resp.status_code == 200
+    assert captured[0]["audio_index"] == 2
+
+
+@pytest.mark.parametrize("bad", ["x", -1])
+def test_transcribe_rejects_invalid_audio_track(tr_client, monkeypatch, bad):
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"audio_index": bad}},
+        },
+    )
+    assert resp.get_json()["ok"] is False
+    assert captured == []
 
 
 def test_transcribe_rejects_uncached_model(tr_client, monkeypatch):

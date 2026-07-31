@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,70 @@ _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
 _GENERIC_AUDIO_HANDLERS = frozenset(
     {"soundhandler", "core media audio", "isom", "audio"}
 )
+
+# Track-name hints for pick_speech_audio_track(). Screen recorders name their
+# streams ("Participant Mic", "System Audio"), and that name is the only signal
+# available without decoding, so the heuristic is purely lexical.
+_SPEECH_TRACK_HINTS = [
+    "participant", "participants", "interview", "interviewee", "interviewer",
+    "meeting", "mic", "mics", "microphone", "mikrofon", "voice", "voices",
+    "speech", "talk", "moderator", "respondent", "facilitator", "guest", "host",
+    "presenter", "narration", "commentary", "headset", "lav", "lavalier",
+    "boom", "call", "zoom", "teams", "webex",
+    "deltagare", "intervju", "röst", "samtal",
+]  # fmt: skip
+# "speaker"/"speakers" is deliberately NEGATIVE: on macOS/Windows a track named
+# "Speakers" is the *output* capture (an aggregate device), not a person. Reading
+# it as speech would silently transcribe system audio — the exact failure this
+# whole feature exists to prevent.
+_NON_SPEECH_TRACK_HINTS = [
+    "system", "screen", "desktop", "display", "music", "game", "output",
+    "loopback", "playback", "monitor", "soundtrack", "background", "ambience",
+    "effects", "sfx", "application", "app", "browser", "tab", "share", "shared",
+    "speaker", "speakers", "blackhole", "soundflower", "aggregate", "mix",
+    "skärm", "skarm", "musik", "dator",
+]  # fmt: skip
+
+
+def _hint_pattern(words: list[str]) -> re.Pattern[str]:
+    """Word-boundary alternation over *words* (so "mic" misses "dynamic")."""
+    return re.compile(
+        r"\b(?:" + "|".join(sorted(words, key=len, reverse=True)) + r")\b"
+    )
+
+
+_SPEECH_TRACK_RE = _hint_pattern(_SPEECH_TRACK_HINTS)
+_NON_SPEECH_TRACK_RE = _hint_pattern(_NON_SPEECH_TRACK_HINTS)
+
+
+def pick_speech_audio_track(audio_tracks: list[dict[str, Any]]) -> int:
+    """Index of the track most likely to carry participant speech (0 if unknown).
+
+    Scores each track's title/handler/label against the speech vs. system-audio
+    name hints above and returns the argmax, with a lowest-index tiebreak. An
+    all-zero field (no track named anything meaningful) yields 0 — which is also
+    faster-whisper's own default stream, so an unnamed multitrack file behaves
+    exactly as it did before this function existed.
+
+    Takes the track dicts ``probe_video_properties`` already built rather than a
+    path: this is *policy*, and baking it into the ``(path, mtime_ns)``-keyed
+    probe cache would serve stale picks if the hints ever become tunable.
+    """
+    best_index = 0
+    # None (not 0) so a field of only *negatively* scored tracks still moves off
+    # track 0 — "System Audio" then an unnamed track should pick the unnamed one.
+    best_score: int | None = None
+    for position, track in enumerate(audio_tracks):
+        haystack = " ".join(
+            str(track.get(key) or "") for key in ("title", "handler", "label")
+        ).lower()
+        score = 2 * len(set(_SPEECH_TRACK_RE.findall(haystack))) - 3 * len(
+            set(_NON_SPEECH_TRACK_RE.findall(haystack))
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_index = int(track.get("index", position))
+    return best_index
 
 
 def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
