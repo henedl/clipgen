@@ -445,8 +445,9 @@
       var btn = el("button", "co-lane-fold");
       btn.type = "button";
       btn.setAttribute("data-source", source);
-      btn.title = (folded ? "Unfold " : "Fold ") + source + " lane";
-      btn.setAttribute("aria-label", btn.title);
+      var foldLabel = (folded ? "Unfold " : "Fold ") + source + " lane";
+      btn.setAttribute("data-tooltip", foldLabel);
+      btn.setAttribute("aria-label", foldLabel);
       // Vertically center in the lane (CSS translateY(-50%) does the rest).
       btn.style.top = (laneY + laneH / 2) + "px";
       btn.appendChild(el("span",

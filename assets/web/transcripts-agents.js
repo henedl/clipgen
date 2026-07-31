@@ -545,7 +545,7 @@
         var sup = document.createElement("sup");
         sup.className = "citation-link";
         sup.dataset.start = String(ref.start);
-        sup.title = formatTime(ref.start);
+        sup.setAttribute("data-tooltip", formatTime(ref.start));
         sup.textContent = "[" + refNum + "]";
         (function (startTime) {
           sup.addEventListener("click", function (e) {
@@ -682,12 +682,12 @@
     if (editing) {
       icon.classList.remove("summary-action-edit");
       icon.classList.add("summary-action-save");
-      btn.title = "Save summary";
+      btn.setAttribute("data-tooltip", "Save summary");
       btn.setAttribute("aria-label", "Save summary");
     } else {
       icon.classList.remove("summary-action-save");
       icon.classList.add("summary-action-edit");
-      btn.title = "Edit summary";
+      btn.setAttribute("data-tooltip", "Edit summary");
       btn.setAttribute("aria-label", "Edit summary");
     }
   }
@@ -907,10 +907,10 @@
     var depMet = _frictionDepMet();
     if (depMet) {
       rerun.removeAttribute("disabled");
-      rerun.title = "";
+      rerun.removeAttribute("data-tooltip");
     } else {
       rerun.setAttribute("disabled", "disabled");
-      rerun.title = "Requires a summary first";
+      rerun.setAttribute("data-tooltip", "Requires a summary first");
     }
     if (state.frictionData) {
       var fd = state.frictionData;
@@ -1532,7 +1532,9 @@
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "friction-jump-chip" + (i === state.frictionMomentIndex ? " is-current" : "");
-      if (entry.moment.rationale) btn.title = entry.moment.rationale;
+      if (entry.moment.rationale) {
+        btn.setAttribute("data-tooltip", entry.moment.rationale);
+      }
       btn.appendChild(el("span", "friction-jump-chip-num", String(i + 1)));
       btn.appendChild(el("span", "", _frictionCatLabel(entry.moment.category)));
       btn.appendChild(el("span", "friction-jump-chip-time", formatTime(seg.start)));

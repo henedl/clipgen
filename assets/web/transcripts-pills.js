@@ -274,7 +274,7 @@
       var stale = document.createElement("span");
       stale.className = "pill-stale-badge";
       stale.textContent = "stale";
-      stale.title = "Artifacts built from an older transcript";
+      stale.setAttribute("data-tooltip", "Artifacts built from an older transcript");
       pill.appendChild(stale);
     }
 
@@ -311,7 +311,7 @@
     btn.type = "button";
     btn.className = "pill-trigger pill-trigger--" + s.status;
     btn.setAttribute("aria-label", cfg.label);
-    btn.setAttribute("title", cfg.label);
+    btn.setAttribute("data-tooltip", cfg.label);
 
     // Two stacked icons; CSS hides one and shows the other on hover/focus.
     var rest = document.createElement("span");
@@ -647,7 +647,7 @@
     }
 
     if (mode === "disabled") btn.setAttribute("disabled", "disabled");
-    if (title) btn.title = title;
+    if (title) btn.setAttribute("data-tooltip", title);
 
     btn.addEventListener("click", function (e) {
       e.stopPropagation();

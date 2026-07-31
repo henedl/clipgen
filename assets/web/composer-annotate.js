@@ -575,7 +575,7 @@
       var row = el("button",
         "co-stroke-option" + (item.value === current ? " active" : ""));
       row.type = "button";
-      if (item.title) row.title = item.title;
+      if (item.title) row.setAttribute("data-tooltip", item.title);
       var line = el("span", "co-stroke-sample");
       item.style(line);
       row.appendChild(line);
@@ -645,8 +645,8 @@
     SWATCH_COLORS.forEach(function (color, idx) {
       var swatch = el("button", "co-color-swatch" + (idx === 0 ? " active" : ""));
       swatch.type = "button";
-      swatch.title = "Annotation color " + color;
-      swatch.setAttribute("aria-label", swatch.title);
+      swatch.setAttribute("data-tooltip", "Annotation color " + color);
+      swatch.setAttribute("aria-label", "Annotation color " + color);
       swatch.setAttribute("data-color", color);
       swatch.style.setProperty("--co-swatch-color", color);
       swatch.addEventListener("click", function () { applyAnnColor(color); });
@@ -655,8 +655,8 @@
 
     var custom = el("button", "co-color-swatch co-color-custom");
     custom.type = "button";
-    custom.title = "Custom color…";
-    custom.setAttribute("aria-label", custom.title);
+    custom.setAttribute("data-tooltip", "Custom color…");
+    custom.setAttribute("aria-label", "Custom color…");
     custom.style.setProperty("--co-swatch-color", state.annColor || SWATCH_COLORS[0]);
     custom.appendChild(el("span", "co-btn-icon co-icon-eye-dropper"));
     custom.addEventListener("click", function () {
