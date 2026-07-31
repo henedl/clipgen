@@ -52,10 +52,12 @@
     // #segmentList. Persisted; owned by transcripts-agents.js, read here and by
     // the video satellite's timeline band.
     frictionMode: "off",
-    // Starts at 0 = "every segment the scorer flagged". The histogram makes the
-    // distribution and the cut point visible, so opening on the full set and
-    // narrowing beats opening pre-filtered to something the user can't see.
-    frictionThreshold: 0,
+    // Score band the filter keeps, both ends draggable on the histogram. Opens
+    // fully open (every segment the scorer flagged) — the histogram makes the
+    // distribution visible, so narrowing from everything beats opening
+    // pre-filtered to something the user can't see.
+    frictionMin: 0,
+    frictionMax: 1,
     frictionCategoryFilter: null,
     // Derived from (threshold, categoryFilter, frictionData, segments) by
     // _recomputeFrictionMatches. The single source every friction consumer reads:
@@ -1410,7 +1412,7 @@
         var seg = state.segments[idx];
         var frow = seg ? state.frictionBySegId[seg.id] : null;
         if (!frow || !(frow.score > 0)) { _hideFrictionTooltip(); return; }
-        _showFrictionTooltip(frow, cx, cy);
+        _showFrictionTooltip(frow, seg, cx, cy);
       });
     });
     container.addEventListener("mouseleave", function () { _hideFrictionTooltip(); });

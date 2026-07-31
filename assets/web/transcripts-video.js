@@ -28,6 +28,8 @@
   var _timelineTooltipRaf = 0;
   var _lastTimelineHit = null;
   var _timelineResizeObs = null;
+  var _frictionBandRect = null;   // {y, h} of the friction band, set by renderTimeline
+  var _frictionBandHover = false; // a friction tooltip is up from the band hover
 
   // Transcribe-progress band: while the selected participant has a running
   // transcription task, the timeline fills left→right in sync with progress
@@ -371,6 +373,9 @@
     var markerY = 22;
     var markerH = cssH - markerY - 4;
     _markerHitRects = [];
+    // Remembered for the friction-band hover hit test, which runs long after
+    // this frame and must not re-derive the band geometry from constants.
+    _frictionBandRect = { y: markerY, h: markerH };
 
     // Friction heatmap band (behind marks).
     _drawFrictionBand(ctx, timeToX, markerY, markerH, cssW);
@@ -451,6 +456,37 @@
       if (mx >= hr.x1 && mx <= hr.x2 && my >= hr.y && my <= hr.y + hr.h) return hr;
     }
     return null;
+  }
+
+  // The friction band is drawn behind the mark bars and had no hover of its own,
+  // so a dense stretch of orange was unreadable — you could see that something
+  // was flagged but not what or why. Resolve the pointer's x to the segment
+  // playing there and hand it to the agents satellite's friction tooltip (the
+  // same one the hot segment rows use), so the band explains itself.
+  function hitTestFrictionBand(clientX, clientY) {
+    if (state.frictionMode === "off" || !_frictionBandRect) return null;
+    var canvas = qs("#timelineCanvas");
+    if (!canvas) return null;
+    var my = clientY - canvas.getBoundingClientRect().top;
+    if (my < _frictionBandRect.y || my > _frictionBandRect.y + _frictionBandRect.h) return null;
+    var t = timelineXToTime({ clientX: clientX });
+    if (t === null) return null;
+    for (var i = 0; i < state.segments.length; i++) {
+      var seg = state.segments[i];
+      if (t < seg.start || t > (seg.end || seg.start)) continue;
+      // Only segments the current filter actually selected — the band draws
+      // exactly those, so anything else would explain a stripe that isn't there.
+      if (state.frictionMatchBySegId[seg.id] === undefined) return null;
+      var frow = state.frictionBySegId[seg.id];
+      return frow ? { frow: frow, seg: seg } : null;
+    }
+    return null;
+  }
+
+  function hideFrictionBandTooltip() {
+    if (!_frictionBandHover) return;
+    _frictionBandHover = false;
+    if (TS._hideFrictionTooltip) TS._hideFrictionTooltip();
   }
 
   function showTimelineTooltip(hit, clientX, clientY) {
@@ -699,18 +735,32 @@
         _timelineTooltipRaf = 0;
         var hit = hitTestTimeline(cx, cy);
         if (hit) {
+          // Set the hit first: _hideFrictionTooltip yields to hasTimelineHover(),
+          // so this clears the friction flag without blanking the element we are
+          // about to write the mark tooltip into.
           _lastTimelineHit = hit;
+          hideFrictionBandTooltip();
           showTimelineTooltip(hit, cx, cy);
           canvas.style.cursor = "pointer";
-        } else if (_lastTimelineHit) {
+          return;
+        }
+        if (_lastTimelineHit) {
           _lastTimelineHit = null;
           hideTimelineTooltip();
-          canvas.style.cursor = "pointer";
         }
+        var band = hitTestFrictionBand(cx, cy);
+        if (band) {
+          _frictionBandHover = true;
+          if (TS._showFrictionTooltip) TS._showFrictionTooltip(band.frow, band.seg, cx, cy);
+        } else {
+          hideFrictionBandTooltip();
+        }
+        canvas.style.cursor = "pointer";
       });
     });
     canvas.addEventListener("mouseleave", function () {
       _lastTimelineHit = null;
+      hideFrictionBandTooltip();
       hideTimelineTooltip();
     });
   }

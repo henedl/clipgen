@@ -906,8 +906,9 @@ body {
   background: var(--color-friction);
 }
 
-/* Bins below the threshold are dimmed so the cut point reads at a glance. */
-.friction-hist-bar.is-below .friction-hist-bar-fill {
+/* Bins outside the selected score band are dimmed so the cut points read at a
+ * glance without having to compare the marker positions to each bar. */
+.friction-hist-bar.is-outside .friction-hist-bar-fill {
   opacity: 0.28;
 }
 
@@ -916,9 +917,38 @@ body {
   top: 0;
   bottom: 0;
   width: 2px;
-  margin-left: -1px; /* center the line on the threshold position */
+  margin-left: -1px; /* center the line on the bound it represents */
   background: var(--color-text);
   pointer-events: none;
+}
+
+/* The handle being dragged, so the grabbed end is unambiguous. */
+.friction-hist-marker.is-active {
+  background: var(--color-friction);
+  width: 3px;
+  margin-left: -1.5px;
+}
+
+/* Current bound values, positioned under the handle each one belongs to. */
+.friction-hist-bounds {
+  position: relative;
+  height: var(--space-3);
+}
+
+.friction-hist-bound {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.friction-hist-bound.is-active {
+  color: var(--color-friction);
+  font-weight: 600;
 }
 
 .friction-hist-label {
@@ -1175,6 +1205,14 @@ body {
 .tr-tooltip-friction-score {
   color: var(--color-text-dim);
   font-variant-numeric: tabular-nums;
+}
+
+.tr-tooltip-friction-quote {
+  font-style: italic;
+}
+
+.tr-tooltip-friction-markers {
+  color: var(--color-friction);
 }
 
 /* Transcript segments */

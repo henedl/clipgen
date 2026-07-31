@@ -152,7 +152,7 @@
   }
 
   // Timer-only teardown (mirrors the old per-agent _stop*Poll): does NOT reset
-  // ETA trackers — render*Status/*Generating reset-then-seed, so resetting here
+  // ETA trackers — render*Status / render*Generating reset-then-seed, so resetting here
   // would wipe the seed when a poll restarts.
   function _stopAgentPoll(desc) {
     if (desc._poller) {
@@ -982,6 +982,13 @@
     state.frictionCategoryFilter = f;
   }
 
+  // Both ends of the score band are user-controlled (the histogram's two
+  // handles), so every score test goes through here rather than comparing
+  // against a lone threshold.
+  function _frictionScoreInBand(score) {
+    return score >= state.frictionMin && score <= state.frictionMax;
+  }
+
   // ---- The one derived filter product ----
   //
   // (threshold, category filter, friction data, segments) -> the three shared
@@ -1007,9 +1014,9 @@
     for (i = 0; i < segs.length; i++) {
       var frow = segs[i];
       var score = frow.score || 0;
-      // score <= 0 is excluded outright so a threshold of 0 still means "every
+      // score <= 0 is excluded outright so a lower bound of 0 still means "every
       // segment the scorer flagged", not "every segment in the transcript".
-      if (score <= 0 || score < state.frictionThreshold) continue;
+      if (score <= 0 || !_frictionScoreInBand(score)) continue;
       var cats = frow.categories || [];
       for (j = 0; j < cats.length; j++) {
         if (filter[cats[j]] !== false) { matches[frow.id] = score; break; }
@@ -1044,12 +1051,73 @@
   function applyFrictionDecorations() {
     _recomputeFrictionMatches();
     renderFrictionChips();
-    _updateFrictionThreshold();
+    _updateFrictionBounds(null);
     renderFrictionJumpStrip();
     _decorateSegmentList();
   }
 
-  // ---- Score histogram (the threshold control) ----
+  // ---- "Why was this selected" ----
+  //
+  // The scores are opaque on their own, so every friction hover surface — a
+  // histogram bin, a hot segment row, the timeline density band — answers the
+  // same question with the same words: what the segment scored, which categories
+  // fired, the phrases that matched, and the line itself. One builder, so the
+  // three can't end up explaining the same segment differently.
+
+  var _FRICTION_TOOLTIP_SEGMENTS = 4; // per histogram bin, before "+N more"
+
+  function _frictionQuote(seg, maxChars) {
+    var text = (seg && seg.text ? seg.text : "").trim();
+    if (!text) return "";
+    if (text.length > maxChars) text = text.slice(0, maxChars - 1).replace(/\s+\S*$/, "") + "…";
+    return "“" + text + "”";
+  }
+
+  // One compact line: 0:12 · 0.45 · Confusion · “where is the export button”
+  function _frictionWhyLine(frow, seg) {
+    var parts = [formatTime(seg.start), (frow.score || 0).toFixed(2)];
+    var cats = (frow.categories || []).map(_frictionCatLabel);
+    if (cats.length) parts.push(cats.join(", "));
+    var quote = _frictionQuote(seg, 60);
+    if (quote) parts.push(quote);
+    return parts.join(" · ");
+  }
+
+  // Scored segments whose score falls in [lo, hi) — the top bin takes 1.0 too.
+  function _frictionSegmentsInBin(lo, hi) {
+    var rows = (state.frictionData && state.frictionData.segments) || [];
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var sc = rows[i].score || 0;
+      if (sc <= 0) continue;
+      if (sc < lo) continue;
+      if (hi < 1 ? sc >= hi : sc > hi) continue;
+      out.push(rows[i]);
+    }
+    return out;
+  }
+
+  function _frictionBinTooltip(lo, hi) {
+    var rows = _frictionSegmentsInBin(lo, hi);
+    var head = "Score " + lo.toFixed(2) + "–" + hi.toFixed(2) + " · " +
+      clipgenPluralUnit(rows.length, "segment", "segments");
+    if (!rows.length) return head;
+    var lines = [head];
+    // Resolve text only for the handful shown — a busy bin can hold hundreds of
+    // rows and _segmentIndexById is a linear scan.
+    for (var i = 0; i < rows.length && i < _FRICTION_TOOLTIP_SEGMENTS; i++) {
+      var idx = _segmentIndexById(rows[i].id);
+      var seg = idx >= 0 ? state.segments[idx] : null;
+      lines.push(seg ? _frictionWhyLine(rows[i], seg)
+        : formatTime(0) + " · " + (rows[i].score || 0).toFixed(2));
+    }
+    if (rows.length > _FRICTION_TOOLTIP_SEGMENTS) {
+      lines.push("+" + (rows.length - _FRICTION_TOOLTIP_SEGMENTS) + " more");
+    }
+    return lines.join("\n");
+  }
+
+  // ---- Score histogram (the score-band control) ----
 
   var _FRICTION_HIST_BINS = 10;
 
@@ -1082,31 +1150,77 @@
       var fill = el("div", "friction-hist-bar-fill");
       fill.style.height = pct.toFixed(1) + "%";
       bar.appendChild(fill);
-      (function (lo, hi, count) {
-        attachHoverTooltip(bar, function () {
-          return lo.toFixed(1) + "–" + hi.toFixed(1) + ": " +
-            clipgenPluralUnit(count, "segment", "segments");
-        }, { align: "center" });
-      })(i / _FRICTION_HIST_BINS, (i + 1) / _FRICTION_HIST_BINS, n);
+      (function (lo, hi) {
+        // Built lazily on hover, not captured here: the histogram can be rendered
+        // before the transcript lands, and the explanation needs segment text.
+        attachHoverTooltip(bar, function () { return _frictionBinTooltip(lo, hi); },
+          { multiline: true });
+      })(i / _FRICTION_HIST_BINS, (i + 1) / _FRICTION_HIST_BINS);
       host.appendChild(bar);
     }
     host.appendChild(el("span", "friction-hist-label",
       clipgenPluralUnit(scored, "scored segment", "scored segments")));
-    host.appendChild(el("div", "friction-hist-marker"));
+    host.appendChild(_buildFrictionHandle("min"));
+    host.appendChild(_buildFrictionHandle("max"));
+
+    var bounds = qs("#frictionBounds");
+    if (bounds) {
+      bounds.innerHTML = "";
+      bounds.appendChild(_buildFrictionBoundLabel("min"));
+      bounds.appendChild(_buildFrictionBoundLabel("max"));
+    }
   }
 
-  // Marker position + per-bar dimming only. Split from renderFrictionHistogram so
-  // a drag never wipes the track's innerHTML mid-gesture (which would drop the
-  // pointer capture the drag depends on).
-  function _updateFrictionThreshold() {
+  function _buildFrictionHandle(which) {
+    var m = el("div", "friction-hist-marker");
+    m.setAttribute("data-bound", which);
+    return m;
+  }
+
+  function _buildFrictionBoundLabel(which) {
+    var s = el("span", "friction-hist-bound");
+    s.setAttribute("data-bound", which);
+    return s;
+  }
+
+  // Handle positions, per-bar dimming and the bound readouts. Split from
+  // renderFrictionHistogram so a drag never wipes the track's innerHTML
+  // mid-gesture (which would drop the pointer capture the drag depends on).
+  function _updateFrictionBounds(activeBound) {
     var host = qs("#frictionHistogram");
     if (!host) return;
-    var marker = host.querySelector(".friction-hist-marker");
-    if (marker) marker.style.left = (state.frictionThreshold * 100) + "%";
+    var lo = state.frictionMin;
+    var hi = state.frictionMax;
+    var markers = host.querySelectorAll(".friction-hist-marker");
+    for (var m = 0; m < markers.length; m++) {
+      var which = markers[m].getAttribute("data-bound");
+      markers[m].style.left = ((which === "min" ? lo : hi) * 100) + "%";
+      markers[m].classList.toggle("is-active", which === activeBound);
+    }
     var bars = host.querySelectorAll(".friction-hist-bar");
     for (var i = 0; i < bars.length; i++) {
-      // Dim a bar once its whole range sits below the cut point.
-      bars[i].classList.toggle("is-below", (i + 1) / _FRICTION_HIST_BINS <= state.frictionThreshold);
+      // A bar is outside when its whole range falls beyond either bound.
+      var barLo = i / _FRICTION_HIST_BINS;
+      var barHi = (i + 1) / _FRICTION_HIST_BINS;
+      bars[i].classList.toggle("is-outside", barHi <= lo || barLo >= hi);
+    }
+
+    // Labels sit under their own handle. When the two bounds nearly coincide the
+    // labels would overlap, so nudge them apart — the positions stay indicative,
+    // and the numbers stay readable, which is the point of the readout.
+    var loPct = lo * 100;
+    var hiPct = hi * 100;
+    if (hiPct - loPct < 8) {
+      var mid = (loPct + hiPct) / 2;
+      loPct = Math.max(0, mid - 4);
+      hiPct = Math.min(100, mid + 4);
+    }
+    var labels = (qs("#frictionBounds") || host).querySelectorAll(".friction-hist-bound");
+    for (var j = 0; j < labels.length; j++) {
+      var isMin = labels[j].getAttribute("data-bound") === "min";
+      labels[j].style.left = (isMin ? loPct : hiPct) + "%";
+      labels[j].textContent = (isMin ? lo : hi).toFixed(2);
+      labels[j].classList.toggle("is-active", labels[j].getAttribute("data-bound") === activeBound);
     }
   }
 
@@ -1115,42 +1229,72 @@
     if (!host) return;
     var raf = 0;
     var pending = null;
+    var grabbed = null; // "min" | "max" — which handle this gesture moves
 
     function scoreAt(clientX) {
       var r = host.getBoundingClientRect();
-      if (!r.width) return state.frictionThreshold;
+      if (!r.width) return null;
       // 0.05 steps, matching the range input this replaced.
       return Math.max(0, Math.min(1, Math.round(((clientX - r.left) / r.width) * 20) / 20));
     }
 
     function commit(v) {
-      if (v === null || v === state.frictionThreshold) return;
-      state.frictionThreshold = v;
+      if (v === null || !grabbed) return;
+      // Bounds clamp against each other rather than swapping: dragging one end
+      // past the other collapses the band instead of silently inverting it.
+      if (grabbed === "min") v = Math.min(v, state.frictionMax);
+      else v = Math.max(v, state.frictionMin);
+      var key = grabbed === "min" ? "frictionMin" : "frictionMax";
+      if (state[key] === v) {
+        _updateFrictionBounds(grabbed); // still reflect the grabbed handle
+        return;
+      }
+      state[key] = v;
       applyFrictionDecorations();
+      _updateFrictionBounds(grabbed);
       renderTimeline();
     }
 
-    // Pointer capture keeps the whole gesture on the track, so nothing is bound
-    // at document scope and there is nothing to tear down on pagehide.
+    // Pointer capture keeps the gesture on the track while the pointer wanders
+    // off it, so nothing is bound at document scope and there is nothing to tear
+    // down on pagehide. The handlers gate on `grabbed`, not on hasPointerCapture:
+    // capture is a nicety some engines refuse (and WKWebView hosts this app in
+    // the desktop bundle), and a drag that silently stops tracking is worse than
+    // one that merely stops following the pointer past the edges. A move with no
+    // button held means we missed the pointerup, so the gesture self-heals.
     host.addEventListener("pointerdown", function (e) {
-      host.setPointerCapture(e.pointerId);
-      pending = scoreAt(e.clientX);
-      commit(pending);
+      var v = scoreAt(e.clientX);
+      if (v === null) return;
+      // A press outside the band always grabs the bound on that side, so it
+      // widens toward the press. Nearest-handle only applies inside. Without the
+      // outside case, a band dragged shut (min === max) would be unrecoverable:
+      // every press would tie, ties would pick min, and min can never exceed max.
+      if (v > state.frictionMax) grabbed = "max";
+      else if (v < state.frictionMin) grabbed = "min";
+      else grabbed = Math.abs(v - state.frictionMin) <= Math.abs(v - state.frictionMax) ? "min" : "max";
+      try { host.setPointerCapture(e.pointerId); } catch (err) { /* capture is optional */ }
+      pending = v;
+      commit(v);
       e.preventDefault();
     });
     host.addEventListener("pointermove", function (e) {
-      if (!host.hasPointerCapture(e.pointerId)) return;
+      if (!grabbed) return;
+      if (e.buttons === 0) { endDrag(e); return; }
       pending = scoreAt(e.clientX);
       if (raf) return;
       raf = requestAnimationFrame(function () { raf = 0; commit(pending); });
     });
     function endDrag(e) {
-      if (!host.hasPointerCapture(e.pointerId)) return;
-      host.releasePointerCapture(e.pointerId);
-      if (raf) { cancelAnimationFrame(raf); raf = 0; commit(pending); }
+      if (!grabbed) return;
+      try { host.releasePointerCapture(e.pointerId); } catch (err) { /* never captured */ }
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      commit(pending);
+      grabbed = null;
+      _updateFrictionBounds(null);
       // Persist once per gesture, not per frame — the stored UI state is a
       // parse/stringify of the whole page blob.
-      setStoredUIStateField("transcripts", "frictionThreshold", state.frictionThreshold);
+      setStoredUIStateField("transcripts", "frictionMin", state.frictionMin);
+      setStoredUIStateField("transcripts", "frictionMax", state.frictionMax);
     }
     host.addEventListener("pointerup", endDrag);
     host.addEventListener("pointercancel", endDrag);
@@ -1167,7 +1311,8 @@
     var out = {};
     var segs = (state.frictionData && state.frictionData.segments) || [];
     for (var i = 0; i < segs.length; i++) {
-      if ((segs[i].score || 0) < state.frictionThreshold || (segs[i].score || 0) <= 0) continue;
+      var sc = segs[i].score || 0;
+      if (sc <= 0 || !_frictionScoreInBand(sc)) continue;
       var cats = segs[i].categories || [];
       for (var j = 0; j < cats.length; j++) out[cats[j]] = (out[cats[j]] || 0) + 1;
     }
@@ -1217,7 +1362,7 @@
   }
 
   function _frictionMomentMatches(m) {
-    if ((m.score || 0) < state.frictionThreshold) return false;
+    if (!_frictionScoreInBand(m.score || 0)) return false;
     var f = state.frictionCategoryFilter;
     if (f && m.category && f[m.category] === false) return false;
     return true;
@@ -1492,9 +1637,8 @@
     if (!mount) return;
     var stored = getStoredUIState("transcripts") || {};
     state.frictionMode = _frictionMode(stored.frictionMode);
-    if (typeof stored.frictionThreshold === "number") {
-      state.frictionThreshold = stored.frictionThreshold;
-    }
+    if (typeof stored.frictionMin === "number") state.frictionMin = stored.frictionMin;
+    if (typeof stored.frictionMax === "number") state.frictionMax = stored.frictionMax;
     if (stored.frictionCategoryFilter) {
       state.frictionCategoryFilter = stored.frictionCategoryFilter;
     }
@@ -1531,7 +1675,7 @@
   // _hideFrictionTooltip's TS.hasTimelineHover() guard). The segment-list
   // mousemove that calls _showFrictionTooltip — and its coalescing _segTooltipRaf
   // — live in the hub's segment-list delegation, not here.
-  function _showFrictionTooltip(frow, clientX, clientY) {
+  function _showFrictionTooltip(frow, seg, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
     tip.textContent = "";
@@ -1544,14 +1688,23 @@
       });
       tip.appendChild(badges);
     }
+    // The line itself, so the hover answers "why is this flagged" without
+    // needing to look back at the transcript (it is the whole point on the
+    // timeline band, where there is no text nearby at all).
+    var quote = _frictionQuote(seg, 90);
+    if (quote) {
+      tip.appendChild(el("span", "tr-tooltip-friction-quote", quote));
+      tip.appendChild(document.createElement("br"));
+    }
     var markers = frow.markers || [];
     if (markers.length) {
       var shown = markers.slice(0, 5).join(", ");
       if (markers.length > 5) shown += " +" + (markers.length - 5) + " more";
-      tip.appendChild(document.createTextNode(shown));
+      tip.appendChild(el("span", "tr-tooltip-friction-markers", "matched: " + shown));
       tip.appendChild(document.createElement("br"));
     }
-    tip.appendChild(el("span", "tr-tooltip-friction-score", "Score " + (frow.score || 0).toFixed(2)));
+    tip.appendChild(el("span", "tr-tooltip-friction-score",
+      (seg ? formatTime(seg.start) + " · " : "") + "score " + (frow.score || 0).toFixed(2)));
     tip.classList.remove("hidden");
     var tipRect = tip.getBoundingClientRect();
     var x = clientX + 12;

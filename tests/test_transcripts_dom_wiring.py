@@ -49,6 +49,7 @@ REQUIRED_IDS = [
     "frictionCounter",
     "frictionMarkAll",
     "frictionHistogram",
+    "frictionBounds",
     "frictionChips",
     "frictionJumpStrip",
     "frictionJumpPrev",
@@ -159,6 +160,54 @@ def test_friction_consumers_all_read_the_shared_match_map():
     assert "frictionHeatmapEnabled" not in _JS, (
         "the boolean heatmap flag was replaced by the three-way state.frictionMode"
     )
+
+
+def test_a_collapsed_score_band_can_be_dragged_back_open():
+    """The histogram has two handles clamped against each other. Picking the
+    nearest handle is not enough: once min === max every press ties, ties resolve
+    to min, and min can never exceed max — the band is shut for good. A press
+    outside the band must grab the bound on that side so it widens toward the
+    press."""
+    start = _JS.index("function _initFrictionHistogramDrag(")
+    body = _JS[start : _JS.index("\n  // ----", start)]
+    assert 'grabbed = "max"' in body and 'grabbed = "min"' in body, (
+        "the outside-the-band case must pick a side explicitly"
+    )
+    assert body.index("v > state.frictionMax") < body.index("Math.abs("), (
+        "the outside-the-band check has to run BEFORE the nearest-handle tie-break"
+    )
+
+
+def test_histogram_drag_does_not_depend_on_pointer_capture():
+    """setPointerCapture is a nicety some engines refuse — and the desktop bundle
+    hosts this app in WKWebView. Gating the move/up handlers on it would make the
+    drag silently dead there, so they gate on the grabbed handle and self-heal
+    when a pointerup is missed."""
+    start = _JS.index("function _initFrictionHistogramDrag(")
+    body = _JS[start : _JS.index("\n  // ----", start)]
+    assert "host.hasPointerCapture(" not in body, (
+        "gate the drag on `grabbed`, not on whether capture was granted"
+    )
+    assert "e.buttons === 0" in body, (
+        "a move with no button held means the pointerup was missed; end the drag"
+    )
+
+
+def test_every_friction_hover_explains_itself_from_one_builder():
+    """A score on its own says nothing. All three friction hover surfaces — the
+    histogram bins, the hot segment rows and the timeline density band — have to
+    answer 'why is this flagged' with the same words, so they share one builder
+    rather than each formatting scores and quotes their own way."""
+    assert _JS.count("function _frictionWhyLine(") == 1
+    assert _JS.count("function _frictionQuote(") == 1
+    for caller in ("_frictionBinTooltip", "_showFrictionTooltip"):
+        assert caller in _JS
+    video = read("transcripts-video.js")
+    assert "TS._showFrictionTooltip" in video, (
+        "the timeline band must reuse the agents satellite's friction tooltip, "
+        "not grow a second one that drifts from it"
+    )
+    assert "hitTestFrictionBand" in video
 
 
 def test_transcripts_does_not_pull_in_the_studio_primitives():

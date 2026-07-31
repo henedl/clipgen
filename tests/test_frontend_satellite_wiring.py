@@ -147,9 +147,16 @@ def _strip(src: str) -> str:
     misread as a call. The ``\\n`` exclusion bounds any mis-parse to one line —
     a DOTALL match would let one stray quote/regex literal eat real definitions
     across the whole file.
+
+    Line comments go first, and that order is load-bearing: prose inside a ``//``
+    comment can accidentally contain ``/*`` (``render*Status/*Generating`` did),
+    and the DOTALL block-comment pass would then swallow everything up to the
+    next ``*/`` anywhere in the file — silently dropping ~1100 lines of
+    definitions from the scan and turning this guard into a no-op for the rest
+    of that file. Stripping ``//`` first makes such prose unreachable.
     """
-    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.DOTALL)
     src = re.sub(r"(?<!:)//[^\n]*", " ", src)  # keep http:// inside strings intact
+    src = re.sub(r"/\*.*?\*/", " ", src, flags=re.DOTALL)
     src = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', src)
     src = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", src)
     return src
