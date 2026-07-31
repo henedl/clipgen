@@ -26,13 +26,23 @@
       <div class="subheader-left">
         <div id="headerSearch">
           <input id="searchInput" type="text" placeholder="Search across all transcripts..." autocomplete="off" data-hotkey="global.search">
-          <span id="searchCount" class="search-count"></span>
-          <div id="searchResults" class="hidden"></div>
+          <!-- Match count and Mark All live in the dropdown's own header, not
+               beside the input: in the subheader row they squeezed the input as
+               soon as you typed and overlapped the Corrections button. Keeping
+               them inside #headerSearch also means the outside-click handler
+               still treats a Mark All click as "inside". -->
+          <div id="searchResults" class="hidden">
+            <div id="searchResultsHeader" class="hidden">
+              <span id="searchCount" class="search-count"></span>
+              <button id="searchMarkAllBtn" type="button" class="btn btn-small">Mark All</button>
+            </div>
+            <div id="searchResultsList"></div>
+          </div>
         </div>
         <!-- Sibling of #headerSearch, not a child: nesting it would widen the
-             absolutely-positioned #searchResults dropdown, interleave with the
-             Mark All button search injects, and make the outside-click handler
-             treat a Corrections click as "inside" so results stayed open. -->
+             absolutely-positioned #searchResults dropdown and make the
+             outside-click handler treat a Corrections click as "inside" so
+             results stayed open. -->
         <button id="correctionsBtn" type="button" class="btn btn-small">Corrections</button>
       </div>
       <div class="subheader-actions">
