@@ -910,13 +910,17 @@ def api_summary_save(participant: str) -> FlaskResponse:
     data = request.get_json(silent=True)
     if not data or not data.get("summary", "").strip():
         return err("Summary text is required")
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None  # built-in agent, always registered
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
             return err("Participant not found", 404)
         entry["summary"] = data["summary"].strip()
-        entry.pop("citations", None)  # invalidate citations on edit
-        _mark_friction_stale(entry)  # summary text feeds the friction prompt
+        # An edited summary feeds every downstream agent: clear citations and
+        # the report, flag friction stale — same invalidation as the summary
+        # regenerate route.
+        _invalidate_dependents(entry, summary_agent)
     _schedule_persist()
     return ok()
 
