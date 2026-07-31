@@ -1,6 +1,7 @@
 """Smoke tests for Transcripts Flask API (prewarm + model status)."""
 
 import threading
+import time
 from typing import cast
 
 import pytest
@@ -1300,7 +1301,7 @@ def test_failed_citations_still_chains_to_friction(
     orch = transcripts_server._orchestrator
     real_run_agent = orch.run_agent
 
-    def _spy(agent_key, participant, force=False):
+    def _spy(agent_key, participant, force=False, skip=None):
         started.append(agent_key)
         if agent_key == "citations":
             # Simulate the model-call failure: run for real, but with the agent's
@@ -1310,7 +1311,7 @@ def test_failed_citations_still_chains_to_friction(
                 "run",
                 lambda entry, cancel, on_token=None: None,
             )
-            real_run_agent(agent_key, participant, force=force)
+            real_run_agent(agent_key, participant, force=force, skip=skip)
 
     monkeypatch.setattr(orch, "run_agent", _spy)
     orch.run_chain("P01")
@@ -1319,6 +1320,98 @@ def test_failed_citations_still_chains_to_friction(
     assert started[0] == "citations"
     assert "friction" in started, f"chain stalled after citations: {started}"
     assert "citations" not in transcripts_server._manifest["source_transcripts"]["P01"]
+
+
+def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monkeypatch):
+    """An agent that raises stores nothing, so the chain must route around it.
+
+    Same stall as the uncommitted-result path — friction depends only on the
+    summary and would otherwise never start after a citations exception.
+    """
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry()
+
+    def _boom(entry, cancel, on_token=None):
+        raise RuntimeError("model exploded")
+
+    monkeypatch.setitem(
+        thinking_agents.get_agent("citations"),  # type: ignore[arg-type]
+        "run",
+        _boom,
+    )
+
+    started: list[str] = []
+    orch = transcripts_server._orchestrator
+    real_run_agent = orch.run_agent
+
+    def _spy(agent_key, participant, force=False, skip=None):
+        started.append(agent_key)
+        real_run_agent(agent_key, participant, force=force, skip=skip)
+
+    monkeypatch.setattr(orch, "run_agent", _spy)
+    orch.run_chain("P01")
+    _join_orchestrator_threads(orch)
+
+    assert started[0] == "citations"
+    assert "friction" in started, f"chain stalled after the exception: {started}"
+
+
+def test_chain_terminates_when_every_agent_stores_nothing(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """Agents that all store nothing must not re-qualify each other forever.
+
+    Their manifest fields stay empty and each leaves the in-flight set when its
+    thread ends, so a skip set carrying only the *last* agent would let two of
+    them take turns indefinitely — one live model call per lap. The skip set
+    accumulates across the chain to make each agent run at most once.
+    """
+    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    _seed_friction_entry()
+
+    # Citations returns immediately; friction lingers. That ordering is what
+    # makes the regression deterministic rather than a race: citations' thread
+    # reaches its `finally` and frees its in-flight slot while friction is still
+    # working, so by the time friction advances the chain, citations looks
+    # eligible again (empty field, not in flight) to a skip set that only
+    # remembers friction.
+    monkeypatch.setitem(
+        thinking_agents.get_agent("citations"),  # type: ignore[arg-type]
+        "run",
+        lambda entry, cancel, on_token=None: None,
+    )
+
+    def _slow_none(entry, cancel, on_token=None):
+        # Falls off the end, i.e. returns None: "ran, stored nothing".
+        time.sleep(0.15)
+
+    monkeypatch.setitem(
+        thinking_agents.get_agent("friction"),  # type: ignore[arg-type]
+        "run",
+        _slow_none,
+    )
+
+    started: list[str] = []
+    orch = transcripts_server._orchestrator
+    real_run_agent = orch.run_agent
+
+    def _spy(agent_key, participant, force=False, skip=None):
+        started.append(agent_key)
+        # Circuit-breaker so a regression fails the assert below instead of
+        # spinning the test suite forever.
+        if len(started) > 6:
+            return
+        real_run_agent(agent_key, participant, force=force, skip=skip)
+
+    monkeypatch.setattr(orch, "run_agent", _spy)
+    orch.run_chain("P01")
+    _join_orchestrator_threads(orch)
+
+    assert started == ["citations", "friction"]
 
 
 def test_segment_edit_marks_friction_stale(tr_client, _agent_state_clean, monkeypatch):
