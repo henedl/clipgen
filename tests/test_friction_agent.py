@@ -39,6 +39,36 @@ class TestExtractJsonArray:
         text = '{"not": "an array"} then [{"yes": 1}]'
         assert thinking_agents._extract_json_array(text) == [{"yes": 1}]
 
+    def test_does_not_settle_on_a_nested_value_array(self):
+        """A malformed outer array must not degrade to an inner one.
+
+        Observed from qwen3.5:9b: a stray ``[`` in the second entry breaks the
+        outer array, and a scan that accepts *any* decodable list settles on
+        the first entry's ``segment_ids`` value. That parses cleanly into a
+        list of strings, so every element is dropped as a non-dict and the run
+        silently yields zero moments — the model's output looked usable.
+        """
+        text = (
+            '[{"segment_ids":["P03:9"],"category":"help_seeking",'
+            '"rationale":"Asked for help.","score":1.0},'
+            '{"segment_ids":["P03:21"],["category":"frustration",'
+            '"rationale":"Overwhelmed.","score":0.95}]}'
+        )
+        out = thinking_agents._extract_json_array(text)
+        assert out != ["P03:9"]
+        assert [m["segment_ids"] for m in out] == [["P03:9"]]
+
+    def test_salvages_valid_entries_from_a_broken_array(self):
+        # One stray character should cost one entry, not the whole response.
+        text = '[{"segment_ids":["a"],"score":0.5}, {oops}, {"segment_ids":["b"],"score":0.4}]'
+        out = thinking_agents._extract_json_array(text)
+        assert [m["segment_ids"] for m in out] == [["a"], ["b"]]
+
+    def test_salvage_tolerates_braces_inside_strings(self):
+        text = '[{"segment_ids":["a"],"rationale":"said {this} aloud"}, {broken]'
+        out = thinking_agents._extract_json_array(text)
+        assert [m["rationale"] for m in out] == ["said {this} aloud"]
+
 
 class TestParseFrictionResponse:
     def test_normalizes_and_ignores_extra_fields(self):

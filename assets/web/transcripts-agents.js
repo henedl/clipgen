@@ -88,7 +88,20 @@
         state.citationsGenerating = false;
         renderCitations();
       },
-      onEmpty: function () { _clearCitationsStatus(); },
+      onEmpty: function () {
+        // Cancel clears the flag (via _clearCitationsStatus) but cannot recall a
+        // GET already on the wire, so that response still lands here — stay
+        // silent, a deliberate abort is not a failure.
+        if (!state.citationsGenerating) return;
+        // Otherwise the run is genuinely over with nothing to show: the route
+        // 404s (which apiGet rejects) once it ends without persisting — after
+        // find_citations' failure return, the Ollama-unavailable path. Say so
+        // instead of just dropping "Finding sources…". The cause is a
+        // suggestion, not a claim: a transport blip lands here too, and the fix
+        // is the same. Participant switch and poll timeout go to onStale.
+        state.citationsGenerating = false;
+        _renderCitationsNote("Couldn't find sources. Check that Ollama is running, then re-run citations.");
+      },
       onStale: function () { _clearCitationsStatus(); },
     },
     friction: {
@@ -217,9 +230,9 @@
   }
 
   // Summary landed (via initial load OR the fallback poll's onResult hook):
-  // render it, then — if citations are still generating server-side — surface
-  // their status and start the citations poll. Shared so the loader and the
-  // poll stay in lockstep (the summary poll's descriptor onResult delegates here).
+  // render it, then attach citations — still generating (surface the status and
+  // poll), or already stored (fetch them). Shared so the loader and the poll
+  // stay in lockstep (the summary poll's descriptor onResult delegates here).
   function _onSummaryResult(pid, data) {
     // Clear any citation state carried over from a previous participant before
     // rendering — renderSummary() reapplies state.summaryCitations, so stale
@@ -239,7 +252,33 @@
       );
       _startCitationsPoll(pid);
       _refreshAgentStateNow();
+    } else {
+      _loadStoredCitations(pid);
     }
+  }
+
+  // The summary response carries citations' *status* but not their payload (the
+  // generic agent GET returns only its own manifest field, and inlining the
+  // dependents would put the whole friction blob on the 1.2s summary poll). So
+  // a settled load has to ask for them separately, or every loadSummary —
+  // participant switch, tab refocus, post-cancel re-sync — would render the
+  // summary with its superscripts permanently stripped.
+  function _loadStoredCitations(pid) {
+    var ver = state.participantReqVer;
+    apiGet(AGENT_DESCRIPTORS.citations.urlBase + "/" + pid).then(function (data) {
+      if (ver !== state.participantReqVer || state.selectedParticipant !== pid) return;
+      // A run may have started while this GET was in flight (Regenerate, or the
+      // chain reaching citations). Restoring the old result now would replace
+      // the live "Finding sources…" line — renderCitations() removes it — with
+      // superscripts the run is about to supersede.
+      if (state.citationsGenerating) return;
+      if (!data.ok || !data.citations) return;
+      state.summaryCitations = data.citations;
+      renderCitations();
+    }).catch(function () {
+      // 404 = citations never ran (or are disabled). Not a failed run, so stay
+      // quiet — the poll's onEmpty owns the "a run just ended empty" message.
+    });
   }
 
   // Open the SSE token stream for a generating summary. Falls back to the GET
@@ -493,9 +532,11 @@
 
     if (!state.summaryCitations) return;
 
+    var dataRefs = 0;
     var refNum = 1;
     for (var i = 0; i < state.summaryCitations.length; i++) {
       var cite = state.summaryCitations[i];
+      dataRefs += (cite.refs || []).length;
       if (!cite.refs || cite.refs.length === 0) continue;
       var el = qs('#summaryContent [data-cite-index="' + i + '"]');
       if (!el) continue;
@@ -516,6 +557,29 @@
         refNum++;
       }
     }
+
+    // Rendering nothing is itself a result: say so, rather than leaving the
+    // panel looking like citations never ran. dataRefs separates "the model
+    // found no supporting segments" from "it found some, but renderSummary's
+    // sentence split didn't line up with the backend's" \u2014 the two splits are
+    // independent implementations, and that mismatch is otherwise silent.
+    if (refNum === 1) {
+      _renderCitationsNote(dataRefs === 0
+        ? "No supporting segments found for this summary."
+        : "Sources were found but couldn't be matched to the summary text. Re-run citations.");
+    }
+  }
+
+  // Terminal one-line status in the summary panel (nothing found / run failed).
+  // Shares .citations-status with the in-flight "Finding sources\u2026" line, minus
+  // its elapsed clock and Cancel button.
+  function _renderCitationsNote(text) {
+    var existing = qs("#summaryContent .citations-status");
+    if (existing) existing.remove();
+    var p = document.createElement("p");
+    p.className = "citations-status";
+    p.textContent = text;
+    qs("#summaryContent").appendChild(p);
   }
 
   // startedAtMs (optional): server-recorded run start in epoch ms \u2014 seeds the
@@ -866,6 +930,12 @@
       } else if (fd.stale) {
         statusEl.textContent = "Stale: segments edited since last run" +
           (fd.model ? " · " + fd.model : "");
+      } else if (!(fd.moments && fd.moments.length)) {
+        // A completed run that surfaced nothing. Without this the header reads
+        // like any successful run and the only hint is the jump strip's one
+        // italic line, well below the fold of the eye.
+        statusEl.textContent = "No friction moments found · computed " +
+          _friendlyTimeAgo(fd.computed_at) + (fd.model ? " · " + fd.model : "");
       } else {
         statusEl.textContent = "Computed " + _friendlyTimeAgo(fd.computed_at) +
           (fd.model ? " · " + fd.model : "");
@@ -919,9 +989,19 @@
   }
 
   function renderFrictionGenerating() {
-    qs("#frictionContent").classList.add("hidden");
+    // Keep the programmatic scores on screen while the agent runs. They come
+    // from the deterministic scorer, are already computed, and are independent
+    // of the LLM — blanking the pane costs the user the histogram, chips and
+    // transcript tinting for the whole run, and the agent only ever *adds*
+    // moments on top. The standalone box is for when there is nothing yet.
+    var hasData = !!state.frictionData;
+    qs("#frictionContent").classList.toggle("hidden", !hasData);
     qs("#frictionEmpty").classList.add("hidden");
-    qs("#frictionGenerating").classList.remove("hidden");
+    qs("#frictionGenerating").classList.toggle("hidden", hasData);
+    if (hasData) {
+      renderFrictionHistogram();
+      applyFrictionDecorations();
+    }
     _renderFrictionHeader();
   }
 
@@ -1028,11 +1108,14 @@
     // numbering and the set of inline callouts can't drift apart.
     var visible = [];
     var cited = {};
+    var unsourced = 0;
     var all = (fd && fd.moments) || [];
     for (i = 0; i < all.length; i++) {
       if (!_frictionMomentMatches(all[i])) continue;
       var idxs = _momentSegmentIndices(all[i]);
-      if (idxs.length === 0) continue; // unsourced moment: nothing to quote or seek to
+      // Unsourced moment: nothing to quote or seek to. Counted, not just
+      // dropped, so the empty strip can name this cause instead of the filter.
+      if (idxs.length === 0) { unsourced++; continue; }
       visible.push({ moment: all[i], idxs: idxs });
       for (j = 0; j < idxs.length; j++) {
         var seg = state.segments[idxs[j]];
@@ -1041,6 +1124,7 @@
     }
     state.frictionVisibleMoments = visible;
     state.frictionCitedBySegId = cited;
+    state.frictionUnsourcedMoments = unsourced;
   }
 
   // The single entry point for "the filter changed": recompute, then reflect it
@@ -1405,6 +1489,10 @@
 
   function _frictionJumpEmptyText() {
     var fd = state.frictionData;
+    // The pane now stays up during a run (renderFrictionGenerating), so the
+    // strip has to speak for the in-flight case too — otherwise it advertises
+    // the Run button that is currently mid-run.
+    if (state.frictionGenerating) return "Analyzing friction…";
     if (!fd) return "No moments detected.";
     if (fd.deterministic) {
       return _frictionDepMet()
@@ -1412,8 +1500,14 @@
         : "Run Summary to surface AI-refined friction moments.";
     }
     if (fd.llm_ok === false) return "Moment detection failed. Re-run with an installed Ollama model.";
-    if (fd.moments && fd.moments.length) return "No moments match the current filter.";
-    return "No moments detected.";
+    if (!(fd.moments && fd.moments.length)) return "No friction moments found in this transcript.";
+    // Moments exist but none reached the strip. Either the filter excluded them
+    // all, or they cite segments that are gone — different causes, different
+    // fixes, so don't blame the filter for both.
+    if (state.frictionUnsourcedMoments) {
+      return "Moments found, but the segments they cite are no longer in the transcript. Re-run friction.";
+    }
+    return "No moments match the current filter.";
   }
 
   function renderFrictionJumpStrip() {

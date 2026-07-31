@@ -1815,7 +1815,10 @@ class AgentOrchestrator:
         return True
 
     def next_eligible(
-        self, participant: str, force: bool = False
+        self,
+        participant: str,
+        force: bool = False,
+        skip: set[str] | None = None,
     ) -> thinking_agents.Agent | None:
         """Find the first agent that should run next for *participant*.
 
@@ -1823,13 +1826,20 @@ class AgentOrchestrator:
           - it is enabled (unless *force* is True — manual triggers bypass this),
           - its result is not already on the entry,
           - all of its dependencies are satisfied,
-          - it is not already running for this participant.
+          - it is not already running for this participant,
+          - its key is not in *skip*.
+
+        *skip* exists for the chain advance after a run that stored nothing: the
+        agent's field is still empty, so it would otherwise be picked again
+        immediately and loop.
         """
         with self._lock:
             entry = _manifest.get("source_transcripts", {}).get(participant)
             if not entry or not entry.get("segments"):
                 return None
             for agent in thinking_agents.AGENTS:
+                if skip and agent["key"] in skip:
+                    continue
                 if not force and not _agent_enabled(agent):
                     continue
                 if entry.get(agent["manifest_field"]):
@@ -1841,19 +1851,32 @@ class AgentOrchestrator:
                 return agent
         return None
 
-    def run_agent(self, agent_key: str, participant: str, force: bool = False) -> None:
+    def run_agent(
+        self,
+        agent_key: str,
+        participant: str,
+        force: bool = False,
+        skip: set[str] | None = None,
+    ) -> None:
         """Spawn a daemon thread to run a single agent for *participant*.
 
         On success, the agent's result is written to the manifest and the chain
         advances to the next eligible agent. Guards against double-spawning via
         the in-flight set. Pass *force* to bypass the config enabled check
         (used by manual triggers from the UI).
+
+        *skip* carries the keys of agents that already had their turn in this
+        chain and stored nothing; it is forwarded to the next ``run_chain`` so
+        the exclusion accumulates. Without that, two agents that both fail to
+        commit take turns re-qualifying each other forever — each one's field
+        stays empty and it leaves the in-flight set when its thread ends.
         """
         agent = thinking_agents.get_agent(agent_key)
         if agent is None:
             return
         if not force and not _agent_enabled(agent):
             return
+        chain_skip = set(skip or ())
 
         cancel_event = threading.Event()
         # Atomically check-and-claim the in-flight slot so two near-simultaneous
@@ -1917,11 +1940,30 @@ class AgentOrchestrator:
                     # respect their enabled config. Otherwise a single-agent
                     # regenerate (e.g. Citations) would cross-trigger a disabled
                     # sibling (e.g. Friction), since they share depends_on=["summary"].
-                    self.run_chain(participant, force=False)
+                    self.run_chain(participant, force=False, skip=chain_skip)
+                else:
+                    # The run finished but stored nothing (the model call failed,
+                    # or its inputs were empty). Its field stays empty so it is
+                    # still eligible on the next chain entry — but this chain must
+                    # advance *past* it, or a sibling that does not depend on it
+                    # (friction needs only the summary) would never start. Skip
+                    # this agent for that lookup: without it next_eligible picks
+                    # the same empty field straight back and the chain spins.
+                    self.run_chain(
+                        participant, force=False, skip=chain_skip | {agent_key}
+                    )
             except Exception as exc:
                 utils.warning_print(
                     f"{agent_key} generation failed for {participant}: {exc}"
                 )
+                # A raising agent stores nothing either, so the chain has to move
+                # on for the same reason as the else-branch above. Skip it after a
+                # cancel, though: Stop is not a failure to route around, and the
+                # early returns above deliberately leave the chain where it is.
+                if not cancel_event.is_set():
+                    self.run_chain(
+                        participant, force=False, skip=chain_skip | {agent_key}
+                    )
             finally:
                 with self._lock:
                     # Only clean up if the slot is still ours. A
@@ -1949,16 +1991,19 @@ class AgentOrchestrator:
             self._threads[agent_key].add(t)
         t.start()
 
-    def run_chain(self, participant: str, force: bool = False) -> None:
+    def run_chain(
+        self, participant: str, force: bool = False, skip: set[str] | None = None
+    ) -> None:
         """Advance the thinking-agent chain for *participant* by one step.
 
         Starts the first eligible agent (if any). When that agent completes,
         ``run_agent`` re-enters this method to start the next step. Pass
-        *force* to bypass config enable checks for manual/UI-triggered runs.
+        *force* to bypass config enable checks for manual/UI-triggered runs, and
+        *skip* to exclude agent keys from consideration (see ``next_eligible``).
         """
-        agent = self.next_eligible(participant, force=force)
+        agent = self.next_eligible(participant, force=force, skip=skip)
         if agent is not None:
-            self.run_agent(agent["key"], participant, force=force)
+            self.run_agent(agent["key"], participant, force=force, skip=skip)
 
 
 _orchestrator = AgentOrchestrator(_manifest_lock)

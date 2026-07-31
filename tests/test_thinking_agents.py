@@ -388,14 +388,23 @@ class TestFindCitations:
         assert result[1]["refs"][0]["start"] == 10
 
     @patch("thinking_agents.ollama_client.generate")
-    def test_returns_empty_refs_when_generate_fails(self, mock_generate):
+    def test_returns_none_when_generate_fails(self, mock_generate):
+        # A failed model call must not return the success sentinel: a full list
+        # of empty-ref claims is indistinguishable from "the model found no
+        # sources", so it would persist and read as a completed run.
         mock_generate.return_value = None
         segments = [{"start": 0, "end": 5, "text": "Some text"}]
-        result = thinking_agents.find_citations("A sentence.", segments)
-        # Returns citations list but with empty refs
+        assert thinking_agents.find_citations("A sentence.", segments) is None
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_returns_empty_refs_when_model_finds_no_sources(self, mock_generate):
+        # The genuine empty case still persists one entry per claim, so the UI
+        # can tell it apart from the failure above.
+        mock_generate.return_value = "1: NONE\n2: NONE"
+        segments = [{"start": 0, "end": 5, "text": "Some text"}]
+        result = thinking_agents.find_citations("First claim. Second claim.", segments)
         assert result is not None
-        assert len(result) == 1
-        assert result[0]["refs"] == []
+        assert [c["refs"] for c in result] == [[], []]
 
     @patch("thinking_agents.ollama_client.generate")
     def test_multiple_refs_per_claim(self, mock_generate):

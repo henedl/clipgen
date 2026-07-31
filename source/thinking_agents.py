@@ -26,7 +26,7 @@ import re
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 import config
 import friction
@@ -303,8 +303,10 @@ def find_citations(
     to avoid multi-chunk latency. Uses ``config.OLLAMA_SUMMARY_MODEL`` unless an
     explicit *model* override is provided. If *cancel_event* is set during the
     model call, the request is aborted and ``None`` is returned. Returns an
-    ordered list of ``{"sentence", "refs": [...]}`` dicts, or ``None`` if inputs
-    are empty or the run was cancelled.
+    ordered list of ``{"sentence", "refs": [...]}`` dicts — one entry per claim,
+    with an empty ``refs`` for claims the model found no support for — or
+    ``None`` if inputs are empty, the run was cancelled, or the model call
+    itself failed.
     """
     sentences = _split_summary_sentences(summary)
     if not sentences or not segments:
@@ -334,9 +336,15 @@ def find_citations(
         cancel_event=cancel_event,
     )
 
-    parsed: dict[int, list[dict[str, Any]]] = {}
-    if response:
-        parsed = _parse_citation_response(_strip_think(response), segments)
+    if not response:
+        # The model call itself failed (Ollama down, model missing, aborted
+        # mid-request). Returning a full list of empty refs here would persist a
+        # success-shaped result the UI cannot tell apart from "no sources
+        # exist", so report the failure and let the caller retry.
+        utils.warning_print("Citations: no response from the model")
+        return None
+
+    parsed = _parse_citation_response(_strip_think(response), segments)
 
     citations: list[dict[str, Any]] = []
     for i, sentence in enumerate(sentences):
@@ -370,23 +378,74 @@ def _run_citations(
 _MAX_FRICTION_SUMMARY_CHARS = 2000  # cap summary context fed to the friction prompt
 
 
+def _extract_json_objects(text: str) -> list[dict[str, Any]]:
+    """Decode every top-level ``{...}`` chunk in *text*, skipping broken ones.
+
+    The salvage path for a model that emits an array with one malformed entry:
+    scanning brace-balanced spans recovers the entries that *are* valid instead
+    of losing the whole response to a single stray character. Braces inside
+    strings are ignored so a rationale containing one can't unbalance the scan.
+    """
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    data, _ = decoder.raw_decode(text[start : i + 1])
+                    if isinstance(data, dict):
+                        objects.append(cast(dict[str, Any], data))
+                except json.JSONDecodeError:
+                    pass
+                start = -1
+    return objects
+
+
 def _extract_json_array(text: str) -> list[Any]:
-    """Best-effort extraction of the first JSON array from a model response.
+    """Best-effort extraction of a model response's JSON array of objects.
 
     Qwen sometimes wraps JSON in prose, ``<think>`` blocks, or markdown fences
     despite "JSON only" instructions. Strips think-blocks, tries a fenced block,
-    then scans for the first ``[`` that ``raw_decode`` can parse into a list.
-    Returns ``[]`` if nothing parses.
+    then scans for a ``[`` that ``raw_decode`` parses into a list.
+
+    Only arrays *of objects* count. The callers all want a list of moment dicts,
+    and a malformed outer array otherwise makes the scan settle on the first
+    inner array it can decode — a ``segment_ids`` value — which parses cleanly
+    into a list of strings and silently yields zero moments. When no array
+    survives, fall back to salvaging individual objects so one stray character
+    costs one entry rather than the whole response.
     """
     if not text:
         return []
     cleaned = _strip_think(text)
 
+    def _is_object_array(data: Any) -> bool:
+        return isinstance(data, list) and all(isinstance(x, dict) for x in data)
+
     fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", cleaned, re.DOTALL)
     if fence:
         try:
             data = json.loads(fence.group(1))
-            if isinstance(data, list):
+            if _is_object_array(data):
                 return data
         except json.JSONDecodeError:
             pass
@@ -396,12 +455,13 @@ def _extract_json_array(text: str) -> list[Any]:
     while start != -1:
         try:
             data, _ = decoder.raw_decode(cleaned[start:])
-            if isinstance(data, list):
+            if _is_object_array(data):
                 return data
         except json.JSONDecodeError:
             pass
         start = cleaned.find("[", start + 1)
-    return []
+
+    return list(_extract_json_objects(cleaned))
 
 
 def _format_friction_candidates(
