@@ -59,7 +59,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 ## Development tools
 
 - **uv** – Always use `uv run` instead of `python` to run scripts (e.g. `uv run clipgen.py`). This ensures the correct venv is used, including in worktrees that don't yet have a `.venv`. Use `uv add` to add dependencies.
-- **Ruff** – Linting and formatting: `uv run ruff check --fix` and `uv run ruff format`. Run these yourself. A per-file `PostToolUse` hook exists in the maintainer's main checkout, but `.gitignore` excludes `.claude/settings.json`, so it is **absent in worktrees** — unformatted Python is the most common CI failure precisely because agents assume the hook ran.
+- **Ruff** – Linting and formatting: `uv run ruff check --fix` and `uv run ruff format`. A per-file `PostToolUse` hook runs both on every edited `.py`. It lives in `.claude/settings.json`, which `.gitignore` excludes, so it reaches worktrees only by being copied — [.worktreeinclude](.worktreeinclude) lists it for exactly that reason. Still run the commands yourself before committing: the hook is per-file and absent from any checkout that did not get the copy, and unformatted Python is the most common CI failure.
 - **ty** – Use `uv run ty check` for type checking.
 
 ## SVG icons
