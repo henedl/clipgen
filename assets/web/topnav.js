@@ -65,6 +65,17 @@
       for (var c = 0; c < columns.length; c++) {
         columns[c].classList.add("pywebview-drag-region");
       }
+      // The hidden title bar also owes the user its double-click action, which
+      // AppKit can no longer deliver. Gate on the same direct-target rule the
+      // drag uses, so both gestures cover exactly the same pixels.
+      nav.addEventListener("dblclick", function (e) {
+        var cls = e.target && e.target.classList;
+        if (!cls || !cls.contains("pywebview-drag-region")) return;
+        var api = window.pywebview && window.pywebview.api;
+        if (api && typeof api.titlebar_double_click === "function") {
+          api.titlebar_double_click();
+        }
+      });
     }
 
     mount.replaceWith(nav);
