@@ -981,9 +981,19 @@
   }
 
   function renderFrictionGenerating() {
-    qs("#frictionContent").classList.add("hidden");
+    // Keep the programmatic scores on screen while the agent runs. They come
+    // from the deterministic scorer, are already computed, and are independent
+    // of the LLM — blanking the pane costs the user the histogram, chips and
+    // transcript tinting for the whole run, and the agent only ever *adds*
+    // moments on top. The standalone box is for when there is nothing yet.
+    var hasData = !!state.frictionData;
+    qs("#frictionContent").classList.toggle("hidden", !hasData);
     qs("#frictionEmpty").classList.add("hidden");
-    qs("#frictionGenerating").classList.remove("hidden");
+    qs("#frictionGenerating").classList.toggle("hidden", hasData);
+    if (hasData) {
+      renderFrictionHistogram();
+      applyFrictionDecorations();
+    }
     _renderFrictionHeader();
   }
 
@@ -1471,6 +1481,10 @@
 
   function _frictionJumpEmptyText() {
     var fd = state.frictionData;
+    // The pane now stays up during a run (renderFrictionGenerating), so the
+    // strip has to speak for the in-flight case too — otherwise it advertises
+    // the Run button that is currently mid-run.
+    if (state.frictionGenerating) return "Analyzing friction…";
     if (!fd) return "No moments detected.";
     if (fd.deterministic) {
       return _frictionDepMet()
