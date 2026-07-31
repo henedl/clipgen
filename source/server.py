@@ -3881,7 +3881,12 @@ def build_combined_app(
     def api_start_settings_get() -> Response:
         import start_settings
 
-        return ok(settings=start_settings.load_start_settings())
+        # `desktop` tells the overlay whether to offer the window-rect toggle:
+        # in a browser tab there is no window for clipgen to remember.
+        return ok(
+            settings=start_settings.load_start_settings(),
+            desktop=utils.GUI_LAUNCH,
+        )
 
     @combined.route("/api/start-settings", methods=["POST"])
     def api_start_settings_post() -> FlaskResponse:
@@ -3890,6 +3895,8 @@ def build_combined_app(
         data = request.get_json(silent=True) or {}
         if "persist_enabled" in data:
             start_settings.set_persist_enabled(bool(data["persist_enabled"]))
+        if "remember_window" in data:
+            start_settings.set_remember_window(bool(data["remember_window"]))
         return ok(settings=start_settings.load_start_settings())
 
     # ---- Shared settings (available from any page) ----

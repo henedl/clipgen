@@ -1,21 +1,29 @@
-"""Persistent first-run / Start overlay settings.
+"""Persistent per-user clipgen state: Start overlay settings and window geometry.
 
 Stores last-used input/output directories and last-used spreadsheet so the
-frontend Start overlay can prefill its inputs across launches. The user can
-toggle persistence off via ``persist_enabled``; when disabled, the recording
-helpers short-circuit but ``persist_enabled`` itself is still written so the
-toggle survives sessions.
+frontend Start overlay can prefill its inputs across launches, plus the desktop
+window's last size and position. Two independent user-facing toggles gate the
+recording: ``persist_enabled`` for the project history and ``remember_window``
+for the window rect. When one is off its recording helpers short-circuit, but
+the flag itself is still written so the toggle survives sessions.
 
 Settings file location:
 
 - Windows: ``%LOCALAPPDATA%\\clipgen\\start.json`` (fallback:
   ``~/AppData/Local/clipgen/start.json`` when ``LOCALAPPDATA`` is unset)
 - macOS / Linux: ``~/.config/clipgen/start.json``
+
+Every mutating helper holds ``_write_lock`` across its whole load-mutate-save
+sequence. ``save_start_settings`` rewrites the entire dict, so two interleaved
+read-modify-write cycles silently drop one side's field — and the writers are
+genuinely concurrent: the Start overlay records from Flask request threads while
+``desktop.py`` records window geometry from a debounce timer thread.
 """
 
 import json
 import os
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +32,11 @@ import utils
 
 
 RECENTS_CAP = 12
+
+# Guards load -> mutate -> save in every helper below. Deliberately not inside
+# load_start_settings/save_start_settings: locking the halves separately would
+# still let two cycles interleave, which is the actual race.
+_write_lock = threading.Lock()
 
 
 def config_dir() -> Path:
@@ -58,6 +71,14 @@ def _defaults() -> dict[str, Any]:
         # last_opened). Powers the Start overlay's "Recently opened" rail and
         # lets a click restore the name plus all three picker values at once.
         "recent_projects": [],
+        # Desktop window rect: {"x", "y", "width", "height"} or None for
+        # "use the defaults". See desktop.py.
+        "window": None,
+        # Deliberately independent of persist_enabled: that toggle is about the
+        # project history the Start overlay collects ("Remember my choices"),
+        # and a window rect is not one of those choices. Someone who does not
+        # want their recent paths kept can still want their window back.
+        "remember_window": True,
     }
 
 
@@ -106,52 +127,57 @@ def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any
 
 def record_recent_input(path: str) -> None:
     """Record *path* as the last-used input directory."""
-    settings = load_start_settings()
-    if not settings.get("persist_enabled", True):
-        return
-    if not path:
-        return
-    settings["last_input"] = path
-    settings["recent_inputs"] = _prepend_dedup(settings.get("recent_inputs", []), path)
-    save_start_settings(settings)
+    with _write_lock:
+        settings = load_start_settings()
+        if not settings.get("persist_enabled", True):
+            return
+        if not path:
+            return
+        settings["last_input"] = path
+        settings["recent_inputs"] = _prepend_dedup(
+            settings.get("recent_inputs", []), path
+        )
+        save_start_settings(settings)
 
 
 def record_recent_output(path: str) -> None:
     """Record *path* as the last-used output directory."""
-    settings = load_start_settings()
-    if not settings.get("persist_enabled", True):
-        return
-    if not path:
-        return
-    settings["last_output"] = path
-    settings["recent_outputs"] = _prepend_dedup(
-        settings.get("recent_outputs", []), path
-    )
-    save_start_settings(settings)
+    with _write_lock:
+        settings = load_start_settings()
+        if not settings.get("persist_enabled", True):
+            return
+        if not path:
+            return
+        settings["last_output"] = path
+        settings["recent_outputs"] = _prepend_dedup(
+            settings.get("recent_outputs", []), path
+        )
+        save_start_settings(settings)
 
 
 def record_recent_spreadsheet(
     type_: str, id_or_path: str, label: str, worksheet: str = ""
 ) -> None:
     """Record a spreadsheet selection as last/recent."""
-    settings = load_start_settings()
-    if not settings.get("persist_enabled", True):
-        return
-    if type_ not in ("google", "excel") or not id_or_path:
-        return
-    entry = {
-        "type": type_,
-        "id_or_path": id_or_path,
-        "label": label or id_or_path,
-        "worksheet": worksheet,
-    }
-    settings["last_spreadsheet"] = entry
-    settings["recent_spreadsheets"] = _prepend_dedup(
-        settings.get("recent_spreadsheets", []),
-        entry,
-        key=lambda x: (x.get("type"), x.get("id_or_path")),
-    )
-    save_start_settings(settings)
+    with _write_lock:
+        settings = load_start_settings()
+        if not settings.get("persist_enabled", True):
+            return
+        if type_ not in ("google", "excel") or not id_or_path:
+            return
+        entry = {
+            "type": type_,
+            "id_or_path": id_or_path,
+            "label": label or id_or_path,
+            "worksheet": worksheet,
+        }
+        settings["last_spreadsheet"] = entry
+        settings["recent_spreadsheets"] = _prepend_dedup(
+            settings.get("recent_spreadsheets", []),
+            entry,
+            key=lambda x: (x.get("type"), x.get("id_or_path")),
+        )
+        save_start_settings(settings)
 
 
 def _spreadsheet_key(spreadsheet: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -191,33 +217,101 @@ def record_project_session(
     the CLI-launch and Studio sheet-switch call sites pass nothing, and without
     it every relaunch would silently wipe the label.
     """
-    settings = load_start_settings()
-    if not settings.get("persist_enabled", True):
-        return
-    if not input_dir or not output_dir:
-        return
-    projects: list[Any] = settings.get("recent_projects", [])
-    entry: dict[str, Any] = {
-        "name": "",
-        "input": input_dir,
-        "output": output_dir,
-        "spreadsheet": spreadsheet if spreadsheet else None,
-        "last_opened": datetime.now(UTC).isoformat(),
-    }
-    if name is None:
-        key = _project_key(entry)
-        for existing in projects:
-            if isinstance(existing, dict) and _project_key(existing) == key:
-                entry["name"] = existing.get("name") or ""
-                break
-    else:
-        entry["name"] = name.strip()
-    settings["recent_projects"] = _prepend_dedup(projects, entry, key=_project_key)
-    save_start_settings(settings)
+    with _write_lock:
+        settings = load_start_settings()
+        if not settings.get("persist_enabled", True):
+            return
+        if not input_dir or not output_dir:
+            return
+        projects: list[Any] = settings.get("recent_projects", [])
+        entry: dict[str, Any] = {
+            "name": "",
+            "input": input_dir,
+            "output": output_dir,
+            "spreadsheet": spreadsheet if spreadsheet else None,
+            "last_opened": datetime.now(UTC).isoformat(),
+        }
+        if name is None:
+            key = _project_key(entry)
+            for existing in projects:
+                if isinstance(existing, dict) and _project_key(existing) == key:
+                    entry["name"] = existing.get("name") or ""
+                    break
+        else:
+            entry["name"] = name.strip()
+        settings["recent_projects"] = _prepend_dedup(projects, entry, key=_project_key)
+        save_start_settings(settings)
+
+
+def load_window_geometry() -> dict[str, int] | None:
+    """Return the persisted desktop window rect, or None if absent/malformed.
+
+    Shape only: the caller owns every judgement about whether the rect is
+    *usable* (min size, on-screen), because that needs screen geometry this
+    module has no business knowing about.
+    """
+    window = load_start_settings().get("window")
+    if not isinstance(window, dict):
+        return None
+    rect: dict[str, int] = {}
+    for key in ("x", "y", "width", "height"):
+        value = window.get(key)
+        # bool is an int subclass and would sail through int(); reject it.
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        rect[key] = int(value)
+    return rect
+
+
+def record_window_geometry(x: int, y: int, width: int, height: int) -> None:
+    """Record the desktop window's rect for the next launch.
+
+    Gated on ``remember_window``, not ``persist_enabled`` — see ``_defaults``.
+    """
+    with _write_lock:
+        settings = load_start_settings()
+        if not settings.get("remember_window", True):
+            return
+        if width <= 0 or height <= 0:
+            return
+        settings["window"] = {
+            "x": int(x),
+            "y": int(y),
+            "width": int(width),
+            "height": int(height),
+        }
+        save_start_settings(settings)
+
+
+def clear_window_geometry() -> None:
+    """Forget the stored window rect so the next launch uses the defaults.
+
+    Ungated by ``persist_enabled``, like ``set_persist_enabled``: an explicit
+    reset has to take effect whatever the toggle says.
+    """
+    with _write_lock:
+        settings = load_start_settings()
+        settings["window"] = None
+        save_start_settings(settings)
 
 
 def set_persist_enabled(enabled: bool) -> None:
     """Toggle the persist_enabled flag and save."""
-    settings = load_start_settings()
-    settings["persist_enabled"] = bool(enabled)
-    save_start_settings(settings)
+    with _write_lock:
+        settings = load_start_settings()
+        settings["persist_enabled"] = bool(enabled)
+        save_start_settings(settings)
+
+
+def set_remember_window(enabled: bool) -> None:
+    """Toggle the remember_window flag and save.
+
+    Turning it off also drops the stored rect, so the next launch opens at the
+    default rather than at whatever was last recorded.
+    """
+    with _write_lock:
+        settings = load_start_settings()
+        settings["remember_window"] = bool(enabled)
+        if not enabled:
+            settings["window"] = None
+        save_start_settings(settings)
