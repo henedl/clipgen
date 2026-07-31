@@ -982,3 +982,47 @@ def test_combined_server_forces_non_interactive(monkeypatch):
 
     server.start_combined_server(port=0)
     assert utils.NO_INPUT_MODE is True
+
+
+def test_start_settings_toggles_are_independent(client):
+    """Turning off project history must not also stop remembering the window.
+
+    They are two checkboxes with two meanings; wiring the window rect to
+    persist_enabled made the feature a silent no-op for anyone who had already
+    opted out of recents.
+    """
+    resp = client.post(
+        "/api/start-settings",
+        data=json.dumps({"persist_enabled": False}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    settings = resp.get_json()["settings"]
+    assert settings["persist_enabled"] is False
+    assert settings["remember_window"] is True
+
+    start_settings.record_window_geometry(10, 20, 1200, 800)
+    assert start_settings.load_window_geometry() is not None
+
+
+def test_start_settings_remember_window_toggle(client):
+    resp = client.post(
+        "/api/start-settings",
+        data=json.dumps({"remember_window": False}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["settings"]["remember_window"] is False
+
+    start_settings.record_window_geometry(10, 20, 1200, 800)
+    assert start_settings.load_window_geometry() is None
+
+
+def test_start_settings_get_reports_desktop_launch(client, monkeypatch):
+    """The overlay only offers the window toggle when there is a window."""
+    import utils
+
+    monkeypatch.setattr(utils, "GUI_LAUNCH", False)
+    assert client.get("/api/start-settings").get_json()["desktop"] is False
+    monkeypatch.setattr(utils, "GUI_LAUNCH", True)
+    assert client.get("/api/start-settings").get_json()["desktop"] is True

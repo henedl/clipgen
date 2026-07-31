@@ -412,10 +412,17 @@
       </section>
 
       <footer class="start-footer cascade-in" data-cascade="4">
-        <label class="persist-check">
-          <input type="checkbox" id="startPersistEnabled" checked>
-          <span>Remember my choices across launches</span>
-        </label>
+        <div class="start-footer-checks">
+          <label class="persist-check">
+            <input type="checkbox" id="startPersistEnabled" checked>
+            <span>Remember my choices across launches</span>
+          </label>
+          <!-- Desktop launches only; loadStartSettings() unhides it. -->
+          <label class="persist-check" id="startRememberWindowRow" hidden>
+            <input type="checkbox" id="startRememberWindow" checked>
+            <span>Remember the window size and position</span>
+          </label>
+        </div>
         <button type="button" class="so-btn so-btn--primary so-btn--lg" data-role="confirm" data-hotkey="start.confirm">
           <span>Open workspace</span>
           <span class="so-icon so-icon--sm" data-icon="arrow-right"></span>

@@ -63,6 +63,7 @@
     sheetLoaded: false,
     selection: null,        // { type, id_or_path, label } | null
     persistEnabled: true,
+    rememberWindow: true,
     googlePollTimer: null,
     googlePollDeadline: 0,
     confirmInFlight: false,
@@ -244,6 +245,8 @@
     els.aboutGrid = root.querySelector('[data-role="about-grid"]');
 
     els.persist = root.querySelector("#startPersistEnabled");
+    els.rememberWindow = root.querySelector("#startRememberWindow");
+    els.rememberWindowRow = root.querySelector("#startRememberWindowRow");
     els.confirmBtn = root.querySelector('[data-role="confirm"]');
   }
 
@@ -343,6 +346,12 @@
       state.persistEnabled = !!els.persist.checked;
       apiPost("/api/start-settings", { persist_enabled: state.persistEnabled })
         .catch(function (err) { console.error("Persist toggle failed", err); });
+    });
+
+    on(els.rememberWindow, "change", function () {
+      state.rememberWindow = !!els.rememberWindow.checked;
+      apiPost("/api/start-settings", { remember_window: state.rememberWindow })
+        .catch(function (err) { console.error("Window toggle failed", err); });
     });
 
     on(els.googlePaste, "input", function () {
@@ -1157,6 +1166,11 @@
       if (!r || !r.settings) return;
       state.persistEnabled = r.settings.persist_enabled !== false;
       if (els.persist) els.persist.checked = state.persistEnabled;
+      state.rememberWindow = r.settings.remember_window !== false;
+      if (els.rememberWindow) els.rememberWindow.checked = state.rememberWindow;
+      // A browser tab has no window for clipgen to place, so the toggle only
+      // appears in a desktop launch.
+      if (els.rememberWindowRow) els.rememberWindowRow.hidden = !r.desktop;
       state.recentProjects = r.settings.recent_projects || [];
       renderRailRecents(state.recentProjects);
     });

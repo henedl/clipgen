@@ -1755,6 +1755,13 @@
   border-top: 1px solid var(--hairline);
 }
 
+.start-overlay .start-footer-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
 .start-overlay .persist-check {
   display: inline-flex;
   align-items: center;
@@ -1763,6 +1770,11 @@
   font-size: 12.5px;
   cursor: pointer;
   user-select: none;
+}
+
+/* The display above outranks the UA [hidden] rule, so restate it. */
+.start-overlay .persist-check[hidden] {
+  display: none;
 }
 
 .start-overlay .persist-check input {

@@ -2,9 +2,10 @@
 
 Stores last-used input/output directories and last-used spreadsheet so the
 frontend Start overlay can prefill its inputs across launches, plus the desktop
-window's last size and position. The user can toggle persistence off via
-``persist_enabled``; when disabled, the recording helpers short-circuit but
-``persist_enabled`` itself is still written so the toggle survives sessions.
+window's last size and position. Two independent user-facing toggles gate the
+recording: ``persist_enabled`` for the project history and ``remember_window``
+for the window rect. When one is off its recording helpers short-circuit, but
+the flag itself is still written so the toggle survives sessions.
 
 Settings file location:
 
@@ -73,6 +74,11 @@ def _defaults() -> dict[str, Any]:
         # Desktop window rect: {"x", "y", "width", "height"} or None for
         # "use the defaults". See desktop.py.
         "window": None,
+        # Deliberately independent of persist_enabled: that toggle is about the
+        # project history the Start overlay collects ("Remember my choices"),
+        # and a window rect is not one of those choices. Someone who does not
+        # want their recent paths kept can still want their window back.
+        "remember_window": True,
     }
 
 
@@ -258,10 +264,13 @@ def load_window_geometry() -> dict[str, int] | None:
 
 
 def record_window_geometry(x: int, y: int, width: int, height: int) -> None:
-    """Record the desktop window's rect for the next launch."""
+    """Record the desktop window's rect for the next launch.
+
+    Gated on ``remember_window``, not ``persist_enabled`` — see ``_defaults``.
+    """
     with _write_lock:
         settings = load_start_settings()
-        if not settings.get("persist_enabled", True):
+        if not settings.get("remember_window", True):
             return
         if width <= 0 or height <= 0:
             return
@@ -291,4 +300,18 @@ def set_persist_enabled(enabled: bool) -> None:
     with _write_lock:
         settings = load_start_settings()
         settings["persist_enabled"] = bool(enabled)
+        save_start_settings(settings)
+
+
+def set_remember_window(enabled: bool) -> None:
+    """Toggle the remember_window flag and save.
+
+    Turning it off also drops the stored rect, so the next launch opens at the
+    default rather than at whatever was last recorded.
+    """
+    with _write_lock:
+        settings = load_start_settings()
+        settings["remember_window"] = bool(enabled)
+        if not enabled:
+            settings["window"] = None
         save_start_settings(settings)

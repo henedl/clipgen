@@ -78,6 +78,7 @@ def test_save_and_reload_roundtrip(settings_file):
         ],
         "recent_projects": [],
         "window": None,
+        "remember_window": True,
     }
     start_settings.save_start_settings(payload)
     assert settings_file.is_file()
@@ -244,10 +245,30 @@ def test_window_geometry_ignores_nonpositive_size(settings_file):
     assert start_settings.load_window_geometry() is None
 
 
-def test_record_window_geometry_respects_persist_disabled(settings_file):
-    start_settings.set_persist_enabled(False)
+def test_record_window_geometry_respects_its_own_toggle(settings_file):
+    start_settings.set_remember_window(False)
     start_settings.record_window_geometry(10, 20, 1200, 800)
     assert start_settings.load_window_geometry() is None
+
+
+def test_window_geometry_is_independent_of_persist_enabled(settings_file):
+    """The two toggles gate different things; persist_enabled is project history."""
+    start_settings.set_persist_enabled(False)
+    start_settings.record_window_geometry(10, 20, 1200, 800)
+    assert start_settings.load_window_geometry() == {
+        "x": 10,
+        "y": 20,
+        "width": 1200,
+        "height": 800,
+    }
+
+
+def test_disabling_remember_window_drops_the_stored_rect(settings_file):
+    start_settings.record_window_geometry(10, 20, 1200, 800)
+    start_settings.set_remember_window(False)
+    assert start_settings.load_window_geometry() is None
+    # The flag itself is still written, so the toggle survives the session.
+    assert start_settings.load_start_settings()["remember_window"] is False
 
 
 def test_clear_window_geometry_works_with_persist_disabled(settings_file):
