@@ -53,7 +53,7 @@ def test_tab_order_and_wip_badge():
     for tab in ("map", "reports"):
         button = html[html.index('data-tab="' + tab + '"') :]
         button = button[: button.index("</button>")]
-        assert "ov-wip-badge" in button, f"{tab} tab lost its WIP badge"
+        assert "cg-wip-badge" in button, f"{tab} tab lost its WIP badge"
 
 
 def test_staleness_is_version_based_and_running_check_is_strict():

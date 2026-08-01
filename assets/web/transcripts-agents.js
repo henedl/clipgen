@@ -802,7 +802,12 @@
     for (var i = 0; i < cats.length; i++) {
       if (cats[i].key === key) return cats[i].label;
     }
-    return key || "—";
+    if (key === "other") return "Other";
+    // A category the model invented. Show its own wording rather than dropping
+    // it — the evidence table groups these under Other, but the jump chip and
+    // the callout should still say what the model actually called it.
+    if (!key) return "—";
+    return key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " ");
   }
 
   function _friendlyTimeAgo(iso) {
@@ -826,14 +831,27 @@
     if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
       _setAnalysisPanelVisible(true);
     }
-    state.frictionData = null;
-    state.frictionBySegId = {};
+    // Blank only when the participant actually changed. A same-participant
+    // refetch — tab refocus, the mid-run re-arm in transcripts.js, a re-select —
+    // must keep the programmatic scores on screen: they come from the
+    // deterministic scorer and owe nothing to the LLM. Wiping them here is what
+    // blanked the histogram, chips, tinting and timeline band for a whole run.
+    if (state.frictionPid !== pid) {
+      state.frictionData = null;
+      state.frictionBySegId = {};
+      state.frictionMomentIndex = -1;
+    }
+    state.frictionPid = pid;
     state.frictionGenerating = false;
     apiGet(AGENT_DESCRIPTORS.friction.urlBase + "/" + pid).then(function (data) {
       if (ver !== state.participantReqVer) return;
       if (data.ok && data.friction) {
         _setFrictionData(data.friction);
       } else if (data.generating) {
+        // Regenerate pops the stored result, so mid-run the server answers with
+        // the deterministic scores alongside `generating` — adopt them before
+        // flipping the flag, or this branch shows the empty "Analyzing…" box.
+        if (data.friction) _setFrictionData(data.friction);
         state.frictionGenerating = true;
         state.frictionStartedAt = data.started_at ? data.started_at * 1000 : null;
         renderFrictionGenerating();
@@ -871,6 +889,7 @@
     state.frictionBySegId = {};
     state.frictionGenerating = false;
     state.frictionMomentIndex = -1;
+    state.frictionPid = null;
     qs("#frictionContent").classList.add("hidden");
     qs("#frictionGenerating").classList.add("hidden");
     qs("#frictionEmpty").classList.add("hidden");
@@ -1054,15 +1073,23 @@
     renderFriction();
   }
 
+  // Two filters, one per evidence source: the keyword scorer's segment
+  // categories and the agent's moment categories are labelled independently, so
+  // one shared dict meant hiding a category on one side silently hid it on the
+  // other. The moment side also carries the "other" bucket.
   function _ensureFrictionFilter() {
-    var f = state.frictionCategoryFilter || {};
-    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    var keys = _frictionCatKeys();
+    var prog = state.frictionCategoryFilter || {};
+    var ai = state.frictionMomentFilter || {};
     // Fill in rather than replace: a persisted filter from an older category set
     // keeps whatever the user chose and picks up new categories enabled.
-    for (var i = 0; i < cats.length; i++) {
-      if (f[cats[i].key] === undefined) f[cats[i].key] = true;
+    for (var i = 0; i < keys.length; i++) {
+      if (prog[keys[i]] === undefined) prog[keys[i]] = true;
+      if (ai[keys[i]] === undefined) ai[keys[i]] = true;
     }
-    state.frictionCategoryFilter = f;
+    if (ai[FRICTION_OTHER] === undefined) ai[FRICTION_OTHER] = true;
+    state.frictionCategoryFilter = prog;
+    state.frictionMomentFilter = ai;
   }
 
   // Both ends of the score band are user-controlled (the histogram's two
@@ -1128,6 +1155,27 @@
     state.frictionVisibleMoments = visible;
     state.frictionCitedBySegId = cited;
     state.frictionUnsourcedMoments = unsourced;
+
+    // What the timeline density band draws: the union of both sources, keyed to
+    // the strongest evidence on each line. Built here rather than at the band so
+    // the canvas can never disagree with the pane about what is flagged. An
+    // AI-only line scores 0 with the keyword scorer, so reading the keyword map
+    // alone left the moments the jump strip is built around off the band
+    // entirely; the two scales differ, but the band's alpha only ever meant
+    // "how strong is the evidence here".
+    var band = {};
+    for (var id in matches) {
+      if (Object.prototype.hasOwnProperty.call(matches, id)) band[id] = matches[id];
+    }
+    for (i = 0; i < visible.length; i++) {
+      var mscore = visible[i].moment.score || 0;
+      for (j = 0; j < visible[i].idxs.length; j++) {
+        var cseg = state.segments[visible[i].idxs[j]];
+        if (!cseg) continue;
+        if (!(band[cseg.id] > mscore)) band[cseg.id] = mscore;
+      }
+    }
+    state.frictionBandBySegId = band;
   }
 
   // The single entry point for "the filter changed": recompute, then reflect it
@@ -1137,7 +1185,7 @@
   // properties, and never rebuilds the segment list.
   function applyFrictionDecorations() {
     _recomputeFrictionMatches();
-    renderFrictionChips();
+    renderFrictionEvidence();
     _updateFrictionBounds(null);
     renderFrictionJumpStrip();
     _decorateSegmentList();
@@ -1387,72 +1435,221 @@
     host.addEventListener("pointercancel", endDrag);
   }
 
-  // ---- Category chips ----
+  // ---- Evidence table ----
   //
-  // One toggleable chip per category, replacing the old pairing of a read-only
-  // stat-chip row with a duplicate row of checkboxes. Counts are computed here
-  // rather than read from stats.by_category, which counts marker hits (not
-  // segments) and is threshold-independent, so it would never move with the
-  // histogram and an empty category would never read as empty.
-  function _frictionCategoryCounts() {
-    var out = {};
+  // Two independent systems produce findings, and the old single chip row only
+  // ever counted one of them. The keyword scorer (friction.py) labels SEGMENTS
+  // from regex hits; the agent labels MOMENTS with a category string of its own
+  // choosing, which is never reconciled against what the scorer found on the
+  // line it quotes. So a category could read "Confusion 0" while a Confusion
+  // moment sat in the jump strip — and because a 0-count chip was inert, that
+  // was the one category you could not filter by.
+  //
+  // The table therefore counts and filters the two apart: a row per category,
+  // a cell per source. Counts are computed here rather than read from
+  // stats.by_category, which counts marker hits (not segments) and ignores the
+  // score band, so it would never move with the histogram.
+  var FRICTION_SOURCES = ["prog", "ai"];
+  // Where a model category that is not one of the six lands. The jump chip and
+  // the callout still show the model's own wording; only the row groups them.
+  var FRICTION_OTHER = "other";
+
+  function _frictionCatKeys() {
+    var cats = CLIPGEN_CONFIG.frictionCategories || [];
+    return cats.map(function (c) { return c.key; });
+  }
+
+  // The model is free to emit any string (thinking_agents.py only lowercases
+  // and underscores it), so bucket anything unrecognized rather than letting it
+  // fall through every filter and every row.
+  function _frictionMomentCategory(m) {
+    var raw = (m && m.category) || "";
+    return _frictionCatKeys().indexOf(raw) === -1 ? FRICTION_OTHER : raw;
+  }
+
+  // Counts inside the current score band — what each cell displays.
+  function _frictionEvidenceCounts() {
+    var prog = {};
+    var ai = {};
     var segs = (state.frictionData && state.frictionData.segments) || [];
-    for (var i = 0; i < segs.length; i++) {
+    var i, j;
+    for (i = 0; i < segs.length; i++) {
       var sc = segs[i].score || 0;
       if (sc <= 0 || !_frictionScoreInBand(sc)) continue;
       var cats = segs[i].categories || [];
-      for (var j = 0; j < cats.length; j++) out[cats[j]] = (out[cats[j]] || 0) + 1;
+      for (j = 0; j < cats.length; j++) prog[cats[j]] = (prog[cats[j]] || 0) + 1;
+    }
+    var moments = (state.frictionData && state.frictionData.moments) || [];
+    for (i = 0; i < moments.length; i++) {
+      if (!_frictionScoreInBand(moments[i].score || 0)) continue;
+      var key = _frictionMomentCategory(moments[i]);
+      ai[key] = (ai[key] || 0) + 1;
+    }
+    return { prog: prog, ai: ai };
+  }
+
+  // Which rows exist at all, ignoring the band and the filters. Deliberately
+  // band-independent: rows appearing and vanishing mid-drag would make the
+  // control block jump under the pointer, and a cell whose count the band has
+  // driven to 0 must stay clickable — gating inertness on the banded count is
+  // exactly the bug this table replaces.
+  function _frictionEvidenceRows() {
+    var seen = {};
+    var segs = (state.frictionData && state.frictionData.segments) || [];
+    var i, j;
+    for (i = 0; i < segs.length; i++) {
+      if ((segs[i].score || 0) <= 0) continue;
+      var cats = segs[i].categories || [];
+      for (j = 0; j < cats.length; j++) {
+        if (!seen[cats[j]]) seen[cats[j]] = { prog: 0, ai: 0 };
+        seen[cats[j]].prog++;
+      }
+    }
+    var moments = (state.frictionData && state.frictionData.moments) || [];
+    for (i = 0; i < moments.length; i++) {
+      var key = _frictionMomentCategory(moments[i]);
+      if (!seen[key]) seen[key] = { prog: 0, ai: 0 };
+      seen[key].ai++;
+    }
+    // Config order first so the table reads consistently, then Other last.
+    var out = [];
+    var keys = _frictionCatKeys();
+    for (i = 0; i < keys.length; i++) {
+      if (seen[keys[i]]) out.push({ key: keys[i], totals: seen[keys[i]] });
+    }
+    if (seen[FRICTION_OTHER]) {
+      out.push({ key: FRICTION_OTHER, totals: seen[FRICTION_OTHER] });
     }
     return out;
   }
 
-  function _buildFrictionChip(cat) {
+  function _frictionSourceFilter(source) {
+    return source === "ai" ? state.frictionMomentFilter : state.frictionCategoryFilter;
+  }
+
+  function _buildFrictionEvidenceCell(catKey, source) {
     var btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "friction-chip";
-    btn.setAttribute("data-cat", cat.key);
-    btn.appendChild(el("span", "", cat.label));
-    btn.appendChild(el("span", "friction-chip-count", "0"));
+    btn.className = "friction-ev-cell";
+    btn.setAttribute("data-cat", catKey);
+    btn.setAttribute("data-src", source);
     btn.addEventListener("click", function () {
       if (btn.classList.contains("is-empty")) return;
       _ensureFrictionFilter();
-      state.frictionCategoryFilter[cat.key] = state.frictionCategoryFilter[cat.key] === false;
-      setStoredUIStateField("transcripts", "frictionCategoryFilter", state.frictionCategoryFilter);
+      var f = _frictionSourceFilter(source);
+      f[catKey] = f[catKey] === false;
+      setStoredUIStateField(
+        "transcripts",
+        source === "ai" ? "frictionMomentFilter" : "frictionCategoryFilter",
+        f
+      );
       applyFrictionDecorations();
       renderTimeline();
     });
     return btn;
   }
 
-  function renderFrictionChips() {
-    var host = qs("#frictionChips");
-    if (!host) return;
-    var cats = CLIPGEN_CONFIG.frictionCategories || [];
-    // Structure is built once; a threshold drag then only rewrites counts and
-    // state classes instead of rebuilding six buttons per animation frame.
-    if (host.childElementCount !== cats.length) {
-      host.innerHTML = "";
-      for (var i = 0; i < cats.length; i++) host.appendChild(_buildFrictionChip(cats[i]));
+  var FRICTION_SOURCE_META = {
+    prog: {
+      label: "Keyword",
+      tooltip:
+        "Segments the keyword scorer matched. Scored 0–1 by marker density, and " +
+        "filtered by the histogram band above.",
+    },
+    ai: {
+      label: "AI",
+      tooltip:
+        "Moments the local AI flagged. Scored 0–1 by the model's own confidence — " +
+        "a different scale from the keyword score, filtered by the same band.",
+    },
+  };
+
+  // One row per source, one column per category: the two sources are the thing
+  // being compared, so they read better as adjacent rows than as two columns
+  // scanned down. Categories head the columns.
+  function _buildFrictionEvidenceRow(source, cats) {
+    var row = el("div", "friction-ev-row");
+    row.setAttribute("data-src", source);
+    var meta = FRICTION_SOURCE_META[source];
+    var label = el("span", "friction-ev-src", meta.label);
+    label.setAttribute("data-tooltip", meta.tooltip);
+    row.appendChild(label);
+    for (var i = 0; i < cats.length; i++) {
+      row.appendChild(_buildFrictionEvidenceCell(cats[i], source));
     }
+    return row;
+  }
+
+  function _buildFrictionEvidenceHead(cats) {
+    var head = el("div", "friction-ev-row friction-ev-head");
+    head.appendChild(el("span", "friction-ev-src", ""));
+    for (var i = 0; i < cats.length; i++) {
+      var label = _frictionCatLabel(cats[i]);
+      var col = el("span", "friction-ev-col", label);
+      // The header truncates on a narrow pane, so the full name has to survive
+      // somewhere — and "Self-correction" is the first to go.
+      col.setAttribute("data-tooltip", label);
+      head.appendChild(col);
+    }
+    return head;
+  }
+
+  function renderFrictionEvidence() {
+    var host = qs("#frictionEvidence");
+    if (!host) return;
     _ensureFrictionFilter();
-    var counts = _frictionCategoryCounts();
-    var chips = host.children;
-    for (var j = 0; j < chips.length; j++) {
-      var key = chips[j].getAttribute("data-cat");
-      var n = counts[key] || 0;
-      var on = state.frictionCategoryFilter[key] !== false;
-      chips[j].lastChild.textContent = String(n);
-      chips[j].classList.toggle("is-empty", n === 0);
-      chips[j].classList.toggle("is-on", n > 0 && on);
-      chips[j].setAttribute("aria-pressed", on ? "true" : "false");
+    var rows = _frictionEvidenceRows();
+    var cats = rows.map(function (r) { return r.key; });
+    // Rebuild only when the category set itself changed; a threshold drag then
+    // just rewrites counts and state classes per animation frame.
+    var signature = cats.join(",");
+    if (host.getAttribute("data-cats") !== signature) {
+      host.setAttribute("data-cats", signature);
+      host.innerHTML = "";
+      if (cats.length === 0) {
+        host.appendChild(el("span", "friction-ev-empty", "No findings in this analysis."));
+        return;
+      }
+      var frag = document.createDocumentFragment();
+      frag.appendChild(_buildFrictionEvidenceHead(cats));
+      for (var i = 0; i < FRICTION_SOURCES.length; i++) {
+        frag.appendChild(_buildFrictionEvidenceRow(FRICTION_SOURCES[i], cats));
+      }
+      host.appendChild(frag);
+    }
+    if (cats.length === 0) return;
+
+    var counts = _frictionEvidenceCounts();
+    var byKey = {};
+    for (var r = 0; r < rows.length; r++) byKey[rows[r].key] = rows[r].totals;
+    var cells = host.querySelectorAll(".friction-ev-cell");
+    for (var c = 0; c < cells.length; c++) {
+      var cell = cells[c];
+      var key = cell.getAttribute("data-cat");
+      var source = cell.getAttribute("data-src");
+      var totals = byKey[key] || { prog: 0, ai: 0 };
+      // Inert only when this source has no finding of this kind at all — not
+      // merely when the band has hidden them, or the band would lock the user
+      // out of the control that widens it.
+      var everyAny = totals[source] > 0;
+      var n = (counts[source][key] || 0);
+      var on = _frictionSourceFilter(source)[key] !== false;
+      cell.textContent = everyAny ? String(n) : "—";
+      cell.classList.toggle("is-empty", !everyAny);
+      cell.classList.toggle("is-on", everyAny && on);
+      cell.classList.toggle("is-muted", everyAny && !on);
+      cell.setAttribute("aria-pressed", everyAny && on ? "true" : "false");
+      cell.setAttribute(
+        "aria-label",
+        _frictionCatLabel(key) + " " + (source === "ai" ? "AI" : "keyword") + " findings"
+      );
     }
   }
 
   function _frictionMomentMatches(m) {
     if (!_frictionScoreInBand(m.score || 0)) return false;
-    var f = state.frictionCategoryFilter;
-    if (f && m.category && f[m.category] === false) return false;
-    return true;
+    var f = state.frictionMomentFilter;
+    return !(f && f[_frictionMomentCategory(m)] === false);
   }
 
   function _segmentIndexById(id) {
@@ -1600,13 +1797,19 @@
     var isolate = state.frictionMode === "isolate";
     var matches = state.frictionMatchBySegId || {};
     var cited = state.frictionCitedBySegId || {};
+    var band = state.frictionBandBySegId || {};
     var rows = list.querySelectorAll(".segment-row");
     var matched = 0;
     for (var i = 0; i < rows.length; i++) {
       var seg = state.segments[i];
       var score = seg ? matches[seg.id] : undefined;
       var isCited = !!(seg && cited[seg.id]);
-      if (score !== undefined || isCited) matched++;
+      // "Flagged by either source" is the derived union map, not a third
+      // hand-rolled OR. score and isCited stay separate below because they drive
+      // different things: the tint alpha is the keyword score, the left rail is
+      // the citation.
+      var flagged = !!seg && band[seg.id] !== undefined;
+      if (flagged) matched++;
       var row = rows[i];
       if (on && score !== undefined) {
         row.classList.add("segment-friction");
@@ -1618,7 +1821,7 @@
       row.classList.toggle("segment-cited", on && isCited);
       // Hidden, never removed: state.cachedSegmentRows is indexed positionally
       // against state.segments, so removing a row would misalign every consumer.
-      row.classList.toggle("segment-hidden", isolate && !(score !== undefined || isCited));
+      row.classList.toggle("segment-hidden", isolate && !flagged);
     }
 
     if (on) {
@@ -1663,6 +1866,13 @@
     _recomputeFrictionMatches();
     var matches = state.frictionMatchBySegId;
     var groups = {};
+    var claimed = {};
+    function claim(segId, cat) {
+      if (claimed[segId]) return;
+      claimed[segId] = true;
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(segId);
+    }
     fd.segments.forEach(function (frow) {
       if (matches[frow.id] === undefined) return;
       var primary = _primaryCategory(frow);
@@ -1676,8 +1886,19 @@
         }
       }
       if (!primary) return;
-      if (!groups[primary]) groups[primary] = [];
-      groups[primary].push(frow.id);
+      claim(frow.id, primary);
+    });
+    // Segments only the agent flagged. They score 0 with the keyword scorer, so
+    // frictionMatchBySegId never holds them — and this action used to skip the
+    // very lines the jump strip exists to surface. Marked under the moment's
+    // own category, and never twice (the keyword pass claims a line first).
+    var visible = state.frictionVisibleMoments || [];
+    visible.forEach(function (entry) {
+      var cat = _frictionMomentCategory(entry.moment);
+      entry.idxs.forEach(function (idx) {
+        var seg = state.segments[idx];
+        if (seg) claim(seg.id, cat);
+      });
     });
     var keys = Object.keys(groups);
     if (keys.length === 0) {
@@ -1741,6 +1962,9 @@
     if (stored.frictionCategoryFilter) {
       state.frictionCategoryFilter = stored.frictionCategoryFilter;
     }
+    if (stored.frictionMomentFilter) {
+      state.frictionMomentFilter = stored.frictionMomentFilter;
+    }
     mount.appendChild(createSegTrack({
       id: "frictionModeInput",
       value: state.frictionMode,
@@ -1774,16 +1998,39 @@
   // _hideFrictionTooltip's TS.hasTimelineHover() guard). The segment-list
   // mousemove that calls _showFrictionTooltip — and its coalescing _segTooltipRaf
   // — live in the hub's segment-list delegation, not here.
+  // Visible moments quoting this segment. Reads the already-resolved indices so
+  // the hover can never name a moment the jump strip has filtered out.
+  function _visibleMomentsCiting(seg) {
+    var out = [];
+    if (!seg) return out;
+    var visible = state.frictionVisibleMoments || [];
+    for (var i = 0; i < visible.length; i++) {
+      for (var j = 0; j < visible[i].idxs.length; j++) {
+        var s = state.segments[visible[i].idxs[j]];
+        if (s && s.id === seg.id) { out.push(visible[i]); break; }
+      }
+    }
+    return out;
+  }
+
   function _showFrictionTooltip(frow, seg, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
     tip.textContent = "";
+    // The band now draws AI-cited lines too, and those score 0 with the keyword
+    // scorer — without the moments folded in, hovering one of those stripes read
+    // "score 0.00" with no categories, i.e. as if the stripe were a bug.
+    var moments = _visibleMomentsCiting(seg);
     var cats = frow.categories || [];
-    if (cats.length) {
+    if (cats.length || moments.length) {
       var badges = document.createElement("div");
       badges.className = "tr-tooltip-friction-cats";
       cats.forEach(function (c) {
         badges.appendChild(el("span", "friction-cat-badge friction-cat-badge--sm", _frictionCatLabel(c)));
+      });
+      moments.forEach(function (entry) {
+        badges.appendChild(el("span", "friction-cat-badge friction-cat-badge--sm friction-cat-badge--ai",
+          _frictionCatLabel(entry.moment.category)));
       });
       tip.appendChild(badges);
     }
@@ -1802,8 +2049,16 @@
       tip.appendChild(el("span", "tr-tooltip-friction-markers", "matched: " + shown));
       tip.appendChild(document.createElement("br"));
     }
+    // Name the source of each score rather than printing a bare number: they
+    // are on different scales (marker density vs the model's own confidence).
+    var scoreParts = [];
+    if ((frow.score || 0) > 0) scoreParts.push("keyword " + frow.score.toFixed(2));
+    for (var mi = 0; mi < moments.length; mi++) {
+      scoreParts.push("AI " + (moments[mi].moment.score || 0).toFixed(2));
+    }
     tip.appendChild(el("span", "tr-tooltip-friction-score",
-      (seg ? formatTime(seg.start) + " · " : "") + "score " + (frow.score || 0).toFixed(2)));
+      (seg ? formatTime(seg.start) + " · " : "") +
+      (scoreParts.length ? scoreParts.join(" · ") : "score 0.00")));
     tip.classList.remove("hidden");
     var tipRect = tip.getBoundingClientRect();
     var x = clientX + 12;

@@ -994,52 +994,107 @@ body {
   pointer-events: none;
 }
 
-.friction-chips {
+/* Evidence table: (keyword | AI) × category, one toggleable cell per pair.
+ * Replaces the single chip row, which counted only the keyword scorer and so
+ * rendered an inert "0" for a category the AI had actually flagged. The two
+ * sources are the thing being compared, so they are the two rows; categories
+ * head the columns. Flex rather than a real table so the cells can be
+ * <button>s. Only categories with at least one finding get a column, so this is
+ * typically 2–5 columns rather than six mostly-empty ones. */
+.friction-evidence {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
+  flex-direction: column;
+  /* Sized by content, not stretched: with two or three categories a full-width
+     table would strand each count a screen away from its header. */
+  align-items: flex-start;
 }
 
-/* Toggleable category filter. Replaces the old pairing of a non-interactive
- * stat chip row plus a duplicate row of checkboxes for the same six categories.
- * Counts are computed client-side against the live threshold (stats.by_category
- * counts marker hits, not segments, and never moves with the slider). */
-.friction-chip {
-  display: inline-flex;
+.friction-ev-row {
+  display: flex;
   align-items: center;
   gap: var(--space-1);
-  padding: 2px var(--space-2);
-  border: 1px solid var(--color-border);
+  padding: 1px 0;
+}
+
+.friction-ev-head {
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--color-text-dim);
+}
+
+/* Row label ("Keyword" / "AI"), and the head row's empty corner cell. */
+.friction-ev-src {
+  flex: 0 0 4rem;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  cursor: help;
+}
+
+.friction-ev-head .friction-ev-src {
+  cursor: default;
+}
+
+/* Column headers share the cells' width but not their inline padding: both are
+   centered, so the padding would only cost the label 16px of room — enough to
+   truncate "Self-correction" — without moving it relative to the digits. */
+.friction-ev-col {
+  flex: 0 0 5.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  cursor: help;
+}
+
+.friction-ev-cell {
+  flex: 0 0 5.75rem;
+  padding: 1px var(--space-2);
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
   background: transparent;
   font-family: inherit;
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: center;
   color: var(--color-text-dim);
   cursor: pointer;
   transition: background var(--duration-fast), border-color var(--duration-fast);
 }
 
-.friction-chip:hover:not(.is-empty) {
+.friction-ev-cell:hover:not(.is-empty) {
   border-color: var(--color-friction);
 }
 
-.friction-chip.is-on {
+.friction-ev-cell.is-on {
   color: var(--color-friction);
   border-color: color-mix(in srgb, var(--color-friction) 55%, var(--color-border));
   background: color-mix(in srgb, var(--color-friction) 12%, transparent);
 }
 
-/* No segments in this category at the current threshold — shown (so the absence
- * is itself information) but not clickable. */
-.friction-chip.is-empty {
-  opacity: 0.45;
+/* Filtered out by the user: still counted and still clickable, just not
+ * contributing. Distinct from .is-empty, which means "nothing of this kind
+ * exists at all" — that one is the only inert state, so a score band that has
+ * driven a count to 0 can never lock the user out of the control. */
+/* Dashed rather than struck through: these cells hold a single digit, and a
+   line-through on a "1" reads as a different glyph entirely. */
+.friction-ev-cell.is-muted {
+  border-style: dashed;
+  border-color: var(--color-border);
+  opacity: 0.6;
+}
+
+.friction-ev-cell.is-empty {
+  opacity: 0.35;
   cursor: default;
 }
 
-.friction-chip-count {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: inherit;
+.friction-ev-empty {
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--color-text-dim);
 }
 
 /* ── Moment jump strip ──────────────────────────────────────
@@ -1214,6 +1269,14 @@ body {
 .friction-cat-badge--sm {
   font-size: 10px;
   font-weight: 500;
+}
+
+/* An agent-labelled category, next to the keyword scorer's own badges in the
+ * same tooltip. Outlined rather than filled so the two sources are told apart
+ * at a glance without introducing a second hue. */
+.friction-cat-badge--ai {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-friction) 55%, var(--color-border));
 }
 
 /* Inline tint on hot segments while friction mode is on. Lower specificity than
@@ -2113,6 +2176,107 @@ body {
 }
 
 .model-install-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Clip-marked-lines modal. Geometry mirrors .model-install-* above so the two
+   dialogs on this page read as one family; the fields borrow the mark
+   popover's input treatment. */
+.clip-marks-modal {
+  max-width: 460px;
+}
+
+.clip-marks-message {
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-4);
+}
+
+.clip-marks-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.clip-marks-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.clip-marks-select,
+.clip-marks-input {
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.clip-marks-select {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.clip-marks-input {
+  width: 88px;
+  flex: none;
+}
+
+.clip-marks-select:focus,
+.clip-marks-input:focus {
+  border-color: var(--color-accent);
+}
+
+.clip-marks-summary {
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  margin-bottom: var(--space-4);
+  min-height: 1.2em;
+}
+
+.clip-marks-progress {
+  margin-bottom: var(--space-4);
+}
+
+.clip-marks-progress.hidden {
+  display: none;
+}
+
+.clip-marks-bar {
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.clip-marks-bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--color-accent);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-normal) ease;
+}
+
+.clip-marks-progress-text {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.clip-marks-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);

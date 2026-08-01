@@ -59,21 +59,8 @@ body {
   border-bottom-color: var(--fg);
 }
 
-/* "WIP" pill on the Map tab — the similarity map is the newest surface. */
-.ov-wip-badge {
-  display: inline-flex;
-  align-items: center;
-  margin-left: var(--space-1-5);
-  padding: 0 var(--space-1-5);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent-hover);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  line-height: 1.6;
-}
+/* The "WIP" pill on the Map and Reports tabs is the shared .cg-wip-badge in
+ * tokens.css — Transcripts' Friction tab uses it too. */
 
 /* Subheader Refresh. When the active tab reports its view was built against an
  * older hub dataVersion, color the button so the user notices without a

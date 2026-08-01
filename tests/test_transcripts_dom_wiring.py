@@ -50,11 +50,21 @@ REQUIRED_IDS = [
     "frictionMarkAll",
     "frictionHistogram",
     "frictionBounds",
-    "frictionChips",
+    "frictionEvidence",
     "frictionJumpStrip",
     "frictionJumpPrev",
     "frictionJumpNext",
     "frictionStaleDot",
+    "clipMarksModal",
+    "clipMarksScope",
+    "clipMarksGap",
+    "clipMarksPad",
+    "clipMarksSummary",
+    "clipMarksProgress",
+    "clipMarksBarFill",
+    "clipMarksProgressText",
+    "clipMarksCancel",
+    "clipMarksConfirm",
 ]
 
 
@@ -149,13 +159,19 @@ def test_scroll_to_segment_bails_on_an_isolated_row():
     )
 
 
-def test_friction_consumers_all_read_the_shared_match_map():
+def test_friction_consumers_all_read_a_shared_derived_map():
     """The threshold/category filter must drive the pane, the segment tints AND
     the timeline band. Before the redesign the band and the tints used raw
-    score > 0, so the transcript disagreed with the tab that filtered it."""
+    score > 0, so the transcript disagreed with the tab that filtered it.
+
+    Two derived maps now, for two different questions: frictionMatchBySegId is
+    the keyword score (it sets the tint alpha), frictionBandBySegId is the union
+    of both evidence sources (what counts as flagged at all). Every consumer
+    reads one of them; none re-derive from raw scores."""
     for name in ("transcripts.js", "transcripts-video.js", "transcripts-agents.js"):
-        assert "frictionMatchBySegId" in read(name), (
-            f"{name} must read the derived match map, not raw friction scores"
+        src = read(name)
+        assert "frictionMatchBySegId" in src or "frictionBandBySegId" in src, (
+            f"{name} must read a derived map, not raw friction scores"
         )
     assert "frictionHeatmapEnabled" not in _JS, (
         "the boolean heatmap flag was replaced by the three-way state.frictionMode"
@@ -354,4 +370,285 @@ def test_pill_nav_cursor_survives_a_pane_rebuild_by_identity():
     )
     assert "pillOptionsCursor +=" not in _JS, (
         "cursor index arithmetic is the bug this replaced — restore by nav id"
+    )
+
+
+# ---- Clip Marked Lines (Quick action -> Studio intake generation) ----
+
+
+def test_clip_marks_loads_the_shared_clusterer_before_the_hub():
+    """intake-cluster.js is not part of the transcripts-*.js glob, so a missing
+    or late <script> is a runtime ReferenceError the concat-based scans above
+    cannot see — the hub reads window.ClipgenIntakeCluster on the first open."""
+    assert "intake-cluster.js" in _HTML, (
+        "transcripts.html must load intake-cluster.js for the clip-marks action"
+    )
+    assert _HTML.index("intake-cluster.js") < _HTML.index('src="transcripts.js"'), (
+        "intake-cluster.js must load before the page hub"
+    )
+
+
+def test_clip_marks_previews_and_cuts_from_one_clusterer():
+    """The summary tells the user how many clips they will get. If the preview
+    and the payload clustered differently, that number would be a lie — so both
+    go through the shared helper, and neither hand-rolls a merge loop."""
+    assert _JS.count("ClipgenIntakeCluster.clusterTranscriptMarks(") == 1, (
+        "clustering belongs in one place (_clipMarksClusters); the summary and "
+        "the payload both call it"
+    )
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_clipMarksClusters()" in body
+
+
+def test_clip_marks_sends_the_text_and_label_studio_drops():
+    """server.py's _process_intake_item titles a transcript clip from label ->
+    truncated text -> category. Studio's queue path omits both, so its clips are
+    all named after the category; sending them is the whole reason these clips
+    read as anything useful."""
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert '"../studio/api/generate-intake"' in body
+    assert 'source: "transcript"' in body
+    for key in ("text:", "label:", "mark_ids:"):
+        assert key in body, f"the intake payload must carry {key}"
+
+
+def test_clip_marks_pads_the_span_without_going_negative():
+    """A mark's segment boundaries sit tight against the speech, so the cut is
+    padded — but a mark near t=0 would otherwise ask ffmpeg for a negative
+    start."""
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "Math.max(0, c.start - pad)" in body, (
+        "the padded start must be floored at zero"
+    )
+
+
+def test_clip_marks_ignores_the_trailing_cancelled_line():
+    """/api/generate-intake closes a cancelled stream with {"cancelled": true},
+    which has no index. Counting it as a completed item over-reports progress by
+    one (the bug live in overview-reports.js)."""
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'typeof data.index !== "number"' in body, (
+        "the NDJSON handler must bail on lines with no index"
+    )
+
+
+def test_clip_marks_modal_classes_are_all_styled():
+    """Standing toggle-completeness check: an unstyled modal class ships a
+    dialog that renders as unlaid-out text with no error anywhere."""
+    for cls in re.findall(r'class="([^"]*clip-marks[^"]*)"', _HTML):
+        for name in cls.split():
+            if name.startswith("clip-marks"):
+                assert "." + name in _CSS, f".{name} is used in HTML but never styled"
+
+
+def test_clip_marks_run_outlives_its_dialog():
+    """Escape/backdrop only close the modal; the batch keeps streaming and the
+    quick action must reopen onto live progress. Storing the run inside the open
+    handler (or clearing it on close) would strand a running job with no way to
+    stop it."""
+    assert "var _clipMarksRun = null;" in _JS
+    close_start = _JS.index("function closeClipMarksModal(")
+    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
+    assert "_clipMarksRun" not in close_body, (
+        "closing the dialog must not touch the in-flight run"
+    )
+    open_start = _JS.index("function openClipMarksModal(")
+    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
+    assert "if (_clipMarksRun) return;" in open_body, (
+        "reopening mid-run must show progress, not re-fetch and reset the pickers"
+    )
+
+
+def test_friction_refetch_keeps_the_programmatic_scores():
+    """The deterministic scorer's output does not depend on the LLM, but
+    loadFriction used to blank it before every GET. Combined with the server
+    answering `generating` for the whole agent run, a tab refocus / re-select /
+    reload mid-run emptied the histogram, chips, tinting and timeline band until
+    the agent finished. Blank only on a real participant change."""
+    start = _JS.index("function loadFriction(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "if (state.frictionPid !== pid) {" in body, (
+        "the wipe must be gated on the participant actually changing"
+    )
+    assert body.index("frictionPid !== pid") < body.index(
+        "state.frictionData = null"
+    ), "the gate has to precede the wipe it exists to prevent"
+    # Mid-run the server ships the scores alongside the generating flag.
+    gen = body[body.index("data.generating") :]
+    assert "if (data.friction) _setFrictionData(data.friction);" in gen, (
+        "the generating branch must adopt the deterministic scores the server "
+        "sends with it, or it renders the empty 'Analyzing…' box"
+    )
+    assert gen.index("_setFrictionData") < gen.index(
+        "state.frictionGenerating = true"
+    ), "_setFrictionData clears the generating flag, so it has to run first"
+
+
+# ---- Friction evidence table (programmatic vs agentic) ----
+
+
+def test_friction_counts_the_two_evidence_sources_apart():
+    """The keyword scorer labels segments; the agent labels its own moments, and
+    never reconciles them against the line it quotes. The old single chip row
+    counted only the first, so a category could read 0 while its moment sat in
+    the jump strip."""
+    start = _JS.index("function _frictionEvidenceCounts(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "frictionData.segments" in body and "frictionData.moments" in body, (
+        "both sources must be counted"
+    )
+    assert "return { prog: prog, ai: ai };" in body, "counted apart, not summed"
+
+
+def test_friction_cell_is_inert_only_on_total_absence():
+    """The original bug: a chip with a 0 count was unclickable, so the score band
+    could lock the user out of the very control that widens it — and a category
+    with AI evidence but no keyword hit could never be toggled at all. Inertness
+    must key on whether that kind of evidence exists AT ALL, not on the banded
+    count the cell happens to display."""
+    start = _JS.index("function renderFrictionEvidence(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "var everyAny = totals[source] > 0;" in body
+    assert 'cell.classList.toggle("is-empty", !everyAny);' in body, (
+        "is-empty must come from the unbanded totals, never from the banded count"
+    )
+    rows = _JS.index("function _frictionEvidenceRows(")
+    rows_body = _JS[rows : _JS.index("\n  function ", rows + 1)]
+    assert "_frictionScoreInBand" not in rows_body, (
+        "the row set must be band-independent, or rows appear and vanish under "
+        "the pointer mid-drag"
+    )
+
+
+def test_friction_filters_are_per_source():
+    """One shared filter dict meant hiding a category on the keyword side
+    silently hid the agent's moments in that category too — including moments in
+    categories whose chip was inert, which no control could then bring back."""
+    assert "state.frictionMomentFilter" in _JS
+    start = _JS.index("function _frictionMomentMatches(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.frictionMomentFilter" in body, "moments read their own filter"
+    assert "frictionCategoryFilter" not in body, (
+        "the keyword filter must not gate moments"
+    )
+
+
+def test_unvalidated_model_categories_are_bucketed_not_dropped():
+    """thinking_agents only lowercases and underscores the model's category, so
+    it can emit anything. An unrecognized string must still land in a row the
+    user can toggle, rather than falling through every filter."""
+    start = _JS.index("function _frictionMomentCategory(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "FRICTION_OTHER" in body and "_frictionCatKeys()" in body
+    # The strip and callout still show what the model actually said.
+    label = _JS.index("function _frictionCatLabel(")
+    label_body = _JS[label : _JS.index("\n  function ", label + 1)]
+    assert 'if (key === "other") return "Other";' in label_body
+    assert "toUpperCase()" in label_body, (
+        "an invented category should render its own wording, not be blanked"
+    )
+
+
+def test_mark_all_matching_covers_the_ai_only_segments():
+    """frictionMatchBySegId holds keyword matches only, so segments the agent
+    alone flagged (score 0, no regex category) were silently skipped — the very
+    lines the jump strip exists to surface."""
+    start = _JS.index("function _frictionMarkAll(")
+    body = _JS[start : _JS.index("\n  function initFriction(", start)]
+    assert "state.frictionVisibleMoments" in body, (
+        "AI-cited segments must be marked too"
+    )
+    assert "claimed[segId]" in body, (
+        "a segment both sources flag must be marked once, not twice"
+    )
+
+
+def test_friction_evidence_classes_are_all_styled():
+    """An unstyled row class renders the table as a run-on line of numbers."""
+    for cls in re.findall(r'"(friction-ev-[a-z-]+)"', _JS):
+        assert "." + cls in _CSS, f".{cls} is created in JS but never styled"
+    for state_cls in (
+        ".friction-ev-cell.is-on",
+        ".friction-ev-cell.is-muted",
+        ".friction-ev-cell.is-empty",
+    ):
+        assert state_cls in _CSS, f"{state_cls} is toggled in JS but never styled"
+
+
+def test_the_density_band_covers_both_evidence_sources():
+    """An AI-cited line scores 0 with the keyword scorer, so a band reading the
+    keyword map alone drew nothing for the very moments the jump strip is built
+    around. The union is derived once, in the same producer as everything else,
+    so the canvas can never disagree with the pane about what is flagged."""
+    start = _JS.index("function _recomputeFrictionMatches(")
+    body = _JS[start : _JS.index("\n  // The single entry point", start)]
+    assert "state.frictionBandBySegId = band;" in body, (
+        "the union belongs in the one derived-state producer"
+    )
+    assert "visible[i].moment.score" in body, (
+        "an AI-only line has no keyword score; the band needs the moment's"
+    )
+    video = read("transcripts-video.js")
+    assert "state.frictionBandBySegId" in video
+    draw = video.index("function _drawFrictionBand(")
+    draw_body = video[draw : video.index("\n  // The selected participant", draw)]
+    assert "frictionMatchBySegId" not in draw_body, (
+        "the band must draw from the union, not the keyword-only map"
+    )
+    hit = video.index("function hitTestFrictionBand(")
+    hit_body = video[hit : video.index("\n  function ", hit + 1)]
+    assert "frictionBandBySegId" in hit_body, (
+        "hover has to key on the same map the band draws, or an AI-only stripe "
+        "hovers as if it were not there"
+    )
+
+
+def test_flagged_by_either_source_is_derived_once():
+    """'keyword match OR cited' was spelled out at three call sites — the band
+    skipped the clause entirely, which is how it lost the AI moments."""
+    assert (
+        "frictionMatchBySegId[seg.id] !== undefined || state.frictionCitedBySegId"
+        not in _JS
+    ), "read the derived union map instead of re-deriving the OR"
+    start = _JS.index("function _decorateSegmentList(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "var flagged = !!seg && band[seg.id] !== undefined;" in body
+    assert 'row.classList.toggle("segment-hidden", isolate && !flagged);' in body
+    # ...but the tint alpha stays the keyword score, and the rail stays citation.
+    assert 'row.style.setProperty("--seg-friction-alpha", score);' in body
+    assert 'row.classList.toggle("segment-cited", on && isCited);' in body
+
+
+def test_the_band_tooltip_names_which_score_it_is_showing():
+    """The band now includes AI-cited lines, which score 0 with the keyword
+    scorer — a bare 'score 0.00' on one of those stripes reads as a bug. The two
+    numbers are on different scales, so each is labelled."""
+    start = _JS.index("function _showFrictionTooltip(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_visibleMomentsCiting(seg)" in body
+    assert '"keyword "' in body and '"AI "' in body, (
+        "label each score with its source rather than printing a bare number"
+    )
+    assert ".friction-cat-badge--ai" in _CSS, (
+        "agent-labelled categories need a treatment distinct from the scorer's"
+    )
+
+
+def test_the_wip_badge_is_shared_not_forked():
+    """The Friction tab is the second consumer of Overview's WIP pill, so the
+    rule moved to tokens.css. A page-local copy is the drift this project keeps
+    re-fixing: tokens.css loads first, so an equal-specificity fork silently
+    wins on source order in whichever page defines it."""
+    assert ".cg-wip-badge {" in read("tokens.css")
+    assert 'class="cg-wip-badge"' in _HTML, "the Friction tab carries the badge"
+    for page in ("transcripts.css", "overview.css"):
+        assert ".cg-wip-badge {" not in read(page), (
+            f"{page} must not redefine the shared badge"
+        )
+    assert "ov-wip-badge" not in read("overview.html"), (
+        "Overview's copy was migrated onto the shared class"
     )

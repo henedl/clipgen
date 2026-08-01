@@ -1063,6 +1063,56 @@ def test_friction_get_deterministic_when_absent_and_idle(tr_client, _agent_state
     assert "by_category" in fr["stats"]
 
 
+def test_friction_get_keeps_deterministic_scores_while_the_agent_runs(
+    tr_client, _agent_state_clean
+):
+    """Regenerate pops the stored friction before the run, so a mid-run refetch
+    used to answer with nothing at all — blanking the histogram, chips, transcript
+    tinting and timeline band for the whole run. The scores are pure and owe
+    nothing to the LLM, so they ride along with the generating flag."""
+    _seed_friction_entry()  # segments present, no stored friction
+    transcripts_server._orchestrator._in_flight["friction"].add("P01")
+
+    resp = tr_client.get("/transcripts/api/agent/friction/P01")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is False and data["generating"] is True
+    fr = data["friction"]
+    assert fr["deterministic"] is True, (
+        "the mid-run payload must be flagged so the poll does not mistake it "
+        "for a completed run"
+    )
+    assert len(fr["segments"]) == 1 and "score" in fr["segments"][0]
+    assert fr["moments"] == [], "only the LLM half waits on the agent"
+
+
+def test_friction_generating_without_segments_carries_no_scores(
+    tr_client, _agent_state_clean
+):
+    """Nothing to score → the generating response stays bare rather than
+    shipping an empty friction object the client would render as a result."""
+    transcripts_server._manifest["source_transcripts"]["P01"] = {"summary": "s"}
+    transcripts_server._orchestrator._in_flight["friction"].add("P01")
+
+    data = tr_client.get("/transcripts/api/agent/friction/P01").get_json()
+    assert data["generating"] is True
+    assert "friction" not in data
+
+
+def test_summary_generating_never_carries_friction_scores(
+    tr_client, _agent_state_clean
+):
+    """The deterministic ride-along is friction-only; it must not leak onto the
+    other agents' generating responses."""
+    # No stored summary, or the result branch would answer before the flag.
+    _seed_friction_entry(summary="")
+    transcripts_server._orchestrator._in_flight["summary"].add("P01")
+
+    data = tr_client.get("/transcripts/api/agent/summary/P01").get_json()
+    assert data["generating"] is True
+    assert "friction" not in data
+
+
 def test_friction_get_404_when_no_segments(tr_client, _agent_state_clean):
     """No segments → nothing to score → 404 (the deterministic fallback needs
     segments)."""
