@@ -2698,11 +2698,12 @@
   // (see _process_intake_item in server.py).
 
   // Mirrors Studio's #trIntakeClusterThreshold default so identical marks
-  // cluster identically on both pages. The pad is Transcripts-only: a mark's
-  // segment boundaries sit tight against the speech, so an unpadded cut clips
-  // the first and last word. A 0s pad reproduces Studio's exact spans.
+  // cluster identically on both pages. Padding defaults to 0 for the same
+  // reason — the spans then match Studio's exactly — but is exposed because a
+  // mark's segment boundaries sit tight against the speech, and a tight cut can
+  // clip the first or last word.
   var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
-  var CLIP_MARKS_DEFAULT_PAD_SECONDS = 1;
+  var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
 
   // { done, failed, total, abort } while a batch streams; null when idle. The
   // modal can be dismissed mid-run (the run continues) and reopened onto the

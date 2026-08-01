@@ -259,17 +259,17 @@
       </div>
       <p class="clip-marks-message">Cut one clip per manually marked line. Marks closer together than the merge window are combined into a single clip.</p>
       <div class="clip-marks-fields">
-        <label class="clip-marks-label">Scope
+        <label class="clip-marks-label" data-tooltip="Clip only the participant open on this page, or every participant that has marks.">Scope
           <select id="clipMarksScope" class="clip-marks-select">
             <option value="current">Current participant</option>
             <option value="all">All participants</option>
           </select>
         </label>
-        <label class="clip-marks-label">Merge window (s)
+        <label class="clip-marks-label" data-tooltip="Marks less than this far apart become one clip covering all of them. 0 gives one clip per marked line.">Merge window (s)
           <input id="clipMarksGap" type="number" min="0" max="120" step="1" value="10" class="clip-marks-input" autocomplete="off">
         </label>
-        <label class="clip-marks-label">Padding (s)
-          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="1" class="clip-marks-input" autocomplete="off">
+        <label class="clip-marks-label" data-tooltip="Extra seconds kept before and after each clip, so a cut on a tight segment boundary does not clip the first or last word.">Padding (s)
+          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="0" class="clip-marks-input" autocomplete="off">
         </label>
       </div>
       <p id="clipMarksSummary" class="clip-marks-summary"></p>
