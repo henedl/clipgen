@@ -636,3 +636,19 @@ def test_the_band_tooltip_names_which_score_it_is_showing():
     assert ".friction-cat-badge--ai" in _CSS, (
         "agent-labelled categories need a treatment distinct from the scorer's"
     )
+
+
+def test_the_wip_badge_is_shared_not_forked():
+    """The Friction tab is the second consumer of Overview's WIP pill, so the
+    rule moved to tokens.css. A page-local copy is the drift this project keeps
+    re-fixing: tokens.css loads first, so an equal-specificity fork silently
+    wins on source order in whichever page defines it."""
+    assert ".cg-wip-badge {" in read("tokens.css")
+    assert 'class="cg-wip-badge"' in _HTML, "the Friction tab carries the badge"
+    for page in ("transcripts.css", "overview.css"):
+        assert ".cg-wip-badge {" not in read(page), (
+            f"{page} must not redefine the shared badge"
+        )
+    assert "ov-wip-badge" not in read("overview.html"), (
+        "Overview's copy was migrated onto the shared class"
+    )

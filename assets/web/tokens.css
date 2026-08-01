@@ -912,6 +912,27 @@ audio.cg-audiotrack { display: none; }
   color: var(--accent-fg);
 }
 
+/* ---- "WIP" pill ----
+ * Marks a tab whose surface is still settling, so a user can tell a rough edge
+ * from a bug. Sits inside the tab button next to its label; pair it with a
+ * data-tooltip on the pill saying what specifically is in progress. Shared
+ * rather than page-local because it has more than one consumer (Overview's Map
+ * and Reports tabs, Transcripts' Friction tab) and two copies would drift. */
+.cg-wip-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: var(--space-1-5);
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-hover);
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.6;
+}
+
 /* ---- Segmented capsule track (built by createSegTrack in utils.js) ----
  * Mutually exclusive options in a pill track; an absolutely-positioned capsule
  * thumb slides to the selected segment. Segments are equal-width grid columns,
