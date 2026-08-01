@@ -55,6 +55,7 @@ import config
 import files
 import friction
 import ollama_client
+import remux_server
 import thinking_agents
 import transcripts
 import utils
@@ -225,6 +226,11 @@ utils.register_static_routes(
     icons=True,
 )
 
+remux_server.register_remux_routes(
+    transcripts_bp,
+    lambda: _participant_source["sheet_context"] if _participant_source else None,
+)
+
 
 # ---- Participants ----
 
@@ -296,6 +302,7 @@ def api_participants() -> FlaskResponse:
                 "video_paths": video_paths,
                 "has_video": p["has_video"],
                 "in_sheet": p.get("in_sheet", False),
+                "browser_seekable": p.get("browser_seekable"),
                 "has_transcript": has_transcript,
                 "segment_count": len(entry.get("segments", [])),
                 "video_filename": Path(first_path).name,

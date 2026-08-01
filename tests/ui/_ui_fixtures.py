@@ -38,6 +38,10 @@ REPORT_PATH = ROOT / "ui-report.json"
 
 STUDY = "clipgen-ui"  # already normalize_study_name-stable: lowercase, no spaces
 PARTICIPANTS = ("P01", "P02")
+# Written as a fragmented MP4 so the fragmented-recording banner has a real
+# subject on Transcripts / Composer / Screenspace. The container shape is the
+# only difference — the frames, duration and probes are identical to P01's.
+FRAGMENTED_PARTICIPANT = "P02"
 CLIP_SECONDS = 20
 
 
@@ -123,14 +127,25 @@ def ensure_inputs() -> Path:
     for participant in PARTICIPANTS:
         path = video_path(participant)
         if not path.is_file() or path.stat().st_size == 0:
-            _make_testsrc_video(path)
+            _make_testsrc_video(path, fragmented=participant == FRAGMENTED_PARTICIPANT)
     if not workbook_path().is_file():
         _make_workbook(workbook_path())
     return INPUT_DIR
 
 
-def _make_testsrc_video(path: Path) -> None:
-    """Encode a synthetic clip. Recipe lifted from tests/screenspace/test_scan_pipeline.py."""
+def _make_testsrc_video(path: Path, fragmented: bool = False) -> None:
+    """Encode a synthetic clip. Recipe lifted from tests/screenspace/test_scan_pipeline.py.
+
+    ``fragmented`` writes the OBS-style fragmented MP4 that browsers cannot seek,
+    so the media banner has something to warn about. It is deliberately *not* the
+    default participant: the six-page smoke keeps its ordinary baseline and the
+    banner is exercised by selecting :data:`FRAGMENTED_PARTICIPANT`.
+    """
+    fragment_flags = (
+        ["-movflags", "frag_keyframe+empty_moov+default_base_moof"]
+        if fragmented
+        else []
+    )
     subprocess.run(
         [
             "ffmpeg",
@@ -147,6 +162,7 @@ def _make_testsrc_video(path: Path) -> None:
             "30",
             "-pix_fmt",
             "yuv420p",
+            *fragment_flags,
             str(path),
         ],
         check=True,

@@ -194,6 +194,11 @@ COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
 # to commit the out point. Mirrored to the frontend via
 # utils.get_frontend_config() — do not hardcode this in JS.
 COMPOSER_DOUBLE_CLICK_CUTS: bool = True
+# Warn on pages that play source video when a recording is a fragmented MP4 the
+# browser cannot seek (OBS "fragmented recording"), and offer the one-click
+# remux that fixes it. Mirrored to the frontend via utils.get_frontend_config()
+# — do not hardcode this in JS.
+MEDIA_CONTAINER_WARNING: bool = True
 # Cap on the WAV extracted for Composer's marker/cut audio scrub — markers can
 # span minutes (unlike Studio clips). Mirrored to the frontend via
 # utils.get_frontend_config() so the client skips scrubbing longer spans and
@@ -691,6 +696,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "STUDIO_CELL_EXPAND_HOVER": "Expand overflowing timestamp cells on hover in the Sheet Preview.",
     "STUDIO_CARD_SCRUBBER": "Hover a queue card's thumbnail to scrub through frames, hear the clip's audio, and see a waveform overlay.",
     "COMPOSER_DOUBLE_CLICK_CUTS": "Double-click the Composer timeline to set the in point, then double-click again to commit the out point.",
+    "MEDIA_CONTAINER_WARNING": "Warn when a source recording is a fragmented MP4 that browsers cannot seek (OBS 'fragmented recording'), and offer a one-click remux to fix it.",
     "STUDIO_METADATA_CLUSTER_SCREENSPACE": "In the Metadata tab, count Screenspace data as time-adjacent clusters instead of raw events, so a dense scan doesn't overshadow the spreadsheet and transcript streams. On by default.",
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
@@ -1136,6 +1142,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
     "COMPOSER_DOUBLE_CLICK_CUTS": {
         "tab": "Composer",
         "group": "Timeline",
+        "type": "bool",
+    },
+    "MEDIA_CONTAINER_WARNING": {
+        "tab": "General",
+        "group": "Media",
         "type": "bool",
     },
     "RICH_COLORS": {"tab": "CLI", "group": "Terminal Output", "type": "bool"},

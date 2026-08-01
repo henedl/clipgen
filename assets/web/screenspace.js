@@ -1143,6 +1143,15 @@
     qs("#frameEmpty").classList.remove("hidden");
     setInfoParticipant(pid);
 
+    // Fragmented-MP4 warning + remux action, at the top of the info panel.
+    if (window.clipgenMediaBanner) {
+      var banded = null;
+      for (var bi = 0; bi < state.participants.length; bi++) {
+        if (state.participants[bi].id === pid) { banded = state.participants[bi]; break; }
+      }
+      window.clipgenMediaBanner.show(qs(".ss-info-content"), banded);
+    }
+
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;

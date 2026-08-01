@@ -232,6 +232,26 @@ def discover_numbered_source_videos(
     return [p for _, p in matches]
 
 
+def _browser_seekable(video_paths: list[str]) -> bool | None:
+    """Can a browser seek every one of this participant's source files?
+
+    ``False`` as soon as any part is a fragmented MP4 — a participant whose
+    second part is unseekable is just as broken as one whose first part is.
+    ``None`` means "unknown" (non-MP4 container, missing file) and the UI must
+    say nothing; see :func:`video.probe_container_seekability`.
+    """
+    import video  # lazy: video imports files, so this cannot be a top-level import
+
+    saw_unknown = False
+    for path in video_paths:
+        probed = video.probe_container_seekability(path)
+        if probed is None:
+            saw_unknown = True
+        elif not probed["browser_seekable"]:
+            return False
+    return None if saw_unknown else True
+
+
 def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]]:
     """Return every participant the tools should list — sheet columns, then disk.
 
@@ -256,9 +276,10 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
     (which always derives its own) would be a silent-mismatch bug.
 
     Returns:
-        ``[{"id", "video_paths", "has_video", "in_sheet"}]`` — freshly built dicts.
-        Never the memoized ones ``discover_participant_videos`` returns; those are
-        shared with the Workflows blueprint and must not be stamped on.
+        ``[{"id", "video_paths", "has_video", "in_sheet", "browser_seekable"}]`` —
+        freshly built dicts. Never the memoized ones
+        ``discover_participant_videos`` returns; those are shared with the
+        Workflows blueprint and must not be stamped on.
     """
     import spreadsheet  # lazy: files.py is CLI-hot; spreadsheet pulls in google_api
 
@@ -282,23 +303,27 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
             continue
         seen.add(pid)
         paths = resolve_source_video_paths(study, pid, overrides.get(pid), input_dir)
+        path_strs = [str(p) for p in paths]
         entries.append(
             {
                 "id": pid,
-                "video_paths": [str(p) for p in paths],
+                "video_paths": path_strs,
                 "has_video": paths[0].is_file(),
                 "in_sheet": True,
+                "browser_seekable": _browser_seekable(path_strs),
             }
         )
     for found in utils.discover_participant_videos():  # already sorted by id
         if found["id"] in seen:
             continue
+        found_paths = list(found["video_paths"])  # copy — source is memoized
         entries.append(
             {
                 "id": found["id"],
-                "video_paths": list(found["video_paths"]),  # copy — source is memoized
+                "video_paths": found_paths,
                 "has_video": found["has_video"],
                 "in_sheet": False,
+                "browser_seekable": _browser_seekable(found_paths),
             }
         )
     return entries
