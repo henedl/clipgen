@@ -760,6 +760,11 @@
     }
     if (!p) return;
 
+    // Fragmented-MP4 warning + remux action, above the player.
+    if (window.clipgenMediaBanner) {
+      window.clipgenMediaBanner.show(qs("#videoSection"), p);
+    }
+
     // Clean up previous video state
     var video = qs("#videoPlayer");
     var videoEmpty = qs("#videoEmpty");

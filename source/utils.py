@@ -995,6 +995,7 @@ def get_frontend_config() -> dict[str, Any]:
         "composerAnnotationSpanSeconds": config.COMPOSER_ANNOTATION_SPAN_SECONDS,
         "composerScrubMaxAudioSeconds": config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS,
         "composerDoubleClickCuts": config.COMPOSER_DOUBLE_CLICK_CUTS,
+        "mediaContainerWarning": config.MEDIA_CONTAINER_WARNING,
         "hotkeyOverrides": dict(config.HOTKEY_OVERRIDES),
     }
 

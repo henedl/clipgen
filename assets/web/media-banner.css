@@ -1,0 +1,77 @@
+/* Media banner — shared by Transcripts, Composer and Screenspace.
+   Warns that a source recording is a fragmented MP4 the browser cannot seek,
+   and hosts the remux action. Behaviour lives in media-banner.js.
+
+   Visual recipe follows .fast-scan-label (screenspace.css): a --color-warning
+   tint strip with a mask-image icon and an inline remediation button. */
+
+.media-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, var(--color-border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 10%, transparent);
+}
+
+.media-banner.hidden {
+  display: none;
+}
+
+/* Once the file is fixed the message is informational, not a warning. */
+.media-banner.is-done {
+  color: var(--color-text);
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--sev-positive) 8%, transparent);
+}
+
+.media-banner-icon {
+  flex: none;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+/* min-width: 0 so a long ffmpeg error truncates instead of collapsing the
+   button out of the flex row. */
+.media-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.media-banner-actions {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+}
+
+.media-banner-progress {
+  flex: 1;
+  height: var(--space-1);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+}
+
+.media-banner-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-warning);
+  transition: width var(--duration-fast) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-banner-progress-fill {
+    transition: none;
+  }
+}

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,9 @@ _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
 # Max keyframe gap (seconds) per file; None means "unknown / too sparse to
 # confirm" and callers must treat that as "do not enable keyframe-only decode".
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
+# Container seekability per file; None means "shape not determined" (not an
+# MP4, truncated, unreadable) and callers must stay silent rather than warn.
+_container_seekability_cache: dict[tuple[str, int], dict[str, Any] | None] = {}
 
 # Generic audio-stream handler names muxers emit by default — treated as "no
 # useful name" when labelling audio tracks (fall back to language / ordinal).
@@ -2068,6 +2072,323 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
 
     _keyframe_gap_cache[key] = result
     return result
+
+
+# Top-level boxes scanned before giving up on finding `moov`. A fragmented MP4
+# always writes `moov` before its first `moof`, and a normal MP4 writes at most
+# a handful of boxes (`ftyp`/`free`/`mdat`) before or after it, so the real
+# files need 2-4 iterations. The bound only exists so a corrupt file whose box
+# sizes walk us through garbage can't loop for long.
+_MAX_TOPLEVEL_BOXES = 64
+
+
+def _read_mvhd_duration(body: bytes) -> float | None:
+    """Return the movie duration (seconds) from an ``mvhd`` box body, or None."""
+    if len(body) < 20:
+        return None
+    version = body[0]
+    try:
+        if version == 0:
+            timescale, duration = struct.unpack(">II", body[12:20])
+        else:
+            if len(body) < 32:
+                return None
+            timescale, duration = struct.unpack(">IQ", body[20:32])
+    except struct.error:
+        return None
+    if not timescale:
+        return None
+    return duration / timescale
+
+
+def probe_container_seekability(filepath: str) -> dict[str, Any] | None:
+    """Report whether a browser can seek this container without downloading it.
+
+    OBS's "fragmented recording" mode writes a fragmented MP4: thousands of
+    ``moof``/``mdat`` pairs, an ``mvhd`` duration of 0, and no sample index in
+    ``moov``. ffmpeg reads such a file happily because it picks up the ``mfra``
+    index box at the tail, so every server-side path (probing, scanning, clip
+    cutting, frame extraction) is unaffected. **Browsers do not read ``mfra``.**
+    They see a stream of unknown length: ``video.duration`` is ``Infinity``,
+    ``seekable`` grows only as bytes arrive, and a seek past the buffered range
+    silently lands somewhere else entirely. On a multi-GB recording that makes
+    the page unusable until the whole file has been pulled over the wire.
+
+    Detection is a bounded read of box headers — no ffprobe, no decoding, sub-
+    millisecond even on multi-GB files — because ``moov`` always precedes the
+    fragments and box bodies are skipped by seeking, never read.
+
+    Returns ``{"fragmented", "header_duration", "browser_seekable"}``, or
+    ``None`` when the shape can't be determined: a non-MP4 container (Matroska,
+    WebM, raw QuickTime oddities), a truncated or unreadable file, or a box walk
+    that runs off the rails. ``None`` means *unknown*, not *broken* — callers
+    must stay silent rather than warn, since every non-MP4 source would
+    otherwise be reported as a problem. Cached per ``(resolved_path, mtime)``.
+    """
+    if config.DEBUGGING:
+        # Synthetic "fine" answer so DEBUGGING runs never touch the disk;
+        # mirrors the probe_max_keyframe_gap / probe_video_properties branches.
+        return {"fragmented": False, "header_duration": 300.0, "browser_seekable": True}
+
+    key = _resolved_path_and_mtime(filepath)
+    if key is None:
+        return None
+    if key in _container_seekability_cache:
+        return _container_seekability_cache[key]
+
+    result = _walk_mp4_for_seekability(filepath)
+    _container_seekability_cache[key] = result
+    return result
+
+
+def _walk_mp4_for_seekability(filepath: str) -> dict[str, Any] | None:
+    """Box-walk implementation behind probe_container_seekability()."""
+    try:
+        total = os.path.getsize(filepath)
+        with open(filepath, "rb") as handle:
+            offset = 0
+            for _ in range(_MAX_TOPLEVEL_BOXES):
+                if offset >= total:
+                    break
+                handle.seek(offset)
+                header = handle.read(16)
+                if len(header) < 8:
+                    break
+                size = struct.unpack(">I", header[0:4])[0]
+                box_type = header[4:8]
+                header_size = 8
+                if size == 1:
+                    if len(header) < 16:
+                        break
+                    size = struct.unpack(">Q", header[8:16])[0]
+                    header_size = 16
+                elif size == 0:
+                    # Only legal on the final box: "extends to end of file".
+                    size = total - offset
+                if size < header_size:
+                    break
+                if box_type == b"moov":
+                    return _scan_moov(handle, offset + header_size, offset + size)
+                offset += size
+    except (OSError, struct.error):
+        return None
+    return None
+
+
+def _scan_moov(handle: Any, start: int, end: int) -> dict[str, Any] | None:
+    """Scan a ``moov`` box's direct children for ``mvex`` and ``mvhd``."""
+    fragmented = False
+    header_duration: float | None = None
+    offset = start
+    while offset < end - 8:
+        handle.seek(offset)
+        header = handle.read(8)
+        if len(header) < 8:
+            break
+        size = struct.unpack(">I", header[0:4])[0]
+        box_type = header[4:8]
+        if size < 8:
+            break
+        if box_type == b"mvex":
+            # A movie-extends box is the spec's definition of "fragmented":
+            # sample data lives in later moof boxes, not in moov's tables.
+            fragmented = True
+        elif box_type == b"mvhd":
+            header_duration = _read_mvhd_duration(handle.read(min(size - 8, 32)))
+        offset += size
+    if not fragmented and header_duration is None:
+        # Found moov but neither marker — not a shape we understand well enough
+        # to make a claim about.
+        return None
+    return {
+        "fragmented": fragmented,
+        "header_duration": header_duration,
+        "browser_seekable": not fragmented and bool(header_duration),
+    }
+
+
+# Kept beside the remuxed source until the user discards it. The suffix lands
+# *after* the extension (``study_P15.mp4.orig``) on purpose: the participant
+# scan globs ``*.mp4``, so anything still ending in .mp4 would come back as a
+# second, phantom participant.
+REMUX_ORIGINAL_SUFFIX = ".orig"
+
+_remux_locks: dict[str, threading.Lock] = {}
+_remux_locks_guard = threading.Lock()
+
+
+def _remux_lock(resolved: str) -> threading.Lock:
+    with _remux_locks_guard:
+        lock = _remux_locks.get(resolved)
+        if lock is None:
+            lock = threading.Lock()
+            _remux_locks[resolved] = lock
+        return lock
+
+
+def original_backup_path(filepath: str) -> Path:
+    """Return where :func:`remux_to_faststart` parks this file's original."""
+    return Path(str(filepath) + REMUX_ORIGINAL_SUFFIX)
+
+
+def remux_to_faststart(
+    filepath: str,
+    *,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> tuple[bool, str]:
+    """Rewrite a fragmented recording into a normal, browser-seekable MP4.
+
+    A stream copy — no re-encode, so the picture and audio are bit-identical and
+    the cost is pure I/O (measured ~330 MB/s, i.e. ~11 s for a 3.7 GB capture).
+    All it changes is the container: one contiguous ``mdat`` with a real sample
+    index, and ``+faststart`` to put ``moov`` at the front. See
+    :func:`probe_container_seekability` for why this matters.
+
+    The source is replaced in place and the original parked at
+    ``<name>.mp4.orig`` for the user to discard or restore. Replacing in place is
+    what keeps participant ids stable — writing ``study_P15.remuxed.mp4`` beside
+    the source would make it a second participant.
+
+    Returns ``(ok, message)``. On any failure the source is left exactly as it
+    was: the new file is only swapped in after it has been re-probed and matched
+    against the original's duration, dimensions and stream count, because a
+    silently truncated or half-muxed replacement is far worse than no remux.
+    """
+    src = Path(filepath)
+    backup = original_backup_path(filepath)
+    progress = on_progress or (lambda _fraction: None)
+
+    if not src.is_file():
+        return False, "Source file is missing."
+    if backup.exists():
+        return False, (
+            f"An earlier original is still kept at '{backup.name}'. "
+            "Discard or restore it before remuxing again."
+        )
+
+    before = probe_video_properties(str(src))
+    if before is None:
+        return False, "Could not probe the source file."
+
+    resolved = str(src.resolve())
+    with _remux_lock(resolved):
+        # Re-check under the lock: a racing job may have finished the swap.
+        if backup.exists():
+            return False, "Another remux of this file just completed."
+        # No .mp4 extension — pathlib.glob('*.mp4') matches dotfiles too, so a
+        # hidden name alone would not keep the scratch file out of the
+        # participant list. -f mp4 supplies the format the name no longer does.
+        tmp = src.parent / f".{src.stem}.remux.{os.getpid()}.{threading.get_ident()}"
+        command = [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            config.FFMPEG_LOGLEVEL,
+            "-i",
+            str(src),
+            # Every stream: these recordings routinely carry two audio tracks
+            # (mic + system) and ffmpeg's default mapping would keep only one.
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
+            str(tmp),
+        ]
+        try:
+            result = _run_ffmpeg_with_progress(
+                command,
+                input_file=str(src),
+                output_file=str(tmp),
+                os_error_message="Failed to remux the source video.",
+                on_progress=progress,
+                expected_duration_sec=float(before.get("duration") or 0.0) or 1.0,
+                cancel_flag=cancel_flag,
+            )
+            if result is None:
+                return False, "Remux was cancelled or ffmpeg could not be started."
+            if result.returncode != 0:
+                return False, f"ffmpeg failed: {(result.stderr or '').strip()[:400]}"
+
+            problem = _remux_output_mismatch(tmp, before)
+            if problem is not None:
+                return False, problem
+
+            # Atomic within the directory: both names are on the same filesystem.
+            src.rename(backup)
+            try:
+                tmp.rename(src)
+            except OSError as error:
+                backup.rename(src)  # put the original back, leave no gap
+                return False, f"Could not swap in the remuxed file: {error}"
+        finally:
+            _delete_quietly(tmp)
+
+    return True, f"Remuxed. Original kept as '{backup.name}'."
+
+
+def _remux_output_mismatch(tmp: Path, before: dict[str, Any]) -> str | None:
+    """Return why a remux output must not be swapped in, or None if it is sound."""
+    if not tmp.is_file() or tmp.stat().st_size <= 0:
+        return "Remux produced no output."
+    seekability = probe_container_seekability(str(tmp))
+    if seekability is None or not seekability["browser_seekable"]:
+        return "The remuxed file is still not browser-seekable; keeping the original."
+    after = probe_video_properties(str(tmp))
+    if after is None:
+        return "Could not probe the remuxed file; keeping the original."
+
+    source_duration = float(before.get("duration") or 0.0)
+    new_duration = float(after.get("duration") or 0.0)
+    if source_duration > 0:
+        tolerance = max(1.0, source_duration * 0.01)
+        if abs(new_duration - source_duration) > tolerance:
+            return (
+                f"Remuxed duration ({new_duration:.0f}s) does not match the source "
+                f"({source_duration:.0f}s); keeping the original."
+            )
+    if after.get("audio_track_count") != before.get("audio_track_count"):
+        return (
+            f"Remux kept {after.get('audio_track_count')} audio track(s) but the "
+            f"source has {before.get('audio_track_count')}; keeping the original."
+        )
+    if (after.get("width"), after.get("height")) != (
+        before.get("width"),
+        before.get("height"),
+    ):
+        return "Remuxed dimensions do not match the source; keeping the original."
+    return None
+
+
+def restore_remux_original(filepath: str) -> tuple[bool, str]:
+    """Put a kept ``.orig`` back, discarding the remuxed file."""
+    src = Path(filepath)
+    backup = original_backup_path(filepath)
+    if not backup.is_file():
+        return False, "No kept original to restore."
+    with _remux_lock(str(src.resolve())):
+        try:
+            backup.replace(src)
+        except OSError as error:
+            return False, f"Could not restore the original: {error}"
+    return True, "Original restored."
+
+
+def discard_remux_original(filepath: str) -> tuple[bool, str]:
+    """Delete a kept ``.orig`` once the user is happy with the remux."""
+    backup = original_backup_path(filepath)
+    if not backup.is_file():
+        return False, "No kept original to discard."
+    with _remux_lock(str(Path(filepath).resolve())):
+        try:
+            backup.unlink()
+        except OSError as error:
+            return False, f"Could not delete the original: {error}"
+    return True, "Original deleted."
 
 
 def extract_frame_at_timestamp(

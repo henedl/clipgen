@@ -56,6 +56,7 @@ from flask import Blueprint, Response, request, send_file
 import config
 import files
 import pipeline
+import remux_server
 import utils
 import video
 from server_utils import MediaCache, err, ok, parse_clip_window
@@ -89,6 +90,8 @@ utils.register_static_routes(
     media_error="Input directory not configured",
     icons=True,
 )
+
+remux_server.register_remux_routes(composer_bp, lambda: _sheet_context)
 
 
 # ---- Manifest I/O ----
@@ -190,6 +193,7 @@ def api_participants() -> Any:
                 "id": p["id"],
                 "has_video": True,
                 "in_sheet": p.get("in_sheet", False),
+                "browser_seekable": p.get("browser_seekable"),
                 "parts": parts or [{"name": Path(vp).name} for vp in p["video_paths"]],
                 "total_duration": (
                     sum(part["duration"] for part in parts) if parts else None

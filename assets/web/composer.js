@@ -325,6 +325,10 @@
   function selectParticipant(pid) {
     var p = findParticipant(pid);
     if (!p) return;
+    // Fragmented-MP4 warning + remux action, above the timeline.
+    if (window.clipgenMediaBanner) {
+      window.clipgenMediaBanner.show(qs("#coTimelineSection"), p);
+    }
     cancelPendingSeek();
     state.participant = pid;
     setStoredUIStateField("composer", "participant", pid);

@@ -68,6 +68,7 @@ from flask import Blueprint, Response, jsonify, request, send_file
 
 import config
 import files
+import remux_server
 import screenspace
 import spreadsheet
 import utils
@@ -233,6 +234,11 @@ utils.register_static_routes(
     media_dir_getter=lambda: _output_dir,
     media_error="Output directory not configured",
     icons=True,
+)
+
+remux_server.register_remux_routes(
+    screenspace_bp,
+    lambda: _participant_source["sheet_context"] if _participant_source else None,
 )
 
 
