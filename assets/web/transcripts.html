@@ -250,6 +250,40 @@
     </div>
   </div>
 
+  <!-- Clip marked lines: parameters for the Quick action that cuts one clip per
+       cluster of marks through Studio's intake generation endpoint. -->
+  <div id="clipMarksModal" class="modal cg-modal-overlay hidden">
+    <div class="modal-content clip-marks-modal">
+      <div class="modal-header">
+        <h3>Clip Marked Lines</h3>
+      </div>
+      <p class="clip-marks-message">Cut one clip per manually marked line. Marks closer together than the merge window are combined into a single clip.</p>
+      <div class="clip-marks-fields">
+        <label class="clip-marks-label">Scope
+          <select id="clipMarksScope" class="clip-marks-select">
+            <option value="current">Current participant</option>
+            <option value="all">All participants</option>
+          </select>
+        </label>
+        <label class="clip-marks-label">Merge window (s)
+          <input id="clipMarksGap" type="number" min="0" max="120" step="1" value="10" class="clip-marks-input" autocomplete="off">
+        </label>
+        <label class="clip-marks-label">Padding (s)
+          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="1" class="clip-marks-input" autocomplete="off">
+        </label>
+      </div>
+      <p id="clipMarksSummary" class="clip-marks-summary"></p>
+      <div id="clipMarksProgress" class="clip-marks-progress hidden">
+        <div class="clip-marks-bar"><div id="clipMarksBarFill" class="clip-marks-bar-fill"></div></div>
+        <p id="clipMarksProgressText" class="clip-marks-progress-text"></p>
+      </div>
+      <div class="clip-marks-actions">
+        <button id="clipMarksCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="clipMarksConfirm" type="button" class="btn btn-small btn-primary">Generate</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Mark popover (shared, repositioned per use) -->
   <div id="markPopover" class="mark-popover cg-menu hidden">
     <div class="mark-popover-categories"></div>
@@ -274,6 +308,7 @@
   <script src="settings-modal.js" defer></script>
   <script src="command-palette.js" defer></script>
   <script src="video-controls.js" defer></script>
+  <script src="intake-cluster.js" defer></script>
   <script src="transcripts.js" defer></script>
   <script src="transcripts-corrections.js" defer></script>
   <script src="transcripts-search.js" defer></script>

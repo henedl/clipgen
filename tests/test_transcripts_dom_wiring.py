@@ -55,6 +55,16 @@ REQUIRED_IDS = [
     "frictionJumpPrev",
     "frictionJumpNext",
     "frictionStaleDot",
+    "clipMarksModal",
+    "clipMarksScope",
+    "clipMarksGap",
+    "clipMarksPad",
+    "clipMarksSummary",
+    "clipMarksProgress",
+    "clipMarksBarFill",
+    "clipMarksProgressText",
+    "clipMarksCancel",
+    "clipMarksConfirm",
 ]
 
 
@@ -354,4 +364,94 @@ def test_pill_nav_cursor_survives_a_pane_rebuild_by_identity():
     )
     assert "pillOptionsCursor +=" not in _JS, (
         "cursor index arithmetic is the bug this replaced — restore by nav id"
+    )
+
+
+# ---- Clip Marked Lines (Quick action -> Studio intake generation) ----
+
+
+def test_clip_marks_loads_the_shared_clusterer_before_the_hub():
+    """intake-cluster.js is not part of the transcripts-*.js glob, so a missing
+    or late <script> is a runtime ReferenceError the concat-based scans above
+    cannot see — the hub reads window.ClipgenIntakeCluster on the first open."""
+    assert "intake-cluster.js" in _HTML, (
+        "transcripts.html must load intake-cluster.js for the clip-marks action"
+    )
+    assert _HTML.index("intake-cluster.js") < _HTML.index('src="transcripts.js"'), (
+        "intake-cluster.js must load before the page hub"
+    )
+
+
+def test_clip_marks_previews_and_cuts_from_one_clusterer():
+    """The summary tells the user how many clips they will get. If the preview
+    and the payload clustered differently, that number would be a lie — so both
+    go through the shared helper, and neither hand-rolls a merge loop."""
+    assert _JS.count("ClipgenIntakeCluster.clusterTranscriptMarks(") == 1, (
+        "clustering belongs in one place (_clipMarksClusters); the summary and "
+        "the payload both call it"
+    )
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_clipMarksClusters()" in body
+
+
+def test_clip_marks_sends_the_text_and_label_studio_drops():
+    """server.py's _process_intake_item titles a transcript clip from label ->
+    truncated text -> category. Studio's queue path omits both, so its clips are
+    all named after the category; sending them is the whole reason these clips
+    read as anything useful."""
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert '"../studio/api/generate-intake"' in body
+    assert 'source: "transcript"' in body
+    for key in ("text:", "label:", "mark_ids:"):
+        assert key in body, f"the intake payload must carry {key}"
+
+
+def test_clip_marks_pads_the_span_without_going_negative():
+    """A mark's segment boundaries sit tight against the speech, so the cut is
+    padded — but a mark near t=0 would otherwise ask ffmpeg for a negative
+    start."""
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "Math.max(0, c.start - pad)" in body, (
+        "the padded start must be floored at zero"
+    )
+
+
+def test_clip_marks_ignores_the_trailing_cancelled_line():
+    """/api/generate-intake closes a cancelled stream with {"cancelled": true},
+    which has no index. Counting it as a completed item over-reports progress by
+    one (the bug live in overview-reports.js)."""
+    start = _JS.index("function submitClipMarks(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'typeof data.index !== "number"' in body, (
+        "the NDJSON handler must bail on lines with no index"
+    )
+
+
+def test_clip_marks_modal_classes_are_all_styled():
+    """Standing toggle-completeness check: an unstyled modal class ships a
+    dialog that renders as unlaid-out text with no error anywhere."""
+    for cls in re.findall(r'class="([^"]*clip-marks[^"]*)"', _HTML):
+        for name in cls.split():
+            if name.startswith("clip-marks"):
+                assert "." + name in _CSS, f".{name} is used in HTML but never styled"
+
+
+def test_clip_marks_run_outlives_its_dialog():
+    """Escape/backdrop only close the modal; the batch keeps streaming and the
+    quick action must reopen onto live progress. Storing the run inside the open
+    handler (or clearing it on close) would strand a running job with no way to
+    stop it."""
+    assert "var _clipMarksRun = null;" in _JS
+    close_start = _JS.index("function closeClipMarksModal(")
+    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
+    assert "_clipMarksRun" not in close_body, (
+        "closing the dialog must not touch the in-flight run"
+    )
+    open_start = _JS.index("function openClipMarksModal(")
+    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
+    assert "if (_clipMarksRun) return;" in open_body, (
+        "reopening mid-run must show progress, not re-fetch and reset the pickers"
     )

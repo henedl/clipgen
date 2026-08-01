@@ -2687,6 +2687,228 @@
     });
   }
 
+  // ---- Clip marked lines ----
+  //
+  // Cuts one clip per cluster of manually marked lines through Studio's
+  // ../studio/api/generate-intake — the same endpoint Studio's Transcript
+  // Intake tab uses, so the output lands in clipgen_manifest.json exactly as if
+  // it had been queued there, and the page needs no generation backend of its
+  // own. Unlike Studio's queue path we also send `text`/`label`, which is what
+  // gives each artifact a readable description instead of a bare category
+  // (see _process_intake_item in server.py).
+
+  // Mirrors Studio's #trIntakeClusterThreshold default so identical marks
+  // cluster identically on both pages. The pad is Transcripts-only: a mark's
+  // segment boundaries sit tight against the speech, so an unpadded cut clips
+  // the first and last word. A 0s pad reproduces Studio's exact spans.
+  var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
+  var CLIP_MARKS_DEFAULT_PAD_SECONDS = 1;
+
+  // { done, failed, total, abort } while a batch streams; null when idle. The
+  // modal can be dismissed mid-run (the run continues) and reopened onto the
+  // live progress, so this outlives the dialog.
+  var _clipMarksRun = null;
+  // Valid resolved marks, refetched every time the modal opens.
+  var _clipMarksMarks = [];
+
+  function _clipMarksScopedMarks() {
+    var scope = (qs("#clipMarksScope") || {}).value;
+    if (scope !== "current") return _clipMarksMarks;
+    var pid = state.selectedParticipant;
+    return _clipMarksMarks.filter(function (m) { return m.participant === pid; });
+  }
+
+  function _clipMarksNumber(sel, fallback, min, max) {
+    var raw = parseFloat((qs(sel) || {}).value);
+    if (isNaN(raw)) return fallback;
+    return Math.min(max, Math.max(min, raw));
+  }
+
+  // The preview and the payload cluster through the same shared helper, so the
+  // count the user reads is the number of clips they get.
+  function _clipMarksClusters() {
+    var marks = _clipMarksScopedMarks();
+    if (!marks.length) return [];
+    var gap = _clipMarksNumber("#clipMarksGap", CLIP_MARKS_DEFAULT_GAP_SECONDS, 0, 120);
+    return window.ClipgenIntakeCluster.clusterTranscriptMarks(marks, gap);
+  }
+
+  function renderClipMarksSummary() {
+    var summaryEl = qs("#clipMarksSummary");
+    var confirmBtn = qs("#clipMarksConfirm");
+    if (!summaryEl || !confirmBtn) return;
+    if (_clipMarksRun) return; // progress block owns the copy while a run streams
+    var marks = _clipMarksScopedMarks();
+    if (!marks.length) {
+      var pid = state.selectedParticipant;
+      var scope = (qs("#clipMarksScope") || {}).value;
+      summaryEl.textContent =
+        scope === "current" && pid
+          ? "No marked lines in " + pid + " yet."
+          : "No marked lines yet — mark a line with M or the gutter dot.";
+      confirmBtn.disabled = true;
+      return;
+    }
+    var clusters = _clipMarksClusters();
+    summaryEl.textContent =
+      clipgenPluralUnit(marks.length, "marked line", "marked lines") +
+      " → " +
+      clipgenPluralUnit(clusters.length, "clip", "clips");
+    confirmBtn.disabled = false;
+  }
+
+  // Both option labels carry live counts so the scope choice and its
+  // consequence are legible in one place.
+  function _renderClipMarksScopeOptions() {
+    var sel = qs("#clipMarksScope");
+    if (!sel || sel.options.length < 2) return;
+    var pid = state.selectedParticipant;
+    var mine = pid
+      ? _clipMarksMarks.filter(function (m) { return m.participant === pid; }).length
+      : 0;
+    sel.options[0].textContent =
+      (pid ? "Current participant (" + pid + ")" : "Current participant") +
+      " — " + clipgenPluralUnit(mine, "mark", "marks");
+    sel.options[0].disabled = !pid;
+    sel.options[1].textContent =
+      "All participants — " + clipgenPluralUnit(_clipMarksMarks.length, "mark", "marks");
+    if (!pid) sel.value = "all";
+  }
+
+  function _renderClipMarksProgress() {
+    var wrap = qs("#clipMarksProgress");
+    var fill = qs("#clipMarksBarFill");
+    var text = qs("#clipMarksProgressText");
+    var confirmBtn = qs("#clipMarksConfirm");
+    var cancelBtn = qs("#clipMarksCancel");
+    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
+    var run = _clipMarksRun;
+    wrap.classList.toggle("hidden", !run);
+    confirmBtn.classList.toggle("hidden", !!run);
+    cancelBtn.textContent = run ? "Stop" : "Cancel";
+    if (!run) return;
+    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
+    fill.style.width = pct + "%";
+    text.textContent =
+      "Clipping… " + run.done + "/" + run.total +
+      (run.failed ? " (" + run.failed + " failed)" : "");
+  }
+
+  function openClipMarksModal() {
+    var modal = qs("#clipMarksModal");
+    if (!modal) return;
+    modal.classList.remove("hidden");
+    openBlockingModal(modal, {
+      onEscape: closeClipMarksModal,
+      onBackdropClick: closeClipMarksModal,
+    });
+    _renderClipMarksProgress();
+    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
+    if (_clipMarksRun) return;
+    qs("#clipMarksSummary").textContent = "Loading marks…";
+    qs("#clipMarksConfirm").disabled = true;
+    apiGet("api/marks")
+      .then(function (data) {
+        _clipMarksMarks = data.ok
+          ? (data.marks || []).filter(function (m) { return m.valid; })
+          : [];
+        _renderClipMarksScopeOptions();
+        renderClipMarksSummary();
+      })
+      .catch(function () {
+        qs("#clipMarksSummary").textContent = "Could not load marks.";
+      });
+  }
+
+  function closeClipMarksModal() {
+    var modal = qs("#clipMarksModal");
+    if (!modal) return;
+    closeBlockingModal(modal);
+    modal.classList.add("hidden");
+  }
+
+  function submitClipMarks() {
+    if (_clipMarksRun) return;
+    var clusters = _clipMarksClusters();
+    if (!clusters.length) return;
+    var pad = _clipMarksNumber("#clipMarksPad", CLIP_MARKS_DEFAULT_PAD_SECONDS, 0, 10);
+    // Only the start needs clamping — ffmpeg stops at EOF, and a multi-video
+    // participant's span is bounded when it is mapped onto the timeline.
+    var items = clusters.map(function (c) {
+      return {
+        participant: c.participant,
+        start: Math.max(0, c.start - pad),
+        end: c.end + pad,
+        event_type: c.category || "transcript",
+        event_ids: [],
+        source: "transcript",
+        mark_ids: c.marks.map(function (m) { return m.id; }),
+        text: c.text || "",
+        label: c.label || "",
+      };
+    });
+
+    var run = { done: 0, failed: 0, total: items.length, abort: new AbortController() };
+    _clipMarksRun = run;
+    _renderClipMarksProgress();
+
+    function handleLine(line) {
+      var data;
+      try { data = JSON.parse(line); } catch (_) { return; }
+      // The trailing {"cancelled": true} line carries no index — this also
+      // keeps it out of the completion tally.
+      if (!data || typeof data.index !== "number") return;
+      run.done++;
+      if (!data.ok) run.failed++;
+      _renderClipMarksProgress();
+    }
+
+    function finish(message) {
+      _clipMarksRun = null;
+      _renderClipMarksProgress();
+      closeClipMarksModal();
+      showToast(message);
+    }
+
+    fetch("../studio/api/generate-intake", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items, format: "clip" }),
+      signal: run.abort.signal,
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("Server error " + response.status);
+        return readNDJSONStream(response, handleLine).then(function () {
+          var made = run.done - run.failed;
+          finish(
+            run.failed
+              ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
+              : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
+          );
+        });
+      })
+      .catch(function (err) {
+        var aborted = err && (err.name === "AbortError" || err.code === 20);
+        finish(aborted ? "Clip generation cancelled" : "Clip generation failed: " + (err && err.message));
+      });
+  }
+
+  function onClipMarksCancel() {
+    if (!_clipMarksRun) {
+      closeClipMarksModal();
+      return;
+    }
+    apiPost("../studio/api/generate-intake/cancel", {}).catch(function () {});
+    _clipMarksRun.abort.abort();
+  }
+
+  function initClipMarksModal() {
+    qs("#clipMarksCancel").addEventListener("click", onClipMarksCancel);
+    qs("#clipMarksConfirm").addEventListener("click", submitClipMarks);
+    qs("#clipMarksScope").addEventListener("change", renderClipMarksSummary);
+    qs("#clipMarksGap").addEventListener("input", renderClipMarksSummary);
+  }
+
   // ---- Boot ----
 
   function runEmbedSubtitle() {
@@ -2763,6 +2985,14 @@
           title: hasAny
             ? "Mux every participant's transcript into a subtitled copy of their video"
             : "Transcribe at least one video to enable this.",
+        },
+        {
+          icon: "scissors",
+          label: "Clip Marked Lines…",
+          action: openClipMarksModal,
+          // Never gated: the modal reports the mark count and disables its own
+          // Generate button, which keeps the menu free of an async mark fetch.
+          title: "Cut a clip for every manually marked line",
         },
         window.ClipgenExportActions.exportQuickAction(),
       ]);
@@ -2861,6 +3091,7 @@
     initPillOutsideClick();
     initPillWheelScroll();
     initCorrectionsModal();
+    initClipMarksModal();
     initVideoPlayer();
     initVideoSync();
     initTimelineCanvas();

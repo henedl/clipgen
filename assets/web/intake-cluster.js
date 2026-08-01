@@ -1,12 +1,13 @@
-/* Shared intake clustering for Studio.
+/* Shared intake clustering.
  *
- * Pure grouping helpers used by the Studio page (studio.js) and its sub-tabs
- * (convergence.js, metadata.js) to collapse raw Screenspace events and
- * Transcript marks into time-adjacent clusters. No DOM, no module state —
- * each function takes its data plus a threshold (in seconds) and returns a
- * fresh list of clusters.
+ * Pure grouping helpers that collapse raw Screenspace events and Transcript
+ * marks into time-adjacent clusters. No DOM, no module state — each function
+ * takes its data plus a threshold (in seconds) and returns a fresh list of
+ * clusters. Consumers: Studio (studio.js + its sub-tabs convergence.js /
+ * metadata.js), Composer, and the Transcripts "Clip Marked Lines" action, which
+ * clusters the same way so identical marks yield identical spans on every page.
  *
- * Loaded before studio.js so the consumers can read it on init.
+ * Loaded before each page's hub script so consumers can read it on init.
  *
  * Public API on window.ClipgenIntakeCluster:
  *   clusterIntakeEvents(events, thresholdSec)    — group Screenspace events by
