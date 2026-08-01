@@ -164,10 +164,9 @@
     { id: "workflows.focusSelector",   section: "workflows", group: "Blueprint", label: "Focus blueprint selector", combos: ["Shift+B"] },
     { id: "workflows.deleteBlueprint", section: "workflows", group: "Blueprint", label: "Delete blueprint", combos: ["Mod+Shift+Backspace"] },
 
-    { id: "overview.tabMap",         section: "overview", group: "Tabs", label: "Show Map tab", combos: ["1"] },
+    { id: "overview.tabMetadata",    section: "overview", group: "Tabs", label: "Show Metadata tab", combos: ["1"] },
     { id: "overview.tabConvergence", section: "overview", group: "Tabs", label: "Show Convergence tab", combos: ["2"] },
-    { id: "overview.tabMetadata",    section: "overview", group: "Tabs", label: "Show Metadata tab", combos: ["3"] },
-    { id: "overview.tabReports",     section: "overview", group: "Tabs", label: "Show Reports tab", combos: ["4"] },
+    { id: "overview.tabReports",     section: "overview", group: "Tabs", label: "Show Reports tab", combos: ["3"] },
     { id: "overview.zonePrev",       section: "overview", group: "Convergence", label: "Previous convergence zone", combos: ["ArrowLeft"] },
     { id: "overview.zoneNext",       section: "overview", group: "Convergence", label: "Next convergence zone", combos: ["ArrowRight"] },
 

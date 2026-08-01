@@ -809,11 +809,9 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
     as applying to that participant — valid timestamps or plain cell text:
     ``{"participant", "category", "severity", "text", "timestamps": N,
     "seconds": [start_seconds, ...]}`` (text-only cells carry ``timestamps: 0``
-    and empty ``seconds``). Injected into overview.py via
-    ``overview.configure()`` (the Map's feature matrix ignores records without
-    timestamps) and into thinking_agents via ``thinking_agents.configure()``
-    (the report agent reads ``text``), so both work off live sheet state — no
-    artifact generation required.
+    and empty ``seconds``). Injected into thinking_agents via
+    ``thinking_agents.configure()`` (the report agent reads ``text``), so it
+    works off live sheet state — no artifact generation required.
     """
     if _sheet_context is None:
         return []
@@ -3383,14 +3381,9 @@ def _init_combined_state(
         sheet_context=_sheet_context,
     )
 
-    import overview
-
-    overview.configure(observation_rows_getter=_sheet_observation_rows)
-
     # The report thinking agent reads sheet observations and transcript marks,
-    # both of which live in other modules' process state — inject them the same
-    # way overview gets its observation rows (import cycles rule out direct
-    # imports from thinking_agents).
+    # both of which live in other modules' process state — inject them (import
+    # cycles rule out direct imports from thinking_agents).
     import thinking_agents
 
     thinking_agents.configure(

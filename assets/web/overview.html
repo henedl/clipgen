@@ -33,9 +33,6 @@
     <nav class="subheader-tabs" role="tablist" aria-label="Overview tabs">
       <button class="preview-tab active" type="button" role="tab" data-tab="metadata" data-hotkey="overview.tabMetadata">Metadata</button>
       <button class="preview-tab" type="button" role="tab" data-tab="convergence" data-hotkey="overview.tabConvergence">Convergence</button>
-      <button class="preview-tab" type="button" role="tab" data-tab="map" data-hotkey="overview.tabMap">Map
-        <span class="cg-wip-badge" data-tooltip="The similarity map is a work in progress">WIP</span>
-      </button>
       <button class="preview-tab" type="button" role="tab" data-tab="reports" data-hotkey="overview.tabReports">Reports
         <span class="cg-wip-badge" data-tooltip="The mini-report is a work in progress">WIP</span>
       </button>
@@ -51,127 +48,6 @@
       </button>
     </div>
   </header>
-
-  <!-- Map tab — three-pane scaffold: lens/outlier sidebar · 3D canvas ·
-       explain panel. The scene is a similarity space: participants positioned
-       by PCA over weighted, z-scored feature vectors so distance reads as
-       "how alike". All math runs client-side (overview-map.js); the server
-       only ships the raw feature matrix from /overview/api/data. -->
-  <div id="mapPanel" class="hidden">
-  <main id="mapShell">
-    <aside id="mapSidebar" aria-label="Similarity lens and outliers">
-      <div class="map-sidebar-header">Similarity lens</div>
-      <p class="map-hint">Weight what "similar" means. Sliders re-layout the
-        space instantly.</p>
-      <div id="mapWeights" class="map-weights"></div>
-
-      <!-- Layout mode: PCA similarity space (default) or manual axes — pick
-           any feature for X/Y/Z plus optional Size and Color dimensions
-           (a 5D scatter). overview-map.js renders the controls. -->
-      <div class="map-sidebar-header">Layout</div>
-      <div id="mapLayoutMode" class="map-layout-mode"></div>
-      <div id="mapAxisPickers" class="map-axis-pickers hidden"></div>
-
-      <div class="map-sidebar-header">Layers</div>
-      <div id="mapLayers" class="map-layers"></div>
-
-      <!-- k selector + status for the Cluster hulls layer (shown while the
-           layer toggle is on; overview-map.js wires it). -->
-      <div id="mapClusterControls" class="map-cluster-controls hidden">
-        <label class="map-cluster-k">k
-          <select id="mapClusterK" aria-label="Cluster count">
-            <option value="0" selected>auto</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4</option>
-            <option value="5">5</option>
-          </select>
-        </label>
-        <span id="mapClusterInfo"></span>
-      </div>
-
-      <!-- Active "color by" choropleth (click the chip to restore the
-           outlier ramp); populated by overview-map.js when a feature name
-           is clicked in the explain panel or axis legend. -->
-      <div id="mapColorBySection" class="hidden">
-        <div class="map-sidebar-header">Color by</div>
-        <div class="map-muted">
-          <button id="mapColorByChip" class="map-muted-chip" type="button"></button>
-        </div>
-      </div>
-
-      <!-- Session replay: sweep a playhead over normalized session time;
-           dots glow and pulse where activity clusters (mindwalk-style). -->
-      <div class="map-sidebar-header">Session replay</div>
-      <div id="mapReplay" class="map-replay">
-        <button id="mapReplayPlay" class="btn btn-small" type="button">Play</button>
-        <input id="mapReplayScrub" type="range" min="0" max="1" step="0.002"
-               value="0" aria-label="Session position">
-        <span id="mapReplayPos" class="map-replay-pos">0%</span>
-      </div>
-
-      <!-- Individually muted features (chips restore them); populated by
-           overview-map.js when a feature is muted from the explain panel. -->
-      <div id="mapMutedSection" class="hidden">
-        <div class="map-sidebar-header">Muted features</div>
-        <div id="mapMuted" class="map-muted"></div>
-      </div>
-
-      <div class="map-sidebar-header">Most unusual</div>
-      <p class="map-hint">Distance from the cohort centroid across all
-        weighted signals, not just the visible projection.</p>
-      <ol id="mapOutliers" class="map-outlier-list"></ol>
-
-      <details class="map-axis-legend">
-        <summary>What the axes mean</summary>
-        <div id="mapAxisList" class="map-axis-list"></div>
-      </details>
-
-      <p id="mapNotice" class="map-notice hidden"></p>
-    </aside>
-
-    <section id="mapCanvasWrap" aria-label="Similarity space">
-      <div id="mapCanvas"></div>
-      <!-- HTML overlay labels: real DOM (hover/click targets, tokens.css
-           typography) projected to screen space each render. -->
-      <div id="mapLabels" aria-hidden="true"></div>
-      <div id="mapTooltip" class="map-tooltip hidden"></div>
-      <!-- Session-timeline drawer: the selected participant's observations /
-           events / marks on session time (overview-map.js fills it). Floats
-           over the canvas bottom so the scene never resizes. -->
-      <div id="mapDrawer" class="map-drawer hidden">
-        <div class="map-drawer-header">
-          <span id="mapDrawerTitle"></span>
-          <span id="mapDrawerCount" class="map-drawer-count"></span>
-        </div>
-        <div id="mapDrawerLanes" class="map-drawer-lanes"></div>
-        <div id="mapDrawerNote" class="map-drawer-note hidden"></div>
-      </div>
-      <div id="mapEmpty" class="map-empty hidden">
-        <h1>Overview</h1>
-        <p>No study data yet. The map lights up as soon as timestamps
-          exist anywhere:</p>
-        <p class="map-empty-sub">open a spreadsheet with timestamps in
-          <a href="/studio/">Studio</a>, run detectors in
-          <a href="/screenspace/">Screenspace</a>, or mark moments in
-          <a href="/transcripts/">Transcripts</a> — then come back.</p>
-      </div>
-    </section>
-
-    <aside id="mapExplain" class="hidden" aria-label="Participant details">
-      <div class="map-explain-header">
-        <span id="mapExplainTitle"></span>
-        <span class="map-explain-actions">
-          <button id="mapCompareBtn" class="btn btn-small" type="button"
-                  title="Compare: shift-click another dot (or click here, then a dot) to diff this participant against it">Compare…</button>
-          <button id="mapExplainClose" class="btn btn-small btn-icon" type="button"
-                  aria-label="Close details">✕</button>
-        </span>
-      </div>
-      <div id="mapExplainBody"></div>
-    </aside>
-  </main>
-  </div>
 
   <!-- Convergence tab (overview-convergence.js renders into these) -->
   <div id="convergencePanel" class="hidden">
@@ -190,8 +66,7 @@
   <div id="toast" class="toast hidden"></div>
 
   <!-- Deps order is a contract: utils → primitives → chrome → settings →
-       intake-cluster (hub clustering) → vendored Three.js (global THREE,
-       r147 UMD — see vendor/README.md) → overview hub → satellites. -->
+       intake-cluster (hub clustering) → overview hub → satellites. -->
   <script src="utils.js" defer></script>
   <script src="hotkeys.js" defer></script>
   <script src="motion.js" defer></script>
@@ -203,9 +78,7 @@
   <script src="settings-modal.js" defer></script>
   <script src="command-palette.js" defer></script>
   <script src="intake-cluster.js" defer></script>
-  <script src="vendor/three.min.js" defer></script>
   <script src="overview.js" defer></script>
-  <script src="overview-map.js" defer></script>
   <script src="overview-convergence.js" defer></script>
   <script src="overview-metadata.js" defer></script>
   <script src="overview-reports.js" defer></script>

@@ -123,7 +123,6 @@ Two honest limits, worth knowing before you read the output:
 | Timeout on `nav.topnav` | The bundle threw before boot — a syntax or load-order problem, not a data problem. |
 | Timeout on the per-page selector | Either a fetch never resolved, or the selector in `tests/ui/_ui_pages.py` rotted because an id/class was renamed. Check the page's render function. |
 | The whole run hangs with no output | An SSE stream open at teardown. See the `block_on_close` note in `tests/ui/_ui_server.py`. |
-| Blank `overview.png` on a passing test | A SwiftShader capture artifact on the WebGL canvas, not an app bug. |
 
 ## Non-goals — do not wire this in
 

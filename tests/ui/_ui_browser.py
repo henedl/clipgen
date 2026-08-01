@@ -26,24 +26,19 @@ from typing import Any
 
 from _ui_fixtures import UiUnavailable
 
-# Ordered by preference. The full Chromium build first: the Overview tab needs a
-# WebGL context for its vendored three.js, and the full build's SwiftShader
-# fallback is more reliable headless than chrome-headless-shell's.
+# Ordered by preference. The purpose-built headless shell first; the full
+# Chromium build is the fallback for installs that only carry it.
 _CANDIDATES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("chromium-*", ("*/*.app/Contents/MacOS/*", "*/chrome", "*/chrome.exe")),
     (
         "chromium_headless_shell-*",
         ("*/chrome-headless-shell", "*/chrome-headless-shell.exe"),
     ),
+    ("chromium-*", ("*/*.app/Contents/MacOS/*", "*/chrome", "*/chrome.exe")),
 )
 
 LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
-    # Overview is the only page that creates a WebGLRenderer. Headless has no
-    # GPU, so pin the software rasteriser rather than letting it fail open.
-    "--use-gl=swiftshader",
-    "--enable-unsafe-swiftshader",
 ]
 
 

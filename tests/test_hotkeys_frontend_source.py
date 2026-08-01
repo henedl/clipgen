@@ -48,7 +48,7 @@ _DOC_KEYDOWN_RE = re.compile(
 
 
 def _js_files():
-    return sorted(p for p in WEB.glob("*.js") if "vendor" not in str(p))
+    return sorted(WEB.glob("*.js"))
 
 
 def test_document_keydown_allowlist():
