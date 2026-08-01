@@ -826,14 +826,27 @@
     if (pid === state.selectedParticipant && _currentParticipantHasTranscript()) {
       _setAnalysisPanelVisible(true);
     }
-    state.frictionData = null;
-    state.frictionBySegId = {};
+    // Blank only when the participant actually changed. A same-participant
+    // refetch — tab refocus, the mid-run re-arm in transcripts.js, a re-select —
+    // must keep the programmatic scores on screen: they come from the
+    // deterministic scorer and owe nothing to the LLM. Wiping them here is what
+    // blanked the histogram, chips, tinting and timeline band for a whole run.
+    if (state.frictionPid !== pid) {
+      state.frictionData = null;
+      state.frictionBySegId = {};
+      state.frictionMomentIndex = -1;
+    }
+    state.frictionPid = pid;
     state.frictionGenerating = false;
     apiGet(AGENT_DESCRIPTORS.friction.urlBase + "/" + pid).then(function (data) {
       if (ver !== state.participantReqVer) return;
       if (data.ok && data.friction) {
         _setFrictionData(data.friction);
       } else if (data.generating) {
+        // Regenerate pops the stored result, so mid-run the server answers with
+        // the deterministic scores alongside `generating` — adopt them before
+        // flipping the flag, or this branch shows the empty "Analyzing…" box.
+        if (data.friction) _setFrictionData(data.friction);
         state.frictionGenerating = true;
         state.frictionStartedAt = data.started_at ? data.started_at * 1000 : null;
         renderFrictionGenerating();
@@ -871,6 +884,7 @@
     state.frictionBySegId = {};
     state.frictionGenerating = false;
     state.frictionMomentIndex = -1;
+    state.frictionPid = null;
     qs("#frictionContent").classList.add("hidden");
     qs("#frictionGenerating").classList.add("hidden");
     qs("#frictionEmpty").classList.add("hidden");

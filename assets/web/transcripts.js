@@ -45,6 +45,10 @@
     citationsGenerating: false,
     activeTab: "summary",
     frictionData: null,
+    // Which participant frictionData belongs to. loadFriction blanks the pane
+    // only when this changes, so a same-participant refetch mid-run keeps the
+    // deterministic scores rather than emptying the tab until the agent lands.
+    frictionPid: null,
     frictionBySegId: {},
     frictionGenerating: false,
     // Server-recorded friction run start (epoch ms) so the elapsed clock

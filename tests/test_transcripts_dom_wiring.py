@@ -455,3 +455,28 @@ def test_clip_marks_run_outlives_its_dialog():
     assert "if (_clipMarksRun) return;" in open_body, (
         "reopening mid-run must show progress, not re-fetch and reset the pickers"
     )
+
+
+def test_friction_refetch_keeps_the_programmatic_scores():
+    """The deterministic scorer's output does not depend on the LLM, but
+    loadFriction used to blank it before every GET. Combined with the server
+    answering `generating` for the whole agent run, a tab refocus / re-select /
+    reload mid-run emptied the histogram, chips, tinting and timeline band until
+    the agent finished. Blank only on a real participant change."""
+    start = _JS.index("function loadFriction(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "if (state.frictionPid !== pid) {" in body, (
+        "the wipe must be gated on the participant actually changing"
+    )
+    assert body.index("frictionPid !== pid") < body.index(
+        "state.frictionData = null"
+    ), "the gate has to precede the wipe it exists to prevent"
+    # Mid-run the server ships the scores alongside the generating flag.
+    gen = body[body.index("data.generating") :]
+    assert "if (data.friction) _setFrictionData(data.friction);" in gen, (
+        "the generating branch must adopt the deterministic scores the server "
+        "sends with it, or it renders the empty 'Analyzing…' box"
+    )
+    assert gen.index("_setFrictionData") < gen.index(
+        "state.frictionGenerating = true"
+    ), "_setFrictionData clears the generating flag, so it has to run first"

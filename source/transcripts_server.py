@@ -734,6 +734,34 @@ def api_embed_all_subtitles() -> FlaskResponse:
 # and the user-edit PUT).
 
 
+def _deterministic_friction(
+    agent_key: str, entry: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """The friction payload that needs no summary and no LLM, or None.
+
+    Friction's per-segment scores + session stats come from a pure, deterministic
+    scorer (friction.py). They are served both *before* the summary-gated agent
+    has ever run and *while* it runs, so the heatmap/timeline/chips are usable
+    the whole time; only the LLM-refined "moments" wait on the agent. The
+    ``deterministic`` flag lets the client show programmatic-only copy and keeps
+    the friction poll from mistaking this for a completed run.
+    """
+    if agent_key != "friction" or not entry or not entry.get("segments"):
+        return None
+    segments = entry["segments"]
+    scored = friction.score_segments(segments)
+    stats = friction.compute_stats(scored, thinking_agents._segments_duration(segments))
+    return {
+        "segments": scored,
+        "moments": [],
+        "stats": stats,
+        "model": None,
+        "llm_ok": None,
+        "stale": False,
+        "deterministic": True,
+    }
+
+
 @transcripts_bp.route("/api/agent/<agent_key>/<participant>")
 def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     """Return an agent's result, its generation status, or 404.
@@ -765,41 +793,24 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
                     )
         return jsonify(resp)
     if _orchestrator.is_generating(participant, agent_key):
-        return jsonify(
-            {
-                "ok": False,
-                "generating": True,
-                "started_at": _orchestrator.started_at(participant, agent_key),
-                "partial": _orchestrator.partial_text(participant, agent_key),
-            }
-        )
-    # Friction's per-segment scores + session stats come from a pure, deterministic
-    # scorer (friction.py) that needs no summary and no LLM. Surface them before the
-    # summary-gated friction agent runs so the heatmap/timeline/stats are usable
-    # immediately; the LLM-refined "moments" stay empty until the agent writes the
-    # manifest field, at which point the stored branch above wins. The `deterministic`
-    # flag lets the client show programmatic-only copy and keeps the friction poll
-    # from mistaking this display fallback for a completed run.
-    if agent_key == "friction" and entry and entry.get("segments"):
-        segments = entry["segments"]
-        scored = friction.score_segments(segments)
-        stats = friction.compute_stats(
-            scored, thinking_agents._segments_duration(segments)
-        )
-        return jsonify(
-            {
-                "ok": True,
-                "friction": {
-                    "segments": scored,
-                    "moments": [],
-                    "stats": stats,
-                    "model": None,
-                    "llm_ok": None,
-                    "stale": False,
-                    "deterministic": True,
-                },
-            }
-        )
+        resp = {
+            "ok": False,
+            "generating": True,
+            "started_at": _orchestrator.started_at(participant, agent_key),
+            "partial": _orchestrator.partial_text(participant, agent_key),
+        }
+        # Regenerate pops the stored field before the run, so without this the
+        # scores vanish for the whole run even though nothing about them depends
+        # on the LLM. Any client refetch mid-run (tab refocus, participant
+        # re-select, page reload) would otherwise blank the histogram, chips,
+        # transcript tinting and timeline band until the agent finished.
+        deterministic = _deterministic_friction(agent_key, entry)
+        if deterministic is not None:
+            resp["friction"] = deterministic
+        return jsonify(resp)
+    deterministic = _deterministic_friction(agent_key, entry)
+    if deterministic is not None:
+        return jsonify({"ok": True, "friction": deterministic})
     return jsonify({"ok": False}), 404
 
 
