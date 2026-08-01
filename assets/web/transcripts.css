@@ -994,52 +994,106 @@ body {
   pointer-events: none;
 }
 
-.friction-chips {
+/* Evidence table: category × (keyword | AI), one toggleable cell per source.
+ * Replaces the single chip row, which counted only the keyword scorer and so
+ * rendered an inert "0" for a category the AI had actually flagged. Flex rather
+ * than a real table so the cells can be <button>s; the two count columns are
+ * fixed-width and right-aligned so the numbers line up down the column. Only
+ * categories with at least one finding get a row, so this is typically 2–5 rows
+ * rather than six mostly-zero ones. */
+.friction-evidence {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
+  flex-direction: column;
+  /* Capped rather than full-width: the pane is as wide as the transcript, and
+     stretched rows put the category name and its counts a screen apart. */
+  max-width: 24rem;
 }
 
-/* Toggleable category filter. Replaces the old pairing of a non-interactive
- * stat chip row plus a duplicate row of checkboxes for the same six categories.
- * Counts are computed client-side against the live threshold (stats.by_category
- * counts marker hits, not segments, and never moves with the slider). */
-.friction-chip {
-  display: inline-flex;
+.friction-ev-row {
+  display: flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: 2px var(--space-2);
-  border: 1px solid var(--color-border);
+  gap: var(--space-2);
+  padding: 1px 0;
+}
+
+.friction-ev-head {
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--color-text-dim);
+}
+
+.friction-ev-cat {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.friction-ev-head .friction-ev-cat {
+  font-size: var(--text-2xs);
+}
+
+/* Header labels share the cells' width AND their inline padding, so each label
+   sits squarely over the digits of its own column rather than the pill edge. */
+.friction-ev-col {
+  flex: 0 0 3.25rem;
+  padding: 0 var(--space-2);
+  text-align: right;
+  cursor: help;
+}
+
+.friction-ev-cell {
+  flex: 0 0 3.25rem;
+  padding: 1px var(--space-2);
+  border: 1px solid transparent;
   border-radius: var(--radius-full);
   background: transparent;
   font-family: inherit;
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
   color: var(--color-text-dim);
   cursor: pointer;
   transition: background var(--duration-fast), border-color var(--duration-fast);
 }
 
-.friction-chip:hover:not(.is-empty) {
+.friction-ev-cell:hover:not(.is-empty) {
   border-color: var(--color-friction);
 }
 
-.friction-chip.is-on {
+.friction-ev-cell.is-on {
   color: var(--color-friction);
   border-color: color-mix(in srgb, var(--color-friction) 55%, var(--color-border));
   background: color-mix(in srgb, var(--color-friction) 12%, transparent);
 }
 
-/* No segments in this category at the current threshold — shown (so the absence
- * is itself information) but not clickable. */
-.friction-chip.is-empty {
-  opacity: 0.45;
+/* Filtered out by the user: still counted and still clickable, just not
+ * contributing. Distinct from .is-empty, which means "nothing of this kind
+ * exists at all" — that one is the only inert state, so a score band that has
+ * driven a count to 0 can never lock the user out of the control. */
+/* Dashed rather than struck through: these cells hold a single digit, and a
+   line-through on a "1" reads as a different glyph entirely. */
+.friction-ev-cell.is-muted {
+  border-style: dashed;
+  border-color: var(--color-border);
+  opacity: 0.6;
+}
+
+.friction-ev-cell.is-empty {
+  opacity: 0.35;
   cursor: default;
 }
 
-.friction-chip-count {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: inherit;
+.friction-ev-empty {
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--color-text-dim);
 }
 
 /* ── Moment jump strip ──────────────────────────────────────

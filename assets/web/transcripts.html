@@ -186,7 +186,10 @@
             </div>
             <div id="frictionHistogram" class="friction-hist"></div>
             <div id="frictionBounds" class="friction-hist-bounds"></div>
-            <div id="frictionChips" class="friction-chips"></div>
+            <!-- Evidence table: one row per category that has any finding,
+                 one toggleable cell per source. The two sources score on
+                 different scales, so they are counted and filtered apart. -->
+            <div id="frictionEvidence" class="friction-evidence"></div>
           </div>
           <!-- LLM moments as a one-line jump strip; their quote + rationale
                render as callouts under the cited segments in the transcript. -->

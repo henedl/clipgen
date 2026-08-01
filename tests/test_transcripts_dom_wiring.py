@@ -50,7 +50,7 @@ REQUIRED_IDS = [
     "frictionMarkAll",
     "frictionHistogram",
     "frictionBounds",
-    "frictionChips",
+    "frictionEvidence",
     "frictionJumpStrip",
     "frictionJumpPrev",
     "frictionJumpNext",
@@ -480,3 +480,94 @@ def test_friction_refetch_keeps_the_programmatic_scores():
     assert gen.index("_setFrictionData") < gen.index(
         "state.frictionGenerating = true"
     ), "_setFrictionData clears the generating flag, so it has to run first"
+
+
+# ---- Friction evidence table (programmatic vs agentic) ----
+
+
+def test_friction_counts_the_two_evidence_sources_apart():
+    """The keyword scorer labels segments; the agent labels its own moments, and
+    never reconciles them against the line it quotes. The old single chip row
+    counted only the first, so a category could read 0 while its moment sat in
+    the jump strip."""
+    start = _JS.index("function _frictionEvidenceCounts(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "frictionData.segments" in body and "frictionData.moments" in body, (
+        "both sources must be counted"
+    )
+    assert "return { prog: prog, ai: ai };" in body, "counted apart, not summed"
+
+
+def test_friction_cell_is_inert_only_on_total_absence():
+    """The original bug: a chip with a 0 count was unclickable, so the score band
+    could lock the user out of the very control that widens it — and a category
+    with AI evidence but no keyword hit could never be toggled at all. Inertness
+    must key on whether that kind of evidence exists AT ALL, not on the banded
+    count the cell happens to display."""
+    start = _JS.index("function renderFrictionEvidence(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "var everyAny = totals[source] > 0;" in body
+    assert 'cell.classList.toggle("is-empty", !everyAny);' in body, (
+        "is-empty must come from the unbanded totals, never from the banded count"
+    )
+    rows = _JS.index("function _frictionEvidenceRows(")
+    rows_body = _JS[rows : _JS.index("\n  function ", rows + 1)]
+    assert "_frictionScoreInBand" not in rows_body, (
+        "the row set must be band-independent, or rows appear and vanish under "
+        "the pointer mid-drag"
+    )
+
+
+def test_friction_filters_are_per_source():
+    """One shared filter dict meant hiding a category on the keyword side
+    silently hid the agent's moments in that category too — including moments in
+    categories whose chip was inert, which no control could then bring back."""
+    assert "state.frictionMomentFilter" in _JS
+    start = _JS.index("function _frictionMomentMatches(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.frictionMomentFilter" in body, "moments read their own filter"
+    assert "frictionCategoryFilter" not in body, (
+        "the keyword filter must not gate moments"
+    )
+
+
+def test_unvalidated_model_categories_are_bucketed_not_dropped():
+    """thinking_agents only lowercases and underscores the model's category, so
+    it can emit anything. An unrecognized string must still land in a row the
+    user can toggle, rather than falling through every filter."""
+    start = _JS.index("function _frictionMomentCategory(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "FRICTION_OTHER" in body and "_frictionCatKeys()" in body
+    # The strip and callout still show what the model actually said.
+    label = _JS.index("function _frictionCatLabel(")
+    label_body = _JS[label : _JS.index("\n  function ", label + 1)]
+    assert 'if (key === "other") return "Other";' in label_body
+    assert "toUpperCase()" in label_body, (
+        "an invented category should render its own wording, not be blanked"
+    )
+
+
+def test_mark_all_matching_covers_the_ai_only_segments():
+    """frictionMatchBySegId holds keyword matches only, so segments the agent
+    alone flagged (score 0, no regex category) were silently skipped — the very
+    lines the jump strip exists to surface."""
+    start = _JS.index("function _frictionMarkAll(")
+    body = _JS[start : _JS.index("\n  function initFriction(", start)]
+    assert "state.frictionVisibleMoments" in body, (
+        "AI-cited segments must be marked too"
+    )
+    assert "claimed[segId]" in body, (
+        "a segment both sources flag must be marked once, not twice"
+    )
+
+
+def test_friction_evidence_classes_are_all_styled():
+    """An unstyled row class renders the table as a run-on line of numbers."""
+    for cls in re.findall(r'"(friction-ev-[a-z-]+)"', _JS):
+        assert "." + cls in _CSS, f".{cls} is created in JS but never styled"
+    for state_cls in (
+        ".friction-ev-cell.is-on",
+        ".friction-ev-cell.is-muted",
+        ".friction-ev-cell.is-empty",
+    ):
+        assert state_cls in _CSS, f"{state_cls} is toggled in JS but never styled"

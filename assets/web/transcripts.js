@@ -64,7 +64,13 @@
     // pre-filtered to something the user can't see.
     frictionMin: 0,
     frictionMax: 1,
+    // Two independent filters, one per evidence source — the keyword scorer
+    // labels segments, the agent labels its own moments, and the two never
+    // agree on a line. Sharing one dict meant hiding a category on one side
+    // silently hid it on the other. Both persist; frictionMomentFilter also
+    // carries the "other" bucket for categories the model invented.
     frictionCategoryFilter: null,
+    frictionMomentFilter: null,
     // Derived from (threshold, categoryFilter, frictionData, segments) by
     // _recomputeFrictionMatches. The single source every friction consumer reads:
     // segment id -> score for matching segments, the visible moments resolved to
