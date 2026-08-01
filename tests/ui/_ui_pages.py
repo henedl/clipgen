@@ -41,12 +41,6 @@ _CONSOLE_ALLOWLIST = (
     # HTTP status is owned by the response handler below; keeping this would
     # double-report every non-2xx.
     "Failed to load resource",
-    # Headless has no GPU. Overview's three.js falls back to SwiftShader and says so.
-    "Automatic fallback to software WebGL",
-    "GroupMarkerNotSet",
-    "Failed to create WebGL context",
-    "SharedImageManager",
-    "Fallback to SwiftShader",
 )
 
 # A non-2xx on these resource types is always a bug. XHR/image/media are not:

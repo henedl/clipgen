@@ -209,32 +209,9 @@ def _clear_participant_source():
 
 
 @pytest.fixture(autouse=True)
-def _reset_overview_observation_getter():
-    """Restore ``overview._observation_rows_getter`` after every test.
-
-    ``server.build_combined_app`` injects the live-sheet getter through
-    ``overview.configure()`` and never unsets it, so any test that builds a
-    combined app leaves it wired for the rest of the worker process. A later
-    ``overview`` test then reads whatever sheet another test left in
-    ``server._sheet_context`` and reports phantom participants — four
-    ``test_overview.py`` assertions failed exactly that way under CI's
-    ``-n auto --randomly-seed`` ordering, while a serial local run happened to
-    order them safely. Snapshot + restore keeps it isolated per test.
-    """
-    import overview
-
-    original = overview._observation_rows_getter
-    try:
-        yield
-    finally:
-        overview._observation_rows_getter = original
-
-
-@pytest.fixture(autouse=True)
 def _reset_thinking_agents_getters():
     """Restore thinking_agents' injected getters after every test.
 
-    Same leak as ``_reset_overview_observation_getter`` above:
     ``server.build_combined_app`` wires ``thinking_agents.configure()`` with
     live sheet/marks getters and never unsets them, so a later report-agent
     test would silently read another test's process state.

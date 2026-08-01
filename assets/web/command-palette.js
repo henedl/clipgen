@@ -81,7 +81,6 @@
     overview: [
       { key: "metadata", label: "Metadata" },
       { key: "convergence", label: "Convergence" },
-      { key: "map", label: "Map" },
     ],
   };
 

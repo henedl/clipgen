@@ -1614,10 +1614,9 @@
     closeDetailInline();
     // The frame preview is appended to document.body, not to #convergencePanel,
     // so hiding the panel does not hide it — switching tabs mid-hover left the
-    // thumbnail painted over the Map or Metadata tab. The pending debounce has
-    // to go too, or a switch within its window paints a preview on the tab the
-    // user just moved to. (Same class as the empty mapDeactivate in 2a387fd6;
-    // overview-map.js clears its own tooltip here for exactly this reason.)
+    // thumbnail painted over the Metadata tab. The pending debounce has to go
+    // too, or a switch within its window paints a preview on the tab the user
+    // just moved to. (Same class as the empty mapDeactivate in 2a387fd6.)
     clearTimeout(_cvHoverDebounce);
     _cvHoverDebounce = null;
     cvHideFramePreview();

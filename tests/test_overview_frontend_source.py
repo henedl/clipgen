@@ -1,7 +1,7 @@
 """Static regression checks for Overview frontend sources.
 
 The Overview page is a hub (overview.js) + tab satellites
-(overview-{map,convergence,metadata,reports}.js) sharing state through the
+(overview-{convergence,metadata,reports}.js) sharing state through the
 window.ClipgenOverview (OV) namespace. These checks pin the contracts the
 satellite-wiring test can't see (bare cross-file *reads*, script order,
 namespace hygiene).
@@ -27,15 +27,12 @@ def test_no_studio_globals_in_overview_sources():
         )
 
 
-def test_script_order_three_before_map_hub_before_satellites():
-    """Load order is a contract: vendored THREE before overview-map.js, and
-    the hub (overview.js) before every satellite."""
+def test_script_order_hub_before_satellites():
+    """Load order is a contract: the hub (overview.js) before every satellite."""
     html = OVERVIEW_HTML.read_text(encoding="utf-8")
     scripts = re.findall(r'<script src="([^"]+)"', html)
-    assert scripts.index("vendor/three.min.js") < scripts.index("overview-map.js")
     hub = scripts.index("overview.js")
     for satellite in (
-        "overview-map.js",
         "overview-convergence.js",
         "overview-metadata.js",
         "overview-reports.js",
@@ -45,15 +42,14 @@ def test_script_order_three_before_map_hub_before_satellites():
 
 
 def test_tab_order_and_wip_badge():
-    """Tabs read Metadata | Convergence | Map | Reports; the Map and Reports
-    tabs carry the WIP pill (the newest surfaces)."""
+    """Tabs read Metadata | Convergence | Reports; the Reports tab carries the
+    WIP pill (the newest surface)."""
     html = OVERVIEW_HTML.read_text(encoding="utf-8")
     tabs = re.findall(r'data-tab="(\w+)"', html)
-    assert tabs == ["metadata", "convergence", "map", "reports"]
-    for tab in ("map", "reports"):
-        button = html[html.index('data-tab="' + tab + '"') :]
-        button = button[: button.index("</button>")]
-        assert "cg-wip-badge" in button, f"{tab} tab lost its WIP badge"
+    assert tabs == ["metadata", "convergence", "reports"]
+    button = html[html.index('data-tab="reports"') :]
+    button = button[: button.index("</button>")]
+    assert "cg-wip-badge" in button, "reports tab lost its WIP badge"
 
 
 def test_staleness_is_version_based_and_running_check_is_strict():
@@ -71,12 +67,6 @@ def test_staleness_is_version_based_and_running_check_is_strict():
     assert "rpState._snapshot = { version: state.dataVersion }" in sm
     for src in (md, cv, sm):
         assert "_snapshot.ss" not in src  # old length-compare heuristic
-    # The Map follows the same contract: re-activation with a newer hub
-    # version re-fetches api/data (a stale matrix froze the layout after
-    # Refresh while sibling tabs updated).
-    mp = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert "hubDataVersion() !== _matrixVersion" in mp
-    assert "function reloadData()" in mp
 
 
 def test_hub_wires_shared_chrome_buttons():
@@ -105,122 +95,6 @@ def test_metadata_screenspace_clustering():
     assert '"Screenspace clusters"' in src
     # Collisions keep raw events (they cluster internally already).
     assert "computeCollisions(activeP, rows, events, marks" in src
-
-
-def test_map_layers_and_drilldown_present():
-    """The Map tab's link layers + drill-down surface (edges computed in the
-    full weighted feature space, not the projection; burst capped)."""
-    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert "function computeSimilarityEdges()" in src
-    assert "function placeAnchors()" in src
-    assert "function buildParticipantItems(pid)" in src
-    assert "function showBurst(idx, items)" in src
-    # Edges come from the weighted z matrix, never projected coordinates.
-    edges_body = src[src.index("function computeSimilarityEdges()") :]
-    edges_body = edges_body[: edges_body.index("\n  }")]
-    assert "state.weighted" in edges_body
-    assert "state.coords" not in edges_body
-    assert re.search(r"var BURST_CAP = \d+;", src)
-
-
-def test_map_color_by_choropleth():
-    """The "color by" choropleth: one authority computes the idle dot look
-    (dotBaseColor/dotBaseScale) and the replay glow composes on it — a
-    hardcoded ramp inside applyReplayGlow would silently override the
-    choropleth mid-replay."""
-    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert "function setColorBy(" in src
-    assert "colorBy: null" in src
-    assert "function dotBaseColor(" in src
-    assert "function dotBaseScale(" in src
-    glow_body = src[src.index("function applyReplayGlow()") :]
-    glow_body = glow_body[: glow_body.index("\n  }")]
-    assert "dotBaseColor(" in glow_body
-    assert "dotBaseScale(" in glow_body
-    html = OVERVIEW_HTML.read_text(encoding="utf-8")
-    assert 'id="mapColorBySection"' in html
-    assert 'id="mapColorByChip"' in html
-    css = (_WEB / "overview.css").read_text(encoding="utf-8")
-    assert ".map-feature-name" in css
-
-
-def test_map_compare_arc():
-    """The pairwise compare: distances come from the weighted z matrix (never
-    projected coordinates), and the arc layer follows the standard
-    rebuild/sync pattern so it travels through the re-layout lerp."""
-    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert "function computePairDiff(" in src
-    assert "function rebuildCompare()" in src
-    assert "function syncComparePositions()" in src
-    diff_body = src[src.index("function computePairDiff(") :]
-    diff_body = diff_body[: diff_body.index("\n  }")]
-    assert "state.zRaw" in diff_body
-    assert "state.coords" not in diff_body
-    html = OVERVIEW_HTML.read_text(encoding="utf-8")
-    assert 'id="mapCompareBtn"' in html
-    css = (_WEB / "overview.css").read_text(encoding="utf-8")
-    assert ".map-compare-swatch" in css
-    assert "#mapCompareBtn.is-armed" in css
-
-
-def test_map_direct_axes_mode():
-    """Manual-axes layout: coords come from state.zRaw (unweighted — the
-    group weights are a similarity lens, not an axis warp), PCA components
-    are still computed for the outlier/edge/anchor layers, and the pickers
-    UI exists with its CSS."""
-    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert 'layoutMode: "pca"' in src
-    assert "function computeLayoutCoords()" in src
-    assert "function renderAxisPickers()" in src
-    body = src[src.index("function computeLayoutCoords()") :]
-    body = body[: body.index("\n  }")]
-    assert "state.zRaw" in body
-    assert "pcaProject(state.weighted" in body  # components live on regardless
-    html = OVERVIEW_HTML.read_text(encoding="utf-8")
-    assert 'id="mapLayoutMode"' in html
-    assert 'id="mapAxisPickers"' in html
-    css = (_WEB / "overview.css").read_text(encoding="utf-8")
-    assert ".map-axis-pickers" in css
-    assert ".map-axis-picker-row" in css
-
-
-def test_map_session_trajectories():
-    """Trajectory paths project window vectors with the WHOLE-SESSION basis
-    (state.stats z-scoring + state.components + state.worldScale) — never a
-    pooled-window PCA — so paths live in the exact space the dots do."""
-    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert "function computeWindowCoords()" in src
-    assert "function rebuildTrajectories()" in src
-    assert "function syncComets(" in src
-    assert "showTrajectories" in src
-    body = src[src.index("function computeWindowCoords()") :]
-    body = body[: body.index("\n  }")]
-    assert "state.stats" in body
-    assert "state.components" in body
-    assert "state.worldScale" in body
-
-
-def test_map_cluster_hulls():
-    """K-means clusters in the FULL weighted feature space, deterministically
-    (farthest-point init — Math.random must never appear in the map source,
-    or clusters would shuffle run-to-run), with the standard rebuild/sync
-    layer pattern and its controls + CSS present."""
-    src = (_WEB / "overview-map.js").read_text(encoding="utf-8")
-    assert "function computeKmeans()" in src
-    assert "function runKmeans(" in src
-    assert "function rebuildClusterHulls()" in src
-    assert "function syncClusterHullPositions()" in src
-    assert "Math.random" not in src
-    kmeans_body = src[src.index("function runKmeans(") :]
-    kmeans_body = kmeans_body[: kmeans_body.index("\n  }")]
-    assert "state.weighted" in kmeans_body
-    assert "state.coords" not in kmeans_body
-    html = OVERVIEW_HTML.read_text(encoding="utf-8")
-    assert 'id="mapClusterControls"' in html
-    assert 'id="mapClusterK"' in html
-    css = (_WEB / "overview.css").read_text(encoding="utf-8")
-    assert ".map-cluster-controls" in css
-    assert ".map-cluster-label" in css
 
 
 def test_hidden_utility_class_defined():

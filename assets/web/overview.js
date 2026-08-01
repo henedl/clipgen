@@ -1,8 +1,7 @@
 /* Overview hub — shared state, data loading, and tab switching for /overview/.
  *
- * The Overview page hosts four cohort-level tabs as satellites: Map
- * (overview-map.js, the 3D similarity space), Convergence
- * (overview-convergence.js), Metadata (overview-metadata.js), and Reports
+ * The Overview page hosts three cohort-level tabs as satellites: Metadata
+ * (overview-metadata.js), Convergence (overview-convergence.js), and Reports
  * (overview-reports.js, the per-participant mini-report). They share
  * this hub's state through the window.ClipgenOverview (OV) namespace — the
  * same hub-plus-satellite pattern Studio/Screenspace/Transcripts use.
@@ -11,7 +10,7 @@
  * surface, so ensureData() memoizes one parallel round of cross-prefix
  * fetches (../studio/api/sheet, ../studio/api/sheet/baseline,
  * ../screenspace/api/events, ../transcripts/api/marks) and a Refresh action
- * re-runs it. All four degrade gracefully when their blueprint has no data
+ * re-runs it. All of them degrade gracefully when their blueprint has no data
  * (no spreadsheet loaded, no scans yet, no transcripts yet).
  *
  * Clustering mirrors studio-intake.js: state.intakeClusters holds only
@@ -37,7 +36,6 @@
     trIntakeMarks: [],        // valid transcript marks
     trIntakeClusters: [],
     composerCuts: [],         // ../composer/api/manifest cuts (each carries participant)
-    frictionMoments: [],      // LLM friction moments with resolved times
     activeTab: "metadata",
     // Bumped after every completed loadAll(). The tabs' staleness snapshots
     // compare against this — data can only "change" via an actual refetch,
@@ -77,8 +75,8 @@
   };
 
   // Cross-referencing: overlapping data from the other sources for a given
-  // participant + time range (same contract as Studio's copy — consumers are
-  // the moved Convergence detail rows and the Map drill-down).
+  // participant + time range (same contract as Studio's copy — consumed by
+  // the moved Convergence detail rows).
   function findOverlappingData(participant, start, end) {
     var result = { transcriptSnippets: [], screenspaceEvents: [], sheetObservations: [] };
 
@@ -162,12 +160,6 @@
       })
       .catch(function () { state.trIntakeMarks = []; });
 
-    var frictionP = apiGet("api/friction-moments")
-      .then(function (data) {
-        state.frictionMoments = (data && data.moments) || [];
-      })
-      .catch(function () { state.frictionMoments = []; });
-
     // Composer cuts are one flat array (each cut carries its own participant),
     // so a single fetch covers every participant's 4th Convergence lane.
     var composerP = apiGet("../composer/api/manifest")
@@ -176,7 +168,7 @@
       })
       .catch(function () { state.composerCuts = []; });
 
-    return Promise.all([sheetP, baselineP, eventsP, marksP, frictionP, composerP]).then(function () {
+    return Promise.all([sheetP, baselineP, eventsP, marksP, composerP]).then(function () {
       buildClusters();
       state.dataVersion++;
       return state;
@@ -262,7 +254,6 @@
 
   function syncTab(animate) {
     var panels = {
-      map: qs("#mapPanel"),
       convergence: qs("#convergencePanel"),
       metadata: qs("#metadataPanel"),
       reports: qs("#reportsPanel"),
@@ -274,16 +265,14 @@
 
     if (OV.convergenceDeactivate) OV.convergenceDeactivate();
     if (OV.metadataDeactivate) OV.metadataDeactivate();
-    if (OV.mapDeactivate) OV.mapDeactivate();
     if (OV.reportsDeactivate) OV.reportsDeactivate();
 
     // Drop any paint the outgoing tab asserted; the incoming one re-asserts it
-    // from its own activate path (Map never does — it self-heals silently).
+    // from its own activate path.
     setRefreshStale(false);
 
     var activePanel = panels[state.activeTab];
     if (activePanel) activePanel.classList.remove("hidden");
-    if (state.activeTab === "map" && OV.mapActivate) OV.mapActivate();
     if (state.activeTab === "convergence" && OV.convergenceActivate) OV.convergenceActivate();
     if (state.activeTab === "metadata" && OV.metadataActivate) OV.metadataActivate();
     if (state.activeTab === "reports" && OV.reportsActivate) OV.reportsActivate();
@@ -324,7 +313,6 @@
     window.ClipgenCommandPalette.register("overview", [
       tabCommand("metadata", "Show Metadata tab", "table-cells"),
       tabCommand("convergence", "Show Convergence tab", "arrows-pointing-in"),
-      tabCommand("map", "Show Map tab", "map"),
       tabCommand("reports", "Show Reports tab", "document-text"),
       {
         id: "overview:refresh",
@@ -390,7 +378,6 @@
     }
 
     window.addEventListener("resize", function () {
-      if (state.activeTab === "map" && OV.mapResize) OV.mapResize();
       if (state.activeTab === "convergence" && OV.convergenceResize) OV.convergenceResize();
       if (state.activeTab === "metadata" && OV.metadataResize) OV.metadataResize();
       if (state.activeTab === "reports" && OV.reportsResize) OV.reportsResize();
@@ -416,7 +403,6 @@
 
   function initHotkeys() {
     window.ClipgenHotkeys.register([
-      { id: "overview.tabMap", handler: function () { switchToTab("map"); } },
       { id: "overview.tabConvergence", handler: function () { switchToTab("convergence"); } },
       { id: "overview.tabMetadata", handler: function () { switchToTab("metadata"); } },
       { id: "overview.tabReports", handler: function () { switchToTab("reports"); } },

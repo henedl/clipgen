@@ -686,9 +686,8 @@ _REPORT_EMPTY_SECTION = "(none recorded)"
 # The report agent needs data that lives outside the transcript entry: sheet
 # observation rows (studio-blueprint process state in server.py) and resolved
 # transcript marks (transcripts_server manifest state). Both reach this module
-# by injection — mirroring overview.configure() — because importing either
-# owner from here would be an import cycle (transcripts_server imports this
-# module). Either getter may be None (CLI runs, tests); the report then
+# by injection because importing either owner from here would be an import
+# cycle (transcripts_server imports this module). Either getter may be None (CLI runs, tests); the report then
 # degrades to the sources that exist.
 _observation_rows_getter: Any = None
 _participant_marks_getter: Any = None

@@ -24,9 +24,7 @@ from _frontend_source import WEB
 
 NODE = shutil.which("node")
 
-# Sorted so the parametrized ids are stable across machines. `vendor/` is a
-# subdirectory and therefore already outside this glob — third-party bundles are
-# not ours to gate.
+# Sorted so the parametrized ids are stable across machines.
 JS_FILES = sorted(p.name for p in WEB.glob("*.js"))
 
 
