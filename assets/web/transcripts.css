@@ -994,25 +994,25 @@ body {
   pointer-events: none;
 }
 
-/* Evidence table: category × (keyword | AI), one toggleable cell per source.
+/* Evidence table: (keyword | AI) × category, one toggleable cell per pair.
  * Replaces the single chip row, which counted only the keyword scorer and so
- * rendered an inert "0" for a category the AI had actually flagged. Flex rather
- * than a real table so the cells can be <button>s; the two count columns are
- * fixed-width and right-aligned so the numbers line up down the column. Only
- * categories with at least one finding get a row, so this is typically 2–5 rows
- * rather than six mostly-zero ones. */
+ * rendered an inert "0" for a category the AI had actually flagged. The two
+ * sources are the thing being compared, so they are the two rows; categories
+ * head the columns. Flex rather than a real table so the cells can be
+ * <button>s. Only categories with at least one finding get a column, so this is
+ * typically 2–5 columns rather than six mostly-empty ones. */
 .friction-evidence {
   display: flex;
   flex-direction: column;
-  /* Capped rather than full-width: the pane is as wide as the transcript, and
-     stretched rows put the category name and its counts a screen apart. */
-  max-width: 24rem;
+  /* Sized by content, not stretched: with two or three categories a full-width
+     table would strand each count a screen away from its header. */
+  align-items: flex-start;
 }
 
 .friction-ev-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   padding: 1px 0;
 }
 
@@ -1024,31 +1024,32 @@ body {
   color: var(--color-text-dim);
 }
 
-.friction-ev-cat {
-  flex: 1;
-  min-width: 0;
+/* Row label ("Keyword" / "AI"), and the head row's empty corner cell. */
+.friction-ev-src {
+  flex: 0 0 4rem;
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  cursor: help;
+}
+
+.friction-ev-head .friction-ev-src {
+  cursor: default;
+}
+
+/* Column headers share the cells' width but not their inline padding: both are
+   centered, so the padding would only cost the label 16px of room — enough to
+   truncate "Self-correction" — without moving it relative to the digits. */
+.friction-ev-col {
+  flex: 0 0 5.75rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-xs);
-  color: var(--color-text-dim);
-}
-
-.friction-ev-head .friction-ev-cat {
-  font-size: var(--text-2xs);
-}
-
-/* Header labels share the cells' width AND their inline padding, so each label
-   sits squarely over the digits of its own column rather than the pill edge. */
-.friction-ev-col {
-  flex: 0 0 3.25rem;
-  padding: 0 var(--space-2);
-  text-align: right;
+  text-align: center;
   cursor: help;
 }
 
 .friction-ev-cell {
-  flex: 0 0 3.25rem;
+  flex: 0 0 5.75rem;
   padding: 1px var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-full);
@@ -1057,7 +1058,7 @@ body {
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  text-align: right;
+  text-align: center;
   color: var(--color-text-dim);
   cursor: pointer;
   transition: background var(--duration-fast), border-color var(--duration-fast);
@@ -1268,6 +1269,14 @@ body {
 .friction-cat-badge--sm {
   font-size: 10px;
   font-weight: 500;
+}
+
+/* An agent-labelled category, next to the keyword scorer's own badges in the
+ * same tooltip. Outlined rather than filled so the two sources are told apart
+ * at a glance without introducing a second hue. */
+.friction-cat-badge--ai {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-friction) 55%, var(--color-border));
 }
 
 /* Inline tint on hot segments while friction mode is on. Lower specificity than

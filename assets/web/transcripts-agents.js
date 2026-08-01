@@ -1155,6 +1155,27 @@
     state.frictionVisibleMoments = visible;
     state.frictionCitedBySegId = cited;
     state.frictionUnsourcedMoments = unsourced;
+
+    // What the timeline density band draws: the union of both sources, keyed to
+    // the strongest evidence on each line. Built here rather than at the band so
+    // the canvas can never disagree with the pane about what is flagged. An
+    // AI-only line scores 0 with the keyword scorer, so reading the keyword map
+    // alone left the moments the jump strip is built around off the band
+    // entirely; the two scales differ, but the band's alpha only ever meant
+    // "how strong is the evidence here".
+    var band = {};
+    for (var id in matches) {
+      if (Object.prototype.hasOwnProperty.call(matches, id)) band[id] = matches[id];
+    }
+    for (i = 0; i < visible.length; i++) {
+      var mscore = visible[i].moment.score || 0;
+      for (j = 0; j < visible[i].idxs.length; j++) {
+        var cseg = state.segments[visible[i].idxs[j]];
+        if (!cseg) continue;
+        if (!(band[cseg.id] > mscore)) band[cseg.id] = mscore;
+      }
+    }
+    state.frictionBandBySegId = band;
   }
 
   // The single entry point for "the filter changed": recompute, then reflect it
@@ -1528,33 +1549,48 @@
     return btn;
   }
 
-  function _buildFrictionEvidenceRow(catKey) {
+  var FRICTION_SOURCE_META = {
+    prog: {
+      label: "Keyword",
+      tooltip:
+        "Segments the keyword scorer matched. Scored 0–1 by marker density, and " +
+        "filtered by the histogram band above.",
+    },
+    ai: {
+      label: "AI",
+      tooltip:
+        "Moments the local AI flagged. Scored 0–1 by the model's own confidence — " +
+        "a different scale from the keyword score, filtered by the same band.",
+    },
+  };
+
+  // One row per source, one column per category: the two sources are the thing
+  // being compared, so they read better as adjacent rows than as two columns
+  // scanned down. Categories head the columns.
+  function _buildFrictionEvidenceRow(source, cats) {
     var row = el("div", "friction-ev-row");
-    row.setAttribute("data-cat", catKey);
-    row.appendChild(el("span", "friction-ev-cat", _frictionCatLabel(catKey)));
-    for (var i = 0; i < FRICTION_SOURCES.length; i++) {
-      row.appendChild(_buildFrictionEvidenceCell(catKey, FRICTION_SOURCES[i]));
+    row.setAttribute("data-src", source);
+    var meta = FRICTION_SOURCE_META[source];
+    var label = el("span", "friction-ev-src", meta.label);
+    label.setAttribute("data-tooltip", meta.tooltip);
+    row.appendChild(label);
+    for (var i = 0; i < cats.length; i++) {
+      row.appendChild(_buildFrictionEvidenceCell(cats[i], source));
     }
     return row;
   }
 
-  function _buildFrictionEvidenceHead() {
+  function _buildFrictionEvidenceHead(cats) {
     var head = el("div", "friction-ev-row friction-ev-head");
-    head.appendChild(el("span", "friction-ev-cat", "Category"));
-    var prog = el("span", "friction-ev-col", "Keyword");
-    prog.setAttribute(
-      "data-tooltip",
-      "Segments the keyword scorer matched. Scored 0–1 by marker density, and " +
-        "filtered by the histogram band above."
-    );
-    head.appendChild(prog);
-    var ai = el("span", "friction-ev-col", "AI");
-    ai.setAttribute(
-      "data-tooltip",
-      "Moments the local AI flagged. Scored 0–1 by the model's own confidence — " +
-        "a different scale from the keyword score, filtered by the same band."
-    );
-    head.appendChild(ai);
+    head.appendChild(el("span", "friction-ev-src", ""));
+    for (var i = 0; i < cats.length; i++) {
+      var label = _frictionCatLabel(cats[i]);
+      var col = el("span", "friction-ev-col", label);
+      // The header truncates on a narrow pane, so the full name has to survive
+      // somewhere — and "Self-correction" is the first to go.
+      col.setAttribute("data-tooltip", label);
+      head.appendChild(col);
+    }
     return head;
   }
 
@@ -1563,24 +1599,25 @@
     if (!host) return;
     _ensureFrictionFilter();
     var rows = _frictionEvidenceRows();
-    // Rebuild only when the row set itself changed; a threshold drag then just
-    // rewrites counts and state classes per animation frame.
-    var signature = rows.map(function (r) { return r.key; }).join(",");
-    if (host.getAttribute("data-rows") !== signature) {
-      host.setAttribute("data-rows", signature);
+    var cats = rows.map(function (r) { return r.key; });
+    // Rebuild only when the category set itself changed; a threshold drag then
+    // just rewrites counts and state classes per animation frame.
+    var signature = cats.join(",");
+    if (host.getAttribute("data-cats") !== signature) {
+      host.setAttribute("data-cats", signature);
       host.innerHTML = "";
-      if (rows.length === 0) {
+      if (cats.length === 0) {
         host.appendChild(el("span", "friction-ev-empty", "No findings in this analysis."));
         return;
       }
       var frag = document.createDocumentFragment();
-      frag.appendChild(_buildFrictionEvidenceHead());
-      for (var i = 0; i < rows.length; i++) {
-        frag.appendChild(_buildFrictionEvidenceRow(rows[i].key));
+      frag.appendChild(_buildFrictionEvidenceHead(cats));
+      for (var i = 0; i < FRICTION_SOURCES.length; i++) {
+        frag.appendChild(_buildFrictionEvidenceRow(FRICTION_SOURCES[i], cats));
       }
       host.appendChild(frag);
     }
-    if (rows.length === 0) return;
+    if (cats.length === 0) return;
 
     var counts = _frictionEvidenceCounts();
     var byKey = {};
@@ -1760,13 +1797,19 @@
     var isolate = state.frictionMode === "isolate";
     var matches = state.frictionMatchBySegId || {};
     var cited = state.frictionCitedBySegId || {};
+    var band = state.frictionBandBySegId || {};
     var rows = list.querySelectorAll(".segment-row");
     var matched = 0;
     for (var i = 0; i < rows.length; i++) {
       var seg = state.segments[i];
       var score = seg ? matches[seg.id] : undefined;
       var isCited = !!(seg && cited[seg.id]);
-      if (score !== undefined || isCited) matched++;
+      // "Flagged by either source" is the derived union map, not a third
+      // hand-rolled OR. score and isCited stay separate below because they drive
+      // different things: the tint alpha is the keyword score, the left rail is
+      // the citation.
+      var flagged = !!seg && band[seg.id] !== undefined;
+      if (flagged) matched++;
       var row = rows[i];
       if (on && score !== undefined) {
         row.classList.add("segment-friction");
@@ -1778,7 +1821,7 @@
       row.classList.toggle("segment-cited", on && isCited);
       // Hidden, never removed: state.cachedSegmentRows is indexed positionally
       // against state.segments, so removing a row would misalign every consumer.
-      row.classList.toggle("segment-hidden", isolate && !(score !== undefined || isCited));
+      row.classList.toggle("segment-hidden", isolate && !flagged);
     }
 
     if (on) {
@@ -1955,16 +1998,39 @@
   // _hideFrictionTooltip's TS.hasTimelineHover() guard). The segment-list
   // mousemove that calls _showFrictionTooltip — and its coalescing _segTooltipRaf
   // — live in the hub's segment-list delegation, not here.
+  // Visible moments quoting this segment. Reads the already-resolved indices so
+  // the hover can never name a moment the jump strip has filtered out.
+  function _visibleMomentsCiting(seg) {
+    var out = [];
+    if (!seg) return out;
+    var visible = state.frictionVisibleMoments || [];
+    for (var i = 0; i < visible.length; i++) {
+      for (var j = 0; j < visible[i].idxs.length; j++) {
+        var s = state.segments[visible[i].idxs[j]];
+        if (s && s.id === seg.id) { out.push(visible[i]); break; }
+      }
+    }
+    return out;
+  }
+
   function _showFrictionTooltip(frow, seg, clientX, clientY) {
     var tip = qs("#trTooltip");
     if (!tip) return;
     tip.textContent = "";
+    // The band now draws AI-cited lines too, and those score 0 with the keyword
+    // scorer — without the moments folded in, hovering one of those stripes read
+    // "score 0.00" with no categories, i.e. as if the stripe were a bug.
+    var moments = _visibleMomentsCiting(seg);
     var cats = frow.categories || [];
-    if (cats.length) {
+    if (cats.length || moments.length) {
       var badges = document.createElement("div");
       badges.className = "tr-tooltip-friction-cats";
       cats.forEach(function (c) {
         badges.appendChild(el("span", "friction-cat-badge friction-cat-badge--sm", _frictionCatLabel(c)));
+      });
+      moments.forEach(function (entry) {
+        badges.appendChild(el("span", "friction-cat-badge friction-cat-badge--sm friction-cat-badge--ai",
+          _frictionCatLabel(entry.moment.category)));
       });
       tip.appendChild(badges);
     }
@@ -1983,8 +2049,16 @@
       tip.appendChild(el("span", "tr-tooltip-friction-markers", "matched: " + shown));
       tip.appendChild(document.createElement("br"));
     }
+    // Name the source of each score rather than printing a bare number: they
+    // are on different scales (marker density vs the model's own confidence).
+    var scoreParts = [];
+    if ((frow.score || 0) > 0) scoreParts.push("keyword " + frow.score.toFixed(2));
+    for (var mi = 0; mi < moments.length; mi++) {
+      scoreParts.push("AI " + (moments[mi].moment.score || 0).toFixed(2));
+    }
     tip.appendChild(el("span", "tr-tooltip-friction-score",
-      (seg ? formatTime(seg.start) + " · " : "") + "score " + (frow.score || 0).toFixed(2)));
+      (seg ? formatTime(seg.start) + " · " : "") +
+      (scoreParts.length ? scoreParts.join(" · ") : "score 0.00")));
     tip.classList.remove("hidden");
     var tipRect = tip.getBoundingClientRect();
     var x = clientX + 12;

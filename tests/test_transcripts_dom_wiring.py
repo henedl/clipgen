@@ -159,13 +159,19 @@ def test_scroll_to_segment_bails_on_an_isolated_row():
     )
 
 
-def test_friction_consumers_all_read_the_shared_match_map():
+def test_friction_consumers_all_read_a_shared_derived_map():
     """The threshold/category filter must drive the pane, the segment tints AND
     the timeline band. Before the redesign the band and the tints used raw
-    score > 0, so the transcript disagreed with the tab that filtered it."""
+    score > 0, so the transcript disagreed with the tab that filtered it.
+
+    Two derived maps now, for two different questions: frictionMatchBySegId is
+    the keyword score (it sets the tint alpha), frictionBandBySegId is the union
+    of both evidence sources (what counts as flagged at all). Every consumer
+    reads one of them; none re-derive from raw scores."""
     for name in ("transcripts.js", "transcripts-video.js", "transcripts-agents.js"):
-        assert "frictionMatchBySegId" in read(name), (
-            f"{name} must read the derived match map, not raw friction scores"
+        src = read(name)
+        assert "frictionMatchBySegId" in src or "frictionBandBySegId" in src, (
+            f"{name} must read a derived map, not raw friction scores"
         )
     assert "frictionHeatmapEnabled" not in _JS, (
         "the boolean heatmap flag was replaced by the three-way state.frictionMode"
@@ -571,3 +577,62 @@ def test_friction_evidence_classes_are_all_styled():
         ".friction-ev-cell.is-empty",
     ):
         assert state_cls in _CSS, f"{state_cls} is toggled in JS but never styled"
+
+
+def test_the_density_band_covers_both_evidence_sources():
+    """An AI-cited line scores 0 with the keyword scorer, so a band reading the
+    keyword map alone drew nothing for the very moments the jump strip is built
+    around. The union is derived once, in the same producer as everything else,
+    so the canvas can never disagree with the pane about what is flagged."""
+    start = _JS.index("function _recomputeFrictionMatches(")
+    body = _JS[start : _JS.index("\n  // The single entry point", start)]
+    assert "state.frictionBandBySegId = band;" in body, (
+        "the union belongs in the one derived-state producer"
+    )
+    assert "visible[i].moment.score" in body, (
+        "an AI-only line has no keyword score; the band needs the moment's"
+    )
+    video = read("transcripts-video.js")
+    assert "state.frictionBandBySegId" in video
+    draw = video.index("function _drawFrictionBand(")
+    draw_body = video[draw : video.index("\n  // The selected participant", draw)]
+    assert "frictionMatchBySegId" not in draw_body, (
+        "the band must draw from the union, not the keyword-only map"
+    )
+    hit = video.index("function hitTestFrictionBand(")
+    hit_body = video[hit : video.index("\n  function ", hit + 1)]
+    assert "frictionBandBySegId" in hit_body, (
+        "hover has to key on the same map the band draws, or an AI-only stripe "
+        "hovers as if it were not there"
+    )
+
+
+def test_flagged_by_either_source_is_derived_once():
+    """'keyword match OR cited' was spelled out at three call sites — the band
+    skipped the clause entirely, which is how it lost the AI moments."""
+    assert (
+        "frictionMatchBySegId[seg.id] !== undefined || state.frictionCitedBySegId"
+        not in _JS
+    ), "read the derived union map instead of re-deriving the OR"
+    start = _JS.index("function _decorateSegmentList(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "var flagged = !!seg && band[seg.id] !== undefined;" in body
+    assert 'row.classList.toggle("segment-hidden", isolate && !flagged);' in body
+    # ...but the tint alpha stays the keyword score, and the rail stays citation.
+    assert 'row.style.setProperty("--seg-friction-alpha", score);' in body
+    assert 'row.classList.toggle("segment-cited", on && isCited);' in body
+
+
+def test_the_band_tooltip_names_which_score_it_is_showing():
+    """The band now includes AI-cited lines, which score 0 with the keyword
+    scorer — a bare 'score 0.00' on one of those stripes reads as a bug. The two
+    numbers are on different scales, so each is labelled."""
+    start = _JS.index("function _showFrictionTooltip(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_visibleMomentsCiting(seg)" in body
+    assert '"keyword "' in body and '"AI "' in body, (
+        "label each score with its source rather than printing a bare number"
+    )
+    assert ".friction-cat-badge--ai" in _CSS, (
+        "agent-labelled categories need a treatment distinct from the scorer's"
+    )

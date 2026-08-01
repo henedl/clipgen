@@ -76,6 +76,11 @@
     // segment id -> score for matching segments, the visible moments resolved to
     // segment indices, and segment id -> 1-based moment number for cited rows.
     frictionMatchBySegId: {},
+    // The union both evidence sources contribute to, keyed to the strongest
+    // score on each line. What the timeline density band draws and hit-tests —
+    // an AI-cited line scores 0 with the keyword scorer, so the match map alone
+    // left the agent's moments off the band entirely.
+    frictionBandBySegId: {},
     frictionVisibleMoments: [],
     frictionCitedBySegId: {},
     // Moments that passed the filter but cite segment ids absent from

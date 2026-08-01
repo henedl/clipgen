@@ -183,9 +183,10 @@
   // Per-pixel averaging of overlapping segment scores (mirrors the Screenspace
   // amplitude graph's binning) gives a continuous band without a separate
   // smoothing constant; alpha scales with score. Reads the shared friction state
-  // the agents satellite writes (state.frictionMode / frictionMatchBySegId) —
-  // the match map, not the raw scores, so the band shows exactly the segments the
-  // pane's threshold + category filter currently select.
+  // the agents satellite writes (state.frictionMode / frictionBandBySegId) — the
+  // derived union map, not the raw scores, so the band shows exactly the
+  // segments the pane's threshold + category filters currently select, from
+  // either evidence source.
   function _drawFrictionBand(ctx, timeToX, bandY, bandH, cssW) {
     if (state.frictionMode === "off") return;
     if (!state.segments.length) return;
@@ -198,7 +199,7 @@
     var any = false;
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
-      var sc = state.frictionMatchBySegId[seg.id] || 0;
+      var sc = (state.frictionBandBySegId || {})[seg.id] || 0;
       if (sc <= 0) continue;
       any = true;
       var x0 = Math.max(0, Math.floor(timeToX(seg.start)));
@@ -482,7 +483,9 @@
       if (t < seg.start || t > (seg.end || seg.start)) continue;
       // Only segments the current filter actually selected — the band draws
       // exactly those, so anything else would explain a stripe that isn't there.
-      if (state.frictionMatchBySegId[seg.id] === undefined) return null;
+      // Keyed on the same union map the band draws from, or an AI-only stripe
+      // would hover as if it were not there.
+      if ((state.frictionBandBySegId || {})[seg.id] === undefined) return null;
       var frow = state.frictionBySegId[seg.id];
       return frow ? { frow: frow, seg: seg } : null;
     }
@@ -871,7 +874,10 @@
     if (state.frictionMode !== "isolate") return false;
     var seg = state.segments[idx];
     if (!seg) return false;
-    return !(state.frictionMatchBySegId[seg.id] !== undefined || state.frictionCitedBySegId[seg.id]);
+    // The union map, same as the band and _decorateSegmentList's isolate test —
+    // spelling "keyword match OR cited" out a third time is how those three
+    // drifted apart in the first place.
+    return (state.frictionBandBySegId || {})[seg.id] === undefined;
   }
 
   // Move the active segment by *delta*, seeking + scrolling to it. Establishes an
