@@ -1194,3 +1194,63 @@ class TestIsWhisperModelCached:
         transcripts.is_whisper_model_cached("medium")
         assert seen["name"] == "medium"
         assert seen["local_files_only"] is True
+
+
+class TestConfirmModelDownload:
+    """The CLI consent gate in front of a first Whisper download."""
+
+    @staticmethod
+    def _uncached(monkeypatch, *, interactive):
+        monkeypatch.setattr(
+            transcripts, "is_whisper_model_cached", lambda n=None: False
+        )
+        monkeypatch.setattr(transcripts, "_stdin_is_interactive", lambda: interactive)
+        monkeypatch.setattr(utils, "NO_INPUT_MODE", False)
+
+    def test_cached_model_never_prompts(self, monkeypatch):
+        monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+        monkeypatch.setattr(
+            utils, "read_user_input", lambda _p: pytest.fail("should not prompt")
+        )
+        assert transcripts._confirm_model_download("large-v3") is True
+
+    def test_non_interactive_stdin_proceeds_without_prompting(self, monkeypatch):
+        """A piped or closed stdin has nothing to answer with, and input()
+        raises there — a scripted --transcribe must download, not crash. This is
+        also how CI hits it: pytest's capture stub reports isatty() False."""
+        self._uncached(monkeypatch, interactive=False)
+        monkeypatch.setattr(
+            utils, "read_user_input", lambda _p: pytest.fail("should not prompt")
+        )
+        assert transcripts._confirm_model_download("base") is True
+
+    def test_no_input_mode_proceeds_without_prompting(self, monkeypatch):
+        self._uncached(monkeypatch, interactive=True)
+        monkeypatch.setattr(utils, "NO_INPUT_MODE", True)
+        monkeypatch.setattr(
+            utils, "read_user_input", lambda _p: pytest.fail("should not prompt")
+        )
+        assert transcripts._confirm_model_download("base") is True
+
+    @pytest.mark.parametrize(
+        "answer,expected", [("y", True), ("yes", True), ("n", False), ("", False)]
+    )
+    def test_interactive_answer_decides(self, monkeypatch, answer, expected):
+        self._uncached(monkeypatch, interactive=True)
+        monkeypatch.setattr(utils, "read_user_input", lambda _p: answer)
+        assert transcripts._confirm_model_download("large-v3") is expected
+
+    def test_declining_aborts_the_load(self, monkeypatch):
+        """_load_model returns None rather than downloading behind the spinner."""
+        self._uncached(monkeypatch, interactive=True)
+        monkeypatch.setattr(utils, "read_user_input", lambda _p: "n")
+        monkeypatch.setattr(transcripts, "_cached_model", None)
+        monkeypatch.setattr(transcripts, "_cached_model_name", None)
+        import faster_whisper
+
+        monkeypatch.setattr(
+            faster_whisper,
+            "WhisperModel",
+            lambda *a, **k: pytest.fail("must not load after a decline"),
+        )
+        assert transcripts._load_model("large-v3") is None

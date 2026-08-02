@@ -42,6 +42,7 @@ import copy
 import os
 import queue
 import re
+import sys
 import threading
 import uuid
 from collections.abc import Callable
@@ -152,6 +153,18 @@ def warmup_transcription_model() -> bool:
     return _load_model() is not None
 
 
+def _stdin_is_interactive() -> bool:
+    """True when there is a terminal on stdin to prompt against.
+
+    A closed stdin has no ``isatty``, and pytest's capture stub answers False —
+    both mean the same thing here: do not call ``input()``.
+    """
+    try:
+        return bool(sys.stdin) and sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def _confirm_model_download(model_name: str) -> bool:
     """Gate a first-time Whisper model download on the terminal.
 
@@ -160,9 +173,12 @@ def _confirm_model_download(model_name: str) -> bool:
     neither, so ``--transcribe`` with a large model silently pulled up to 2.9 GB
     behind a "Loading transcription model..." spinner. Returns True to proceed.
 
-    Non-interactive runs (``--no-input``, and every server-side call, which
-    forces ``NO_INPUT_MODE``) announce the download and continue rather than
-    blocking on a prompt nobody can answer — the server has already asked.
+    Non-interactive runs announce the download and continue rather than blocking
+    on a prompt nobody can answer. That covers ``--no-input`` and every
+    server-side call (which forces ``NO_INPUT_MODE`` — and where the browser has
+    already asked), but also a piped or closed stdin: ``input()`` raises there,
+    so asking would turn a scripted ``--transcribe`` into a crash. Consent is a
+    guard against a surprise 2.9 GB download, not a reason to fail the run.
     """
     if is_whisper_model_cached(model_name):
         return True
@@ -170,7 +186,7 @@ def _confirm_model_download(model_name: str) -> bool:
     size = f" (~{size_mb / 1000:.1f} GB)" if size_mb >= 1000 else f" (~{size_mb} MB)"
     if not size_mb:
         size = ""
-    if utils.NO_INPUT_MODE:
+    if utils.NO_INPUT_MODE or not _stdin_is_interactive():
         utils.info_print(f"Downloading transcription model '{model_name}'{size}...")
         return True
     utils.warning_print(
