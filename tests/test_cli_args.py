@@ -932,3 +932,73 @@ def test_missing_ffmpeg_routes_through_fatal_startup_error(monkeypatch):
     assert video.check_ffmpeg_tools_available() is False
     assert len(seen) == 1
     assert "ffmpeg" in seen[0][1][0]
+
+
+class TestInstallGuidance:
+    """The guidance in the fatal alert is the only thing a windowed launch
+    shows, so it has to work for a Mac without Homebrew too."""
+
+    def _lines(self, monkeypatch, *, platform, has_brew):
+        import utils as u
+
+        monkeypatch.setattr(u.sys, "platform", platform)
+        monkeypatch.setattr(
+            u.shutil,
+            "which",
+            lambda tool: "/opt/homebrew/bin/brew" if has_brew else None,
+        )
+        return u.install_guidance_lines(
+            brew_command="brew install ffmpeg",
+            linux=["Linux (Debian/Ubuntu): sudo apt install ffmpeg"],
+            windows=["Windows (winget): winget install Gyan.FFmpeg"],
+            download_url="https://www.ffmpeg.org/download.html",
+            verify_commands=["ffmpeg -version"],
+        )
+
+    def test_macos_with_brew_leads_with_brew(self, monkeypatch):
+        lines = self._lines(monkeypatch, platform="darwin", has_brew=True)
+        assert any("brew install ffmpeg" in line for line in lines)
+        assert not any("brew.sh" in line for line in lines)
+
+    def test_macos_without_brew_leads_with_the_download(self, monkeypatch):
+        """`brew install …` is an instruction a brewless Mac cannot follow."""
+        lines = self._lines(monkeypatch, platform="darwin", has_brew=False)
+        blob = "\n".join(lines)
+        assert "Homebrew is not installed" in blob
+        assert "https://www.ffmpeg.org/download.html" in blob
+        assert "https://brew.sh" in blob
+        # The brew command survives as the second route, not the only one.
+        assert "brew install ffmpeg" in blob
+
+    def test_first_line_is_actionable_on_its_own(self, monkeypatch):
+        """The browser surfaces (Overview gate, Settings note, summary hint) are
+        one-liners that render only ``install_hint[0]``. A first line that is a
+        bare header — "macOS: Homebrew is not installed." — leaves those users
+        with nothing to act on, which is exactly what it did once."""
+        for platform, has_brew in (
+            ("darwin", True),
+            ("darwin", False),
+            ("linux", False),
+            ("win32", False),
+            ("sunos5", False),
+        ):
+            first = self._lines(monkeypatch, platform=platform, has_brew=has_brew)[0]
+            assert (
+                "ffmpeg.org/download.html" in first
+                or "install ffmpeg" in first
+                or "install Gyan.FFmpeg" in first
+            ), f"{platform} brew={has_brew}: {first!r}"
+            # A header line ends in a period and carries no command or URL.
+            assert not first.endswith("is not installed.")
+
+    def test_download_url_reachable_on_every_platform(self, monkeypatch):
+        for platform in ("darwin", "linux", "win32", "sunos5"):
+            lines = self._lines(monkeypatch, platform=platform, has_brew=True)
+            assert any(
+                "https://www.ffmpeg.org/download.html" in line for line in lines
+            ), platform
+
+    def test_verify_commands_come_last(self, monkeypatch):
+        lines = self._lines(monkeypatch, platform="linux", has_brew=False)
+        assert lines[-1] == "  ffmpeg -version"
+        assert lines[-2] == "Then verify in a new terminal:"

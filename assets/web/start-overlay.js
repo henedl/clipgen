@@ -72,6 +72,11 @@
     changelogLoaded: false,
     aboutLoaded: false,
     googleSheets: [],
+    // Last unauthenticated /api/spreadsheets/google payload: the credentials
+    // filename, searched paths and setup link behind the "Don't have
+    // credentials.json?" disclosure. Cached because the auth poll re-renders
+    // the CTA without one, and these facts don't change mid-sign-in.
+    googleCreds: null,
     excelFiles: [],
     statusData: null,
     recentProjects: [],
@@ -1276,7 +1281,7 @@
     var url = "/api/spreadsheets/google" + (force ? "?refresh=true" : "");
     return apiGet(url).then(function (g) {
       if (!g.authenticated) {
-        renderGoogleConnectCTA(g.auth_in_flight, g.auth_error);
+        renderGoogleConnectCTA(g.auth_in_flight, g.auth_error, g);
         return;
       }
       if (g.auth_error) {
@@ -1312,7 +1317,11 @@
     setHidden(els.googleRefresh, false);
   }
 
-  function renderGoogleConnectCTA(inFlight, errorMsg) {
+  // `creds` is the unauthenticated /api/spreadsheets/google payload. It is
+  // absent on the poll's re-renders, so the last one seen is cached on state
+  // rather than re-fetched — the setup facts don't change mid-sign-in.
+  function renderGoogleConnectCTA(inFlight, errorMsg, creds) {
+    if (creds && creds.credentials_paths) state.googleCreds = creds;
     els.googleStatus.innerHTML = "";
     setHidden(els.googlePicker, true);
     setHidden(els.googleRefresh, true);
@@ -1335,6 +1344,55 @@
     );
     row.appendChild(msg);
     els.googleStatus.appendChild(row);
+    if (!inFlight) renderGoogleCredentialsHelp(els.googleStatus);
+  }
+
+  // Everything a first-time user needs to get past "Connect Google" and has so
+  // far had no way to learn: what the file is, which three folders clipgen
+  // looks in, and where Google documents making one. The server has always
+  // known all of it — it just printed it to a stdout a windowed launch has no
+  // console for. Collapsed by default so it stays out of the way of the
+  // already-configured user.
+  function renderGoogleCredentialsHelp(container) {
+    var creds = state.googleCreds;
+    if (!creds || !creds.credentials_paths || !creds.credentials_paths.length) return;
+    var filename = creds.credentials_filename || "credentials.json";
+    var found = creds.credentials_found;
+
+    var details = el("details", "sheet-panel__creds");
+    var summary = el(
+      "summary",
+      "sheet-panel__creds-summary",
+      found ? "Using " + filename + " from " + found : "Don't have " + filename + "?"
+    );
+    details.appendChild(summary);
+
+    details.appendChild(el(
+      "p",
+      "sheet-panel__creds-text",
+      found
+        ? "Sign-in uses this file. If it is the wrong project, replace it and connect again."
+        : "Google Sheets access needs an OAuth client file from Google Cloud. " +
+          "Save it as " + filename + " in any of these folders, then Connect:"
+    ));
+
+    var list = el("ul", "sheet-panel__creds-paths");
+    for (var i = 0; i < creds.credentials_paths.length; i++) {
+      var path = creds.credentials_paths[i];
+      var item = el("li", "sheet-panel__creds-path", path);
+      if (found && path === found) item.classList.add("is-found");
+      list.appendChild(item);
+    }
+    details.appendChild(list);
+
+    if (creds.credentials_guide_url) {
+      var link = el("a", "sheet-panel__creds-link", "How to create " + filename + " ↗");
+      link.href = creds.credentials_guide_url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      details.appendChild(link);
+    }
+    container.appendChild(details);
   }
 
   function connectGoogle() {

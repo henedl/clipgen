@@ -68,6 +68,26 @@ jobs:
           cat > dist/INSTALL.txt <<'EOF'
           clipgen for macOS
 
+          BEFORE YOU START: install ffmpeg
+
+          clipgen cuts and inspects video with ffmpeg, which is not bundled with
+          this app (it is GPL-licensed). Without it clipgen shows an error and
+          quits on launch. Install it first:
+
+              brew install ffmpeg
+
+          If you don't have Homebrew, get it from https://brew.sh, or download a
+          prebuilt ffmpeg from https://www.ffmpeg.org/download.html and put
+          ffmpeg and ffprobe somewhere on your PATH. Verify with:
+
+              ffmpeg -version
+              ffprobe -version
+
+          Ollama (https://ollama.com/download) is optional — it powers the AI
+          summaries and reports. Everything else works without it.
+
+          INSTALLING CLIPGEN
+
           1. Drag clipgen.app to Applications.
           2. The first time you run it, macOS will say "clipgen is damaged or
              incomplete". This is Gatekeeper blocking an unsigned app downloaded

@@ -1500,6 +1500,25 @@ def api_ollama_pull_status() -> FlaskResponse:
     return jsonify(snapshot)
 
 
+@transcripts_bp.route("/api/models/ollama/start", methods=["POST"])
+def api_ollama_start() -> FlaskResponse:
+    """Start ``ollama serve`` on the user's behalf and report the outcome.
+
+    ``ollama_client.start_server()`` already existed and was already
+    lock-serialized, but the only thing that ever reached it was a
+    connection-refused retry buried inside ``generate()`` — so a user looking at
+    a dead AI panel had no way to trigger it. Synchronous on purpose: it is
+    bounded by the client's own ~10 s startup timeout, and a user who just
+    clicked "Start Ollama" wants the answer, not a second poller to babysit.
+    """
+    if not ollama_client.is_installed():
+        return err("Ollama is not installed")
+    started = ollama_client.start_server()
+    if not started:
+        return err("Ollama did not start")
+    return ok(started=True)
+
+
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
 def api_transcribe() -> FlaskResponse:
     """Enqueue participant(s) for background transcription."""

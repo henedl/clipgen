@@ -148,6 +148,9 @@
         </div>
         <div id="summaryEmpty" class="panel-empty hidden">
           <p class="panel-empty-text">No summary yet.</p>
+          <!-- Filled by renderSummaryEmpty() when Ollama is missing or stopped,
+               so the Run button below doesn't just fail silently. -->
+          <p id="summaryEmptyHint" class="panel-empty-hint hidden"></p>
           <button id="summaryRunCta" type="button" class="btn btn-small" data-tooltip="Runs a local AI thinking agent on this transcript">
             <span class="ai-agent-badge" aria-hidden="true"></span><span class="agent-run-label">Run summary</span>
           </button>
@@ -244,6 +247,9 @@
         <h3 id="modelInstallTitle">Download model?</h3>
       </div>
       <p id="modelInstallMessage" class="model-install-message"></p>
+      <!-- Platform install commands, shown only for the "Ollama isn't
+           installed" flavour. Monospaced because it holds shell commands. -->
+      <pre id="modelInstallHint" class="model-install-hint hidden"></pre>
       <div id="modelInstallProgress" class="model-install-progress hidden">
         <div class="model-install-bar"><div id="modelInstallBarFill" class="model-install-bar-fill"></div></div>
         <p id="modelInstallProgressText" class="model-install-progress-text"></p>

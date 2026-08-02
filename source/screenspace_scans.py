@@ -577,7 +577,11 @@ def generate_timelapse(
     ``-progress`` output.  Checks *cancel_flag* periodically to allow
     early termination.
 
-    Returns output file path on success, ``None`` on failure.
+    Returns the output file path on success and ``None`` when *cancel_flag*
+    stopped it. Raises ``RuntimeError`` when ffmpeg could not be started or
+    exited non-zero — the two states need different endings (a cancelled task
+    is not a failed one), and both callers turn the exception into a failed
+    node/task with the message attached.
     """
     # gif output has no H.264 encoder to choose, so it never probes for one.
     encoder = video.resolve_video_encoder() if output_format != "gif" else "libx264"
@@ -609,7 +613,13 @@ def generate_timelapse(
     )
 
     def encode(enc: str) -> int | None:
-        """Run one encode attempt; returns ffmpeg's rc, or None if cancelled."""
+        """Run one encode attempt; returns ffmpeg's rc, or None if cancelled.
+
+        A failure to *spawn* raises rather than returning None: the caller reads
+        None as "the user cancelled", and a missing ffmpeg reported as a cancel
+        is how a broken install used to show up as a completed timelapse task
+        with no output file.
+        """
         # Use Popen with -progress to get real-time encoding updates
         cmd = build(enc) + ["-progress", "pipe:1"]
         try:
@@ -619,8 +629,12 @@ def generate_timelapse(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
             )
             assert proc.stdout is not None  # guaranteed by stdout=PIPE
-        except (FileNotFoundError, OSError):
-            return None
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "ffmpeg is not installed or not found in PATH — cannot encode a timelapse."
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(f"Could not start ffmpeg: {exc}") from exc
 
         if on_progress:
             on_progress(0.0)
@@ -654,16 +668,21 @@ def generate_timelapse(
         video.note_hw_encode_failure(encoder)
         returncode = encode("libx264")
 
-    # A cancel (or a failed spawn) must not report completion: encode() returns
-    # None for those, and the caller's progress bar would otherwise jump to 100%
-    # on a task the user just stopped.
+    # A cancel must not report completion: encode() returns None for it, and the
+    # caller's progress bar would otherwise jump to 100% on a task the user just
+    # stopped. A failed spawn no longer arrives here — encode() raises for that.
     if returncode is None:
         return None
 
+    if returncode != 0:
+        # The worker only inspects its cancel flag when deciding a task's final
+        # status, so returning None here would mark a failed encode "completed"
+        # with no output. Raise so it lands in the failure branch with a reason —
+        # and before on_progress(1.0), so the bar never fills on a failed encode.
+        raise RuntimeError(f"ffmpeg exited with code {returncode} encoding timelapse")
+
     if on_progress:
         on_progress(1.0)
-    if returncode != 0:
-        return None
     return output_path
 
 

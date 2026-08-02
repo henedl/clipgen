@@ -2083,6 +2083,46 @@ def test_api_models_includes_cached_and_agents(monkeypatch):
     assert all(a["installed"] for a in agents)
 
 
+def _models_payload(monkeypatch, *, binary_present, server_answers):
+    import ollama_client
+    import server as server_mod
+
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+    monkeypatch.setattr(ollama_client, "is_installed", lambda: binary_present)
+    monkeypatch.setattr(
+        ollama_client, "list_models", lambda: [] if server_answers else None
+    )
+    app = server_mod.build_combined_app()
+    with app.test_client() as c:
+        return c.get("/api/models").get_json()["ollama"]
+
+
+def test_api_models_separates_not_installed_from_not_running(monkeypatch):
+    """`available` alone cannot tell the two apart, and they need opposite
+    advice — telling someone who never installed Ollama to "start it" was the
+    bug this field exists to fix."""
+    missing = _models_payload(monkeypatch, binary_present=False, server_answers=False)
+    assert missing["installed"] is False
+    assert missing["available"] is False
+
+    stopped = _models_payload(monkeypatch, binary_present=True, server_answers=False)
+    assert stopped["installed"] is True
+    assert stopped["available"] is False
+
+    running = _models_payload(monkeypatch, binary_present=True, server_answers=True)
+    assert running["installed"] is True
+    assert running["available"] is True
+
+
+def test_api_models_ships_install_guidance(monkeypatch):
+    """The platform install commands used to reach only the terminal, which a
+    desktop-bundle user never sees."""
+    payload = _models_payload(monkeypatch, binary_present=False, server_answers=False)
+    hint = payload["install_hint"]
+    assert hint and all(isinstance(line, str) for line in hint)
+    assert any("ollama.com" in line for line in hint)
+
+
 # ---- Completed-task merge semantics ----
 
 

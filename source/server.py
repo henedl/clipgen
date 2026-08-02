@@ -3570,11 +3570,22 @@ def build_combined_app(
         mid-session shows up without waiting out the TTL.
         """
         if _google_auth.client is None:
+            import cli as _cli
+
+            # The searched paths and the setup link ride along on the
+            # unauthenticated response only: they answer "what is
+            # credentials.json and where does it go", which is the one question
+            # the overlay could never answer. cli already computes the list —
+            # it just had nowhere to go but a stdout no windowed launch has.
             return ok(
                 authenticated=False,
                 auth_in_flight=_google_auth.in_flight,
                 auth_error=_google_auth.error,
                 sheets=[],
+                credentials_filename=_cli.CREDENTIALS_FILENAME,
+                credentials_paths=[str(p) for p in _cli.credentials_search_paths()],
+                credentials_found=str(_cli.resolve_credentials_path() or ""),
+                credentials_guide_url="https://docs.gspread.org/en/latest/oauth2.html",
             )
         try:
             metas = _cached_spreadsheet_meta(
@@ -3729,8 +3740,15 @@ def build_combined_app(
 
                 client = _cli.authenticate_google()
                 if client is None:
+                    # "check credentials.json" is unhelpful when there is no
+                    # such file to check — that is a setup step the user has
+                    # not done yet, not a broken file. The overlay expands on
+                    # whichever of the two this is.
                     _google_auth.error = (
-                        "Google authentication failed — check credentials.json."
+                        "No credentials.json found."
+                        if _cli.resolve_credentials_path() is None
+                        else "Google sign-in failed — credentials.json was found "
+                        "but could not be used."
                     )
                 else:
                     _google_auth.client = client
@@ -4011,6 +4029,13 @@ def build_combined_app(
             whisper={"models": whisper_models},
             ollama={
                 "available": ollama_available,
+                # "not installed" and "installed but not running" need opposite
+                # advice, and `available` alone cannot tell them apart — the
+                # pages used to tell a user who had never installed Ollama to
+                # "start it". install_hint carries the platform-specific
+                # commands that previously only ever reached the terminal.
+                "installed": ollama_client.is_installed(),
+                "install_hint": ollama_client.install_guidance_lines(),
                 "models": ollama_models,
                 "agents": ollama_agents,
                 "base_url": config.OLLAMA_BASE_URL,

@@ -689,10 +689,14 @@ class TestAnalysisPreviewAlignment:
 
 
 class TestScanVideoFramesFfmpegIntegration:
+    # Patch the owning sibling, not the facade: scan_video_frames calls the
+    # module-local name, so re-export rebinding on `screenspace` never reaches it.
     def test_ffmpeg_pipe_succeeds(self, monkeypatch):
         """When ffmpeg pipe succeeds, scan completes without error."""
+        import screenspace_frames
+
         monkeypatch.setattr(
-            screenspace,
+            screenspace_frames,
             "_scan_via_ffmpeg_pipe",
             lambda *a, **kw: True,
         )
@@ -704,28 +708,27 @@ class TestScanVideoFramesFfmpegIntegration:
             lambda ts, f: None,
         )
 
-    def test_warns_when_ffmpeg_pipe_fails(self, monkeypatch):
-        """When ffmpeg pipe fails, a warning is emitted."""
+    def test_raises_when_ffmpeg_pipe_fails(self, monkeypatch):
+        """Extracting no frames is a failure, not an empty result.
+
+        It used to warn and return, so the task completed having looked at
+        nothing and the user read the empty result as "found nothing".
+        """
+        import screenspace_frames
+
         monkeypatch.setattr(
-            screenspace,
+            screenspace_frames,
             "_scan_via_ffmpeg_pipe",
             lambda *a, **kw: False,
         )
-        warnings = []
-        monkeypatch.setattr(
-            screenspace.utils,
-            "warning_print",
-            lambda msg, *a, **kw: warnings.append(msg),
-        )
 
-        screenspace.scan_video_frames(
-            "/fake.mp4",
-            {"x": 0, "y": 0, "w": 10, "h": 10},
-            1.0,
-            lambda ts, f: None,
-        )
-        assert len(warnings) == 1
-        assert "ffmpeg" in warnings[0].lower()
+        with pytest.raises(RuntimeError, match="Could not extract frames"):
+            screenspace.scan_video_frames(
+                "/fake.mp4",
+                {"x": 0, "y": 0, "w": 10, "h": 10},
+                1.0,
+                lambda ts, f: None,
+            )
 
 
 class TestFacadeReExports:

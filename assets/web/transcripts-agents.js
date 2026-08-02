@@ -28,6 +28,7 @@
     scrollToSegment = TS.scrollToSegment,
     loadTranscript = TS.loadTranscript,
     ensureAgentModelInstalled = TS.ensureAgentModelInstalled,
+    _trFetchModels = TS._trFetchModels,
     _refreshAgentStateNow = TS._refreshAgentStateNow,
     _txEtaTicker = TS._txEtaTicker,
     _summaryEtaTracker = TS._summaryEtaTracker,
@@ -386,6 +387,26 @@
     state.summaryText = "";
     state.summaryCitations = null;
     state.citationsGenerating = false;
+    _updateSummaryEmptyHint();
+  }
+
+  // "No summary yet." plus a Run button that silently does nothing is the most
+  // common first contact with the AI features, and it never said why. Fill in
+  // the reason when there is one. Fire-and-forget: the empty state is already
+  // on screen and correct without it, so a slow or failed /api/models must
+  // never delay the render or throw.
+  function _updateSummaryEmptyHint() {
+    var hintEl = qs("#summaryEmptyHint");
+    if (!hintEl) return;
+    hintEl.classList.add("hidden");
+    hintEl.textContent = "";
+    _trFetchModels().then(function (data) {
+      var status = clipgenOllamaStatus(data && data.ollama);
+      if (status.state === "ok") return;
+      var extra = status.state === "missing" && status.hint.length ? " " + status.hint[0] : "";
+      hintEl.textContent = status.message + extra;
+      hintEl.classList.remove("hidden");
+    }).catch(function () { /* leave the plain empty state alone */ });
   }
 
   function renderSummary(text) {
