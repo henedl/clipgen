@@ -119,6 +119,25 @@
         sel.insertBefore(custom, sel.firstChild);
       }
       sel.disabled = false;
+
+      // An Ollama dropdown whose only entry is "<model> (current)" looks like a
+      // populated list, so a user with no Ollama at all gets no signal that the
+      // setting cannot do anything. Say so next to the control.
+      if (provider === "ollama") {
+        var status = clipgenOllamaStatus(data.ollama);
+        var note = sel.parentNode && sel.parentNode.querySelector(".settings-model-note");
+        if (status.state !== "ok" && sel.parentNode) {
+          if (!note) {
+            note = document.createElement("div");
+            note.className = "settings-model-note";
+            sel.parentNode.appendChild(note);
+          }
+          var extra = status.state === "missing" && status.hint.length ? " " + status.hint[0] : "";
+          note.textContent = status.message + extra;
+        } else if (note) {
+          note.remove();
+        }
+      }
     });
   }
 

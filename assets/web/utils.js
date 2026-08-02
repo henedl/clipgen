@@ -2016,6 +2016,47 @@ var clipgenHashTab = function () {
   return m ? m[1] : "";
 };
 
+// ---- Ollama availability ----
+
+// Classify the `ollama` block of /api/models into something a panel can render.
+// Returns {state, message, hint, baseUrl} where state is "ok" (usable or
+// unknown), "missing" (binary absent) or "stopped" (installed, not answering).
+//
+// The two failure states need opposite advice, and every page used to collapse
+// them into one boolean — Overview told users who had never installed Ollama to
+// "start it, then Refresh". Transcripts, Overview and Settings all route their
+// wording through here so the answer is the same wherever it is asked.
+//
+// An absent or unfetched payload is deliberately "ok": an unknown state must
+// never block an action or paint a scary banner.
+var clipgenOllamaStatus = function (ollama) {
+  var baseUrl = (ollama && ollama.base_url) || "localhost";
+  var hint = (ollama && ollama.install_hint) || [];
+  if (!ollama) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl };
+  // The messages name the problem but prescribe no particular control — the
+  // three surfaces that show them have different affordances (Overview has a
+  // Refresh, Settings has nothing, the dialog has its own retry button), and a
+  // banner telling you to press something that isn't there is worse than one
+  // that just says what is wrong.
+  if (ollama.installed === false) {
+    return {
+      state: "missing",
+      message: "Ollama is not installed — the AI summaries, citations and reports need it.",
+      hint: hint,
+      baseUrl: baseUrl,
+    };
+  }
+  if (ollama.available === false) {
+    return {
+      state: "stopped",
+      message: "Ollama is installed but not running at " + baseUrl + ".",
+      hint: hint,
+      baseUrl: baseUrl,
+    };
+  }
+  return { state: "ok", message: "", hint: hint, baseUrl: baseUrl };
+};
+
 // ---- Per-page UI state (localStorage) ----
 
 var UI_STATE_STORAGE_KEY = "clipgen-ui-state";

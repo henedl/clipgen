@@ -2528,16 +2528,43 @@
       var progressText = qs("#modelInstallProgressText");
       var cancelBtn = qs("#modelInstallCancel");
       var confirmBtn = qs("#modelInstallConfirm");
+      var hintEl = qs("#modelInstallHint");
 
       progress.classList.add("hidden");
       barFill.style.width = "0%";
       progressText.textContent = "";
+      hintEl.classList.add("hidden");
+      hintEl.textContent = "";
       cancelBtn.disabled = false;
       cancelBtn.textContent = "Cancel";
       confirmBtn.disabled = false;
       confirmBtn.classList.remove("hidden");
 
-      if (opts.kind === "whisper") {
+      if (opts.kind === "ollama-runtime") {
+        // Ollama itself is missing or down — a different problem from "the
+        // model isn't pulled", and previously the one case the gate stayed
+        // silent about. No auto-install: we show the commands and offer a
+        // re-check, except for "stopped", where starting the server is
+        // something clipgen can genuinely do on the user's behalf.
+        // Not status.message: that one is written for a panel banner and ends
+        // in "then Refresh", which is the wrong instruction next to a button
+        // that does the re-check itself.
+        if (opts.state === "missing") {
+          titleEl.textContent = "Ollama isn't installed";
+          msgEl.textContent = "clipgen couldn't find Ollama on this machine. " +
+            "The AI summaries, citations and reports need it — everything else works without it.";
+          confirmBtn.textContent = "I've installed it — retry";
+          if (opts.hint && opts.hint.length) {
+            hintEl.textContent = opts.hint.join("\n");
+            hintEl.classList.remove("hidden");
+          }
+        } else {
+          titleEl.textContent = "Ollama isn't running";
+          msgEl.textContent = "Ollama is installed but isn't answering at " +
+            (opts.baseUrl || "localhost") + ". clipgen can start it for you.";
+          confirmBtn.textContent = "Start Ollama";
+        }
+      } else if (opts.kind === "whisper") {
         titleEl.textContent = "Download transcription model?";
         var size = opts.sizeMb ? " (~" + _trFormatModelSize(opts.sizeMb) + ")" : "";
         if (opts.prewarm) {
@@ -2568,7 +2595,59 @@
         resolve(result);
       }
       function onCancel() { close(false); }
+
+      // "Start Ollama" / "I've installed it — retry": both end in the same
+      // question — is Ollama usable now? Re-fetch rather than trusting the
+      // start call, so a server that spawned but never came up still reads as
+      // a failure.
+      function onRuntimeConfirm() {
+        confirmBtn.disabled = true;
+        progress.classList.remove("hidden");
+        progressText.textContent = opts.state === "stopped" ? "Starting…" : "Checking…";
+        var step = opts.state === "stopped"
+          ? apiPost("/api/models/ollama/start", {}).catch(function () { return null; })
+          : Promise.resolve(null);
+        // Re-enabling the button and relabelling Cancel is the only way out of
+        // the "Checking…" state, so it has to happen on *every* ending — a
+        // /api/models that rejects left the dialog stuck mid-check with both
+        // buttons dead.
+        function stillUnavailable(text) {
+          if (cancelled) return;
+          progressText.textContent = text;
+          confirmBtn.disabled = false;
+          cancelBtn.textContent = "Close";
+        }
+
+        step.then(function () {
+          _trModelsCache = null;
+          _trModelsCachePromise = null;
+          return _trFetchModels();
+        }).then(function (data) {
+          if (cancelled) return;
+          // _trFetchModels resolves null rather than rejecting when the fetch
+          // fails, and clipgenOllamaStatus(null) is "ok" by design (an unknown
+          // state must never block an action elsewhere). Here that default is
+          // wrong in the other direction: the user asked "is it ready now?" and
+          // a failed check is not a yes.
+          if (!data || !data.ok) {
+            stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
+            return;
+          }
+          if (clipgenOllamaStatus(data.ollama).state === "ok") {
+            showToast("Ollama is ready");
+            close(true);
+            return;
+          }
+          stillUnavailable(opts.state === "stopped"
+            ? "Ollama still isn't responding."
+            : "Still not finding Ollama. Open a new terminal and check `ollama --version`.");
+        }).catch(function () {
+          stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
+        });
+      }
+
       function onConfirm() {
+        if (opts.kind === "ollama-runtime") { onRuntimeConfirm(); return; }
         if (opts.kind === "whisper") { close(true); return; }
         // Ollama: kick off the pull and show progress in place. Cancel stays
         // enabled so the user can dismiss while it runs.
@@ -2608,22 +2687,52 @@
     });
   }
 
-  // Gate an agent run on its Ollama model being installed. Resolves true to
-  // proceed, false to abort. We only block when Ollama is reachable AND the
-  // model is positively missing — otherwise the existing "model unavailable"
-  // error path handles it.
+  // Gate an agent run on Ollama being usable and its model being installed.
+  // Resolves true to proceed, false to abort.
+  //
+  // This used to return true whenever Ollama was unreachable, on the theory
+  // that the downstream "model unavailable" error would explain it — but that
+  // error only appears on two of the agent surfaces, and never says how to fix
+  // anything. An unreachable Ollama is the state a first-time user is actually
+  // in, so it gets its own dialog. An *unknown* state (fetch failed) still
+  // passes through: never block an action on a question we couldn't ask.
   function ensureAgentModelInstalled(agentKey) {
     return _trFetchModels().then(function (data) {
       var oll = data && data.ollama;
-      if (!oll || !oll.available) return true;
-      var agents = oll.agents || [];
-      var info = null;
-      for (var i = 0; i < agents.length; i++) {
-        if (agents[i].key === agentKey) { info = agents[i]; break; }
+      if (!oll) return true;
+      var status = clipgenOllamaStatus(oll);
+      if (status.state !== "ok") {
+        return confirmModelInstall({
+          kind: "ollama-runtime",
+          state: status.state,
+          baseUrl: status.baseUrl,
+          hint: status.hint,
+        }).then(function (recovered) {
+          if (!recovered) return false;
+          // Ollama is up now, but that says nothing about the agent's model —
+          // the payload we started from listed no models at all. Ask again
+          // against the fresh one the dialog just refetched.
+          return _trFetchModels().then(function (fresh) {
+            return _ensureModelFromPayload(fresh, agentKey);
+          });
+        });
       }
-      if (!info || info.installed || !info.model) return true;
-      return confirmModelInstall({ kind: "ollama", agentKey: agentKey, model: info.model });
+      return _ensureModelFromPayload(data, agentKey);
     }).catch(function () { return true; });
+  }
+
+  // The "is this agent's model pulled?" half of the gate, against an already
+  // fetched /api/models payload. Resolves true to proceed.
+  function _ensureModelFromPayload(data, agentKey) {
+    var oll = data && data.ollama;
+    if (!oll) return true;
+    var agents = oll.agents || [];
+    var info = null;
+    for (var i = 0; i < agents.length; i++) {
+      if (agents[i].key === agentKey) { info = agents[i]; break; }
+    }
+    if (!info || info.installed || !info.model) return true;
+    return confirmModelInstall({ kind: "ollama", agentKey: agentKey, model: info.model });
   }
 
   function _applySettingsSnapshot(applied, settings) {

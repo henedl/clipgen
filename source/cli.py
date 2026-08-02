@@ -967,7 +967,15 @@ def authenticate_google() -> Any | None:
             gspread_client = gspread.oauth(credentials_filename=str(credentials))
         utils.debug_print("Login successful!")
         return gspread_client
-    except (gspread.exceptions.GSpreadException, FileNotFoundError, OSError) as e:
+    # ValueError covers json.JSONDecodeError: a credentials.json that exists but
+    # is malformed used to escape this handler entirely and surface as a
+    # traceback, when it is exactly the case the guidance below is written for.
+    except (
+        gspread.exceptions.GSpreadException,
+        FileNotFoundError,
+        OSError,
+        ValueError,
+    ) as e:
         searched = [f"  - {p}" for p in credentials_search_paths()]
         utils.error_print(
             "Could not authenticate with Google.",

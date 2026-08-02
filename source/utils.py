@@ -6,6 +6,7 @@ import functools
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -553,6 +554,65 @@ def augment_path_for_gui_launch() -> list[str]:
     if added:
         os.environ["PATH"] = os.pathsep.join([*current, *added])
     return added
+
+
+def install_guidance_lines(
+    *,
+    brew_command: str,
+    linux: list[str],
+    windows: list[str],
+    download_url: str,
+    verify_commands: list[str],
+) -> list[str]:
+    """Build platform-specific "how do I install this" lines for a missing tool.
+
+    Shared by the ffmpeg and Ollama guidance so the two stay in step — both are
+    surfaced to users who have no console (a native alert, or the browser), and
+    both used to hand macOS users ``brew install …`` unconditionally. That is a
+    dead end on a machine without Homebrew, which is the *default* state of a
+    fresh Mac: nothing else in clipgen requires it. So the macOS branch probes
+    for brew and leads with the direct download when it is absent.
+
+    ``download_url`` is always reachable in the output, on every platform — it
+    is the one instruction that works regardless of what package manager the
+    user does or does not have.
+
+    **Line 0 is always a complete, actionable instruction on its own.** The
+    browser surfaces (Overview's gate, the Settings note, the Transcripts
+    summary hint) are one-liners and show only the first line; the full list
+    goes to the terminal and to the runtime dialog. A brewless Mac briefly led
+    with a bare "Homebrew is not installed." header here, which told those
+    surfaces' users nothing they could act on.
+    """
+    if sys.platform == "darwin":
+        if shutil.which("brew") is not None:
+            platform_specific = [f"macOS: install with Homebrew: {brew_command}"]
+        else:
+            platform_specific = [
+                f"macOS: download from {download_url}",
+                "  Homebrew is not installed. To use it instead, install it from",
+                f"  https://brew.sh, then: {brew_command}",
+            ]
+    elif sys.platform.startswith("linux"):
+        platform_specific = list(linux)
+    elif sys.platform.startswith("win"):
+        platform_specific = list(windows)
+    else:
+        platform_specific = []
+
+    if any(download_url in line for line in platform_specific):
+        download_lines = []
+    elif platform_specific:
+        download_lines = [f"Or download from: {download_url}"]
+    else:
+        download_lines = [f"Download from: {download_url}"]
+
+    return [
+        *platform_specific,
+        *download_lines,
+        "Then verify in a new terminal:",
+        *[f"  {command}" for command in verify_commands],
+    ]
 
 
 def _show_native_alert(title: str, message: str) -> None:

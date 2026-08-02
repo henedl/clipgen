@@ -84,8 +84,14 @@ def scan_video_frames(
         full_frame=full_frame,
         cv_scale=cv_scale,
     ):
-        utils.warning_print(
-            f"ffmpeg pipe extraction failed for {Path(video_path).name}"
+        # This used to warn and return, so the scan "completed" having examined
+        # zero frames — the user saw an empty result list and read it as "the
+        # detector found nothing", not "nothing was ever looked at". The cv2
+        # fallback this fell back to is long gone. Raise so the worker marks the
+        # task failed with a reason.
+        raise RuntimeError(
+            f"Could not extract frames from {Path(video_path).name} — "
+            "check that ffmpeg is installed and the file is readable."
         )
 
 
@@ -323,9 +329,12 @@ def _scan_via_ffmpeg_pipe(
 ) -> bool:
     """Try to scan frames via ffmpeg pipe, calling *callback* for each.
 
-    Returns ``True`` if the ffmpeg path succeeded (caller should skip the
-    cv2 fallback), ``False`` if it failed and the caller should fall back
-    to cv2-based extraction.
+    Returns ``True`` if the ffmpeg path succeeded, ``False`` if it could not
+    run at all (no ffmpeg on PATH, unprobeable video, zero dimensions).
+
+    There is no longer a cv2 fallback for a ``False`` here — ``scan_video_frames``
+    raises instead, because a scan that quietly yields zero frames is
+    indistinguishable to the user from a scan that legitimately found nothing.
     """
     if not shutil.which("ffmpeg"):
         return False

@@ -149,8 +149,14 @@
   function ollamaGate() {
     var o = rpState.ollama;
     if (!o) return null;
-    if (o.available === false) {
-      return "Ollama is not reachable at " + (o.base_url || "localhost") + ". Start it, then Refresh.";
+    var status = clipgenOllamaStatus(o);
+    if (status.state !== "ok") {
+      // The install command only helps the "missing" case; a stopped server
+      // just needs starting, and this panel's Refresh re-checks either way.
+      var extra = status.state === "missing" && status.hint.length
+        ? " " + status.hint[0]
+        : " Start it, then Refresh.";
+      return status.message + extra;
     }
     var agents = o.agents || [];
     for (var i = 0; i < agents.length; i++) {

@@ -1253,6 +1253,71 @@
   min-width: 0;
 }
 
+/* Rendered by renderGoogleConnectCTA since the connect flow was built; the
+   rule was never written, so a failed sign-in reported itself in body text. */
+.start-overlay .sheet-panel__status-error {
+  margin-bottom: var(--space-2);
+  color: var(--severity-high);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* "Don't have credentials.json?" disclosure under the Connect button. */
+.start-overlay .sheet-panel__creds {
+  margin-top: var(--space-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.start-overlay .sheet-panel__creds-summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  list-style: none;
+}
+
+.start-overlay .sheet-panel__creds-summary::-webkit-details-marker {
+  display: none;
+}
+
+.start-overlay .sheet-panel__creds-summary::before {
+  content: "▸ ";
+}
+
+.start-overlay .sheet-panel__creds[open] .sheet-panel__creds-summary::before {
+  content: "▾ ";
+}
+
+.start-overlay .sheet-panel__creds-summary:hover {
+  color: var(--fg);
+}
+
+.start-overlay .sheet-panel__creds-text {
+  margin: var(--space-2) 0;
+  color: var(--fg-muted);
+}
+
+.start-overlay .sheet-panel__creds-paths {
+  margin: 0 0 var(--space-2);
+  padding-left: var(--space-4);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+.start-overlay .sheet-panel__creds-path.is-found {
+  color: var(--fg);
+}
+
+.start-overlay .sheet-panel__creds-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.start-overlay .sheet-panel__creds-link:hover {
+  text-decoration: underline;
+}
+
 .start-overlay .sheet-panel__connect {
   appearance: none;
   border: 1px solid var(--accent);

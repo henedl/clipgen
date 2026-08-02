@@ -152,6 +152,40 @@ def warmup_transcription_model() -> bool:
     return _load_model() is not None
 
 
+def _confirm_model_download(model_name: str) -> bool:
+    """Gate a first-time Whisper model download on the terminal.
+
+    The web UI has had an explicit consent dialog and an authoritative
+    server-side ``allow_download`` gate since transcription shipped; the CLI had
+    neither, so ``--transcribe`` with a large model silently pulled up to 2.9 GB
+    behind a "Loading transcription model..." spinner. Returns True to proceed.
+
+    Non-interactive runs (``--no-input``, and every server-side call, which
+    forces ``NO_INPUT_MODE``) announce the download and continue rather than
+    blocking on a prompt nobody can answer — the server has already asked.
+    """
+    if is_whisper_model_cached(model_name):
+        return True
+    size_mb = next((m["size_mb"] for m in WHISPER_MODELS if m["name"] == model_name), 0)
+    size = f" (~{size_mb / 1000:.1f} GB)" if size_mb >= 1000 else f" (~{size_mb} MB)"
+    if not size_mb:
+        size = ""
+    if utils.NO_INPUT_MODE:
+        utils.info_print(f"Downloading transcription model '{model_name}'{size}...")
+        return True
+    utils.warning_print(
+        f"The '{model_name}' transcription model{size} is not downloaded yet.",
+        details=["It will be downloaded once and stored locally."],
+    )
+    answer = utils.read_user_input("Download it now? [y/n]\n>> ")
+    if answer.strip().lower() in ("y", "yes"):
+        return True
+    utils.info_print(
+        "Skipped. Pick a smaller model with TRANSCRIBE_MODEL (see --settings)."
+    )
+    return False
+
+
 def _load_model(model_name: str | None = None) -> Any:
     """Lazy-load the WhisperModel, caching it for reuse (thread-safe).
 
@@ -199,6 +233,9 @@ def _load_model(model_name: str | None = None) -> Any:
             if threads > 0:
                 load_kwargs["cpu_threads"] = threads
             return WhisperModel(model_name, **load_kwargs)
+
+        if not _confirm_model_download(model_name):
+            return None
 
         utils.info_print(f"Loading transcription model '{model_name}'...")
         _cached_model = utils.run_with_spinner(

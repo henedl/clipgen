@@ -11,6 +11,9 @@ This module is intentionally small — higher-level reasoning lives in
 
 Key functions:
   is_available()      - check Ollama server connectivity
+  is_installed()      - check whether the `ollama` binary exists at all
+  start_server()      - spawn `ollama serve` and wait for it to answer
+  install_guidance_lines() - platform-specific "how to install Ollama" text
   list_models()       - enumerate installed models with metadata
   is_model_installed()- check whether a specific model is installed locally
   generate()          - send a prompt and get a text response
@@ -22,7 +25,6 @@ import json
 import shutil
 import socket
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
@@ -48,7 +50,7 @@ _START_TIMEOUT = 10  # seconds to wait for server to become available after star
 _PULL_TIMEOUT = 300  # seconds
 _CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet stretches
 
-# Serializes _start_server() calls so two threads hitting connection-refused at
+# Serializes start_server() calls so two threads hitting connection-refused at
 # the same time don't both spawn `ollama serve`.
 _start_server_lock = threading.Lock()
 
@@ -160,33 +162,34 @@ def _is_connection_refused(exc: Exception) -> bool:
     return isinstance(exc, ConnectionRefusedError)
 
 
-def _ollama_install_guidance_lines() -> list[str]:
-    """Return actionable install guidance based on the current platform."""
-    platform_specific = []
-    if sys.platform == "darwin":
-        platform_specific = [
-            "macOS: install with Homebrew: brew install ollama",
-        ]
-    elif sys.platform.startswith("linux"):
-        platform_specific = [
-            "Linux: curl -fsSL https://ollama.com/install.sh | sh",
-        ]
-    elif sys.platform.startswith("win"):
-        platform_specific = [
-            "Windows: winget install Ollama.Ollama",
-        ]
-    else:
-        platform_specific = [
-            "Download from: https://ollama.com/download",
-        ]
+def install_guidance_lines() -> list[str]:
+    """Return actionable install guidance based on the current platform.
 
-    return platform_specific + [
-        "Then verify in a new terminal:",
-        "  ollama --version",
-    ]
+    Public because the guidance now has to reach the browser as well as the
+    terminal — ``/api/models`` ships it so the Transcripts and Overview pages
+    can tell a user *how* to get Ollama instead of only that it is missing.
+    """
+    return utils.install_guidance_lines(
+        brew_command="brew install ollama",
+        linux=["Linux: curl -fsSL https://ollama.com/install.sh | sh"],
+        windows=["Windows: winget install Ollama.Ollama"],
+        download_url="https://ollama.com/download",
+        verify_commands=["ollama --version"],
+    )
 
 
-def _start_server() -> bool:
+def is_installed() -> bool:
+    """Return True when the ``ollama`` binary is on PATH.
+
+    Deliberately distinct from ``is_available()``, which reports whether the
+    *server* answers. The two states need opposite advice — "start it, then
+    refresh" is useless to someone who never installed it — so every surface
+    that gates on Ollama reads both rather than collapsing them into one flag.
+    """
+    return shutil.which("ollama") is not None
+
+
+def start_server() -> bool:
     """Attempt to start ``ollama serve`` and wait for it to become available.
 
     Serialized via ``_start_server_lock`` so concurrent connection-refused
@@ -195,10 +198,10 @@ def _start_server() -> bool:
 
     Returns True if the server is responding after startup, False otherwise.
     """
-    if shutil.which("ollama") is None:
+    if not is_installed():
         utils.warning_print(
             "Ollama is not installed.",
-            details=_ollama_install_guidance_lines(),
+            details=install_guidance_lines(),
         )
         return False
 
@@ -412,7 +415,7 @@ def generate(
             utils.warning_print(f"Ollama generate failed (connection): {exc}")
             return None
         # Connection refused — try to start the server and retry once
-        if not _start_server():
+        if not start_server():
             return None
         try:
             return _do_generate(body, cancel_event=cancel_event, on_token=on_token)
@@ -504,7 +507,7 @@ def pull_model(
             utils.warning_print(f"Ollama pull failed (connection): {exc}")
             return False
         # Connection refused — try to start the server and retry once.
-        if not _start_server():
+        if not start_server():
             return False
         try:
             return _do_pull(model, on_progress)

@@ -643,6 +643,22 @@ def test_google_list_unauthenticated(client):
     assert body["sheets"] == []
 
 
+def test_google_list_unauthenticated_explains_credentials(client):
+    """The overlay could say "check credentials.json" but never what that file
+    is or where it goes — the searched paths only ever reached stdout, which a
+    windowed launch has no console for."""
+    import cli
+
+    body = client.get("/api/spreadsheets/google").get_json()
+    assert body["credentials_filename"] == "credentials.json"
+    assert body["credentials_paths"] == [str(p) for p in cli.credentials_search_paths()]
+    assert len(body["credentials_paths"]) >= 2
+    assert "gspread" in body["credentials_guide_url"]
+    # Empty string (not null) when nothing is on disk, so the JS can branch on
+    # truthiness without a null check.
+    assert isinstance(body["credentials_found"], str)
+
+
 def test_google_list_authenticated(client, monkeypatch):
     """Sheet metadata (incl. modifiedTime) comes from get_all_spreadsheet_meta."""
     server._google_auth.client = object()  # stand-in

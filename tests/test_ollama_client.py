@@ -440,7 +440,7 @@ class TestGenerateAgainstRealServer:
 class TestAutoStartServer:
     """Tests for the auto-start behavior when Ollama is not running."""
 
-    @patch("ollama_client._start_server", return_value=True)
+    @patch("ollama_client.start_server", return_value=True)
     @patch("ollama_client.urllib.request.urlopen")
     def test_retries_after_connection_refused(self, mock_urlopen, mock_start):
         """On ConnectionRefusedError, start server and retry successfully."""
@@ -455,7 +455,7 @@ class TestAutoStartServer:
         assert result == "retried ok"
         mock_start.assert_called_once()
 
-    @patch("ollama_client._start_server", return_value=False)
+    @patch("ollama_client.start_server", return_value=False)
     @patch("ollama_client.urllib.request.urlopen")
     def test_returns_none_when_server_start_fails(self, mock_urlopen, mock_start):
         """If server fails to start, return None without retrying."""
@@ -466,7 +466,7 @@ class TestAutoStartServer:
         assert result is None
         mock_start.assert_called_once()
 
-    @patch("ollama_client._start_server")
+    @patch("ollama_client.start_server")
     @patch("ollama_client.urllib.request.urlopen")
     def test_does_not_start_server_on_other_errors(self, mock_urlopen, mock_start):
         """Non-ConnectionRefused errors should not trigger auto-start."""
@@ -481,25 +481,25 @@ class TestAutoStartServer:
     def test_start_server_polls_until_available(
         self, mock_avail, mock_popen, mock_which, monkeypatch
     ):
-        """_start_server polls is_available until it returns True."""
+        """start_server polls is_available until it returns True."""
         # What is under test is the poll *loop*, not the production 0.5 s spacing
         # between attempts — leaving it real just slept through two intervals.
         monkeypatch.setattr(ollama_client, "_START_POLL_INTERVAL", 0)
         mock_avail.side_effect = [False, False, True]
-        assert ollama_client._start_server() is True
+        assert ollama_client.start_server() is True
         assert mock_avail.call_count == 3
         mock_popen.assert_called_once()
 
     @patch("ollama_client.shutil.which", return_value=None)
     def test_start_server_returns_false_when_binary_missing(self, mock_which):
-        """_start_server returns False when ollama is not installed."""
-        assert ollama_client._start_server() is False
+        """start_server returns False when ollama is not installed."""
+        assert ollama_client.start_server() is False
 
     @patch("ollama_client.shutil.which", return_value=None)
     @patch("ollama_client.utils.warning_print")
     def test_start_server_shows_install_guidance(self, mock_warn, mock_which):
-        """_start_server shows install guidance when ollama is not in PATH."""
-        ollama_client._start_server()
+        """start_server shows install guidance when ollama is not in PATH."""
+        ollama_client.start_server()
         mock_warn.assert_called_once()
         assert "not installed" in mock_warn.call_args[0][0].lower()
         details = mock_warn.call_args[1]["details"]

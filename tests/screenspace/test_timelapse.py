@@ -3,6 +3,8 @@
 import io
 from unittest import mock
 
+import pytest
+
 
 import screenspace
 import screenspace_tools
@@ -158,8 +160,13 @@ class TestGenerateTimelapseProgress:
         # A stopped task must not leave the caller's bar showing completion.
         assert 1.0 not in progress_values
 
-    def test_failed_spawn_reports_no_completion(self, monkeypatch):
-        """An unspawnable ffmpeg returns None without claiming 100%."""
+    def test_failed_spawn_raises_rather_than_reading_as_cancel(self, monkeypatch):
+        """A missing ffmpeg raises: None is reserved for a user cancel.
+
+        Returning None here used to make the worker mark the task completed
+        (it decides status from its cancel flag, not the return value), so a
+        broken ffmpeg install produced a "finished" timelapse with no file.
+        """
 
         def boom(*_a, **_kw):
             raise FileNotFoundError("no ffmpeg")
@@ -167,19 +174,19 @@ class TestGenerateTimelapseProgress:
         monkeypatch.setattr("subprocess.Popen", boom)
 
         progress_values = []
-        result = screenspace.generate_timelapse(
-            "/video.mp4",
-            {"x": 0, "y": 0, "w": 100, "h": 100},
-            10.0,
-            "/out.mp4",
-            on_progress=lambda p: progress_values.append(p),
-        )
+        with pytest.raises(RuntimeError, match="ffmpeg is not installed"):
+            screenspace.generate_timelapse(
+                "/video.mp4",
+                {"x": 0, "y": 0, "w": 100, "h": 100},
+                10.0,
+                "/out.mp4",
+                on_progress=lambda p: progress_values.append(p),
+            )
 
-        assert result is None
         assert 1.0 not in progress_values
 
-    def test_encode_failure_still_reports_completion(self, monkeypatch):
-        """A non-zero rc keeps the pre-refactor behavior: bar completes, None returned."""
+    def test_encode_failure_raises_without_completing_the_bar(self, monkeypatch):
+        """A non-zero rc is a failure, not a silent None with a full bar."""
         fake_proc = mock.MagicMock()
         fake_proc.stdout = io.BytesIO(b"progress=end\n")
         fake_proc.returncode = 1
@@ -188,16 +195,16 @@ class TestGenerateTimelapseProgress:
         monkeypatch.setattr("subprocess.Popen", lambda *a, **kw: fake_proc)
 
         progress_values = []
-        result = screenspace.generate_timelapse(
-            "/video.mp4",
-            {"x": 0, "y": 0, "w": 100, "h": 100},
-            10.0,
-            "/out.mp4",
-            on_progress=lambda p: progress_values.append(p),
-        )
+        with pytest.raises(RuntimeError, match="exited with code 1"):
+            screenspace.generate_timelapse(
+                "/video.mp4",
+                {"x": 0, "y": 0, "w": 100, "h": 100},
+                10.0,
+                "/out.mp4",
+                on_progress=lambda p: progress_values.append(p),
+            )
 
-        assert result is None
-        assert 1.0 in progress_values
+        assert 1.0 not in progress_values
 
 
 class TestTimelapseDispatchPassesMarkers:

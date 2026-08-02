@@ -145,31 +145,19 @@ def accurate_seek_args(timestamp_seconds: float) -> tuple[list[str], list[str]]:
 
 def _ffmpeg_install_guidance_lines() -> list[str]:
     """Return actionable install guidance based on the current platform."""
-    platform_specific = []
-    if sys.platform == "darwin":
-        platform_specific = [
-            "macOS: install with Homebrew: brew install ffmpeg",
-        ]
-    elif sys.platform.startswith("linux"):
-        platform_specific = [
+    return utils.install_guidance_lines(
+        brew_command="brew install ffmpeg",
+        linux=[
             "Linux (Debian/Ubuntu): sudo apt update && sudo apt install ffmpeg",
             "Linux (Fedora): sudo dnf install ffmpeg",
-        ]
-    elif sys.platform.startswith("win"):
-        platform_specific = [
+        ],
+        windows=[
             "Windows (winget): winget install Gyan.FFmpeg",
             "Windows (chocolatey): choco install ffmpeg",
-        ]
-    else:
-        platform_specific = [
-            "Install from: https://www.ffmpeg.org/download.html",
-        ]
-
-    return platform_specific + [
-        "Then verify in a new terminal:",
-        "  ffmpeg -version",
-        "  ffprobe -version",
-    ]
+        ],
+        download_url="https://www.ffmpeg.org/download.html",
+        verify_commands=["ffmpeg -version", "ffprobe -version"],
+    )
 
 
 def check_ffmpeg_tools_available() -> bool:
@@ -185,6 +173,10 @@ def check_ffmpeg_tools_available() -> bool:
         "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
     ]
     details.extend(_ffmpeg_install_guidance_lines())
+    if not getattr(sys, "frozen", False):
+        # Source checkouts ship a script that does the whole job; a frozen
+        # bundle has no repo to run it from, so only mention it when there is.
+        details.append("Or, from this checkout: scripts/install-ffmpeg-ollama.sh")
     # Not error_print: this aborts startup, and a windowed launch has no console
     # to read the guidance above — the app would just quit with nothing on screen.
     utils.fatal_startup_error("Required video tools are missing from PATH.", details)
