@@ -81,6 +81,82 @@ def test_teardown_is_idempotent():
     desktop_chrome.teardown()
     desktop_chrome.teardown()
     assert desktop_chrome._observers == []
+    # The layout state resets sit above the "no observers" early-out: apply()
+    # runs a first layout pass before _observe() registers anything.
+    assert desktop_chrome._frame_observed is None
+    assert desktop_chrome._frame_token is None
+    assert desktop_chrome._laying_out is False
+    assert desktop_chrome._last_inventory is None
+
+
+def test_the_container_is_resolved_without_the_traffic_lights():
+    """During a share there may be no buttons to walk up from.
+
+    The container used to be reached as buttons[0].superview().superview(), so
+    losing the buttons lost the container — and with it the 48px band.
+    """
+    assert '"NSTitlebarContainerView"' in SOURCE
+    # Both the styling pass and the layout pass go through the one resolver.
+    assert SOURCE.count("_titlebar_container(") >= 3  # 1 def + 2 call sites
+
+
+def test_the_titlebar_grows_before_the_buttons_are_looked_up():
+    """The regression: macOS Sequoia swaps the lights for a sharing pill.
+
+    Gating the growth on all three buttons being present left the bar at its
+    stock 28px for the whole share, so the pill rode high in clipgen's topnav.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    assert body.index("setFrame_") < body.index("standardWindowButton_")
+
+
+def test_a_sharing_swap_re_asserts_the_layout():
+    """No window-level notification fires when the sharing pill appears.
+
+    Resize and the two fullscreen notifications are all the module used to
+    observe, which is why the lights came back at stock positions after a share
+    and stayed there until the window was resized.
+    """
+    assert "NSViewFrameDidChangeNotification" in SOURCE
+    assert "setPostsFrameChangedNotifications_" in SOURCE
+    assert "NSWindowDidBecomeKeyNotification" in SOURCE
+
+
+def test_the_frame_observer_cannot_recurse_into_itself():
+    """Our own setFrame_ posts the notification the observer listens for."""
+    assert re.search(r"^\s+_laying_out = True", SOURCE, re.MULTILINE)
+    assert re.search(r"^\s+if _laying_out:", SOURCE, re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    "band,size,expected",
+    [
+        (48, 16, 16),  # the shipped bar: also the DESKTOP_TRAFFIC_LIGHT_INSET math
+        (28, 16, 6),  # AppKit's stock titlebar
+        # Half-pixel remainders: round() is ties-to-even, so these land on
+        # different sides. Pinned because a sub-pixel origin blurs the button.
+        (48, 15, 16),  # 16.5 -> 16
+        (48, 13, 18),  # 17.5 -> 18
+    ],
+)
+def test_centered_origin_matches_the_configured_inset(band, size, expected):
+    assert desktop_chrome._centered_origin(band, size) == expected
+
+
+def test_the_reassert_budget_bounds_an_appkit_layout_fight():
+    """A container AppKit pins would otherwise be an unbounded main-thread loop."""
+    desktop_chrome.teardown()
+    try:
+        limit = desktop_chrome._REASSERT_BURST_LIMIT
+        assert all(desktop_chrome._within_reassert_budget(0.0) for _ in range(limit))
+        assert desktop_chrome._within_reassert_budget(0.0) is False
+        # A later burst is a fresh window, not a continuation of the fight.
+        assert desktop_chrome._within_reassert_budget(
+            desktop_chrome._REASSERT_WINDOW_S + 1.0
+        )
+    finally:
+        desktop_chrome.teardown()
 
 
 def test_topnav_opts_into_the_drag_selector_only_for_the_desktop_launch():
