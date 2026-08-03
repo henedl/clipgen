@@ -332,12 +332,13 @@ def test_local_ai_badge_is_styled_and_its_icon_exists():
 
 def test_audio_track_override_survives_track_zero():
     """`<select>.value` for track 0 is the string "0" (truthy), so the falsy gate
-    in startTranscribe is correct — but only by accident of that stringiness. A
-    refactor to a numeric override would silently drop "transcribe track 1"."""
-    start = _JS.index("function startTranscribe(")
+    in transcribeParticipants is correct — but only by accident of that
+    stringiness. A refactor to a numeric override would silently drop
+    "transcribe track 1"."""
+    start = _JS.index("function transcribeParticipants(pids, force)")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "ov.audioTrack" in body, (
-        "startTranscribe must forward the pill's audio-track override"
+        "the enqueue must forward each pill's audio-track override"
     )
     assert "audio_index" in body, "the POST key the server parses is audio_index"
 
@@ -651,4 +652,45 @@ def test_the_wip_badge_is_shared_not_forked():
         )
     assert "ov-wip-badge" not in read("overview.html"), (
         "Overview's copy was migrated onto the shared class"
+    )
+
+
+# ---- Transcribe All (Quick action -> batch transcription enqueue) ----
+
+
+def test_transcribe_all_reaches_a_published_satellite_function():
+    """The hub delegates to TS.transcribeParticipants, which lives in the pills
+    satellite. test_frontend_satellite_wiring.py only catches *bare* cross-file
+    calls; a delegator whose TS.fn was never assigned is syntactically fine and
+    silently no-ops, so the menu item would just do nothing on click."""
+    assert "TS.transcribeParticipants = transcribeParticipants" in _JS, (
+        "transcripts-pills.js must publish transcribeParticipants for the hub"
+    )
+    assert (
+        "function transcribeParticipants() { return TS.transcribeParticipants &&" in _JS
+    ), "the hub needs a guarded delegator (it loads before the pills satellite)"
+
+
+def test_transcribe_all_skips_completed_and_in_flight_participants():
+    """/api/transcribe skips already-transcribed participants only when force is
+    false, and has no in-flight guard at all — two POSTs for a running pid make
+    two tasks that both run. So the eligible list is filtered client-side on
+    both axes before anything is enqueued."""
+    start = _JS.index("function _untranscribedParticipants(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "has_video" in body and "!ps[i].has_transcript" in body
+    for status in ('"queued"', '"running"'):
+        assert status in body, (
+            f"a participant with a {status} task must not be re-enqueued"
+        )
+
+
+def test_transcribe_all_never_forces():
+    """Force would re-transcribe every completed participant in the study — a
+    long, silent, destructive batch nobody asked for. The action is explicitly
+    additive; re-transcribing stays a per-pill choice."""
+    start = _JS.index("function runTranscribeAll(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "transcribeParticipants(pids, false)" in body, (
+        "the batch enqueue must pass force=false"
     )

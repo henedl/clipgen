@@ -824,21 +824,27 @@
   }
 
   function startTranscribe(pid, force) {
-    var overrides = {};
-    var ov = state.pillOverrides[pid];
-    // ov.audioTrack is a <select> value, so track 0 arrives as the string "0" —
-    // truthy, unlike the number. The server parses it back to an int and treats
-    // absent (not falsy) as "auto-detect".
-    if (ov && (ov.model || ov.language || ov.audioTrack)) {
-      overrides[pid] = {};
-      if (ov.model) overrides[pid].model = ov.model;
-      if (ov.language) overrides[pid].language = ov.language;
-      if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
-    }
-    transcribeParticipants([pid], force, overrides);
+    transcribeParticipants([pid], force);
   }
 
-  function transcribeParticipants(pids, force, overrides) {
+  // Enqueue one or many participants in a single POST, each carrying whatever
+  // model/language/audio-track override its own pill dropdown holds. The hub's
+  // Transcribe All quick action passes the whole eligible list through here.
+  function transcribeParticipants(pids, force) {
+    var overrides = {};
+    for (var i = 0; i < pids.length; i++) {
+      var pid = pids[i];
+      var ov = state.pillOverrides[pid];
+      // ov.audioTrack is a <select> value, so track 0 arrives as the string "0" —
+      // truthy, unlike the number. The server parses it back to an int and treats
+      // absent (not falsy) as "auto-detect".
+      if (ov && (ov.model || ov.language || ov.audioTrack)) {
+        overrides[pid] = {};
+        if (ov.model) overrides[pid].model = ov.model;
+        if (ov.language) overrides[pid].language = ov.language;
+        if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
+      }
+    }
     _postTranscribe(pids, force, overrides, false);
   }
 
@@ -980,6 +986,7 @@
   // ---- Published back to the hub (loadParticipants/selectParticipant/poller
   // render pills; boot wires the listeners) ----
   TS.renderPills = renderPills;
+  TS.transcribeParticipants = transcribeParticipants; // hub (Transcribe All quick action)
   TS.initPillOutsideClick = initPillOutsideClick;
   TS.initPillWheelScroll = initPillWheelScroll;
   TS.togglePillOptions = togglePillOptions; // video (O hotkey)

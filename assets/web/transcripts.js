@@ -2074,8 +2074,10 @@
 
   // ---- Participant pills (impl in transcripts-pills.js) ----
   // Thin hub delegators: loadParticipants / selectParticipant / pollTaskStatus
-  // call renderPills; boot wires initPillOutsideClick / initPillWheelScroll.
+  // call renderPills; boot wires initPillOutsideClick / initPillWheelScroll; the
+  // Transcribe All quick action enqueues through transcribeParticipants.
   function renderPills() { return TS.renderPills && TS.renderPills(); }
+  function transcribeParticipants() { return TS.transcribeParticipants && TS.transcribeParticipants.apply(null, arguments); }
   function initPillOutsideClick() { return TS.initPillOutsideClick && TS.initPillOutsideClick(); }
   function initPillWheelScroll() { return TS.initPillWheelScroll && TS.initPillWheelScroll(); }
 
@@ -3069,6 +3071,33 @@
       .catch(function (err) { showToast("Embed failed: " + err.message); });
   }
 
+  // Participants the Transcribe All action would enqueue: a source video, no
+  // transcript yet, and nothing already queued or running for them. That last
+  // filter is not optional — /api/transcribe has no in-flight guard, so without
+  // it a second click while the batch runs enqueues every pending pid twice.
+  function _untranscribedParticipants() {
+    var ps = state.participants || [];
+    var tasks = state.tasks || [];
+    var busy = {};
+    for (var t = 0; t < tasks.length; t++) {
+      if (tasks[t].status === "queued" || tasks[t].status === "running") busy[tasks[t].participant] = true;
+    }
+    var pids = [];
+    for (var i = 0; i < ps.length; i++) {
+      if (ps[i].has_video && !ps[i].has_transcript && !busy[ps[i].id]) pids.push(ps[i].id);
+    }
+    return pids;
+  }
+
+  // One POST for the whole list; the worker thread runs them sequentially and the
+  // pills render each task's progress off the existing poller. _postTranscribe
+  // owns the toast, the polling restart, and the uncached-model confirm.
+  function runTranscribeAll() {
+    var pids = _untranscribedParticipants();
+    if (!pids.length) return;
+    transcribeParticipants(pids, false);
+  }
+
   var _rebuildTopNavActions = function () {};
 
   function _currentParticipantHasTranscript() {
@@ -3097,7 +3126,17 @@
     function rebuild() {
       var hasOne = _currentParticipantHasTranscript();
       var hasAny = _anyTranscriptExists();
+      var pending = _untranscribedParticipants().length;
       window.ClipgenTopNav.setQuickActions([
+        {
+          icon: "microphone",
+          label: "Transcribe All",
+          action: runTranscribeAll,
+          disabled: pending === 0,
+          title: pending
+            ? "Queue transcription for the " + clipgenPluralUnit(pending, "participant", "participants") + " without a transcript"
+            : "Every participant with a video already has a transcript or is queued.",
+        },
         {
           icon: "language",
           label: "Embed Subtitle in Video",
@@ -3131,7 +3170,8 @@
     rebuild();
     window.ClipgenExportActions.refreshExportStatus(rebuild);
     // Always rebuild on menu open so Embed-Subtitle items pick up
-    // participant-selection changes; also refresh export-enabled state.
+    // participant-selection changes and Transcribe All re-counts against
+    // in-flight tasks; also refresh export-enabled state.
     window.ClipgenTopNav.onBeforeOpen(function () {
       rebuild();
       window.ClipgenExportActions.refreshExportStatus(rebuild);
