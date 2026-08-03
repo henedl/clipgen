@@ -1083,7 +1083,7 @@ def _exec_heatmap(
         output_path = files.get_unique_filename("heatmap.gif", file_format=".gif")
         num_frames = int(float(params.get("frames", 24) or 24))
         if output == "gif":
-            result = screenspace_heatmap.generate_heatmap_gif(
+            anim = screenspace_heatmap.generate_heatmap_gif(
                 results,
                 width,
                 height,
@@ -1092,7 +1092,7 @@ def _exec_heatmap(
                 num_frames=num_frames,
             )
         else:
-            result = screenspace_heatmap.generate_rolling_heatmap_gif(
+            anim = screenspace_heatmap.generate_rolling_heatmap_gif(
                 results,
                 width,
                 height,
@@ -1101,6 +1101,9 @@ def _exec_heatmap(
                 num_frames=num_frames,
                 window_frames=int(float(params.get("window", 6) or 6)),
             )
+        # No sprite sheet here: this node's output is a standalone artifact for
+        # the manifest/viewer, not a Screenspace results thumbnail to scrub.
+        result = anim["path"] if anim else None
         failure_note = "Not enough detector results for an animated heatmap"
     if not result:
         files.release_reservation(output_path)

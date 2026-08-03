@@ -281,6 +281,12 @@ SCREENSPACE_FLOW_GRID_MIN_MAG: float = 0.5
 SCREENSPACE_HEATMAP_ROLLING_WINDOW: int = (
     6  # GIF buckets (of 24) inside the rolling-window heatmap's sliding window
 )
+SCREENSPACE_HEATMAP_SPRITE_COLS: int = (
+    6  # columns in the hover-scrub sprite sheet written alongside each heatmap GIF
+)
+SCREENSPACE_HEATMAP_SPRITE_FRAME_WIDTH: int = (
+    320  # per-frame width in that sprite sheet (downscale only; never upscales)
+)
 SCREENSPACE_CHANGE_HEATMAP_GRID: int = (
     16  # cells per axis for the Change heatmap's downsampled per-frame change grid
 )

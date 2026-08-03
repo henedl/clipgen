@@ -4050,17 +4050,62 @@ body.panel-dragging #bottomPanel {
 .heatmap-thumb-media {
   position: relative;
   line-height: 0;
+  border-radius: var(--radius);
+  /* card-scrubber owns background-size/-position and needs both of these. */
+  overflow: hidden;
+  background-repeat: no-repeat;
 }
 
-.heatmap-thumb-media img,
-.heatmap-thumb-frozen {
+.heatmap-thumb-media img {
   width: 100%;
+  height: 100%;
   border-radius: var(--radius);
   display: block;
 }
 
 .heatmap-thumb-animated {
   cursor: pointer;
+}
+
+/* Paused animated thumbs rest on their sprite sheet and scrub on hover, so the
+   pointer advertises the horizontal drag rather than a plain click. */
+.heatmap-thumb-media.paused:hover {
+  cursor: ew-resize;
+}
+
+.heatmap-scrub-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--color-border);
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+
+.heatmap-thumb-media.paused:hover .heatmap-scrub-progress {
+  opacity: 1;
+}
+
+.heatmap-scrub-progress-fill {
+  height: 100%;
+  background: var(--accent-fg);
+}
+
+.heatmap-thumb-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--space-8);
+  border: 1px dashed var(--color-border);
+  background: var(--color-surface-alt);
+}
+
+.heatmap-thumb-missing-text {
+  font-size: var(--text-xs);
+  line-height: normal;
+  color: var(--color-text-dim);
 }
 
 .heatmap-thumb-glyph {
@@ -4087,6 +4132,12 @@ body.panel-dragging #bottomPanel {
 
 .heatmap-thumb-animated:hover .heatmap-thumb-glyph {
   opacity: 0.95;
+}
+
+/* Dimmer while paused: hovering a paused thumb means scrubbing, and the glyph
+   sits right over the frames the user is reading. */
+.heatmap-thumb-media.paused:hover .heatmap-thumb-glyph {
+  opacity: 0.5;
 }
 
 .heatmap-thumb-media.paused .heatmap-thumb-glyph {

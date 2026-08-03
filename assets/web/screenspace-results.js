@@ -498,6 +498,153 @@
     };
   }
 
+  // Swap a heatmap thumb for a placeholder when its image 404s. The filenames
+  // come from the manifest, so a moved/cleared output directory (or a write that
+  // silently failed) used to surface as a browser broken-image glyph with nothing
+  // in the console to say which URL died.
+  function markHeatmapMissing(media, url) {
+    if (typeof console !== "undefined" && console.warn) {
+      console.warn("clipgen: heatmap image failed to load: " + url);
+    }
+    media.innerHTML = "";
+    media.style.backgroundImage = "";
+    // Drop the sprite's aspect ratio too, or a missing animation leaves a
+    // tall empty box next to a compact one.
+    media.style.aspectRatio = "";
+    media.classList.remove("heatmap-thumb-animated", "paused");
+    media.classList.add("heatmap-thumb-missing");
+    media.appendChild(el("span", "heatmap-thumb-missing-text", "Image unavailable"));
+  }
+
+  // Plain <img> filling the media box: the static PNG, the GIF while playing, and
+  // the fallback for an animation with no usable sprite. Only here does a load
+  // error mean the thumb has nothing left to show.
+  function fillHeatmapImage(media, view) {
+    var img = document.createElement("img");
+    img.decoding = "async";
+    img.src = "media/" + view.src;
+    img.alt = view.alt;
+    img.addEventListener("error", function () {
+      markHeatmapMissing(media, img.src);
+    });
+    media.appendChild(img);
+    return img;
+  }
+
+  // Build one thumb's media box. The static PNG is a plain <img>; an animated
+  // view rests paused on a sprite sheet (hover scrubs through the frames) and
+  // only fetches the GIF when the user presses play. A view with no sprite
+  // geometry — a scan from before sprites existed — degrades to the plain
+  // looping GIF with no scrub and no toggle.
+  function buildHeatmapMedia(view) {
+    var media = el("div", "heatmap-thumb-media");
+    var sprite = view.sprite;
+    if (!view.key || !sprite || !sprite.frames) {
+      fillHeatmapImage(media, view);
+      return media;
+    }
+
+    media.classList.add("heatmap-thumb-animated");
+    // The sprite/GIF swap changes which child defines the box, so pin the
+    // aspect ratio from the sprite geometry instead and let both fill it.
+    media.style.aspectRatio = sprite.w + " / " + sprite.h;
+    var glyph = el("span", "heatmap-thumb-glyph");
+    var progress = el("div", "heatmap-scrub-progress");
+    var progressFill = el("div", "heatmap-scrub-progress-fill");
+    progress.appendChild(progressFill);
+    var detach = null;
+    var spriteBroken = false;
+    // Sprite sheets are rendered on demand from the GIF, not stored beside it.
+    var spriteUrl = "api/heatmap-sprite/" + encodeURIComponent(view.src) +
+      "?cols=" + sprite.cols;
+
+    function showPaused() {
+      if (detach) return;
+      // The sprite already failed once (probed below, or on an earlier pause) —
+      // going back to it would just paint an empty box.
+      if (spriteBroken) {
+        fallBackToPlainGif();
+        return;
+      }
+      media.innerHTML = "";
+      media.classList.add("paused");
+      media.style.backgroundImage = 'url("' + spriteUrl + '")';
+      media.appendChild(glyph);
+      media.appendChild(progress);
+      progressFill.style.width = "100%";
+      detach = window.clipgenCardScrubber.attach(media, {
+        spriteData: {
+          cols: sprite.cols,
+          rows: sprite.rows,
+          frameCount: sprite.frames,
+          interval: 0,
+        },
+        // Rest on the finished accumulation rather than the empty first frame.
+        restFrame: sprite.frames - 1,
+        onScrub: function (frac) {
+          progressFill.style.width = (frac === null ? 1 : frac) * 100 + "%";
+        },
+      });
+    }
+
+    function showPlaying() {
+      if (detach) {
+        detach();
+        detach = null;
+      }
+      media.innerHTML = "";
+      media.classList.remove("paused");
+      media.style.backgroundImage = "";
+      fillHeatmapImage(media, view);
+      media.appendChild(glyph);
+    }
+
+    // Degrade to plain GIF playback, losing only the scrub. Used when the sprite
+    // sheet can't be built (a corrupt or half-written GIF): the animation itself
+    // may still render perfectly, so this must never blank the thumb.
+    function fallBackToPlainGif() {
+      if (detach) {
+        detach();
+        detach = null;
+      }
+      media.removeEventListener("click", onToggle);
+      media.classList.remove("paused");
+      media.style.backgroundImage = "";
+      media.innerHTML = "";
+      fillHeatmapImage(media, view);
+    }
+
+    // Scoped to the task, not just the view: a re-render of the same task keeps
+    // whatever the user pressed, but selecting a different task starts paused again.
+    var playKey = state.selectedTaskId + "|" + view.key;
+    function onToggle() {
+      var playing = !state.heatmapPlaying[playKey];
+      state.heatmapPlaying[playKey] = playing;
+      if (playing) showPlaying();
+      else showPaused();
+    }
+    media.addEventListener("click", onToggle);
+
+    // A background-image that fails has no error event, so probe it separately.
+    // The probe is async: by the time it resolves the user may already have hit
+    // play, so only fall back if we are still showing the sprite.
+    var probe = new Image();
+    probe.addEventListener("error", function () {
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn("clipgen: heatmap sprite failed to load: " + spriteUrl);
+      }
+      spriteBroken = true;
+      // The user may already have hit play while this was in flight; the GIF is
+      // fine, so leave it alone and let the next pause take the fallback.
+      if (media.classList.contains("paused")) fallBackToPlainGif();
+    });
+    probe.src = spriteUrl;
+
+    if (state.heatmapPlaying[playKey]) showPlaying();
+    else showPaused();
+    return media;
+  }
+
   // Render all rows inline below this many; above it, rows stream in chunks via
   // an IntersectionObserver so a 500+ result task doesn't build thousands of DOM
   // nodes (and reflow) in one synchronous pass. Variable row heights (wrapping
@@ -737,14 +884,15 @@
 
       // Show every generated mode side by side as a small thumbnail strip.
       var heatmapViews = [
-        { label: "Static", src: task.heatmap, alt: "Detection heatmap", animated: false },
+        { label: "Static", src: task.heatmap, alt: "Detection heatmap", key: null },
       ];
       if (task.heatmap_gif) {
         heatmapViews.push({
           label: "Accumulation",
           src: task.heatmap_gif,
           alt: "Heatmap accumulation animation",
-          animated: true,
+          key: "heatmap_gif",
+          sprite: task.heatmap_gif_sprite,
         });
       }
       if (task.heatmap_rolling_gif) {
@@ -752,50 +900,19 @@
           label: "Rolling Window",
           src: task.heatmap_rolling_gif,
           alt: "Rolling-window heatmap animation",
-          animated: true,
+          key: "heatmap_rolling_gif",
+          sprite: task.heatmap_rolling_gif_sprite,
         });
       }
+
+      // The rebuild below orphans every previously attached thumb, so drop the
+      // dead entries before wiring the new ones.
+      if (window.clipgenCardScrubber) window.clipgenCardScrubber.detachStale();
 
       var heatmapStrip = el("div", "heatmap-strip");
       heatmapViews.forEach(function (view) {
         var thumb = el("div", "heatmap-thumb");
-        var media = el("div", "heatmap-thumb-media");
-        var img = document.createElement("img");
-        img.decoding = "async";
-        img.src = "media/" + view.src;
-        img.alt = view.alt;
-        media.appendChild(img);
-        if (view.animated) {
-          // GIFs can't be paused natively: freeze the current frame onto a
-          // canvas to pause, restore the gif src to resume from the start.
-          media.classList.add("heatmap-thumb-animated");
-          media.appendChild(el("span", "heatmap-thumb-glyph"));
-          var gifSrc = "media/" + view.src;
-          var frozen = null;
-          media.addEventListener("click", function () {
-            if (!frozen) {
-              var canvas = el("canvas", "heatmap-thumb-frozen");
-              canvas.width = img.naturalWidth || img.clientWidth || 1;
-              canvas.height = img.naturalHeight || img.clientHeight || 1;
-              try {
-                canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-              } catch (e) {
-                return; // frame not ready yet — leave it playing
-              }
-              img.classList.add("hidden");
-              media.insertBefore(canvas, img);
-              frozen = canvas;
-              media.classList.add("paused");
-            } else {
-              media.removeChild(frozen);
-              frozen = null;
-              img.classList.remove("hidden");
-              img.src = gifSrc; // restart the animation
-              media.classList.remove("paused");
-            }
-          });
-        }
-        thumb.appendChild(media);
+        thumb.appendChild(buildHeatmapMedia(view));
         thumb.appendChild(el("div", "heatmap-thumb-label", view.label));
         heatmapStrip.appendChild(thumb);
       });

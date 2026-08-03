@@ -2,13 +2,21 @@
 
 Template-, flow-, change-, and attention-heatmap PNGs plus animated-GIF views:
 a cumulative accumulation and a rolling-window (recent-only, fading) variant.
-No sibling-module dependencies.
+A GIF gives the browser no way to seek, so build_gif_sprite_bytes() re-tiles one
+into a sprite sheet on demand for the frontend's hover-scrub.
+No sibling-module dependencies beyond config/utils.
 """
 
+import io
+import math
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
+
+import config
+import utils
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -24,6 +32,29 @@ def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray
     normalized = (accumulator / max_val * 255).astype(np.uint8)
     normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
     return cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+
+
+def _write_png(output_path: str, image: np.ndarray) -> bool:
+    """Encode *image* to PNG and write it, returning whether it landed.
+
+    Deliberately not ``cv2.imwrite``: that returns ``False`` (no exception) on a
+    missing parent directory, a permission error, a full disk, and on paths its
+    own file layer cannot open — and every caller here used to discard that
+    boolean and report success, so a heatmap that was never written still got
+    its filename published to the manifest and the browser. Encoding in memory
+    and writing through ``pathlib`` keeps path handling in Python, where a
+    failure is a real ``OSError``.
+    """
+    try:
+        ok, buf = cv2.imencode(".png", image)
+        if not ok:
+            utils.warning_print(f"Heatmap PNG encoding failed: {output_path}")
+            return False
+        Path(output_path).write_bytes(buf.tobytes())
+    except (OSError, cv2.error) as exc:
+        utils.warning_print(f"Could not write heatmap PNG {output_path}: {exc}")
+        return False
+    return True
 
 
 # Heatmap types that accumulate sparse normalized {x, y, mag} grid cells at a
@@ -58,7 +89,8 @@ def generate_template_heatmap(
         return None
 
     heatmap = _colorize_accumulator(accumulator, accumulator.max())
-    cv2.imwrite(output_path, heatmap)
+    if not _write_png(output_path, heatmap):
+        return None
     return output_path
 
 
@@ -89,7 +121,8 @@ def generate_flow_heatmap(
     heatmap = cv2.resize(
         heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
     )
-    cv2.imwrite(output_path, heatmap)
+    if not _write_png(output_path, heatmap):
+        return None
     return output_path
 
 
@@ -116,7 +149,8 @@ def generate_change_heatmap(
     heatmap = cv2.resize(
         heatmap, (region_width, region_height), interpolation=cv2.INTER_LINEAR
     )
-    cv2.imwrite(output_path, heatmap)
+    if not _write_png(output_path, heatmap):
+        return None
     return output_path
 
 
@@ -144,7 +178,8 @@ def generate_attention_heatmap(
     heatmap = cv2.resize(
         heatmap, (frame_width, frame_height), interpolation=cv2.INTER_LINEAR
     )
-    cv2.imwrite(output_path, heatmap)
+    if not _write_png(output_path, heatmap):
+        return None
     return output_path
 
 
@@ -205,6 +240,101 @@ def _frame_bucket_bounds(
     return (frame_idx * total) // num_frames, ((frame_idx + 1) * total) // num_frames
 
 
+def _save_animation(
+    frames: list["Image.Image"],
+    output_path: str,
+    frame_duration_ms: int,
+) -> dict[str, Any]:
+    """Write *frames* as an animated GIF and describe it for the frontend.
+
+    Returns ``{"path", "frames", "w", "h"}``. Everything here is intrinsic to the
+    animation, never derived from config, so a stored descriptor can never drift
+    away from the sprite sheet :func:`build_gif_sprite_bytes` renders from the
+    same GIF later.
+
+    ``frames`` is re-read from the written file rather than taken from ``len()``:
+    PIL collapses a run of identical frames into one, which happens whenever
+    consecutive buckets add no new heat (``cv2.circle`` sets rather than
+    accumulates, so repeat detections at one spot render identically). Trusting
+    the input count would tell the frontend to scrub to cells the sheet doesn't
+    have.
+    """
+    from PIL import Image
+
+    frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=frame_duration_ms,
+        loop=0,
+    )
+    written = len(frames)
+    try:
+        with Image.open(output_path) as anim:
+            written = int(getattr(anim, "n_frames", written))
+    except (OSError, ValueError):
+        pass
+    return {
+        "path": output_path,
+        "frames": written,
+        "w": frames[0].size[0],
+        "h": frames[0].size[1],
+    }
+
+
+def sprite_grid(frame_count: int) -> tuple[int, int]:
+    """Return the ``(cols, rows)`` sprite grid for *frame_count* frames."""
+    cols = max(1, min(frame_count, int(config.SCREENSPACE_HEATMAP_SPRITE_COLS)))
+    return cols, math.ceil(frame_count / cols)
+
+
+def build_gif_sprite_bytes(gif_path: str, cols: int) -> bytes | None:
+    """Tile an animated GIF's frames into a single sprite-sheet PNG.
+
+    A GIF cannot be seeked in a browser, so the heatmap thumbs rest on a sprite
+    cell and map hover position to a frame. Rendered on demand from the GIF that
+    is already on disk (and cached in memory by the route) rather than written
+    alongside it — sprites are a derived view everywhere else in clipgen too, and
+    the output directory is the user's, not a scratch space.
+
+    Frames are downscaled to ``SCREENSPACE_HEATMAP_SPRITE_FRAME_WIDTH``: a
+    frame-native template heatmap is 1080p, and 24 of those in one sheet is a
+    ~50-megapixel PNG for a thumbnail that renders ~200px wide. Aspect ratio is
+    preserved, so the caller's ``w``/``h`` still describe the cell shape.
+    """
+    from PIL import Image, ImageSequence
+
+    try:
+        with Image.open(gif_path) as anim:
+            frames = [f.convert("RGB") for f in ImageSequence.Iterator(anim)]
+    except Exception as exc:
+        # Deliberately broad: this decodes a file that may be truncated or
+        # half-written (a scan killed mid-save), and PIL's GIF frame walk leaks
+        # whatever its parser hits — IndexError and struct.error as readily as
+        # OSError. Every one of them means the same thing to the caller: no
+        # sprite, fall back to plain playback. Letting one escape would 500 the
+        # route instead of degrading a thumbnail.
+        utils.warning_print(f"Could not read heatmap GIF {gif_path}: {exc}")
+        return None
+    if not frames:
+        return None
+
+    src_w, src_h = frames[0].size
+    target_w = max(1, min(int(config.SCREENSPACE_HEATMAP_SPRITE_FRAME_WIDTH), src_w))
+    target_h = max(1, round(src_h * target_w / src_w))
+    cols = max(1, min(len(frames), cols))
+    rows = math.ceil(len(frames) / cols)
+
+    sheet = Image.new("RGB", (cols * target_w, rows * target_h))
+    for idx, frame in enumerate(frames):
+        scaled = frame.resize((target_w, target_h), Image.Resampling.BILINEAR)
+        sheet.paste(scaled, ((idx % cols) * target_w, (idx // cols) * target_h))
+
+    buf = io.BytesIO()
+    sheet.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def generate_heatmap_gif(
     results: list[dict[str, Any]],
     width: int,
@@ -213,11 +343,12 @@ def generate_heatmap_gif(
     heatmap_type: str = "template",
     num_frames: int = 24,
     frame_duration_ms: int = 120,
-) -> str | None:
+) -> dict[str, Any] | None:
     """Generate an animated GIF showing heatmap accumulation over time.
 
     Divides *results* into *num_frames* temporal buckets, progressively
-    accumulates heatmap data, and writes frames as an animated GIF.
+    accumulates heatmap data, and writes frames as an animated GIF. Returns the
+    :func:`_save_animation` descriptor, or ``None`` when there is nothing to draw.
     """
     if not results:
         return None
@@ -255,14 +386,7 @@ def generate_heatmap_gif(
             _heatmap_frame_image(accumulator, global_max, heatmap_type, width, height)
         )
 
-    frames[0].save(
-        output_path,
-        save_all=True,
-        append_images=frames[1:],
-        duration=frame_duration_ms,
-        loop=0,
-    )
-    return output_path
+    return _save_animation(frames, output_path, frame_duration_ms)
 
 
 def generate_rolling_heatmap_gif(
@@ -274,7 +398,7 @@ def generate_rolling_heatmap_gif(
     num_frames: int = 24,
     window_frames: int = 6,
     frame_duration_ms: int = 120,
-) -> str | None:
+) -> dict[str, Any] | None:
     """Generate an animated GIF showing a sliding-window heatmap over time.
 
     Like :func:`generate_heatmap_gif`, but each frame accumulates only the
@@ -322,14 +446,7 @@ def generate_rolling_heatmap_gif(
             )
         )
 
-    frames[0].save(
-        output_path,
-        save_all=True,
-        append_images=frames[1:],
-        duration=frame_duration_ms,
-        loop=0,
-    )
-    return output_path
+    return _save_animation(frames, output_path, frame_duration_ms)
 
 
 # ---------------------------------------------------------------------------

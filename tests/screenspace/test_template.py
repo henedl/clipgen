@@ -197,8 +197,10 @@ class TestGenerateHeatmapGif:
 
     def test_basic_gif(self, tmp_path):
         out = str(tmp_path / "heatmap.gif")
-        path = screenspace.generate_heatmap_gif(self._matches(8), 200, 200, out)
-        assert path == out
+        info = screenspace.generate_heatmap_gif(self._matches(8), 200, 200, out)
+        assert info is not None
+        assert info["path"] == out
+        assert info["frames"] == 8
         assert (tmp_path / "heatmap.gif").stat().st_size > 0
 
     def test_empty_returns_none(self, tmp_path):
@@ -215,10 +217,11 @@ class TestGenerateHeatmapGif:
             for i in range(8)
         ]
         out = str(tmp_path / "heatmap_change.gif")
-        path = screenspace.generate_heatmap_gif(
+        info = screenspace.generate_heatmap_gif(
             results, 200, 150, out, heatmap_type="change"
         )
-        assert path == out
+        assert info is not None
+        assert info["path"] == out
         assert (tmp_path / "heatmap_change.gif").stat().st_size > 0
 
 
@@ -234,8 +237,10 @@ class TestGenerateRollingHeatmapGif:
 
     def test_basic_rolling_gif(self, tmp_path):
         out = str(tmp_path / "rolling.gif")
-        path = screenspace.generate_rolling_heatmap_gif(self._matches(8), 200, 200, out)
-        assert path == out
+        info = screenspace.generate_rolling_heatmap_gif(self._matches(8), 200, 200, out)
+        assert info is not None
+        assert info["path"] == out
+        assert info["frames"] == 8
         assert (tmp_path / "rolling.gif").is_file()
         assert (tmp_path / "rolling.gif").stat().st_size > 0
 
@@ -256,21 +261,162 @@ class TestGenerateRollingHeatmapGif:
             for i in range(8)
         ]
         out = str(tmp_path / "rolling_change.gif")
-        path = screenspace.generate_rolling_heatmap_gif(
+        info = screenspace.generate_rolling_heatmap_gif(
             results, 200, 150, out, heatmap_type="change"
         )
-        assert path == out
+        assert info is not None
+        assert info["path"] == out
         assert (tmp_path / "rolling_change.gif").stat().st_size > 0
 
     def test_large_count_rolling_gif(self, tmp_path):
         # 47 results / 24 frames: the old floor-division bucketing dumped the
         # remainder onto the final frame; this just guards it still renders.
         out = str(tmp_path / "rolling_large.gif")
-        path = screenspace.generate_rolling_heatmap_gif(
+        info = screenspace.generate_rolling_heatmap_gif(
             self._matches(47), 200, 200, out
         )
-        assert path == out
+        assert info is not None
+        assert info["path"] == out
+        assert info["frames"] == 24  # capped at num_frames, not one per result
         assert (tmp_path / "rolling_large.gif").stat().st_size > 0
+
+
+class TestHeatmapSprite:
+    """The sprite sheet the browser hover-scrubs in place of the unseekable GIF.
+
+    It is rendered on demand from the GIF and never written to disk, so these
+    cover the descriptor the task carries and the tiling the route performs.
+    """
+
+    def _matches(self, n):
+        return [
+            {
+                "timestamp": float(i),
+                "matches": [{"x": 10 + i, "y": 10, "w": 30, "h": 30, "score": 0.9}],
+            }
+            for i in range(n)
+        ]
+
+    def test_descriptor_is_intrinsic_to_the_gif(self, tmp_path):
+        info = screenspace.generate_heatmap_gif(
+            self._matches(8), 200, 100, str(tmp_path / "heatmap.gif")
+        )
+        assert info is not None
+        # Frame count and cell shape come from the animation itself, never from
+        # config, so a stored descriptor can't drift from a later-rendered sheet.
+        assert info["frames"] == 8
+        assert (info["w"], info["h"]) == (200, 100)
+        # The GIF is the only file written.
+        assert [p.name for p in tmp_path.iterdir()] == ["heatmap.gif"]
+
+    def test_sprite_grid_wraps_at_the_configured_columns(self, monkeypatch):
+        monkeypatch.setattr(config, "SCREENSPACE_HEATMAP_SPRITE_COLS", 6)
+        assert screenspace.sprite_grid(8) == (6, 2)
+        assert screenspace.sprite_grid(24) == (6, 4)
+        # Fewer frames than columns: no empty columns.
+        assert screenspace.sprite_grid(3) == (3, 1)
+
+    def test_sprite_bytes_tile_the_gif_frames(self, tmp_path, monkeypatch):
+        import io
+
+        from PIL import Image
+
+        monkeypatch.setattr(config, "SCREENSPACE_HEATMAP_SPRITE_FRAME_WIDTH", 80)
+        gif = str(tmp_path / "heatmap.gif")
+        info = screenspace.generate_heatmap_gif(self._matches(8), 200, 100, gif)
+        assert info is not None
+
+        data = screenspace.build_gif_sprite_bytes(gif, 6)
+        assert data is not None
+        with Image.open(io.BytesIO(data)) as sheet:
+            # 8 frames at 6 columns → 2 rows; frames downscaled 200x100 → 80x40.
+            assert sheet.size == (6 * 80, 2 * 40)
+
+    def test_sprite_bytes_never_upscale(self, tmp_path, monkeypatch):
+        import io
+
+        from PIL import Image
+
+        monkeypatch.setattr(config, "SCREENSPACE_HEATMAP_SPRITE_FRAME_WIDTH", 320)
+        gif = str(tmp_path / "rolling.gif")
+        screenspace.generate_rolling_heatmap_gif(self._matches(4), 48, 24, gif)
+        data = screenspace.build_gif_sprite_bytes(gif, 6)
+        assert data is not None
+        with Image.open(io.BytesIO(data)) as sheet:
+            assert sheet.size == (4 * 48, 1 * 24)
+
+    def test_frame_count_reflects_what_pil_actually_wrote(self, tmp_path):
+        """PIL collapses a run of identical frames, so the descriptor must be
+        re-read from the file — otherwise the frontend scrubs to cells the
+        sprite sheet doesn't have."""
+        # Every result paints the same cell, so every rendered frame is identical.
+        results = [
+            {"timestamp": float(i), "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}]}
+            for i in range(8)
+        ]
+        gif = str(tmp_path / "heatmap.gif")
+        info = screenspace.generate_heatmap_gif(
+            results, 100, 50, gif, heatmap_type="change"
+        )
+        assert info is not None
+        assert info["frames"] == 1  # not the 8 buckets we handed it
+
+        data = screenspace.build_gif_sprite_bytes(gif, 6)
+        assert data is not None
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as sheet:
+            assert sheet.size[0] // 100 == 1  # one column of cells, matching
+
+    def test_single_frame_gif_gets_no_sprite_descriptor(self, tmp_path, monkeypatch):
+        """A collapsed one-frame animation is a still: no scrub geometry, so the
+        thumb degrades to plain playback instead of scrubbing a 1-cell sheet."""
+        import screenspace_worker
+
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        gif = str(tmp_path / "heatmap_ss_x.gif")
+        info = screenspace.generate_heatmap_gif(
+            [
+                {
+                    "timestamp": float(i),
+                    "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}],
+                }
+                for i in range(8)
+            ],
+            100,
+            50,
+            gif,
+            heatmap_type="change",
+        )
+        attachments = screenspace_worker._heatmap_gif_attachments(info, "heatmap_gif")
+        assert attachments == {"heatmap_gif": "heatmap_ss_x.gif"}
+
+    def test_unreadable_gif_yields_no_sprite(self, tmp_path):
+        broken = tmp_path / "heatmap_broken.gif"
+        broken.write_bytes(b"not a gif")
+        assert screenspace.build_gif_sprite_bytes(str(broken), 6) is None
+        assert screenspace.build_gif_sprite_bytes(str(tmp_path / "gone.gif"), 6) is None
+
+
+class TestHeatmapPngWriteFailure:
+    """A PNG that never landed must not be reported as a generated artifact."""
+
+    def _results(self):
+        return [{"timestamp": 0.0, "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}]}]
+
+    def test_missing_directory_returns_none(self, tmp_path):
+        out = str(tmp_path / "nope" / "heatmap.png")
+        assert screenspace.generate_change_heatmap(self._results(), 64, 64, out) is None
+
+    def test_encode_failure_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            screenspace_heatmap.cv2, "imencode", lambda *a, **kw: (False, None)
+        )
+        out = str(tmp_path / "heatmap.png")
+        assert screenspace.generate_change_heatmap(self._results(), 64, 64, out) is None
+        assert not (tmp_path / "heatmap.png").exists()
 
 
 class TestFrameBucketBounds:

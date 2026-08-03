@@ -116,12 +116,14 @@ from screenspace_scans import (
     scan_text,
 )
 from screenspace_heatmap import (
+    build_gif_sprite_bytes,
     generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
     generate_rolling_heatmap_gif,
     generate_template_heatmap,
+    sprite_grid,
 )
 from screenspace_tools import (
     TOOLS,

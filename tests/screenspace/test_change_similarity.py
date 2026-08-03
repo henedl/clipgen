@@ -5,6 +5,7 @@ import numpy as np
 import config
 import screenspace
 import screenspace_frames
+import screenspace_heatmap
 import screenspace_scans
 
 
@@ -227,8 +228,13 @@ class TestHeatmapDisableSetting:
         }
 
     def _change_results(self, n=8):
+        # Heat moves across frames so the GIF keeps all n of them — PIL collapses
+        # a run of identical frames, which would leave the animation unscrubbable.
         return [
-            {"timestamp": float(i), "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}]}
+            {
+                "timestamp": float(i),
+                "change_grid": [{"x": 0.1 + 0.1 * i, "y": 0.5, "mag": 0.7}],
+            }
             for i in range(n)
         ]
 
@@ -253,6 +259,32 @@ class TestHeatmapDisableSetting:
         worker = screenspace.ScreenspaceWorker()
         attachments = self._run_generate(worker, self._change_task())
         assert "heatmap" in attachments
+        # Every published name must be a real file: a name for a file that was
+        # never written is a 404 in the browser with nothing logged anywhere.
+        for key in ("heatmap", "heatmap_gif", "heatmap_rolling_gif"):
+            assert (tmp_path / attachments[key]).stat().st_size > 0
+        # Sprite descriptors are geometry only — the sheet itself is rendered on
+        # demand by the route, so nothing extra lands in the output directory.
+        for key in ("heatmap_gif", "heatmap_rolling_gif"):
+            sprite = attachments[f"{key}_sprite"]
+            assert "file" not in sprite
+            assert sprite["cols"] * sprite["rows"] >= sprite["frames"] >= 2
+            assert sprite["w"] > 0 and sprite["h"] > 0
+        assert not list(tmp_path.glob("*sprite*"))
+
+    def test_unwritable_png_is_not_published(self, tmp_path, monkeypatch):
+        """cv2 used to report a failed write as success, so the strip rendered
+        a dead link. A PNG that didn't land must simply not be advertised."""
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(config, "SCREENSPACE_GENERATE_CHANGE_HEATMAP", True)
+        monkeypatch.setattr(
+            screenspace_heatmap.cv2, "imencode", lambda *a, **kw: (False, None)
+        )
+        worker = screenspace.ScreenspaceWorker()
+        attachments = self._run_generate(worker, self._change_task())
+        assert "heatmap" not in attachments
+        # The GIFs go through PIL, so they are unaffected and still published.
+        assert (tmp_path / attachments["heatmap_gif"]).is_file()
 
     def test_settings_present_and_default_true(self):
         for name in (

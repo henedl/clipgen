@@ -470,6 +470,55 @@ class TestScreenspaceWorker:
             worker.stop()
 
 
+class TestHeatmapFailureIsolation:
+    def test_heatmap_error_leaves_the_task_completed(self, monkeypatch):
+        """Heatmap rendering used to sit inside the completion try/except, so a
+        failure to draw a decorative artifact demoted a task that had already
+        completed with valid results (and emitted its events) to `failed`."""
+        results = [
+            {"timestamp": float(i), "change_grid": [{"x": 0.5, "y": 0.5, "mag": 0.7}]}
+            for i in range(4)
+        ]
+        monkeypatch.setattr(
+            screenspace.ScreenspaceWorker,
+            "_dispatch",
+            lambda self, task, on_progress, cancel_flag, on_result=None: [
+                dict(r) for r in results
+            ],
+        )
+
+        def boom(*a, **kw):
+            raise RuntimeError("no PIL in this bundle")
+
+        monkeypatch.setattr(screenspace.ScreenspaceWorker, "_generate_heatmap", boom)
+
+        worker = screenspace.ScreenspaceWorker()
+        task = screenspace.create_task(
+            "change",
+            "P01",
+            "s.mp4",
+            ["/v.mp4"],
+            "r1",
+            {"x": 0, "y": 0, "w": 64, "h": 64},
+        )
+        worker.enqueue(task)
+        worker.start()
+        try:
+            for _ in range(100):
+                t = worker.get_task(task["id"])
+                if t and t["status"] in ("completed", "failed"):
+                    break
+                time.sleep(0.05)
+            t = worker.get_task(task["id"])
+            assert t is not None
+            assert t["status"] == "completed"
+            assert t.get("error") is None
+            assert len(t["result"]) == 4
+            assert "heatmap" not in t
+        finally:
+            worker.stop()
+
+
 class TestWorkerParallel:
     def test_two_tasks_run_concurrently(self, monkeypatch):
         """With PARALLEL_WORKERS=2, two tasks reach RUNNING simultaneously."""

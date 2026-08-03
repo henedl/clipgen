@@ -1083,7 +1083,7 @@ def test_heatmap_rolling_gif_passes_window(tmp_path, monkeypatch):
         called["window_frames"] = window_frames
         called["num_frames"] = num_frames
         called["heatmap_type"] = heatmap_type
-        return out_path
+        return {"path": out_path, "frames": num_frames}
 
     monkeypatch.setattr(
         screenspace_heatmap, "generate_rolling_heatmap_gif", fake_rolling
