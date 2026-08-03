@@ -11,9 +11,12 @@ This module is intentionally small — higher-level reasoning lives in
 
 Key functions:
   is_available()      - check Ollama server connectivity
-  is_installed()      - check whether the `ollama` binary exists at all
+  is_installed()      - check whether the `ollama` binary is reachable at all
+  resolve_ollama_bin()- the binary actually used: PATH first, managed second
   start_server()      - spawn `ollama serve` and wait for it to answer
   install_guidance_lines() - platform-specific "how to install Ollama" text
+  can_install_managed() / install_managed() - consent-gated in-app download of
+    the official standalone CLI into clipgen's config dir (macOS only)
   list_models()       - enumerate installed models with metadata
   is_model_installed()- check whether a specific model is installed locally
   generate()          - send a prompt and get a text response
@@ -21,18 +24,25 @@ Key functions:
   unload_model()      - ask Ollama to evict a model from memory immediately
 """
 
+import hashlib
 import json
+import os
 import shutil
 import socket
 import subprocess
+import sys
+import tarfile
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import config
+import start_settings
 import utils
 
 _HEALTH_TIMEOUT = 5  # seconds for connectivity check
@@ -53,6 +63,25 @@ _CANCEL_WATCHER_POLL = 1.0  # seconds; bounds abort latency during long quiet st
 # Serializes start_server() calls so two threads hitting connection-refused at
 # the same time don't both spawn `ollama serve`.
 _start_server_lock = threading.Lock()
+
+# Pinned standalone CLI release for the consent-gated in-app install. The
+# darwin tarball is flat — the `ollama` binary with llama-server and the GGML
+# runner libraries beside it, designed to run from any directory. The sha256 is
+# GitHub's published asset digest, re-verified after download. macOS only: the
+# Windows standalone zip is ~1 GB of GPU runner DLLs and the official installer
+# (winget) handles PATH + updates there, so Windows keeps the install hints.
+OLLAMA_DOWNLOAD_VERSION = "0.32.5"
+_OLLAMA_DARWIN_URL = (
+    "https://github.com/ollama/ollama/releases/download/"
+    f"v{OLLAMA_DOWNLOAD_VERSION}/ollama-darwin.tgz"
+)
+_OLLAMA_DARWIN_SHA256 = (
+    "5789dd037a86adb328c72c11fc45e6c558452d07e5b50814a8bdb7b0fbdbcd81"
+)
+_OLLAMA_DOWNLOAD_SIZE_BYTES = 145_747_028  # fallback when Content-Length is absent
+_INSTALL_CHUNK = 1024 * 1024
+_INSTALL_TIMEOUT = 120  # seconds; connect + first byte, GitHub is normally fast
+_VERSION_PROBE_TIMEOUT = 15  # seconds; `ollama --version` sanity check
 
 
 def is_available() -> bool:
@@ -178,15 +207,50 @@ def install_guidance_lines() -> list[str]:
     )
 
 
+def _managed_ollama_dir() -> Path:
+    """Where the in-app install lives, under clipgen's own config dir."""
+    return start_settings.config_dir() / "tools" / "ollama"
+
+
+def managed_ollama_path() -> Path | None:
+    """Path to the managed ``ollama`` binary, or None when absent.
+
+    Probes both the flat layout the current tarball ships (``ollama`` at the
+    root, runners beside it) and a ``bin/`` layout in case a future release
+    restructures the archive.
+    """
+    base = _managed_ollama_dir()
+    for candidate in (base / "ollama", base / "bin" / "ollama"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def resolve_ollama_bin() -> str | None:
+    """The ``ollama`` binary clipgen should run, or None when there is none.
+
+    PATH wins over the managed copy: a user-managed install (Ollama.app, brew)
+    self-updates and carries the menu-bar app, so clipgen's downloaded copy is
+    strictly the fallback for machines with nothing — matching the codebase's
+    stance that PATH augmentation is about discoverability, not overriding a
+    resolution order the user already has.
+    """
+    on_path = shutil.which("ollama")
+    if on_path:
+        return on_path
+    managed = managed_ollama_path()
+    return str(managed) if managed is not None else None
+
+
 def is_installed() -> bool:
-    """Return True when the ``ollama`` binary is on PATH.
+    """Return True when an ``ollama`` binary is reachable (PATH or managed).
 
     Deliberately distinct from ``is_available()``, which reports whether the
     *server* answers. The two states need opposite advice — "start it, then
     refresh" is useless to someone who never installed it — so every surface
     that gates on Ollama reads both rather than collapsing them into one flag.
     """
-    return shutil.which("ollama") is not None
+    return resolve_ollama_bin() is not None
 
 
 def start_server() -> bool:
@@ -213,7 +277,7 @@ def start_server() -> bool:
         utils.info_print("Starting Ollama server...")
         try:
             subprocess.Popen(
-                ["ollama", "serve"],
+                [resolve_ollama_bin() or "ollama", "serve"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -230,6 +294,134 @@ def start_server() -> bool:
 
     utils.warning_print("Ollama server did not start within timeout.")
     return False
+
+
+def can_install_managed() -> bool:
+    """Whether the in-app Ollama download is supported on this platform."""
+    return sys.platform == "darwin"
+
+
+def managed_install_size_mb() -> int:
+    """Approximate download size, for consent labels ("~140 MB")."""
+    return round(_OLLAMA_DOWNLOAD_SIZE_BYTES / 1e6)
+
+
+def _managed_binary_works(binary: Path) -> bool:
+    """Sanity-run ``ollama --version`` on the managed copy."""
+    try:
+        probe = subprocess.run(
+            [str(binary), "--version"],
+            capture_output=True,
+            timeout=_VERSION_PROBE_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
+def install_managed(
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> bool:
+    """Download and unpack the pinned Ollama CLI into the managed dir.
+
+    Consent lives with the caller — this is only ever reached from an explicit
+    user action (the Transcripts install dialog). Streams the pinned tarball to
+    a temp file inside the managed dir (same filesystem), verifies its SHA256,
+    extracts, and sanity-runs ``--version``. Progress dicts are shaped like
+    ``pull_model`` chunks (``status``/``completed``/``total``) so the frontend
+    reuses its pull rendering. Never raises; returns False on any failure,
+    matching the module's error style. Idempotent: an already-working managed
+    install returns True immediately.
+    """
+    if not can_install_managed():
+        return False
+    existing = managed_ollama_path()
+    if existing is not None and _managed_binary_works(existing):
+        return True
+
+    target_dir = _managed_ollama_dir()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        utils.warning_print(f"Ollama install failed (create dir): {exc}")
+        return False
+
+    with tempfile.NamedTemporaryFile(
+        dir=target_dir, suffix=".tgz", delete=False
+    ) as tmp:
+        archive_path = Path(tmp.name)
+    try:
+        digest = hashlib.sha256()
+        received = 0
+        request = urllib.request.Request(
+            _OLLAMA_DARWIN_URL, headers={"User-Agent": "clipgen-ollama-install"}
+        )
+        try:
+            with (
+                urllib.request.urlopen(request, timeout=_INSTALL_TIMEOUT) as response,
+                archive_path.open("wb") as out,
+            ):
+                total = int(
+                    response.headers.get("Content-Length")
+                    or _OLLAMA_DOWNLOAD_SIZE_BYTES
+                )
+                while chunk := response.read(_INSTALL_CHUNK):
+                    digest.update(chunk)
+                    out.write(chunk)
+                    received += len(chunk)
+                    if on_progress is not None:
+                        on_progress(
+                            {
+                                "status": "downloading Ollama",
+                                "completed": received,
+                                "total": total,
+                            }
+                        )
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            utils.warning_print(f"Ollama install failed (download): {exc}")
+            return False
+
+        if digest.hexdigest() != _OLLAMA_DARWIN_SHA256:
+            utils.warning_print(
+                "Ollama install failed: downloaded archive does not match the "
+                f"pinned SHA256 for v{OLLAMA_DOWNLOAD_VERSION}."
+            )
+            return False
+        if on_progress is not None:
+            on_progress({"status": "unpacking Ollama"})
+
+        try:
+            with tarfile.open(archive_path) as archive:
+                # filter="tar" blocks absolute-path/traversal escapes while
+                # keeping file modes — this hash-verified archive ships
+                # executables, which the stricter "data" filter would strip.
+                archive.extractall(target_dir, filter="tar")
+        except (tarfile.TarError, OSError) as exc:
+            utils.warning_print(f"Ollama install failed (extract): {exc}")
+            return False
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+    installed = managed_ollama_path()
+    if installed is None:
+        # Belt and braces for a future archive that drops the exec bit.
+        fallback = target_dir / "ollama"
+        if fallback.is_file():
+            try:
+                fallback.chmod(0o755)
+            except OSError:
+                pass
+            installed = managed_ollama_path()
+    if installed is None or not _managed_binary_works(installed):
+        utils.warning_print(
+            "Ollama install failed: extracted binary is missing or does not run."
+        )
+        return False
+    if on_progress is not None:
+        on_progress({"status": "success"})
+    utils.info_print(f"Installed Ollama v{OLLAMA_DOWNLOAD_VERSION} to {target_dir}.")
+    return True
 
 
 def _shutdown_response_socket(resp: Any) -> None:

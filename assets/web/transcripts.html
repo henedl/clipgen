@@ -256,6 +256,10 @@
       </div>
       <div class="model-install-actions">
         <button id="modelInstallCancel" type="button" class="btn btn-small">Cancel</button>
+        <!-- Secondary action for the "Ollama isn't installed" flavour when the
+             in-app download is offered: primary downloads, this one re-checks
+             after a manual install. Hidden in every other flavour. -->
+        <button id="modelInstallAlt" type="button" class="btn btn-small hidden">I've installed it — retry</button>
         <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Install</button>
       </div>
     </div>

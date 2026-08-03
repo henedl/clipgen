@@ -14,7 +14,23 @@ import urllib.error
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import ollama_client
+
+
+@pytest.fixture(autouse=True)
+def _isolated_config_dir(tmp_path, monkeypatch):
+    """Keep managed-install probing away from the host's real config dir.
+
+    ``is_installed()``/``resolve_ollama_bin()`` fall back to
+    ``start_settings.config_dir()/tools/ollama`` — on a machine that has used
+    the in-app installer, every which()-patched test would silently resolve
+    the real managed binary instead.
+    """
+    monkeypatch.setattr(
+        ollama_client.start_settings, "config_dir", lambda: tmp_path / "cfg"
+    )
 
 
 def _ndjson_lines(*chunks: dict) -> list[bytes]:
@@ -585,3 +601,81 @@ class TestPullModel:
 
     def test_empty_model_name(self):
         assert ollama_client.pull_model("") is False
+
+
+class TestManagedInstall:
+    """The in-app download of the Ollama CLI itself (macOS managed install)."""
+
+    def _make_managed(self, tmp_path, layout="flat", executable=True):
+        base = tmp_path / "cfg" / "tools" / "ollama"
+        binary = (base / "ollama") if layout == "flat" else (base / "bin" / "ollama")
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+        if executable:
+            binary.chmod(0o755)
+        return binary
+
+    @patch("ollama_client.shutil.which", return_value="/opt/homebrew/bin/ollama")
+    def test_resolve_prefers_path_over_managed(self, mock_which, tmp_path):
+        """A user-managed install (brew, Ollama.app) self-updates; it wins."""
+        self._make_managed(tmp_path)
+        assert ollama_client.resolve_ollama_bin() == "/opt/homebrew/bin/ollama"
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_resolve_falls_back_to_managed(self, mock_which, tmp_path):
+        binary = self._make_managed(tmp_path)
+        assert ollama_client.resolve_ollama_bin() == str(binary)
+        assert ollama_client.is_installed() is True
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_resolve_probes_bin_layout(self, mock_which, tmp_path):
+        """A future tarball may move the binary under bin/."""
+        binary = self._make_managed(tmp_path, layout="bin")
+        assert ollama_client.resolve_ollama_bin() == str(binary)
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_resolve_requires_exec_bit(self, mock_which, tmp_path):
+        self._make_managed(tmp_path, executable=False)
+        assert ollama_client.resolve_ollama_bin() is None
+        assert ollama_client.is_installed() is False
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_nothing_installed(self, mock_which):
+        assert ollama_client.resolve_ollama_bin() is None
+        assert ollama_client.is_installed() is False
+
+    def test_can_install_managed_is_darwin_only(self, monkeypatch):
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        assert ollama_client.can_install_managed() is True
+        monkeypatch.setattr(ollama_client.sys, "platform", "win32")
+        assert ollama_client.can_install_managed() is False
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_idempotent(self, mock_urlopen, tmp_path, monkeypatch):
+        """A working managed install returns True without touching the network."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        self._make_managed(tmp_path)
+        monkeypatch.setattr(
+            ollama_client, "_managed_binary_works", lambda _binary: True
+        )
+        assert ollama_client.install_managed() is True
+        mock_urlopen.assert_not_called()
+
+    def test_install_managed_refused_off_macos(self, monkeypatch):
+        monkeypatch.setattr(ollama_client.sys, "platform", "linux")
+        assert ollama_client.install_managed() is False
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_rejects_bad_hash(self, mock_urlopen, monkeypatch):
+        """A tampered/changed download must fail before extraction."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        resp = MagicMock()
+        resp.headers = {"Content-Length": "9"}
+        resp.read.side_effect = [b"not a tgz", b""]
+        resp.__enter__ = lambda self_: resp
+        resp.__exit__ = lambda self_, *exc: False
+        mock_urlopen.return_value = resp
+        progress: list[dict] = []
+        assert ollama_client.install_managed(on_progress=progress.append) is False
+        assert any(p.get("status", "").startswith("downloading") for p in progress)
+        assert ollama_client.managed_ollama_path() is None

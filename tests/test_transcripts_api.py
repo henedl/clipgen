@@ -2082,6 +2082,91 @@ def test_ollama_pull_reports_failure(tr_client, monkeypatch):
     assert status["error"]
 
 
+def test_ollama_install_rejected_where_unsupported(tr_client, monkeypatch):
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: False)
+    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_ollama_install_short_circuits_when_installed(tr_client, monkeypatch):
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
+    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["already_installed"] is True
+
+
+def test_ollama_install_status_before_any_install(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+    resp = tr_client.get("/transcripts/api/models/ollama/install-status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["found"] is False
+
+
+def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
+    import time
+
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
+
+    def _fake_install(on_progress=None):
+        if on_progress:
+            on_progress({"status": "downloading Ollama", "total": 100, "completed": 40})
+        return True
+
+    monkeypatch.setattr(ollama_client, "install_managed", _fake_install)
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+
+    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
+    assert resp.status_code == 200
+    assert resp.get_json()["started"] is True
+
+    status = {}
+    for _ in range(100):
+        status = tr_client.get(
+            "/transcripts/api/models/ollama/install-status"
+        ).get_json()
+        if status.get("found") and status.get("done"):
+            break
+        time.sleep(0.02)
+    assert status["found"] is True
+    assert status["done"] is True
+    assert status["succeeded"] is True
+    assert status["status"] == "success"
+
+
+def test_ollama_install_second_post_attaches(tr_client, monkeypatch):
+    import threading as threading_mod
+
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
+    release = threading_mod.Event()
+    monkeypatch.setattr(
+        ollama_client,
+        "install_managed",
+        lambda on_progress=None: release.wait(2.0),
+    )
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+    try:
+        first = tr_client.post("/transcripts/api/models/ollama/install", json={})
+        assert first.get_json()["started"] is True
+        second = tr_client.post("/transcripts/api/models/ollama/install", json={})
+        assert second.get_json()["already_installing"] is True
+    finally:
+        release.set()
+
+
 def test_api_models_includes_cached_and_agents(monkeypatch):
     import ollama_client
     import server as server_mod

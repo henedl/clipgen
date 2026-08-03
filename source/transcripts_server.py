@@ -111,6 +111,11 @@ _pending_model_unloads_lock = threading.Lock()
 _ollama_pull_status: dict[str, dict[str, Any]] = {}
 _ollama_pull_lock = threading.Lock()
 
+# Progress for the (single, unkeyed) managed install of the Ollama CLI itself —
+# the same shape as a pull entry so the frontend reuses its pull rendering.
+_ollama_install_status: dict[str, Any] | None = None
+_ollama_install_lock = threading.Lock()
+
 
 def _schedule_model_unload(model: str) -> None:
     """Schedule an Ollama model unload after ``config.OLLAMA_UNLOAD_DELAY_SECONDS``.
@@ -1517,6 +1522,82 @@ def api_ollama_start() -> FlaskResponse:
     if not started:
         return err("Ollama did not start")
     return ok(started=True)
+
+
+@transcripts_bp.route("/api/models/ollama/install", methods=["POST"])
+def api_ollama_install() -> FlaskResponse:
+    """Download the Ollama CLI itself into clipgen's managed dir (macOS only).
+
+    The consent-gated counterpart of /api/models/ollama/pull one level down:
+    same background-thread + status-dict + polling shape, so the frontend
+    reuses its pull rendering. Only ever reached from the explicit install
+    dialog on the Transcripts page.
+    """
+    global _ollama_install_status
+    if not ollama_client.can_install_managed():
+        return err("In-app Ollama install is not supported on this platform")
+    if ollama_client.is_installed():
+        return ok(already_installed=True)
+    with _ollama_install_lock:
+        if _ollama_install_status is not None and not _ollama_install_status.get(
+            "done"
+        ):
+            return ok(already_installing=True)
+        _ollama_install_status = {
+            "status": "starting",
+            "completed": 0,
+            "total": 0,
+            "done": False,
+            "succeeded": False,
+            "error": None,
+        }
+
+    def _on_progress(chunk: dict[str, Any]) -> None:
+        with _ollama_install_lock:
+            st = _ollama_install_status
+            if st is None:
+                return
+            status = chunk.get("status")
+            if status:
+                st["status"] = status
+            total = chunk.get("total")
+            completed = chunk.get("completed")
+            if isinstance(total, (int, float)):
+                st["total"] = int(total)
+            if isinstance(completed, (int, float)):
+                st["completed"] = int(completed)
+
+    def _run_install() -> None:
+        succeeded = False
+        try:
+            succeeded = ollama_client.install_managed(on_progress=_on_progress)
+        finally:
+            with _ollama_install_lock:
+                st = _ollama_install_status
+                if st is not None:
+                    st["done"] = True
+                    st["succeeded"] = succeeded
+                    if succeeded:
+                        st["status"] = "success"
+                    elif not st.get("error"):
+                        st["error"] = "Install failed"
+
+    threading.Thread(target=_run_install, daemon=True, name="ollama-install").start()
+    return ok(started=True)
+
+
+@transcripts_bp.route("/api/models/ollama/install-status")
+def api_ollama_install_status() -> FlaskResponse:
+    """Report progress for the managed install started via .../install."""
+    with _ollama_install_lock:
+        snapshot = (
+            dict(_ollama_install_status) if _ollama_install_status is not None else None
+        )
+    if snapshot is None:
+        return ok(found=False)
+    snapshot["ok"] = True
+    snapshot["found"] = True
+    return jsonify(snapshot)
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])

@@ -403,7 +403,14 @@
     _trFetchModels().then(function (data) {
       var status = clipgenOllamaStatus(data && data.ollama);
       if (status.state === "ok") return;
-      var extra = status.state === "missing" && status.hint.length ? " " + status.hint[0] : "";
+      var extra = "";
+      if (status.state === "missing") {
+        // Running the summary raises the install dialog, so the shortest true
+        // instruction here is "just run it".
+        extra = status.canInstall
+          ? " clipgen can download it for you when you run the summary."
+          : (status.hint.length ? " " + status.hint[0] : "");
+      }
       hintEl.textContent = status.message + extra;
       hintEl.classList.remove("hidden");
     }).catch(function () { /* leave the plain empty state alone */ });

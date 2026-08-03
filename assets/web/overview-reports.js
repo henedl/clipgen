@@ -151,11 +151,17 @@
     if (!o) return null;
     var status = clipgenOllamaStatus(o);
     if (status.state !== "ok") {
-      // The install command only helps the "missing" case; a stopped server
+      // The install guidance only helps the "missing" case; a stopped server
       // just needs starting, and this panel's Refresh re-checks either way.
-      var extra = status.state === "missing" && status.hint.length
-        ? " " + status.hint[0]
-        : " Start it, then Refresh.";
+      // The install dialog itself lives on the Transcripts page, so point there.
+      var extra;
+      if (status.state === "missing") {
+        extra = status.canInstall
+          ? " clipgen can download it for you — run any AI action on the Transcripts page."
+          : (status.hint.length ? " " + status.hint[0] : "");
+      } else {
+        extra = " Start it, then Refresh.";
+      }
       return status.message + extra;
     }
     var agents = o.agents || [];
