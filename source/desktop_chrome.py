@@ -366,7 +366,9 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
     pill over them — a *sibling* of the three widgets, not a replacement: the
     buttons stay in the hierarchy, visible, and the pill simply covers them
     (measured on Sequoia: pill ``[17,14 52x20]`` against widgets at 16/36/56).
-    So both are placed on every pass; neither is an alternative to the other.
+    So the pill is checked on every pass rather than as an alternative to the
+    buttons — though AppKit centers it correctly by itself once the band is
+    right, so that check is normally a no-op.
 
     The band is grown before the buttons are looked up, so a slot with no usable
     buttons still gets its height rather than being skipped entirely.
@@ -424,19 +426,32 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
                 origin.x = margin + index * pitch
                 origin.y = margin
                 button.setFrameOrigin_(origin)
-        _place_sharing_pill(container, buttons, bar)
+        _place_sharing_pill(container, bar)
+        # Moving a view leaves whatever drew behind it holding stale pixels, and
+        # the titlebar is not redrawn until the window is next interacted with —
+        # which is how a re-placed sharing pill came to appear twice at once.
+        container.setNeedsDisplay_(True)
+        for view in container.subviews():
+            view.setNeedsDisplay_(True)
         _log_titlebar_inventory(container, buttons)
     finally:
         _laying_out = False
 
 
-def _place_sharing_pill(container: Any, buttons: list[Any], bar: int) -> None:
-    """Center Sequoia's screen-sharing pill where the traffic lights were.
+def _place_sharing_pill(container: Any, bar: int) -> None:
+    """Correct Sequoia's screen-sharing pill if it is not centered in the band.
 
     Measured on Sequoia the pill is an ``NSWindowSharingSessionRecipientIndicator``
     at ``[17,14 52x20]``, sitting alongside the three ``_NSTheme*Widget``s one
     level below the container's own children (the full-height ``NSTitlebarView``
     and ``_NSTitlebarDecorationView``) — hence the single level of descent.
+
+    A correction, not a placement. Once the band is 48px AppKit centers the pill
+    itself — ``y = 14`` is exactly ``(48 - 20) / 2`` — so the normal path must
+    touch nothing. Nudging it the 1px from AppKit's ``x = 17`` to the close
+    button's ``x = 16`` bought nothing and left a ghost of the pill's backdrop
+    at the old position until the window was interacted with. Hence: vertical
+    only, and only when AppKit has actually got it wrong.
 
     Matched by class name, not by shape. Shape matching — "short, visible, inside
     the left gutter" — was tried and reverted: the titlebar is full of short,
@@ -455,17 +470,14 @@ def _place_sharing_pill(container: Any, buttons: list[Any], bar: int) -> None:
             candidates.append(view)
             candidates.extend(view.subviews())
 
-        # The close button's own vertical margin doubles as the slot's left
-        # inset, so the rule needs no hardcoded button size.
-        close = buttons[0] if buttons else None
         for view in candidates:
             if "SharingSession" not in str(view.className()):
                 continue
-            height = view.frame().size.height
-            reference = close.frame().size.height if close else height
             origin = view.frame().origin
-            origin.x = _centered_origin(bar, reference)
-            origin.y = _centered_origin(bar, height)
+            centered = _centered_origin(bar, view.frame().size.height)
+            if abs(origin.y - centered) <= 1:
+                continue
+            origin.y = centered
             view.setFrameOrigin_(origin)
     except Exception as exc:
         utils.verbose_print(f"Could not place the screen-sharing indicator: {exc}")

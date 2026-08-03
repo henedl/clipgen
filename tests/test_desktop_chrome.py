@@ -135,6 +135,31 @@ def test_the_sharing_pill_is_matched_by_class_not_by_shape():
     assert "DESKTOP_TRAFFIC_LIGHT_INSET" not in body
 
 
+def test_the_sharing_pill_is_only_corrected_when_appkit_gets_it_wrong():
+    """AppKit centers the pill itself once the band is 48px; y = 14 is exact.
+
+    Nudging it the 1px from AppKit's x = 17 to the close button's x = 16 bought
+    nothing and left a ghost of its backdrop at the old position until the window
+    was interacted with. So: vertical only, behind a tolerance.
+    """
+    body = SOURCE[SOURCE.index("def _place_sharing_pill") :]
+    body = body[: body.index("\ndef ")]
+    move = body[body.index("for view in candidates") :]
+    assert "origin.x" not in move
+    assert "continue" in move[: move.index("origin.y =")]
+
+
+def test_the_titlebar_is_invalidated_after_a_layout_pass():
+    """A moved view leaves stale pixels behind it in whatever drew there.
+
+    The titlebar is not redrawn until the window is next interacted with, which
+    is how a re-placed sharing pill came to be on screen twice at once.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    assert body.index("_place_sharing_pill(") < body.index("setNeedsDisplay_")
+
+
 def test_the_band_subviews_are_clamped_to_the_bar():
     """Growing the container autoresizes its fillers; AppKit's reset does not.
 
