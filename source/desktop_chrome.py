@@ -17,12 +17,16 @@ The buttons then have to move: AppKit centers them in a 28px titlebar, which
 leaves them riding high in a 48px bar. ``_apply_titlebar_layout`` grows the
 ``NSTitlebarContainerView`` to the bar height and re-centers each button inside
 it — the same approach Electron uses for ``trafficLightPosition``. AppKit resets
-that layout on resize, on leaving fullscreen, and — the reason the observer list
-is longer than it looks like it needs to be — whenever macOS Sequoia swaps the
-three buttons for its purple screen-sharing pill. That swap fires none of the
-window-level notifications, so the container's *own* frame change is what we
-listen to; and the bar is grown before ``standardWindowButton_`` is consulted,
-because during a share there may be no buttons to hang the layout off at all.
+that layout on resize, on leaving fullscreen, and — the reason the machinery
+below is larger than it looks like it needs to be — for a few hundred
+milliseconds either side of macOS Sequoia laying its screen-sharing pill over
+the light row. That transition fires no window-level notification, resets the
+buttons *inside* a container that keeps our height, and makes its final move
+after the last notification anyone can observe. So the views themselves are
+watched rather than the window, and a bounded chain of deferred re-checks gets
+the last word; without it the row stayed scrambled until the user resized.
+Measure, do not reason: ``-v`` prints the real view shapes on every pass, and
+three fixes written from plausible models of this hierarchy were all wrong.
 
 The drag *region* is not defined here. ``-webkit-app-region: drag`` does nothing
 in WKWebView, so the topnav opts into pywebview's ``.pywebview-drag-region``
@@ -297,13 +301,12 @@ def _mask_bit(AppKit: Any, name: str, fallback: int) -> int:
 def _titlebar_container(AppKit: Any, native: Any) -> Any:
     """Resolve the window's ``NSTitlebarContainerView``, or ``None``.
 
-    Deliberately does *not* go through ``standardWindowButton_`` first. While the
-    screen is being shared macOS replaces the three buttons with its own
-    indicator, and the old ``buttons[0].superview().superview()`` route then had
-    nothing to walk — which is why the bar stopped being grown mid-share. The
-    button route stays as the fallback because it is the one that has always
-    worked; a wrong guess is not an option here, since the caller resizes what it
-    is handed.
+    Deliberately does *not* go through ``standardWindowButton_`` first. The band
+    is the one thing the page's layout depends on, and reaching it through
+    ``buttons[0].superview().superview()`` made it hostage to a slot that macOS
+    rearranges at will. The button route stays as the fallback because it is the
+    one that has always worked; ``None`` rather than a guess, because the caller
+    resizes what it is handed.
     """
     try:
         for view in native.contentView().superview().subviews():
