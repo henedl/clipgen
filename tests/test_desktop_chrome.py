@@ -103,7 +103,7 @@ def test_the_container_is_resolved_without_the_traffic_lights():
 def test_the_titlebar_grows_before_the_buttons_are_looked_up():
     body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
     body = body[: body.index("\ndef ")]
-    assert body.index("setFrame_") < body.index("standardWindowButton_")
+    assert body.index("setFrame_") < body.index("_light_buttons(")
 
 
 def test_the_sharing_pill_is_placed_alongside_the_buttons_not_instead_of_them():
@@ -149,15 +149,20 @@ def test_the_sharing_pill_is_only_corrected_when_appkit_gets_it_wrong():
     assert "continue" in move[: move.index("origin.y =")]
 
 
-def test_the_titlebar_is_invalidated_after_a_layout_pass():
+def test_the_titlebar_is_invalidated_recursively_after_a_layout_pass():
     """A moved view leaves stale pixels behind it in whatever drew there.
 
     The titlebar is not redrawn until the window is next interacted with, which
-    is how a re-placed sharing pill came to be on screen twice at once.
+    is how a re-placed sharing pill came to be on screen twice at once. Marking
+    only the container's direct subviews missed it: the pill and the vibrancy
+    view that backs it are both grandchildren.
     """
     body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
     body = body[: body.index("\ndef ")]
-    assert body.index("_place_sharing_pill(") < body.index("setNeedsDisplay_")
+    assert body.index("_place_sharing_pill(") < body.index("_invalidate(")
+    walk = SOURCE[SOURCE.index("def _invalidate") :]
+    walk = walk[: walk.index("\ndef ")]
+    assert "_invalidate(child)" in walk
 
 
 def test_the_band_subviews_are_clamped_to_the_bar():
@@ -170,7 +175,7 @@ def test_the_band_subviews_are_clamped_to_the_bar():
     body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
     body = body[: body.index("\ndef ")]
     clamp = body[body.index("for view in container.subviews()") :]
-    assert "> bar" in clamp[: clamp.index("buttons = [")]
+    assert "> bar" in clamp[: clamp.index("_light_buttons(")]
 
 
 def test_a_sharing_transition_re_asserts_the_layout():
@@ -189,15 +194,52 @@ def test_the_light_row_is_watched_and_not_just_the_container():
     """A transition resets the buttons inside a container that keeps our height.
 
     Watching only the container saw nothing at all in that case, so the layout
-    was right in the model and stale on screen until a manual resize. The slot
-    walk is what both the observers and the early-out are built from.
+    was right in the model and stale on screen until a manual resize.
     """
     body = SOURCE[SOURCE.index("def _slot_views") :]
     body = body[: body.index("\ndef ")]
-    assert "standardWindowButton_" in body and "superview()" in body
-    for caller in ("_layout_is_current", "_bind_frame_observer"):
-        scope = SOURCE[SOURCE.index(f"def {caller}") :]
-        assert "_slot_views(" in scope[: scope.index("\ndef ")], caller
+    assert "_light_buttons(" in body and "superview()" in body
+    scope = SOURCE[SOURCE.index("def _bind_frame_observer") :]
+    assert "_slot_views(" in scope[: scope.index("\ndef ")]
+
+
+def test_a_lopsided_pitch_read_is_rejected():
+    """AppKit reports gaps of 29 and 20 in one read mid-transition.
+
+    Feeding that through `margin + index * pitch` spread the row to 16/45/74 and
+    left it there — the exact state the window was stuck in after a share.
+    """
+    body = SOURCE[SOURCE.index("def _button_pitch") :]
+    body = body[: body.index("\ndef ")]
+    assert "abs(first - second)" in body
+
+
+def test_the_early_out_checks_every_button_not_just_the_close_one():
+    """It is the deferred chain's stop condition, so it must match what we write.
+
+    A transition scrambles the row as a whole; a predicate that only looked at
+    the close button would call 16/45/74 settled and stop.
+    """
+    body = SOURCE[SOURCE.index("def _layout_is_current") :]
+    body = body[: body.index("\ndef ")]
+    assert "for index, button in enumerate(buttons)" in body
+    assert "_pitch" in body
+
+
+def test_a_pass_arms_a_deferred_re_check():
+    """AppKit's last move lands after our pass and posts nothing we observe.
+
+    Without the chain the row stayed at 7/45/74 until the window was resized —
+    the notification-only design could never get the last word.
+    """
+    assert "threading.Timer" in SOURCE
+    chain = SOURCE[SOURCE.index("def _settle(") :]
+    chain = chain[: chain.index("\ndef ")]
+    # Each link stops as soon as the layout reads correct, and it is bounded.
+    assert "_layout_is_current(" in chain
+    assert "attempts - 1" in chain
+    scope = SOURCE[SOURCE.index("def _schedule_settle") :]
+    assert "attempts <= 0" in scope[: scope.index("\ndef ")]
 
 
 def test_the_frame_observer_cannot_recurse_into_itself():

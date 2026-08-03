@@ -69,6 +69,19 @@ _reassert_count = 0
 _reassert_started = 0.0
 # Last verbose titlebar inventory, so a drag-resize does not print one per tick.
 _last_inventory: str | None = None
+# AppKit keeps shuffling the slot for a few hundred ms after a sharing
+# transition, and its *last* move lands after our pass with no further
+# notification — measured, that left the row at 7/45/74 until the user resized
+# the window. So a pass arms a short chain of deferred re-checks, each of which
+# stops as soon as the layout reads correct.
+_SETTLE_DELAY_S = 0.15
+_SETTLE_ATTEMPTS = 5
+_settle_timer: Any = None
+# Last self-consistent button pitch. Mid-transition AppKit reports a lopsided
+# row (measured: gaps of 29 and 20 in one read) and writing that back is what
+# spread the buttons to 16/45/74 in the first place.
+_DEFAULT_PITCH = 20.0
+_pitch = _DEFAULT_PITCH
 
 
 def is_supported() -> bool:
@@ -129,7 +142,7 @@ def apply(window: Any) -> bool:
 
 def teardown() -> None:
     """Unregister the notification observers. Safe to call more than once."""
-    global _fullscreen, _laying_out
+    global _fullscreen, _laying_out, _settle_timer, _pitch
     global _reassert_count, _reassert_started, _last_inventory
     # Above the early-out: a window that never registered an observer can still
     # have left layout state behind (apply() runs the first pass before _observe).
@@ -140,6 +153,10 @@ def teardown() -> None:
     _reassert_count = 0
     _reassert_started = 0.0
     _last_inventory = None
+    _pitch = _DEFAULT_PITCH
+    if _settle_timer is not None:
+        _settle_timer.cancel()
+        _settle_timer = None
     if not _observers:
         return
     try:
@@ -404,18 +421,11 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
                 filler.origin.y = 0
                 view.setFrame_(filler)
 
-        buttons = [
-            native.standardWindowButton_(getattr(AppKit, name))
-            for name in (
-                "NSWindowCloseButton",
-                "NSWindowMiniaturizeButton",
-                "NSWindowZoomButton",
-            )
-        ]
+        buttons = _light_buttons(AppKit, native)
         if all(buttons):
-            # Read the pitch before moving anything — it is 20px either way,
-            # which keeps repeat calls (resize, fullscreen exit) idempotent.
-            pitch = buttons[1].frame().origin.x - buttons[0].frame().origin.x
+            # Read the pitch before moving anything, and only trust a row whose
+            # two gaps agree — see _button_pitch.
+            pitch = _button_pitch(buttons)
             for index, button in enumerate(buttons):
                 # The lights sit in a group view that normally fills the grown
                 # container. Fall back to the bar when a reset has left the group
@@ -427,15 +437,43 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
                 origin.y = margin
                 button.setFrameOrigin_(origin)
         _place_sharing_pill(container, bar)
-        # Moving a view leaves whatever drew behind it holding stale pixels, and
-        # the titlebar is not redrawn until the window is next interacted with —
-        # which is how a re-placed sharing pill came to appear twice at once.
-        container.setNeedsDisplay_(True)
-        for view in container.subviews():
-            view.setNeedsDisplay_(True)
+        _invalidate(container)
         _log_titlebar_inventory(container, buttons)
     finally:
         _laying_out = False
+
+
+def _button_pitch(buttons: list[Any]) -> float:
+    """The light row's x spacing, ignoring a mid-transition read.
+
+    During a sharing transition AppKit walks the row through intermediate
+    positions and briefly reports it lopsided — measured, close at 7 while the
+    other two sat at 36 and 56, so gaps of 29 and 20 in a single read. Feeding
+    that back through ``margin + index * pitch`` is what spread the buttons to
+    16/45/74 and left them there. A row whose two gaps disagree is not a row
+    worth measuring, so the last sane pitch is kept instead.
+    """
+    global _pitch
+    first = buttons[1].frame().origin.x - buttons[0].frame().origin.x
+    second = buttons[2].frame().origin.x - buttons[1].frame().origin.x
+    if first > 0 and abs(first - second) <= 0.5:
+        _pitch = first
+    return _pitch
+
+
+def _invalidate(view: Any) -> None:
+    """Mark *view* and everything under it for redisplay.
+
+    Moving a view leaves stale pixels in whatever drew behind it, and the
+    titlebar is not redrawn until the window is next interacted with — which is
+    how a re-placed sharing pill came to be on screen twice at once. Recursive
+    on purpose: the pill and the vibrancy view that backs it are *grand*children
+    of the container, so marking only its direct subviews missed both of the
+    views that actually draw.
+    """
+    view.setNeedsDisplay_(True)
+    for child in view.subviews():
+        _invalidate(child)
 
 
 def _place_sharing_pill(container: Any, bar: int) -> None:
@@ -544,7 +582,7 @@ def _slot_views(AppKit: Any, native: Any) -> list[Any]:
     if container is None:
         return []
     views = [container]
-    close = native.standardWindowButton_(AppKit.NSWindowCloseButton)
+    close = _light_buttons(AppKit, native)[0]
     if close is not None:
         group = close.superview()
         if group is not None:
@@ -553,30 +591,100 @@ def _slot_views(AppKit: Any, native: Any) -> list[Any]:
     return views
 
 
-def _layout_is_current(AppKit: Any, native: Any, bar: int) -> bool:
-    """Whether the band and the light row are already where we put them.
+def _light_buttons(AppKit: Any, native: Any) -> list[Any]:
+    """The three standard window buttons, in row order. Entries may be ``None``."""
+    return [
+        native.standardWindowButton_(getattr(AppKit, name))
+        for name in (
+            "NSWindowCloseButton",
+            "NSWindowMiniaturizeButton",
+            "NSWindowZoomButton",
+        )
+    ]
 
-    The notification handler's early-out, and the thing that keeps a drag-resize
-    — which fires a frame change per tick without disturbing either — from
-    costing a layout pass or a slice of the re-assert budget. Frames are
-    CGFloats, so compare with a half-pixel tolerance rather than for equality.
+
+def _layout_is_current(AppKit: Any, native: Any, bar: int) -> bool:
+    """Whether the band and the whole light row are already where we put them.
+
+    The notification handler's early-out and the deferred chain's stop
+    condition, so it has to test exactly what the pass writes — all three
+    buttons, not just the close one. A transition scrambles the row as a whole
+    (measured: 16/45/74 while close alone looked plausible), and a predicate
+    that only looked at close would call that settled. Frames are CGFloats, so
+    compare with a half-pixel tolerance rather than for equality.
 
     The group view's own height is deliberately not part of the test: the buttons
     are anchored to its bottom edge, so it can sit at AppKit's 28px without
     moving anything the user can see, and demanding 48 there would spend the
     whole budget re-asserting a difference with no visual consequence.
     """
-    views = _slot_views(AppKit, native)
-    if not views:
+    container = _titlebar_container(AppKit, native)
+    if container is None:
         return True  # nothing to place; a pass would not change that
-    if abs(views[0].frame().size.height - bar) > 0.5:
+    if abs(container.frame().size.height - bar) > 0.5:
         return False
-    if len(views) < 3:
+    buttons = _light_buttons(AppKit, native)
+    if not all(buttons):
         return True
-    close = views[-1]
-    margin = _centered_origin(bar, close.frame().size.height)
-    origin = close.frame().origin
-    return abs(origin.x - margin) <= 0.5 and abs(origin.y - margin) <= 0.5
+    parent_height = max(buttons[0].superview().frame().size.height, bar)
+    margin = _centered_origin(parent_height, buttons[0].frame().size.height)
+    for index, button in enumerate(buttons):
+        origin = button.frame().origin
+        if abs(origin.y - margin) > 0.5:
+            return False
+        if abs(origin.x - (margin + index * _pitch)) > 0.5:
+            return False
+    return True
+
+
+def _schedule_settle(AppKit: Any, native: Any, attempts: int) -> None:
+    """Arm a deferred re-check of the layout.
+
+    Notifications alone are not enough to finish a sharing transition. AppKit
+    walks the slot through several intermediate layouts and its *last* move
+    lands after our final pass without posting anything we observe, so the row
+    sat at 7/45/74 until the user resized the window. A short chain of timed
+    re-checks gives us the last word instead; each link stops as soon as the
+    layout reads correct, so a quiet window costs one no-op check.
+    """
+    global _settle_timer
+    if attempts <= 0:
+        return
+    if _settle_timer is not None and _settle_timer.is_alive():
+        return  # one pending check is enough; it re-arms itself if it acts
+
+    def fire() -> None:
+        try:
+            # Imported by name for the same reason as AppKit — see _appkit().
+            # The hop matters: this runs on a timer thread, not AppKit's.
+            app_helper: Any = importlib.import_module("PyObjCTools.AppHelper")
+            app_helper.callAfter(lambda: _settle(AppKit, native, attempts))
+        except Exception as exc:
+            utils.verbose_print(f"Could not re-check the titlebar layout: {exc}")
+
+    _settle_timer = threading.Timer(_SETTLE_DELAY_S, fire)
+    _settle_timer.daemon = True
+    _settle_timer.start()
+
+
+def _settle(AppKit: Any, native: Any, attempts: int) -> None:
+    """One link of the deferred chain: fix the layout, or draw and stop."""
+    if _fullscreen:
+        return
+    if not _layout_is_current(AppKit, native, config.DESKTOP_CHROME_BAR_HEIGHT):
+        _apply_titlebar_layout(AppKit, native)
+        _schedule_settle(AppKit, native, attempts - 1)
+        return
+    # Settled — but AppKit shuffles the sharing pill through two positions of its
+    # own during a transition (measured: x 17, then 8, then 17) and does not
+    # always repaint what it vacated, which is what put two badges on screen at
+    # once. Marking dirty is not enough on its own here, so force the one redraw
+    # the user would otherwise have to trigger by touching the window. Once per
+    # chain, and never on the resize path, which repaints anyway.
+    container = _titlebar_container(AppKit, native)
+    if container is not None:
+        _invalidate(container)
+        container.displayIfNeeded()
 
 
 def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
@@ -638,11 +746,15 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
         # A transition can swap the views out from under us; re-bind after the
         # pass so the next reset is still heard.
         _bind_frame_observer(AppKit, native, on_frame_change)
+        # AppKit is mid-transition and will move the slot again after this pass
+        # without posting anything. The deferred chain is what gets the last word.
+        _schedule_settle(AppKit, native, _SETTLE_ATTEMPTS)
 
     def on_become_key(_note: Any) -> None:
         _rearm_reassert_budget()
         _bind_frame_observer(AppKit, native, on_frame_change)
         _apply_titlebar_layout(AppKit, native)
+        _schedule_settle(AppKit, native, _SETTLE_ATTEMPTS)
 
     def on_resize(_note: Any) -> None:
         _rearm_reassert_budget()
