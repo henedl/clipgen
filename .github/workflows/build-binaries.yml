@@ -53,7 +53,7 @@ jobs:
           uv pip install pyinstaller==6.19.0
 
       - name: Cache pinned ffmpeg binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/vendor
           key: ffmpeg-vendor-${{ runner.os }}-${{ hashFiles('build/fetch_binaries.py') }}
