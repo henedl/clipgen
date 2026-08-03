@@ -332,12 +332,13 @@ def test_local_ai_badge_is_styled_and_its_icon_exists():
 
 def test_audio_track_override_survives_track_zero():
     """`<select>.value` for track 0 is the string "0" (truthy), so the falsy gate
-    in startTranscribe is correct — but only by accident of that stringiness. A
-    refactor to a numeric override would silently drop "transcribe track 1"."""
-    start = _JS.index("function startTranscribe(")
+    in transcribeParticipants is correct — but only by accident of that
+    stringiness. A refactor to a numeric override would silently drop
+    "transcribe track 1"."""
+    start = _JS.index("function transcribeParticipants(pids, force)")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "ov.audioTrack" in body, (
-        "startTranscribe must forward the pill's audio-track override"
+        "the enqueue must forward each pill's audio-track override"
     )
     assert "audio_index" in body, "the POST key the server parses is audio_index"
 
@@ -651,4 +652,88 @@ def test_the_wip_badge_is_shared_not_forked():
         )
     assert "ov-wip-badge" not in read("overview.html"), (
         "Overview's copy was migrated onto the shared class"
+    )
+
+
+# ---- Transcribe All (Quick action -> batch transcription enqueue) ----
+
+
+def test_transcribe_all_reaches_a_published_satellite_function():
+    """The hub delegates to TS.transcribeParticipants, which lives in the pills
+    satellite. test_frontend_satellite_wiring.py only catches *bare* cross-file
+    calls; a delegator whose TS.fn was never assigned is syntactically fine and
+    silently no-ops, so the menu item would just do nothing on click."""
+    assert "TS.transcribeParticipants = transcribeParticipants" in _JS, (
+        "transcripts-pills.js must publish transcribeParticipants for the hub"
+    )
+    assert (
+        "function transcribeParticipants() { return TS.transcribeParticipants &&" in _JS
+    ), "the hub needs a guarded delegator (it loads before the pills satellite)"
+
+
+def test_transcribe_all_skips_completed_and_in_flight_participants():
+    """/api/transcribe skips already-transcribed participants only when force is
+    false, and has no in-flight guard at all — two POSTs for a running pid make
+    two tasks that both run. So the eligible list is filtered client-side on
+    both axes before anything is enqueued."""
+    start = _JS.index("function _untranscribedParticipants(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "has_video" in body and "!ps[i].has_transcript" in body
+    for status in ('"queued"', '"running"'):
+        assert status in body, (
+            f"a participant with a {status} task must not be re-enqueued"
+        )
+
+
+def test_transcribe_all_never_forces():
+    """Force would re-transcribe every completed participant in the study — a
+    long, silent, destructive batch nobody asked for. The action is explicitly
+    additive; re-transcribing stays a per-pill choice."""
+    start = _JS.index("function runTranscribeAll(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "transcribeParticipants(pids, false)" in body, (
+        "the batch enqueue must pass force=false"
+    )
+
+
+def test_transcribe_enqueue_claims_its_participants_up_front():
+    """state.tasks does not learn about a task until the POST comes back, so the
+    eligibility gate is blind for the whole round trip — and for however long
+    the model-download confirm sits open. Without a claim taken *before* the
+    request, a second Transcribe All in that window re-enqueues every pending
+    participant, and the server (which has no in-flight guard) runs each twice."""
+    start = _JS.index("function transcribeParticipants(pids, force)")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_transcribeInFlight[pid]" in body and "continue" in body, (
+        "already-claimed pids must be dropped from the batch"
+    )
+    assert body.index("_transcribeInFlight[pid] = true") < body.index(
+        "_postTranscribe("
+    ), "the claim must be taken before the request, not in its callback"
+
+
+def test_transcribe_enqueue_releases_its_claim_on_every_exit():
+    """A claim that leaks is worse than no claim: the participant can never be
+    transcribed again without a page reload. Every terminal branch releases —
+    success, rejected POST, declined download, and the network catch — while the
+    allow_download retry deliberately keeps it (it re-posts the same pids)."""
+    start = _JS.index("function _postTranscribe(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert body.count("_clearTranscribeInFlight(pids)") == 4, (
+        "release on success, on !ok, on a declined download, and in .catch()"
+    )
+    assert ".catch(function () {" in body, (
+        "apiPost rejects on a non-2xx or a dropped connection; that path used to "
+        "fall through silently and would now strand the claim"
+    )
+
+
+def test_transcribe_enqueue_adopts_the_returned_tasks_immediately():
+    """pollTaskStatus() is itself a round trip away, so without adopting the
+    response the pills sit idle and the gate stays open for another interval."""
+    start = _JS.index("function _postTranscribe(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.tasks = state.tasks.concat(data.tasks)" in body
+    assert body.index("state.tasks.concat") < body.index("renderPills()"), (
+        "adopt before repainting, or the pills render the pre-enqueue state"
     )

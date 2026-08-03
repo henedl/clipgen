@@ -1611,11 +1611,20 @@ def api_transcribe() -> FlaskResponse:
             )
             if _worker:
                 _worker.enqueue(task)
+            # Same shape as /api/transcribe/status's entries (minus the running-
+            # only partial_count), so the client can adopt these into its task
+            # list immediately instead of waiting a poll interval to learn the
+            # participant is queued. created_at in particular is what its
+            # newest-task-per-participant reducer sorts on.
             enqueued.append(
                 {
                     "id": task["id"],
                     "participant": p["id"],
                     "status": task["status"],
+                    "progress": task["progress"],
+                    "error": task["error"],
+                    "created_at": task["created_at"],
+                    "completed_at": task["completed_at"],
                 }
             )
 

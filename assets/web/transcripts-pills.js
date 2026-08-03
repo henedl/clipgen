@@ -824,27 +824,51 @@
   }
 
   function startTranscribe(pid, force) {
-    var overrides = {};
-    var ov = state.pillOverrides[pid];
-    // ov.audioTrack is a <select> value, so track 0 arrives as the string "0" —
-    // truthy, unlike the number. The server parses it back to an int and treats
-    // absent (not falsy) as "auto-detect".
-    if (ov && (ov.model || ov.language || ov.audioTrack)) {
-      overrides[pid] = {};
-      if (ov.model) overrides[pid].model = ov.model;
-      if (ov.language) overrides[pid].language = ov.language;
-      if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
-    }
-    transcribeParticipants([pid], force, overrides);
+    transcribeParticipants([pid], force);
   }
 
-  function transcribeParticipants(pids, force, overrides) {
-    _postTranscribe(pids, force, overrides, false);
+  // Participants with an un-acked transcribe POST. The server has no in-flight
+  // guard — two POSTs for one participant make two tasks that both run — and
+  // the callers that gate on state.tasks (the hub's Transcribe All) cannot see
+  // a task that has not been enqueued yet. That gap spans the whole round trip
+  // plus, on the download path, however long the confirm dialog stays open.
+  var _transcribeInFlight = {};
+
+  function _clearTranscribeInFlight(pids) {
+    for (var i = 0; i < pids.length; i++) delete _transcribeInFlight[pids[i]];
+  }
+
+  // Enqueue one or many participants in a single POST, each carrying whatever
+  // model/language/audio-track override its own pill dropdown holds. The hub's
+  // Transcribe All quick action passes the whole eligible list through here.
+  function transcribeParticipants(pids, force) {
+    var fresh = [];
+    var overrides = {};
+    for (var i = 0; i < pids.length; i++) {
+      var pid = pids[i];
+      if (_transcribeInFlight[pid]) continue;
+      _transcribeInFlight[pid] = true;
+      fresh.push(pid);
+      var ov = state.pillOverrides[pid];
+      // ov.audioTrack is a <select> value, so track 0 arrives as the string "0" —
+      // truthy, unlike the number. The server parses it back to an int and treats
+      // absent (not falsy) as "auto-detect".
+      if (ov && (ov.model || ov.language || ov.audioTrack)) {
+        overrides[pid] = {};
+        if (ov.model) overrides[pid].model = ov.model;
+        if (ov.language) overrides[pid].language = ov.language;
+        if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
+      }
+    }
+    if (!fresh.length) return;
+    _postTranscribe(fresh, force, overrides, false);
   }
 
   // POST to the transcribe endpoint. The server is the authority on whether a
   // Whisper model is cached: when it rejects with reason "model_not_cached", we
   // confirm each uncached download with the user and retry with allow_download.
+  // Every exit from here releases the in-flight claim, except the retry — which
+  // hands the same pids to the next _postTranscribe.
   function _postTranscribe(pids, force, overrides, allowDownload) {
     var body = { participants: pids, force: force };
     if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
@@ -853,16 +877,34 @@
       if (!data.ok) {
         if (data.reason === "model_not_cached" && data.uncached && data.uncached.length) {
           _confirmUncachedWhisperModels(data.uncached).then(function (ok) {
-            if (ok) _postTranscribe(pids, force, overrides, true);
+            if (ok) {
+              _postTranscribe(pids, force, overrides, true);
+              return;
+            }
+            _clearTranscribeInFlight(pids);
           });
           return;
         }
+        _clearTranscribeInFlight(pids);
         showToast("Failed to enqueue transcription");
         return;
       }
+      // Adopt the server's task records now rather than a poll interval from
+      // now: state.tasks is both what paints the pills and what the next
+      // enqueue checks for eligibility, and pollTaskStatus() below is itself a
+      // round trip away. The records carry created_at, so a re-transcribe sorts
+      // ahead of the participant's completed task in renderPills' reducer.
+      state.tasks = state.tasks.concat(data.tasks);
+      _clearTranscribeInFlight(pids);
       showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
+      renderPills();
       startPolling();
       pollTaskStatus();
+    }).catch(function () {
+      // Without this the pids stay claimed forever and the participant can
+      // never be re-enqueued without a reload.
+      _clearTranscribeInFlight(pids);
+      showToast("Failed to enqueue transcription");
     });
   }
 
@@ -980,6 +1022,7 @@
   // ---- Published back to the hub (loadParticipants/selectParticipant/poller
   // render pills; boot wires the listeners) ----
   TS.renderPills = renderPills;
+  TS.transcribeParticipants = transcribeParticipants; // hub (Transcribe All quick action)
   TS.initPillOutsideClick = initPillOutsideClick;
   TS.initPillWheelScroll = initPillWheelScroll;
   TS.togglePillOptions = togglePillOptions; // video (O hotkey)

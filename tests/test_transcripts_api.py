@@ -367,6 +367,44 @@ def test_warmup_proceeds_when_model_cached(tr_client, monkeypatch):
     assert resp.get_json().get("started") is True
 
 
+def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
+    """The enqueue response is the client's only view of a new task until the
+    next 3 s status poll, and it gates the *next* enqueue on it (the server has
+    no in-flight guard, so a duplicate POST would run the participant twice).
+    A record missing created_at loses the newest-task-per-participant reducer to
+    the participant's older completed task, so a re-transcribe would read as
+    still-eligible and the pill would keep painting the stale done state."""
+
+    class _StubWorker:
+        def enqueue(self, task):
+            pass
+
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": ["/tmp/P01.mp4"], "has_video": True}
+    ]
+    transcripts_server._worker = cast("transcripts.TranscriptWorker", _StubWorker())
+    monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe", json={"participants": ["P01"], "force": True}
+    )
+    assert resp.status_code == 200
+    task = resp.get_json()["tasks"][0]
+    # Same keys the status route serves, so the client can concat the two lists.
+    assert set(task) == {
+        "id",
+        "participant",
+        "status",
+        "progress",
+        "error",
+        "created_at",
+        "completed_at",
+    }
+    assert task["participant"] == "P01"
+    assert task["status"] == transcripts.TASK_STATUS_QUEUED
+    assert task["created_at"], "the reducer sorts on this; it must not be null"
+
+
 def test_transcribe_applies_per_participant_overrides(tr_client, monkeypatch):
     """POST /api/transcribe threads {model, language} overrides onto the task."""
 
