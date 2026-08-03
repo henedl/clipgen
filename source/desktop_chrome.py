@@ -50,12 +50,14 @@ _observers: list[Any] = []
 # then (they live in the auto-hiding overlay), so we neither move them nor ask
 # the page to reserve room for them.
 _fullscreen = False
-# The NSTitlebarContainerView our frame observer is bound to, and that observer's
-# token. AppKit can hand the window a different container across a fullscreen or
-# sharing transition, which would leave an observer bound to the old one deaf, so
-# the pair is re-bound whenever the identity changes.
-_frame_observed: Any = None
-_frame_token: Any = None
+# The views whose frames are watched for an AppKit reset, and the matching
+# observer tokens. Watching the container alone is not enough: a screen-sharing
+# transition puts the buttons back at their stock positions *inside* a container
+# that keeps our height, so the reset produces no container frame change at all.
+# AppKit can also hand the window different views across a transition, which
+# would leave the observers deaf, so the set is re-bound when identity changes.
+_frame_observed: list[Any] = []
+_frame_tokens: list[Any] = []
 # Re-entrancy guard: our own setFrame_ posts the notification we listen for.
 _laying_out = False
 # Ping-pong budget. If AppKit pins the container height (constraint, or a re-layout
@@ -127,13 +129,13 @@ def apply(window: Any) -> bool:
 
 def teardown() -> None:
     """Unregister the notification observers. Safe to call more than once."""
-    global _fullscreen, _frame_observed, _frame_token, _laying_out
+    global _fullscreen, _laying_out
     global _reassert_count, _reassert_started, _last_inventory
     # Above the early-out: a window that never registered an observer can still
     # have left layout state behind (apply() runs the first pass before _observe).
     _fullscreen = False
-    _frame_observed = None
-    _frame_token = None
+    _frame_observed.clear()
+    _frame_tokens.clear()
     _laying_out = False
     _reassert_count = 0
     _reassert_started = 0.0
@@ -358,13 +360,16 @@ def _rearm_reassert_budget() -> None:
 def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
     """Grow the titlebar band and place whatever macOS put in the light slot.
 
-    Two different things can occupy the top-left slot. Normally it is the three
-    standard window buttons, which AppKit centers for a 28px titlebar and which
-    therefore ride high in our 48px one. While the screen is being shared,
-    Sequoia replaces all three with a single purple sharing pill — positioned for
-    that same 28px titlebar. Both want the same treatment, so the band is grown
-    *unconditionally*, before the buttons are even looked up: bailing out on a
-    missing button is exactly what left the pill sitting in a stock-height bar.
+    The slot holds the three standard window buttons, which AppKit centers for a
+    28px titlebar and which therefore ride high in our 48px one. While the screen
+    is being shared, Sequoia lays an ``NSWindowSharingSessionRecipientIndicator``
+    pill over them — a *sibling* of the three widgets, not a replacement: the
+    buttons stay in the hierarchy, visible, and the pill simply covers them
+    (measured on Sequoia: pill ``[17,14 52x20]`` against widgets at 16/36/56).
+    So both are placed on every pass; neither is an alternative to the other.
+
+    The band is grown before the buttons are looked up, so a slot with no usable
+    buttons still gets its height rather than being skipped entirely.
 
     AppKit views are unflipped, so a child's ``origin.y`` is measured from the
     container's bottom edge — which growing the band moves. Growth and placement
@@ -385,6 +390,18 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
         frame.origin.y = native.frame().size.height - bar
         container.setFrame_(frame)
 
+        # Growing the container autoresizes the views that fill it, but AppKit's
+        # own reset back to 28px does not shrink them again — so every re-assert
+        # left _NSTitlebarDecorationView 20px taller than the last (48, 68, 88…).
+        # Clamp them to the band we own; overshoot only, since the light group
+        # legitimately sits at 28 with its buttons anchored to the bottom edge.
+        for view in container.subviews():
+            filler = view.frame()
+            if filler.size.height > bar:
+                filler.size.height = bar
+                filler.origin.y = 0
+                view.setFrame_(filler)
+
         buttons = [
             native.standardWindowButton_(getattr(AppKit, name))
             for name in (
@@ -393,21 +410,21 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
                 "NSWindowZoomButton",
             )
         ]
-        if all(buttons) and not any(button.isHidden() for button in buttons):
+        if all(buttons):
             # Read the pitch before moving anything — it is 20px either way,
             # which keeps repeat calls (resize, fullscreen exit) idempotent.
             pitch = buttons[1].frame().origin.x - buttons[0].frame().origin.x
             for index, button in enumerate(buttons):
-                # The lights sit in a group view that fills the grown container,
-                # so they are centered against their parent, not against `bar`.
-                parent_height = button.superview().frame().size.height
+                # The lights sit in a group view that normally fills the grown
+                # container. Fall back to the bar when a reset has left the group
+                # short, so the row stays centered in the band the page reserves.
+                parent_height = max(button.superview().frame().size.height, bar)
                 margin = _centered_origin(parent_height, button.frame().size.height)
                 origin = button.frame().origin
                 origin.x = margin + index * pitch
                 origin.y = margin
                 button.setFrameOrigin_(origin)
-        else:
-            _place_sharing_pill(container, buttons, bar)
+        _place_sharing_pill(container, buttons, bar)
         _log_titlebar_inventory(container, buttons)
     finally:
         _laying_out = False
@@ -416,42 +433,39 @@ def _apply_titlebar_layout(AppKit: Any, native: Any) -> None:
 def _place_sharing_pill(container: Any, buttons: list[Any], bar: int) -> None:
     """Center Sequoia's screen-sharing pill where the traffic lights were.
 
-    The pill is system-owned and undocumented, so it is identified by shape
-    rather than by class: a short, visible control sitting inside the left gutter
-    the page already reserves. The one level of descent is not a guess — measured
-    on Sequoia, the container's own children are two full-height views
-    (``NSTitlebarView``, ``_NSTitlebarDecorationView``) and the traffic lights
-    are ``NSTitlebarView``'s children, so the slot lives exactly one level down.
-    ``_log_titlebar_inventory`` prints the same two levels, so a share where the
-    pill never moves can be diagnosed from the log alone.
+    Measured on Sequoia the pill is an ``NSWindowSharingSessionRecipientIndicator``
+    at ``[17,14 52x20]``, sitting alongside the three ``_NSTheme*Widget``s one
+    level below the container's own children (the full-height ``NSTitlebarView``
+    and ``_NSTitlebarDecorationView``) — hence the single level of descent.
 
-    Guarded separately from the growth above: a surprise in this heuristic must
-    not cost us the band height, which is the half that fixes the buttons.
+    Matched by class name, not by shape. Shape matching — "short, visible, inside
+    the left gutter" — was tried and reverted: the titlebar is full of short,
+    left-aligned background views (``NSVisualEffectView``, the light group
+    itself), and moving those drags the buttons off with them and leaves the bar
+    growing by 20px a pass. If Apple renames the class this quietly stops
+    running, which is the safe direction to fail in; ``_log_titlebar_inventory``
+    prints the real name at ``-v``.
+
+    Guarded separately from the growth above: a surprise here must not cost us
+    the band height, which is the half that fixes the buttons.
     """
     try:
         candidates: list[Any] = []
         for view in container.subviews():
-            if view.frame().size.height < bar:
-                candidates.append(view)
-            else:
-                candidates.extend(view.subviews())
+            candidates.append(view)
+            candidates.extend(view.subviews())
 
-        # The pill's own vertical margin doubles as its left inset when the
-        # buttons are gone entirely, so the rule needs no hardcoded button size.
-        close = buttons[0]
-        gutter = config.DESKTOP_TRAFFIC_LIGHT_INSET
+        # The close button's own vertical margin doubles as the slot's left
+        # inset, so the rule needs no hardcoded button size.
+        close = buttons[0] if buttons else None
         for view in candidates:
-            size = view.frame().size
-            # Hidden buttons are candidates too while the pill stands in for
-            # them; moving them would only scramble the row they get back.
-            if view.isHidden() or size.height >= bar:
+            if "SharingSession" not in str(view.className()):
                 continue
-            if view.frame().origin.x >= gutter:
-                continue
-            reference = close.frame().size.height if close else size.height
+            height = view.frame().size.height
+            reference = close.frame().size.height if close else height
             origin = view.frame().origin
             origin.x = _centered_origin(bar, reference)
-            origin.y = _centered_origin(bar, size.height)
+            origin.y = _centered_origin(bar, height)
             view.setFrameOrigin_(origin)
     except Exception as exc:
         utils.verbose_print(f"Could not place the screen-sharing indicator: {exc}")
@@ -505,34 +519,89 @@ def _log_titlebar_inventory(container: Any, buttons: list[Any]) -> None:
         utils.verbose_print(line)
 
 
-def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
-    """Bind (or re-bind) the container frame observer, following its identity.
+def _slot_views(AppKit: Any, native: Any) -> list[Any]:
+    """The views whose geometry the layout pass owns, outermost first.
 
-    The container's own frame change is the only signal a screen-sharing swap
+    The container, the group view the lights sit in, and the close button. All
+    three are watched and all three are checked, because a screen-sharing
+    transition resets them independently: measured, it puts the buttons back at
+    their stock positions inside a container that still has our height, so
+    watching the container alone sees nothing at all.
+    """
+    container = _titlebar_container(AppKit, native)
+    if container is None:
+        return []
+    views = [container]
+    close = native.standardWindowButton_(AppKit.NSWindowCloseButton)
+    if close is not None:
+        group = close.superview()
+        if group is not None:
+            views.append(group)
+        views.append(close)
+    return views
+
+
+def _layout_is_current(AppKit: Any, native: Any, bar: int) -> bool:
+    """Whether the band and the light row are already where we put them.
+
+    The notification handler's early-out, and the thing that keeps a drag-resize
+    — which fires a frame change per tick without disturbing either — from
+    costing a layout pass or a slice of the re-assert budget. Frames are
+    CGFloats, so compare with a half-pixel tolerance rather than for equality.
+
+    The group view's own height is deliberately not part of the test: the buttons
+    are anchored to its bottom edge, so it can sit at AppKit's 28px without
+    moving anything the user can see, and demanding 48 there would spend the
+    whole budget re-asserting a difference with no visual consequence.
+    """
+    views = _slot_views(AppKit, native)
+    if not views:
+        return True  # nothing to place; a pass would not change that
+    if abs(views[0].frame().size.height - bar) > 0.5:
+        return False
+    if len(views) < 3:
+        return True
+    close = views[-1]
+    margin = _centered_origin(bar, close.frame().size.height)
+    origin = close.frame().origin
+    return abs(origin.x - margin) <= 0.5 and abs(origin.y - margin) <= 0.5
+
+
+def _bind_frame_observer(AppKit: Any, native: Any, handler: Any) -> None:
+    """Bind (or re-bind) the frame observers, following the views' identity.
+
+    A view's own frame change is the only signal a screen-sharing transition
     reliably produces — no window-level notification fires for it. AppKit can
-    also hand the window a *different* container across a transition, which would
-    leave an observer bound to the old one permanently deaf, so the binding is
+    also hand the window *different* views across a transition, which would leave
+    the observers bound to the old ones permanently deaf, so the binding is
     re-checked rather than made once.
     """
-    global _frame_observed, _frame_token
-    container = _titlebar_container(AppKit, native)
-    if container is None or container is _frame_observed:
+    views = _slot_views(AppKit, native)
+    if not views:
+        return
+    if len(views) == len(_frame_observed) and all(
+        a is b for a, b in zip(views, _frame_observed)
+    ):
         return
     center = AppKit.NSNotificationCenter.defaultCenter()
-    if _frame_token is not None:
-        center.removeObserver_(_frame_token)
-        for index, token in enumerate(_observers):
-            if token is _frame_token:
+    for token in _frame_tokens:
+        center.removeObserver_(token)
+        for index, existing in enumerate(_observers):
+            if existing is token:
                 del _observers[index]
                 break
-    # Already the NSView default; set explicitly so the one hook that catches a
-    # sharing swap cannot be switched off from under us.
-    container.setPostsFrameChangedNotifications_(True)
-    _frame_token = center.addObserverForName_object_queue_usingBlock_(
-        AppKit.NSViewFrameDidChangeNotification, container, None, handler
-    )
-    _observers.append(_frame_token)
-    _frame_observed = container
+    _frame_tokens.clear()
+    _frame_observed.clear()
+    for view in views:
+        # Already the NSView default; set explicitly so the one hook that catches
+        # a sharing transition cannot be switched off from under us.
+        view.setPostsFrameChangedNotifications_(True)
+        token = center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSViewFrameDidChangeNotification, view, None, handler
+        )
+        _frame_tokens.append(token)
+        _observers.append(token)
+        _frame_observed.append(view)
 
 
 def _observe(AppKit: Any, window: Any, native: Any) -> None:
@@ -540,15 +609,12 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
     center = AppKit.NSNotificationCenter.defaultCenter()
 
     def on_frame_change(_note: Any) -> None:
-        # Our own setFrame_ posts this synchronously.
+        # Our own setFrame_/setFrameOrigin_ post this synchronously.
         if _laying_out:
-            return
-        container = _titlebar_container(AppKit, native)
-        if container is None:
             return
         # Width-only changes (every tick of a drag-resize) are not a reset, and
         # must be filtered out *before* the budget is charged.
-        if container.frame().size.height == config.DESKTOP_CHROME_BAR_HEIGHT:
+        if _layout_is_current(AppKit, native, config.DESKTOP_CHROME_BAR_HEIGHT):
             return
         if not _within_reassert_budget(time.monotonic()):
             if _reassert_count == _REASSERT_BURST_LIMIT + 1:
@@ -557,6 +623,9 @@ def _observe(AppKit: Any, window: Any, native: Any) -> None:
                 )
             return
         _apply_titlebar_layout(AppKit, native)
+        # A transition can swap the views out from under us; re-bind after the
+        # pass so the next reset is still heard.
+        _bind_frame_observer(AppKit, native, on_frame_change)
 
     def on_become_key(_note: Any) -> None:
         _rearm_reassert_budget()

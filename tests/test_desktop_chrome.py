@@ -83,44 +83,96 @@ def test_teardown_is_idempotent():
     assert desktop_chrome._observers == []
     # The layout state resets sit above the "no observers" early-out: apply()
     # runs a first layout pass before _observe() registers anything.
-    assert desktop_chrome._frame_observed is None
-    assert desktop_chrome._frame_token is None
+    assert desktop_chrome._frame_observed == []
+    assert desktop_chrome._frame_tokens == []
     assert desktop_chrome._laying_out is False
     assert desktop_chrome._last_inventory is None
 
 
 def test_the_container_is_resolved_without_the_traffic_lights():
-    """During a share there may be no buttons to walk up from.
+    """The container used to be reached as buttons[0].superview().superview().
 
-    The container used to be reached as buttons[0].superview().superview(), so
-    losing the buttons lost the container — and with it the 48px band.
+    That route works only for as long as the buttons do. Resolving by class name
+    keeps the 48px band available even when the slot is not what we expect.
     """
     assert '"NSTitlebarContainerView"' in SOURCE
-    # Both the styling pass and the layout pass go through the one resolver.
+    # Both the styling pass and the slot walk go through the one resolver.
     assert SOURCE.count("_titlebar_container(") >= 3  # 1 def + 2 call sites
 
 
 def test_the_titlebar_grows_before_the_buttons_are_looked_up():
-    """The regression: macOS Sequoia swaps the lights for a sharing pill.
-
-    Gating the growth on all three buttons being present left the bar at its
-    stock 28px for the whole share, so the pill rode high in clipgen's topnav.
-    """
     body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
     body = body[: body.index("\ndef ")]
     assert body.index("setFrame_") < body.index("standardWindowButton_")
 
 
-def test_a_sharing_swap_re_asserts_the_layout():
+def test_the_sharing_pill_is_placed_alongside_the_buttons_not_instead_of_them():
+    """Measured on Sequoia: the pill is a *sibling* of the three widgets.
+
+    `buttons=shown,shown,shown` throughout a real share — the lights are never
+    hidden or removed, the NSWindowSharingSessionRecipientIndicator just covers
+    them. Placing the pill in an `else:` off the buttons was dead code that never
+    ran once.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    call = body.index("_place_sharing_pill(")
+    branch = body.rindex("\n", 0, call)
+    # Same indentation as the button block, not nested inside an else.
+    assert body[branch : branch + 9] == "\n        "
+
+
+def test_the_sharing_pill_is_matched_by_class_not_by_shape():
+    """Shape matching was tried against a live titlebar and corrupted the bar.
+
+    "Short, visible, inside the left gutter" also describes NSVisualEffectView
+    and the light group; moving those dragged the buttons to [7,26] and left the
+    bar growing 20px a pass. The pill's real class name comes from the -v log.
+    """
+    body = SOURCE[SOURCE.index("def _place_sharing_pill") :]
+    body = body[: body.index("\ndef ")]
+    assert "SharingSession" in body
+    assert "DESKTOP_TRAFFIC_LIGHT_INSET" not in body
+
+
+def test_the_band_subviews_are_clamped_to_the_bar():
+    """Growing the container autoresizes its fillers; AppKit's reset does not.
+
+    Without the clamp every re-assert left _NSTitlebarDecorationView 20px taller
+    than the last — 48, 68, 88 — which only showed up once the frame observer
+    started catching resets at all.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    clamp = body[body.index("for view in container.subviews()") :]
+    assert "> bar" in clamp[: clamp.index("buttons = [")]
+
+
+def test_a_sharing_transition_re_asserts_the_layout():
     """No window-level notification fires when the sharing pill appears.
 
-    Resize and the two fullscreen notifications are all the module used to
-    observe, which is why the lights came back at stock positions after a share
-    and stayed there until the window was resized.
+    Resize and the two fullscreen notifications were all the module observed,
+    which is why the lights came back at stock positions after a share and stayed
+    there until the window was resized.
     """
     assert "NSViewFrameDidChangeNotification" in SOURCE
     assert "setPostsFrameChangedNotifications_" in SOURCE
     assert "NSWindowDidBecomeKeyNotification" in SOURCE
+
+
+def test_the_light_row_is_watched_and_not_just_the_container():
+    """A transition resets the buttons inside a container that keeps our height.
+
+    Watching only the container saw nothing at all in that case, so the layout
+    was right in the model and stale on screen until a manual resize. The slot
+    walk is what both the observers and the early-out are built from.
+    """
+    body = SOURCE[SOURCE.index("def _slot_views") :]
+    body = body[: body.index("\ndef ")]
+    assert "standardWindowButton_" in body and "superview()" in body
+    for caller in ("_layout_is_current", "_bind_frame_observer"):
+        scope = SOURCE[SOURCE.index(f"def {caller}") :]
+        assert "_slot_views(" in scope[: scope.index("\ndef ")], caller
 
 
 def test_the_frame_observer_cannot_recurse_into_itself():
