@@ -13,11 +13,20 @@ frozen build — most of the cost here has historically gone into rediscovering 
 
 ```bash
 uv pip install pyinstaller==6.19.0          # match the CI pin
+uv run --no-sync build/fetch_binaries.py    # pinned ffmpeg/ffprobe → build/vendor/ (idempotent)
 uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
 Takes ~90 s. Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows: `clipgen.exe` +
 `_internal/`). The build is **one-dir** — see "Why one-dir" below before changing that.
+
+The fetch step downloads the pinned static GPL ffmpeg/ffprobe builds (SHA256-verified, see the
+`PINS` block in `build/fetch_binaries.py` for provenance) into the gitignored `build/vendor/`.
+The spec hard-fails without them — a build that skipped the step must break on the build machine,
+not ship an app that dies on its startup ffmpeg check. They land in `<bundle>/bin/`, which
+`utils.prepend_bundled_bin_to_path()` puts at the head of PATH on frozen launches, so the app
+always runs the ffmpeg it was feature-verified with. UPX is excluded for them in both `EXE` and
+`COLLECT` (`upx_exclude`) — UPX corrupts signed mach-O and packed ffmpeg.exe builds.
 
 ## The one rule: verify the way a user launches it
 
@@ -86,6 +95,8 @@ from scratch. That is the entire 16× difference. One-file is also deprecated in
 windowed mode on macOS and **becomes a hard error in PyInstaller v7.0**.
 
 Cost of one-dir: download 261 MB → 309 MB, on disk 261 MB → 799 MB. Worth it.
+With the bundled ffmpeg/ffprobe (2026-08): download ~386 MB, on disk ~925 MB — the two static
+binaries add ~130 MB uncompressed. Startup is unaffected (measured 2.1 s post-bundling).
 
 ## Frozen path resolution — three different roots
 
@@ -142,21 +153,28 @@ app" is one level **up**. On macOS it is the folder containing the `.app` — ne
 ## Release verification checklist
 
 ```bash
+uv run --no-sync build/fetch_binaries.py
 uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 codesign --force --deep --sign - --timestamp=none dist/clipgen.app
 codesign --verify --deep --strict dist/clipgen.app
 open dist/clipgen.app                                        # window opens, no Terminal
 ./dist/clipgen.app/Contents/MacOS/clipgen --help             # CLI still works
+# Bundled ffmpeg resolves without Homebrew on PATH (the #638 failure, inverted):
+env -i HOME="$HOME" PATH=/usr/bin:/bin ./dist/clipgen.app/Contents/MacOS/clipgen --no-input -l 1 2>&1 | head -5
+dist/clipgen.app/Contents/Frameworks/bin/ffmpeg -hide_banner -buildconf | grep -c enable-libx264
 ```
 
 Plus: measure startup (above); DMG round-trip preserves exec bit + symlinks + signature; and
 `credentials.json` beside the app is still found. Windows can only be verified via a
-`workflow_dispatch` run — say so plainly in the PR rather than implying it was checked.
+`workflow_dispatch` run — say so plainly in the PR rather than implying it was checked. CI also
+greps the in-bundle ffmpeg's encoders/filters on both legs, so provider build-config drift fails
+the build instead of silently degrading webp/vp9/titlecards.
 
 ## Related
 
 - [agents/skills/check/SKILL.md](../check/SKILL.md) — the pre-commit gate
 - [plans/archive/DESKTOP-PACKAGING-PLAN.md](../../../plans/archive/DESKTOP-PACKAGING-PLAN.md) — how
-  the current shape was arrived at, including the deferred ffmpeg-bundling decision and its GPL
-  implications
+  the current shape was arrived at. Its "deferred ffmpeg bundling" note is resolved: the bundle now
+  ships pinned GPL ffmpeg/ffprobe (licensing recorded in `build/THIRD-PARTY-LICENSES` and
+  `plans/LICENSE-PLAN.md`)
 - [desktop.py](../../../source/desktop.py) — the window host and its two JS bridges

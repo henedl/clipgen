@@ -50,6 +50,24 @@ excludes = [
     # Other unused transitive dependencies
     "matplotlib", "IPython", "notebook", "jupyter",
 ]
+
+# Bundled ffmpeg/ffprobe: pinned static GPL builds, fetched by
+# `uv run build/fetch_binaries.py` into build/vendor/<platform>/bin/ (see the
+# PINS block there for provenance; THIRD-PARTY-LICENSES carries the license).
+# They land in <bundle>/bin/, which cli.main prepends to PATH on frozen
+# launches, so every "ffmpeg" argv in the codebase resolves to these copies.
+# Guarded like source/ below: a build that skipped the fetch step must fail
+# here, not ship an app that dies on its startup ffmpeg check.
+_vendor_platform = "macos-arm64" if sys.platform == "darwin" else "windows-x64"
+_vendor_bin = Path(SPECPATH) / "vendor" / _vendor_platform / "bin"  # noqa: F821
+_tool_names = ["ffmpeg", "ffprobe"] if sys.platform == "darwin" else ["ffmpeg.exe", "ffprobe.exe"]
+_missing_tools = [name for name in _tool_names if not (_vendor_bin / name).is_file()]
+if _missing_tools:
+    raise SystemExit(
+        f"clipgen.spec: bundled video tools missing from {_vendor_bin}: "
+        f"{sorted(_missing_tools)}. Run `uv run build/fetch_binaries.py` first."
+    )
+binaries = [(str(_vendor_bin / name), "bin") for name in _tool_names]
 # tkinter is intentionally NOT excluded: utils.open_native_folder_picker
 # uses tkinter.filedialog as the non-macOS fallback for the Start overlay's
 # Browse button. Excluding it silently breaks the Browse flow on Windows/Linux
@@ -62,7 +80,7 @@ a = Analysis(
     # Python file is the launcher itself. Guarded immediately below.
     ["../clipgen.py"],
     pathex=[str(_REPO_ROOT / "source")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -106,7 +124,10 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=True,
     upx=True,
-    upx_exclude=[],
+    # The bundled video tools must never pass through UPX: it corrupts signed
+    # mach-O binaries, and on Windows a packed ffmpeg.exe is a known-broken
+    # combination. Mirrored in COLLECT below.
+    upx_exclude=["ffmpeg*", "ffprobe*"],
     runtime_tmpdir=None,
     # Windows keeps a console so `clipgen.exe --gif ...` still prints — a
     # GUI-subsystem build has no stdout at all, and PyInstaller has no dual-mode
@@ -129,7 +150,7 @@ coll = COLLECT(
     a.datas,
     strip=True,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=["ffmpeg*", "ffprobe*"],  # see EXE above
     name="clipgen",
 )
 

@@ -3771,8 +3771,14 @@ def main() -> None:
     # to surface natively instead of printing into the void. Set the flag before
     # the first thing that can abort startup.
     utils.GUI_LAUNCH = _use_desktop_window(args) and _resolve_web_mode(args) is not None
+    # Bundled tools first, package managers appended after: the desktop build
+    # ships its own feature-verified ffmpeg/ffprobe under <bundle>/bin, which
+    # must win over any system copy, while the Homebrew append below remains
+    # the fallback for tools the bundle does not carry (e.g. a user-installed
+    # ollama). Both must run before anything calls shutil.which.
+    utils.prepend_bundled_bin_to_path()
     # Finder gives a GUI process a bare PATH that omits Homebrew, so ffmpeg is
-    # invisible and startup aborts. Must run before anything calls shutil.which.
+    # invisible and startup aborts.
     utils.augment_path_for_gui_launch()
 
     if config.DEBUGGING:

@@ -172,6 +172,15 @@ def check_ffmpeg_tools_available() -> bool:
         f"Missing command(s): {', '.join(missing_tools)}",
         "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
     ]
+    if getattr(sys, "frozen", False):
+        # Desktop builds bundle both tools under <bundle>/bin, so reaching
+        # this branch means the bundle itself is damaged — installing a system
+        # ffmpeg would paper over a broken download or a stripped app.
+        details.append(
+            "This build bundles ffmpeg — if it is missing, the app is "
+            "damaged. Reinstall clipgen, or place ffmpeg on your PATH as a "
+            "workaround."
+        )
     details.extend(_ffmpeg_install_guidance_lines())
     if not getattr(sys, "frozen", False):
         # Source checkouts ship a script that does the whole job; a frozen

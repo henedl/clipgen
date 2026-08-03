@@ -891,6 +891,56 @@ def test_path_augmentation_skipped_off_macos(monkeypatch, tmp_path):
     assert utils.augment_path_for_gui_launch() == []
 
 
+def test_bundled_bin_prepend_only_when_frozen(monkeypatch):
+    """Source runs must keep the developer's ffmpeg, not hunt for a bundle."""
+    import utils
+
+    monkeypatch.delattr("sys.frozen", raising=False)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert utils.prepend_bundled_bin_to_path() is None
+    assert os.environ["PATH"] == "/usr/bin:/bin"
+
+
+def test_bundled_bin_prepend_wins_over_package_managers(monkeypatch, tmp_path):
+    """The bundle's ffmpeg must beat any system copy: prepended, idempotent,
+    and still at the head after the Homebrew append runs."""
+    import utils
+
+    bundled = tmp_path / "bin"
+    bundled.mkdir()
+    brew = tmp_path / "brew-bin"
+    brew.mkdir()
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(utils, "_GUI_PATH_DIRS", (str(brew),))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    assert utils.prepend_bundled_bin_to_path() == str(bundled)
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(bundled)
+    # Idempotent: a second call must not grow PATH.
+    before = os.environ["PATH"]
+    assert utils.prepend_bundled_bin_to_path() == str(bundled)
+    assert os.environ["PATH"] == before
+    # The append helper runs right after in cli.main; bundled stays first.
+    assert utils.augment_path_for_gui_launch() == [str(brew)]
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(bundled)
+
+
+def test_bundled_bin_prepend_noop_without_bin_dir(monkeypatch, tmp_path):
+    """A bundle without bin/ (e.g. a dev-built one-dir before the fetch step
+    existed) must fall back to PATH resolution untouched."""
+    import utils
+
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert utils.prepend_bundled_bin_to_path() is None
+    assert os.environ["PATH"] == "/usr/bin:/bin"
+
+
 def test_fatal_startup_error_is_silent_without_gui(monkeypatch):
     """Console runs keep printing only — no dialog subprocess."""
     import utils

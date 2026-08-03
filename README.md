@@ -8,10 +8,14 @@ clipgen is written in Python and interacts with local video files through [ffmpe
 
 ## How to use
 
+### Downloading the desktop app
+
+Tagged releases publish a macOS `.dmg` and a Windows `.zip` on the [Releases page](https://github.com/henedl/clipgen/releases). These bundle ffmpeg/ffprobe (GPL builds — see `THIRD-PARTY-LICENSES` in the download), so there is nothing else to install: follow the bundled `INSTALL.txt` and you are running. Everything below this point concerns running from source.
+
 ### Pre-requisites
 
 1. To run from source: install [uv](https://docs.astral.sh/uv/) and run `uv sync` to install Python dependencies.
-2. **Install ffmpeg** and ensure `ffmpeg` and `ffprobe` are on your `PATH`. This is required for every mode, including the binary and DMG builds — clipgen refuses to start without it. From a source checkout, `scripts/install-ffmpeg-ollama.sh` (macOS/Linux) or `scripts/install-ffmpeg-ollama.bat` (Windows) installs it for you; otherwise use `brew install ffmpeg`, `sudo apt install ffmpeg`, `winget install Gyan.FFmpeg`, or a build from [ffmpeg.org](https://www.ffmpeg.org/download.html).
+2. **Install ffmpeg** and ensure `ffmpeg` and `ffprobe` are on your `PATH`. Source runs refuse to start without it (the desktop builds above bundle their own). From a source checkout, `scripts/install-ffmpeg-ollama.sh` (macOS/Linux) or `scripts/install-ffmpeg-ollama.bat` (Windows) installs it for you; otherwise use `brew install ffmpeg`, `sudo apt install ffmpeg`, `winget install Gyan.FFmpeg`, or a build from [ffmpeg.org](https://www.ffmpeg.org/download.html).
 3. For Google Sheets: configure Google authentication per [gspread's setup guide](https://docs.gspread.org/en/latest/oauth2.html), then save the OAuth client file as `credentials.json` in any one of the folders clipgen searches, in this order: the working directory (for a binary, the folder containing the app), `~/.config/gspread/`, or clipgen's own config dir (`~/.config/clipgen/`, `%LOCALAPPDATA%\clipgen\` on Windows). Not needed for local Excel files, and not needed at all for Screenspace, Transcripts, Composer or Workflows.
 4. Optional — **local AI (Ollama)**: the Transcripts thinking agents (summary, citations, friction) and the Overview per-participant reports call a local [Ollama](https://ollama.com/download) server. Without it, everything else works and those panels tell you what is missing. Install with `brew install ollama`, `winget install Ollama.Ollama`, or `curl -fsSL https://ollama.com/install.sh | sh`; clipgen starts `ollama serve` for you and offers to pull an agent's model the first time you run it. Transcription itself (faster-whisper) does not need Ollama.
 
@@ -143,6 +147,7 @@ Cross-platform executables (macOS and Windows) are built automatically via GitHu
 
 ```shell
 pip install pyinstaller
+uv run build/fetch_binaries.py      # pinned ffmpeg/ffprobe for the bundle (SHA256-verified)
 pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 

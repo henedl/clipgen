@@ -556,6 +556,32 @@ def augment_path_for_gui_launch() -> list[str]:
     return added
 
 
+def prepend_bundled_bin_to_path() -> str | None:
+    """Put the bundle's own tools first on PATH in a frozen launch.
+
+    Returns the directory that was (or already is) at the head, or None when
+    there is nothing to do (source runs, or a bundle without a bin/ dir).
+
+    The desktop builds ship pinned ffmpeg/ffprobe under <bundle>/bin (see
+    build/fetch_binaries.py). Unlike ``augment_path_for_gui_launch`` this
+    *prepends*: the app must run the ffmpeg it was built and feature-verified
+    with, not whatever an older Homebrew install resolves to — the escape
+    hatch for power users is replacing the file inside the bundle. Source
+    runs are left alone, matching the append helper.
+    """
+    if not getattr(sys, "frozen", False) or sys.platform not in ("darwin", "win32"):
+        return None
+    bin_dir = get_bundled_assets_root() / "bin"
+    if not bin_dir.is_dir():
+        return None
+    current = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    bundled = str(bin_dir)
+    if current[:1] != [bundled]:
+        current = [bundled, *[p for p in current if p != bundled]]
+        os.environ["PATH"] = os.pathsep.join(current)
+    return bundled
+
+
 def install_guidance_lines(
     *,
     brew_command: str,

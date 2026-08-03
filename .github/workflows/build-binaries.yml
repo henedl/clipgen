@@ -52,8 +52,55 @@ jobs:
           uv pip install . --torch-backend cpu
           uv pip install pyinstaller==6.19.0
 
+      - name: Cache pinned ffmpeg binaries
+        uses: actions/cache@v4
+        with:
+          path: build/vendor
+          key: ffmpeg-vendor-${{ runner.os }}-${{ hashFiles('build/fetch_binaries.py') }}
+
+      - name: Fetch pinned ffmpeg binaries
+        # Idempotent: a cache hit makes this a hash-check no-op. The spec
+        # refuses to build without these files.
+        run: uv run build/fetch_binaries.py
+
       - name: Build executable
         run: uv run pyinstaller --clean --noconfirm build/clipgen.spec
+
+      - name: Verify bundled ffmpeg features (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          # The soft feature gates (webp screenshots, vp9 gifs, drawtext
+          # titlecards, hardware encode) silently degrade when the bundled
+          # build lacks a library — fail here on provider config drift instead.
+          FF="$(find dist/clipgen.app -type f -name ffmpeg -path "*/bin/*" | head -1)"
+          FP="$(find dist/clipgen.app -type f -name ffprobe -path "*/bin/*" | head -1)"
+          test -n "$FF" && test -n "$FP"
+          "$FP" -version | head -1
+          for enc in libx264 libwebp libvpx-vp9 h264_videotoolbox; do
+            "$FF" -hide_banner -encoders | grep -q " $enc " \
+              || { echo "::error::bundled ffmpeg lacks encoder $enc"; exit 1; }
+          done
+          "$FF" -hide_banner -filters | grep -q " drawtext " \
+            || { echo "::error::bundled ffmpeg lacks the drawtext filter"; exit 1; }
+
+      - name: Verify bundled ffmpeg features (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ff = "dist/clipgen/_internal/bin/ffmpeg.exe"
+          & dist/clipgen/_internal/bin/ffprobe.exe -version | Select-Object -First 1
+          $encoders = & $ff -hide_banner -encoders
+          foreach ($name in "libx264", "libwebp", "libvpx-vp9") {
+            if (-not ($encoders | Select-String -Quiet " $name ")) {
+              throw "bundled ffmpeg lacks encoder $name"
+            }
+          }
+          $filters = & $ff -hide_banner -filters
+          if (-not ($filters | Select-String -Quiet " drawtext ")) {
+            throw "bundled ffmpeg lacks the drawtext filter"
+          }
 
       - name: Ad-hoc codesign the .app bundle (macOS)
         if: matrix.os == 'macos-latest'
@@ -68,24 +115,6 @@ jobs:
           cat > dist/INSTALL.txt <<'EOF'
           clipgen for macOS
 
-          BEFORE YOU START: install ffmpeg
-
-          clipgen cuts and inspects video with ffmpeg, which is not bundled with
-          this app (it is GPL-licensed). Without it clipgen shows an error and
-          quits on launch. Install it first:
-
-              brew install ffmpeg
-
-          If you don't have Homebrew, get it from https://brew.sh, or download a
-          prebuilt ffmpeg from https://www.ffmpeg.org/download.html and put
-          ffmpeg and ffprobe somewhere on your PATH. Verify with:
-
-              ffmpeg -version
-              ffprobe -version
-
-          Ollama (https://ollama.com/download) is optional — it powers the AI
-          summaries and reports. Everything else works without it.
-
           INSTALLING CLIPGEN
 
           1. Drag clipgen.app to Applications.
@@ -98,6 +127,14 @@ jobs:
              (Adjust the path if you put it elsewhere.) After that, double-click
              clipgen.app and it opens in its own window. You won't see this
              message again.
+
+          Nothing else to install: ffmpeg and ffprobe, which clipgen uses to cut
+          and inspect video, are bundled inside the app. They are GPL-licensed
+          free software — see the THIRD-PARTY-LICENSES file next to this one for
+          the license text and where to get their source code.
+
+          Ollama (https://ollama.com/download) is optional — it powers the AI
+          summaries and reports. Everything else works without it.
 
           clipgen also still works as a command-line tool. Run the binary inside
           the bundle directly:
@@ -133,6 +170,23 @@ jobs:
         run: |
           # One-dir emits dist/clipgen/ (clipgen.exe + _internal/). Ship one file.
           $ErrorActionPreference = 'Stop'
+          # A GPL ffmpeg now ships inside the folder, so the license text must
+          # travel with it (the DMG has carried it since the LGPL-via-cv2 days).
+          Copy-Item build/THIRD-PARTY-LICENSES dist/clipgen/
+          Set-Content -Path dist/clipgen/INSTALL.txt -Value @"
+          clipgen for Windows
+
+          Unzip this folder anywhere and run clipgen.exe. Nothing else to
+          install: ffmpeg and ffprobe, which clipgen uses to cut and inspect
+          video, are bundled (in _internal/bin/). They are GPL-licensed free
+          software - see THIRD-PARTY-LICENSES in this folder for the license
+          text and where to get their source code.
+
+          Ollama (https://ollama.com/download) is optional - it powers the AI
+          summaries and reports. Everything else works without it.
+
+          clipgen.exe also works from a terminal: clipgen.exe --help
+          "@
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME } else { $ver = 'dev' }
           Compress-Archive -Path dist/clipgen -DestinationPath "dist/clipgen-$ver-windows.zip" -Force
           Get-ChildItem dist/*.zip
