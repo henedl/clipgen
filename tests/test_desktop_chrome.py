@@ -81,6 +81,201 @@ def test_teardown_is_idempotent():
     desktop_chrome.teardown()
     desktop_chrome.teardown()
     assert desktop_chrome._observers == []
+    # The layout state resets sit above the "no observers" early-out: apply()
+    # runs a first layout pass before _observe() registers anything.
+    assert desktop_chrome._frame_observed == []
+    assert desktop_chrome._frame_tokens == []
+    assert desktop_chrome._laying_out is False
+    assert desktop_chrome._last_inventory is None
+
+
+def test_the_container_is_resolved_without_the_traffic_lights():
+    """The container used to be reached as buttons[0].superview().superview().
+
+    That route works only for as long as the buttons do. Resolving by class name
+    keeps the 48px band available even when the slot is not what we expect.
+    """
+    assert '"NSTitlebarContainerView"' in SOURCE
+    # Both the styling pass and the slot walk go through the one resolver.
+    assert SOURCE.count("_titlebar_container(") >= 3  # 1 def + 2 call sites
+
+
+def test_the_titlebar_grows_before_the_buttons_are_looked_up():
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    assert body.index("setFrame_") < body.index("_light_buttons(")
+
+
+def test_the_sharing_pill_is_placed_alongside_the_buttons_not_instead_of_them():
+    """Measured on Sequoia: the pill is a *sibling* of the three widgets.
+
+    `buttons=shown,shown,shown` throughout a real share — the lights are never
+    hidden or removed, the NSWindowSharingSessionRecipientIndicator just covers
+    them. Placing the pill in an `else:` off the buttons was dead code that never
+    ran once.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    call = body.index("_place_sharing_pill(")
+    branch = body.rindex("\n", 0, call)
+    # Same indentation as the button block, not nested inside an else.
+    assert body[branch : branch + 9] == "\n        "
+
+
+def test_the_sharing_pill_is_matched_by_class_not_by_shape():
+    """Shape matching was tried against a live titlebar and corrupted the bar.
+
+    "Short, visible, inside the left gutter" also describes NSVisualEffectView
+    and the light group; moving those dragged the buttons to [7,26] and left the
+    bar growing 20px a pass. The pill's real class name comes from the -v log.
+    """
+    body = SOURCE[SOURCE.index("def _place_sharing_pill") :]
+    body = body[: body.index("\ndef ")]
+    assert "SharingSession" in body
+    assert "DESKTOP_TRAFFIC_LIGHT_INSET" not in body
+
+
+def test_the_sharing_pill_is_only_corrected_when_appkit_gets_it_wrong():
+    """AppKit centers the pill itself once the band is 48px; y = 14 is exact.
+
+    Nudging it the 1px from AppKit's x = 17 to the close button's x = 16 bought
+    nothing and left a ghost of its backdrop at the old position until the window
+    was interacted with. So: vertical only, behind a tolerance.
+    """
+    body = SOURCE[SOURCE.index("def _place_sharing_pill") :]
+    body = body[: body.index("\ndef ")]
+    move = body[body.index("for view in candidates") :]
+    assert "origin.x" not in move
+    assert "continue" in move[: move.index("origin.y =")]
+
+
+def test_the_titlebar_is_invalidated_recursively_after_a_layout_pass():
+    """A moved view leaves stale pixels behind it in whatever drew there.
+
+    The titlebar is not redrawn until the window is next interacted with, which
+    is how a re-placed sharing pill came to be on screen twice at once. Marking
+    only the container's direct subviews missed it: the pill and the vibrancy
+    view that backs it are both grandchildren.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    assert body.index("_place_sharing_pill(") < body.index("_invalidate(")
+    walk = SOURCE[SOURCE.index("def _invalidate") :]
+    walk = walk[: walk.index("\ndef ")]
+    assert "_invalidate(child)" in walk
+
+
+def test_the_band_subviews_are_clamped_to_the_bar():
+    """Growing the container autoresizes its fillers; AppKit's reset does not.
+
+    Without the clamp every re-assert left _NSTitlebarDecorationView 20px taller
+    than the last — 48, 68, 88 — which only showed up once the frame observer
+    started catching resets at all.
+    """
+    body = SOURCE[SOURCE.index("def _apply_titlebar_layout") :]
+    body = body[: body.index("\ndef ")]
+    clamp = body[body.index("for view in container.subviews()") :]
+    assert "> bar" in clamp[: clamp.index("_light_buttons(")]
+
+
+def test_a_sharing_transition_re_asserts_the_layout():
+    """No window-level notification fires when the sharing pill appears.
+
+    Resize and the two fullscreen notifications were all the module observed,
+    which is why the lights came back at stock positions after a share and stayed
+    there until the window was resized.
+    """
+    assert "NSViewFrameDidChangeNotification" in SOURCE
+    assert "setPostsFrameChangedNotifications_" in SOURCE
+    assert "NSWindowDidBecomeKeyNotification" in SOURCE
+
+
+def test_the_light_row_is_watched_and_not_just_the_container():
+    """A transition resets the buttons inside a container that keeps our height.
+
+    Watching only the container saw nothing at all in that case, so the layout
+    was right in the model and stale on screen until a manual resize.
+    """
+    body = SOURCE[SOURCE.index("def _slot_views") :]
+    body = body[: body.index("\ndef ")]
+    assert "_light_buttons(" in body and "superview()" in body
+    scope = SOURCE[SOURCE.index("def _bind_frame_observer") :]
+    assert "_slot_views(" in scope[: scope.index("\ndef ")]
+
+
+def test_a_lopsided_pitch_read_is_rejected():
+    """AppKit reports gaps of 29 and 20 in one read mid-transition.
+
+    Feeding that through `margin + index * pitch` spread the row to 16/45/74 and
+    left it there — the exact state the window was stuck in after a share.
+    """
+    body = SOURCE[SOURCE.index("def _button_pitch") :]
+    body = body[: body.index("\ndef ")]
+    assert "abs(first - second)" in body
+
+
+def test_the_early_out_checks_every_button_not_just_the_close_one():
+    """It is the deferred chain's stop condition, so it must match what we write.
+
+    A transition scrambles the row as a whole; a predicate that only looked at
+    the close button would call 16/45/74 settled and stop.
+    """
+    body = SOURCE[SOURCE.index("def _layout_is_current") :]
+    body = body[: body.index("\ndef ")]
+    assert "for index, button in enumerate(buttons)" in body
+    assert "_pitch" in body
+
+
+def test_a_pass_arms_a_deferred_re_check():
+    """AppKit's last move lands after our pass and posts nothing we observe.
+
+    Without the chain the row stayed at 7/45/74 until the window was resized —
+    the notification-only design could never get the last word.
+    """
+    assert "threading.Timer" in SOURCE
+    chain = SOURCE[SOURCE.index("def _settle(") :]
+    chain = chain[: chain.index("\ndef ")]
+    # Each link stops as soon as the layout reads correct, and it is bounded.
+    assert "_layout_is_current(" in chain
+    assert "attempts - 1" in chain
+    scope = SOURCE[SOURCE.index("def _schedule_settle") :]
+    assert "attempts <= 0" in scope[: scope.index("\ndef ")]
+
+
+def test_the_frame_observer_cannot_recurse_into_itself():
+    """Our own setFrame_ posts the notification the observer listens for."""
+    assert re.search(r"^\s+_laying_out = True", SOURCE, re.MULTILINE)
+    assert re.search(r"^\s+if _laying_out:", SOURCE, re.MULTILINE)
+
+
+@pytest.mark.parametrize(
+    "band,size,expected",
+    [
+        (48, 16, 16),  # the shipped bar: also the DESKTOP_TRAFFIC_LIGHT_INSET math
+        (28, 16, 6),  # AppKit's stock titlebar
+        # Half-pixel remainders: round() is ties-to-even, so these land on
+        # different sides. Pinned because a sub-pixel origin blurs the button.
+        (48, 15, 16),  # 16.5 -> 16
+        (48, 13, 18),  # 17.5 -> 18
+    ],
+)
+def test_centered_origin_matches_the_configured_inset(band, size, expected):
+    assert desktop_chrome._centered_origin(band, size) == expected
+
+
+def test_the_reassert_budget_bounds_an_appkit_layout_fight():
+    """A container AppKit pins would otherwise be an unbounded main-thread loop."""
+    desktop_chrome.teardown()
+    try:
+        limit = desktop_chrome._REASSERT_BURST_LIMIT
+        assert all(desktop_chrome._within_reassert_budget(0.0) for _ in range(limit))
+        assert desktop_chrome._within_reassert_budget(0.0) is False
+        # A later burst is a fresh window, not a continuation of the fight.
+        assert desktop_chrome._within_reassert_budget(
+            desktop_chrome._REASSERT_WINDOW_S + 1.0
+        )
+    finally:
+        desktop_chrome.teardown()
 
 
 def test_topnav_opts_into_the_drag_selector_only_for_the_desktop_launch():
