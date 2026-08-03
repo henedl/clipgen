@@ -27,6 +27,7 @@ from screenspace_heatmap import (
     generate_heatmap_gif,
     generate_rolling_heatmap_gif,
     generate_template_heatmap,
+    sprite_grid,
 )
 from screenspace_manifest import (
     TASK_STATUS_CANCELLED,
@@ -46,6 +47,71 @@ from screenspace_frames import _probe_video_meta
 # the client (unlike flow_grid, which the flow overlay needs). Stripped from
 # external reads and dropped from results once heatmaps are written.
 _SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")
+
+# Task keys carrying a heatmap artifact filename. The frontend turns every one of
+# these into an image URL, so they must never name a file that isn't on disk. Each
+# GIF also carries a "<key>_sprite" geometry descriptor, but that names no file —
+# the sprite sheet is rendered on demand from the GIF by /api/heatmap-sprite.
+_HEATMAP_FILE_KEYS = ("heatmap", "heatmap_gif", "heatmap_rolling_gif")
+
+
+def _published_name(path: str | None) -> str | None:
+    """Return *path*'s basename, but only if it is a non-empty file on disk.
+
+    A generator that claims success for a file that never landed turns into a
+    404 in the browser with nothing logged anywhere — the whole heatmap strip
+    reads as dead links. Verify before publishing so a broken write shows up as
+    a missing section (and a warning) instead.
+    """
+    if not path:
+        return None
+    p = Path(path)
+    try:
+        if p.is_file() and p.stat().st_size > 0:
+            return p.name
+    except OSError:
+        pass
+    utils.warning_print(f"Heatmap artifact reported success but is not on disk: {path}")
+    return None
+
+
+def _heatmap_gif_attachments(info: dict[str, Any] | None, key: str) -> dict[str, Any]:
+    """Turn a :func:`_save_animation` descriptor into task attachment keys.
+
+    The ``*_sprite`` value is pure geometry — frame count and cell shape, both
+    intrinsic to the GIF — that lets the frontend size the thumb and map hover
+    position to a frame before any image arrives. The sheet itself is rendered
+    on demand from the GIF, so nothing extra lands in the user's output folder.
+    """
+    if not info:
+        return {}
+    name = _published_name(info.get("path"))
+    if not name:
+        return {}
+    # A GIF that collapsed to a single frame is a still, not something to scrub;
+    # omitting the descriptor drops the thumb to plain playback.
+    if info["frames"] < 2:
+        return {key: name}
+    cols, rows = sprite_grid(info["frames"])
+    return {
+        key: name,
+        f"{key}_sprite": {
+            "cols": cols,
+            "rows": rows,
+            "frames": info["frames"],
+            "w": info["w"],
+            "h": info["h"],
+        },
+    }
+
+
+def _drop_missing_heatmaps(task: dict[str, Any], out_dir: Path) -> None:
+    """Strip heatmap keys from *task* whose files are absent from *out_dir*."""
+    for key in _HEATMAP_FILE_KEYS:
+        name = task.get(key)
+        if isinstance(name, str) and name and not (out_dir / name).is_file():
+            task.pop(key, None)
+            task.pop(f"{key}_sprite", None)
 
 
 def _copy_task_for_read(
@@ -221,13 +287,20 @@ class ScreenspaceWorker:
         restoring them verbatim left the task list (and the Overview
         "analysis is still running" banner) claiming a scan was in progress
         forever.
+
+        Heatmap filenames are re-checked against the output directory and
+        dropped when the file is gone: the manifest records basenames, so an
+        output directory that was cleared or moved between sessions otherwise
+        restores a strip of permanently broken images with nothing to explain it.
         """
         in_flight = (TASK_STATUS_RUNNING, TASK_STATUS_QUEUED, TASK_STATUS_PAUSED)
+        out_dir = Path(utils.get_effective_output_dir())
         with self._lock:
             for t in tasks:
                 if not t.get("id"):
                     continue
                 restored = copy.deepcopy(t)
+                _drop_missing_heatmaps(restored, out_dir)
                 old_status = restored.get("status")
                 if old_status in in_flight:
                     restored["status"] = TASK_STATUS_FAILED
@@ -469,24 +542,25 @@ class ScreenspaceWorker:
         heatmap_type: str,
         *,
         rolling: bool,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """Write the cumulative (and optionally rolling-window) heatmap GIFs.
 
-        Returns the generated GIF filenames keyed by attachment name.
+        Returns the generated GIF filenames keyed by attachment name, each
+        paired with a ``*_sprite`` geometry descriptor the frontend uses to
+        hover-scrub the animation (a GIF gives the browser no way to seek).
         """
         out_dir = Path(utils.get_effective_output_dir())
-        attachments: dict[str, str] = {}
-        gp = generate_heatmap_gif(
+        attachments: dict[str, Any] = {}
+        gif = generate_heatmap_gif(
             results,
             width,
             height,
             str(out_dir / f"heatmap_{task_id}.gif"),
             heatmap_type=heatmap_type,
         )
-        if gp:
-            attachments["heatmap_gif"] = Path(gp).name
+        attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
         if rolling:
-            rp = generate_rolling_heatmap_gif(
+            roll = generate_rolling_heatmap_gif(
                 results,
                 width,
                 height,
@@ -494,8 +568,7 @@ class ScreenspaceWorker:
                 heatmap_type=heatmap_type,
                 window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
             )
-            if rp:
-                attachments["heatmap_rolling_gif"] = Path(rp).name
+            attachments.update(_heatmap_gif_attachments(roll, "heatmap_rolling_gif"))
         return attachments
 
     def _generate_heatmap(
@@ -505,7 +578,7 @@ class ScreenspaceWorker:
         video_paths: list[str],
         region_coords: dict[str, Any],
         results: list[dict[str, Any]],
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """Generate heatmap artifacts for template, flow, change, or attention tasks.
 
         Pure compute + file I/O — takes primitives instead of the task dict and
@@ -522,7 +595,7 @@ class ScreenspaceWorker:
         }
         if not heatmap_enabled.get(task_type, False):
             return {}
-        attachments: dict[str, str] = {}
+        attachments: dict[str, Any] = {}
         heatmap_path = str(
             Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
         )
@@ -530,9 +603,11 @@ class ScreenspaceWorker:
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
-            hp = generate_template_heatmap(results, fw, fh, heatmap_path)
+            hp = _published_name(
+                generate_template_heatmap(results, fw, fh, heatmap_path)
+            )
             if hp:
-                attachments["heatmap"] = Path(hp).name
+                attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
                     task_id, results, fw, fh, "template", rolling=True
@@ -545,9 +620,11 @@ class ScreenspaceWorker:
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
-            hp = generate_attention_heatmap(results, fw, fh, heatmap_path)
+            hp = _published_name(
+                generate_attention_heatmap(results, fw, fh, heatmap_path)
+            )
             if hp:
-                attachments["heatmap"] = Path(hp).name
+                attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
                     task_id, results, fw, fh, "attention", rolling=True
@@ -557,11 +634,15 @@ class ScreenspaceWorker:
             rw = region_coords.get("w", 256)
             rh = region_coords.get("h", 256)
             if task_type == "flow":
-                hp = generate_flow_heatmap(results, rw, rh, heatmap_path)
+                hp = _published_name(
+                    generate_flow_heatmap(results, rw, rh, heatmap_path)
+                )
             else:
-                hp = generate_change_heatmap(results, rw, rh, heatmap_path)
+                hp = _published_name(
+                    generate_change_heatmap(results, rw, rh, heatmap_path)
+                )
             if hp:
-                attachments["heatmap"] = Path(hp).name
+                attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
                     task_id, results, rw, rh, task_type, rolling=task_type == "change"
@@ -767,9 +848,20 @@ class ScreenspaceWorker:
             # the lock because readers deep-copy `result` under it.
             if heatmap_inputs is not None and isinstance(result, list) and result:
                 task_type, video_paths, region_coords = heatmap_inputs
-                attachments = self._generate_heatmap(
-                    task_type, task_id, video_paths, region_coords, result
-                )
+                # Own try/except, deliberately not the outer one: the scan has
+                # already completed with valid results and emitted its events, so
+                # a failure to render a decorative artifact (zero-size region,
+                # disk error, missing PIL in a frozen bundle) must not demote the
+                # task to `failed` and throw those results away.
+                try:
+                    attachments = self._generate_heatmap(
+                        task_type, task_id, video_paths, region_coords, result
+                    )
+                except Exception as exc:
+                    utils.warning_print(
+                        f"Heatmap generation failed for task {task_id}: {exc}"
+                    )
+                    attachments = {}
                 # change_grid/saliency_grid are consumed only by heatmap
                 # generation; drop them so completed tasks don't retain
                 # per-frame grids in memory until dismissal. Attention's

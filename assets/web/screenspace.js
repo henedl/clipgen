@@ -209,6 +209,11 @@
     // Refresh is set while restoreTaskToWorkflow rebuilds the param panel.
     resultsRequestVersion: 0,
     heatmapOverlayRequestVersion: 0,
+    // Play state for the animated heatmap thumbs, keyed "<taskId>|<attachment>".
+    // They start paused on a scrubbable sprite; renderResults() rebuilds the whole
+    // strip on every filter change and SSE tick, so anything the user toggled has
+    // to live out here. Task-scoped so a different task starts paused again.
+    heatmapPlaying: {},
     suppressCalibrationRefresh: false,
     poller: null,
     eventSource: null,

@@ -344,18 +344,14 @@ class TestAttentionHeatmap:
     def test_cumulative_and_rolling_gifs(self, tmp_path):
         cum = str(tmp_path / "cum.gif")
         roll = str(tmp_path / "roll.gif")
-        assert (
-            screenspace.generate_heatmap_gif(
-                _grid_results(), 160, 120, cum, heatmap_type="attention"
-            )
-            == cum
+        cum_info = screenspace.generate_heatmap_gif(
+            _grid_results(), 160, 120, cum, heatmap_type="attention"
         )
-        assert (
-            screenspace.generate_rolling_heatmap_gif(
-                _grid_results(), 160, 120, roll, heatmap_type="attention"
-            )
-            == roll
+        roll_info = screenspace.generate_rolling_heatmap_gif(
+            _grid_results(), 160, 120, roll, heatmap_type="attention"
         )
+        assert cum_info is not None and cum_info["path"] == cum
+        assert roll_info is not None and roll_info["path"] == roll
 
 
 class TestAttentionEvents:

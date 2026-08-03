@@ -2,8 +2,9 @@
 
 Registered at /screenspace/ by start_combined_server(). Works with or without a
 spreadsheet; auto-discovers participant videos from the input directory.
-Module-level state: _manifest, _worker, _output_dir, _participants (initialized by
-_init_screenspace_state()).
+Module-level state: _manifest, _worker, _participants (initialized by
+_init_screenspace_state()). The output directory is deliberately *not* cached
+here — /media/ resolves it per request via utils.get_effective_output_dir().
 
 API endpoints (all under /screenspace/):
   GET  /media/<filename>                    – serve artifact media files
@@ -19,6 +20,7 @@ API endpoints (all under /screenspace/):
   DELETE /api/pins/<participant>/all        – remove every pin for a participant
   POST /api/calibrate                       – score a participant's pins vs a tool synchronously
   GET  /api/video/frame/<participant>/<ts>  – extract a JPEG frame at timestamp
+  GET  /api/heatmap-sprite/<gif>            – hover-scrub sprite sheet tiled from a heatmap GIF
   GET|POST /api/preview/<participant>/<ts>   – PNG of the active tool's preprocessed view (?layer=<id> for single-layer overlay)
   GET  /api/preview/layers                   – JSON catalog of overlay-eligible layers per tool
   GET  /api/video/info/<participant>        – video metadata (duration, resolution, fps)
@@ -74,6 +76,7 @@ import spreadsheet
 import utils
 import video
 from server_utils import (
+    MediaCache,
     err,
     json_endpoint,
     make_debounced_persist,
@@ -143,7 +146,6 @@ def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
 
 _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
-_output_dir: str = ""
 _participants: list[dict[str, Any]] = []
 # What the current _participants list was built from: {"sheet_context", "dir",
 # "mtime"}, or None before _init_screenspace_state has run (same "not configured
@@ -180,6 +182,13 @@ _decoded_frame_cache_lock = threading.Lock()
 _PIN_OCR_CACHE_MAX = 64
 _pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
 _pin_ocr_cache_lock = threading.Lock()
+
+# Heatmap hover-scrub sprite sheets, re-tiled from the heatmap GIFs on demand and
+# never written to the output directory (sprites are a derived view everywhere
+# else in clipgen too — see studio's /api/sprite). At most a handful of tasks are
+# on screen at once, and each sheet is a small PNG. Keyed with ``mtime_ns`` so a
+# regenerated GIF invalidates naturally.
+_heatmap_sprite_cache = MediaCache(32)
 
 # ---- SSE (Server-Sent Events) client registry ----
 
@@ -231,7 +240,12 @@ screenspace_bp = Blueprint("screenspace", __name__)
 utils.register_static_routes(
     screenspace_bp,
     "screenspace.html",
-    media_dir_getter=lambda: _output_dir,
+    # Resolved per request, never snapshotted: POST /api/dirs moves
+    # config.OUTPUT_DIR mid-session without re-running _init_screenspace_state
+    # (the Start overlay's "no spreadsheet" path closes without a reload), and a
+    # snapshot then served heatmaps/timelapses from the previous directory —
+    # every artifact URL a dead link until something re-inited the blueprint.
+    media_dir_getter=lambda: str(utils.get_effective_output_dir()),
     media_error="Output directory not configured",
     icons=True,
 )
@@ -1091,6 +1105,44 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         jpeg_bytes,
         mimetype="image/jpeg",
         headers={"Cache-Control": "public, max-age=86400, immutable"},
+    )
+
+
+@screenspace_bp.route("/api/heatmap-sprite/<filename>")
+def api_heatmap_sprite(filename: str) -> FlaskResponse:
+    """Tiled PNG sprite sheet of a heatmap GIF's frames, for hover scrubbing.
+
+    A GIF cannot be seeked in a browser, so the Results panel rests each animated
+    heatmap thumb on a sprite cell and maps hover position to a frame. The sheet
+    is derived from the GIF that already sits in the output directory rather than
+    written beside it — that directory is the user's deliverable, and sprites are
+    a derived, cacheable view everywhere else in clipgen too (studio's
+    ``/api/sprite``, composer's timeline tiles).
+
+    ``cols`` comes from the caller so the layout always matches the geometry the
+    task descriptor already handed the frontend, even if the config default
+    changed since the scan ran.
+    """
+    name = Path(filename).name  # never let a path escape the output directory
+    if not name.startswith("heatmap_") or not name.endswith(".gif"):
+        return err("Not a heatmap animation", 404)
+    gif_path = Path(utils.get_effective_output_dir()) / name
+    if not gif_path.is_file():
+        return err("Heatmap animation not found", 404)
+
+    cols = request.args.get("cols", config.SCREENSPACE_HEATMAP_SPRITE_COLS, type=int)
+    cols = max(1, min(int(cols or 1), 64))
+
+    sprite_bytes = _heatmap_sprite_cache.get_or_compute(
+        (str(gif_path), _mtime_or_zero(str(gif_path)), cols),
+        lambda: screenspace.build_gif_sprite_bytes(str(gif_path), cols),
+    )
+    if sprite_bytes is None:
+        return err("Could not build heatmap sprite", 404)
+    return Response(
+        sprite_bytes,
+        mimetype="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 
@@ -2840,9 +2892,8 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
     """
     import screenspace
 
-    global _manifest, _worker, _output_dir, _participant_source
+    global _manifest, _worker, _participant_source
 
-    _output_dir = str(utils.get_effective_output_dir())
     _manifest = screenspace.load_screenspace_manifest()
     _backfill_missing_events(_manifest)
 

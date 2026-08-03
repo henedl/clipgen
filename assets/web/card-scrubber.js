@@ -246,6 +246,10 @@
   //   spriteData:   { cols, rows, frameCount, interval } — required
   //   audioFile:    string filename used as cache key — optional; enables audio + waveform
   //   audioBaseUrl: string prefix for audio fetch — optional, default "media/"
+  //   restFrame:    frame shown before the first hover and after mouseleave —
+  //                 optional, default 0. Screenspace's heatmap animations rest on
+  //                 the last frame, which is the finished accumulation.
+  //   onScrub:      called with (frac, frameIndex) on each scrub step — optional
   //
   // Returns a detach() function that removes listeners and any DOM additions.
   function attach(mediaEl, opts) {
@@ -261,8 +265,19 @@
         ? audioBaseUrl + encodeURIComponent(audioFile)
         : null;
 
+    // Map a frame index onto the sprite grid's background-position percentages.
+    function framePosition(frameIndex) {
+      frameIndex = Math.max(0, Math.min(frameIndex, sd.frameCount - 1));
+      var col = frameIndex % sd.cols;
+      var row = Math.floor(frameIndex / sd.cols);
+      var xPct = sd.cols > 1 ? (col / (sd.cols - 1)) * 100 : 0;
+      var yPct = sd.rows > 1 ? (row / (sd.rows - 1)) * 100 : 0;
+      return xPct + "% " + yPct + "%";
+    }
+
+    var restFrame = opts.restFrame || 0;
     mediaEl.style.backgroundSize = (sd.cols * 100) + "% " + (sd.rows * 100) + "%";
-    mediaEl.style.backgroundPosition = "0% 0%";
+    mediaEl.style.backgroundPosition = framePosition(restFrame);
 
     function onMove(e) {
       var clientX = e.clientX;
@@ -273,11 +288,8 @@
         var frac = (clientX - rect.left) / rect.width;
         var frameIndex = Math.floor(frac * sd.frameCount);
         frameIndex = Math.max(0, Math.min(frameIndex, sd.frameCount - 1));
-        var col = frameIndex % sd.cols;
-        var row = Math.floor(frameIndex / sd.cols);
-        var xPct = sd.cols > 1 ? (col / (sd.cols - 1)) * 100 : 0;
-        var yPct = sd.rows > 1 ? (row / (sd.rows - 1)) * 100 : 0;
-        mediaEl.style.backgroundPosition = xPct + "% " + yPct + "%";
+        mediaEl.style.backgroundPosition = framePosition(frameIndex);
+        if (opts.onScrub) opts.onScrub(Math.max(0, Math.min(frac, 1)), frameIndex);
         if (audioFile && audioUrl) {
           audioScrubAt(audioFile, audioUrl, frameIndex * sd.interval);
           var waveform = extractWaveform(audioFile);
@@ -290,7 +302,8 @@
     }
 
     function onLeave() {
-      if (sd) mediaEl.style.backgroundPosition = "0% 0%";
+      if (sd) mediaEl.style.backgroundPosition = framePosition(restFrame);
+      if (opts.onScrub) opts.onScrub(null, restFrame);
       audioScrubStop();
       clearWaveform(mediaEl);
     }

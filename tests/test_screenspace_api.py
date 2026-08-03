@@ -57,7 +57,8 @@ def client(ss_app, tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(screenspace_server, "_events_version", 0)
-    monkeypatch.setattr(screenspace_server, "_output_dir", str(tmp_path))
+    # /media/ resolves the output dir per request, so config.OUTPUT_DIR above is
+    # all it needs — there is no module-level snapshot to seed.
     monkeypatch.setattr(screenspace_server, "_worker", screenspace.ScreenspaceWorker())
     # Fresh module-level calibration/preview caches per test (auto-restored).
     monkeypatch.setattr(screenspace_server, "_decoded_frame_cache", OrderedDict())
@@ -3332,3 +3333,132 @@ def test_restore_tasks_demotes_in_flight_statuses():
     for tid in ("t_run", "t_queue", "t_pause"):
         assert by_id[tid]["status"] == "failed"
         assert "Interrupted" in by_id[tid]["error"]
+
+
+def test_restore_tasks_drops_heatmaps_whose_files_are_gone(tmp_path, monkeypatch):
+    """The manifest stores basenames, so an output directory that was cleared or
+    moved between sessions would otherwise restore a strip of dead image links."""
+    import screenspace_worker
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    (tmp_path / "heatmap_kept.png").write_bytes(b"png")
+    (tmp_path / "heatmap_kept.gif").write_bytes(b"gif")
+
+    worker = screenspace_worker.ScreenspaceWorker()
+    worker.restore_tasks(
+        [
+            {
+                "id": "t_kept",
+                "status": "completed",
+                "heatmap": "heatmap_kept.png",
+                "heatmap_gif": "heatmap_kept.gif",
+                "heatmap_gif_sprite": {"cols": 6, "rows": 2, "frames": 8},
+            },
+            {
+                "id": "t_gone",
+                "status": "completed",
+                "heatmap": "heatmap_gone.png",
+                "heatmap_rolling_gif": "heatmap_gone.gif",
+                "heatmap_rolling_gif_sprite": {"cols": 6, "rows": 2, "frames": 8},
+            },
+        ]
+    )
+    by_id = {t["id"]: t for t in worker.get_all_tasks()}
+    assert by_id["t_kept"]["heatmap"] == "heatmap_kept.png"
+    assert by_id["t_kept"]["heatmap_gif"] == "heatmap_kept.gif"
+    # The sprite descriptor names no file, so it rides along with its GIF.
+    assert by_id["t_kept"]["heatmap_gif_sprite"]["frames"] == 8
+    for key in ("heatmap", "heatmap_rolling_gif", "heatmap_rolling_gif_sprite"):
+        assert key not in by_id["t_gone"]
+
+
+def test_heatmap_sprite_route_tiles_the_gif(client, tmp_path, monkeypatch):
+    """The hover-scrub sheet is derived from the GIF on demand, so the output
+    directory keeps only the artifacts the user asked for."""
+    import io
+
+    from PIL import Image
+
+    monkeypatch.setattr(config, "SCREENSPACE_HEATMAP_SPRITE_FRAME_WIDTH", 40)
+    # Heat has to move, or PIL collapses the identical frames into one.
+    results = [
+        {
+            "timestamp": float(i),
+            "change_grid": [{"x": 0.1 + 0.1 * i, "y": 0.5, "mag": 0.7}],
+        }
+        for i in range(8)
+    ]
+    gif = tmp_path / "heatmap_ss_abc.gif"
+    assert screenspace.generate_heatmap_gif(
+        results, 100, 50, str(gif), heatmap_type="change"
+    )
+
+    resp = client.get("/screenspace/api/heatmap-sprite/heatmap_ss_abc.gif?cols=4")
+    assert resp.status_code == 200
+    assert resp.mimetype == "image/png"
+    with Image.open(io.BytesIO(resp.data)) as sheet:
+        # 8 frames at the requested 4 columns → 2 rows of 40x20 cells.
+        assert sheet.size == (4 * 40, 2 * 20)
+    # Nothing was written next to the GIF.
+    assert [p.name for p in tmp_path.iterdir()] == ["heatmap_ss_abc.gif"]
+
+
+def test_heatmap_sprite_route_rejects_non_heatmaps(client, tmp_path):
+    """Only heatmap GIFs in the output dir, and no path escapes."""
+    (tmp_path / "secrets.gif").write_bytes(b"GIF89a")
+    for bad in (
+        "secrets.gif",  # not a heatmap
+        "heatmap_ss_abc.png",  # not an animation
+        "..%2Fheatmap_ss_abc.gif",  # traversal
+    ):
+        resp = client.get("/screenspace/api/heatmap-sprite/" + bad)
+        assert resp.status_code == 404, bad
+    # A well-formed name that simply isn't there is a 404 too, not a 500.
+    assert (
+        client.get("/screenspace/api/heatmap-sprite/heatmap_ss_gone.gif").status_code
+        == 404
+    )
+
+
+def test_heatmap_sprite_route_survives_a_corrupt_gif(client, tmp_path):
+    """A truncated GIF (a scan killed mid-save) must degrade the thumb to plain
+    playback, not 500 the route — PIL's frame walk raises IndexError there, not
+    OSError, and the browser still renders the partial animation happily."""
+    results = [
+        {
+            "timestamp": float(i),
+            "change_grid": [{"x": 0.1 + 0.1 * i, "y": 0.5, "mag": 0.7}],
+        }
+        for i in range(8)
+    ]
+    gif = tmp_path / "heatmap_ss_trunc.gif"
+    screenspace.generate_heatmap_gif(results, 100, 50, str(gif), heatmap_type="change")
+    gif.write_bytes(gif.read_bytes()[: gif.stat().st_size // 3])
+
+    resp = client.get("/screenspace/api/heatmap-sprite/heatmap_ss_trunc.gif")
+    assert resp.status_code == 404
+    # The GIF itself is still served, so the frontend has something to fall back to.
+    assert client.get("/screenspace/media/heatmap_ss_trunc.gif").status_code == 200
+
+
+def test_media_route_follows_a_mid_session_output_dir_change(
+    ss_app, tmp_path, monkeypatch
+):
+    """/screenspace/media/ must resolve the output dir per request.
+
+    POST /api/dirs moves config.OUTPUT_DIR without re-running
+    _init_screenspace_state (the Start overlay's "no spreadsheet" path closes
+    without a reload), and the route used to serve from an init-time snapshot —
+    so heatmaps written to the new directory came back 404 for the whole session.
+    """
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    (second / "heatmap_ss_abc.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with ss_app.test_client() as c:
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(first))
+        assert c.get("/screenspace/media/heatmap_ss_abc.png").status_code == 404
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(second))
+        assert c.get("/screenspace/media/heatmap_ss_abc.png").status_code == 200
