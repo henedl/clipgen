@@ -117,6 +117,18 @@ _GOOGLE_SHEET_LIST_TTL_SEC = 300.0
 # right item. Only set when the spreadsheet was opened via the runtime
 # picker; CLI-loaded sheets leave this None.
 _active_sheet_meta: dict[str, str] | None = None
+# The parsed MindNode document, when the session was opened from a mind map
+# instead of (or alongside) a spreadsheet. Teams that work in mind maps run
+# Studio with no sheet at all, so this is an independent source: it is never
+# cleared by a sheet swap, and Studio's MindNode Intake tab is its only reader.
+_mindnode_doc: dict[str, Any] | None = None
+_mindnode_lock = threading.Lock()
+# The source descriptor most recently handed to `record_project_session` — i.e.
+# what this session's recent-projects entry is keyed by. The Start overlay's
+# "current session" highlight compares against exactly this, so it cannot be
+# re-derived from _active_sheet_meta / _mindnode_doc alone: with both a sheet
+# and a mind map open, only the one opened *last* is what got recorded.
+_active_project_source: dict[str, str] | None = None
 _generated_artifacts: list[dict[str, Any]] = []
 # Index by (cellRow, cellCol, type) for O(1) lookup in /api/generate Phase 1.
 # Mutated under _generated_output_lock together with _generated_artifacts.
@@ -846,11 +858,17 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
+        # A mind-map-only session still has a study and participants. They ride
+        # on their own keys rather than `participants`, which every consumer
+        # (Studio's grid, Overview's tabs) reads as *sheet columns* paired with
+        # `rows` — filling it here would invent a cohort that has no rows.
+        mn = _mindnode_doc or {}
         return jsonify(
             {
                 "ok": True,
                 "sheet_loaded": False,
-                "study": "",
+                "study": str(mn.get("study", "")),
+                "mindnodeParticipants": list(mn.get("participants", [])),
                 "version": utils.get_version(),
                 "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
                 "titlecardsEnabled": config.TITLECARDS_ENABLED,
@@ -885,6 +903,34 @@ def api_sheet() -> FlaskResponse:
             "rows": sheet_payload["rows"],
         }
     )
+
+
+@studio_bp.route("/api/mindnode")
+def api_mindnode() -> FlaskResponse:
+    """Return the active MindNode document for the intake tab.
+
+    Response: ``{ok, mindnode_loaded, document}`` where *document* is the
+    :func:`mindnode.parse_document` payload (study, participants, notes) or
+    ``None`` when no mind map is open. Re-parsed on request rather than cached
+    so editing the map in MindNode and hitting Refresh shows the new notes.
+    """
+    global _mindnode_doc
+    with _mindnode_lock:
+        doc = _mindnode_doc
+    if doc is None:
+        return jsonify({"ok": True, "mindnode_loaded": False, "document": None})
+
+    import mindnode
+
+    try:
+        fresh = mindnode.parse_document(doc["path"])
+    except ValueError as exc:
+        # The bundle moved or was corrupted since it was opened. Report it
+        # rather than serving a stale tree the researcher can no longer see.
+        return err(str(exc), 404)
+    with _mindnode_lock:
+        _mindnode_doc = fresh
+    return jsonify({"ok": True, "mindnode_loaded": True, "document": fresh})
 
 
 @studio_bp.route("/api/sheet/baseline")
@@ -986,6 +1032,18 @@ def _resolve_intake_video_paths(participant: str, source: str = "") -> list[str]
     return []
 
 
+def _effective_study() -> str:
+    """The study name to stamp on generated artifacts.
+
+    Falls back to the open mind map when there is no spreadsheet — a mind-map
+    session has no ``SheetContext``, and an empty study would land every clip
+    under a nameless study and break ``{study}_{participant}`` lookups.
+    """
+    if _sheet_context is not None:
+        return _sheet_context.study_name
+    return str((_mindnode_doc or {}).get("study") or "")
+
+
 def _process_intake_item(
     item: dict[str, Any],
     output_format: str,
@@ -1011,6 +1069,9 @@ def _process_intake_item(
     event_ids = item.get("event_ids", [])
     source = item.get("source", "screenspace")
     mark_ids = item.get("mark_ids", [])
+    # A MindNode document can hold several detached trees, each with its own
+    # root title, so an item may name a study of its own.
+    study = str(item.get("study") or "") or study
 
     video_paths = _resolve_intake_video_paths(participant, source)
 
@@ -1077,9 +1138,10 @@ def _process_intake_item(
     if output_format == "clip":
         video.enforce_filesize_limit(out_path, cancel_flag=cancel_flag)
 
-    default_desc = (
-        "Transcript intake" if source == "transcript" else "Screenspace intake"
-    )
+    default_desc = {
+        "transcript": "Transcript intake",
+        "mindnode": "MindNode intake",
+    }.get(source, "Screenspace intake")
     item_text = str(item.get("text") or "").strip()
     item_label = str(item.get("label") or "").strip()
     description = event_type or default_desc
@@ -1101,7 +1163,9 @@ def _process_intake_item(
         "thumbnail": "",
         "study": study,
         "participant": participant,
-        "category": "",
+        # Sheet-backed intake sources carry no category; a mind map's question
+        # branch is one, so honour it when the item supplies it.
+        "category": str(item.get("category") or ""),
         "severity": "",
         "description": description,
         "cellRow": None,
@@ -2668,7 +2732,7 @@ def api_generate_intake() -> FlaskResponse:
         return err("No intake items specified")
 
     output_format = data.get("format", "clip")
-    study = _sheet_context.study_name if _sheet_context else ""
+    study = _effective_study()
 
     def stream() -> Iterator[str]:
         _intake_cancel_event.clear()
@@ -2936,7 +3000,7 @@ def api_reel_direct() -> FlaskResponse:
                 )
                 return
 
-            reel_study = _sheet_context.study_name if _sheet_context else ""
+            reel_study = _effective_study()
             reel_base = f"{reel_study} intake reel" if reel_study else "intake_reel"
             reel_name = files.get_unique_filename(f"{reel_base}{config.FILEFORMAT}")
 
@@ -3303,6 +3367,65 @@ def _open_worksheet_for(
     return new_ws, label
 
 
+def _mindnode_source() -> dict[str, str] | None:
+    """The open mind map as a recent-projects source descriptor, if any."""
+    if _mindnode_doc is None:
+        return None
+    return {
+        "type": "mindnode",
+        "id_or_path": str(_mindnode_doc.get("path", "")),
+        "label": str(_mindnode_doc.get("name", "")),
+        "worksheet": "",
+    }
+
+
+def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
+    """Open a ``.mindnode`` document as the session's observation source.
+
+    A mind map is not a worksheet, so this deliberately skips
+    :func:`_swap_worksheet` — Studio runs with ``sheet_loaded: false`` and the
+    MindNode Intake tab supplies the notes. Any spreadsheet already open is left
+    alone; the two sources coexist.
+    """
+    import mindnode
+    import start_settings
+
+    global _mindnode_doc, _active_project_source
+    try:
+        doc = mindnode.parse_document(id_or_path)
+    except ValueError as exc:
+        return err(str(exc), 400)
+
+    with _mindnode_lock:
+        _mindnode_doc = doc
+    label = Path(id_or_path).name
+    source = {
+        "type": "mindnode",
+        "id_or_path": id_or_path,
+        "label": label,
+        "worksheet": "",
+    }
+    start_settings.record_recent_spreadsheet("mindnode", id_or_path, label, "")
+    start_settings.record_project_session(
+        str(utils.get_effective_input_dir()),
+        str(utils.get_effective_output_dir()),
+        source,
+        name=project_name,
+    )
+    _active_project_source = source
+    return jsonify(
+        {
+            "ok": True,
+            "sheet_loaded": _worksheet is not None,
+            "mindnode_loaded": True,
+            "spreadsheet_label": _spreadsheet_label(),
+            "mindnode_label": label,
+            "study": doc["study"],
+            "notes": len(doc["notes"]),
+        }
+    )
+
+
 def _set_cache_headers(response):
     """after_request hook: apply content-type-aware caching to static assets.
 
@@ -3366,6 +3489,8 @@ def _init_combined_state(
             str(utils.get_effective_output_dir()),
             _active_sheet_meta,
         )
+        global _active_project_source
+        _active_project_source = _active_sheet_meta
 
     screenspace_server._init_screenspace_state(
         sheet_context=_sheet_context,
@@ -3447,6 +3572,12 @@ def build_combined_app(
                 "composer": True,
                 "overview": True,
                 "sheet_loaded": _worksheet is not None,
+                # What record_project_session last stored, so the overlay's
+                # current-session key matches its recent-projects key.
+                "active_source": _active_project_source,
+                "mindnode_loaded": _mindnode_doc is not None,
+                "mindnode_label": (_mindnode_doc or {}).get("name", ""),
+                "mindnode_path": (_mindnode_doc or {}).get("path", ""),
                 "spreadsheet_label": _spreadsheet_label(),
                 "spreadsheet_type": (meta or {}).get("type", ""),
                 "spreadsheet_id_or_path": (meta or {}).get("id_or_path", ""),
@@ -3560,6 +3691,53 @@ def build_combined_app(
                     {"path": str(p), "name": p.name, "modified": modified}
                 )
         return ok(input_dir=str(input_dir), files=files_list)
+
+    @combined.route("/api/spreadsheets/mindnode", methods=["GET"])
+    def api_spreadsheets_mindnode() -> Response:
+        """List ``.mindnode`` bundles in the input dir for the Start overlay."""
+        import mindnode
+
+        input_dir = Path(utils.get_effective_input_dir())
+        return ok(input_dir=str(input_dir), files=mindnode.find_documents(input_dir))
+
+    @combined.route("/api/spreadsheets/mindnode/preview", methods=["GET"])
+    def api_spreadsheets_mindnode_preview() -> FlaskResponse:
+        """Summarize a ``.mindnode`` document before it is opened.
+
+        Read-only counterpart to ``/api/spreadsheets/preview``: parses the
+        bundle without touching module state so the Start overlay can show what
+        the map holds while the user is still choosing.
+        """
+        import mindnode
+
+        path = (request.args.get("path") or "").strip()
+        if not path:
+            return err("Required: path")
+        try:
+            doc = mindnode.parse_document(path)
+        except ValueError as exc:
+            return err(str(exc), 400)
+        return ok(
+            study=doc["study"],
+            roots=doc["roots"],
+            participants=doc["participants"],
+            categories=sorted({n["category"] for n in doc["notes"] if n["category"]}),
+            notes=len(doc["notes"]),
+            with_times=doc["with_times"],
+            without_times=doc["without_times"],
+            has_preview=(Path(path) / mindnode.PREVIEW_RELPATH).is_file(),
+        )
+
+    @combined.route("/api/spreadsheets/mindnode/thumb", methods=["GET"])
+    def api_spreadsheets_mindnode_thumb() -> FlaskResponse:
+        """Serve a ``.mindnode`` bundle's own QuickLook render of the map."""
+        import mindnode
+
+        path = (request.args.get("path") or "").strip()
+        thumb = Path(path) / mindnode.PREVIEW_RELPATH if path else None
+        if thumb is None or not thumb.is_file():
+            return err("No preview in this document", 404)
+        return send_file(str(thumb), mimetype="image/jpeg")
 
     @combined.route("/api/spreadsheets/google", methods=["GET"])
     def api_spreadsheets_google() -> Response:
@@ -3774,8 +3952,8 @@ def build_combined_app(
         type_ = data.get("type", "")
         id_or_path = (data.get("id_or_path") or "").strip()
         worksheet = (data.get("worksheet") or "").strip() or None
-        if type_ not in ("google", "excel") or not id_or_path:
-            return err("Required: type ('google'|'excel') and id_or_path")
+        if type_ not in ("google", "excel", "mindnode") or not id_or_path:
+            return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
         # Absent → None → record_project_session keeps any stored name. Only the
         # Start overlay sends it; Studio's runtime sheet switch never does.
         project_name = data.get("project_name")
@@ -3788,6 +3966,8 @@ def build_combined_app(
                 "before switching spreadsheets.",
                 409,
             )
+        if type_ == "mindnode":
+            return _open_mindnode(id_or_path, project_name)
         if type_ == "google" and _google_auth.client is None:
             return err("Not authenticated with Google — click 'Connect Google' first.")
 
@@ -3808,27 +3988,24 @@ def build_combined_app(
         # Record the worksheet actually loaded (title after auto-pick fallback)
         # so recent-projects can restore the exact tab, not just the request.
         loaded_worksheet = getattr(new_ws, "title", "") or (worksheet or "")
+        source = {
+            "type": type_,
+            "id_or_path": id_or_path,
+            "label": label,
+            "worksheet": loaded_worksheet,
+        }
         start_settings.record_recent_spreadsheet(
             type_, id_or_path, label, loaded_worksheet
         )
         start_settings.record_project_session(
             str(utils.get_effective_input_dir()),
             str(utils.get_effective_output_dir()),
-            {
-                "type": type_,
-                "id_or_path": id_or_path,
-                "label": label,
-                "worksheet": loaded_worksheet,
-            },
+            source,
             name=project_name,
         )
-        global _active_sheet_meta
-        _active_sheet_meta = {
-            "type": type_,
-            "id_or_path": id_or_path,
-            "label": label,
-            "worksheet": loaded_worksheet,
-        }
+        global _active_sheet_meta, _active_project_source
+        _active_sheet_meta = dict(source)
+        _active_project_source = source
         return ok(
             sheet_loaded=True,
             spreadsheet_label=_spreadsheet_label(),
@@ -3836,12 +4013,21 @@ def build_combined_app(
 
     @combined.route("/api/spreadsheets/close", methods=["POST"])
     def api_spreadsheets_close() -> FlaskResponse:
-        global _active_sheet_meta
+        global _active_sheet_meta, _mindnode_doc, _active_project_source
         if _generation_busy():
             return err("Generation is in progress — wait for it to finish.", 409)
+        # A mind map is an independent source, so closing "the spreadsheet" from
+        # the Start overlay must drop whichever one is actually open.
+        if (request.get_json(silent=True) or {}).get("type") == "mindnode":
+            with _mindnode_lock:
+                _mindnode_doc = None
+            # Whatever is still open becomes the session's source again.
+            _active_project_source = _active_sheet_meta
+            return ok(sheet_loaded=_worksheet is not None, mindnode_loaded=False)
         _swap_worksheet(None)
         _active_sheet_meta = None
-        return ok(sheet_loaded=False)
+        _active_project_source = _mindnode_source()
+        return ok(sheet_loaded=False, mindnode_loaded=_mindnode_doc is not None)
 
     @combined.route("/api/folder-picker", methods=["POST"])
     def api_folder_picker() -> Response:

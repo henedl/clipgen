@@ -96,6 +96,15 @@
     coIntakeFilterText: "",
     coIntakeHoveredIdx: -1,
     _coIntakeFp: null,
+    // MindNode intake. mnIntakeItems holds one entry per timestamp pair;
+    // mnIntakeSkipped holds the notes with no timestamp, shown disabled.
+    mnIntakeItems: [],
+    mnIntakeSkipped: [],
+    mnIntakeFilterParticipants: [],
+    mnIntakeFilterCategories: [],
+    mnIntakeFilterText: "",
+    mnIntakeHoveredIdx: -1,
+    _mnIntakeFp: null,
     convergenceBaselines: {},
     convergenceDataVersion: 0,
     convergenceStale: false,
@@ -106,7 +115,8 @@
   };
 
   function isIntakeSource(source) {
-    return source === "screenspace" || source === "transcript" || source === "composer";
+    return source === "screenspace" || source === "transcript" ||
+      source === "composer" || source === "mindnode";
   }
 
   var ROW_FUNCTIONS = {
@@ -163,7 +173,8 @@
   function intakeIds(item) {
     if (!item) return [];
     var raw =
-      item.source === "screenspace" || item.source === "composer"
+      item.source === "screenspace" || item.source === "composer" ||
+      item.source === "mindnode"
         ? item.event_ids
         : item.source === "transcript"
           ? item.mark_ids
@@ -1023,12 +1034,14 @@
     var intakePanel = qs("#intakePanel");
     var trIntakePanel = qs("#trIntakePanel");
     var coIntakePanel = qs("#coIntakePanel");
+    var mnIntakePanel = qs("#mnIntakePanel");
 
     // Hide everything first
     grid.classList.add("hidden");
     intakePanel.classList.add("hidden");
     if (trIntakePanel) trIntakePanel.classList.add("hidden");
     if (coIntakePanel) coIntakePanel.classList.add("hidden");
+    if (mnIntakePanel) mnIntakePanel.classList.add("hidden");
 
     // The Refresh button stays on every tab; only what it refreshes changes.
     var refreshTitle = "Refresh sheet data from source";
@@ -1049,6 +1062,10 @@
       if (coIntakePanel) coIntakePanel.classList.remove("hidden");
       activePanel = coIntakePanel;
       refreshTitle = "Refresh Composer intake";
+    } else if (state.activePreviewTab === "mindnode-intake") {
+      if (mnIntakePanel) mnIntakePanel.classList.remove("hidden");
+      activePanel = mnIntakePanel;
+      refreshTitle = "Re-read the mind map";
     }
     if (refreshBtn) refreshBtn.title = refreshTitle;
     if (activePanel && animate) {
@@ -1126,6 +1143,11 @@
           clipgenApplyConfig(data.config);
           updateArtifactFormatLabels();
           state.sheetData = data;
+          // A mind-map-only session has a study and participants even with no
+          // sheet; without this the subheader stays blank. Guarded on `study`
+          // so a genuinely empty session keeps its blank subheader rather than
+          // reading "Unknown study — 0 participants".
+          if (data.study) renderHeader();
           return;
         }
         state.sheetData = data;
@@ -1219,6 +1241,8 @@
       work = refreshTranscriptIntake();
     } else if (state.activePreviewTab === "composer-intake") {
       work = refreshComposerIntake();
+    } else if (state.activePreviewTab === "mindnode-intake") {
+      work = refreshMindnodeIntake();
     } else {
       work = refreshSheetData();
     }
@@ -1428,8 +1452,13 @@
 
   function renderHeader() {
     var d = state.sheetData;
+    // With no sheet the cohort comes from the mind map, which is carried on its
+    // own key — `participants` means *sheet columns* to every other consumer.
+    var people = (d.participants && d.participants.length)
+      ? d.participants
+      : (d.mindnodeParticipants || []);
     qs("#studyName").textContent = d.study || "Unknown study";
-    qs("#versionInfo").textContent = d.participants.length + " participants";
+    qs("#versionInfo").textContent = people.length + " participants";
   }
 
   // ---- Grid rendering ----
@@ -2625,9 +2654,11 @@
   // intake thumb.
   function buildSourceBadge(source) {
     var badge = el("span", "queue-card-source-badge" +
-      (source === "composer" ? " source-composer" : ""));
+      (source === "composer" ? " source-composer" : "") +
+      (source === "mindnode" ? " source-mindnode" : ""));
     var icon = source === "transcript" ? "bars-3"
       : source === "composer" ? "scissors"
+      : source === "mindnode" ? "share"
       : "squares-2x2";
     badge.innerHTML = iconHTML(icon);
     return badge;
@@ -4450,6 +4481,12 @@
           var coIntakeTab = qs('.preview-tab[data-tab="composer-intake"]');
           if (coIntakeTab) coIntakeTab.classList.remove("hidden");
         }
+        // Unlike the other three surfaces (always mounted), this tab only
+        // means anything once a mind map has actually been opened.
+        if (data.mindnode_loaded) {
+          var mnIntakeTab = qs('.preview-tab[data-tab="mindnode-intake"]');
+          if (mnIntakeTab) mnIntakeTab.classList.remove("hidden");
+        }
         restoreStoredPreviewTab();
       })
       .catch(function () {});
@@ -4585,9 +4622,11 @@
   function pollScreenspaceIntake() { return STUDIO.pollScreenspaceIntake && STUDIO.pollScreenspaceIntake.apply(null, arguments); }
   function pollTranscriptIntake() { return STUDIO.pollTranscriptIntake && STUDIO.pollTranscriptIntake.apply(null, arguments); }
   function pollComposerIntake() { return STUDIO.pollComposerIntake && STUDIO.pollComposerIntake.apply(null, arguments); }
+  function pollMindnodeIntake() { return STUDIO.pollMindnodeIntake && STUDIO.pollMindnodeIntake.apply(null, arguments); }
   function refreshScreenspaceIntake() { return STUDIO.refreshScreenspaceIntake && STUDIO.refreshScreenspaceIntake.apply(null, arguments); }
   function refreshTranscriptIntake() { return STUDIO.refreshTranscriptIntake && STUDIO.refreshTranscriptIntake.apply(null, arguments); }
   function refreshComposerIntake() { return STUDIO.refreshComposerIntake && STUDIO.refreshComposerIntake.apply(null, arguments); }
+  function refreshMindnodeIntake() { return STUDIO.refreshMindnodeIntake && STUDIO.refreshMindnodeIntake.apply(null, arguments); }
   function focusComposerIntakeItem() { return STUDIO.focusComposerIntakeItem && STUDIO.focusComposerIntakeItem.apply(null, arguments); }
   function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
@@ -4763,9 +4802,11 @@
     state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000 });
     state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000 });
     state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000 });
+    state.mnIntakePoller = createPoller(pollMindnodeIntake, 5000, { maxIntervalMs: 30000 });
     state.ssIntakePoller.start();
     state.trIntakePoller.start();
     state.coIntakePoller.start();
+    state.mnIntakePoller.start();
     // One-shot job-status fetch on page load picks up any reel/generate
     // build that's still running in the background after the user navigated
     // away to a sibling frontend and back. The poll's own success handler

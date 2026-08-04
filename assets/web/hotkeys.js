@@ -85,7 +85,7 @@
     { id: "studio.focusReel",          section: "studio", group: "Selection", label: "Select reel queue", combos: ["Shift+3"] },
     { id: "studio.focusArtifactStash", section: "studio", group: "Selection", label: "Select stashed artifacts", combos: ["Shift+4"] },
     { id: "studio.focusReelStash",     section: "studio", group: "Selection", label: "Select stashed reels", combos: ["Shift+5"] },
-    { id: "studio.selectTab",          section: "studio", group: "Tabs", label: "Switch preview tab by number", combos: ["1", "2", "3", "4"], rebindable: false, displayKeys: "1–4" },
+    { id: "studio.selectTab",          section: "studio", group: "Tabs", label: "Switch preview tab by number", combos: ["1", "2", "3", "4", "5"], rebindable: false, displayKeys: "1–5" },
 
     { id: "composer.seekBackMid",      section: "composer", group: "Playhead", label: "Seek back 2.5 s", combos: ["Shift+ArrowLeft"] },
     { id: "composer.seekFwdMid",       section: "composer", group: "Playhead", label: "Seek forward 2.5 s", combos: ["Shift+ArrowRight"] },
@@ -175,6 +175,7 @@
 
     { id: "start.tabGoogle",    section: "start", group: "Spreadsheet", label: "Use Google Sheets",     combos: ["G"] },
     { id: "start.tabExcel",     section: "start", group: "Spreadsheet", label: "Use Excel file",        combos: ["E"] },
+    { id: "start.tabMindnode",  section: "start", group: "Spreadsheet", label: "Use MindNode mind map", combos: ["M"] },
     { id: "start.tabNone",      section: "start", group: "Spreadsheet", label: "No spreadsheet",         combos: ["N"] },
     { id: "start.browseInput",  section: "start", group: "Folders",     label: "Browse input folder",    combos: ["I"] },
     { id: "start.browseOutput", section: "start", group: "Folders",     label: "Browse output folder",   combos: ["O"] },

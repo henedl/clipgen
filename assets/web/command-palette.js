@@ -73,6 +73,7 @@
       { key: "intake", label: "Screenspace Intake" },
       { key: "transcript-intake", label: "Transcript Intake" },
       { key: "composer-intake", label: "Composer Intake" },
+      { key: "mindnode-intake", label: "MindNode Intake" },
     ],
     transcripts: [
       { key: "summary", label: "Summary" },

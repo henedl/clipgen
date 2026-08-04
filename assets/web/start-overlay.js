@@ -67,7 +67,7 @@
     googlePollTimer: null,
     googlePollDeadline: 0,
     confirmInFlight: false,
-    activeTab: "google",    // 'google' | 'excel' | 'none'
+    activeTab: "google",    // 'google' | 'excel' | 'mindnode' | 'none'
     extrasTab: "tools",     // 'tools' | 'updates' | 'about'
     changelogLoaded: false,
     aboutLoaded: false,
@@ -78,6 +78,8 @@
     // the CTA without one, and these facts don't change mid-sign-in.
     googleCreds: null,
     excelFiles: [],
+    mindnodeFiles: [],
+    mindnodePreviewReqVer: 0,   // rejects stale mind-map summary fetches
     statusData: null,
     recentProjects: [],
     projectName: "",          // the optional label typed in the right column
@@ -227,6 +229,17 @@
     els.excelPickerLabel = root.querySelector('[data-role="excel-picker-label"]');
     els.excelPickerMenu = root.querySelector('[data-role="excel-picker-menu"]');
     els.excelPaste = root.querySelector("#startExcelPaste");
+    els.mindnodePanel = root.querySelector('[data-tabpanel="mindnode"]');
+    els.mindnodeStatus = root.querySelector('[data-role="mindnode-status"]');
+    els.mindnodeRefresh = root.querySelector('[data-role="mindnode-refresh"]');
+    els.mindnodePicker = root.querySelector('[data-role="mindnode-picker"]');
+    els.mindnodePickerTrigger = root.querySelector('[data-role="mindnode-picker-trigger"]');
+    els.mindnodePickerLabel = root.querySelector('[data-role="mindnode-picker-label"]');
+    els.mindnodePickerMenu = root.querySelector('[data-role="mindnode-picker-menu"]');
+    els.mindnodePaste = root.querySelector("#startMindnodePaste");
+    els.mindnodePreview = root.querySelector('[data-role="mindnode-preview"]');
+    els.mindnodePreviewThumb = root.querySelector('[data-role="mindnode-preview-thumb"]');
+    els.mindnodePreviewSummary = root.querySelector('[data-role="mindnode-preview-summary"]');
     els.worksheetSection = root.querySelector('[data-role="worksheet-section"]');
     els.worksheetLoading = root.querySelector('[data-role="worksheet-loading"]');
     els.worksheetPicker = root.querySelector('[data-role="worksheet-picker"]');
@@ -329,6 +342,13 @@
       e.stopPropagation();
       togglePicker("excel");
     });
+    on(els.mindnodeRefresh, "click", function () {
+      runPanelRefresh(els.mindnodeRefresh, loadMindnodeFiles);
+    });
+    on(els.mindnodePickerTrigger, "click", function (e) {
+      e.stopPropagation();
+      togglePicker("mindnode");
+    });
     on(els.worksheetPickerTrigger, "click", function (e) {
       e.stopPropagation();
       togglePicker("worksheet");
@@ -383,6 +403,17 @@
       }
     });
 
+    on(els.mindnodePaste, "input", function () {
+      var v = (els.mindnodePaste.value || "").trim();
+      if (v) {
+        // A mind map has no worksheets, so there is nothing to schedule —
+        // setSelection alone settles the selection and Confirm is free.
+        setSelection({ type: "mindnode", id_or_path: v, label: v.split("/").pop() || v });
+      } else if (state.selection && state.selection.type === "mindnode") {
+        renderMindnodeList(state.mindnodeFiles || []);
+      }
+    });
+
     // Keyboard: Escape (close) and Tab containment are owned by the shared
     // blocking-modal trap (see open()); the rest are shared-registry hotkeys so
     // holding Alt reveals them and they list in the "?" cheatsheet. Gated by
@@ -392,6 +423,7 @@
       ClipgenHotkeys.register([
         { id: "start.tabGoogle",    inModal: true, when: isOpen, handler: function () { setTab("google"); } },
         { id: "start.tabExcel",     inModal: true, when: isOpen, handler: function () { setTab("excel"); } },
+        { id: "start.tabMindnode",  inModal: true, when: isOpen, handler: function () { setTab("mindnode"); } },
         { id: "start.tabNone",      inModal: true, when: isOpen, handler: function () { setTab("none"); } },
         { id: "start.browseInput",  inModal: true, when: isOpen, handler: function () { browseFolder("input"); } },
         { id: "start.browseOutput", inModal: true, when: isOpen, handler: function () { browseFolder("output"); } },
@@ -478,9 +510,9 @@
       });
   }
 
-  // ---- Sheet picker (Google + Excel dropdowns) ----
+  // ---- Sheet picker (Google + Excel + MindNode dropdowns) ----
 
-  var PICKER_KINDS = ["google", "excel", "worksheet"];
+  var PICKER_KINDS = ["google", "excel", "mindnode", "worksheet"];
 
   function pickerRefs(kind) {
     if (kind === "google") {
@@ -497,6 +529,14 @@
         trigger: els.excelPickerTrigger,
         label: els.excelPickerLabel,
         placeholder: "Select an Excel file…",
+      };
+    }
+    if (kind === "mindnode") {
+      return {
+        menu: els.mindnodePickerMenu,
+        trigger: els.mindnodePickerTrigger,
+        label: els.mindnodePickerLabel,
+        placeholder: "Select a MindNode document…",
       };
     }
     return {
@@ -550,6 +590,10 @@
         els.excelPickerMenu && !els.excelPickerMenu.classList.contains("hidden")) {
       closePicker("excel");
     }
+    if (els.mindnodePicker && !els.mindnodePicker.contains(e.target) &&
+        els.mindnodePickerMenu && !els.mindnodePickerMenu.classList.contains("hidden")) {
+      closePicker("mindnode");
+    }
     if (els.worksheetPicker && !els.worksheetPicker.contains(e.target) &&
         els.worksheetPickerMenu && !els.worksheetPickerMenu.classList.contains("hidden")) {
       closePicker("worksheet");
@@ -579,6 +623,7 @@
     });
     setHidden(els.googlePanel, name !== "google");
     setHidden(els.excelPanel, name !== "excel");
+    setHidden(els.mindnodePanel, name !== "mindnode");
     setHidden(els.nonePanel, name !== "none");
     if (name === "none") {
       // Clear any sheet selection — user is opting out.
@@ -620,7 +665,11 @@
     } else if (sel && sel.type === "excel") {
       highlightExcelSelection(sel.id_or_path);
       updatePickerLabel("excel", sel.label || sel.id_or_path);
+    } else if (sel && sel.type === "mindnode") {
+      highlightMindnodeSelection(sel.id_or_path);
+      updatePickerLabel("mindnode", sel.label || sel.id_or_path);
     }
+    loadMindnodePreview(sel);
     // A fresh spreadsheet identity resets the worksheet choice; bump the
     // request version so any in-flight worksheet fetch for the prior selection
     // is ignored, then reset the dropdown (loadWorksheets re-shows it for 2+
@@ -1090,10 +1139,19 @@
   function currentSessionKey() {
     var s = state.statusData || {};
     if (!s.input_dir && !s.output_dir) return "";
-    var sheetKey = s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path
-      ? s.spreadsheet_type + "|" + s.spreadsheet_id_or_path
-      : "";
-    return (s.input_dir || "") + "::" + (s.output_dir || "") + "::" + sheetKey;
+    // Keyed off the source the server actually recorded, so this mirrors
+    // projectKey() for every source type. Deriving it from the spreadsheet
+    // fields alone left a mind-map session keyed "input::output::", which
+    // matched no stored project — no current-session highlight, and no
+    // restored project name. Falls back to the sheet fields for a session
+    // predating active_source (e.g. a CLI-loaded sheet with no recorded open).
+    var src = s.active_source;
+    var sourceKey = src && src.type && src.id_or_path
+      ? src.type + "|" + src.id_or_path
+      : s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path
+        ? s.spreadsheet_type + "|" + s.spreadsheet_id_or_path
+        : "";
+    return (s.input_dir || "") + "::" + (s.output_dir || "") + "::" + sourceKey;
   }
 
   function formatWhen(iso) {
@@ -1546,6 +1604,113 @@
     });
   }
 
+  // Mind maps live in the input folder alongside the videos, so this mirrors
+  // loadExcelFiles: the route re-globs on every call and Refresh just re-runs it.
+  function loadMindnodeFiles() {
+    if (!els.mindnodeStatus) return Promise.resolve();
+    els.mindnodeStatus.textContent = "Scanning input folder…";
+    return apiGet("/api/spreadsheets/mindnode").then(function (r) {
+      state.mindnodeFiles = r.files || [];
+      els.mindnodeStatus.textContent = state.mindnodeFiles.length
+        ? state.mindnodeFiles.length +
+          (state.mindnodeFiles.length === 1 ? " mind map in " : " mind maps in ") +
+          r.input_dir
+        : "No .mindnode documents in " + r.input_dir;
+      renderMindnodeList(state.mindnodeFiles);
+    }).catch(function (err) {
+      console.error("MindNode scan failed", err);
+      els.mindnodeStatus.textContent = (state.mindnodeFiles || []).length
+        ? "Couldn't re-scan the input folder. Showing the last list."
+        : "Could not scan the input folder.";
+    });
+  }
+
+  function renderMindnodeList(files) {
+    if (!els.mindnodePickerMenu) return;
+    els.mindnodePickerMenu.innerHTML = "";
+    if (!files.length) {
+      els.mindnodePickerMenu.appendChild(
+        el("div", "sheet-picker__empty", "No .mindnode documents in the input folder")
+      );
+      return;
+    }
+    files.forEach(function (f) {
+      var option = el("button", "sheet-picker__option");
+      option.type = "button";
+      option.setAttribute("role", "option");
+      option.setAttribute("data-path", f.path);
+      option.appendChild(el("span", "sheet-picker__option-main", f.name));
+      option.appendChild(el("span", "sheet-picker__option-sub", f.path));
+      var edited = formatEdited(f.modified);
+      if (edited) option.appendChild(el("span", "sheet-picker__option-meta", edited));
+      option.addEventListener("click", function () {
+        if (els.mindnodePaste) els.mindnodePaste.value = "";
+        // No worksheets to fetch, so setSelection is the whole flow.
+        setSelection({ type: "mindnode", id_or_path: f.path, label: f.name });
+        closePicker("mindnode");
+      });
+      els.mindnodePickerMenu.appendChild(option);
+    });
+    if (state.selection && state.selection.type === "mindnode") {
+      highlightMindnodeSelection(state.selection.id_or_path);
+    }
+  }
+
+  function highlightMindnodeSelection(path) {
+    if (!els.mindnodePickerMenu) return;
+    var items = els.mindnodePickerMenu.querySelectorAll(".sheet-picker__option");
+    Array.prototype.forEach.call(items, function (item) {
+      item.classList.toggle("is-selected", item.getAttribute("data-path") === path);
+    });
+  }
+
+  // Summarize the chosen map before it is opened — the equivalent of the
+  // source-video preview the spreadsheet tabs get, plus the bundle's own
+  // QuickLook render so the researcher can confirm it is the right document.
+  function loadMindnodePreview(sel) {
+    if (!els.mindnodePreview) return;
+    var reqVer = ++state.mindnodePreviewReqVer;
+    if (!sel || sel.type !== "mindnode" || !sel.id_or_path) {
+      setHidden(els.mindnodePreview, true);
+      return;
+    }
+    apiGet("/api/spreadsheets/mindnode/preview?path=" + encodeURIComponent(sel.id_or_path))
+      .then(function (r) {
+        if (reqVer !== state.mindnodePreviewReqVer) return;   // stale fetch
+        applyMindnodePreview(sel, r);
+      })
+      .catch(function (err) {
+        if (reqVer !== state.mindnodePreviewReqVer) return;
+        setHidden(els.mindnodePreviewThumb, true);
+        els.mindnodePreviewSummary.textContent =
+          (err && err.message) || "Could not read this mind map.";
+        setHidden(els.mindnodePreview, false);
+      });
+  }
+
+  function applyMindnodePreview(sel, data) {
+    var parts = [data.notes + (data.notes === 1 ? " note" : " notes")];
+    if (data.without_times) {
+      // Said up front: these are the notes that cannot become clips.
+      parts.push(data.without_times + " without a timestamp");
+    }
+    parts.push(
+      data.participants.length +
+        (data.participants.length === 1 ? " participant" : " participants") +
+        (data.participants.length ? " (" + data.participants.join(", ") + ")" : "")
+    );
+    els.mindnodePreviewSummary.textContent =
+      "Study “" + data.study + "” — " + parts.join(", ");
+    if (data.has_preview && els.mindnodePreviewThumb) {
+      els.mindnodePreviewThumb.src =
+        "/api/spreadsheets/mindnode/thumb?path=" + encodeURIComponent(sel.id_or_path);
+      setHidden(els.mindnodePreviewThumb, false);
+    } else {
+      setHidden(els.mindnodePreviewThumb, true);
+    }
+    setHidden(els.mindnodePreview, false);
+  }
+
   function loadChangelog() {
     return apiGet("/api/changelog").then(function (r) {
       state.changelogLoaded = true;
@@ -1878,6 +2043,7 @@
       // re-list from Drive on every overlay open.
       .then(function () { return loadGoogleSheets(); })
       .then(loadExcelFiles)
+      .then(loadMindnodeFiles)
       .then(applyCurrentSessionPrefill)
       .catch(function (err) {
         console.error("Start overlay refresh failed", err);
@@ -1886,6 +2052,23 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
+    // A mind map is an independent source with no worksheet, so it is restored
+    // ahead of the spreadsheet branches and short-circuits them.
+    if (s.mindnode_loaded && s.mindnode_path) {
+      setTab("mindnode");
+      setSelection({
+        type: "mindnode",
+        id_or_path: s.mindnode_path,
+        label: s.mindnode_label || s.mindnode_path,
+      });
+      var known = (state.mindnodeFiles || []).some(function (f) {
+        return f.path === s.mindnode_path;
+      });
+      if (!known && els.mindnodePaste) els.mindnodePaste.value = s.mindnode_path;
+      state.baseline = baselineFromInputs();
+      applyFieldStates();
+      return;
+    }
     if (s.sheet_loaded && s.spreadsheet_type && s.spreadsheet_id_or_path) {
       // Seed the picker so the current session shows as "loaded" without the
       // user needing to re-select. Activate the correct tab + selection, and

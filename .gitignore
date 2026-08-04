@@ -60,6 +60,11 @@ node_modules/
 *.png
 *.csv
 *.app/
+# MindNode documents are research data. Note a .mindnode is a *directory*
+# (a macOS file package), hence the trailing slash — and because git cannot
+# re-include a file whose parent directory is excluded, the test fixture is
+# re-included as a directory below, not by a path inside it.
+*.mindnode/
 
 # Files we want to keep
 !assets/titlecard.png
@@ -67,3 +72,4 @@ node_modules/
 !assets/icons/*
 !assets/logos/*
 !assets/web/*
+!tests/fixtures/*.mindnode/

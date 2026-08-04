@@ -212,11 +212,16 @@
   --color-task-attention:  #a3e635;
 
   /* Stream colors — for metadata cross-stream visualisations
-   * (sheet=yellow, screenspace=blue, transcript=green). Constant across
-   * themes so the three streams stay distinguishable on either background. */
+   * (sheet=yellow, screenspace=blue, transcript=green, mindnode=purple).
+   * Constant across themes so the streams stay distinguishable on either
+   * background. They stack side by side as cross-reference badges, so a new
+   * stream needs a hue that reads apart from *all* the others — purple was the
+   * only free slot left (blue is spoken for twice over by screenspace and the
+   * Composer accent). */
   --stream-sheet:        #eab308;
   --stream-screenspace:  #3498db;
   --stream-transcript:   #10a34a;
+  --stream-mindnode:     #9333ea;
 
   /* Transcript intake category colors */
   --cat-pain-point: var(--sev-high);
