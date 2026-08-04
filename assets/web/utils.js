@@ -2032,29 +2032,30 @@ var clipgenHashTab = function () {
 var clipgenOllamaStatus = function (ollama) {
   var baseUrl = (ollama && ollama.base_url) || "localhost";
   var hint = (ollama && ollama.install_hint) || [];
-  if (!ollama) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl };
+  // Whether clipgen can download the Ollama CLI itself in-app (macOS managed
+  // install) — "missing" surfaces point at that flow instead of shell commands.
+  var canInstall = !!(ollama && ollama.can_install);
+  var installSizeMb = (ollama && ollama.install_size_mb) || 0;
+  var base = { hint: hint, baseUrl: baseUrl, canInstall: canInstall, installSizeMb: installSizeMb };
+  if (!ollama) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl, canInstall: false, installSizeMb: 0 };
   // The messages name the problem but prescribe no particular control — the
   // three surfaces that show them have different affordances (Overview has a
   // Refresh, Settings has nothing, the dialog has its own retry button), and a
   // banner telling you to press something that isn't there is worse than one
   // that just says what is wrong.
   if (ollama.installed === false) {
-    return {
-      state: "missing",
-      message: "Ollama is not installed — the AI summaries, citations and reports need it.",
-      hint: hint,
-      baseUrl: baseUrl,
-    };
+    base.state = "missing";
+    base.message = "Ollama is not installed — the AI summaries, citations and reports need it.";
+    return base;
   }
   if (ollama.available === false) {
-    return {
-      state: "stopped",
-      message: "Ollama is installed but not running at " + baseUrl + ".",
-      hint: hint,
-      baseUrl: baseUrl,
-    };
+    base.state = "stopped";
+    base.message = "Ollama is installed but not running at " + baseUrl + ".";
+    return base;
   }
-  return { state: "ok", message: "", hint: hint, baseUrl: baseUrl };
+  base.state = "ok";
+  base.message = "";
+  return base;
 };
 
 // ---- Per-page UI state (localStorage) ----

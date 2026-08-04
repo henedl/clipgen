@@ -4036,6 +4036,10 @@ def build_combined_app(
                 # commands that previously only ever reached the terminal.
                 "installed": ollama_client.is_installed(),
                 "install_hint": ollama_client.install_guidance_lines(),
+                # Whether clipgen can download the CLI itself in-app (macOS
+                # managed install), plus the download size for consent labels.
+                "can_install": ollama_client.can_install_managed(),
+                "install_size_mb": ollama_client.managed_install_size_mb(),
                 "models": ollama_models,
                 "agents": ollama_agents,
                 "base_url": config.OLLAMA_BASE_URL,

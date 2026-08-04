@@ -132,7 +132,12 @@
             note.className = "settings-model-note";
             sel.parentNode.appendChild(note);
           }
-          var extra = status.state === "missing" && status.hint.length ? " " + status.hint[0] : "";
+          var extra = "";
+          if (status.state === "missing") {
+            extra = status.canInstall
+              ? " clipgen can download it for you — run any AI action on the Transcripts page."
+              : (status.hint.length ? " " + status.hint[0] : "");
+          }
           note.textContent = status.message + extra;
         } else if (note) {
           note.remove();

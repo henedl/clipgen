@@ -134,7 +134,8 @@ jobs:
           the license text and where to get their source code.
 
           Ollama (https://ollama.com/download) is optional — it powers the AI
-          summaries and reports. Everything else works without it.
+          summaries and reports. Everything else works without it, and clipgen
+          offers to download it for you the first time you use those features.
 
           clipgen also still works as a command-line tool. Run the binary inside
           the bundle directly:
