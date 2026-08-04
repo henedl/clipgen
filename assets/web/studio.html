@@ -30,6 +30,7 @@
       <button class="preview-tab hidden" data-tab="intake" data-hotkey="studio.selectTab" data-hotkey-combo="1"><span id="intakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Screenspace Intake <span id="intakeTabBadge" class="intake-tab-badge hidden">0</span></button>
       <button class="preview-tab hidden" data-tab="transcript-intake" data-hotkey="studio.selectTab" data-hotkey-combo="2"><span id="trIntakeTabDot" class="tab-status-dot hidden" aria-hidden="true"></span>Transcript Intake <span id="trIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
       <button class="preview-tab hidden" data-tab="composer-intake" data-hotkey="studio.selectTab" data-hotkey-combo="3">Composer Intake <span id="coIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
+      <button class="preview-tab hidden" data-tab="mindnode-intake" data-hotkey="studio.selectTab" data-hotkey-combo="4">MindNode Intake <span id="mnIntakeTabBadge" class="intake-tab-badge hidden">0</span></button>
     </div>
     <div class="subheader-actions">
       <!-- Tab-aware: syncPreviewTab() swaps the title, refreshActiveTab() the action. -->
@@ -127,6 +128,22 @@
       <div id="coIntakeCards" class="intake-cards-grid">
         <div class="drop-target-empty">Composer cuts will appear here</div>
       </div>
+    </div>
+    <div id="mnIntakePanel" class="hidden">
+      <div class="area-controls" id="mnIntakeControls">
+        <button id="mnIntakeAddAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Queue every listed note as an artifact"><span>Add all to Artifacts</span></button>
+        <button id="mnIntakeReelAllBtn" class="cg-btn cg-btn-solid cg-btn-sm" disabled data-tooltip="Add every listed note to the reel"><span>Add all to Reel</span></button>
+      </div>
+      <div class="intake-filters">
+        <input id="mnIntakeFilterSearch" type="text" placeholder="Search notes&#x2026;" class="intake-filter-search" autocomplete="off">
+        <div id="mnIntakeCategoryPills" class="intake-chip-row"></div>
+        <div id="mnIntakeFilterParticipants" class="intake-chip-row"></div>
+      </div>
+      <div id="mnIntakeTimeline" class="intake-density-host"></div>
+      <div id="mnIntakeCards" class="intake-cards-grid">
+        <div class="drop-target-empty">Timestamped notes from the mind map will appear here</div>
+      </div>
+      <div id="mnIntakeSkipped" class="mn-skipped hidden"></div>
     </div>
     </div>
   </section>

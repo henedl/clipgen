@@ -1,4 +1,6 @@
-/* clipgen Studio — intake satellite (Screenspace + Transcript intake panels).
+/* clipgen Studio — intake satellite.
+ *
+ * Panels: Screenspace, Transcript, Composer and MindNode intake.
  *
  * Carved out of studio.js (the hub) following the hub+satellite convention used
  * by transcripts.js / screenspace.js. Shares the hub's mutable `state` and the
@@ -1314,6 +1316,270 @@
     renderIntakeCards(CO_INTAKE, filtered);
   }
 
+  // ---- MindNode Intake ----
+
+  // Teams that work in mind maps rather than spreadsheets get their notes here.
+  // Like Composer's panel this is a fingerprint-polled list with no clustering:
+  // a note is already a discrete observation. Two things are specific to it —
+  // one note can carry several timestamp pairs (each becomes its own card, as a
+  // sheet cell expands to segments), and notes carrying no timestamp at all are
+  // kept and shown disabled rather than dropped, so the researcher can see what
+  // is not clippable instead of silently losing it.
+
+  var _mnIntakeDensityEl = null;
+
+  function mindnodeNoteToItem(note) {
+    return {
+      participant: note.participant,
+      start: note.start,
+      end: note.end,
+      // A bare-timestamp node has no text; the server falls back to a generic
+      // "MindNode intake" label rather than inventing a name.
+      desc: note.desc,
+      event_type: note.desc,
+      category: note.category,
+      study: note.study,
+      source: "mindnode",
+      event_ids: [note.id],
+    };
+  }
+
+  function mnIntakeAddToArtifacts(note) {
+    intakeAddItem(state.artifactQueue, mindnodeNoteToItem(note), renderArtifactQueue);
+  }
+
+  function mnIntakeToggleArtifacts(note) {
+    intakeToggleItem(state.artifactQueue, mindnodeNoteToItem(note), renderArtifactQueue);
+  }
+
+  function mnIntakeAddToReel(note) {
+    intakeAddItem(state.reelQueue, mindnodeNoteToItem(note), renderReelQueue);
+  }
+
+  function mnIntakeToggleReel(note) {
+    intakeToggleItem(state.reelQueue, mindnodeNoteToItem(note), renderReelQueue);
+  }
+
+  function filteredMindnodeNotes() {
+    var items = state.mnIntakeItems;
+    var parts = state.mnIntakeFilterParticipants;
+    var cats = state.mnIntakeFilterCategories;
+    var text = state.mnIntakeFilterText.toLowerCase();
+    if (!parts.length && !cats.length && !text) return items;
+    return items.filter(function (n) {
+      if (parts.length && parts.indexOf(n.participant) === -1) return false;
+      if (cats.length && cats.indexOf(n.category) === -1) return false;
+      if (text && (n.desc || "").toLowerCase().indexOf(text) === -1
+          && (n.category || "").toLowerCase().indexOf(text) === -1
+          && (n.participant || "").toLowerCase().indexOf(text) === -1) return false;
+      return true;
+    });
+  }
+
+  // Category chips are the map's own question branches, so unlike the fixed
+  // Composer/detector lists they are derived from the loaded document.
+  function buildMnIntakeCategoryPills() {
+    var container = qs("#mnIntakeCategoryPills");
+    if (!container) return;
+    var counts = {};
+    var order = [];
+    state.mnIntakeItems.forEach(function (n) {
+      if (!n.category) return;
+      if (counts[n.category] === undefined) order.push(n.category);
+      counts[n.category] = (counts[n.category] || 0) + 1;
+    });
+    container.innerHTML = "";
+    order.forEach(function (cat) {
+      var chip = ClipgenPrimitives.createFilterChip({
+        label: cat,
+        active: state.mnIntakeFilterCategories.indexOf(cat) >= 0,
+        count: counts[cat],
+        color: categoryColor(cat),
+        onClick: function () {
+          var arr = state.mnIntakeFilterCategories.slice();
+          var idx = arr.indexOf(cat);
+          if (idx >= 0) arr.splice(idx, 1);
+          else arr.push(cat);
+          state.mnIntakeFilterCategories = arr;
+          renderMindnodeIntake();
+        },
+      });
+      container.appendChild(chip);
+    });
+  }
+
+  function highlightMnIntakeCard(idx) {
+    var cards = qsa(".mn-intake-queue-card");
+    for (var i = 0; i < cards.length; i++) {
+      if (i === idx) cards[i].classList.add("intake-highlight");
+      else cards[i].classList.remove("intake-highlight");
+    }
+  }
+
+  var MN_INTAKE = {
+    cardsSel: "#mnIntakeCards",
+    cardSel: ".mn-intake-queue-card",
+    cardClass: "mn-intake-queue-card",
+    idxAttr: "mnIntakeIdx",
+    selfSource: "mindnode",
+    setTranscriptContext: false,
+    snippet: function (n) { return n.category || ""; },
+    clusterToItem: mindnodeNoteToItem,
+    cardHue: function (n) { return categoryColor(n.category || "mindnode"); },
+    typeText: function (n) { return n.desc || "untitled note"; },
+    selfBadge: function (n) {
+      return {
+        icon: XREF_BADGES.mindnode.icon,
+        color: XREF_BADGES.mindnode.color,
+        title: n.category ? n.category + " — " + (n.desc || "note") : "MindNode note",
+      };
+    },
+    // --- participant pills + density timeline ---
+    participantsSel: "#mnIntakeFilterParticipants",
+    timelineSel: "#mnIntakeTimeline",
+    clustersKey: "mnIntakeItems",
+    filterParticipantsKey: "mnIntakeFilterParticipants",
+    hoveredIdxKey: "mnIntakeHoveredIdx",
+    filterTextKey: "mnIntakeFilterText",
+    filtered: filteredMindnodeNotes,
+    highlightCard: highlightMnIntakeCard,
+    rerender: renderMindnodeIntake,
+    getDensityEl: function () { return _mnIntakeDensityEl; },
+    setDensityEl: function (dt) { _mnIntakeDensityEl = dt; },
+    barCount: function () { return 1; },
+    barColor: function (n) { return { hue: categoryHue(n.category || "mindnode") }; },
+    // --- init / delegated listeners ---
+    addAllBtnSel: "#mnIntakeAddAllBtn",
+    reelAllBtnSel: "#mnIntakeReelAllBtn",
+    thresholdSel: "#mnIntakeClusterThreshold", // absent — notes never cluster
+    searchSel: "#mnIntakeFilterSearch",
+    toggleArtifacts: mnIntakeToggleArtifacts,
+    toggleReel: mnIntakeToggleReel,
+    addToArtifacts: mnIntakeAddToArtifacts,
+    addToReel: mnIntakeAddToReel,
+    onDismiss: function () {}, // notes are edited in MindNode, not here
+    onThresholdChange: function () {},
+    onCardHover: function (card, idx) {
+      var note = filteredMindnodeNotes()[idx];
+      return note ? (note.text || "") : "";
+    },
+    extraControl: function () {},
+  };
+
+  // Poll the parsed document and fingerprint it — the server re-parses the
+  // bundle on each call, so editing the map in MindNode shows up here without
+  // reopening the workspace.
+  function pollMindnodeIntake() {
+    return apiGet("api/mindnode")
+      .then(function (data) {
+        if (!data || !data.ok || !data.mindnode_loaded || !data.document) return false;
+        var items = [];
+        var skipped = [];
+        (data.document.notes || []).forEach(function (note) {
+          if (!note.spans || !note.spans.length) {
+            skipped.push(note);
+            return;
+          }
+          // One card per timestamp pair, the way a sheet cell expands to
+          // segments — the note id alone would collide across its own spans.
+          note.spans.forEach(function (span, segIdx) {
+            items.push({
+              id: note.id + "#" + segIdx,
+              participant: note.participant,
+              category: note.category,
+              desc: note.desc,
+              text: note.text,
+              study: note.study,
+              start: span[0],
+              end: span[1],
+            });
+          });
+        });
+        var fp = JSON.stringify([
+          items.map(function (n) {
+            return [n.id, n.participant, n.category, n.desc, n.start, n.end];
+          }),
+          skipped.map(function (n) { return [n.id, n.participant, n.desc]; }),
+        ]);
+        if (fp === state._mnIntakeFp) return false;
+        state._mnIntakeFp = fp;
+        state.mnIntakeItems = items;
+        state.mnIntakeSkipped = skipped;
+        renderMindnodeIntake();
+        return true;
+      })
+      .catch(function () { return false; });
+  }
+
+  function refreshMindnodeIntake() {
+    if (state.mnIntakePoller) return state.mnIntakePoller.wake();
+    return pollMindnodeIntake();
+  }
+
+  // The untimestamped notes, rendered disabled below the grid. They cannot be
+  // cut, but they are real observations the researcher wrote, so hiding them
+  // would read as clipgen having lost them.
+  function renderMnIntakeSkipped() {
+    var host = qs("#mnIntakeSkipped");
+    if (!host) return;
+    host.innerHTML = "";
+    var skipped = state.mnIntakeSkipped || [];
+    if (!skipped.length) {
+      host.classList.add("hidden");
+      return;
+    }
+    host.classList.remove("hidden");
+    host.appendChild(el(
+      "div",
+      "mn-skipped-head",
+      skipped.length + (skipped.length === 1 ? " note has" : " notes have") +
+        " no timestamp — add one in MindNode to make them clippable"
+    ));
+    var list = el("div", "mn-skipped-list");
+    skipped.forEach(function (note) {
+      var row = el("div", "mn-skipped-row");
+      row.appendChild(el("span", "mn-skipped-participant", note.participant));
+      row.appendChild(el("span", "mn-skipped-category", note.category || ""));
+      row.appendChild(el("span", "mn-skipped-desc", note.desc || note.text || "untitled note"));
+      list.appendChild(row);
+    });
+    host.appendChild(list);
+  }
+
+  function renderMindnodeIntake() {
+    ssClearPending();
+    var container = qs("#mnIntakeCards");
+    if (!container) return;
+    var filtered = filteredMindnodeNotes();
+    var addAllBtn = qs("#mnIntakeAddAllBtn");
+    var reelAllBtn = qs("#mnIntakeReelAllBtn");
+    var badge = qs("#mnIntakeTabBadge");
+
+    if (badge) {
+      if (state.mnIntakeItems.length > 0) {
+        badge.textContent = state.mnIntakeItems.length;
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+    }
+
+    if (addAllBtn) addAllBtn.disabled = filtered.length === 0;
+    if (reelAllBtn) reelAllBtn.disabled = filtered.length === 0;
+
+    buildMnIntakeCategoryPills();
+    buildIntakeParticipantPills(MN_INTAKE);
+    buildIntakeDensityTimeline(MN_INTAKE, filtered);
+    renderMnIntakeSkipped();
+
+    if (filtered.length === 0) {
+      container.innerHTML = '<div class="drop-target-empty">Timestamped notes from the mind map appear here. Open a .mindnode document from the Start overlay</div>';
+      return;
+    }
+
+    renderIntakeCards(MN_INTAKE, filtered);
+  }
+
   function initTooltipToggle() {
     state.trIntakeTooltipsEnabled = getStoredTooltipPref();
     var btn = qs("#tooltipToggle");
@@ -1336,6 +1602,7 @@
     initIntakePanel(SS_INTAKE);
     initIntakePanel(TR_INTAKE);
     initIntakePanel(CO_INTAKE);
+    initIntakePanel(MN_INTAKE);
   }
 
   // ---- Keyboard-cursor access (hub's kbStep/kbSend, keyed by preview tab) ----
@@ -1344,6 +1611,7 @@
     if (tab === "intake") return SS_INTAKE;
     if (tab === "transcript-intake") return TR_INTAKE;
     if (tab === "composer-intake") return CO_INTAKE;
+    if (tab === "mindnode-intake") return MN_INTAKE;
     return null;
   }
 
@@ -1376,9 +1644,11 @@
   STUDIO.pollScreenspaceIntake = pollScreenspaceIntake;
   STUDIO.pollTranscriptIntake = pollTranscriptIntake;
   STUDIO.pollComposerIntake = pollComposerIntake;
+  STUDIO.pollMindnodeIntake = pollMindnodeIntake;
   STUDIO.refreshScreenspaceIntake = refreshScreenspaceIntake;
   STUDIO.refreshTranscriptIntake = refreshTranscriptIntake;
   STUDIO.refreshComposerIntake = refreshComposerIntake;
+  STUDIO.refreshMindnodeIntake = refreshMindnodeIntake;
   STUDIO.focusComposerIntakeItem = focusComposerIntakeItem;
   STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;

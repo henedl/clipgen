@@ -42,8 +42,8 @@ package-dir = {"" = "source"}
 py-modules = [
     "app", "changelog", "cli", "composer_server", "config", "data_export",
     "desktop", "desktop_chrome", "excel_io",
-    "files", "friction", "google_api", "interactive", "ollama_client", "overview",
-    "pipeline", "remux_server",
+    "files", "friction", "google_api", "interactive", "mindnode", "ollama_client",
+    "overview", "pipeline", "remux_server",
     "screenspace", "screenspace_frames", "screenspace_heatmap",
     "screenspace_manifest", "screenspace_multitool", "screenspace_ocr",
     "screenspace_preview", "screenspace_primitives", "screenspace_scans",

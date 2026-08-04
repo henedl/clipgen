@@ -41,6 +41,7 @@ html {
 .cg-icon--bars-3      { mask-image: url(icons/bars-3.svg);      -webkit-mask-image: url(icons/bars-3.svg); }
 .cg-icon--squares-2x2 { mask-image: url(icons/squares-2x2.svg); -webkit-mask-image: url(icons/squares-2x2.svg); }
 .cg-icon--scissors    { mask-image: url(icons/scissors.svg);    -webkit-mask-image: url(icons/scissors.svg); }
+.cg-icon--share       { mask-image: url(icons/share.svg);       -webkit-mask-image: url(icons/share.svg); }
 .cg-icon--chevron-up-down { mask-image: url(icons/chevron-up-down.svg); -webkit-mask-image: url(icons/chevron-up-down.svg); }
 .cg-icon--bars-arrow-up   { mask-image: url(icons/bars-arrow-up.svg);   -webkit-mask-image: url(icons/bars-arrow-up.svg); }
 .cg-icon--bars-arrow-down { mask-image: url(icons/bars-arrow-down.svg); -webkit-mask-image: url(icons/bars-arrow-down.svg); }
@@ -159,7 +160,8 @@ body {
  * use a bare `0` so the shorthand stays valid.) */
 #intakePanel,
 #trIntakePanel,
-#coIntakePanel {
+#coIntakePanel,
+#mnIntakePanel {
   padding: var(--chrome-height) 0 var(--space-3);
 }
 
@@ -170,7 +172,8 @@ body {
 #sheetGrid,
 #intakePanel,
 #trIntakePanel,
-#coIntakePanel {
+#coIntakePanel,
+#mnIntakePanel {
   min-width: 0;
 }
 
@@ -423,7 +426,8 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
 #sheetGrid,
 #intakePanel,
 #trIntakePanel,
-#coIntakePanel {
+#coIntakePanel,
+#mnIntakePanel {
   transition: opacity 180ms ease-out, transform 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 .tab-slide-enter {
@@ -434,7 +438,8 @@ body[data-active-tab]:not([data-active-tab="sheet"]) #studioSidebar {
   #sheetGrid,
   #intakePanel,
   #trIntakePanel,
-  #coIntakePanel {
+  #coIntakePanel,
+  #mnIntakePanel {
     transition: none;
   }
   .tab-slide-enter {
@@ -643,7 +648,8 @@ body.bottom-collapsed #sheetPreview {
 body.bottom-collapsed #sheetGrid,
 body.bottom-collapsed #intakePanel,
 body.bottom-collapsed #trIntakePanel,
-body.bottom-collapsed #coIntakePanel {
+body.bottom-collapsed #coIntakePanel,
+body.bottom-collapsed #mnIntakePanel {
   flex: 1 1 0;
   min-height: 0;
 }
@@ -2619,7 +2625,8 @@ html[data-theme="dark"] .log-panel {
  * so intake panels read consistently with the rest of Studio. */
 #intakeControls,
 #trIntakeControls,
-#coIntakeControls {
+#coIntakeControls,
+#mnIntakeControls {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -2760,6 +2767,61 @@ html[data-theme="dark"] .log-panel {
 
 .queue-card-source-badge.source-composer {
   background: color-mix(in oklch, var(--color-accent) 85%, transparent);
+}
+
+.queue-card-source-badge.source-mindnode {
+  background: color-mix(in oklch, var(--stream-mindnode) 85%, transparent);
+}
+
+/* Untimestamped mind-map notes. They cannot be cut, so they sit below the card
+ * grid as a muted, non-interactive list rather than being dropped — the
+ * researcher wrote them, and silently omitting them reads as data loss. */
+.mn-skipped {
+  /* Horizontal margin matches .intake-cards-grid's padding so the block lines
+     up with the cards above it rather than running edge to edge. */
+  margin: 0 var(--space-3) var(--space-3);
+  padding: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+}
+
+.mn-skipped.hidden {
+  display: none;
+}
+
+.mn-skipped-head {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  margin-bottom: var(--space-2);
+}
+
+.mn-skipped-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-1) 0;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  opacity: 0.75;
+}
+
+.mn-skipped-participant {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.mn-skipped-category {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.mn-skipped-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Asterisk chip on a card whose timestamp has a Composer trim override —
