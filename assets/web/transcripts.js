@@ -3467,7 +3467,7 @@
           // Never gated, same as Clip Marked Lines below: the modal reports the
           // transcript count and disables its own Embed button, so the scope
           // choice lives where its consequence is visible.
-          title: "Write subtitled copies of the source videos from their transcripts",
+          title: "Write a subtitled copy of each source video into the output folder; the originals are never modified",
         },
         {
           icon: "scissors",
