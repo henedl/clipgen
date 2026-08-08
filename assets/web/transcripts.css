@@ -2199,28 +2199,30 @@ body {
   gap: var(--space-2);
 }
 
-/* Clip-marked-lines modal. Geometry mirrors .model-install-* above so the two
-   dialogs on this page read as one family; the fields borrow the mark
-   popover's input treatment. */
-.clip-marks-modal {
+/* Shared parameter-dialog family, used by #clipMarksModal and #embedSubsModal:
+   a labelled field stack, a live summary line, a streaming progress bar, and a
+   Cancel/confirm row. Geometry mirrors .model-install-* above so every dialog
+   on this page reads as one family; the fields borrow the mark popover's input
+   treatment. Ids stay per-modal; only the presentation is shared. */
+.param-modal-card {
   max-width: 460px;
 }
 
-.clip-marks-message {
+.param-modal-message {
   font-size: var(--text-sm);
   line-height: 1.5;
   color: var(--color-text-dim);
   margin-bottom: var(--space-4);
 }
 
-.clip-marks-fields {
+.param-modal-fields {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-3);
 }
 
-.clip-marks-label {
+.param-modal-label {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2228,8 +2230,8 @@ body {
   font-size: var(--text-sm);
 }
 
-.clip-marks-select,
-.clip-marks-input {
+.param-modal-select,
+.param-modal-input {
   height: 28px;
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border);
@@ -2242,45 +2244,56 @@ body {
   box-sizing: border-box;
 }
 
-.clip-marks-select {
+.param-modal-select {
   flex: 1;
   min-width: 0;
   cursor: pointer;
 }
 
-.clip-marks-input {
+.param-modal-input {
   width: 88px;
   flex: none;
 }
 
-.clip-marks-select:focus,
-.clip-marks-input:focus {
+/* Checkbox rows read right-to-left of the text ones: the control sits where the
+   select/input sits, so the field stack keeps one alignment edge. */
+.param-modal-checkbox {
+  width: auto;
+  height: auto;
+  flex: none;
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.param-modal-select:focus,
+.param-modal-input:focus {
   border-color: var(--color-accent);
 }
 
-.clip-marks-summary {
+.param-modal-summary {
   font-size: var(--text-xs);
   color: var(--color-text-dim);
   margin-bottom: var(--space-4);
   min-height: 1.2em;
 }
 
-.clip-marks-progress {
+.param-modal-progress {
   margin-bottom: var(--space-4);
 }
 
-.clip-marks-progress.hidden {
+.param-modal-progress.hidden {
   display: none;
 }
 
-.clip-marks-bar {
+.param-modal-bar {
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--color-border);
   overflow: hidden;
 }
 
-.clip-marks-bar-fill {
+.param-modal-bar-fill {
   height: 100%;
   width: 0;
   background: var(--color-accent);
@@ -2288,13 +2301,13 @@ body {
   transition: width var(--duration-normal) ease;
 }
 
-.clip-marks-progress-text {
+.param-modal-progress-text {
   margin-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--color-text-dim);
 }
 
-.clip-marks-actions {
+.param-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);

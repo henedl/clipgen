@@ -799,6 +799,7 @@ def mux_subtitles(
     *,
     track_title: str = "Transcript",
     track_language: str = "und",
+    set_default: bool = True,
 ) -> bool:
     """Stream-copy *input_video* and add *srt_path* as a soft subtitle stream.
 
@@ -806,6 +807,21 @@ def mux_subtitles(
     .mp4/.mov/.m4v, ``srt`` (subrip) for .mkv, ``webvtt`` for .webm.
     Video and audio streams are stream-copied (no re-encode). Returns True
     on success, False on any validation or ffmpeg failure.
+
+    *set_default* controls whether the new track carries the ``default``
+    disposition (players turn it on without the viewer picking it). The False
+    case writes ``0`` rather than omitting the flag, but **only .mkv/.webm
+    honour it**: measured on ffmpeg 8.1.2, the mp4 muxer reports ``default=1``
+    for the subtitle track no matter what is passed (an ISOBMFF track is
+    enabled or absent — there is no "present but off"), while ``forced`` on the
+    same command does take effect, so this is the muxer and not the argument.
+    Callers that expose the flag must say so; see the frontend's Embed
+    Subtitles dialog.
+
+    *track_language* is normalized to ISO 639-2 here rather than trusted: the
+    mp4 muxer stores only three-letter codes and drops anything else *without
+    an error*, so Whisper's two-letter output ("en") used to leave every mp4
+    subtitle track untagged. See :func:`utils.normalize_track_language`.
     """
     if not Path(input_video).is_file():
         utils.error_print(
@@ -850,11 +866,11 @@ def mux_subtitles(
         "-c:s",
         codec,
         "-metadata:s:s:0",
-        f"language={track_language}",
+        f"language={utils.normalize_track_language(track_language)}",
         "-metadata:s:s:0",
         f"title={track_title}",
         "-disposition:s:0",
-        "default",
+        "default" if set_default else "0",
         output_video,
     ]
 

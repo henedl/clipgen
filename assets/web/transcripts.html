@@ -268,33 +268,64 @@
   <!-- Clip marked lines: parameters for the Quick action that cuts one clip per
        cluster of marks through Studio's intake generation endpoint. -->
   <div id="clipMarksModal" class="modal cg-modal-overlay hidden">
-    <div class="modal-content clip-marks-modal">
+    <div class="modal-content param-modal-card">
       <div class="modal-header">
         <h3>Clip Marked Lines</h3>
       </div>
-      <p class="clip-marks-message">Cut one clip per manually marked line. Marks closer together than the merge window are combined into a single clip.</p>
-      <div class="clip-marks-fields">
-        <label class="clip-marks-label" data-tooltip="Clip only the participant open on this page, or every participant that has marks.">Scope
-          <select id="clipMarksScope" class="clip-marks-select">
+      <p class="param-modal-message">Cut one clip per manually marked line. Marks closer together than the merge window are combined into a single clip.</p>
+      <div class="param-modal-fields">
+        <label class="param-modal-label" data-tooltip="Clip only the participant open on this page, or every participant that has marks.">Scope
+          <select id="clipMarksScope" class="param-modal-select">
             <option value="current">Current participant</option>
             <option value="all">All participants</option>
           </select>
         </label>
-        <label class="clip-marks-label" data-tooltip="Marks less than this far apart become one clip covering all of them. 0 gives one clip per marked line.">Merge window (s)
-          <input id="clipMarksGap" type="number" min="0" max="120" step="1" value="10" class="clip-marks-input" autocomplete="off">
+        <label class="param-modal-label" data-tooltip="Marks less than this far apart become one clip covering all of them. 0 gives one clip per marked line.">Merge window (s)
+          <input id="clipMarksGap" type="number" min="0" max="120" step="1" value="10" class="param-modal-input" autocomplete="off">
         </label>
-        <label class="clip-marks-label" data-tooltip="Extra seconds kept before and after each clip, so a cut on a tight segment boundary does not clip the first or last word.">Padding (s)
-          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="0" class="clip-marks-input" autocomplete="off">
+        <label class="param-modal-label" data-tooltip="Extra seconds kept before and after each clip, so a cut on a tight segment boundary does not clip the first or last word.">Padding (s)
+          <input id="clipMarksPad" type="number" min="0" max="10" step="0.5" value="0" class="param-modal-input" autocomplete="off">
         </label>
       </div>
-      <p id="clipMarksSummary" class="clip-marks-summary"></p>
-      <div id="clipMarksProgress" class="clip-marks-progress hidden">
-        <div class="clip-marks-bar"><div id="clipMarksBarFill" class="clip-marks-bar-fill"></div></div>
-        <p id="clipMarksProgressText" class="clip-marks-progress-text"></p>
+      <p id="clipMarksSummary" class="param-modal-summary"></p>
+      <div id="clipMarksProgress" class="param-modal-progress hidden">
+        <div class="param-modal-bar"><div id="clipMarksBarFill" class="param-modal-bar-fill"></div></div>
+        <p id="clipMarksProgressText" class="param-modal-progress-text"></p>
       </div>
-      <div class="clip-marks-actions">
+      <div class="param-modal-actions">
         <button id="clipMarksCancel" type="button" class="btn btn-small">Cancel</button>
         <button id="clipMarksConfirm" type="button" class="btn btn-small btn-primary">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Embed subtitles: parameters for the Quick action that muxes transcripts
+       back into subtitled copies of the source videos. -->
+  <div id="embedSubsModal" class="modal cg-modal-overlay hidden">
+    <div class="modal-content param-modal-card">
+      <div class="modal-header">
+        <h3>Embed Subtitles</h3>
+      </div>
+      <p class="param-modal-message">Write a subtitled copy of each source video, with the transcript added as a selectable subtitle track. The originals are never modified.</p>
+      <div class="param-modal-fields">
+        <label class="param-modal-label" data-tooltip="Embed only the participant open on this page, or every participant that has a transcript.">Scope
+          <select id="embedSubsScope" class="param-modal-select">
+            <option value="current">Current participant</option>
+            <option value="all">All participants</option>
+          </select>
+        </label>
+        <label class="param-modal-label" data-tooltip="Mark the subtitle track as default so players show it without the viewer turning it on. Only .mkv and .webm can carry a track that is off — .mp4 and .mov always enable theirs.">Set as default track
+          <input id="embedSubsDefault" type="checkbox" class="param-modal-checkbox" checked>
+        </label>
+      </div>
+      <p id="embedSubsSummary" class="param-modal-summary"></p>
+      <div id="embedSubsProgress" class="param-modal-progress hidden">
+        <div class="param-modal-bar"><div id="embedSubsBarFill" class="param-modal-bar-fill"></div></div>
+        <p id="embedSubsProgressText" class="param-modal-progress-text"></p>
+      </div>
+      <div class="param-modal-actions">
+        <button id="embedSubsCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="embedSubsConfirm" type="button" class="btn btn-small btn-primary">Embed</button>
       </div>
     </div>
   </div>

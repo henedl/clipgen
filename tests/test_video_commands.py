@@ -1705,7 +1705,67 @@ def test_mux_subtitles_mp4_uses_mov_text(monkeypatch, tmp_path):
     assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
     assert "-map" in cmd
     assert "0" in cmd and "1:0" in cmd
+    assert cmd[cmd.index("-disposition:s:0") + 1] == "default"
     assert cmd[-1] == str(out)
+
+
+def test_mux_subtitles_normalizes_the_language_to_three_letters(monkeypatch, tmp_path):
+    """Whisper reports ISO 639-1 ("en"), containers store only ISO 639-2.
+
+    Measured on ffmpeg 8.1.2: the mp4 muxer drops an "en" tag outright and
+    truncates transcripts.py's "unknown" fallback to the nonsense tag "unk" —
+    both silently. So the code is normalized before it reaches the muxer, not
+    trusted.
+    """
+    src, srt = _write_dummy_pair(tmp_path)
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    for given, expected in [
+        ("en", "eng"),  # the case that shipped untagged mp4s
+        ("zh", "zho"),
+        ("pt-BR", "por"),  # BCP 47 keeps only the primary subtag
+        ("eng", "eng"),  # already 639-2 -> untouched
+        ("unknown", "und"),  # transcripts.py's detection fallback
+        ("", "und"),
+    ]:
+        captured: dict = {}
+        out = tmp_path / f"out-{expected}.mp4"
+        assert video.mux_subtitles(
+            str(src), str(srt), str(out), track_language=given
+        ), given
+        cmd = captured["command"]
+        lang_arg = cmd[cmd.index("-metadata:s:s:0") + 1]
+        assert lang_arg == f"language={expected}", f"{given!r} -> {lang_arg}"
+
+
+def test_mux_subtitles_set_default_false_clears_the_disposition(monkeypatch, tmp_path):
+    """set_default=False writes an explicit 0 rather than dropping the flag.
+
+    A container whose only subtitle stream is the one we add can mark it default
+    on its own, so omitting the flag would not reliably leave the track off.
+    """
+    src, srt = _write_dummy_pair(tmp_path)
+    out = tmp_path / "out.mp4"
+
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(args=command, returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", fake_run)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+
+    ok = video.mux_subtitles(str(src), str(srt), str(out), set_default=False)
+    assert ok is True
+    cmd = captured["command"]
+    assert cmd[cmd.index("-disposition:s:0") + 1] == "0"
 
 
 def test_mux_subtitles_mkv_uses_srt(monkeypatch, tmp_path):

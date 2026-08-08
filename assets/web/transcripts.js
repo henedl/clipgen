@@ -3154,35 +3154,252 @@
     qs("#clipMarksGap").addEventListener("input", renderClipMarksSummary);
   }
 
-  // ---- Boot ----
+  // ---- Embed subtitles ----
+  //
+  // Muxes each participant's transcript back into a copy of their source video
+  // as a soft subtitle track (a stream copy — no re-encode). Structurally a
+  // twin of the Clip Marked Lines dialog above: same scope picker, same live
+  // summary, same NDJSON progress bar. The one parameter beyond scope is the
+  // track's default disposition; everything else the mux takes (container
+  // codec, track title, language) is derived server-side.
+  //
+  // Unlike clip-marks there is no fetch on open — state.participants already
+  // carries has_transcript and video_paths from the poll, so the dialog opens
+  // with its counts already correct.
 
-  function runEmbedSubtitle() {
+  // { done, failed, total, abort } while a batch streams; null when idle. Lives
+  // out here so the dialog can be dismissed mid-run and reopened onto the live
+  // progress, exactly like _clipMarksRun.
+  var _embedSubsRun = null;
+
+  // The server refuses a participant whose transcript spans several source
+  // files (muxing it back would mean concatenating the parts first), and
+  // video_paths already ships on /api/participants — so drop them here rather
+  // than spending a whole ffmpeg round-trip to surface a failure line.
+  function _embedSubsCandidates() {
+    var ps = state.participants || [];
+    var out = [];
+    for (var i = 0; i < ps.length; i++) {
+      if (ps[i].has_transcript) out.push(ps[i]);
+    }
+    return out;
+  }
+
+  function _embedSubsIsMultiPart(p) {
+    return !!(p.video_paths && p.video_paths.length > 1);
+  }
+
+  function _embedSubsScoped() {
+    var all = _embedSubsCandidates();
+    if ((qs("#embedSubsScope") || {}).value !== "current") return all;
     var pid = state.selectedParticipant;
-    if (!pid) return;
-    showToast("Embedding subtitle…");
-    apiPost("api/embed-subtitle/" + pid, {})
-      .then(function (data) {
-        if (data && data.ok) showToast("Wrote " + data.output_filename);
-        else showToast((data && data.error) || "Embed failed");
-      })
-      .catch(function (err) { showToast("Embed failed: " + err.message); });
+    return all.filter(function (p) { return p.id === pid; });
   }
 
-  function runEmbedAllSubtitles() {
-    showToast("Embedding subtitles for all transcripts…");
-    apiPost("api/embed-all-subtitles", {})
-      .then(function (data) {
-        if (!data || !data.ok) {
-          showToast((data && data.error) || "Embed failed");
-          return;
-        }
-        var results = data.results || [];
-        var okCount = 0;
-        for (var i = 0; i < results.length; i++) if (results[i].ok) okCount++;
-        showToast("Embedded " + okCount + "/" + clipgenPluralUnit(results.length, "video", "videos") + " to " + data.output_dir);
-      })
-      .catch(function (err) { showToast("Embed failed: " + err.message); });
+  function _embedSubsTargets() {
+    return _embedSubsScoped().filter(function (p) { return !_embedSubsIsMultiPart(p); });
   }
+
+  // The mp4 family always ships its subtitle track enabled — measured on ffmpeg
+  // 8.1.2, the muxer reports default=1 whatever -disposition:s:0 is given (an
+  // ISOBMFF track is enabled or absent; only .mkv/.webm have a present-but-off
+  // state). Unticking the box is therefore a no-op for those files, and a
+  // control that silently does nothing is worse than one that says so.
+  var EMBED_SUBS_ALWAYS_DEFAULT_EXT = /\.(mp4|m4v|mov)$/i;
+
+  function _embedSubsAlwaysDefault(targets) {
+    return targets.filter(function (p) {
+      return EMBED_SUBS_ALWAYS_DEFAULT_EXT.test(p.video_paths ? p.video_paths[0] : "");
+    });
+  }
+
+  function renderEmbedSubsSummary() {
+    var summaryEl = qs("#embedSubsSummary");
+    var confirmBtn = qs("#embedSubsConfirm");
+    if (!summaryEl || !confirmBtn) return;
+    if (_embedSubsRun) return; // progress block owns the copy while a run streams
+    var targets = _embedSubsTargets();
+    var skipped = _embedSubsScoped().filter(_embedSubsIsMultiPart);
+    var skipNote = skipped.length
+      ? " " + skipped.map(function (p) { return p.id; }).join(", ") +
+        " skipped (multi-part " + (skipped.length === 1 ? "recording" : "recordings") + ")."
+      : "";
+    if (!targets.length) {
+      var scope = (qs("#embedSubsScope") || {}).value;
+      // Two different dead ends: nothing transcribed yet, versus transcripts
+      // that exist but every one of them spans several files. Only the first is
+      // fixed by running a transcription, so telling the user to do that when
+      // the real blocker is multi-part footage sends them at a no-op.
+      if (skipped.length) {
+        summaryEl.textContent =
+          (skipped.length === 1
+            ? skipped[0].id + "'s transcript spans several video files"
+            : "Every transcript here spans several video files") +
+          ", which cannot be muxed back into one subtitled copy.";
+      } else {
+        summaryEl.textContent =
+          scope === "current" && state.selectedParticipant
+            ? "No transcript for " + state.selectedParticipant + " yet."
+            : "No transcripts yet — transcribe a video first.";
+      }
+      confirmBtn.disabled = true;
+      return;
+    }
+    // Only worth saying when the box is unticked: with it ticked the mp4
+    // muxer's behaviour and the user's request agree.
+    var stuckOn = (qs("#embedSubsDefault") || {}).checked
+      ? []
+      : _embedSubsAlwaysDefault(targets);
+    var stuckNote = stuckOn.length
+      ? " " + (stuckOn.length === targets.length ? "The track" : stuckOn.length + " of these")
+        + " will still be on by default — .mp4/.mov cannot carry a subtitle track that is off."
+      : "";
+    summaryEl.textContent =
+      clipgenPluralUnit(targets.length, "transcript", "transcripts") +
+      " → " +
+      clipgenPluralUnit(targets.length, "subtitled video", "subtitled videos") +
+      "." + skipNote + stuckNote;
+    confirmBtn.disabled = false;
+  }
+
+  // Both option labels carry live counts so the scope choice and its
+  // consequence are legible in one place (mirrors the clip-marks picker).
+  function _renderEmbedSubsScopeOptions() {
+    var sel = qs("#embedSubsScope");
+    if (!sel || sel.options.length < 2) return;
+    var pid = state.selectedParticipant;
+    var all = _embedSubsCandidates();
+    var mine = pid
+      ? all.filter(function (p) { return p.id === pid; }).length
+      : 0;
+    sel.options[0].textContent =
+      (pid ? "Current participant (" + pid + ")" : "Current participant") +
+      " — " + clipgenPluralUnit(mine, "transcript", "transcripts");
+    sel.options[0].disabled = !mine;
+    sel.options[1].textContent =
+      "All participants — " + clipgenPluralUnit(all.length, "transcript", "transcripts");
+    if (!mine) sel.value = "all";
+  }
+
+  function _renderEmbedSubsProgress() {
+    var wrap = qs("#embedSubsProgress");
+    var fill = qs("#embedSubsBarFill");
+    var text = qs("#embedSubsProgressText");
+    var confirmBtn = qs("#embedSubsConfirm");
+    var cancelBtn = qs("#embedSubsCancel");
+    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
+    var run = _embedSubsRun;
+    wrap.classList.toggle("hidden", !run);
+    confirmBtn.classList.toggle("hidden", !!run);
+    cancelBtn.textContent = run ? "Stop" : "Cancel";
+    if (!run) return;
+    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
+    fill.style.width = pct + "%";
+    text.textContent =
+      "Embedding… " + run.done + "/" + run.total +
+      (run.failed ? " (" + run.failed + " failed)" : "");
+  }
+
+  function openEmbedSubsModal() {
+    var modal = qs("#embedSubsModal");
+    if (!modal) return;
+    modal.classList.remove("hidden");
+    openBlockingModal(modal, {
+      onEscape: closeEmbedSubsModal,
+      onBackdropClick: closeEmbedSubsModal,
+    });
+    _renderEmbedSubsProgress();
+    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
+    if (_embedSubsRun) return;
+    _renderEmbedSubsScopeOptions();
+    renderEmbedSubsSummary();
+  }
+
+  function closeEmbedSubsModal() {
+    var modal = qs("#embedSubsModal");
+    if (!modal) return;
+    closeBlockingModal(modal);
+    modal.classList.add("hidden");
+  }
+
+  function submitEmbedSubs() {
+    if (_embedSubsRun) return;
+    var targets = _embedSubsTargets();
+    if (!targets.length) return;
+    var pids = targets.map(function (p) { return p.id; });
+    var defaultTrack = !!(qs("#embedSubsDefault") || {}).checked;
+
+    var run = { done: 0, failed: 0, total: pids.length, abort: new AbortController() };
+    _embedSubsRun = run;
+    _renderEmbedSubsProgress();
+    var outputDir = "";
+
+    function handleLine(line) {
+      var data;
+      try { data = JSON.parse(line); } catch (_) { return; }
+      if (!data) return;
+      // The header line carries the destination and the trailing
+      // {"cancelled": true} carries nothing — neither has an index, which is
+      // also what keeps them out of the completion tally.
+      if (data.output_dir) outputDir = data.output_dir;
+      if (typeof data.index !== "number") return;
+      run.done++;
+      if (!data.ok) run.failed++;
+      _renderEmbedSubsProgress();
+    }
+
+    function finish(message) {
+      _embedSubsRun = null;
+      _renderEmbedSubsProgress();
+      closeEmbedSubsModal();
+      showToast(message);
+    }
+
+    fetch("api/embed-subtitles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ participants: pids, default_track: defaultTrack }),
+      signal: run.abort.signal,
+    })
+      .then(function (response) {
+        if (!response.ok) throw new Error("Server error " + response.status);
+        return readNDJSONStream(response, handleLine).then(function () {
+          var made = run.done - run.failed;
+          var where = outputDir ? " to " + outputDir : "";
+          finish(
+            run.failed
+              ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"
+              : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where
+          );
+        });
+      })
+      .catch(function (err) {
+        var aborted = err && (err.name === "AbortError" || err.code === 20);
+        finish(aborted ? "Subtitle embedding cancelled" : "Subtitle embedding failed: " + (err && err.message));
+      });
+  }
+
+  function onEmbedSubsCancel() {
+    if (!_embedSubsRun) {
+      closeEmbedSubsModal();
+      return;
+    }
+    // The server stops between files (a mux cannot be interrupted mid-copy), so
+    // the abort just drops our end of a stream that is already winding down.
+    apiPost("api/embed-subtitles/cancel", {}).catch(function () {});
+    _embedSubsRun.abort.abort();
+  }
+
+  function initEmbedSubsModal() {
+    qs("#embedSubsCancel").addEventListener("click", onEmbedSubsCancel);
+    qs("#embedSubsConfirm").addEventListener("click", submitEmbedSubs);
+    qs("#embedSubsScope").addEventListener("change", renderEmbedSubsSummary);
+    // The checkbox does not change the file count, but it does decide whether
+    // the .mp4 caveat applies — so the summary has to re-render for it.
+    qs("#embedSubsDefault").addEventListener("change", renderEmbedSubsSummary);
+  }
+
+  // ---- Boot ----
 
   // Participants the Transcribe All action would enqueue: a source video, no
   // transcript yet, and nothing already queued or running for them. That last
@@ -3213,19 +3430,14 @@
 
   var _rebuildTopNavActions = function () {};
 
+  // Published on TS for transcripts-agents.js, which gates its panel-visible
+  // refreshes on it. The topnav no longer reads it — the Embed Subtitles dialog
+  // does its own scoping — but the satellite still does.
   function _currentParticipantHasTranscript() {
     var pid = state.selectedParticipant;
     if (!pid || !state.participants) return false;
     for (var i = 0; i < state.participants.length; i++) {
       if (state.participants[i].id === pid) return !!state.participants[i].has_transcript;
-    }
-    return false;
-  }
-
-  function _anyTranscriptExists() {
-    var ps = state.participants || [];
-    for (var i = 0; i < ps.length; i++) {
-      if (ps[i].has_transcript) return true;
     }
     return false;
   }
@@ -3237,8 +3449,6 @@
   function initTopNavActions() {
     if (!window.ClipgenTopNav) return;
     function rebuild() {
-      var hasOne = _currentParticipantHasTranscript();
-      var hasAny = _anyTranscriptExists();
       var pending = _untranscribedParticipants().length;
       window.ClipgenTopNav.setQuickActions([
         {
@@ -3252,21 +3462,12 @@
         },
         {
           icon: "language",
-          label: "Embed Subtitle in Video",
-          action: runEmbedSubtitle,
-          disabled: !hasOne,
-          title: hasOne
-            ? "Mux this participant's transcript into a copy of their source video"
-            : "Select a participant with a transcript to enable this.",
-        },
-        {
-          icon: "film",
-          label: "Embed all Subtitles",
-          action: runEmbedAllSubtitles,
-          disabled: !hasAny,
-          title: hasAny
-            ? "Mux every participant's transcript into a subtitled copy of their video"
-            : "Transcribe at least one video to enable this.",
+          label: "Embed Subtitles…",
+          action: openEmbedSubsModal,
+          // Never gated, same as Clip Marked Lines below: the modal reports the
+          // transcript count and disables its own Embed button, so the scope
+          // choice lives where its consequence is visible.
+          title: "Write subtitled copies of the source videos from their transcripts",
         },
         {
           icon: "scissors",
@@ -3282,9 +3483,8 @@
     _rebuildTopNavActions = rebuild;
     rebuild();
     window.ClipgenExportActions.refreshExportStatus(rebuild);
-    // Always rebuild on menu open so Embed-Subtitle items pick up
-    // participant-selection changes and Transcribe All re-counts against
-    // in-flight tasks; also refresh export-enabled state.
+    // Always rebuild on menu open so Transcribe All re-counts against in-flight
+    // tasks; also refresh export-enabled state.
     window.ClipgenTopNav.onBeforeOpen(function () {
       rebuild();
       window.ClipgenExportActions.refreshExportStatus(rebuild);
@@ -3375,6 +3575,7 @@
     initPillWheelScroll();
     initCorrectionsModal();
     initClipMarksModal();
+    initEmbedSubsModal();
     initVideoPlayer();
     initVideoSync();
     initTimelineCanvas();
@@ -3509,6 +3710,6 @@
   TS._citationsEtaTracker = _citationsEtaTracker; // agents
   TS._frictionEtaTracker = _frictionEtaTracker; // agents
   TS._updateAgentElapsed = _updateAgentElapsed; // agents
-  TS._currentParticipantHasTranscript = _currentParticipantHasTranscript; // agents (panel-visible guard) + hub topnav
+  TS._currentParticipantHasTranscript = _currentParticipantHasTranscript; // agents (panel-visible guard)
 
 })();

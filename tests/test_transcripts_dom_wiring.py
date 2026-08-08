@@ -65,6 +65,15 @@ REQUIRED_IDS = [
     "clipMarksProgressText",
     "clipMarksCancel",
     "clipMarksConfirm",
+    "embedSubsModal",
+    "embedSubsScope",
+    "embedSubsDefault",
+    "embedSubsSummary",
+    "embedSubsProgress",
+    "embedSubsBarFill",
+    "embedSubsProgressText",
+    "embedSubsCancel",
+    "embedSubsConfirm",
 ]
 
 
@@ -437,12 +446,15 @@ def test_clip_marks_ignores_the_trailing_cancelled_line():
     )
 
 
-def test_clip_marks_modal_classes_are_all_styled():
+def test_param_modal_classes_are_all_styled():
     """Standing toggle-completeness check: an unstyled modal class ships a
-    dialog that renders as unlaid-out text with no error anywhere."""
-    for cls in re.findall(r'class="([^"]*clip-marks[^"]*)"', _HTML):
+    dialog that renders as unlaid-out text with no error anywhere.
+
+    Scoped to the shared .param-modal-* family, so it covers every parameter
+    dialog on the page (#clipMarksModal, #embedSubsModal) rather than one."""
+    for cls in re.findall(r'class="([^"]*param-modal[^"]*)"', _HTML):
         for name in cls.split():
-            if name.startswith("clip-marks"):
+            if name.startswith("param-modal"):
                 assert "." + name in _CSS, f".{name} is used in HTML but never styled"
 
 
@@ -462,6 +474,103 @@ def test_clip_marks_run_outlives_its_dialog():
     assert "if (_clipMarksRun) return;" in open_body, (
         "reopening mid-run must show progress, not re-fetch and reset the pickers"
     )
+
+
+# ---- Embed Subtitles (merged Quick action -> streaming mux) ----
+
+
+def test_embed_subs_is_one_quick_action():
+    """The two old entries ("Embed Subtitle in Video" / "Embed all Subtitles")
+    differed only in scope, which now lives in the dialog. Leaving either label
+    behind means the menu still offers the split the merge removed."""
+    assert "Embed Subtitles…" in _JS
+    for gone in ("Embed Subtitle in Video", "Embed all Subtitles"):
+        assert gone not in _JS, f"the merged action replaces {gone!r}"
+    # The old endpoints are gone too — no caller may resurrect them.
+    for route in ("api/embed-subtitle/", "api/embed-all-subtitles"):
+        assert route not in _JS, f"{route} was replaced by api/embed-subtitles"
+
+
+def test_embed_subs_run_outlives_its_dialog():
+    """Same contract as the clip-marks run: Escape/backdrop close the dialog
+    while the mux batch keeps streaming, so the run must live outside the open
+    handler or a dismissed dialog strands a job with no way to stop it."""
+    assert "var _embedSubsRun = null;" in _JS
+    close_start = _JS.index("function closeEmbedSubsModal(")
+    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
+    assert "_embedSubsRun" not in close_body, (
+        "closing the dialog must not touch the in-flight run"
+    )
+    open_start = _JS.index("function openEmbedSubsModal(")
+    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
+    assert "if (_embedSubsRun) return;" in open_body, (
+        "reopening mid-run must show progress, not reset the pickers"
+    )
+
+
+def test_embed_subs_ignores_the_indexless_stream_lines():
+    """The stream opens with a header line and can close with
+    {"cancelled": true}; neither carries an index. Counting them as completed
+    items over-reports progress."""
+    start = _JS.index("function submitEmbedSubs(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'typeof data.index !== "number"' in body, (
+        "the NDJSON handler must bail on lines with no index"
+    )
+    assert "if (data.output_dir) outputDir = data.output_dir;" in body, (
+        "the header line carries the destination the finish toast reports"
+    )
+
+
+def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
+    """Measured on ffmpeg 8.1.2: the mp4 muxer reports default=1 for the
+    subtitle track whatever -disposition:s:0 is given (only .mkv/.webm have a
+    present-but-off state). Unticking the box therefore changes nothing for the
+    commonest source container, and a control that silently no-ops is the
+    "wrong output, no error" class — so the summary has to say so."""
+    assert "EMBED_SUBS_ALWAYS_DEFAULT_EXT" in _JS
+    start = _JS.index("function renderEmbedSubsSummary(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_embedSubsAlwaysDefault(" in body, (
+        "the summary must flag targets whose container ignores the toggle"
+    )
+    assert '"#embedSubsDefault"' in body and ".checked" in body, (
+        "the caveat only applies when the box is unticked, so the summary has "
+        "to read the checkbox"
+    )
+    # The caveat depends on the checkbox, so the checkbox must re-render it.
+    init_start = _JS.index("function initEmbedSubsModal(")
+    init_body = _JS[init_start : _JS.index("\n  function ", init_start + 1)]
+    assert '"#embedSubsDefault"' in init_body, (
+        "toggling the checkbox must re-render the summary that carries the caveat"
+    )
+
+
+def test_embed_subs_empty_state_distinguishes_multi_part_from_no_transcript():
+    """When every scoped participant is multi-part the target list is empty but
+    transcripts exist, so the plain empty state ("transcribe a video first")
+    would contradict itself — and point at a fix that changes nothing."""
+    start = _JS.index("function renderEmbedSubsSummary(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    empty_branch = body[body.index("if (!targets.length)") :]
+    assert "if (skipped.length)" in empty_branch, (
+        "the empty state must branch on whether anything was skipped"
+    )
+    assert empty_branch.index("skipped.length") < empty_branch.index(
+        "transcribe a video first"
+    ), "the multi-part copy must pre-empt the no-transcript copy"
+
+
+def test_embed_subs_excludes_multi_part_participants():
+    """The server refuses a transcript spanning several source files. video_paths
+    already ships on /api/participants, so filtering client-side turns a wasted
+    ffmpeg round-trip plus a failure line into an up-front note in the summary."""
+    start = _JS.index("function _embedSubsTargets(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_embedSubsIsMultiPart" in body, (
+        "targets must drop multi-part participants before the POST"
+    )
+    assert "video_paths.length > 1" in _JS
 
 
 def test_friction_refetch_keeps_the_programmatic_scores():
