@@ -1,7 +1,9 @@
 """Smoke tests for Transcripts Flask API (prewarm + model status)."""
 
+import json
 import threading
 import time
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -947,7 +949,27 @@ def _seed_transcript(pid: str, video_path: str) -> None:
     }
 
 
-def test_embed_subtitle_happy_path(tr_client, tmp_path, monkeypatch):
+def _ndjson(resp) -> list[dict]:
+    """Parse a streamed NDJSON response body into its lines."""
+    return [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+
+def _writing_mux(captured: dict):
+    """A mux_subtitles stub that records its args and touches the output file."""
+
+    def fake_mux(input_video, srt_path, output_video, **kwargs):
+        captured.setdefault("calls", []).append(
+            (input_video, srt_path, output_video, kwargs)
+        )
+        # Touch the output so files.get_unique_filename treats a second run as
+        # needing a -1 suffix.
+        Path(output_video).write_bytes(b"\x00")
+        return True
+
+    return fake_mux
+
+
+def test_embed_subtitles_happy_path(tr_client, tmp_path, monkeypatch):
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
@@ -958,51 +980,98 @@ def test_embed_subtitle_happy_path(tr_client, tmp_path, monkeypatch):
         transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
     )
 
-    captured = {}
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video, "mux_subtitles", _writing_mux(captured)
+    )
 
-    def fake_mux(input_video, srt_path, output_video, **kwargs):
-        captured["args"] = (input_video, srt_path, output_video, kwargs)
-        # Touch the output file so files.get_unique_filename treats a second
-        # run as needing a -1 suffix.
-        from pathlib import Path
-
-        Path(output_video).write_bytes(b"\x00")
-        return True
-
-    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", fake_mux)
-
-    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
     assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert data["output_filename"] == "study_P01-subtitled.mp4"
+    assert resp.mimetype == "application/x-ndjson"
+    header, result = _ndjson(resp)
+    assert header == {"total": 1, "output_dir": str(tmp_path)}
+    assert result["index"] == 0
+    assert result["participant"] == "P01"
+    assert result["ok"] is True
+    assert result["output_filename"] == "study_P01-subtitled.mp4"
     assert (tmp_path / "study_P01-subtitled.mp4").is_file()
     # mux helper received correct args
-    assert captured["args"][0] == str(video_path)
-    assert captured["args"][3]["track_language"] == "en"
+    assert captured["calls"][0][0] == str(video_path)
+    assert captured["calls"][0][3]["track_language"] == "en"
+    # Default disposition is on unless the request opts out.
+    assert captured["calls"][0][3]["set_default"] is True
 
 
-def test_embed_subtitle_404_without_transcript(tr_client, tmp_path, monkeypatch):
+def test_embed_subtitles_forwards_default_track_false(tr_client, tmp_path, monkeypatch):
+    """Unticking 'Set as default track' reaches mux_subtitles as set_default=False."""
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
         {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
     ]
-    # No transcript seeded.
+    _seed_transcript("P01", str(video_path))
     monkeypatch.setattr(
         transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
     )
+
+    captured: dict = {}
     monkeypatch.setattr(
-        transcripts_server.video,
-        "mux_subtitles",
-        lambda *a, **kw: pytest.fail("mux_subtitles should not be called"),
+        transcripts_server.video, "mux_subtitles", _writing_mux(captured)
     )
-    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
-    assert resp.status_code == 404
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles",
+        json={"participants": ["P01"], "default_track": False},
+    )
+    assert resp.status_code == 200
+    _ndjson(resp)
+    assert captured["calls"][0][3]["set_default"] is False
+
+
+def test_embed_subtitles_400_without_participants(tr_client):
+    resp = tr_client.post("/transcripts/api/embed-subtitles", json={"participants": []})
+    assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
 
 
-def test_embed_subtitle_500_when_ffmpeg_fails(tr_client, tmp_path, monkeypatch):
+def test_embed_subtitles_streams_failure_for_missing_transcript(
+    tr_client, tmp_path, monkeypatch
+):
+    """A participant with no transcript is an ok=false line, not a failed request.
+
+    One unusable id must not sink the rest of a whole-study batch.
+    """
+    v1 = tmp_path / "study_P01.mp4"
+    v2 = tmp_path / "study_P02.mp4"
+    v1.write_bytes(b"\x00")
+    v2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(v1)], "has_video": True},
+        {"id": "P02", "video_paths": [str(v2)], "has_video": True},
+    ]
+    _seed_transcript("P01", str(v1))  # P02 deliberately left untranscribed
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", _writing_mux({}))
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01", "P02"]}
+    )
+    assert resp.status_code == 200
+    lines = _ndjson(resp)
+    assert lines[0]["total"] == 2
+    assert [ln["participant"] for ln in lines[1:]] == ["P01", "P02"]
+    assert lines[1]["ok"] is True
+    assert lines[2]["ok"] is False
+    assert lines[2]["error"] == "No transcript for participant"
+
+
+def test_embed_subtitles_streams_failure_when_ffmpeg_fails(
+    tr_client, tmp_path, monkeypatch
+):
     video_path = tmp_path / "study_P01.mp4"
     video_path.write_bytes(b"\x00")
     transcripts_server._participants = [
@@ -1016,13 +1085,19 @@ def test_embed_subtitle_500_when_ffmpeg_fails(tr_client, tmp_path, monkeypatch):
         transcripts_server.video, "mux_subtitles", lambda *a, **kw: False
     )
 
-    resp = tr_client.post("/transcripts/api/embed-subtitle/P01")
-    assert resp.status_code == 500
-    body = resp.get_json()
-    assert body["ok"] is False
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result = _ndjson(resp)
+    assert result["ok"] is False
+    assert result["error"] == "ffmpeg failed to mux subtitles"
 
 
-def test_embed_all_subtitles_mixed_participants(tr_client, tmp_path, monkeypatch):
+def test_embed_subtitles_cancel_stops_before_the_next_file(
+    tr_client, tmp_path, monkeypatch
+):
+    """A cancel mid-run skips the remaining participants and ends with the flag."""
     v1 = tmp_path / "study_P01.mp4"
     v2 = tmp_path / "study_P02.mp4"
     v1.write_bytes(b"\x00")
@@ -1032,32 +1107,47 @@ def test_embed_all_subtitles_mixed_participants(tr_client, tmp_path, monkeypatch
         {"id": "P02", "video_paths": [str(v2)], "has_video": True},
     ]
     _seed_transcript("P01", str(v1))
-    # P02 has no transcript — should be skipped silently.
+    _seed_transcript("P02", str(v2))
     monkeypatch.setattr(
         transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
     )
 
-    def fake_mux(input_video, srt_path, output_video, **kwargs):
-        from pathlib import Path
-
+    def cancelling_mux(input_video, srt_path, output_video, **kwargs):
         Path(output_video).write_bytes(b"\x00")
+        # Stand in for the user hitting Stop while the first file is muxing.
+        transcripts_server._embed_cancel_event.set()
         return True
 
-    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", fake_mux)
+    monkeypatch.setattr(transcripts_server.video, "mux_subtitles", cancelling_mux)
 
-    resp = tr_client.post("/transcripts/api/embed-all-subtitles")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert len(data["results"]) == 1
-    assert data["results"][0]["participant"] == "P01"
-    assert data["results"][0]["ok"] is True
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01", "P02"]}
+    )
+    lines = _ndjson(resp)
+    assert lines[0]["total"] == 2
+    assert lines[1]["participant"] == "P01"
+    assert lines[-1] == {"cancelled": True}
+    assert not any(ln.get("participant") == "P02" for ln in lines)
+    # The slot is released even on the cancel path, so the next run can claim it.
+    assert transcripts_server._embed_busy is False
 
 
-def test_embed_all_subtitles_404_when_no_transcripts(tr_client, tmp_path):
-    resp = tr_client.post("/transcripts/api/embed-all-subtitles")
-    assert resp.status_code == 404
+def test_embed_subtitles_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
+    """A second tab gets 409 rather than sharing the first run's cancel event."""
+    monkeypatch.setattr(transcripts_server, "_embed_busy", True)
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 409
     assert resp.get_json()["ok"] is False
+
+
+def test_embed_subtitles_cancel_route_sets_the_event(tr_client):
+    transcripts_server._embed_cancel_event.clear()
+    resp = tr_client.post("/transcripts/api/embed-subtitles/cancel")
+    assert resp.status_code == 200
+    assert transcripts_server._embed_cancel_event.is_set()
+    transcripts_server._embed_cancel_event.clear()
 
 
 # ---- Friction endpoints ----

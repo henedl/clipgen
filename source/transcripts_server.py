@@ -11,8 +11,8 @@ API endpoints (all under /transcripts/):
   GET  /api/transcript/<participant>              - full transcript segments (corrections applied)
   PUT  /api/transcript/<participant>/segment      - edit a segment's text, creates correction
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
-  POST /api/embed-subtitle/<participant>          - mux participant transcript into a copy of their video
-  POST /api/embed-all-subtitles                   - mux every participant's transcript into a subtitled copy of their video
+  POST /api/embed-subtitles                       - NDJSON: mux each requested participant's transcript into a subtitled copy of their video
+  POST /api/embed-subtitles/cancel                - stop the in-flight embed run after the current file
   GET  /api/agent/<key>/<participant>            - a thinking agent's result (summary/citations/friction/report), status, or 404
   POST /api/agent/<key>/<participant>/regenerate - clear + re-trigger an agent (forces past its enabled config)
   POST /api/agent/<key>/<participant>/stop       - flag an in-flight agent run for discard
@@ -45,6 +45,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -600,8 +601,33 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
     return response
 
 
+# One embed run at a time, so the shared cancel event always belongs to exactly
+# one stream: a second tab's Stop must not abort a run it cannot see. Claimed
+# atomically under _embed_lock (check-and-set, never check-then-act).
+_embed_cancel_event = threading.Event()
+_embed_lock = threading.Lock()
+_embed_busy = False
+
+
+def _claim_embed_slot() -> bool:
+    """Take the single embed slot, or return False if a run already holds it."""
+    global _embed_busy
+    with _embed_lock:
+        if _embed_busy:
+            return False
+        _embed_busy = True
+        _embed_cancel_event.clear()
+        return True
+
+
+def _release_embed_slot() -> None:
+    global _embed_busy
+    with _embed_lock:
+        _embed_busy = False
+
+
 def _embed_subtitle_for_participant(
-    participant: str, output_dir: Path
+    participant: str, output_dir: Path, *, default_track: bool = True
 ) -> dict[str, Any]:
     """Mux *participant*'s transcript into a copy of their source video.
 
@@ -681,6 +707,7 @@ def _embed_subtitle_for_participant(
             tmp_path,
             output_path,
             track_language=language or "und",
+            set_default=default_track,
         )
     finally:
         if tmp_path:
@@ -703,39 +730,74 @@ def _embed_subtitle_for_participant(
     }
 
 
-@transcripts_bp.route("/api/embed-subtitle/<participant>", methods=["POST"])
-def api_embed_subtitle(participant: str) -> FlaskResponse:
-    """Mux *participant*'s transcript into a copy of their source video.
+@transcripts_bp.route("/api/embed-subtitles", methods=["POST"])
+def api_embed_subtitles() -> FlaskResponse:
+    """Mux each requested participant's transcript into a subtitled copy.
 
-    Writes ``<video-stem>-subtitled<ext>`` into the effective output dir
-    (uniquified if a previous run already wrote that name).
+    Body: ``{"participants": ["P01", ...], "default_track": true}``. Each write
+    lands in the effective output dir as ``<video-stem>-subtitled<ext>``
+    (uniquified if a previous run already took that name).
+
+    Streams NDJSON so the browser can paint a progress bar over a whole study
+    rather than waiting out one silent request:
+
+      ``{"total": N, "output_dir": "..."}``                      - header line
+      ``{"index": i, "participant": pid, "ok": true,  ...}``     - one per file
+      ``{"index": i, "participant": pid, "ok": false, "error"}``
+      ``{"cancelled": true}``                                    - if stopped
+
+    A participant that has no transcript is an ``ok: false`` line, not a failed
+    request: one bad id must not sink the rest of the batch.
     """
+    data = request.get_json(silent=True) or {}
+    participants = [str(pid) for pid in data.get("participants", []) if pid]
+    if not participants:
+        return err("No participants specified")
+    default_track = bool(data.get("default_track", True))
+
+    if not _claim_embed_slot():
+        return err("A subtitle embed is already in progress", 409)
+
     output_dir = Path(utils.get_effective_output_dir())
-    outcome = _embed_subtitle_for_participant(participant, output_dir)
-    if not outcome["ok"]:
-        status = 404 if outcome["error"] == "No transcript for participant" else 500
-        return err(outcome["error"], status)
-    return ok(
-        output_path=outcome["output_path"],
-        output_filename=outcome["output_filename"],
-        output_dir=str(output_dir),
+
+    def stream() -> Iterator[str]:
+        cancel_flag = _embed_cancel_event.is_set
+        try:
+            yield (
+                json.dumps({"total": len(participants), "output_dir": str(output_dir)})
+                + "\n"
+            )
+            # Sequential on purpose: every mux is a whole-file stream copy, so
+            # running them concurrently only contends for the same disk. That
+            # also fixes the cancellation granularity — ffmpeg cannot be
+            # interrupted mid-copy, so Stop takes effect between participants.
+            for idx, pid in enumerate(participants):
+                if cancel_flag():
+                    break
+                outcome = _embed_subtitle_for_participant(
+                    pid, output_dir, default_track=default_track
+                )
+                outcome["index"] = idx
+                yield json.dumps(outcome) + "\n"
+            if cancel_flag():
+                yield json.dumps({"cancelled": True}) + "\n"
+        finally:
+            # Also runs when the client disconnects mid-stream, so a closed tab
+            # cannot wedge the slot for the rest of the session.
+            _release_embed_slot()
+
+    return Response(
+        stream(),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
     )
 
 
-@transcripts_bp.route("/api/embed-all-subtitles", methods=["POST"])
-def api_embed_all_subtitles() -> FlaskResponse:
-    """Mux every participant with a transcript into a subtitled copy."""
-    output_dir = Path(utils.get_effective_output_dir())
-    with _manifest_lock:
-        src = _manifest.get("source_transcripts", {})
-        targets = [pid for pid, entry in src.items() if entry.get("segments")]
-    if not targets:
-        return err("No transcripts available to embed.", 404)
-    results = [_embed_subtitle_for_participant(pid, output_dir) for pid in targets]
-    return ok(
-        results=results,
-        output_dir=str(output_dir),
-    )
+@transcripts_bp.route("/api/embed-subtitles/cancel", methods=["POST"])
+def api_embed_subtitles_cancel() -> FlaskResponse:
+    """Stop the in-flight embed run once the current file finishes."""
+    _embed_cancel_event.set()
+    return ok()
 
 
 # ---- AI thinking agents (summary / citations / friction) ----

@@ -226,3 +226,57 @@ def test_parse_cell_annotations_splits_segment_and_cell_annotations():
     assert cleaned == "00:10-00:20 00:30-00:40"
     assert "key" in cell_annotations
     assert segment_annotations["key"] == {0}
+
+
+def test_normalize_track_language_maps_two_letter_to_iso639_2():
+    """Whisper reports ISO 639-1; media containers store only ISO 639-2."""
+    assert utils.normalize_track_language("en") == "eng"
+    assert utils.normalize_track_language("zh") == "zho"
+    assert utils.normalize_track_language("de") == "deu"
+    # Case and stray whitespace are the user's, not the muxer's, problem.
+    assert utils.normalize_track_language("  EN  ") == "eng"
+
+
+def test_normalize_track_language_prefers_the_terminological_variant():
+    """ISO 639-2 has two codes for ~20 languages and ffmpeg stores whichever it
+    is handed, so the choice is ours: /T is what Matroska specifies and what
+    current players expect."""
+    assert utils.normalize_track_language("de") == "deu"  # not "ger"
+    assert utils.normalize_track_language("fr") == "fra"  # not "fre"
+    assert utils.normalize_track_language("nl") == "nld"  # not "dut"
+
+
+def test_normalize_track_language_falls_back_to_und_not_junk():
+    """transcripts.py falls back to the literal "unknown" when detection fails.
+    Passed through, the mp4 muxer truncates it to the nonsense tag "unk" — so
+    anything unrecognized has to become the standard undetermined tag instead."""
+    for junk in ("", "   ", None, "unknown", "english", "x", "12"):
+        assert utils.normalize_track_language(junk) == "und", junk
+
+
+def test_normalize_track_language_passes_through_three_letter_codes():
+    # Already 639-2/639-3 (including Whisper's own "haw"/"yue"), or a code the
+    # table does not carry — either way it is already container-shaped.
+    for code in ("eng", "haw", "yue", "und"):
+        assert utils.normalize_track_language(code) == code
+
+
+def test_normalize_track_language_keeps_only_the_primary_subtag():
+    # TRANSCRIBE_LANGUAGE is user-editable, so a BCP 47 tag is plausible input.
+    assert utils.normalize_track_language("en-US") == "eng"
+    assert utils.normalize_track_language("pt-BR") == "por"
+    assert utils.normalize_track_language("zh_Hans") == "zho"
+
+
+def test_normalize_track_language_covers_every_whisper_language():
+    """The table exists to serve transcription output, so a Whisper code that
+    silently degrades to "und" is the exact bug this function was added to fix.
+    Skips rather than fails where faster-whisper is not installed."""
+    pytest = __import__("pytest")
+    tokenizer = pytest.importorskip("faster_whisper.tokenizer")
+    unmapped = [
+        code
+        for code in sorted(tokenizer._LANGUAGE_CODES)
+        if utils.normalize_track_language(code) == "und"
+    ]
+    assert not unmapped, f"Whisper languages missing from ISO639_1_TO_2: {unmapped}"

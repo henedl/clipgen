@@ -2130,6 +2130,67 @@ def get_current_time() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ISO 639-1 (two-letter) -> ISO 639-2/T (three-letter), covering every language
+# faster-whisper can report (its _LANGUAGE_CODES set). Media containers store
+# only the three-letter form, so this is the hop between what Whisper detects
+# and what a subtitle/audio track can be tagged with.
+#
+# Whisper's own set already includes two three-letter codes ("haw", "yue"),
+# which need no entry — normalize_track_language passes any 3-letter code
+# through. Deliberately the /T (terminological) variant: for the ~20 languages
+# where ISO 639-2 has two codes, /T is what Matroska specifies and what current
+# players expect ("deu" not "ger", "fra" not "fre"). ffmpeg stores whichever it
+# is given verbatim, so the choice is ours to get right.
+ISO639_1_TO_2 = {
+    "af": "afr", "am": "amh", "ar": "ara", "as": "asm", "az": "aze",
+    "ba": "bak", "be": "bel", "bg": "bul", "bn": "ben", "bo": "bod",
+    "br": "bre", "bs": "bos", "ca": "cat", "cs": "ces", "cy": "cym",
+    "da": "dan", "de": "deu", "el": "ell", "en": "eng", "es": "spa",
+    "et": "est", "eu": "eus", "fa": "fas", "fi": "fin", "fo": "fao",
+    "fr": "fra", "gl": "glg", "gu": "guj", "ha": "hau", "he": "heb",
+    "hi": "hin", "hr": "hrv", "ht": "hat", "hu": "hun", "hy": "hye",
+    "id": "ind", "is": "isl", "it": "ita", "ja": "jpn", "jv": "jav",
+    # Whisper spells Javanese "jw"; ISO 639-1 spells it "jv". Both map over.
+    "jw": "jav",
+    "ka": "kat", "kk": "kaz", "km": "khm", "kn": "kan", "ko": "kor",
+    "la": "lat", "lb": "ltz", "ln": "lin", "lo": "lao", "lt": "lit",
+    "lv": "lav", "mg": "mlg", "mi": "mri", "mk": "mkd", "ml": "mal",
+    "mn": "mon", "mr": "mar", "ms": "msa", "mt": "mlt", "my": "mya",
+    "ne": "nep", "nl": "nld", "nn": "nno", "no": "nor", "oc": "oci",
+    "pa": "pan", "pl": "pol", "ps": "pus", "pt": "por", "ro": "ron",
+    "ru": "rus", "sa": "san", "sd": "snd", "si": "sin", "sk": "slk",
+    "sl": "slv", "sn": "sna", "so": "som", "sq": "sqi", "sr": "srp",
+    "su": "sun", "sv": "swe", "sw": "swa", "ta": "tam", "te": "tel",
+    "tg": "tgk", "th": "tha", "tk": "tuk", "tl": "tgl", "tr": "tur",
+    "tt": "tat", "uk": "ukr", "ur": "urd", "uz": "uzb", "vi": "vie",
+    "yi": "yid", "yo": "yor", "zh": "zho",
+}  # fmt: skip
+
+
+def normalize_track_language(code: str | None) -> str:
+    """Coerce *code* into a three-letter media-container language tag.
+
+    Containers store only ISO 639-2, and they fail *silently* on anything else:
+    measured on ffmpeg 8.1.2, an ``en`` tag is dropped outright by the mp4
+    muxer, while ``unknown`` (transcripts.py's detection fallback) is truncated
+    to the nonsense tag ``unk``. Neither raises, so an unnormalized code costs
+    the track its language with no error anywhere.
+
+    Returns ``"und"`` (the standard "undetermined" tag) for empty, unknown, or
+    malformed input rather than passing junk through to the muxer.
+    """
+    text = (code or "").strip().lower()
+    if not text:
+        return "und"
+    # Accept BCP 47 forms too ("en-US", "zh_Hans"): only the primary subtag is
+    # meaningful to a container. TRANSCRIBE_LANGUAGE is user-editable, so this
+    # is a plausible thing to be handed.
+    primary = text.replace("_", "-").split("-")[0]
+    if len(primary) == 3 and primary.isalpha():
+        return primary
+    return ISO639_1_TO_2.get(primary, "und")
+
+
 # ---- Participant video discovery ----
 
 
