@@ -4641,9 +4641,24 @@
     if (!window.ClipgenTopNav) return;
     function rebuild() {
       window.ClipgenTopNav.setQuickActions([
-        { icon: "eye",        label: "Build Viewer",  action: onBuildViewer },
-        { icon: "film",       label: "Open Timeline", action: onBuildTimelineViewer },
-        { icon: "photo",      label: "Open Gallery",  action: openGalleryDialog },
+        {
+          icon: "eye",
+          label: "Build Viewer",
+          action: onBuildViewer,
+          title: "Build a self-contained timeline viewer HTML from the clips generated in this session",
+        },
+        {
+          icon: "film",
+          label: "Open Timeline",
+          action: onBuildTimelineViewer,
+          title: "Cut every clip in the sheet, then build and open a full timeline viewer HTML in the output folder",
+        },
+        {
+          icon: "photo",
+          label: "Open Gallery",
+          action: openGalleryDialog,
+          title: "Build a gallery viewer of screenshots or GIFs sampled from one participant's source video",
+        },
         window.ClipgenExportActions.exportQuickAction(),
       ]);
     }

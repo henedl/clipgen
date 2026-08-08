@@ -3620,9 +3620,8 @@ def build_combined_app(
             return err(str(exc), 500)
         if not written:
             return err(
-                "No manifests in output directory. Expected one of "
-                f"{config.SCREENSPACE_MANIFEST_FILENAME} or "
-                f"{config.TRANSCRIPTS_MANIFEST_FILENAME}.",
+                f"Nothing to export: no Screenspace or Transcript manifest in {output_dir}. "
+                "Run a Screenspace scan or transcribe a video first.",
                 404,
             )
         return ok(

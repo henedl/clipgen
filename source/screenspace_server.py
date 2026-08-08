@@ -2546,6 +2546,10 @@ def api_intake_poll() -> FlaskResponse:
 def api_export_events() -> FlaskResponse:
     """Export Screenspace events as analysis-ready JSON or CSV.
 
+    Both formats return a downloadable file body (not the ``ok()`` envelope):
+    CSV rows, or the ``{exported_at, version, records}`` JSON envelope
+    :func:`data_export.to_json` also writes for the bundle export.
+
     Query params:
       format:      "json" (default) or "csv"
       excluded:    "true" to keep only excluded, "false" to drop excluded; default keeps both
@@ -2588,7 +2592,15 @@ def api_export_events() -> FlaskResponse:
         )
         return response
     if fmt == "json":
-        return ok(events=utils.sanitize_floats(records))
+        # Same {exported_at, version, records} envelope the bundle export writes,
+        # so a saved screenspace_events.json is self-describing rather than an
+        # API response that happened to be written to disk.
+        body = data_export.to_json(utils.sanitize_floats(records))
+        response = Response(body, mimetype="application/json")
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="screenspace_events.json"'
+        )
+        return response
     return err(f"Unsupported format: {fmt}")
 
 

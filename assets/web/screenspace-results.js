@@ -192,7 +192,7 @@
     var exportBtn = qs("#exportEventsBtn");
     var exportMenu = qs("#exportEventsMenu");
     if (exportBtn && exportMenu) {
-      attachHoverTooltip(exportBtn, "Export events", { align: "center" });
+      attachHoverTooltip(exportBtn, "Download the detected events as a CSV or JSON file", { align: "center" });
       var closeExportMenu = function () {
         exportMenu.classList.add("hidden");
         exportBtn.setAttribute("aria-expanded", "false");
