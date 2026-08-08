@@ -2755,11 +2755,16 @@ def test_export_events_json(client):
     ]
     resp = client.get("/screenspace/api/export/events?format=json")
     assert resp.status_code == 200
+    assert 'attachment; filename="screenspace_events.json"' in resp.headers.get(
+        "Content-Disposition", ""
+    )
     data = resp.get_json()
-    assert data["ok"] is True
-    assert len(data["events"]) == 2
+    # The bundle export's envelope, not the API's ok() envelope.
+    assert "ok" not in data
+    assert data["exported_at"] and data["version"]
+    assert len(data["records"]) == 2
     # Metadata should be hoisted to top-level "magnitude"
-    assert any("magnitude" in e for e in data["events"])
+    assert any("magnitude" in e for e in data["records"])
 
 
 def test_export_events_csv(client):
@@ -2793,8 +2798,8 @@ def test_export_events_filter_excluded_false(client):
     ]
     resp = client.get("/screenspace/api/export/events?format=json&excluded=false")
     data = resp.get_json()
-    assert len(data["events"]) == 1
-    assert data["events"][0]["id"] == "ev_1"
+    assert len(data["records"]) == 1
+    assert data["records"][0]["id"] == "ev_1"
 
 
 def test_export_events_filter_participant(client):
@@ -2804,8 +2809,8 @@ def test_export_events_filter_participant(client):
     ]
     resp = client.get("/screenspace/api/export/events?format=json&participant=P02")
     data = resp.get_json()
-    assert len(data["events"]) == 1
-    assert data["events"][0]["participant"] == "P02"
+    assert len(data["records"]) == 1
+    assert data["records"][0]["participant"] == "P02"
 
 
 def test_export_events_unsupported_format(client):

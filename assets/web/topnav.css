@@ -329,7 +329,11 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
+  /* Shrink-to-fit against a narrow trigger pins the panel at min-width and wraps
+     any label longer than it; size to the longest label instead. */
+  width: max-content;
   min-width: 240px;
+  max-width: 360px;
   padding: var(--space-1-5);
   display: none;
   flex-direction: column;

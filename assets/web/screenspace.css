@@ -3746,7 +3746,11 @@ body.panel-dragging #bottomPanel {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
+  /* Shrink-to-fit inside a ~2rem icon-button wrapper would squeeze the note down
+     to min-width; size to content instead and cap the wrap width. */
+  width: max-content;
   min-width: 8rem;
+  max-width: 18rem;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -3760,6 +3764,18 @@ body.panel-dragging #bottomPanel {
 
 .rp-export-menu.hidden {
   display: none;
+}
+
+/* Scope note above the format items: the exported file is not the filtered
+   list on screen, and nothing else in the UI says so. */
+.rp-export-note {
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--text-2xs);
+  line-height: 1.4;
+  color: var(--color-text-dim);
+  pointer-events: none;
 }
 
 .rp-export-item {

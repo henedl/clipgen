@@ -301,12 +301,13 @@
             <span class="rp-icon-btn-icon rp-icon-scissors"></span>
           </button>
           <div id="exportEventsWrap" class="rp-export-wrap">
-            <button id="exportEventsBtn" class="rp-icon-btn" type="button" aria-label="Export events" aria-haspopup="menu" aria-expanded="false">
+            <button id="exportEventsBtn" class="rp-icon-btn" type="button" aria-label="Export detected events" aria-haspopup="menu" aria-expanded="false">
               <span class="rp-icon-btn-icon rp-icon-download"></span>
             </button>
             <div id="exportEventsMenu" class="rp-export-menu hidden" role="menu">
-              <button class="rp-export-item" type="button" role="menuitem" data-format="csv">CSV</button>
-              <button class="rp-export-item" type="button" role="menuitem" data-format="json">JSON</button>
+              <div class="rp-export-note">Every event from every task. Excluded events follow the eye toggle; the certainty slider filters this list only, not the file.</div>
+              <button class="rp-export-item" type="button" role="menuitem" data-format="csv">Save as CSV</button>
+              <button class="rp-export-item" type="button" role="menuitem" data-format="json">Save as JSON</button>
             </div>
           </div>
         </div>
