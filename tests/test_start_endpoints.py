@@ -1003,22 +1003,30 @@ def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
 
 
 def test_combined_server_forces_non_interactive(monkeypatch):
-    """The web server has no console: start_combined_server must flip
+    """The web server has no console: serve_combined_app must flip
     utils.NO_INPUT_MODE on so a missing source video is skipped-and-reported
     instead of blocking a Flask/daemon thread on input() (regression: watch-dir
     triggered runs + Studio generate hung on the fuzzy-match prompt)."""
     import utils
 
-    class _FakeApp:
-        def run(self, **kwargs):  # never actually serve
-            pass
+    def _fake_app(environ, start_response):
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [b"ok"]
 
     monkeypatch.setattr(utils, "NO_INPUT_MODE", False)
-    monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _FakeApp())
-    monkeypatch.setattr(server.webbrowser, "open", lambda *a, **k: None)
+    monkeypatch.setattr(utils, "preload_av_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _fake_app)
 
-    server.start_combined_server(port=0)
-    assert utils.NO_INPUT_MODE is True
+    live = server.serve_combined_app(port=0, block_until_ready=True)
+    try:
+        assert utils.NO_INPUT_MODE is True
+        assert live.boot["ready"] is True
+    finally:
+        # Close the socket directly: stop_combined_app would import the heavy
+        # blueprint modules to stop workers the fake app never started.
+        live.srv.shutdown()
+        live.srv.server_close()
 
 
 def test_start_settings_toggles_are_independent(client):

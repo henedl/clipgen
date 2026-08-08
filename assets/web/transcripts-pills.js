@@ -91,7 +91,14 @@
       citations: (p.agents && p.agents.citations) || "idle",
       friction: (p.agents && p.agents.friction) || "idle",
     };
-    return { status: status, progress: progress, taskId: taskId, agents: agents };
+    return {
+      status: status,
+      progress: progress,
+      taskId: taskId,
+      agents: agents,
+      // Running sub-state ("loading_model" / "transcribing") for the dot tooltip.
+      phase: task ? task.phase : null,
+    };
   }
 
   // "1" when the participant's video is on disk but has no column in the loaded
@@ -136,6 +143,9 @@
             existing[k].getAttribute("data-status") !== s0.status ||
             existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0") ||
             existing[k].getAttribute("data-agents") !== agentsAttr ||
+            // Phase feeds the dot tooltip's closure — a loading_model →
+            // transcribing flip must rebuild or the tooltip stays stale.
+            existing[k].getAttribute("data-phase") !== (s0.phase || "") ||
             existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0)) {
           canPatch = false; break;
         }
@@ -209,6 +219,7 @@
     wrap.setAttribute("data-status", s.status);
     wrap.setAttribute("data-active", isActive ? "1" : "0");
     wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," + s.agents.friction);
+    wrap.setAttribute("data-phase", s.phase || "");
     wrap.setAttribute("data-offsheet", offSheetFlag(p));
     wrap.appendChild(buildPill(p, s, isActive));
     wrap.appendChild(buildPillDots(p, s));
@@ -252,7 +263,12 @@
     attachHoverTooltip(row, function () {
       var lines = [];
       for (var k = 0; k < keys.length; k++) {
-        lines.push(labels[k] + ": " + _dotStateLabel(ag[keys[k]]));
+        var label = _dotStateLabel(ag[keys[k]]);
+        if (keys[k] === "transcription" && ag[keys[k]] === "running" &&
+            s.phase === "loading_model") {
+          label = "loading model…";
+        }
+        lines.push(labels[k] + ": " + label);
       }
       return lines.join("\n");
     }, { multiline: true, align: "center" });

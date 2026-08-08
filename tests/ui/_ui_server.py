@@ -27,7 +27,11 @@ def start(worksheet: Any) -> LiveServer:
     # request. Under pytest that is merely captured; under shot.py it buries the
     # screenshot path and the --eval result the caller actually came for.
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
-    return server.serve_combined_app(worksheet=worksheet, port=0, default_page="studio")
+    # block_until_ready: the harness must land on the real page, never the
+    # boot shell — the smoke asserts against page content deterministically.
+    return server.serve_combined_app(
+        worksheet=worksheet, port=0, default_page="studio", block_until_ready=True
+    )
 
 
 def stop(live: LiveServer) -> None:

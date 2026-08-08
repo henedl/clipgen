@@ -59,6 +59,7 @@ import string
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -4282,27 +4283,114 @@ class LiveServer:
     port: int
     srv: ThreadedWSGIServer
     thread: threading.Thread
+    boot: dict[str, Any]  # dispatcher/build shared state; see serve_combined_app
+    ready: threading.Event  # set once the build thread finished (success or not)
 
 
-def _prepare_server_runtime() -> None:
-    """Apply the process-wide setup every served instance needs."""
-    # The web server has no interactive console: every request/run/background
-    # task executes on a Flask/daemon thread with no attached stdin. Force
-    # non-interactive resolution so a missing source video (or any pipeline
-    # prompt) is skipped-and-reported instead of blocking the thread forever on
-    # ``input()`` — this previously hung Studio generate and watch-dir-triggered
-    # workflow runs alike.
-    utils.NO_INPUT_MODE = True
+# Boot narration, keyed by phase id. The boot page renders `message` verbatim
+# (no Python↔JS constant mirroring), and the same strings are echoed to the
+# console so a terminal launch narrates the cold start too.
+_BOOT_MESSAGES = {
+    "starting": "Starting clipgen…",
+    "video_libs": "Loading video engine…",
+    "vision_libs": "Loading computer-vision libraries…",
+    "workspace": "Preparing workspace…",
+    "interface": "Building the interface…",
+    "ready": "Ready",
+}
 
-    # Pre-load the two FFmpeg-bundling libs (av via faster-whisper, cv2 via
-    # Screenspace) with native stderr silenced, so the macOS libavdevice
-    # ObjC duplicate-class warning never reaches the console once both
-    # subsystems are reachable on this combined server.
-    utils.preload_av_libs_quietly()
 
-    # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel temp-clips)
-    # a prior hard kill may have left in the output dir, before workers spin up.
-    utils.sweep_stale_temp_artifacts()
+def _boot_wsgi_response(
+    start_response: Callable,
+    status: str,
+    content_type: str,
+    body: bytes,
+) -> list[bytes]:
+    """Emit a dispatcher-owned response (the real app's after_request never runs).
+
+    no-store matters: a cached boot page served after the swap would poll and
+    reload forever.
+    """
+    start_response(
+        status,
+        [
+            ("Content-Type", content_type),
+            ("Content-Length", str(len(body))),
+            ("Cache-Control", "no-store"),
+        ],
+    )
+    return [body]
+
+
+def _boot_page_html() -> str:
+    """Read the boot page, splicing in the desktop-chrome head when hosted.
+
+    Read per request rather than memoized: the page is served a handful of
+    times per launch, ever. utils.DESKTOP_CHROME is set by desktop.py before
+    the window exists, so it is already correct on the first GET.
+    """
+    html = (utils.get_bundled_assets_root() / "assets" / "web" / "boot.html").read_text(
+        encoding="utf-8"
+    )
+    chrome = utils.DESKTOP_CHROME
+    if chrome:
+        html = html.replace(
+            "<!-- CLIPGEN_BOOT_CHROME -->", utils._desktop_chrome_head(chrome)
+        )
+    return html
+
+
+def _make_boot_dispatcher(boot_state: dict[str, Any]) -> Callable:
+    """WSGI dispatcher that serves a boot page until the real app is built.
+
+    Binding the socket takes milliseconds; building the combined app takes tens
+    of seconds on a cold machine (the av/cv2 native libraries alone are ~18s of
+    disk I/O). The dispatcher lets the socket go live immediately: while
+    ``boot_state["app"]`` is None, page requests get ``assets/web/boot.html``
+    (which polls ``/api/boot-status`` and reloads once ready) and API requests
+    get a 503 in the standard envelope; afterwards everything is delegated to
+    the installed Flask app. ``/api/boot-status`` stays dispatcher-owned
+    forever so a poll landing just after the swap cannot 404 against the real
+    app.
+    """
+
+    def dispatcher(environ: dict[str, Any], start_response: Callable) -> Any:
+        path = environ.get("PATH_INFO", "")
+        if path == "/api/boot-status":
+            body = json.dumps(
+                {
+                    "ready": boot_state["ready"],
+                    "phase": boot_state["phase"],
+                    "message": boot_state["message"],
+                    "error": boot_state["error"],
+                }
+            ).encode("utf-8")
+            return _boot_wsgi_response(
+                start_response, "200 OK", "application/json", body
+            )
+        # Single read → the swap is atomic per request; a request that read the
+        # boot handler finishes against it harmlessly.
+        app = boot_state["app"]
+        if app is not None:
+            return app(environ, start_response)
+        if "/api/" in path:
+            # Stale tabs and satellites poll during boot; the standard envelope
+            # lets their createPoller loops degrade quietly instead of parsing
+            # HTML as JSON.
+            body = json.dumps({"ok": False, "error": "Server is starting up"}).encode(
+                "utf-8"
+            )
+            return _boot_wsgi_response(
+                start_response, "503 Service Unavailable", "application/json", body
+            )
+        return _boot_wsgi_response(
+            start_response,
+            "200 OK",
+            "text/html; charset=utf-8",
+            _boot_page_html().encode("utf-8"),
+        )
+
+    return dispatcher
 
 
 def _port_available(port: int) -> bool:
@@ -4324,20 +4412,38 @@ def serve_combined_app(
     port: int | None = None,
     default_page: str = "studio",
     gspread_client: Any = None,
+    block_until_ready: bool = False,
 ) -> LiveServer:
     """Serve the combined app on a background thread and return once listening.
 
     Unlike :func:`start_combined_server` this does not block and does not open a
     browser, so a desktop host can point a native window at ``LiveServer.url``
     and tear the server down again when the window closes.
-    """
-    _prepare_server_runtime()
 
-    combined = build_combined_app(
-        worksheet=worksheet,
-        default_page=default_page,
-        gspread_client=gspread_client,
-    )
+    The socket goes live in well under a second serving a boot page; the heavy
+    build (av/cv2 preload + blueprint imports, tens of seconds on a cold
+    machine) runs on a background thread and is swapped in when done. Pass
+    ``block_until_ready=True`` to instead wait for the real app — tests and
+    scripted callers want the built app, not the boot shell.
+    """
+    # The web server has no interactive console: every request/run/background
+    # task executes on a Flask/daemon thread with no attached stdin. Force
+    # non-interactive resolution so a missing source video (or any pipeline
+    # prompt) is skipped-and-reported instead of blocking the thread forever on
+    # ``input()`` — this previously hung Studio generate and watch-dir-triggered
+    # workflow runs alike. Set synchronously: requests can arrive before the
+    # build thread runs.
+    utils.NO_INPUT_MODE = True
+
+    boot_state: dict[str, Any] = {
+        "ready": False,
+        "phase": "starting",
+        "message": _BOOT_MESSAGES["starting"],
+        "error": None,
+        "app": None,
+    }
+    ready = threading.Event()
+    dispatcher = _make_boot_dispatcher(boot_state)
 
     # Not `port or ...`: 0 is a meaningful value here (bind an ephemeral port).
     requested = port if port is not None else config.SERVER_PORT
@@ -4352,7 +4458,7 @@ def serve_combined_app(
         srv = make_server(
             "127.0.0.1",
             requested,
-            combined,
+            dispatcher,
             threaded=True,
             request_handler=QuietWSGIRequestHandler,
         )
@@ -4365,7 +4471,7 @@ def serve_combined_app(
         srv = make_server(
             "127.0.0.1",
             0,
-            combined,
+            dispatcher,
             threaded=True,
             request_handler=QuietWSGIRequestHandler,
         )
@@ -4382,6 +4488,65 @@ def serve_combined_app(
         target=srv.serve_forever, daemon=True, name="clipgen-server"
     )
     thread.start()
+
+    utils.info_print(
+        "Starting clipgen — the first launch after a restart can take up to a "
+        "minute while video libraries load."
+    )
+    started = time.monotonic()
+
+    def set_phase(phase: str) -> None:
+        boot_state["phase"] = phase
+        boot_state["message"] = _BOOT_MESSAGES[phase]
+        utils.info_print(_BOOT_MESSAGES[phase])
+
+    def build() -> None:
+        try:
+            # Preload first, under the stderr suppressor, before the blueprint
+            # imports below pull cv2 themselves (and before faster-whisper pulls
+            # av) — see preload_av_libs_quietly for why order matters.
+            utils.preload_av_libs_quietly(
+                on_phase=lambda lib: set_phase(
+                    "video_libs" if lib == "av" else "vision_libs"
+                )
+            )
+            set_phase("workspace")
+            # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel
+            # temp-clips) a prior hard kill may have left in the output dir.
+            # Must stay before the build: it unlinks *.json.tmp regardless of
+            # age, and build_combined_app starts workers that atomic-write.
+            utils.sweep_stale_temp_artifacts()
+            set_phase("interface")
+            combined = build_combined_app(
+                worksheet=worksheet,
+                default_page=default_page,
+                gspread_client=gspread_client,
+            )
+            boot_state["app"] = combined
+            set_phase("ready")
+            boot_state["ready"] = True
+            utils.info_print(f"clipgen ready in {time.monotonic() - started:.1f}s")
+        except BaseException as exc:
+            # BaseException on purpose: _init_studio_state exits via sys.exit(1)
+            # on a bad worksheet, and a SystemExit swallowed by a daemon thread
+            # would leave the boot page spinning forever.
+            boot_state["error"] = f"{type(exc).__name__}: {exc}"
+            utils.error_print(
+                "clipgen failed to start.",
+                details=traceback.format_exc().strip().splitlines(),
+            )
+        finally:
+            ready.set()
+
+    threading.Thread(target=build, daemon=True, name="clipgen-boot-build").start()
+
+    if block_until_ready:
+        finished = ready.wait(timeout=300)
+        if not finished or boot_state["error"] is not None:
+            srv.shutdown()
+            srv.server_close()
+            raise RuntimeError(boot_state["error"] or "clipgen server build timed out")
+
     origin = f"http://127.0.0.1:{srv.server_port}"
     return LiveServer(
         origin=origin,
@@ -4389,6 +4554,8 @@ def serve_combined_app(
         port=srv.server_port,
         srv=srv,
         thread=thread,
+        boot=boot_state,
+        ready=ready,
     )
 
 
@@ -4402,6 +4569,16 @@ def stop_combined_app(live: LiveServer) -> None:
     live.srv.shutdown()
     live.srv.server_close()
     live.thread.join(timeout=10)
+
+    # A close during boot: give an almost-finished build a moment to settle,
+    # then skip the worker teardown if the app never got installed — the
+    # blueprint modules were never imported, there are no workers to stop, and
+    # importing screenspace_server cold just to find None would itself cost
+    # seconds. A build still in flight is a daemon thread; it dies with the
+    # process, which is where every mid-boot close leads anyway.
+    live.ready.wait(timeout=1)
+    if not live.boot.get("ready"):
+        return
 
     # Imported lazily for the same reason build_combined_app does: keeping cv2
     # and torch off the import path of callers that never serve Screenspace.
@@ -4439,26 +4616,24 @@ def start_combined_server(
     the Google Sheets list endpoint reports authenticated and skips the
     "Connect Google" CTA in the Start overlay.
 
-    Opens the user's default browser and blocks until interrupted. Desktop
-    launches use :func:`serve_combined_app` instead.
+    Opens the user's default browser once the socket is bound — the tab shows
+    the boot page until the background build swaps the real app in — and blocks
+    until interrupted. Desktop launches use :func:`serve_combined_app` directly.
     """
-    _prepare_server_runtime()
-
-    combined = build_combined_app(
+    live = serve_combined_app(
         worksheet=worksheet,
+        port=port or config.SERVER_PORT,
         default_page=default_page,
         gspread_client=gspread_client,
     )
-    port = port or config.SERVER_PORT
-    url = f"http://127.0.0.1:{port}/{default_page}/"
-
-    utils.info_print(f"clipgen server running at http://127.0.0.1:{port}")
-    webbrowser.open(url)
-
-    combined.run(
-        host="127.0.0.1",
-        port=port,
-        debug=False,
-        threaded=True,
-        request_handler=QuietWSGIRequestHandler,
-    )
+    utils.info_print(f"clipgen server running at {live.origin}")
+    webbrowser.open(live.url)
+    try:
+        # Join in slices rather than blocking forever: on Windows a bare join
+        # swallows Ctrl+C until the thread exits.
+        while live.thread.is_alive():
+            live.thread.join(timeout=1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_combined_app(live)

@@ -169,6 +169,9 @@ def test_transcribe_status_slim_and_segments_tail(tr_client):
     entry = next(x for x in status["tasks"] if x["id"] == task["id"])
     assert "partial_segments" not in entry
     assert entry["partial_count"] == 3
+    # Running entries carry the phase sub-state ("queued" here: the test flips
+    # status by hand, so _execute_task never advanced it).
+    assert entry["phase"] == "queued"
 
     seg = tr_client.get(
         f"/transcripts/api/transcribe/{task['id']}/segments?since=1"
@@ -315,6 +318,14 @@ def test_model_status_shape(tr_client):
     assert data["prewarm"] in ("off", "queue_open", "page_load")
 
 
+def test_model_status_warming_during_on_demand_load(tr_client, monkeypatch):
+    """A load triggered by a transcription task (not the warmup endpoint) must
+    read as warming — 'not loaded, not warming' renders as 'failed to load'."""
+    monkeypatch.setattr(transcripts, "_model_loading", True)
+    data = tr_client.get("/transcripts/api/transcribe/model-status").get_json()
+    assert data["warming"] is True
+
+
 def test_warmup_already_loaded_in_debugging(tr_client, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True)
     monkeypatch.setattr(config, "TRANSCRIBE_PREWARM", "queue_open")
@@ -397,6 +408,7 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
         "id",
         "participant",
         "status",
+        "phase",
         "progress",
         "error",
         "created_at",

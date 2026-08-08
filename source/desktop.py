@@ -357,7 +357,8 @@ def launch_desktop(
     )
     utils.info_print(f"clipgen running at {live.origin}")
 
-    # Second sample: the server boot above is the slow part of a cold start.
+    # Second sample: the server bind above returns fast (the heavy build runs
+    # in the background behind the boot page), but sample again for safety.
     _sample_reset_modifier()
 
     try:
