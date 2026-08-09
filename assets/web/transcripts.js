@@ -886,7 +886,9 @@
       state.segments = [];
       state.streamingParticipant = null;
       renderSegments();
-      _setTranscriptEmptyText(taskForPid);
+      // _taskForSelectedParticipant, not taskForPid: the pane must agree with
+      // the indicator's running-over-queued pick when duplicate tasks exist.
+      _setTranscriptEmptyText(_taskForSelectedParticipant());
       renderTimeline();
       clearAnalysisPanel();
     }
@@ -2282,18 +2284,16 @@
       // Stream partial segments for the selected participant's running task
       var selectedRunningTask = null;
       if (state.selectedParticipant) {
-        var newestForSelected = null;
         data.tasks.forEach(function (t) {
-          if (t.participant !== state.selectedParticipant) return;
-          if (t.status === "running" && t.partial_count) selectedRunningTask = t;
-          if (!newestForSelected ||
-              (t.created_at || "") > (newestForSelected.created_at || "")) {
-            newestForSelected = t;
+          if (t.participant === state.selectedParticipant && t.status === "running" && t.partial_count) {
+            selectedRunningTask = t;
           }
         });
         // Keep the empty pane's wait text current (queued → loading model →
         // starting) while nothing has streamed yet; harmless when hidden.
-        _setTranscriptEmptyText(newestForSelected);
+        // Same running-over-queued pick as the status indicator, so the two
+        // never disagree when duplicate tasks exist for the participant.
+        _setTranscriptEmptyText(_taskForSelectedParticipant());
       }
       if (selectedRunningTask) {
         state.streamingParticipant = state.selectedParticipant;
