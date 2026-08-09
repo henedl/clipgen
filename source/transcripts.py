@@ -101,6 +101,15 @@ WHISPER_MODELS: list[dict[str, Any]] = [
 _cached_model: Any = None
 _cached_model_name: str | None = None
 _model_load_lock = threading.Lock()
+# True while _load_model is actually constructing a WhisperModel — the ~10s a
+# cold load takes. Lets the model-status endpoint report "warming" for
+# on-demand loads too, not just the explicit warmup path.
+_model_loading = False
+
+
+def is_transcription_model_loading() -> bool:
+    """True while a WhisperModel construction is in flight (any trigger)."""
+    return _model_loading
 
 
 # ---------------------------------------------------------------------------
@@ -250,15 +259,20 @@ def _load_model(model_name: str | None = None) -> Any:
                 load_kwargs["cpu_threads"] = threads
             return WhisperModel(model_name, **load_kwargs)
 
-        if not _confirm_model_download(model_name):
-            return None
+        global _model_loading
+        _model_loading = True
+        try:
+            if not _confirm_model_download(model_name):
+                return None
 
-        utils.info_print(f"Loading transcription model '{model_name}'...")
-        _cached_model = utils.run_with_spinner(
-            "Loading transcription model...", _do_load
-        )
-        _cached_model_name = model_name
-        return _cached_model
+            utils.info_print(f"Loading transcription model '{model_name}'...")
+            _cached_model = utils.run_with_spinner(
+                "Loading transcription model...", _do_load
+            )
+            _cached_model_name = model_name
+            return _cached_model
+        finally:
+            _model_loading = False
 
 
 def _build_transcribe_kwargs(
@@ -1037,6 +1051,10 @@ def create_transcript_task(
         "language": language,
         "audio_index": audio_index,
         "status": TASK_STATUS_QUEUED,
+        # Sub-state of "running": "loading_model" while the Whisper model is
+        # constructed (~10s cold, invisible to the progress float), then
+        # "transcribing". Lets the frontend say what the 0% wait actually is.
+        "phase": "queued",
         "progress": 0.0,
         "partial_segments": [],
         "result": None,
@@ -1245,6 +1263,28 @@ class TranscriptWorker:
         manifest = load_transcripts_manifest()
         corrections = manifest.get("corrections", [])
         context_kw = get_corrections_keywords(corrections) or None
+
+        # Load the model up front (a no-op when already cached) so the ~10s
+        # cold construction is visible as its own phase instead of an opaque
+        # "running, 0%". The DEBUGGING guard is load-bearing: debug mode
+        # returns stub results without ever touching Whisper, and worker tests
+        # depend on that. transcribe_video's own _load_model call then hits
+        # the cache. A task cancelled while queued must not pay for a model
+        # load either — transcribe_video aborts it right below.
+        if not config.DEBUGGING and not task.get("_cancelled"):
+            with self._lock:
+                task["phase"] = "loading_model"
+            if _load_model(task.get("model")) is None:
+                with self._lock:
+                    task["status"] = TASK_STATUS_FAILED
+                    task["error"] = "Transcription model failed to load."
+                    task["partial_segments"] = []
+                    task["completed_at"] = datetime.now(UTC).isoformat()
+                return
+        with self._lock:
+            task["phase"] = "transcribing"
+            # Progress/ETA baseline: excludes queue-wait and the model load.
+            task["transcribe_started_at"] = datetime.now(UTC).isoformat()
 
         def _on_seg(end_time: float, segment: TranscriptSegment) -> None:
             # Check cancel flag outside the lock to avoid deadlock — the

@@ -1,0 +1,164 @@
+<!doctype html>
+<!--
+  Boot page, served by the WSGI dispatcher in server.py while the real Flask
+  app is still being built (av/cv2 preload + blueprint imports — tens of
+  seconds on a cold machine). It polls /api/boot-status and reloads into the
+  real page once the build swaps in.
+
+  Standing exception to the tokens.css / no-hardcoded-hex rules: this page must
+  be fully self-contained (inline CSS + ES5 JS, no external fetches) because
+  the boot dispatcher serves no /icons/, tokens.css, fonts, or utils.js routes.
+  Color values mirror tokens.css --bg/--fg/--fg-muted/--accent for both themes;
+  the dark background also matches desktop.py's _WINDOW_BACKGROUND.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clipgen — starting</title>
+<!-- CLIPGEN_BOOT_CHROME -->
+<script>
+  // Mirror utils.js applyStoredThemePreference without depending on utils.js.
+  (function () {
+    var stored = null;
+    try { stored = window.localStorage.getItem("clipgen-theme"); } catch (e) {}
+    if (stored === "light") {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+  })();
+</script>
+<style>
+  html { background: #0a0a0b; color: #ffffff; }
+  html[data-theme="light"] { background: #fafafa; color: #14151a; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .boot {
+    text-align: center;
+    /* Optically centered slightly above the middle, like a native splash. */
+    transform: translateY(-8vh);
+  }
+  .boot-wordmark {
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    margin-bottom: 28px;
+  }
+  .boot-spinner {
+    width: 22px;
+    height: 22px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.16);
+    border-top-color: #2D6BFF;
+    animation: boot-spin 0.8s linear infinite;
+  }
+  html[data-theme="light"] .boot-spinner {
+    border-color: rgba(20, 21, 26, 0.14);
+    border-top-color: #2D6BFF;
+  }
+  @keyframes boot-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .boot-spinner { animation-duration: 2.4s; }
+  }
+  .boot-msg {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.62);
+    min-height: 18px;
+  }
+  html[data-theme="light"] .boot-msg { color: rgba(20, 21, 26, 0.68); }
+  .boot-elapsed {
+    margin-top: 6px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: rgba(255, 255, 255, 0.28);
+  }
+  html[data-theme="light"] .boot-elapsed { color: rgba(20, 21, 26, 0.32); }
+  .boot-err {
+    display: none;
+    margin: 16px auto 0;
+    max-width: 420px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #e5534b;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  /* Native window host: pad below the hidden-titlebar chrome bar and give the
+     bar region a drag handle so the window can be moved during boot. */
+  .boot-drag { display: none; }
+  html[data-desktop-chrome] .boot-drag {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--desktop-chrome-height, 38px);
+  }
+</style>
+</head>
+<body>
+<div class="boot-drag pywebview-drag-region"></div>
+<div class="boot">
+  <div class="boot-wordmark">clipgen</div>
+  <div class="boot-spinner" id="bootSpinner"></div>
+  <div class="boot-msg" id="bootMsg">Starting clipgen&#8230;</div>
+  <div class="boot-elapsed" id="bootElapsed"></div>
+  <div class="boot-err" id="bootErr"></div>
+</div>
+<script>
+  (function () {
+    var msgEl = document.getElementById("bootMsg");
+    var errEl = document.getElementById("bootErr");
+    var elapsedEl = document.getElementById("bootElapsed");
+    var spinnerEl = document.getElementById("bootSpinner");
+    var started = Date.now();
+    var stopped = false;
+
+    function tickElapsed() {
+      if (stopped) return;
+      var secs = Math.floor((Date.now() - started) / 1000);
+      // Only show the counter once the wait is long enough to wonder about.
+      elapsedEl.textContent = secs >= 3 ? secs + "s" : "";
+      window.setTimeout(tickElapsed, 1000);
+    }
+    tickElapsed();
+
+    function poll() {
+      if (stopped) return;
+      fetch("/api/boot-status", { cache: "no-store" })
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+          if (data.ready) {
+            stopped = true;
+            // Served at the real page's own path, so a reload lands there.
+            window.location.reload();
+            return;
+          }
+          if (data.error) {
+            stopped = true;
+            spinnerEl.style.display = "none";
+            msgEl.textContent = "clipgen failed to start";
+            errEl.textContent = data.error;
+            errEl.style.display = "block";
+            return;
+          }
+          if (data.message) msgEl.textContent = data.message;
+          window.setTimeout(poll, 500);
+        })
+        .catch(function () {
+          // Server not answering yet (or a blip mid-boot): keep trying.
+          window.setTimeout(poll, 500);
+        });
+    }
+    poll();
+  })();
+</script>
+</body>
+</html>

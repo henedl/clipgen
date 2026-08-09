@@ -1486,7 +1486,10 @@ def api_transcribe_model_status() -> FlaskResponse:
         warming = _transcript_model_warming
     return ok(
         loaded=transcripts.is_transcription_model_loaded(),
-        warming=warming,
+        # OR in on-demand loads (a transcription task constructing the model)
+        # so a healthy load never reads as "not loaded, not warming" — the
+        # frontend renders that as "failed to load".
+        warming=warming or transcripts.is_transcription_model_loading(),
         model=config.TRANSCRIBE_MODEL,
         prewarm=_transcribe_prewarm_setting(),
     )
@@ -1764,6 +1767,7 @@ def api_transcribe() -> FlaskResponse:
                     "id": task["id"],
                     "participant": p["id"],
                     "status": task["status"],
+                    "phase": task["phase"],
                     "progress": task["progress"],
                     "error": task["error"],
                     "created_at": task["created_at"],
@@ -1794,6 +1798,9 @@ def api_transcribe_status() -> FlaskResponse:
             }
             if t["status"] == transcripts.TASK_STATUS_RUNNING:
                 task_info["partial_count"] = t.get("partial_count", 0)
+                # "loading_model" vs "transcribing" — what the 0% wait is.
+                task_info["phase"] = t.get("phase", "transcribing")
+                task_info["transcribe_started_at"] = t.get("transcribe_started_at")
             tasks.append(task_info)
     return ok(
         tasks=tasks,

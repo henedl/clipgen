@@ -67,7 +67,7 @@ def suppress_native_stderr():
 _av_libs_preloaded = False
 
 
-def preload_av_libs_quietly() -> None:
+def preload_av_libs_quietly(on_phase: Callable[[str], None] | None = None) -> None:
     """Import ``av`` and ``cv2`` once, early, with native stderr silenced.
 
     Both wheels bundle their own FFmpeg ``libavdevice`` (an AVFoundation
@@ -77,16 +77,25 @@ def preload_av_libs_quietly() -> None:
     under :func:`suppress_native_stderr` means later lazy ``import cv2`` /
     ``import av`` calls find them already resident (no second dlopen, no
     warning). Idempotent; either import missing is a no-op.
+
+    *on_phase* is called with ``"av"`` / ``"cv2"`` before each import — each
+    can take ~10s of disk I/O on a cold machine, and the server's boot page
+    narrates which one it is waiting on.
     """
     global _av_libs_preloaded
     if _av_libs_preloaded:
         return
     _av_libs_preloaded = True
+    if on_phase is not None:
+        on_phase("av")
     with suppress_native_stderr():
         try:
             import av  # noqa: F401
         except ImportError:
             pass
+    if on_phase is not None:
+        on_phase("cv2")
+    with suppress_native_stderr():
         try:
             import cv2  # noqa: F401
         except ImportError:

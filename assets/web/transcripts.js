@@ -424,6 +424,9 @@
 
     if (!pid) {
       taskLine = "No participant selected";
+    } else if (task && task.status === "running" && task.phase === "loading_model") {
+      cls = "status-indicator--working";
+      taskLine = pid + ": loading transcription model\u2026";
     } else if (task && task.status === "running") {
       cls = "status-indicator--working";
       var pct = Math.round((task.progress || 0) * 100);
@@ -883,6 +886,9 @@
       state.segments = [];
       state.streamingParticipant = null;
       renderSegments();
+      // _taskForSelectedParticipant, not taskForPid: the pane must agree with
+      // the indicator's running-over-queued pick when duplicate tasks exist.
+      _setTranscriptEmptyText(_taskForSelectedParticipant());
       renderTimeline();
       clearAnalysisPanel();
     }
@@ -893,10 +899,35 @@
     updateTranscribeFill();
   }
 
+  // Contextual text for the #transcriptEmpty pane: while the newest task for
+  // the selected participant is queued / loading the model / decoding with no
+  // segments streamed yet, "No transcript available" is misleading — say what
+  // the wait actually is. Called with null to restore the defaults.
+  function _setTranscriptEmptyText(task) {
+    var empty = qs("#transcriptEmpty");
+    if (!empty) return;
+    var main = empty.querySelector("p");
+    var hint = empty.querySelector(".empty-hint");
+    if (task && task.status === "running" && task.phase === "loading_model") {
+      main.textContent = "Loading transcription model…";
+      hint.textContent = "The first transcription after a restart takes a few extra seconds";
+    } else if (task && task.status === "running") {
+      main.textContent = "Starting transcription…";
+      hint.textContent = "Lines appear here as they are transcribed";
+    } else if (task && task.status === "queued") {
+      main.textContent = "Queued for transcription…";
+      hint.textContent = "Waiting for the current task to finish";
+    } else {
+      main.textContent = "No transcript available";
+      hint.textContent = "Use the Queue panel to transcribe this participant's video";
+    }
+  }
+
   function renderEmptyState() {
     qs("#videoPlayer").classList.add("hidden");
     qs("#videoEmpty").classList.remove("hidden");
     qs("#segmentList").innerHTML = "";
+    _setTranscriptEmptyText(null);
     qs("#transcriptEmpty").classList.remove("hidden");
     clearAnalysisPanel();
     clearTimelineMarkers();
@@ -1153,16 +1184,20 @@
   });
 
   // " \u00b7 0:42 \u00b7 ~1:20 left" suffix for a participant's running transcription, or
-  // "" when not running. Each entry is keyed by the task's created_at so a re-run
-  // of the same participant seeds a fresh tracker from the new task rather than
-  // continuing the prior run's elapsed (created_at includes any queue wait, so
-  // elapsed may slightly overstate). Stale entries are pruned in _tickTxEta.
+  // "" when not running (or still loading the model \u2014 no decode progress to
+  // time yet). Each entry is keyed by the task's created_at so a re-run of the
+  // same participant seeds a fresh tracker from the new task rather than
+  // continuing the prior run's elapsed. Seeded from transcribe_started_at so
+  // elapsed/ETA exclude the queue wait and the model load. Stale entries are
+  // pruned in _tickTxEta.
   function _txEtaSuffix(pid, task) {
     if (!pid || !task || task.status !== "running") return "";
+    if (task.phase === "loading_model") return "";
     var entry = _txEtaTrackers[pid];
     if (!entry || entry.createdAt !== task.created_at) {
       var t = createEtaTracker();
-      var seed = task.created_at ? Date.parse(task.created_at) : NaN;
+      var seedIso = task.transcribe_started_at || task.created_at;
+      var seed = seedIso ? Date.parse(seedIso) : NaN;
       t.start(isNaN(seed) ? undefined : seed);
       entry = { tracker: t, createdAt: task.created_at };
       _txEtaTrackers[pid] = entry;
@@ -2254,6 +2289,11 @@
             selectedRunningTask = t;
           }
         });
+        // Keep the empty pane's wait text current (queued → loading model →
+        // starting) while nothing has streamed yet; harmless when hidden.
+        // Same running-over-queued pick as the status indicator, so the two
+        // never disagree when duplicate tasks exist for the participant.
+        _setTranscriptEmptyText(_taskForSelectedParticipant());
       }
       if (selectedRunningTask) {
         state.streamingParticipant = state.selectedParticipant;

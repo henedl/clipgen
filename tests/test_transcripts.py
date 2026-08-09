@@ -867,6 +867,7 @@ class TestCreateTranscriptTask:
         assert task["participant"] == "P01"
         assert task["video_paths"] == ["/path/to/video.mp4"]
         assert task["status"] == "queued"
+        assert task["phase"] == "queued"
         assert task["progress"] == 0.0
         assert task["result"] is None
         assert task["error"] is None
@@ -1078,6 +1079,66 @@ class TestTranscriptWorker:
         assert "No audio stream" in task["error"]
         assert task["partial_segments"] == []
         load_model.assert_not_called()
+
+    def test_execute_task_phase_progression_in_debug(self, monkeypatch):
+        """Debug mode skips the loading_model phase by design (stub results,
+        no Whisper) and lands on transcribing with a start stamp."""
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", True)
+        monkeypatch.setattr(video_mod, "timeline_or_none", lambda *_a: None)
+        monkeypatch.setattr(
+            video_mod,
+            "probe_video_properties",
+            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+        )
+        monkeypatch.setattr(
+            transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
+        )
+        monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda *_a: 0)
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        task["status"] = "running"
+        assert task["phase"] == "queued"
+
+        worker._execute_task(task)
+
+        assert task["status"] == "completed"
+        assert task["phase"] == "transcribing"
+        assert task["transcribe_started_at"]
+
+    def test_execute_task_model_load_failure_fails_task(self, monkeypatch):
+        """A model that fails to construct fails the task under the
+        loading_model phase instead of dying inside transcribe_video."""
+        from unittest.mock import Mock
+
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(video_mod, "timeline_or_none", lambda *_a: None)
+        monkeypatch.setattr(
+            video_mod,
+            "probe_video_properties",
+            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+        )
+        monkeypatch.setattr(
+            transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
+        )
+        monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda *_a: 0)
+        load_model = Mock(return_value=None)
+        monkeypatch.setattr(transcripts, "_load_model", load_model)
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        task["status"] = "running"
+
+        worker._execute_task(task)
+
+        assert task["status"] == "failed"
+        assert "model failed to load" in task["error"]
+        assert task["phase"] == "loading_model"
+        load_model.assert_called_once()
 
     def test_remove_task(self):
         worker = transcripts.TranscriptWorker()
