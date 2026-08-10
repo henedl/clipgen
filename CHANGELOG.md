@@ -2,6 +2,34 @@
 
 Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
 
+## v0.14.74 — 2026-08-08 — Transcripts
+**One "Embed Subtitles…" modal replaces the two embed quick actions**
+"Embed Subtitle in Video" and "Embed all Subtitles" are now a single action with a scope picker (live counts, same layout as Clip Marked Lines) and a "Set as default track" toggle. The new `POST /api/embed-subtitles` NDJSON route streams per-file progress, is cancellable, and reports one bad id as an `ok:false` line instead of sinking the batch. Multi-part participants are filtered client-side with an explanation rather than costing an ffmpeg round-trip. Subtitle language tags now normalize to ISO 639-2 (`en`→`eng`, `unknown`→`und`), and the default-track toggle is hidden on `.mp4`/`.mov` where ffmpeg cannot set disposition.
+
+## v0.14.73 — 2026-08-04 — Studio
+**Read MindNode mind maps as a clip source**
+Studio can open a `.mindnode` bundle directly — no spreadsheet required — and cut clips from its timestamps. A new MindNode tab on Start (picker, recents, QuickLook summary) and a MindNode Intake tab in Studio mirror the Composer intake flow; notes without timestamps list disabled with a count. Participant nodes are auto-detected via `P##`/`G##` headers, categories join everything above that level, and timestamps use the same parsing and `!key` rules as sheet cells. Mind-map-only sessions now carry study name and category through intake generation instead of falling back to empty strings.
+
+## v0.14.72 — 2026-08-04 — Transcripts
+**Download Ollama in-app on macOS**
+When Ollama is missing, the Transcripts install dialog offers a consent-gated Download & install that fetches the pinned official standalone CLI into `~/.config/clipgen/tools/ollama`, then chains serve → refetch → ready. PATH installs still win over the managed copy so a user-managed Ollama self-updates normally; Windows and Linux keep the existing brew/winget hints. Settings, Overview reports, and the summary empty state point at the in-app flow when `can_install` is true, with a secondary "I've installed it — retry" for the manual path.
+
+## v0.14.71 — 2026-08-04 — Core
+**Desktop builds ship pinned GPL ffmpeg/ffprobe**
+The macOS DMG and Windows zip no longer require a separate ffmpeg install: SHA256-pinned full-GPL static builds land in `<bundle>/bin` and prepend to PATH on frozen launches. CI verifies the bundle includes `libx264`, `libwebp`, `libvpx-vp9`, and `drawtext` so provider drift fails the build; the bundled libfreetype also fixes titlecard encoding under Homebrew ffmpeg 8.x. `THIRD-PARTY-LICENSES` documents the GPL provenance; clipgen itself stays MIT (subprocess invocation only).
+
+## v0.14.70 — 2026-08-03 — Screenspace
+**Hover-scrub heatmap animations, paused by default**
+Animated heatmap thumbs now start paused and scrub through frames on hover, resting on the last frame; the GIF loads only when you click play. Scrubbing uses an on-demand sprite sheet from `GET /api/heatmap-sprite` (cached in memory, never written to disk) via the shared `clipgenCardScrubber`. Heatmaps written after a directory change no longer 404 for the rest of the session, PNG write failures surface instead of silently completing empty tasks, and a broken image shows an "Image unavailable" placeholder rather than a broken glyph.
+
+## v0.14.69 — 2026-08-03 — Transcripts
+**Transcribe All quick action**
+A one-click Transcribe All queues every participant with a source video and no transcript yet, respecting each pill's model, language, and audio-track overrides. The action skips participants already transcribed or queued, never passes `force` (re-transcribe stays per-pill), and claims pids before the POST so a repeat trigger cannot double-enqueue during the round trip.
+
+## v0.14.68 — 2026-08-02 — Core
+**Missing-dependency guidance where users can actually see it**
+Windowed launches have no console, so ffmpeg, Google credentials, and Ollama install hints now surface in the UI instead of stdout. The Start overlay explains `credentials.json` paths and links to gspread's guide; `/api/models` distinguishes "not installed" from "not running" and exposes install hints; Overview no longer tells users who never installed Ollama to "start it, then Refresh." Install guidance probes for Homebrew on macOS and leads with a direct download when brew is absent. A missing ffmpeg no longer marks a timelapse completed with no output, and the CLI `--transcribe` path asks before a first multi-GB Whisper download.
+
 ## v0.14.67 — 2026-08-01 — Core
 **Overview drops the Map tab**
 The WIP 3D similarity Map is gone, along with Three.js and the server routes behind it. Overview now has three tabs — Metadata, Convergence, and Reports — with hotkeys renumbered 1/2/3.
