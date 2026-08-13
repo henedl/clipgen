@@ -4,9 +4,11 @@ Agent-specific behavior (summarization, citation linking) lives in
 tests/test_thinking_agents.py.
 """
 
+import hashlib
 import http.server
 import io
 import json
+import subprocess
 import socketserver
 import threading
 import time
@@ -21,16 +23,19 @@ import ollama_client
 
 @pytest.fixture(autouse=True)
 def _isolated_config_dir(tmp_path, monkeypatch):
-    """Keep managed-install probing away from the host's real config dir.
+    """Keep managed-install probing away from the host's real installs.
 
     ``is_installed()``/``resolve_ollama_bin()`` fall back to
     ``start_settings.config_dir()/tools/ollama`` — on a machine that has used
     the in-app installer, every which()-patched test would silently resolve
-    the real managed binary instead.
+    the real managed binary instead. On a Windows host the win32 probe reads
+    ``%LOCALAPPDATA%\\Programs\\Ollama`` straight from the environment, so
+    that gets pointed into tmp too (harmless elsewhere).
     """
     monkeypatch.setattr(
         ollama_client.start_settings, "config_dir", lambda: tmp_path / "cfg"
     )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
 
 
 def _ndjson_lines(*chunks: dict) -> list[bytes]:
@@ -604,7 +609,7 @@ class TestPullModel:
 
 
 class TestManagedInstall:
-    """The in-app download of the Ollama CLI itself (macOS managed install)."""
+    """The in-app install of Ollama itself (macOS tarball / Windows installer)."""
 
     def _make_managed(self, tmp_path, layout="flat", executable=True):
         base = tmp_path / "cfg" / "tools" / "ollama"
@@ -614,6 +619,20 @@ class TestManagedInstall:
         if executable:
             binary.chmod(0o755)
         return binary
+
+    def _windows_platform(self, monkeypatch, tmp_path):
+        """Patch platform + %LOCALAPPDATA% so the win32 paths stay in tmp."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        return tmp_path / "localappdata" / "Programs" / "Ollama" / "ollama.exe"
+
+    def _make_download_resp(self, payload):
+        resp = MagicMock()
+        resp.headers = {"Content-Length": str(len(payload))}
+        resp.read.side_effect = [payload, b""]
+        resp.__enter__ = lambda self_: resp
+        resp.__exit__ = lambda self_, *exc: False
+        return resp
 
     @patch("ollama_client.shutil.which", return_value="/opt/homebrew/bin/ollama")
     def test_resolve_prefers_path_over_managed(self, mock_which, tmp_path):
@@ -644,10 +663,12 @@ class TestManagedInstall:
         assert ollama_client.resolve_ollama_bin() is None
         assert ollama_client.is_installed() is False
 
-    def test_can_install_managed_is_darwin_only(self, monkeypatch):
+    def test_can_install_managed_platforms(self, monkeypatch):
         monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
         assert ollama_client.can_install_managed() is True
         monkeypatch.setattr(ollama_client.sys, "platform", "win32")
+        assert ollama_client.can_install_managed() is True
+        monkeypatch.setattr(ollama_client.sys, "platform", "linux")
         assert ollama_client.can_install_managed() is False
 
     @patch("ollama_client.urllib.request.urlopen")
@@ -661,7 +682,7 @@ class TestManagedInstall:
         assert ollama_client.install_managed() is True
         mock_urlopen.assert_not_called()
 
-    def test_install_managed_refused_off_macos(self, monkeypatch):
+    def test_install_managed_refused_on_linux(self, monkeypatch):
         monkeypatch.setattr(ollama_client.sys, "platform", "linux")
         assert ollama_client.install_managed() is False
 
@@ -679,3 +700,93 @@ class TestManagedInstall:
         assert ollama_client.install_managed(on_progress=progress.append) is False
         assert any(p.get("status", "").startswith("downloading") for p in progress)
         assert ollama_client.managed_ollama_path() is None
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_windows_managed_path_probes_programs_dir(
+        self, mock_which, tmp_path, monkeypatch
+    ):
+        """The installer's PATH edit is registry-only; probe its dir directly.
+
+        A plain file with no exec bit must be found — os.X_OK is meaningless
+        for .exe files, so the win32 probe is is_file-only.
+        """
+        exe = self._windows_platform(monkeypatch, tmp_path)
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"MZ")
+        assert ollama_client.resolve_ollama_bin() == str(exe)
+        assert ollama_client.is_installed() is True
+
+    @patch("ollama_client.subprocess.run")
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_windows_happy_path(
+        self, mock_urlopen, mock_run, tmp_path, monkeypatch
+    ):
+        exe = self._windows_platform(monkeypatch, tmp_path)
+        payload = b"fake installer bytes"
+        monkeypatch.setattr(
+            ollama_client,
+            "_OLLAMA_WINDOWS_SHA256",
+            hashlib.sha256(payload).hexdigest(),
+        )
+        mock_urlopen.return_value = self._make_download_resp(payload)
+
+        def _fake_install(*args, **kwargs):
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_bytes(b"MZ")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = _fake_install
+        monkeypatch.setattr(
+            ollama_client, "_managed_binary_works", lambda _binary: True
+        )
+        progress: list[dict] = []
+        assert ollama_client.install_managed(on_progress=progress.append) is True
+
+        argv = mock_run.call_args.args[0]
+        assert argv[1:] == ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+        assert argv[0].endswith(".exe")
+        assert mock_run.call_args.kwargs["creationflags"] == ollama_client._NO_WINDOW
+        statuses = [p.get("status") for p in progress]
+        assert "downloading Ollama" in statuses
+        assert "running installer" in statuses
+        assert statuses[-1] == "success"
+        managed_dir = tmp_path / "cfg" / "tools" / "ollama"
+        assert not list(managed_dir.glob("*.exe"))
+
+    @patch("ollama_client.subprocess.run")
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_windows_rejects_bad_hash(
+        self, mock_urlopen, mock_run, tmp_path, monkeypatch
+    ):
+        """A tampered download must never reach the installer run."""
+        self._windows_platform(monkeypatch, tmp_path)
+        mock_urlopen.return_value = self._make_download_resp(b"tampered bytes")
+        assert ollama_client.install_managed() is False
+        mock_run.assert_not_called()
+        managed_dir = tmp_path / "cfg" / "tools" / "ollama"
+        assert not list(managed_dir.glob("*.exe"))
+
+    @pytest.mark.parametrize(
+        "run_effect",
+        [
+            lambda *a, **k: MagicMock(returncode=1),
+            subprocess.TimeoutExpired(cmd="OllamaSetup.exe", timeout=900),
+        ],
+        ids=["nonzero-exit", "timeout"],
+    )
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_windows_installer_fails(
+        self, mock_urlopen, tmp_path, monkeypatch, run_effect
+    ):
+        self._windows_platform(monkeypatch, tmp_path)
+        payload = b"fake installer bytes"
+        monkeypatch.setattr(
+            ollama_client,
+            "_OLLAMA_WINDOWS_SHA256",
+            hashlib.sha256(payload).hexdigest(),
+        )
+        mock_urlopen.return_value = self._make_download_resp(payload)
+        with patch("ollama_client.subprocess.run", side_effect=run_effect):
+            assert ollama_client.install_managed() is False
+        managed_dir = tmp_path / "cfg" / "tools" / "ollama"
+        assert not list(managed_dir.glob("*.exe"))
