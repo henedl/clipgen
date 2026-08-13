@@ -641,6 +641,34 @@ def test_document_route_404s_when_the_bundle_disappears(mn_client):
 # ---- Generation plumbing -----------------------------------------------------
 
 
+def test_intake_video_paths_follow_the_input_dir(monkeypatch, tmp_path):
+    """POST /api/dirs moves INPUT_DIR; intake must not keep a boot-time scan.
+
+    The MindNode-only Start overlay never hits /api/participants on Screenspace
+    or Transcripts, so those caches stay empty. Generating from the map would
+    then 404 every clip with "No video for P01" even though the file is there.
+    """
+    import screenspace_server
+    import transcripts_server
+    import server
+
+    boot = tmp_path / "boot"
+    boot.mkdir()
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    video = chosen / "study_P01.mp4"
+    video.write_bytes(b"fake")
+
+    monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
+    monkeypatch.setattr(server, "_sheet_context", None)
+    # Stale caches as after boot, before anyone opens Transcripts/Screenspace.
+    monkeypatch.setattr(screenspace_server, "_participants", [])
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    paths = server._resolve_intake_video_paths("P01", "mindnode")
+    assert paths == [str(video)]
+
+
 def test_effective_study_falls_back_to_the_mind_map(monkeypatch):
     """With no spreadsheet, artifacts must still get a study name."""
     import server
