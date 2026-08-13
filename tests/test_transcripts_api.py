@@ -2519,3 +2519,22 @@ class TestMediaRouteFollowsTheInputDir:
         assert tr_client.get("/transcripts/media/study_P02.mp4").status_code == 200
         # ...and the old directory is no longer served.
         assert tr_client.get("/transcripts/media/study_P01.mp4").status_code == 404
+
+    def test_serves_after_the_very_first_directory_choice(
+        self, tr_client, tmp_path, monkeypatch
+    ):
+        """The shape every desktop launch hits.
+
+        Nothing configures an input directory before the Start overlay does, so
+        ``get_effective_input_dir()`` falls back to ``Path.cwd()`` — which
+        ``cli.main()`` has chdir'd to the folder holding the app. Snapshotting
+        that gave the media route a directory that exists but holds no videos,
+        so the first transcription's playback 404'd rather than reporting a
+        missing configuration.
+        """
+        monkeypatch.setattr(config, "INPUT_DIR", "")
+        chosen = tmp_path / "chosen"
+        chosen.mkdir()
+        (chosen / "study_P03.mp4").write_bytes(b"chosen")
+        monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
+        assert tr_client.get("/transcripts/media/study_P03.mp4").status_code == 200

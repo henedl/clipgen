@@ -233,6 +233,13 @@ utils.register_static_routes(
     # the page listing participants from the new directory while /media/<file>
     # still served the old one — every video 404'd even though the page's own
     # ?v= mtime proved the file was there. Same reasoning as studio_bp's.
+    #
+    # This hit *every* desktop launch, not just people who switch folders: at
+    # startup nothing has configured an input directory yet, so
+    # get_effective_input_dir() falls back to Path.cwd() — which cli.main() has
+    # chdir'd to the folder containing the app. The snapshot was therefore that
+    # folder (e.g. the Desktop), a directory that exists but holds no videos,
+    # which is why the failure read as 404 rather than "not configured".
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
