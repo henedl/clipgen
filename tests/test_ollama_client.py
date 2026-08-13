@@ -23,16 +23,19 @@ import ollama_client
 
 @pytest.fixture(autouse=True)
 def _isolated_config_dir(tmp_path, monkeypatch):
-    """Keep managed-install probing away from the host's real config dir.
+    """Keep managed-install probing away from the host's real installs.
 
     ``is_installed()``/``resolve_ollama_bin()`` fall back to
     ``start_settings.config_dir()/tools/ollama`` — on a machine that has used
     the in-app installer, every which()-patched test would silently resolve
-    the real managed binary instead.
+    the real managed binary instead. On a Windows host the win32 probe reads
+    ``%LOCALAPPDATA%\\Programs\\Ollama`` straight from the environment, so
+    that gets pointed into tmp too (harmless elsewhere).
     """
     monkeypatch.setattr(
         ollama_client.start_settings, "config_dir", lambda: tmp_path / "cfg"
     )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
 
 
 def _ndjson_lines(*chunks: dict) -> list[bytes]:
