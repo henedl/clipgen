@@ -120,6 +120,19 @@ if _missing:
 
 pyz = PYZ(a.pure)
 
+# strip must never run on Windows. PyInstaller shells out to whatever `strip`
+# is on PATH, and the GitHub windows runner puts a MinGW/Strawberry GNU strip
+# there — which mangles MSVC-built PE DLLs (signed, Control-Flow-Guard section
+# layout). A stripped python312.dll still exists and looks healthy, but
+# LoadLibrary fails at launch with error 998 "Invalid access to memory
+# location", so the exe flashes a console and dies before any Python runs.
+# Confirmed from the CI build log: "Executing: strip ...\python312.dll".
+# UPX is off for the same reason preemptively: it never ran in CI (no upx on
+# the runner today), but if a future image adds one it would corrupt the same
+# DLLs the same silent way. macOS keeps strip (Apple's strip understands
+# mach-O, and the bundle is re-signed afterwards).
+_strip = sys.platform == "darwin"
+
 # One-dir, not one-file. One-file re-extracts the whole archive to a *new* temp
 # directory on every launch, so every large dylib (cv2, av, torch) loads cold —
 # no OS page cache, and macOS re-validates each code signature from scratch.
@@ -134,9 +147,9 @@ exe = EXE(
     name="clipgen",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
-    upx=True,
-    # The bundled video tools must never pass through UPX: it corrupts signed
+    strip=_strip,
+    upx=False,
+    # Belt-and-braces should UPX ever be re-enabled: it corrupts signed
     # mach-O binaries, and on Windows a packed ffmpeg.exe is a known-broken
     # combination. Mirrored in COLLECT below.
     upx_exclude=["ffmpeg*", "ffprobe*"],
@@ -160,8 +173,8 @@ coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    strip=True,
-    upx=True,
+    strip=_strip,
+    upx=False,
     upx_exclude=["ffmpeg*", "ffprobe*"],  # see EXE above
     name="clipgen",
 )

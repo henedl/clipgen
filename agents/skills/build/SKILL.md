@@ -28,6 +28,15 @@ not ship an app that dies on its startup ffmpeg check. They land in `<bundle>/bi
 always runs the ffmpeg it was feature-verified with. UPX is excluded for them in both `EXE` and
 `COLLECT` (`upx_exclude`) — UPX corrupts signed mach-O and packed ffmpeg.exe builds.
 
+**`strip` and `upx` are macOS-only in the spec — never re-enable them on Windows.** PyInstaller
+shells out to whatever `strip`/`upx` is on PATH, and the GitHub windows runner carries a
+MinGW/Strawberry GNU `strip.exe` that mangles MSVC-built PE DLLs (signed, CFG section layout).
+The build stays green, the files all exist, and the shipped exe dies at launch with
+`Failed to load Python DLL ... LoadLibrary: Invalid access to memory location` (error 998) —
+that exact bug shipped in every Windows build from #639 until the spec's `_strip` gate. CI now
+smoke-launches `clipgen.exe --help` on both legs, which fails on any bundle whose DLLs got
+corrupted at build time (the bootloader loads `python312.dll` before argv parsing).
+
 ## The one rule: verify the way a user launches it
 
 **A frozen app behaves differently depending on how it is started, and the convenient way to test
