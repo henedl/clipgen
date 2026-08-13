@@ -163,6 +163,22 @@ bundle on both platforms. When a new dependency reads bundled data files at runt
 `collect_data_files(...)` line *and* a build-time guard in the same commit; a missing data
 file is invisible to the build and to every source-tree test.
 
+## A CPU-only build does not make every dependency CPU-only
+
+CI installs with `--torch-backend cpu`, so no `nvidia-*` wheel is present and none is
+collected — the bundle has no CUDA runtime. That is enough for anything that asks *torch*
+whether a GPU exists: EasyOCR gates on `torch.cuda.is_available()`, gets `False`, warns, and
+runs on CPU.
+
+**CTranslate2 does not ask torch.** Its wheels carry their own CUDA support and their own
+device detection, so faster-whisper's default `device="auto"` selected CUDA on any machine
+with an NVIDIA GPU and then died at the first inference with `Library cublas64_12.dll is not
+found or cannot be loaded` — minutes in, after the model had downloaded and loaded. Hence
+`transcripts._resolve_transcribe_device()`, which resolves "auto" to CPU when frozen.
+
+When adding a dependency that can use a GPU, check *what it asks*: a library with its own
+CUDA detection will happily pick a GPU this bundle cannot feed.
+
 ## `multiprocessing.freeze_support()` is not optional
 
 In a frozen app `sys.executable` is the clipgen binary. Anything that touches
