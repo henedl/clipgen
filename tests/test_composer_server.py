@@ -37,7 +37,6 @@ def co_app():
 def co_client(co_app, tmp_path, monkeypatch):
     # Seed module globals via monkeypatch so they auto-restore on teardown.
     monkeypatch.setattr(composer_server, "_manifest", composer_server._empty_manifest())
-    monkeypatch.setattr(composer_server, "_input_dir", str(tmp_path))
     monkeypatch.setattr(composer_server, "_sheet_context", None)
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path), raising=False)
