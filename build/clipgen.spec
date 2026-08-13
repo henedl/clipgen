@@ -37,6 +37,18 @@ datas = []
 datas += collect_data_files("gspread")
 datas += collect_data_files("openpyxl")
 datas += collect_data_files("rich")
+# faster-whisper loads its bundled Silero VAD model (assets/silero_vad_v6.onnx
+# as of 1.2.1) via __file__ arithmetic, and PyInstaller ships no hook for it —
+# without this the frozen app computes the right path to a file that was never
+# copied in, and every default (VAD-on) transcription dies with NO_SUCHFILE.
+_fw_datas = collect_data_files("faster_whisper")
+if not any(src.endswith(".onnx") for src, _dest in _fw_datas):
+    raise SystemExit(
+        "clipgen.spec: collect_data_files('faster_whisper') found no .onnx VAD "
+        "model. faster-whisper moved or renamed its assets; frozen transcription "
+        "would break at runtime. Inspect the installed package and update this spec."
+    )
+datas += _fw_datas
 datas += [("../assets", "assets")]
 datas += [("VERSION", ".")]
 datas += [("../CHANGELOG.md", ".")]

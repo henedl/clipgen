@@ -83,6 +83,11 @@ jobs:
           done
           "$FF" -hide_banner -filters | grep -q " drawtext " \
             || { echo "::error::bundled ffmpeg lacks the drawtext filter"; exit 1; }
+          # faster-whisper's Silero VAD model must ship, or every default
+          # (VAD-on) transcription dies with NO_SUCHFILE. Match *.onnx, not the
+          # current filename, so an upstream rename doesn't require a CI edit.
+          find dist/clipgen.app -path "*faster_whisper/assets/*.onnx" | grep -q . \
+            || { echo "::error::bundle lacks the faster_whisper VAD .onnx asset"; exit 1; }
 
       - name: Verify bundled ffmpeg features (Windows)
         if: matrix.os == 'windows-latest'
@@ -100,6 +105,13 @@ jobs:
           $filters = & $ff -hide_banner -filters
           if (-not ($filters | Select-String -Quiet " drawtext ")) {
             throw "bundled ffmpeg lacks the drawtext filter"
+          }
+          # faster-whisper's Silero VAD model must ship, or every default
+          # (VAD-on) transcription dies with NO_SUCHFILE. Match *.onnx, not the
+          # current filename, so an upstream rename doesn't require a CI edit.
+          $vad = Get-ChildItem -Recurse dist/clipgen/_internal/faster_whisper -Filter *.onnx -ErrorAction SilentlyContinue
+          if (-not $vad) {
+            throw "bundle lacks the faster_whisper VAD .onnx asset"
           }
 
       - name: Ad-hoc codesign the .app bundle (macOS)
