@@ -137,6 +137,27 @@ So on Windows one-dir the exe lives *inside* `clipgen/` next to `_internal/`, an
 app" is one level **up**. On macOS it is the folder containing the `.app` — never inside
 `Contents/MacOS`, which is invisible in Finder and part of the code signature.
 
+## Third-party package data must be collected explicitly
+
+PyInstaller only bundles what a hook or the spec tells it to; **there is no hook for every
+package**. faster-whisper has none, so its Silero VAD model (`assets/silero_vad_v6.onnx`,
+loaded by `__file__` arithmetic with VAD on by default) was silently absent and every frozen
+transcription died with `NO_SUCHFILE` — while every source run worked. The spec now has
+`collect_data_files("faster_whisper")` plus a fail-loud `.onnx` guard, and CI checks the
+bundle on both platforms. When a new dependency reads bundled data files at runtime, add a
+`collect_data_files(...)` line *and* a build-time guard in the same commit; a missing data
+file is invisible to the build and to every source-tree test.
+
+## `multiprocessing.freeze_support()` is not optional
+
+In a frozen app `sys.executable` is the clipgen binary. Anything that touches
+`multiprocessing` — tqdm's `RLock` inside faster-whisper's transcribe loop was enough — makes
+CPython's resource tracker re-exec that binary with interpreter-style argv
+(`-B -S -E -s -c '...'`), which lands in clipgen's argparse as
+`clipgen: error: argument -S/--severity: expected one argument`. PyInstaller's runtime hook
+intercepts exactly that argv shape, but only from inside `freeze_support()`. The call must
+stay the **first statement** of the launcher's `__main__` block, before any clipgen import.
+
 ## CI and distribution traps
 
 - **`actions/upload-artifact` does not preserve Unix permissions.** It forces everything to 644,
