@@ -38,6 +38,11 @@ that exact bug shipped in every Windows build from #639 until the spec's `_strip
 smoke-launches `clipgen.exe --help` on both legs, which fails on any bundle whose DLLs got
 corrupted at build time (the bootloader loads `python312.dll` before argv parsing).
 
+Stripping bought nothing to begin with: turning it off grew the Windows artifact from
+440.4 MB to 442.3 MB — **+1.9 MB, 0.43%**. These are MSVC binaries whose debug info lives in
+separate PDBs, so there is barely anything for `strip` to remove. Do not trade a launchable
+app for that.
+
 ## The one rule: verify the way a user launches it
 
 **A frozen app behaves differently depending on how it is started, and the convenient way to test
