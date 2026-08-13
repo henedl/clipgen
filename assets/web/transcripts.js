@@ -2700,7 +2700,7 @@
         progress.classList.remove("hidden");
         progressText.textContent = opts.state === "stopped" ? "Starting…" : "Checking…";
         var step = opts.state === "stopped"
-          ? apiPost("/api/models/ollama/start", {}).catch(function () { return null; })
+          ? apiPost("api/models/ollama/start", {}).catch(function () { return null; })
           : Promise.resolve(null);
         // Re-enabling the button and relabelling Cancel is the only way out of
         // the "Checking…" state, so it has to happen on *every* ending — a
@@ -2772,7 +2772,7 @@
             return;
           }
           progressText.textContent = "Installed. Starting Ollama…";
-          apiPost("/api/models/ollama/start", {}).catch(function () { return null; })
+          apiPost("api/models/ollama/start", {}).catch(function () { return null; })
             .then(function () {
               _trModelsCache = null;
               _trModelsCachePromise = null;
