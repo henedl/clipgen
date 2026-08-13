@@ -128,6 +128,50 @@ def test_spec_guards_and_upx_excludes_the_vendored_tools() -> None:
     )
 
 
+def test_spec_never_strips_or_packs_on_windows() -> None:
+    """``strip``/``upx`` must stay macOS-only, or Windows ships a dead exe.
+
+    PyInstaller shells out to whatever ``strip`` is on PATH. The GitHub windows
+    runner carries a GNU binutils ``strip``, which happily rewrites MSVC-built
+    PE DLLs into images the Windows loader rejects — ``python312.dll`` included.
+    The build stays green (``strip`` returns 0), every file is present and
+    plausibly sized, and the shipped ``clipgen.exe`` dies before any Python runs
+    with ``Failed to load Python DLL ... LoadLibrary: Invalid access to memory
+    location``. That shipped in every Windows build until the ``_strip`` gate.
+    """
+    spec_text = (_ROOT / "build" / "clipgen.spec").read_text(encoding="utf-8")
+    assert '_strip = sys.platform == "darwin"' in spec_text, (
+        "the spec must gate `strip` to macOS; GNU strip corrupts Windows PE DLLs"
+    )
+    assert spec_text.count("strip=_strip") == 2, (
+        "both EXE and COLLECT must take `strip` from the platform gate"
+    )
+    assert "strip=True" not in spec_text, (
+        "`strip=True` is unconditional and breaks the Windows bundle"
+    )
+    assert spec_text.count("upx=False") == 2, (
+        "UPX corrupts the same PE DLLs; keep it off in both EXE and COLLECT"
+    )
+
+
+def test_build_workflow_smoke_launches_both_bundles() -> None:
+    """A green PyInstaller build proves nothing about whether the exe launches.
+
+    The bootloader loads ``python312.dll`` before argv is parsed, so ``--help``
+    is enough to catch a bundle whose DLLs were corrupted at build time — the
+    one failure mode the feature-verification steps all miss.
+    """
+    workflow = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "dist/clipgen/clipgen.exe --help" in workflow, (
+        "the Windows leg must smoke-launch the frozen exe"
+    )
+    assert "./dist/clipgen.app/Contents/MacOS/clipgen --help" in workflow, (
+        "the macOS leg must smoke-launch the frozen binary"
+    )
+
+
 def test_gitignore_allowlists_the_fetch_script() -> None:
     """``build/*`` is gitignored with a ``!`` allowlist; without its entry the
     fetch script exists locally but never lands in a commit."""

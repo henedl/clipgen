@@ -477,6 +477,11 @@ TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run
 TRANSCRIBE_MODEL: str = "base"  # tiny, base, small, medium, large-v3
 TRANSCRIBE_LANGUAGE: str | None = None  # None = auto-detect
 TRANSCRIBE_COMPUTE_TYPE: str = "int8"  # int8 (fastest), float16, float32
+# Compute device for the Whisper model: "auto", "cpu", or "cuda". See
+# transcripts._resolve_transcribe_device() for why "auto" means CPU in a frozen
+# build — the desktop bundle ships no CUDA runtime, so letting CTranslate2
+# auto-select a GPU only produces a "cublas64_12.dll is not found" crash.
+TRANSCRIBE_DEVICE: str = "auto"
 TRANSCRIBE_FORMAT: str = "md"  # md, srt, vtt
 TRANSCRIBE_INITIAL_PROMPT: str = "This is a recorded user experience research session."  # biases Whisper toward UX research terminology
 TRANSCRIBE_BEAM_SIZE: int = (
@@ -686,6 +691,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_PREWARM": "When the Transcripts page pre-loads the Whisper model: off, queue_open (opening a pill's options pane or hovering a pill that needs transcription), or page_load (after listing participants).",
     "TRANSCRIBE_BEAM_SIZE": "Beam-search width. 1 = greedy (fastest); higher is slower for marginally better accuracy.",
     "TRANSCRIBE_CPU_THREADS": "CTranslate2 CPU threads for the Whisper model. 0 = auto (all cores).",
+    "TRANSCRIBE_DEVICE": "Compute device for the Whisper model. auto = GPU only where the CUDA runtime is actually available (always CPU in the desktop app, which ships no CUDA). Set cuda only if you installed a matching cuBLAS/cuDNN yourself.",
     "TRANSCRIBE_VAD_FILTER": "Use Silero VAD to transcribe speech spans only, skipping long silence (reduces silence hallucinations).",
     "TRANSCRIBE_VAD_THRESHOLD": "Silero speech-probability cutoff when VAD is on. Lower = more permissive (catches quieter speech, fewer dropped words).",
     "TRANSCRIBE_VAD_SPEECH_PAD_MS": "Padding (ms) added to each detected speech span so word onsets/offsets aren't clipped by VAD.",
@@ -898,6 +904,12 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0,
         "max": 64,
         "step": 1,
+    },
+    "TRANSCRIBE_DEVICE": {
+        "tab": "Transcription",
+        "group": "Transcription",
+        "type": "select",
+        "options": ["auto", "cpu", "cuda"],
     },
     "TRANSCRIBE_BEAM_SIZE": {
         "tab": "Transcription",

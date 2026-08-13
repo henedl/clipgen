@@ -103,7 +103,11 @@ workflows_bp = Blueprint("workflows", __name__)
 utils.register_static_routes(
     workflows_bp,
     "workflows.html",
-    media_dir_getter=lambda: _input_dir,
+    # Per request, not a snapshot — POST /api/dirs moves config.INPUT_DIR
+    # mid-session and never re-inits this blueprint. See transcripts_bp.
+    # (_input_dir survives below for _build_node_context, which pins the
+    # directory a run started against on purpose.)
+    media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
 )

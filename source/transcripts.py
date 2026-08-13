@@ -211,6 +211,33 @@ def _confirm_model_download(model_name: str) -> bool:
     return False
 
 
+def _resolve_transcribe_device() -> str:
+    """Return the device string to hand ``WhisperModel``.
+
+    faster-whisper defaults to ``device="auto"``, which makes CTranslate2 pick
+    CUDA whenever it can see an NVIDIA device — and CTranslate2 ships its own
+    CUDA support independent of torch, needing a matching cuBLAS/cuDNN beside
+    it. The desktop bundle has neither: CI builds with ``--torch-backend cpu``,
+    so no ``nvidia-*`` wheel is installed and none is collected. On any machine
+    with an NVIDIA GPU the frozen app therefore selected CUDA and then died at
+    the first inference with ``Library cublas64_12.dll is not found or cannot
+    be loaded`` — long after the model had finished downloading and loading.
+
+    So "auto" resolves to CPU when frozen. Explicit "cpu"/"cuda" are passed
+    through untouched: a user who installed the CUDA runtime themselves is
+    entitled to ask for it, and to see CTranslate2's own error if it is wrong.
+    """
+    device = (config.TRANSCRIBE_DEVICE or "auto").strip().lower()
+    if device not in ("auto", "cpu", "cuda"):
+        utils.warning_print(
+            f"Unknown TRANSCRIBE_DEVICE {config.TRANSCRIBE_DEVICE!r}; using auto."
+        )
+        device = "auto"
+    if device == "auto" and getattr(sys, "frozen", False):
+        return "cpu"
+    return device
+
+
 def _load_model(model_name: str | None = None) -> Any:
     """Lazy-load the WhisperModel, caching it for reuse (thread-safe).
 
@@ -253,7 +280,8 @@ def _load_model(model_name: str | None = None) -> Any:
             # at a time and >1 workers multiplies model memory for no gain here.
             threads = config.TRANSCRIBE_CPU_THREADS or (os.cpu_count() or 0)
             load_kwargs: dict[str, Any] = {
-                "compute_type": config.TRANSCRIBE_COMPUTE_TYPE
+                "compute_type": config.TRANSCRIBE_COMPUTE_TYPE,
+                "device": _resolve_transcribe_device(),
             }
             if threads > 0:
                 load_kwargs["cpu_threads"] = threads

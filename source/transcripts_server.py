@@ -2,8 +2,9 @@
 
 Registered at /transcripts/ by start_combined_server(). Works with or without a
 spreadsheet; auto-discovers participant videos from the input directory.
-Module-level state: _manifest, _worker, _input_dir, _participants (initialized by
-_init_transcripts_state()).
+Module-level state: _manifest, _worker, _participants (initialized by
+_init_transcripts_state()). The input directory is deliberately *not* among
+them — it is read live per request, since it can move mid-session.
 
 API endpoints (all under /transcripts/):
   GET  /media/<filename>                          - serve source video files
@@ -69,7 +70,6 @@ FlaskResponse = Response | tuple[Response, int]
 
 _manifest: dict[str, Any] = {}
 _worker: transcripts.TranscriptWorker | None = None
-_input_dir: str = ""
 _participants: list[dict[str, Any]] = []
 # What the current _participants list was built from: {"sheet_context", "dir",
 # "mtime"}, or None before _init_transcripts_state has run (same "not configured
@@ -227,7 +227,20 @@ transcripts_bp = Blueprint("transcripts", __name__)
 utils.register_static_routes(
     transcripts_bp,
     "transcripts.html",
-    media_dir_getter=lambda: _input_dir,
+    # Resolved per request, never snapshotted at init: POST /api/dirs moves
+    # config.INPUT_DIR mid-session without re-running _init_transcripts_state,
+    # and _refresh_participants already follows the move. A snapshot here left
+    # the page listing participants from the new directory while /media/<file>
+    # still served the old one — every video 404'd even though the page's own
+    # ?v= mtime proved the file was there. Same reasoning as studio_bp's.
+    #
+    # This hit *every* desktop launch, not just people who switch folders: at
+    # startup nothing has configured an input directory yet, so
+    # get_effective_input_dir() falls back to Path.cwd() — which cli.main() has
+    # chdir'd to the folder containing the app. The snapshot was therefore that
+    # folder (e.g. the Desktop), a directory that exists but holds no videos,
+    # which is why the failure read as 404 rather than "not configured".
+    media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
 )
@@ -2278,9 +2291,8 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     ``server._swap_worksheet`` re-inits this blueprint on every sheet swap, so
     the stored reference is replaced rather than going stale.
     """
-    global _manifest, _worker, _input_dir, _participant_source
+    global _manifest, _worker, _participant_source
 
-    _input_dir = str(utils.get_effective_input_dir())
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()
     _pending_chain_pids.clear()

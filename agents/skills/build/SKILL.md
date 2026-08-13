@@ -28,6 +28,21 @@ not ship an app that dies on its startup ffmpeg check. They land in `<bundle>/bi
 always runs the ffmpeg it was feature-verified with. UPX is excluded for them in both `EXE` and
 `COLLECT` (`upx_exclude`) — UPX corrupts signed mach-O and packed ffmpeg.exe builds.
 
+**`strip` and `upx` are macOS-only in the spec — never re-enable them on Windows.** PyInstaller
+shells out to whatever `strip`/`upx` is on PATH, and the GitHub windows runner carries a GNU
+binutils `strip` that mangles MSVC-built PE DLLs (PyInstaller's docs say as much: `--strip` is
+"not recommended for Windows").
+The build stays green, the files all exist, and the shipped exe dies at launch with
+`Failed to load Python DLL ... LoadLibrary: Invalid access to memory location` (error 998) —
+that exact bug shipped in every Windows build from #639 until the spec's `_strip` gate. CI now
+smoke-launches `clipgen.exe --help` on both legs, which fails on any bundle whose DLLs got
+corrupted at build time (the bootloader loads `python312.dll` before argv parsing).
+
+Stripping bought nothing to begin with: turning it off grew the Windows artifact from
+440.4 MB to 442.3 MB — **+1.9 MB, 0.43%**. These are MSVC binaries whose debug info lives in
+separate PDBs, so there is barely anything for `strip` to remove. Do not trade a launchable
+app for that.
+
 ## The one rule: verify the way a user launches it
 
 **A frozen app behaves differently depending on how it is started, and the convenient way to test
@@ -147,6 +162,22 @@ transcription died with `NO_SUCHFILE` — while every source run worked. The spe
 bundle on both platforms. When a new dependency reads bundled data files at runtime, add a
 `collect_data_files(...)` line *and* a build-time guard in the same commit; a missing data
 file is invisible to the build and to every source-tree test.
+
+## A CPU-only build does not make every dependency CPU-only
+
+CI installs with `--torch-backend cpu`, so no `nvidia-*` wheel is present and none is
+collected — the bundle has no CUDA runtime. That is enough for anything that asks *torch*
+whether a GPU exists: EasyOCR gates on `torch.cuda.is_available()`, gets `False`, warns, and
+runs on CPU.
+
+**CTranslate2 does not ask torch.** Its wheels carry their own CUDA support and their own
+device detection, so faster-whisper's default `device="auto"` selected CUDA on any machine
+with an NVIDIA GPU and then died at the first inference with `Library cublas64_12.dll is not
+found or cannot be loaded` — minutes in, after the model had downloaded and loaded. Hence
+`transcripts._resolve_transcribe_device()`, which resolves "auto" to CPU when frozen.
+
+When adding a dependency that can use a GPU, check *what it asks*: a library with its own
+CUDA detection will happily pick a GPU this bundle cannot feed.
 
 ## `multiprocessing.freeze_support()` is not optional
 

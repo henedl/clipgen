@@ -34,8 +34,10 @@ recorded across several files) is addressed on the stitched timeline, and the
 frontend maps global time onto parts using the ``parts[].offset`` values from
 ``GET /api/participants``.
 
-Module-level state (``_input_dir``, ``_sheet_context``, ``_manifest``) is
-initialized by :func:`_init_composer_state`, mirroring the other blueprints.
+Module-level state (``_sheet_context``, ``_manifest``) is initialized by
+:func:`_init_composer_state`, mirroring the other blueprints. The input
+directory is not among them: it is read live per request, since it can move
+mid-session via ``POST /api/dirs``.
 Mutations hold ``_manifest_lock`` and persist via :func:`_persist_locked`.
 """
 
@@ -64,7 +66,6 @@ import itertools
 
 # ---- Module state (initialized by _init_composer_state) ----
 
-_input_dir: str = ""
 _sheet_context: Any = None
 _manifest: dict[str, Any] = {}
 _manifest_lock = threading.Lock()
@@ -86,7 +87,9 @@ composer_bp = Blueprint("composer", __name__)
 utils.register_static_routes(
     composer_bp,
     "composer.html",
-    media_dir_getter=lambda: _input_dir,
+    # Per request, not a snapshot — POST /api/dirs moves config.INPUT_DIR
+    # mid-session and never re-inits this blueprint. See transcripts_bp.
+    media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
 )
@@ -1385,8 +1388,7 @@ def _init_composer_state(sheet_context: Any = None) -> None:
     Participants are resolved from ``_sheet_context`` + the input dir on demand
     (:func:`files.resolve_participant_videos`), so nothing is snapshotted here.
     """
-    global _input_dir, _sheet_context, _manifest
+    global _sheet_context, _manifest
 
-    _input_dir = str(utils.get_effective_input_dir())
     _sheet_context = sheet_context
     _manifest = _load_manifest()

@@ -58,7 +58,9 @@ def tr_client(tr_app, tmp_path, monkeypatch):
         ],
     )
     monkeypatch.setattr(transcripts_server, "_worker", None)
-    monkeypatch.setattr(transcripts_server, "_input_dir", str(tmp_path))
+    # The media route reads the input dir live rather than from a module global,
+    # so point config at tmp_path instead of pinning a snapshot.
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
     monkeypatch.setattr(transcripts_server, "_transcript_model_warming", False)
     # Fresh corrected-segments cache + merged-task set per test (auto-restored).
     monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
@@ -2487,3 +2489,52 @@ def test_on_task_complete_refreshes_agents_on_retranscription(monkeypatch):
         assert agent["manifest_field"] not in entry
     # Chain re-run for the participant.
     assert chained == [pid]
+
+
+class TestMediaRouteFollowsTheInputDir:
+    """``/media/<file>`` must resolve the input directory per request.
+
+    The Start overlay sets the input directory through ``POST /api/dirs``, which
+    moves ``config.INPUT_DIR`` without re-running ``_init_transcripts_state``.
+    While the route served a snapshot taken at init, choosing a directory in the
+    overlay left the page listing participants from the new one while every
+    video 404'd — with the page's own ``?v=`` mtime proving the file was there.
+    """
+
+    def test_serves_from_the_directory_chosen_after_startup(
+        self, tr_client, tmp_path, monkeypatch
+    ):
+        first = tmp_path / "before"
+        first.mkdir()
+        (first / "study_P01.mp4").write_bytes(b"first")
+        monkeypatch.setattr(config, "INPUT_DIR", str(first))
+        assert tr_client.get("/transcripts/media/study_P01.mp4").status_code == 200
+
+        # The user picks a different folder in the Start overlay.
+        second = tmp_path / "after"
+        second.mkdir()
+        (second / "study_P02.mp4").write_bytes(b"second")
+        monkeypatch.setattr(config, "INPUT_DIR", str(second))
+
+        assert tr_client.get("/transcripts/media/study_P02.mp4").status_code == 200
+        # ...and the old directory is no longer served.
+        assert tr_client.get("/transcripts/media/study_P01.mp4").status_code == 404
+
+    def test_serves_after_the_very_first_directory_choice(
+        self, tr_client, tmp_path, monkeypatch
+    ):
+        """The shape every desktop launch hits.
+
+        Nothing configures an input directory before the Start overlay does, so
+        ``get_effective_input_dir()`` falls back to ``Path.cwd()`` — which
+        ``cli.main()`` has chdir'd to the folder holding the app. Snapshotting
+        that gave the media route a directory that exists but holds no videos,
+        so the first transcription's playback 404'd rather than reporting a
+        missing configuration.
+        """
+        monkeypatch.setattr(config, "INPUT_DIR", "")
+        chosen = tmp_path / "chosen"
+        chosen.mkdir()
+        (chosen / "study_P03.mp4").write_bytes(b"chosen")
+        monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
+        assert tr_client.get("/transcripts/media/study_P03.mp4").status_code == 200

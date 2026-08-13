@@ -114,6 +114,34 @@ jobs:
             throw "bundle lacks the faster_whisper VAD .onnx asset"
           }
 
+      - name: Smoke-launch the frozen exe (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # The bootloader loads python312.dll before any Python runs, so even
+          # `--help` catches a bundle whose DLLs were corrupted at build time
+          # (GNU strip on the runner's PATH did exactly that once: LoadLibrary
+          # error 998 at launch, green build). Not a startup-time proxy — just
+          # "does it launch at all".
+          $ErrorActionPreference = 'Stop'
+          # Capture first, trim after. Piping a native command straight into
+          # `Select-Object -First N` stops the pipeline early, which kills the
+          # process and leaves $LASTEXITCODE empty — the check then "fails" on a
+          # perfectly good build.
+          $out = & dist/clipgen/clipgen.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "clipgen.exe --help exited with $LASTEXITCODE" }
+          $out | Select-Object -First 5
+
+      - name: Smoke-launch the frozen binary (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          # Same guard as the Windows leg: proves the frozen interpreter loads.
+          # Captured rather than piped into `head`, which would close the pipe
+          # early and SIGPIPE the binary under `pipefail`.
+          out=$(./dist/clipgen.app/Contents/MacOS/clipgen --help)
+          printf '%s\n' "$out" | head -5
+
       - name: Ad-hoc codesign the .app bundle (macOS)
         if: matrix.os == 'macos-latest'
         run: |
