@@ -120,13 +120,14 @@ if _missing:
 
 pyz = PYZ(a.pure)
 
-# strip must never run on Windows. PyInstaller shells out to whatever `strip`
-# is on PATH, and the GitHub windows runner puts a MinGW/Strawberry GNU strip
-# there — which mangles MSVC-built PE DLLs (signed, Control-Flow-Guard section
-# layout). A stripped python312.dll still exists and looks healthy, but
-# LoadLibrary fails at launch with error 998 "Invalid access to memory
-# location", so the exe flashes a console and dies before any Python runs.
-# Confirmed from the CI build log: "Executing: strip ...\python312.dll".
+# strip must never run on Windows — PyInstaller's own docs call --strip "not
+# recommended for Windows". It shells out to whatever `strip` is on PATH, and
+# the GitHub windows runner has a GNU binutils one (it reports the aarch64
+# WebView2Loader.dll as "file format not recognized" and rewrites everything
+# else). GNU strip mangles MSVC-built PE DLLs: the file still exists and looks
+# healthy, but LoadLibrary fails at launch with error 998 "Invalid access to
+# memory location", so the exe flashes a console and dies before any Python
+# runs. Confirmed from the CI build log: "Executing: strip ...\python312.dll".
 # UPX is off for the same reason preemptively: it never ran in CI (no upx on
 # the runner today), but if a future image adds one it would corrupt the same
 # DLLs the same silent way. macOS keeps strip (Apple's strip understands
