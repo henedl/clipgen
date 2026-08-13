@@ -1217,6 +1217,45 @@ class TestLoadModelCpuThreads:
         transcripts._load_model("base")
         assert "cpu_threads" not in seen["kwargs"]
 
+    def test_device_is_always_passed_explicitly(self, monkeypatch):
+        """Never leave it to faster-whisper's ``device="auto"`` default."""
+        seen = self._capture_model(monkeypatch)
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "auto")
+        transcripts._load_model("base")
+        assert seen["kwargs"].get("device") in ("auto", "cpu")
+
+
+class TestResolveTranscribeDevice:
+    """The frozen bundle ships no CUDA runtime (CI builds ``--torch-backend
+    cpu``), so an auto-selected GPU can only fail at first inference with
+    ``Library cublas64_12.dll is not found or cannot be loaded``."""
+
+    def test_auto_is_cpu_when_frozen(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "auto")
+        monkeypatch.setattr(transcripts.sys, "frozen", True, raising=False)
+        assert transcripts._resolve_transcribe_device() == "cpu"
+
+    def test_auto_stays_auto_from_source(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "auto")
+        monkeypatch.delattr(transcripts.sys, "frozen", raising=False)
+        assert transcripts._resolve_transcribe_device() == "auto"
+
+    def test_explicit_cuda_survives_freezing(self, monkeypatch):
+        """A user who installed cuBLAS/cuDNN themselves gets what they asked
+        for — including CTranslate2's own error if they were wrong."""
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "cuda")
+        monkeypatch.setattr(transcripts.sys, "frozen", True, raising=False)
+        assert transcripts._resolve_transcribe_device() == "cuda"
+
+    def test_case_and_whitespace_tolerated(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "  CPU ")
+        assert transcripts._resolve_transcribe_device() == "cpu"
+
+    def test_unknown_value_falls_back_to_auto(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "mps")
+        monkeypatch.delattr(transcripts.sys, "frozen", raising=False)
+        assert transcripts._resolve_transcribe_device() == "auto"
+
 
 class TestIsWhisperModelCached:
     def test_debugging_short_circuits_true(self, monkeypatch):
