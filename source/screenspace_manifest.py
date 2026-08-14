@@ -1,9 +1,4 @@
-"""Screenspace task + manifest helpers.
-
-Task-status constants, task construction, manifest load/save, result-time
-offsetting for multi-video scans, and event generation from raw results.
-Imports the confidence extractor from screenspace_tools.
-"""
+"""Screenspace task + manifest helpers."""
 
 import uuid
 from datetime import UTC, datetime
@@ -16,7 +11,7 @@ from screenspace_tools import _extract_confidence
 
 
 # ---------------------------------------------------------------------------
-# Task queue and worker
+# Task construction
 # ---------------------------------------------------------------------------
 
 TASK_STATUS_QUEUED = "queued"
@@ -39,10 +34,9 @@ _SENTINEL = object()
 
 
 def strip_task_param_binaries(params: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of task ``parameters`` without binary payloads
-    (``TASK_BINARY_KEYS``), also stripping binaries + internal ``region_coords``
-    from multitool ``steps``. Shared by manifest writes and API responses
-    (``screenspace_server._clean_task``)."""
+    """Copy of task ``parameters`` without ``TASK_BINARY_KEYS``, also stripping
+    binaries + internal ``region_coords`` from multitool ``steps``. Shared by
+    manifest writes and API responses (``screenspace_server._clean_task``)."""
     params = {k: v for k, v in params.items() if k not in TASK_BINARY_KEYS}
     if "steps" in params:
         step_strip_keys = TASK_BINARY_KEYS + ("region_coords",)
@@ -166,9 +160,9 @@ def _describe(task_type: str, params: dict[str, Any]) -> str:
 def describe_task(task_type: str, region_name: str, parameters: dict[str, Any]) -> str:
     """Build a descriptive display name from a task's distinguishing params.
 
-    e.g. 'Text "checkout" · header', 'Color: blue · HUD', 'Numbers > 100'.
-    Total: malformed params degrade to the capitalized tool label, never raise.
-    The user-supplied event_label still overrides this everywhere it is shown.
+    e.g. 'Text "checkout" · header', 'Color: blue · HUD', 'Numbers > 100'. Total:
+    malformed params degrade to the capitalized tool label rather than raising.
+    A user-supplied event_label still overrides this wherever it is shown.
     """
     try:
         name = _describe(task_type, parameters)
@@ -217,7 +211,7 @@ def create_task(
 
 
 # ---------------------------------------------------------------------------
-# Heatmap generation
+# Manifest persistence
 # ---------------------------------------------------------------------------
 
 
@@ -328,9 +322,8 @@ def generate_events_from_results(
     if task_type == "timelapse":
         return []
     if task_type == "attention":
-        # Events come from the shift-only on_result stream; this filter is
-        # defensive for regeneration paths (e.g. event backfill from
-        # task["result"]) that could hand us the full per-sample list.
+        # Events come from the shift-only on_result stream; this guards the
+        # regeneration paths that could hand over the full per-sample list.
         raw_results = [r for r in raw_results if r.get("shift")]
     events: list[dict[str, Any]] = []
     for r in raw_results:
@@ -369,9 +362,8 @@ def generate_events_from_results(
             metadata["peak_value"] = r.get("peak_value", 0.0)
         elif task_type == "boundary":
             metadata["distance"] = r.get("distance", 0.0)
-            # Scene/hybrid metrics emit the period each boundary opens; absent
-            # for the phash metric. Carried so Studio/Viewer can later render
-            # segments instead of bare ticks.
+            # Scene/hybrid metrics emit the period each boundary opens (absent for
+            # phash), so Studio/Viewer can render segments instead of bare ticks.
             if "period_start" in r:
                 metadata["period_start"] = r.get("period_start")
             if "period_end" in r:
@@ -386,8 +378,8 @@ def generate_events_from_results(
         if task_type == "inactivity" and "end" in r:
             ev["time_out"] = round(r["end"], 2)
         if task_type == "boundary":
-            # Boundaries are for orientation, not clip candidacy. The
-            # navigational flag lets Studio intake hide them by default.
+            # Orientation, not clip candidacy — the flag lets Studio intake hide
+            # boundaries by default.
             ev["navigational"] = True
         events.append(ev)
     return events

@@ -20,28 +20,17 @@ a background thread → results are timestamps or artifact files → state persi
 screenspace_manifest.json. Region coordinates are normalized (0–1); source_width/source_height
 are stored for denormalization to target video resolution.
 
-This module is a thin re-export facade. The implementation lives in cohesive sibling
-modules (imported deepest-first below); ``import screenspace; screenspace.NAME`` keeps
-resolving every public name — and the private names the test suite reaches for — from
-their new homes:
-
-  screenspace_primitives  – pure cv2/numpy region + image-analysis primitives
-  screenspace_ocr         – cached EasyOCR readers, number/text scoring helpers
-  screenspace_frames      – ffmpeg-pipe frame extraction + ffprobe metadata
-  screenspace_scans       – the eleven per-tool scan workflows
-  screenspace_heatmap     – template/flow/change/attention heatmap PNG + cumulative/rolling GIF generation
-  screenspace_tools       – AnalysisTool registry + per-frame dispatch
-  screenspace_multitool   – multitool chaining + offset joining
-  screenspace_manifest    – task/manifest persistence + event generation
-  screenspace_worker      – the background task-queue worker
+This module is a thin re-export facade: the implementation lives in the cohesive
+``screenspace_*`` siblings imported below (deepest-first), so ``screenspace.NAME``
+keeps resolving every public name — and the private names tests reach for.
+Per-module roles are tabulated in agents/ARCHITECTURE.md.
 """
 
 # ruff: noqa: F401
 # Deepest-first re-export so ``screenspace.NAME`` resolves from the new modules.
 
-# ``screenspace.utils`` is part of the public surface (a test monkeypatches
-# ``screenspace.utils.warning_print``); ``utils`` is a singleton module so the
-# patch is visible to every sibling that does ``import utils``.
+# Public surface: a test monkeypatches ``screenspace.utils.warning_print``, and
+# since ``utils`` is a singleton module the patch reaches every sibling too.
 import utils
 
 from screenspace_primitives import (
@@ -89,9 +78,9 @@ from screenspace_ocr import (
     run_calibration_ocr,
 )
 
-# Re-exporting a name here only rebinds it on the facade — it does NOT propagate
-# to siblings that imported it (e.g. ``screenspace_scans._probe_video_meta``). To
-# stub a seam in a test, patch the owning module, not the facade.
+# Re-exporting only rebinds on the facade; it does NOT propagate to siblings that
+# imported the name (e.g. ``screenspace_scans._probe_video_meta``). Tests must
+# patch the owning module, not the facade.
 from screenspace_frames import (
     _ffmpeg_pipe_frames,
     _probe_video_meta,

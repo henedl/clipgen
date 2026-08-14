@@ -1,11 +1,13 @@
 """Screenspace analysis tools (strategy registry) + per-frame dispatch.
 
-The ``AnalysisTool`` base class, one subclass per tool, the ``TOOLS`` registry,
-and the single-frame evaluation/scoring entry points used by the multitool
-chainer and pin calibration. Imports primitives, OCR helpers, and scan
-workflows from sibling modules; the one tools->multitool edge
-(``MultitoolTool.scan`` -> ``scan_multitool``) is a function-local import to
-keep the module graph acyclic.
+Each tool is a small class wrapping the module-level ``scan_*`` function (kept
+standalone so tests can monkeypatch them). Two dispatch points look a tool up in
+``TOOLS`` and delegate: :func:`check_frame_for_tool` (single-frame, used by the
+multitool chainer and pin calibration) and ``ScreenspaceWorker._dispatch``
+(full-video scan).
+
+The one tools->multitool edge (``MultitoolTool.scan`` -> ``scan_multitool``) is a
+function-local import, keeping the module graph acyclic.
 """
 
 import math
@@ -102,13 +104,12 @@ def _extract_confidence(tool_type: str, result: dict[str, Any]) -> float:
 # Per-frame memoization (multitool chains)
 # ---------------------------------------------------------------------------
 #
-# Within a multitool chain every step re-derives crop / gray / phash / OCR from
-# the same ``(frame, region)``. ``scan_multitool`` passes a fresh dict per frame
-# as ``cache`` (and the previous frame's dict as ``prev_cache``, rolled forward)
-# so steps sharing a region compute each derived value once, and temporal tools
-# (change / flow / inactivity) reuse the previous frame's already-computed crop /
-# gray instead of recomputing it. Single-frame callers (pin calibration) pass no
-# cache — ``None`` disables memoization and keeps results byte-identical.
+# Within a multitool chain every step re-derives crop/gray/phash/OCR from the
+# same ``(frame, region)``. ``scan_multitool`` passes a fresh per-frame ``cache``
+# (plus the previous frame's as ``prev_cache``, rolled forward), so steps sharing
+# a region compute each value once and temporal tools (change/flow/inactivity)
+# reuse the previous frame's crop/gray. Single-frame callers (pin calibration)
+# pass none — ``None`` disables memoization and keeps results byte-identical.
 
 _MISSING = object()
 
@@ -229,17 +230,16 @@ def check_frame_for_tool(
 ) -> tuple[bool, dict[str, Any] | None]:
     """Evaluate whether a single frame passes a tool's criteria.
 
-    Used by :func:`scan_multitool` for steps 1+ in the chain.  Returns
-    ``(passed, result_dict)`` where *result_dict* contains tool-specific
-    metadata when the check passes, or ``None`` when it does not.
+    Used by :func:`scan_multitool` for steps 1+ in the chain. Returns
+    ``(passed, result_dict)``, the dict carrying tool-specific metadata on a pass
+    and ``None`` otherwise.
 
-    For **change** and **flow** tools *prev_frame* is required (the frame
-    immediately before the candidate timestamp).  If it is ``None`` the
-    check is skipped (returns ``(False, None)``).
+    **change** and **flow** require *prev_frame* (the frame immediately before
+    the candidate timestamp); a ``None`` there skips the check as ``(False, None)``.
 
-    ``cache`` / ``prev_cache`` are optional per-frame memo dicts (this frame's and
-    the previous frame's) that let chained steps sharing a region reuse crop /
-    gray / phash / OCR work; ``None`` (the calibration path) disables memoization.
+    ``cache`` / ``prev_cache`` are optional per-frame memo dicts letting chained
+    steps that share a region reuse crop/gray/phash/OCR work; ``None`` (the
+    calibration path) disables memoization.
 
     Degenerate regions (width or height ≤ 0, e.g. a 1-px user draw rounded
     to zero pixels on a small preview) are treated as a non-match here so
@@ -296,10 +296,9 @@ def score_frame_for_tool(
     pin so fuzzy/confidence changes re-score without re-running OCR; when absent
     the tool runs OCR live through its ``check_frame``.
     """
-    # Template matches against the full frame and ignores ``region``, so a
-    # zero-size region — the case when an uploaded template scans the whole
-    # frame with no region_ref — is valid for it. Every other tool crops the
-    # region, where an empty crop would break downstream cv2 ops.
+    # Template matches full-frame and ignores ``region``, so a zero-size region
+    # (an uploaded template scanning the whole frame with no region_ref) is valid
+    # for it alone. Every other tool crops, where an empty crop breaks cv2.
     if tool_type != "template" and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
         return {"status": "not_evaluable"}
     tool = TOOLS.get(tool_type)
@@ -501,13 +500,10 @@ class ChangeTool(AnalysisTool):
 
 class SimilarityTool(AnalysisTool):
     # A spatial Similarity heatmap is feasible but deferred: this tool computes
-    # only a scalar SSIM via ``regions_are_similar``. An accumulated heatmap would
-    # need the per-pixel map (``ssim_diff_map`` /
-    # ``structural_similarity(..., full=True)``, already used by the Model view
-    # preview off the hot path), which adds per-frame CPU/memory; if added later,
-    # gate it behind the phash pre-filter so the full map is only computed on
-    # candidate frames. (See Change/Template heatmaps in screenspace_heatmap.py
-    # for the accumulation pattern.)
+    # only a scalar SSIM. An accumulated heatmap needs the per-pixel map
+    # (``ssim_diff_map``, already used by the Model view preview off the hot
+    # path), costing per-frame CPU/memory — so gate it behind the phash
+    # pre-filter if added.
     name = "similarity"
     fast_scan_region_dim = 128
     score_key = "score"
@@ -678,7 +674,7 @@ class TemplateTool(AnalysisTool):
         if template_img is None:
             return False, None
         threshold = params.get("threshold", config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD)
-        # Cache the per-task-constant scaled template/mask + grayscale prep on the
+        # Cache the task-constant scaled template/mask + grayscale prep on the
         # parameters dict so multitool scans amortize it across frames. The
         # template_scale slider resizes the (often uploaded) template to its
         # in-video pixel size before matching, mirroring scan_template.

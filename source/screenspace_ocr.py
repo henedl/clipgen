@@ -1,9 +1,4 @@
-"""Screenspace OCR + numeric helpers.
-
-Pooled EasyOCR readers, region preprocessing, glyph confusion-folding, the
-numeric comparison helpers and allowlists, region reading/scoring, and the
-calibration OCR entry point. Imports region cropping from screenspace_primitives.
-"""
+"""Screenspace OCR + numeric helpers."""
 
 import difflib
 import math
@@ -25,16 +20,12 @@ from screenspace_primitives import extract_region, point_in_mask_points
 # Reader pool
 # ---------------------------------------------------------------------------
 #
-# EasyOCR/torch inference on a shared Reader is not thread-safe: with parallel
-# Screenspace workers (and the calibration route thread) hitting one Reader,
-# concurrent readtext calls can corrupt results or crash. Rather than serialize
-# every readtext behind a global lock (which capped OCR concurrency at 1 despite
-# SCREENSPACE_PARALLEL_WORKERS), keep a small bounded pool of Readers per
-# language set and hand a distinct Reader to each concurrent caller. A Reader is
-# only ever touched by one thread at a time, so no inference lock is needed and
-# up to pool-size OCR calls run truly in parallel. The pool is bounded (not a
-# per-thread reader) because the Flask calibration path spawns ephemeral request
-# threads, which would otherwise accumulate one model copy per thread.
+# EasyOCR/torch inference on a shared Reader is not thread-safe — concurrent
+# readtext calls corrupt results or crash. A global lock would fix that but caps
+# OCR concurrency at 1 regardless of SCREENSPACE_PARALLEL_WORKERS, so instead
+# each caller borrows its own Reader from a small per-language pool. Bounded
+# rather than per-thread: Flask's ephemeral calibration request threads would
+# otherwise accumulate one model copy each.
 
 _ocr_pools: dict[tuple, queue.Queue] = {}
 _ocr_pool_lock = threading.Lock()  # guards _ocr_pools creation
@@ -75,13 +66,12 @@ def _get_ocr_pool(languages: list[str]) -> queue.Queue:
 
 @contextmanager
 def _checkout_ocr_reader(languages: list[str]) -> Iterator[Any]:
-    """Borrow a Reader from the bounded per-language pool for the duration of a call.
+    """Borrow a Reader from the bounded per-language pool for one call.
 
-    ``pool.get()`` blocks when every Reader is busy, so concurrency is capped at
-    the pool size. A ``None`` slot is built on first use under ``_ocr_build_lock``
-    (serializing only construction, so the initial model-file download can't
-    race). The slot is always returned to the pool — ``None`` again if
-    construction raised — so the pool's slot count never shrinks.
+    ``pool.get()`` blocks while every Reader is busy, capping concurrency at the
+    pool size. ``None`` slots are built on first use under ``_ocr_build_lock`` so
+    the initial model download can't race. The slot always goes back — ``None``
+    again if construction raised — so the pool never shrinks.
     """
     key = tuple(sorted(languages))
     pool = _get_ocr_pool(languages)
@@ -104,15 +94,11 @@ def _ocr_readtext(languages: list[str], image: np.ndarray, **kwargs: Any) -> lis
 def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarray:
     """Enhance a region crop for OCR: upscale small crops and boost local contrast.
 
-    Compressed game HUDs frequently render text below EasyOCR's comfortable size
-    and at low contrast. Crops shorter than ``min_height`` are upscaled with cubic
-    interpolation (preserving aspect ratio), then CLAHE (contrast-limited adaptive
-    histogram equalization) separates faint glyphs from the background. Opt-in per
-    task because the resize + equalization costs a few ms/frame and can introduce
-    ringing on already-clean text.
-
-    Returns a 3-channel BGR array (EasyOCR accepts grayscale, but stacking keeps
-    the downstream call identical to the raw crop).
+    Compressed HUDs render text below EasyOCR's comfortable size and contrast, so
+    crops shorter than ``min_height`` are cubic-upscaled (aspect preserved) and
+    CLAHE-equalized. Opt-in per task: it costs a few ms/frame and can ring on
+    already-clean text. Returns 3-channel BGR so the downstream call is identical
+    to the raw-crop path.
     """
     if min_height <= 0:
         min_height = config.SCREENSPACE_OCR_MIN_HEIGHT
@@ -129,10 +115,9 @@ def _preprocess_for_ocr(pixels: np.ndarray, *, min_height: int = 0) -> np.ndarra
     return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
 
-# Opt-in OCR confusion-collapsing for the text tool. Folds glyphs EasyOCR most
-# often swaps on compressed footage toward a canonical form before the fuzzy
-# compare. Two directions: fold toward digits (so a search for "100" matches an
-# OCR reading of "l00") or toward letters (so a search for "stop" matches "5top").
+# Opt-in confusion-collapsing for the text tool: fold the glyphs EasyOCR most
+# often swaps on compressed footage before the fuzzy compare. Either toward
+# digits ("100" matches a reading of "l00") or letters ("stop" matches "5top").
 _OCR_FOLD_TO_DIGITS = str.maketrans(
     {"o": "0", "l": "1", "i": "1", "|": "1", "s": "5", "b": "8"}
 )
@@ -172,15 +157,12 @@ def _effective_ocr_confidence_threshold(value: Any = None) -> float:
 _NUMBERS_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _VALID_OPERATORS = ("eq", "gt", "lt", "gte", "lte", "range")
 
-# EasyOCR character allowlist for the numbers tool. Numbers mode is digits-only,
-# so constraining recognition kills glyph confusions (O↔0, S↔5, l↔1) at the
-# source. Only passed for the default English reader — some language combos
-# reject ``allowlist``. Mirrors what the downstream parser accepts (``-``, ``.``,
-# ``,`` thousands separators, digits).
+# Constraining recognition kills glyph confusions (O↔0, S↔5, l↔1) at the source.
+# Mirrors what the downstream parser accepts. English-only — some language combos
+# reject ``allowlist``.
 _OCR_NUMBER_ALLOWLIST = "0123456789.,-"
-# integers_only narrows the allowlist further: dropping ``.,-`` stops a separator
-# or sign glyph from surviving OCR as a digit and inflating the parsed value.
-# Use for whole-number HUD targets (scores, counts) where decimals never appear.
+# integers_only drops ``.,-`` too, so a separator or sign glyph can't survive OCR
+# as a digit and inflate the value. For HUD targets where decimals never appear.
 _OCR_DIGITS_ONLY_ALLOWLIST = "0123456789"
 
 
@@ -228,15 +210,13 @@ def _ocr_region_readings(
 ) -> list[Any]:
     """Run EasyOCR over a region crop and return raw ``(bbox, text, conf)`` tuples.
 
-    Pure transport over the cached reader — no fuzzy/threshold logic — so the
-    same readings can be re-scored under different fuzzy/confidence settings
-    (the basis of the calibration OCR cache).
+    Pure transport — no fuzzy/threshold logic — so the same readings can be
+    re-scored under different settings (the calibration OCR cache relies on this).
 
-    For shaped regions, *mask_points* (bbox-relative contour list) drops
-    readings whose bbox center falls outside every contour. OCR always sees the
-    full rect (masking glyph pixels would corrupt recognition); only the
-    readings are filtered. Centers are normalized by the *post-preprocess*
-    image shape so the test is unaffected by the OCR upscale.
+    For shaped regions, *mask_points* (bbox-relative contours) drops readings whose
+    bbox center falls outside every contour. OCR still sees the full rect, since
+    masking glyph pixels would corrupt recognition. Centers normalize by the
+    *post-preprocess* shape so the test survives the OCR upscale.
     """
     langs = languages or ["en"]
     pixels = _preprocess_for_ocr(region_pixels) if preprocess else region_pixels

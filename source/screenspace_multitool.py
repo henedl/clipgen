@@ -1,9 +1,7 @@
 """Screenspace multitool chaining.
 
-Chains multiple tools (each later step only re-checks frames that passed the
-earlier ones), with optional time-offset windows joined into combined events.
-Imports the single-frame dispatch from screenspace_tools and a full-frame
-sweep / ffprobe helper from screenspace_frames.
+Chains multiple tools — each later step only re-checks frames that passed the
+earlier ones — with optional time-offset windows joined into combined events.
 """
 
 import bisect
@@ -46,26 +44,19 @@ def scan_multitool(
 ) -> list[dict[str, Any]]:
     """Run a multi-factor scan chaining several tool types.
 
-    Iterates the video once, checking all steps per frame.  A frame
-    must pass every step (in order) to be included in the results.
-    Results are emitted incrementally via *on_result* as each passing
-    frame is found.
+    Iterates the video once; a frame must pass every step (in order) to land in
+    the results, which stream out via *on_result* as they are found. Each entry
+    in *steps* is a dict of ``"type"`` plus that tool's own parameters (e.g.
+    ``target_color``, ``tolerance``).
 
-    Each entry in *steps* is a dict with ``"type"`` plus the tool's
-    own parameters (e.g. ``target_color``, ``tolerance`` for color).
+    An ``"offset"`` window on any step past the first (``{"min", "max"}`` seconds
+    relative to the previous step's matched frame) switches to a two-phase
+    collect-then-join path: phase 1 records every step's pass/fail per frame,
+    phase 2 joins them temporally (see :func:`_join_multitool_offsets`). Offset
+    events anchor on the first step's frame and emit after the join rather than
+    per-frame; without an offset the single-pass short-circuit path runs.
 
-    When any step (idx > 0) carries an ``"offset"`` window
-    (``{"min", "max"}`` seconds relative to the previous step's matched
-    frame), the scan switches to a two-phase *collect-then-join* path:
-    phase 1 decodes the video once and records every step's pass/fail per
-    frame; phase 2 joins them temporally (see
-    :func:`_join_multitool_offsets`). Offset events are anchored on the
-    first step's frame and emitted after the join (not per-frame). When no
-    step has an offset the original single-pass short-circuit path runs,
-    behaving exactly as before.
-
-    Returns a list of ``{timestamp, tool_types, steps, min_confidence}``
-    dicts.
+    Returns ``{timestamp, tool_types, steps, min_confidence}`` dicts.
     """
     if len(steps) < 2:
         raise ValueError("Multitool requires at least 2 steps")
@@ -91,8 +82,8 @@ def scan_multitool(
         scan_end = vid_duration
     total_range = scan_end - scan_start
 
-    # Validate offset windows so a misconfigured offset doesn't silently yield an
-    # empty result with no explanation. Direct callers (MultitoolTool.scan, the
+    # Validate here too: a misconfigured offset would otherwise yield an empty
+    # result with no explanation, and direct callers (MultitoolTool.scan, the
     # Workflows ss_scan node) bypass the server route's _coerce_offset check.
     for i in range(1, len(steps)):
         off = steps[i].get("offset")
@@ -116,9 +107,9 @@ def scan_multitool(
     tool_types = [s["type"] for s in steps]
     step_regions = [s.get("region_coords", region) for s in steps]
     prev_frame: list[np.ndarray | None] = [None]
-    # Per-frame memo shared across a frame's steps, rolled forward so temporal
-    # tools (change/flow/inactivity) reuse the previous frame's crop/gray/phash
-    # instead of recomputing it. See check_frame_for_tool's cache/prev_cache.
+    # Per-frame memo shared across a frame's steps and rolled forward, so temporal
+    # tools (change/flow/inactivity) reuse the previous frame's crop/gray/phash.
+    # See check_frame_for_tool's cache/prev_cache.
     prev_cache: list[dict[Any, Any] | None] = [None]
     results: list[dict[str, Any]] = []
 
@@ -127,10 +118,10 @@ def scan_multitool(
 
     if _multitool_has_offset(steps):
         # ---- Offset path: two-phase collect-then-join --------------------
-        # Phase 1: one decode pass, evaluate EVERY step on EVERY frame (no
+        # Phase 1: one decode pass evaluating EVERY step on EVERY frame (no
         # short-circuit), recording pass/fail + detail per sampled timestamp.
-        # ``prev_frame`` is maintained exactly as the fast path so temporal
-        # tools (change/flow/inactivity) still see the prior frame.
+        # ``prev_frame`` is maintained as in the fast path so temporal tools
+        # still see the prior frame.
         ts_list: list[float] = []
         passed_cols: list[list[bool]] = [[] for _ in steps]
         detail_cols: list[list[dict[str, Any] | None]] = [[] for _ in steps]
@@ -155,8 +146,8 @@ def scan_multitool(
             prev_frame[0] = frame
             prev_cache[0] = cache
             if on_progress and total_range > 0:
-                # Reserve the last 10% for the join (cheap, but keeps the bar
-                # from sitting at 100% while the join runs).
+                # Reserve the last 10% for the join, so the bar doesn't sit at
+                # 100% while it runs.
                 on_progress(0.9 * (ts - scan_start) / total_range)
             return None
 
@@ -171,12 +162,11 @@ def scan_multitool(
             fast_opts=fast_opts,
         )
 
-        # A user cancel/pause stops the decode early; skip the join+emit and
-        # let the worker settle the cancelled/paused status. ``detect_first``
-        # does NOT trip _cancel here — it only fires on the first on_result.
-        # The join needs every frame from ``scan_start``, so this path cannot
-        # resume incrementally; ``ScreenspaceWorker.resume`` restarts offset
-        # tasks from scratch (it does not advance ``start_seconds`` for them).
+        # A user cancel/pause stops the decode early; skip the join+emit and let
+        # the worker settle the status. (``detect_first`` does not trip _cancel
+        # here — it only fires on the first on_result.) The join needs every frame
+        # from ``scan_start``, so offset tasks cannot resume incrementally;
+        # ``ScreenspaceWorker.resume`` restarts them from scratch.
         if _cancel():
             return []
 
@@ -278,22 +268,20 @@ def _join_multitool_offsets(
     list of sampled timestamps; ``passed_cols[i]`` / ``detail_cols[i]`` are the
     parallel per-step pass/fail and detail columns from phase 1.
 
-    Semantics (all confirmed with the product owner):
+    Semantics (confirmed with the product owner — do not change on a hunch):
 
     * **Anchor** — every step-0 match seeds a candidate chain; the emitted
       event's ``timestamp`` is the step-0 (trigger) frame.
-    * **Cumulative** — each step ``i`` is evaluated relative to ``ref_ts``, the
-      *previous* step's matched frame. An AND match advances ``ref_ts`` to its
-      earliest in-window frame; NOT and same-frame steps leave it unchanged.
-      The advance is greedy (earliest match wins) with no backtracking — for a
-      3+ step chain a later in-window match that would have let a downstream
-      step resolve is not reconsidered.
-    * **Offset window** — ``[ref_ts + min, ref_ts + max]`` (either bound may be
-      negative). Absent offset ⇒ the exact ``ref_ts`` frame (legacy behavior).
+    * **Cumulative** — step ``i`` is evaluated against ``ref_ts``, the *previous*
+      step's matched frame. An AND match advances ``ref_ts`` to its earliest
+      in-window frame; NOT and same-frame steps leave it unchanged. The advance
+      is greedy with no backtracking — in a 3+ step chain, a later in-window
+      match that would have let a downstream step resolve is not reconsidered.
+    * **Offset window** — ``[ref_ts + min, ref_ts + max]``, either bound possibly
+      negative. No offset ⇒ the exact ``ref_ts`` frame.
     * **NOT** — passes iff the condition matches in *no* frame of the window.
 
-    Adjacent anchors that resolve are coalesced (see
-    :func:`_coalesce_offset_events`).
+    Adjacent anchors that resolve are coalesced (:func:`_coalesce_offset_events`).
     """
     n = len(steps)
     eps = 1e-6
