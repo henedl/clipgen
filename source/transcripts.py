@@ -1227,7 +1227,22 @@ class TranscriptWorker:
                     continue
                 task["status"] = TASK_STATUS_RUNNING
 
-            self._execute_task(task)
+            # The worker must outlive any single task. _execute_task owns its
+            # own try/except for the transcription itself, but work outside it
+            # (the model preload, ffprobe/timeline setup) can still raise, and
+            # there is no restart path for this thread — is_alive is reported
+            # to the frontend but never acted on, so a death here wedges every
+            # later transcribe request in a queue nothing drains.
+            try:
+                self._execute_task(task)
+            except Exception as exc:
+                utils.error_print(f"Transcription task failed: {exc}")
+                with self._lock:
+                    if task.get("status") == TASK_STATUS_RUNNING:
+                        task["status"] = TASK_STATUS_FAILED
+                        task["error"] = str(exc)
+                        task.setdefault("partial_segments", [])
+                        task["completed_at"] = datetime.now(UTC).isoformat()
 
             if self.on_task_complete:
                 try:
@@ -1302,10 +1317,24 @@ class TranscriptWorker:
         if not config.DEBUGGING and not task.get("_cancelled"):
             with self._lock:
                 task["phase"] = "loading_model"
-            if _load_model(task.get("model")) is None:
+            # _load_model does not only return None on failure — it raises.
+            # run_with_spinner calls its callback bare, and the WhisperModel
+            # construction inside has a finally but no except, so a CTranslate2
+            # "Library cublas64_12.dll is not found", an unsupported
+            # compute_type, or a huggingface download OSError all propagate.
+            # This sits outside the try below, so without this handler the
+            # exception escapes _run and kills the worker thread for good.
+            try:
+                loaded = _load_model(task.get("model"))
+            except Exception as exc:
+                loaded = None
+                load_error = f"Transcription model failed to load: {exc}"
+            else:
+                load_error = "Transcription model failed to load."
+            if loaded is None:
                 with self._lock:
                     task["status"] = TASK_STATUS_FAILED
-                    task["error"] = "Transcription model failed to load."
+                    task["error"] = load_error
                     task["partial_segments"] = []
                     task["completed_at"] = datetime.now(UTC).isoformat()
                 return

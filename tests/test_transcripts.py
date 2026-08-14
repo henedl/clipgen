@@ -1140,6 +1140,82 @@ class TestTranscriptWorker:
         assert task["phase"] == "loading_model"
         load_model.assert_called_once()
 
+    def test_execute_task_model_load_raising_fails_task(self, monkeypatch):
+        """_load_model raises as well as returning None (run_with_spinner calls
+        its callback bare, and the WhisperModel construction has no except), so
+        the preload must catch it rather than let it escape _execute_task."""
+        import video as video_mod
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(video_mod, "timeline_or_none", lambda *_a: None)
+        monkeypatch.setattr(
+            video_mod,
+            "probe_video_properties",
+            lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
+        )
+        monkeypatch.setattr(
+            transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
+        )
+        monkeypatch.setattr(transcripts, "_resolve_audio_index", lambda *_a: 0)
+
+        def _raising_load(*_a, **_k):
+            raise RuntimeError("Library cublas64_12.dll is not found")
+
+        monkeypatch.setattr(transcripts, "_load_model", _raising_load)
+
+        worker = transcripts.TranscriptWorker()
+        task = transcripts.create_transcript_task("P01", ["/v.mp4"])
+        task["status"] = "running"
+
+        worker._execute_task(task)
+
+        assert task["status"] == "failed"
+        assert "cublas64_12" in task["error"]
+        assert task["completed_at"]
+
+    def test_worker_loop_survives_a_raising_task(self, monkeypatch):
+        """A task that raises anywhere outside _execute_task's own try must not
+        kill the worker thread: there is no restart path, so the next task
+        would queue into a loop nothing drains."""
+        import time
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+
+        seen = []
+
+        # Keyed on the participant, not execution order: both tasks enqueue at
+        # the same priority and the tie breaks on a random task id, so which
+        # one the worker picks up first is not deterministic.
+        def _boom(task):
+            seen.append(task["id"])
+            if task["participant"] == "P01":
+                raise RuntimeError("model exploded")
+            task["status"] = "completed"
+
+        worker = transcripts.TranscriptWorker()
+        monkeypatch.setattr(worker, "_execute_task", _boom)
+        worker.start()
+        try:
+            first = worker.enqueue(
+                transcripts.create_transcript_task("P01", ["/v.mp4"])
+            )
+            second = worker.enqueue(
+                transcripts.create_transcript_task("P02", ["/v.mp4"])
+            )
+            deadline = time.monotonic() + 5
+            while len(seen) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+        finally:
+            worker.stop()
+
+        assert len(seen) == 2, "worker died on the first task"
+        failed = worker.get_task(first)
+        completed = worker.get_task(second)
+        assert failed is not None and completed is not None
+        assert failed["status"] == "failed"
+        assert "model exploded" in failed["error"]
+        assert completed["status"] == "completed"
+
     def test_remove_task(self):
         worker = transcripts.TranscriptWorker()
         task = transcripts.create_transcript_task("P01", ["/v.mp4"])
