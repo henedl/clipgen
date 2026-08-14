@@ -767,6 +767,19 @@ def test_the_wip_badge_is_shared_not_forked():
 # ---- Transcribe All (Quick action -> batch transcription enqueue) ----
 
 
+def test_ollama_start_posts_to_the_transcripts_blueprint():
+    """A leading slash would hit GET-only /api/models on the combined app.
+
+    The start route lives on transcripts_bp as POST /transcripts/api/models/ollama/start
+    (sibling of install/pull). apiPost("/api/models/ollama/start") 404s; the
+    .catch swallows it, so after a managed install — whose silent Windows
+    installer does not auto-start the tray — Ollama never comes up and the
+    Start Ollama button is a no-op.
+    """
+    assert _JS.count('apiPost("api/models/ollama/start"') == 2
+    assert 'apiPost("/api/models/ollama/start"' not in _JS
+
+
 def test_transcribe_all_reaches_a_published_satellite_function():
     """The hub delegates to TS.transcribeParticipants, which lives in the pills
     satellite. test_frontend_satellite_wiring.py only catches *bare* cross-file

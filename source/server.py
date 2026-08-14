@@ -1013,23 +1013,16 @@ def _save_manifest_quiet() -> None:
 def _resolve_intake_video_paths(participant: str, source: str = "") -> list[str]:
     """Resolve the ordered source-video path(s) for an intake participant.
 
-    Tries the source-specific participant list first, then falls back to the
-    other.  Both lists are populated from the same source videos so the
-    fallback is a safety net. Returns [] when the participant has no video.
-    A multi-video participant returns all parts (one continuous timeline).
+    Reads the live input directory (and the open sheet, when there is one)
+    rather than the Screenspace/Transcripts ``_participants`` caches. Those
+    only refresh on ``/api/participants``; ``POST /api/dirs`` and a MindNode-only
+    session never hit that route, so a generate would look at the boot-time
+    scan and report "No video for P01". ``source`` is kept for call-site
+    compatibility — both tool lists scan the same files.
     """
-    import screenspace_server
-    import transcripts_server
-
-    lists = (
-        [transcripts_server._participants, screenspace_server._participants]
-        if source == "transcript"
-        else [screenspace_server._participants, transcripts_server._participants]
-    )
-    for plist in lists:
-        for p in plist:
-            if p["id"] == participant and p.get("has_video"):
-                return list(p["video_paths"])
+    for p in files.resolve_participant_videos(_sheet_context):
+        if p["id"] == participant and p.get("has_video"):
+            return list(p["video_paths"])
     return []
 
 
