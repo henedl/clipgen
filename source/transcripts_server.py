@@ -620,23 +620,37 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
 _embed_cancel_event = threading.Event()
 _embed_lock = threading.Lock()
 _embed_busy = False
+# Identifies the run currently holding the slot. The release is attempted twice
+# per run (the generator's finally, and the response's call_on_close for the
+# case where the generator is never started at all), and a bare release would
+# let the second of those clear a *successor* run's claim. Releasing by token
+# makes both attempts idempotent and scoped to their own run.
+_embed_owner: str | None = None
 
 
-def _claim_embed_slot() -> bool:
-    """Take the single embed slot, or return False if a run already holds it."""
-    global _embed_busy
+def _claim_embed_slot() -> str | None:
+    """Take the single embed slot, returning its token, or None if held."""
+    global _embed_busy, _embed_owner
     with _embed_lock:
         if _embed_busy:
-            return False
+            return None
         _embed_busy = True
+        _embed_owner = uuid.uuid4().hex
         _embed_cancel_event.clear()
-        return True
+        return _embed_owner
 
 
-def _release_embed_slot() -> None:
-    global _embed_busy
+def _release_embed_slot(token: str | None = None) -> None:
+    """Free the slot, but only if *token* still owns it.
+
+    ``token=None`` releases unconditionally (tests and teardown).
+    """
+    global _embed_busy, _embed_owner
     with _embed_lock:
+        if token is not None and _embed_owner != token:
+            return
         _embed_busy = False
+        _embed_owner = None
 
 
 def _embed_subtitle_for_participant(
@@ -774,7 +788,8 @@ def api_embed_subtitles() -> FlaskResponse:
         return err("No participants specified")
     default_track = bool(data.get("default_track", True))
 
-    if not _claim_embed_slot():
+    embed_token = _claim_embed_slot()
+    if embed_token is None:
         return err("A subtitle embed is already in progress", 409)
 
     output_dir = Path(utils.get_effective_output_dir())
@@ -808,13 +823,20 @@ def api_embed_subtitles() -> FlaskResponse:
         finally:
             # Also runs when the client disconnects mid-stream, so a closed tab
             # cannot wedge the slot for the rest of the session.
-            _release_embed_slot()
+            _release_embed_slot(embed_token)
 
-    return Response(
+    response = Response(
         stream(),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
+    # The generator's finally covers a stream that was started and then dropped.
+    # It does *not* cover one that was never started: closing an unstarted
+    # generator just marks it closed, running no body at all. call_on_close
+    # fires whenever the response is torn down either way, and the token makes
+    # the double release harmless.
+    response.call_on_close(lambda: _release_embed_slot(embed_token))
+    return response
 
 
 @transcripts_bp.route("/api/embed-subtitles/cancel", methods=["POST"])

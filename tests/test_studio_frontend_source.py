@@ -239,3 +239,25 @@ def test_studio_card_scrubber_gates_on_thumbnail_and_prefetches():
     assert "function processSpritePrefetch()" in src
     assert "function loadCardSprite(thumb, done)" in src
     assert "SPRITE_PREFETCH_CONCURRENCY" in src
+
+
+def test_intake_queued_state_covers_every_panel():
+    """refreshIntakeCardStates visited only the Screenspace and Transcript
+    panels, so a queued MindNode or Composer card showed no "already queued"
+    highlight and clicking it again silently toggled it back out. The rule
+    (.intake-queue-card.in-queue) and the class were both already there — only
+    the sweep was missing. Driving it off each panel's own config is what keeps
+    the next panel from being forgotten the same way."""
+    src = _studio_js()
+    start = src.index("function intakeCardPanels(")
+    body = src[start : src.index("\n  function ", start + 1)]
+    for cfg in ("CO_INTAKE", "MN_INTAKE"):
+        assert cfg in body, f"{cfg} is missing from the queued-state sweep"
+    sweep_start = src.index("function refreshIntakeCardStates(")
+    sweep = src[sweep_start : src.index("\n  function ", sweep_start + 1)]
+    assert "intakeCardPanels()" in sweep, (
+        "the sweep must iterate the panel list, not hardcode two selectors"
+    )
+    # Scoped per panel: every card also carries the shared .intake-queue-card,
+    # so an unscoped query would index one panel's cards against another's list.
+    assert "panel.cardsSel" in sweep and "panel.cardSel" in sweep

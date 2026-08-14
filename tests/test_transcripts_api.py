@@ -1192,6 +1192,47 @@ def test_embed_subtitles_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
     assert resp.get_json()["ok"] is False
 
 
+def test_embed_slot_is_freed_when_the_stream_is_never_consumed(tr_client, monkeypatch):
+    """Closing a generator that was never *started* runs no body at all — not
+    its finally — so a response discarded before the first read would have left
+    the slot held and every later embed answering 409 until restart."""
+    monkeypatch.setattr(transcripts_server, "_embed_busy", False)
+    monkeypatch.setattr(transcripts_server, "_embed_owner", None)
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    # Tear the response down without ever pulling a line from the body.
+    resp.close()
+
+    assert transcripts_server._embed_busy is False
+    assert transcripts_server._embed_owner is None
+
+
+def test_embed_slot_release_is_scoped_to_its_own_run(monkeypatch):
+    """The release is attempted twice per run (the generator's finally and the
+    response's call_on_close). An ungated release would let the late one clear
+    a successor's claim — the 863edf8f pattern."""
+    monkeypatch.setattr(transcripts_server, "_embed_busy", False)
+    monkeypatch.setattr(transcripts_server, "_embed_owner", None)
+
+    first = transcripts_server._claim_embed_slot()
+    assert first is not None
+    transcripts_server._release_embed_slot(first)
+
+    second = transcripts_server._claim_embed_slot()
+    assert second is not None and second != first
+
+    # The first run's straggler release must not free the second run's slot.
+    transcripts_server._release_embed_slot(first)
+    assert transcripts_server._embed_busy is True
+    assert transcripts_server._claim_embed_slot() is None
+
+    transcripts_server._release_embed_slot(second)
+    assert transcripts_server._embed_busy is False
+
+
 def test_embed_subtitles_cancel_route_sets_the_event(tr_client):
     transcripts_server._embed_cancel_event.clear()
     resp = tr_client.post("/transcripts/api/embed-subtitles/cancel")
