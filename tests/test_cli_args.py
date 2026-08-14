@@ -6,6 +6,7 @@ import pytest
 
 import cli
 import app
+import utils
 
 
 def _base_args(**overrides):
@@ -623,6 +624,25 @@ def test_settings_flag_parses(monkeypatch, argv_extra, expected):
     monkeypatch.setattr("sys.argv", ["clipgen.py", *argv_extra])
     args = cli.parse_arguments()
     assert args.settings is expected
+
+
+# ---- --version flag ----
+
+
+def test_version_flag_prints_bare_version_and_exits(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--version"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.strip() == utils.get_version()
+
+
+def test_help_text_reports_version(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 0
+    assert f"clipgen v{utils.get_version()}" in capsys.readouterr().out
 
 
 def test_settings_rejected_with_no_input(monkeypatch, capsys):
