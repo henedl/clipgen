@@ -3245,8 +3245,30 @@
     return all.filter(function (p) { return p.id === pid; });
   }
 
+  // Container extension of a participant's first source file, lowercased.
+  function _embedSubsExt(p) {
+    var path = (p.video_paths && p.video_paths[0]) || "";
+    var dot = path.lastIndexOf(".");
+    return dot === -1 ? "" : path.slice(dot).toLowerCase();
+  }
+
+  function _embedSubsContainers() {
+    return CLIPGEN_CONFIG.subtitleContainers || { supported: [], alwaysDefault: [] };
+  }
+
+  // A container mux_subtitles has no codec for is rejected server-side at its
+  // `codec is None` guard. Filtering here for the same reason multi-part is
+  // filtered here: otherwise the summary promises "8 subtitled videos" and the
+  // run comes back with 8 failure lines.
+  function _embedSubsIsUnsupported(p) {
+    var supported = _embedSubsContainers().supported || [];
+    return supported.indexOf(_embedSubsExt(p)) === -1;
+  }
+
   function _embedSubsTargets() {
-    return _embedSubsScoped().filter(function (p) { return !_embedSubsIsMultiPart(p); });
+    return _embedSubsScoped().filter(function (p) {
+      return !_embedSubsIsMultiPart(p) && !_embedSubsIsUnsupported(p);
+    });
   }
 
   // The mp4 family always ships its subtitle track enabled — measured on ffmpeg
@@ -3254,11 +3276,10 @@
   // ISOBMFF track is enabled or absent; only .mkv/.webm have a present-but-off
   // state). Unticking the box is therefore a no-op for those files, and a
   // control that silently does nothing is worse than one that says so.
-  var EMBED_SUBS_ALWAYS_DEFAULT_EXT = /\.(mp4|m4v|mov)$/i;
-
   function _embedSubsAlwaysDefault(targets) {
+    var always = _embedSubsContainers().alwaysDefault || [];
     return targets.filter(function (p) {
-      return EMBED_SUBS_ALWAYS_DEFAULT_EXT.test(p.video_paths ? p.video_paths[0] : "");
+      return always.indexOf(_embedSubsExt(p)) !== -1;
     });
   }
 
@@ -3268,18 +3289,34 @@
     if (!summaryEl || !confirmBtn) return;
     if (_embedSubsRun) return; // progress block owns the copy while a run streams
     var targets = _embedSubsTargets();
-    var skipped = _embedSubsScoped().filter(_embedSubsIsMultiPart);
+    var scoped = _embedSubsScoped();
+    var skipped = scoped.filter(_embedSubsIsMultiPart);
+    var unsupported = scoped.filter(function (p) {
+      return !_embedSubsIsMultiPart(p) && _embedSubsIsUnsupported(p);
+    });
     var skipNote = skipped.length
       ? " " + skipped.map(function (p) { return p.id; }).join(", ") +
         " skipped (multi-part " + (skipped.length === 1 ? "recording" : "recordings") + ")."
       : "";
+    if (unsupported.length) {
+      skipNote += " " + unsupported.map(function (p) { return p.id; }).join(", ") +
+        " skipped (subtitles cannot be muxed into " +
+        _embedSubsExt(unsupported[0]) + ").";
+    }
     if (!targets.length) {
       var scope = (qs("#embedSubsScope") || {}).value;
-      // Two different dead ends: nothing transcribed yet, versus transcripts
-      // that exist but every one of them spans several files. Only the first is
-      // fixed by running a transcription, so telling the user to do that when
-      // the real blocker is multi-part footage sends them at a no-op.
-      if (skipped.length) {
+      // Three different dead ends: nothing transcribed yet, transcripts that
+      // exist but span several files, or a container the muxer cannot write.
+      // Only the first is fixed by running a transcription, so saying that when
+      // the real blocker is the footage sends the user at a no-op.
+      if (unsupported.length && !skipped.length) {
+        summaryEl.textContent =
+          (unsupported.length === 1
+            ? unsupported[0].id + "'s recording is " + _embedSubsExt(unsupported[0])
+            : "These recordings are in a container") +
+          ", which cannot carry an embedded subtitle track. Supported: " +
+          (_embedSubsContainers().supported || []).join(", ") + ".";
+      } else if (skipped.length) {
         summaryEl.textContent =
           (skipped.length === 1
             ? skipped[0].id + "'s transcript spans several video files"
@@ -3383,14 +3420,17 @@
     _renderEmbedSubsProgress();
     var outputDir = "";
 
+    var sawDone = false;
+
     function handleLine(line) {
       var data;
       try { data = JSON.parse(line); } catch (_) { return; }
       if (!data) return;
       // The header line carries the destination and the trailing
-      // {"cancelled": true} carries nothing — neither has an index, which is
-      // also what keeps them out of the completion tally.
+      // {"cancelled": true} / {"done": true} carry nothing — none has an
+      // index, which is also what keeps them out of the completion tally.
       if (data.output_dir) outputDir = data.output_dir;
+      if (data.done) sawDone = true;
       if (typeof data.index !== "number") return;
       run.done++;
       if (!data.ok) run.failed++;
@@ -3415,6 +3455,18 @@
         return readNDJSONStream(response, handleLine).then(function () {
           var made = run.done - run.failed;
           var where = outputDir ? " to " + outputDir : "";
+          // No sentinel means the server died partway and the body simply
+          // stopped. readNDJSONStream cannot tell that from a clean end, so
+          // without this check a run that blew up at participant 4 of 10
+          // reported "3 subtitled videos written" and nothing else.
+          if (!sawDone) {
+            finish(
+              "Subtitle embedding stopped early — " +
+                clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
+                " of " + run.total + ". Check the clipgen log."
+            );
+            return;
+          }
           finish(
             run.failed
               ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"

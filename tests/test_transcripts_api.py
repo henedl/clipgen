@@ -1004,7 +1004,8 @@ def test_embed_subtitles_happy_path(tr_client, tmp_path, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.mimetype == "application/x-ndjson"
-    header, result = _ndjson(resp)
+    header, result, done = _ndjson(resp)
+    assert done == {"done": True}
     assert header == {"total": 1, "output_dir": str(tmp_path)}
     assert result["index"] == 0
     assert result["participant"] == "P01"
@@ -1077,7 +1078,7 @@ def test_embed_subtitles_streams_failure_for_missing_transcript(
     assert resp.status_code == 200
     lines = _ndjson(resp)
     assert lines[0]["total"] == 2
-    assert [ln["participant"] for ln in lines[1:]] == ["P01", "P02"]
+    assert [ln["participant"] for ln in lines[1:-1]] == ["P01", "P02"]
     assert lines[1]["ok"] is True
     assert lines[2]["ok"] is False
     assert lines[2]["error"] == "No transcript for participant"
@@ -1103,9 +1104,43 @@ def test_embed_subtitles_streams_failure_when_ffmpeg_fails(
         "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
     )
     assert resp.status_code == 200
-    _, result = _ndjson(resp)
+    _, result, done = _ndjson(resp)
+    assert done == {"done": True}
     assert result["ok"] is False
     assert result["error"] == "ffmpeg failed to mux subtitles"
+    # get_unique_filename reserves by creating an empty file; a failed mux that
+    # does not release it leaves a 0-byte artifact looking like a real export.
+    assert not list(tmp_path.glob("*-subtitled.mp4"))
+
+
+def test_embed_subtitles_truncated_stream_has_no_done_sentinel(
+    tr_client, tmp_path, monkeypatch
+):
+    """A generator that dies mid-run just truncates the body, which the client's
+    NDJSON reader cannot distinguish from a clean end — so the terminal
+    sentinel's absence is what marks the run as incomplete."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    _seed_transcript("P01", str(video_path))
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+
+    def _explode(*_a, **_kw):
+        raise RuntimeError("mux blew up")
+
+    monkeypatch.setattr(transcripts_server, "_embed_subtitle_for_participant", _explode)
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    with pytest.raises(RuntimeError, match="mux blew up"):
+        resp.get_data()
+    # The slot must still be free — the generator's finally runs on teardown.
+    assert transcripts_server._embed_busy is False
 
 
 def test_embed_subtitles_cancel_stops_before_the_next_file(
@@ -1140,7 +1175,8 @@ def test_embed_subtitles_cancel_stops_before_the_next_file(
     lines = _ndjson(resp)
     assert lines[0]["total"] == 2
     assert lines[1]["participant"] == "P01"
-    assert lines[-1] == {"cancelled": True}
+    assert lines[-2] == {"cancelled": True}
+    assert lines[-1] == {"done": True}
     assert not any(ln.get("participant") == "P02" for ln in lines)
     # The slot is released even on the cancel path, so the next run can claim it.
     assert transcripts_server._embed_busy is False

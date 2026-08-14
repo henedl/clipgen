@@ -1703,8 +1703,11 @@ def test_mux_subtitles_mp4_uses_mov_text(monkeypatch, tmp_path):
     assert cmd[:2] == ["ffmpeg", "-y"]
     assert "-c:s" in cmd and cmd[cmd.index("-c:s") + 1] == "mov_text"
     assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
-    assert "-map" in cmd
-    assert "0" in cmd and "1:0" in cmd
+    # Video + audio only, never a bare `-map 0`: mapping the source's own
+    # subtitle streams would push the new track off output index 0, so the
+    # -metadata/-disposition arguments below would land on the wrong one.
+    maps = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-map"]
+    assert maps == ["0:v?", "0:a?", "1:0"]
     assert cmd[cmd.index("-disposition:s:0") + 1] == "default"
     assert cmd[-1] == str(out)
 

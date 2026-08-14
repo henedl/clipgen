@@ -528,7 +528,13 @@ def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
     present-but-off state). Unticking the box therefore changes nothing for the
     commonest source container, and a control that silently no-ops is the
     "wrong output, no error" class — so the summary has to say so."""
-    assert "EMBED_SUBS_ALWAYS_DEFAULT_EXT" in _JS
+    # The container lists come from CLIPGEN_CONFIG (mirroring
+    # video.SUBTITLE_ALWAYS_DEFAULT_CONTAINERS), never a hardcoded JS regex —
+    # see the "no duplicated constants between Python and JS" rule.
+    assert "CLIPGEN_CONFIG.subtitleContainers" in _JS
+    assert "/\\.(mp4|m4v|mov)$/i" not in _JS, (
+        "the mp4-family list must not be re-hardcoded in JS"
+    )
     start = _JS.index("function renderEmbedSubsSummary(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "_embedSubsAlwaysDefault(" in body, (
@@ -537,6 +543,23 @@ def test_embed_subs_warns_the_default_toggle_is_inert_on_mp4():
     assert '"#embedSubsDefault"' in body and ".checked" in body, (
         "the caveat only applies when the box is unticked, so the summary has "
         "to read the checkbox"
+    )
+
+
+def test_embed_subs_filters_containers_the_muxer_cannot_write():
+    """mux_subtitles rejects any container it has no codec for. Filtering only
+    multi-part participants left the summary promising "8 subtitled videos" for
+    a study of .avi sources and the run returning 8 failure lines."""
+    assert "_embedSubsIsUnsupported(" in _JS
+    start = _JS.index("function _embedSubsTargets(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_embedSubsIsUnsupported(p)" in body, (
+        "the target list must drop unsupported containers, not just multi-part"
+    )
+    summary = _JS[_JS.index("function renderEmbedSubsSummary(") :]
+    summary = summary[: summary.index("\n  function ")]
+    assert "unsupported" in summary, (
+        "the summary must account for what it dropped, like it does multi-part"
     )
     # The caveat depends on the checkbox, so the checkbox must re-render it.
     init_start = _JS.index("function initEmbedSubsModal(")

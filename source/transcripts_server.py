@@ -730,6 +730,12 @@ def _embed_subtitle_for_participant(
                 pass
 
     if not ok:
+        # get_unique_filename reserves by *creating* an empty placeholder, so
+        # aborting without releasing leaves a 0-byte file that looks like a
+        # finished export — one per participant on a whole-study run whose
+        # container ffmpeg cannot mux — and pushes the next run's names onto
+        # -1/-2 suffixes.
+        files.release_reservation(output_path)
         return {
             "participant": participant,
             "ok": False,
@@ -794,6 +800,11 @@ def api_embed_subtitles() -> FlaskResponse:
                 yield json.dumps(outcome) + "\n"
             if cancel_flag():
                 yield json.dumps({"cancelled": True}) + "\n"
+            # Terminal sentinel. A generator that dies mid-run just truncates
+            # the body, and a truncated NDJSON stream is indistinguishable from
+            # a complete one to the reader — the client would report the
+            # partial count as a success. Its absence is the failure signal.
+            yield json.dumps({"done": True}) + "\n"
         finally:
             # Also runs when the client disconnects mid-stream, so a closed tab
             # cannot wedge the slot for the rest of the session.

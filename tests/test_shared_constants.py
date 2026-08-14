@@ -24,7 +24,10 @@ def _js_source() -> str:
 def _parse_js_object_literal(name: str) -> dict:
     """Extract a top-level JS object literal `var <name> = { ... };` as a dict.
 
-    Handles unquoted keys and trailing commas; values must be JSON-compatible.
+    Handles unquoted keys, trailing commas, and whole-line `//` comments (the
+    fallback block documents which Python constant each key mirrors); values
+    must be JSON-compatible. Only line-leading comments are stripped, so a
+    value containing `//` is never mangled.
     """
     match = re.search(
         r"var\s+" + re.escape(name) + r"\s*=\s*(\{.+?\n\});",
@@ -33,6 +36,7 @@ def _parse_js_object_literal(name: str) -> dict:
     )
     assert match, f"{name} not found in utils.js"
     raw = match.group(1)
+    raw = re.sub(r"^\s*//.*$", "", raw, flags=re.MULTILINE)
     raw = re.sub(r"(\b\w+)\s*:", r'"\1":', raw)
     raw = re.sub(r",\s*([}\]])", r"\1", raw)
     return json.loads(raw)
@@ -138,6 +142,10 @@ def test_clipgen_config_defaults_match_python():
     )
     assert js_config["composerDoubleClickCuts"] == py_config["composerDoubleClickCuts"]
     assert js_config["mediaContainerWarning"] == py_config["mediaContainerWarning"]
+    # The Embed Subtitles dialog filters its target list against these, so JS
+    # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
+    # ffmpeg will refuse to write (or hiding one it would have written).
+    assert js_config["subtitleContainers"] == py_config["subtitleContainers"]
 
 
 def test_get_frontend_config_shape():
@@ -170,6 +178,7 @@ def test_get_frontend_config_shape():
         "composerScrubMaxAudioSeconds",
         "composerDoubleClickCuts",
         "mediaContainerWarning",
+        "subtitleContainers",
         "hotkeyOverrides",
     }
     assert isinstance(cfg["defaultDuration"], int)

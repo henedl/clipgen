@@ -1091,7 +1091,29 @@ def get_frontend_config() -> dict[str, Any]:
         "composerScrubMaxAudioSeconds": config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS,
         "composerDoubleClickCuts": config.COMPOSER_DOUBLE_CLICK_CUTS,
         "mediaContainerWarning": config.MEDIA_CONTAINER_WARNING,
+        "subtitleContainers": _subtitle_container_config(),
         "hotkeyOverrides": dict(config.HOTKEY_OVERRIDES),
+    }
+
+
+def _subtitle_container_config() -> dict[str, list[str]]:
+    """Container extensions the subtitle muxer can write, split by disposition.
+
+    ``supported`` is every container ``video.mux_subtitles`` has a codec for —
+    the Embed Subtitles dialog filters against it so a run that ffmpeg would
+    reject at its ``codec is None`` guard is never promised in the summary.
+    ``alwaysDefault`` is the mp4 family, whose muxer ships the subtitle track
+    enabled no matter what ``-disposition:s:0`` says, so the dialog's
+    "set as default" toggle has to declare itself a no-op there.
+
+    Imported lazily: video.py pulls in the ffmpeg helpers, and utils is on the
+    import path of everything.
+    """
+    import video
+
+    return {
+        "supported": sorted(video.SUBTITLE_CODEC_BY_CONTAINER),
+        "alwaysDefault": sorted(video.SUBTITLE_ALWAYS_DEFAULT_CONTAINERS),
     }
 
 

@@ -70,6 +70,13 @@ var CLIPGEN_CONFIG = {
   composerScrubMaxAudioSeconds: 180.0,
   composerDoubleClickCuts: true,
   mediaContainerWarning: true,
+  // Mirrors video.SUBTITLE_CODEC_BY_CONTAINER / SUBTITLE_ALWAYS_DEFAULT_CONTAINERS.
+  // `supported` is what mux_subtitles can write at all; `alwaysDefault` is the
+  // mp4 family, whose muxer ignores -disposition:s:0.
+  subtitleContainers: {
+    supported: [".m4v", ".mkv", ".mov", ".mp4", ".webm"],
+    alwaysDefault: [".m4v", ".mov", ".mp4"],
+  },
   hotkeyOverrides: {},
 };
 
@@ -137,6 +144,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.mediaContainerWarning === "boolean") {
     CLIPGEN_CONFIG.mediaContainerWarning = payload.mediaContainerWarning;
+  }
+  if (payload.subtitleContainers && typeof payload.subtitleContainers === "object") {
+    CLIPGEN_CONFIG.subtitleContainers = payload.subtitleContainers;
   }
   if (payload.hotkeyOverrides && typeof payload.hotkeyOverrides === "object") {
     CLIPGEN_CONFIG.hotkeyOverrides = payload.hotkeyOverrides;
