@@ -39,13 +39,11 @@
 
   // ---- Thinking-agent plumbing (shared poll factory) ----
   //
-  // summary / citations / friction all poll the same generic /api/agent/<key>/
-  // endpoints; only the URL base, cadence, and result-handling hooks differ, so
-  // one _makeAgentPoll scaffold drives all three (the "one JS poll factory").
-  // Adding an agent is a descriptor entry + its render hooks — no new poll/stop
-  // plumbing. Summary stays richest (SSE token stream + citation chaining +
-  // inline edit); its extra behavior rides in its hooks and the bespoke run
-  // helpers further down.
+  // summary / citations / friction poll the same generic /api/agent/<key>/
+  // endpoints, differing only in URL base, cadence and result hooks, so one
+  // _makeAgentPoll scaffold drives all three. Adding an agent is a descriptor
+  // entry plus render hooks — no new poll/stop plumbing. Summary is richest (SSE
+  // token stream, citation chaining, inline edit); that rides in its hooks.
 
   // Hard cap on agent polls (citations + friction). Long Ollama runs on big
   // transcripts once outlived a shorter timeout, so the result landed in the
@@ -181,16 +179,11 @@
 
   // ---- AI Summary ----
   //
-  // Two cooperating pollers, both built by _makeAgentPoll above:
-  //   AGENT_DESCRIPTORS.summary._poller   — runs while the backend is still
-  //                      generating the summary. Stops as soon as a summary
-  //                      lands, or when the user switches participant.
-  //   AGENT_DESCRIPTORS.citations._poller — runs after the summary arrives if
-  //                      citations are still computing (citations depend on
-  //                      summary).
-  // Both are stopped by their own _stop*Poll() helpers; either also stops if
-  // `state.selectedParticipant` no longer matches the participant the poll
-  // was started for.
+  // Two cooperating pollers from _makeAgentPoll above: summary's runs while the
+  // backend generates and stops once one lands; citations' runs after the summary
+  // arrives, since citations depend on it. Both have _stop*Poll() helpers, and
+  // either also stops when `state.selectedParticipant` no longer matches the
+  // participant the poll started for.
 
   // SSE token stream: the primary live-update transport while a summary
   // generates — pushes each token as the model emits it (true word-by-word).
@@ -794,16 +787,14 @@
     });
   }
 
-  // ---- Friction detection (Pass 3) ----
+  // ---- Friction detection ----
   //
-  // Programmatic scores + LLM moments land together in the manifest's
-  // `friction` field. The tab is a CONTROL SURFACE over #segmentList rather than
-  // a results list: a mode switch, a score histogram and category chips filter
-  // the transcript below (tinting it, or isolating it down to the matches), and
-  // the moments are a jump strip whose rationales render as inline callouts under
-  // the segments they quote. Everything downstream reads one derived map — see
-  // _recomputeFrictionMatches. Generation mirrors summary/citations (poll until
-  // done; manual run/cancel bypass the global flag).
+  // Programmatic scores + LLM moments land together in the manifest's `friction`
+  // field. The tab is a CONTROL SURFACE over #segmentList, not a results list: a
+  // mode switch, score histogram and category chips filter the transcript below
+  // (tinting it, or isolating to the matches), and the moments are a jump strip
+  // whose rationales render as inline callouts under the segments they quote.
+  // Everything downstream reads one derived map — see _recomputeFrictionMatches.
 
   function _currentParticipant() {
     var pid = state.selectedParticipant;
@@ -1129,19 +1120,17 @@
 
   // ---- The one derived filter product ----
   //
-  // (threshold, category filter, friction data, segments) -> the three shared
-  // fields every consumer reads: state.frictionMatchBySegId (segment id -> score),
-  // state.frictionVisibleMoments and state.frictionCitedBySegId. The segment
-  // tints, isolate hiding, the timeline density band, "Mark all matching", the
-  // counter and the isolate-aware keyboard nav all read these, so the pane and
-  // the transcript below it can never disagree about what counts as friction.
+  // (threshold, category filter, friction data, segments) -> the three fields every
+  // consumer reads: state.frictionMatchBySegId, state.frictionVisibleMoments and
+  // state.frictionCitedBySegId. Segment tints, isolate hiding, the timeline density
+  // band, "Mark all matching", the counter and the isolate-aware keyboard nav all
+  // read these, so the pane and the transcript can never disagree.
   //
-  // A segment matches when its programmatic score clears the threshold and at
-  // least one of its categories is still enabled, OR when a visible moment cites
-  // it. That second clause is not redundant: the segment score comes from the
-  // regex scorer (friction.py) while the moment score is the model's, so a moment
-  // can clear the threshold while the line it quotes scores 0. Without it,
-  // isolate mode would hide the very row the jump strip seeks to.
+  // A segment matches when its score clears the threshold and one of its
+  // categories is enabled, OR when a visible moment cites it. The second clause
+  // isn't redundant: segment scores come from the regex scorer while moment scores
+  // are the model's, so a moment can clear the threshold while the line it quotes
+  // scores 0 — without it, isolate mode would hide the very row the strip seeks to.
   function _recomputeFrictionMatches() {
     _ensureFrictionFilter();
     var fd = state.frictionData;
@@ -1465,18 +1454,17 @@
 
   // ---- Evidence table ----
   //
-  // Two independent systems produce findings, and the old single chip row only
-  // ever counted one of them. The keyword scorer (friction.py) labels SEGMENTS
-  // from regex hits; the agent labels MOMENTS with a category string of its own
-  // choosing, which is never reconciled against what the scorer found on the
-  // line it quotes. So a category could read "Confusion 0" while a Confusion
-  // moment sat in the jump strip — and because a 0-count chip was inert, that
-  // was the one category you could not filter by.
+  // Two independent systems produce findings and a single chip row could only
+  // count one: the keyword scorer labels SEGMENTS from regex hits, while the agent
+  // labels MOMENTS with a category of its own choosing, never reconciled against
+  // what the scorer found on the line it quotes. A category could read
+  // "Confusion 0" while a Confusion moment sat in the jump strip — and a 0-count
+  // chip was inert, so that was the one category you could not filter by.
   //
-  // The table therefore counts and filters the two apart: a row per category,
-  // a cell per source. Counts are computed here rather than read from
-  // stats.by_category, which counts marker hits (not segments) and ignores the
-  // score band, so it would never move with the histogram.
+  // So the table counts the two apart: a row per category, a cell per source.
+  // Counts are computed here rather than read from stats.by_category, which counts
+  // marker hits (not segments) and ignores the score band, so it would never move
+  // with the histogram.
   var FRICTION_SOURCES = ["prog", "ai"];
   // Where a model category that is not one of the six lands. The jump chip and
   // the callout still show the model's own wording; only the row groups them.

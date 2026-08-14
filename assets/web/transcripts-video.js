@@ -179,14 +179,12 @@
     });
   }
 
-  // Draw the smoothed friction density band across the timeline ruler.
-  // Per-pixel averaging of overlapping segment scores (mirrors the Screenspace
-  // amplitude graph's binning) gives a continuous band without a separate
-  // smoothing constant; alpha scales with score. Reads the shared friction state
-  // the agents satellite writes (state.frictionMode / frictionBandBySegId) — the
-  // derived union map, not the raw scores, so the band shows exactly the
-  // segments the pane's threshold + category filters currently select, from
-  // either evidence source.
+  // Smoothed friction density band across the timeline ruler. Per-pixel averaging
+  // of overlapping segment scores (mirroring the Screenspace amplitude graph's
+  // binning) gives a continuous band with no separate smoothing constant; alpha
+  // scales with score. Reads the *derived* union map the agents satellite writes,
+  // not the raw scores, so the band shows exactly the segments the pane's
+  // threshold + category filters select.
   function _drawFrictionBand(ctx, timeToX, bandY, bandH, cssW) {
     if (state.frictionMode === "off") return;
     if (!state.segments.length) return;

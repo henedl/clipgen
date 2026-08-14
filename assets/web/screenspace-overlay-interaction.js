@@ -322,10 +322,9 @@
   //   - inside a region body               → state.draggingRegion
   //   - empty area                         → state.drawingRegion (new region)
   //
-  // Mousemove updates whichever mode is active; mouseup commits and clears it.
-  // Document-level move/up listeners mirror the canvas handlers so a drag
-  // continues smoothly when the cursor leaves the overlay (the canvas-level
-  // handlers stop firing, the document ones take over).
+  // Mousemove updates the active mode, mouseup commits and clears it.
+  // Document-level move/up listeners mirror the canvas handlers, so a drag
+  // continues when the cursor leaves the overlay and the canvas handlers stop.
   function initRegionDrawing() {
     var overlay = qs("#overlayCanvas");
 

@@ -25,14 +25,12 @@
 
   // ---- Calibration strip ----
   //
-  // Scores the participant's pins against the active tool + parameters and
-  // plots each as a dot on a normalized 0–1 "matchiness" axis (green = positive
-  // pin, red = negative). The threshold control is drawn as a vertical line so
-  // the researcher can place the cutoff in the gap between the two populations.
-  // Evaluation is per-frame only — temporal params (consecutive / detect-first)
-  // are not validated; the coverage note says so. Unlike the model view, which
-  // previews the current playhead, calibration scores the PINNED timestamps, so
-  // it never re-runs on seek.
+  // Scores the participant's pins against the active tool + parameters, plotting
+  // each as a dot on a normalized 0–1 "matchiness" axis (green = positive pin, red
+  // = negative), with the threshold drawn as a vertical line so the researcher can
+  // place the cutoff in the gap between populations. Evaluation is per-frame only
+  // — temporal params are not validated, and the coverage note says so. Unlike the
+  // model view it scores the PINNED timestamps, so it never re-runs on seek.
 
   var _calibrationGen = 0;
   var _calibrationTimer = 0;
@@ -49,18 +47,16 @@
   // immediately superseded. Suppress it; restore runs its own refresh at the
   // end with the real values.
 
-  // Per-tool axis metadata. Axis range is read from the tool's threshold slider
-  // (min/max) where one exists in matching units. color and scene have no single
-  // clean cutoff, so they draw no line and rely on per-pin pass/fail plus the gap
-  // between populations. inactivity's Sensitivity slider is already in phash-
-  // distance units, so its line is drawn on an inverted axis (low distance = more
-  // inactive = right). Per-pin scalars come from the backend `score`; this map
-  // only positions them.
-  // `compare` is the *pass comparison* ("ge" → passes when score ≥ threshold,
-  // "le" → passes when score ≤ threshold), used by _calSuggest to bisect the gap
-  // between populations. It's distinct from `invert` (which only flips the axis
-  // *display*); they coincide today but mean different things. color/scene omit
-  // it (no single cutoff to suggest).
+  // Per-tool axis metadata. The range comes from the tool's threshold slider where
+  // one exists in matching units; color and scene have no single clean cutoff, so
+  // they draw no line and rely on per-pin pass/fail plus the population gap.
+  // inactivity's Sensitivity slider is already in phash-distance units, so its line
+  // is drawn inverted (low distance = more inactive = right). Per-pin scalars come
+  // from the backend `score`; this map only positions them.
+  //
+  // `compare` is the *pass comparison* ("ge" passes when score ≥ threshold), used
+  // by _calSuggest to bisect the gap. Distinct from `invert`, which only flips the
+  // axis *display* — they coincide today but mean different things.
   var CAL_AXIS = {
     change: { sliderId: "paramChangeThresh", invert: false, drawLine: true, compare: "ge" },
     similarity: { sliderId: "paramSimThresh", invert: false, drawLine: true, compare: "ge" },
