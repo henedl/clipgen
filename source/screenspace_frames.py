@@ -379,7 +379,7 @@ def _scan_via_ffmpeg_pipe(
 
         return True  # ffmpeg pipe succeeded (even if video had 0 frames)
     except Exception as exc:
-        utils.warning_print(f"ffmpeg pipe scan failed, falling back to cv2: {exc}")
+        utils.warning_print(f"ffmpeg pipe scan failed: {exc}")
         return False
 
 
