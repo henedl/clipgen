@@ -54,7 +54,8 @@ def parse_arguments() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(
         description=(
-            "clipgen - Video clip generator from Google Sheets or local Excel timestamps. "
+            f"clipgen v{utils.get_version()} - Video clip generator from Google Sheets "
+            "or local Excel timestamps. "
             "Interactive-only flows (e.g. browse, reellate) have no separate CLI flags; "
             "run without a selection-mode flag to use them."
         ),
@@ -718,6 +719,12 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         action="store_true",
         help="Open the interactive settings editor before running "
         "(changes apply to this run only; incompatible with --no-input)",
+    )
+    run_opts.add_argument(
+        "--version",
+        action="version",
+        version=utils.get_version(),
+        help="Print the clipgen version and exit",
     )
 
     titlecards_grp = parser.add_argument_group("title cards (choose at most one)")
