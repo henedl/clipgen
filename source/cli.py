@@ -2329,19 +2329,6 @@ def _split_csv_set(value: str | None) -> set[str] | None:
     return items if items else None
 
 
-def _split_study_participant(filename: str) -> tuple[str, str]:
-    """Derive (study, participant) from a {study}_{participant}.<ext> filename stem.
-
-    Falls back to ('', filename_stem) when the basename does not match the
-    convention; downstream code uses the participant for clip metadata only.
-    """
-    stem = Path(filename).stem
-    parts = stem.rsplit("_", 1)
-    if len(parts) == 2 and parts[0]:
-        return (parts[0], parts[1])
-    return ("", stem)
-
-
 def _filter_screenspace_events(
     events: list[dict[str, Any]],
     *,
@@ -2644,7 +2631,7 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
     for idx, cluster in enumerate(clusters):
         source_video = cluster.get("source_video") or ""
         if source_video:
-            study, _participant_from_filename = _split_study_participant(source_video)
+            study = utils.split_source_stem(source_video)[0]
         else:
             study = ""
         participant = cluster.get("participant") or ""
@@ -2733,8 +2720,7 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
         source_video = cluster.get("source_video") or ""
         study = ""
         if source_video:
-            derived_study, _pid_from_filename = _split_study_participant(source_video)
-            study = derived_study
+            study = utils.split_source_stem(source_video)[0]
         participant = cluster.get("participant") or ""
         text = cluster.get("text") or ""
         desc = _truncate_for_filename(text) if text else "transcript"

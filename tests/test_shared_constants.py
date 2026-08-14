@@ -9,8 +9,11 @@ import json
 import re
 from pathlib import Path
 
+import cli
 import config
+import screenspace_tools
 import utils
+import workflows_catalog
 
 from _frontend_source import WEB
 
@@ -322,4 +325,108 @@ def test_detector_palette_stays_aligned():
         f"Detectors missing a `--color-task-*` token in tokens.css: "
         f"{sorted(set(detector_types) - css_detector_keys)}. "
         f"Add the token (dark + light blocks) to assets/web/tokens.css."
+    )
+
+
+# CSS mask classes that are not engine tools (workflow toolbar chrome).
+_SS_TASK_ICON_NON_TOOLS = frozenset({"info", "play"})
+# CLI --ss-task has no create path for these (rerun-only / UI-only).
+_CLI_TASK_EXCLUDES = frozenset({"boundary", "multitool"})
+# Own NODE_TYPES entries, not generated ss_* detect nodes.
+_WORKFLOWS_SEPARATE_NODES = frozenset({"multitool", "timelapse"})
+# In TOOLS but not yet a workflows node. A 14th tool must join specs, a
+# separate NODE_TYPES entry, or this set — otherwise the equality below fails.
+_WORKFLOWS_UNWIRED = frozenset({"attention"})
+# Timeline viewer has no per-event icon for timelapse (single output file).
+_VIEWER_ICON_SKIP = frozenset({"timelapse"})
+
+
+def _js_object_body(source: str, name: str) -> str:
+    """Return the inside of `var <name> = { ... }` (brace-matched)."""
+    match = re.search(r"var\s+" + re.escape(name) + r"\s*=\s*\{", source)
+    assert match, f"{name} not found"
+    start = match.end() - 1
+    depth = 0
+    for i, ch in enumerate(source[start:]):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start + 1 : start + i]
+    raise AssertionError(f"{name} object not closed")
+
+
+def _flat_js_object_keys(source: str, name: str) -> set[str]:
+    """Keys of a flat `var <name> = { a: ..., b: ... }` object."""
+    return set(re.findall(r"(\w+)\s*:", _js_object_body(source, name)))
+
+
+def test_detector_registries_stay_aligned():
+    """Engine TOOLS is the source of truth; parallel catalogues must match it.
+
+    test_detector_palette_stays_aligned already locks JS types ↔ fallback ↔
+    tokens.css colours. This catches Python↔Python and JS↔JS name drift the
+    palette test never sees (CODE-REVIEW.md "Parallel registries").
+    """
+    engine = set(screenspace_tools.TOOLS)
+    js_types = set(_parse_js_string_array("_DETECTOR_TYPES"))
+    assert engine == js_types, (
+        f"screenspace_tools.TOOLS and utils.js _DETECTOR_TYPES diverged: "
+        f"engine={sorted(engine)} vs js={sorted(js_types)}. "
+        f"Add the tool to both (and the other registries this test lists)."
+    )
+
+    assert set(cli._SS_VALID_TASK_TYPES) == engine - _CLI_TASK_EXCLUDES, (
+        f"cli._SS_VALID_TASK_TYPES drifted from TOOLS minus {_CLI_TASK_EXCLUDES}. "
+        f"CLI={sorted(cli._SS_VALID_TASK_TYPES)} vs expected="
+        f"{sorted(engine - _CLI_TASK_EXCLUDES)}."
+    )
+
+    specs = set(workflows_catalog._SS_DETECTOR_SPECS)
+    assert specs == engine - _WORKFLOWS_SEPARATE_NODES - _WORKFLOWS_UNWIRED, (
+        f"workflows_catalog._SS_DETECTOR_SPECS drifted from TOOLS. "
+        f"specs={sorted(specs)} vs expected="
+        f"{sorted(engine - _WORKFLOWS_SEPARATE_NODES - _WORKFLOWS_UNWIRED)}. "
+        f"Separate nodes={sorted(_WORKFLOWS_SEPARATE_NODES)}; "
+        f"unwired={sorted(_WORKFLOWS_UNWIRED)}."
+    )
+    assert _WORKFLOWS_SEPARATE_NODES <= set(workflows_catalog.NODE_TYPES), (
+        f"Workflows NODE_TYPES missing {_WORKFLOWS_SEPARATE_NODES - set(workflows_catalog.NODE_TYPES)}. "
+        f"multitool/timelapse live as their own nodes, not ss_* specs."
+    )
+
+    ss_js = (WEB / "screenspace.js").read_text(encoding="utf-8")
+    icon_types = _flat_js_object_keys(ss_js, "SS_TASK_ICON_TYPES")
+    icon_names = _flat_js_object_keys(ss_js, "TOOL_ICON_NAMES")
+    assert icon_types == engine, (
+        f"screenspace.js SS_TASK_ICON_TYPES drifted from TOOLS: "
+        f"{sorted(icon_types)} vs {sorted(engine)}."
+    )
+    assert icon_names == engine, (
+        f"screenspace.js TOOL_ICON_NAMES drifted from TOOLS: "
+        f"{sorted(icon_names)} vs {sorted(engine)}."
+    )
+
+    ss_css = (WEB / "screenspace.css").read_text(encoding="utf-8")
+    css_icons = set(re.findall(r"\.ss-task-icon--([\w-]+)", ss_css))
+    assert css_icons - _SS_TASK_ICON_NON_TOOLS == engine, (
+        f"screenspace.css .ss-task-icon--* drifted from TOOLS "
+        f"(ignoring {_SS_TASK_ICON_NON_TOOLS}): "
+        f"{sorted(css_icons - _SS_TASK_ICON_NON_TOOLS)} vs {sorted(engine)}."
+    )
+
+    viewer_js = (WEB / "viewer.js").read_text(encoding="utf-8")
+    viewer_icons = set(
+        re.findall(
+            r"^\s+(\w+):\s*\{\s*viewBox:",
+            _js_object_body(viewer_js, "SS_DETECTOR_ICON_PATHS"),
+            re.MULTILINE,
+        )
+    )
+    assert viewer_icons == engine - _VIEWER_ICON_SKIP, (
+        f"viewer.js SS_DETECTOR_ICON_PATHS drifted from TOOLS minus "
+        f"{_VIEWER_ICON_SKIP}: {sorted(viewer_icons)} vs "
+        f"{sorted(engine - _VIEWER_ICON_SKIP)}. Timelapse skips this map "
+        f"(single output file); every other tool needs an inline path."
     )
