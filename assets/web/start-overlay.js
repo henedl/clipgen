@@ -1860,10 +1860,46 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        recordSession(inputVal, outputVal, null, nameVal).finally(function () {
-          releaseConfirm();
-          close();
-        });
+        // "No spreadsheet" has to actually close whatever is open, not just
+        // record the session. Nothing else in the UI ever posted to
+        // /api/spreadsheets/close, so a source opened earlier lived for the
+        // rest of the process — a mind map especially, since it is never
+        // cleared by opening a sheet either.
+        var st = state.statusData || {};
+        var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
+        // One call per source: the route drops the mind map for
+        // {type: "mindnode"} and the worksheet otherwise, and the two coexist,
+        // so closing both takes both calls.
+        function postClose(body) {
+          return fetch("/api/spreadsheets/close", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }).catch(function () { return null; });
+        }
+        var closeStep = Promise.resolve(null);
+        if (st.mindnode_loaded) {
+          closeStep = closeStep.then(function () {
+            return postClose({ type: "mindnode" });
+          });
+        }
+        if (st.sheet_loaded) {
+          closeStep = closeStep.then(function () { return postClose({}); });
+        }
+        closeStep
+          .then(function () {
+            return recordSession(inputVal, outputVal, null, nameVal);
+          })
+          .finally(function () {
+            releaseConfirm();
+            // Reload only when something was actually unloaded — the other
+            // frontends are holding data for a source that no longer exists.
+            if (needsClose) {
+              window.location.reload();
+              return;
+            }
+            close();
+          });
         return;
       }
       // Built explicitly rather than posting state.selection verbatim so the
@@ -2052,9 +2088,20 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
-    // A mind map is an independent source with no worksheet, so it is restored
-    // ahead of the spreadsheet branches and short-circuits them.
-    if (s.mindnode_loaded && s.mindnode_path) {
+    // A mind map is an independent source with no worksheet, so it gets its own
+    // branch ahead of the spreadsheet ones. Gate on active_source, NOT on
+    // mindnode_loaded: opening a mind map never clears the sheet and opening a
+    // sheet never clears the mind map (they coexist by design), so a bare
+    // mindnode_loaded check meant that once a mind map had been opened it
+    // hijacked the prefill for the rest of the session — the recents list would
+    // highlight the spreadsheet the user opened afterwards while this panel
+    // switched to the Mind map tab, and confirming re-opened the map.
+    // currentSessionKey() already keys on active_source; these must agree.
+    // An empty active_source (nothing recorded for this session yet) keeps the
+    // original precedence, so a mind-map-only launch still prefills.
+    var activeType = (s.active_source && s.active_source.type) || "";
+    var mindnodeIsActive = activeType === "mindnode" || !activeType;
+    if (mindnodeIsActive && s.mindnode_loaded && s.mindnode_path) {
       setTab("mindnode");
       setSelection({
         type: "mindnode",

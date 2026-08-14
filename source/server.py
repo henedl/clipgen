@@ -930,6 +930,19 @@ def api_mindnode() -> FlaskResponse:
         # rather than serving a stale tree the researcher can no longer see.
         return err(str(exc), 404)
     with _mindnode_lock:
+        # Re-check under the lock: the parse above runs with it released (it is
+        # slow, and the route re-parses on every request so an edited map shows
+        # new notes), so a close landing in that window would otherwise be
+        # undone here — the map would be open again on the server while the UI
+        # believed it was shut.
+        if _mindnode_doc is not doc:
+            return jsonify(
+                {
+                    "ok": True,
+                    "mindnode_loaded": _mindnode_doc is not None,
+                    "document": _mindnode_doc,
+                }
+            )
         _mindnode_doc = fresh
     return jsonify({"ok": True, "mindnode_loaded": True, "document": fresh})
 
