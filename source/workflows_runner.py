@@ -1,15 +1,8 @@
 """Workflows run engine: DAG topo-sort + sequential ready-set execution.
 
-The engine half of the workflows engine, split out of ``workflows.py`` (which
-keeps the executors, the import-time wiring, and the facade; the declarative
-catalog lives in ``workflows_catalog``). Owns the run/node status constants,
-the auto-run trigger types, ``topo_order``/``bind_participant``, per-node
-result sidecars, resume planning, and ``WorkflowRunner``.
-
-Reads ``NODE_TYPES[...]["execute"]`` and ``ADAPTERS`` only at call time —
-after ``workflows.py``'s import-time wiring has attached the executors — so
-importing ``workflows`` (the facade) remains the supported entry point for
-running graphs.
+Reads ``NODE_TYPES[...]["execute"]`` and ``ADAPTERS`` only at call time — after
+``workflows.py``'s import-time wiring has attached the executors — so importing
+``workflows`` (the facade) remains the supported entry point for running graphs.
 """
 
 from __future__ import annotations
@@ -27,22 +20,17 @@ from typing import Any
 import utils
 from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
 
-# ---------------------------------------------------------------------------
-# Run engine (M4) — DAG topo-sort + sequential ready-set execution
-# ---------------------------------------------------------------------------
-#
-# ``WorkflowRunner`` runs one blueprint on a daemon thread (the server spawns it).
-# It calls the executors directly with the uniform ``NodeContext`` contract, so a
-# cross-domain DAG gets clean end-to-end progress + cancellation without routing
-# through the per-domain worker queues. Execution is strictly sequential (the v1
-# decision: Whisper/Ollama are single-resource); intra-node parallelism (e.g.
-# ``process_clips``' own pool) still applies.
+# ``WorkflowRunner`` runs one blueprint on a daemon thread (spawned by the
+# server), calling executors directly with the uniform ``NodeContext`` contract so
+# a cross-domain DAG gets end-to-end progress + cancellation without routing
+# through the per-domain worker queues. Execution is strictly sequential —
+# Whisper/Ollama are single-resource — though intra-node pools still apply.
 
 # Run + per-node status constants. Deliberately duplicated from
-# screenspace_manifest's TASK_STATUS_* (and transcripts' status strings): the
-# only viable import direction would drag screenspace_tools' top-level cv2
-# into the workflows import chain, and a shared module for five strings
-# fails the repo's minimalism bar. Keep in sync by eye.
+# screenspace_manifest's TASK_STATUS_* (and transcripts' status strings): the only
+# viable import direction would drag screenspace_tools' top-level cv2 into the
+# workflows import chain, and a shared module for five strings fails the repo's
+# minimalism bar. Keep in sync by eye.
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_COMPLETED = "completed"
@@ -66,12 +54,11 @@ NODE_STATUS_SKIPPED = "skipped"
 # the runner filters them out so they never execute or appear in run snapshots.
 NOTE_NODE_TYPE = "note"
 
-# Auto-run trigger types: new_video (the original watch-dir P6 trigger) plus
-# the chaining triggers (a transcript or Screenspace scan completing fires an
-# armed blueprint for that participant). Served through /api/catalog context so
-# the frontend picker never duplicates the list; workflows_server's watcher
-# polls each type's source (input dir / transcripts manifest / screenspace
-# manifest) only while a blueprint of that type is armed.
+# Auto-run trigger types: a new video landing, or a transcript / Screenspace
+# scan completing, fires an armed blueprint for that participant. Served through
+# /api/catalog so the frontend picker never duplicates the list;
+# workflows_server's watcher polls each type's source (input dir, transcripts
+# manifest, screenspace manifest) only while a blueprint of that type is armed.
 TRIGGER_TYPES: list[dict[str, str]] = [
     {"id": "new_video", "label": "New video lands"},
     {"id": "transcript_complete", "label": "Transcript completes"},
@@ -106,10 +93,9 @@ def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list
     for edge in edges:
         src, dst = edge.get("from"), edge.get("to")
         # A wire missing either endpoint (or carrying a non-string one) is
-        # malformed, not just stale — skip it for the same reason. `in id_set`
-        # below already excluded these (None is never a node id), but only
-        # incidentally: it reads as a membership test, and ty cannot use it to
-        # narrow `.get()`'s Optional. This states the contract instead.
+        # malformed, not merely stale. `in id_set` below already excluded these
+        # incidentally — None is never a node id — but it reads as a membership
+        # test and ty can't use it to narrow `.get()`'s Optional.
         if not isinstance(src, str) or not isinstance(dst, str):
             continue
         if src in id_set and dst in id_set:
@@ -132,7 +118,7 @@ def topo_order(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list
 def blueprint_participant_nodes(blueprint: dict[str, Any]) -> list[dict[str, Any]]:
     """The blueprint's participant-bound source nodes (``video_source``).
 
-    Whole-study batch (P3) fans out over these — a blueprint with none can't be
+    Whole-study batch fans out over these — a blueprint with none can't be
     rebound per participant, so the batch endpoint rejects it.
     """
     return [n for n in blueprint.get("nodes", []) if n.get("type") == "video_source"]
@@ -143,7 +129,7 @@ def bind_participant(blueprint: dict[str, Any], participant: str) -> dict[str, A
 
     Pure: the original is never mutated. Non-source nodes are untouched — only the
     participant-bound sources are rewritten, so one blueprint can run once per
-    participant in a batch (P3).
+    participant in a batch.
     """
     clone = copy.deepcopy(blueprint)
     for node in clone.get("nodes", []):
@@ -215,7 +201,7 @@ def _node_result_summary(result: Any) -> dict[str, Any]:
     return {port: _summarize_value(val) for port, val in result.items()}
 
 
-# ---- Per-node result sidecars (P5) ----------------------------------------
+# ---- Per-node result sidecars ----------------------------------------------
 #
 # The snapshot ships only counts/pointers; the *full* inspectable result is
 # written to ``<output_dir>/workflow_runs/<run_id>/<node_id>.json`` so the
@@ -238,11 +224,10 @@ _INSPECTABLE_PORT_TYPES = frozenset(
     }
 )
 
-# Output port types persisted in the sidecar — everything JSON-safe, so a
-# later resume (``compute_resume_plan``) can reload a completed node's outputs
-# verbatim. Only ``clipRecords`` is excluded: its records carry gspread
-# ``Cell`` objects that don't survive JSON, so clipRecords producers always
-# re-run on resume (cheap — one Sheets read).
+# Output port types persisted in the sidecar — everything JSON-safe, so a resume
+# (``compute_resume_plan``) can reload a completed node's outputs verbatim. Only
+# ``clipRecords`` is excluded: its records carry gspread ``Cell`` objects that
+# don't survive JSON, so its producers always re-run (cheap — one Sheets read).
 _SIDECAR_PORT_TYPES = _INSPECTABLE_PORT_TYPES | frozenset(
     {
         "transcript",
@@ -257,7 +242,7 @@ _SIDECAR_PORT_TYPES = _INSPECTABLE_PORT_TYPES | frozenset(
 
 
 def run_results_dir(output_dir: Path | str, run_id: str) -> Path:
-    """Directory holding one run's per-node result sidecars (P5)."""
+    """Directory holding one run's per-node result sidecars."""
     return Path(output_dir) / "workflow_runs" / run_id
 
 
@@ -482,23 +467,21 @@ class WorkflowRunner:
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
-        # Partial run (P11): when set, only this node and its transitive ancestors
+        # Partial run: when set, only this node and its transitive ancestors
         # execute; the rest are marked skipped. Empty → run the whole graph.
         self.target_node_id = target_node_id
-        # Pre-seeded results: {node_id: result} for nodes whose output is
-        # already known — participant-independent sources a batch coordinator
-        # computed once (P3), or completed nodes reloaded from a prior run's
-        # sidecars on resume. A seeded node is stored as if it ran, skipping
-        # its executor. ``seed_note`` (resume) is surfaced on each seeded node.
+        # Pre-seeded results: {node_id: result} for nodes whose output is already
+        # known — participant-independent sources a batch coordinator computed
+        # once, or completed nodes reloaded from a prior run's sidecars on resume.
+        # A seeded node is stored as if it ran, skipping its executor.
         self._seed_results = seed_results or {}
         self._seed_note = seed_note
-        # Batch identity (P3): empty for a normal single run; a child run carries
-        # its participant + parent batch id so the snapshot can be grouped.
+        # Batch identity: empty for a normal single run; a child run carries its
+        # participant + parent batch id so the snapshot can be grouped.
         self.participant = participant
         self.batch_id = batch_id
-        # Auto-run triggers (P6 + chaining): True when this run was launched by
-        # the watcher (surfaced as a badge in the run history); ``trigger_type``
-        # records which trigger fired it (new_video / transcript_complete / …).
+        # True when the watcher launched this run (surfaced as a badge in the run
+        # history); ``trigger_type`` records which trigger fired it.
         self.triggered = triggered
         self.trigger_type = trigger_type
         # Sticky notes are canvas annotations, not executable nodes — drop them
@@ -526,7 +509,7 @@ class WorkflowRunner:
             for n in self.nodes
         }
         self._results: dict[str, dict[str, Any]] = {}
-        # Node ids with an inspectable result sidecar on disk (P5); surfaced as
+        # Node ids with an inspectable result sidecar on disk; surfaced as
         # ``hasResult`` in the snapshot so the UI knows it can fetch on demand.
         self._sidecars: set[str] = set()
         self.status = RUN_STATUS_QUEUED

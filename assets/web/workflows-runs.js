@@ -2,9 +2,8 @@
  *
  * Owns the Run lifecycle on the client: POST a run, subscribe to its per-run SSE
  * stream (with a polling fallback), render the run-history list + per-node status
- * rows in #wfRuns, and tint the canvas node cards by status with a progress bar.
- * Mirrors the screenspace-tasks SSE+poller pattern. Reads shared state through
- * WF.state — never re-`var`s a divergent `state` (the carve gotcha).
+ * rows in #wfRuns, and tint the canvas cards by status with a progress bar.
+ * Mirrors the screenspace-tasks SSE+poller pattern.
  */
 
 (function () {
@@ -13,10 +12,10 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // Satellite-local transport handles (only this file touches them, so they stay
-  // module-local rather than on WF.state). The run pair streams the focused child
-  // (or a single run); the batch pair streams the batch summary — both can run at
-  // once during a batch (summary + the drilled-in child's per-node detail).
+  // Satellite-local transport handles: only this file touches them, so they stay
+  // module-local rather than on WF.state. The run pair streams the focused child
+  // (or a single run), the batch pair the batch summary — both run at once during
+  // a batch.
   var _stream = null; // EventSource for the active/focused run
   var _poller = null; // createPoller fallback when run SSE drops
   var _batchStream = null; // EventSource for the active batch
@@ -176,9 +175,9 @@
     // Errors gate the run (the button is already disabled; this guards the
     // programmatic path). Warnings never block.
     if (state.validation && state.validation.errors.length) return;
-    // A Video Source set to "All participants" makes Run fan out over the study —
-    // but a partial "run to here" or a resume is always a single run (a resumed
-    // batch child keeps its participant binding server-side).
+    // "All participants" makes Run fan out over the study, but a partial "run to
+    // here" or a resume is always single (a resumed batch child keeps its
+    // participant binding server-side).
     if (!targetNodeId && !resumeFromRunId && blueprintWantsBatch()) {
       startBatch();
       return;
@@ -228,12 +227,11 @@
     // UI flips to idle when the stream/poll reports the cancelled status.
   }
 
-  // The explicit participant subset to fan out over, or null for "all". Resolved
-  // from the first Video Source whose value is an array (subset) or the ALL
-  // sentinel — multiple Video Sources share one batch list (the server rebinds
-  // them all per child run; a per-source subset is out of scope). An array of ≥2
-  // ids is sent as-is; ALL (or no explicit selection) omits the field so the
-  // server's "all participants" branch runs.
+  // The explicit participant subset to fan out over, or null for "all". Read from
+  // the first Video Source whose value is an array or the ALL sentinel; multiple
+  // Video Sources share one batch list, since the server rebinds them all per
+  // child run. ALL (or no explicit selection) omits the field so the server's
+  // "all participants" branch runs.
   function batchParticipants() {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
@@ -246,9 +244,9 @@
     return null;
   }
 
-  // Fan the active blueprint out across the selected participants (P3). One run
-  // per participant, sequential, grouped under one batch card. Reached from
-  // startRun when a Video Source is set to "All participants" or a subset.
+  // Fan the active blueprint out across the selected participants: one run each,
+  // sequential, grouped under one batch card. Reached from startRun when a Video
+  // Source is set to "All participants" or a subset.
   function startBatch() {
     if (!state.ready || !state.activeBlueprintId) return;
     if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
@@ -282,9 +280,9 @@
   function refreshRuns() {
     var bpId = state.activeBlueprintId;
     if (!bpId) return;
-    // Keep the cross-blueprint list current too while it's the visible scope
-    // (the discover poller stays blueprint-scoped; "All" refreshes on toggle
-    // and on blueprint switches like this one).
+    // Keep the cross-blueprint list current while it's the visible scope: the
+    // discover poller stays blueprint-scoped, so "All" refreshes on toggle and on
+    // blueprint switches like this one.
     if (state.runScope === "all") fetchAllRuns();
     stopTransport();
     stopBatchTransport();
@@ -346,11 +344,10 @@
       .catch(function () {});
   }
 
-  // The cross-blueprint history's click-through handshake: the row sets
-  // pendingFocusRunId and opens the target blueprint; once refreshRuns has that
-  // blueprint's runs loaded, drill into the requested one (batch children are
-  // in state.runs too, so focusChild covers both). Cleared silently when the
-  // run has since been evicted from history.
+  // Cross-blueprint history click-through: the row sets pendingFocusRunId and
+  // opens the target blueprint, then once refreshRuns has its runs loaded we drill
+  // into the requested one (batch children are in state.runs too). Cleared
+  // silently when the run has since been evicted.
   function consumePendingFocus() {
     var pf = state.pendingFocusRunId;
     if (!pf) return;
@@ -603,7 +600,7 @@
 
   // Per-node detail rows + result chips for an expanded run (shared by single-run
   // cards and a drilled-in batch child). Rows whose snapshot says `hasResult`
-  // expand to lazily fetch + render the node's stored result sidecar (P5).
+  // expand to lazily fetch + render the node's stored result sidecar.
   function buildNodeDetail(run) {
     var wrap = document.createDocumentFragment();
     var rows = el("div", "wf-run-nodes");
@@ -640,7 +637,7 @@
     return wrap;
   }
 
-  // ---- Lazy per-node result (P5) -------------------------------------------
+  // ---- Lazy per-node result ------------------------------------------------
 
   // Expand/collapse one node's result panel. The full payload is fetched once
   // and cached on the run object, so re-expanding (even after a card rebuild)
@@ -835,7 +832,7 @@
 
     var head = el("div", "wf-run-head");
     head.appendChild(el("span", "wf-run-status wf-run-status-" + run.status, run.status));
-    // Auto-launched by the watch-dir trigger (P6) — a bolt chip distinguishes it
+    // Auto-launched by a trigger — a bolt chip distinguishes it
     // from a manual run (margin-right:auto keeps it hugging the status label).
     if (run.triggered) {
       var trig = el("span", "wf-run-triggered", "triggered");
@@ -1139,7 +1136,7 @@
   var _running = false;
 
   // Re-gate the Run button from the three inputs that can change independently:
-  // an in-flight run, the load gate, and validation errors (P5). Called by both
+  // an in-flight run, the load gate, and validation errors. Called by both
   // setRunningUI and the validation satellite (after every recompute).
   function syncRunButton() {
     var v = state.validation;
@@ -1175,7 +1172,7 @@
     syncRunButton();
   }
 
-  // ---- Discover externally-started runs (P6 watch-dir triggers) -------------
+  // ---- Discover externally-started runs (trigger-launched) ------------------
   // A run can appear without this client starting it — the directory watcher
   // auto-launches one when a new video lands. The run panel otherwise only
   // refreshes on blueprint-open, so such runs would never surface live. A low-

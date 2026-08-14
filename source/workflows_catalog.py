@@ -1,21 +1,14 @@
 """Workflows node catalog: declarative registry + typed-port adapters.
 
-The data half of the workflows engine, split out of ``workflows.py`` (which
-keeps the executors, the import-time wiring, and the facade; the run engine
-lives in ``workflows_runner``). Owns:
+``NodeContext`` (the run-wide context handed to every executor), ``NODE_TYPES``
+(the node registry of typed ports + param schema, fed to ``/api/catalog`` by
+``serialize_catalog``), ``BUILTIN_STASHES``, the source-descriptor helpers, and
+the pure ``ADAPTERS`` coercion table.
 
-* ``NodeContext`` — the run-wide context handed to every node executor.
-* ``NODE_TYPES`` — the declarative single-source-of-truth node registry
-  (typed ports + param schema); ``serialize_catalog`` feeds ``/api/catalog``.
-* ``BUILTIN_STASHES`` — the read-only built-in recipe graphs.
-* The source-descriptor helpers embedded in every domain value.
-* ``ADAPTERS`` + ``_ADAPTER_DESCRIPTIONS`` — the typed-port coercion table the
-  runner applies (pure ``value -> value``; late-imports ``files``/``video``).
-
-**Wiring caveat:** the collection-algebra node types and every node's
-``execute`` key are attached by ``workflows.py`` at import time (it mutates
-the ``NODE_TYPES`` dict imported from here). Import ``workflows``, not this
-module, before running graphs — this module alone is an unwired catalog.
+**Wiring caveat:** the collection-algebra node types and every node's ``execute``
+key are attached by ``workflows.py`` at import time, which mutates the
+``NODE_TYPES`` dict imported from here. Import ``workflows``, not this module,
+before running graphs — on its own this is an unwired catalog.
 """
 
 from __future__ import annotations
@@ -73,11 +66,11 @@ class NodeContext:
 # Node catalog (declarative single source of truth)
 # ---------------------------------------------------------------------------
 #
-# Modelled on ``thinking_agents.AGENTS``: a data-driven, enumerable registry
-# the frontend renders generically. Each node carries the typed ports the DAG
-# needs (the wire vocabulary lives in plans/archive/WORKFLOWS-PLAN.md). Adding
-# a node is "append a NodeType + an executor" (executors section below), zero
-# frontend edits. ``serialize_catalog`` strips ``execute`` for the JSON endpoint.
+# Modelled on ``thinking_agents.AGENTS``: a data-driven registry the frontend
+# renders generically, each node carrying the typed ports the DAG needs (wire
+# vocabulary in plans/archive/WORKFLOWS-PLAN.md). Adding a node is "append a
+# NodeType + an executor", zero frontend edits; ``serialize_catalog`` strips
+# ``execute`` for the JSON endpoint.
 
 
 class Port(TypedDict):
@@ -98,7 +91,7 @@ class ParamSpec(TypedDict):
     choices: NotRequired[list[Any]]
     min: NotRequired[float]
     max: NotRequired[float]
-    # P5: an empty value here is a guaranteed no-op/failure — the pre-run
+    # An empty value here is a guaranteed no-op/failure, so the pre-run
     # validation panel surfaces it as an error and disables Run.
     required: NotRequired[bool]
 
@@ -135,8 +128,8 @@ _OLLAMA_MODEL_PARAM: ParamSpec = {
 }
 
 
-# Curated v1 node set (plans/archive/WORKFLOWS-PLAN.md). Keyed by id so the
-# frontend can both iterate (palette) and look up a placed node's type.
+# Curated node set (plans/archive/WORKFLOWS-PLAN.md). Keyed by id so the frontend
+# can both iterate (palette) and look up a placed node's type.
 NODE_TYPES: dict[str, NodeType] = {
     # ---- Sources ----
     "video_source": {
@@ -333,9 +326,9 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
     # ---- Screenspace ----
-    # The ten per-detector nodes (ss_text … ss_boundary) are appended below the
-    # literal from ``_SS_DETECTOR_SPECS`` so each tool's real params reach the
-    # scan (the old single ``ss_scan`` passed ``parameters={}``).
+    # The per-detector nodes (ss_text … ss_boundary) are appended below the
+    # literal from ``_SS_DETECTOR_SPECS``, so each tool's real params reach the
+    # scan rather than the empty ``parameters={}`` a single ss_scan would pass.
     "multitool": {
         "id": "multitool",
         "label": "Multitool",
@@ -1111,7 +1104,7 @@ def serialize_adapters() -> list[list[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Built-in recipes (P4) — read-only stashes served alongside user stashes
+# Built-in recipes — read-only stashes served alongside user stashes
 # ---------------------------------------------------------------------------
 #
 # These are the headline graphs shipped as ready-to-stamp sub-graphs. They are
@@ -1451,7 +1444,7 @@ def _clip_source_filename(source: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Typed-port adapters (M3) — pure value -> value, applied by the runner (M4)
+# Typed-port adapters — pure value -> value, applied by the runner
 # ---------------------------------------------------------------------------
 #
 # An adapter coerces an output value whose port type differs from the consuming
