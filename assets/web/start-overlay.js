@@ -2112,16 +2112,13 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
-    // A mind map is an independent source with no worksheet, so it gets its own
-    // branch ahead of the spreadsheet ones. Gate on active_source, NOT on
-    // mindnode_loaded: opening a mind map never clears the sheet and opening a
-    // sheet never clears the mind map (they coexist by design), so a bare
-    // mindnode_loaded check meant that once a mind map had been opened it
-    // hijacked the prefill for the rest of the session — the recents list would
-    // highlight the spreadsheet the user opened afterwards while this panel
-    // switched to the Mind map tab, and confirming re-opened the map.
-    // currentSessionKey() already keys on active_source; these must agree.
-    // An empty active_source (nothing recorded for this session yet) keeps the
+    // A mind map is an independent source with no worksheet, so it branches ahead
+    // of the spreadsheet cases. Gate on active_source, NOT mindnode_loaded: the
+    // two coexist by design, so a bare mindnode_loaded check let one opened mind
+    // map hijack the prefill for the rest of the session — recents would highlight
+    // the spreadsheet opened afterwards while this panel switched to the Mind map
+    // tab, and confirming re-opened the map. currentSessionKey() already keys on
+    // active_source and the two must agree. An empty active_source keeps the
     // original precedence, so a mind-map-only launch still prefills.
     var activeType = (s.active_source && s.active_source.type) || "";
     var mindnodeIsActive = activeType === "mindnode" || !activeType;

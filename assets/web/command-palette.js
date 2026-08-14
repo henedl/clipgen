@@ -628,14 +628,12 @@
 
   // ---- Summon chord ----
   //
-  // The chord lives in the shared hotkey registry (hotkeys.js catalog id
-  // "global.palette", default Mod+Shift+P / Mod+K, rebindable in Settings →
-  // Hotkeys). allowInInput keeps the Spotlight behavior: the chord is
-  // deliberate, so it fires even while typing in a page input. The registry
-  // dispatcher suppresses all combos while a blocking modal is open — which
-  // includes the palette itself — so toggling *closed* is handled by the
-  // palette input's own keydown handler (isToggleChord in onInputKeydown),
-  // mirroring how the hotkeys cheatsheet passes its own toggle back through.
+  // Lives in the shared hotkey registry (catalog id "global.palette", default
+  // Mod+Shift+P / Mod+K, rebindable). allowInInput keeps the Spotlight behavior:
+  // the chord is deliberate, so it fires even while typing. The dispatcher
+  // suppresses all combos while a blocking modal is open — the palette included —
+  // so toggling *closed* falls to the palette input's own keydown handler
+  // (isToggleChord), as the hotkeys cheatsheet does with its toggle.
 
   function isToggleChord(e) {
     if (!window.ClipgenHotkeys) return false;

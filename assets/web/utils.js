@@ -18,13 +18,11 @@ var CLIPGEN_DEV_TOKEN_TWEAK = false;
 
 // ---- Canonical config (mirror of config.py via utils.get_frontend_config)
 //
-// Source of truth: every API response (server.py /api/sheet) and every
-// exported viewer payload (viewer.py finalize_*) embeds a `config` field.
-// Pages call
-// clipgenApplyConfig(payload) to overlay the live values onto these defaults.
-// The hardcoded defaults below cover purely-offline contexts (re-opened
-// older exported viewers); tests/test_shared_constants.py asserts they
-// match config.py.
+// Every API response and every exported viewer payload embeds a `config` field;
+// pages call clipgenApplyConfig(payload) to overlay the live values onto these
+// defaults. The hardcoded defaults below only serve offline contexts (re-opened
+// older exported viewers), and tests/test_shared_constants.py asserts they match
+// config.py.
 
 var CLIPGEN_CONFIG = {
   defaultDuration: 60,
@@ -216,22 +214,16 @@ var createLoopVideo = function (src, alt) {
 
 // ---- Brand mark hydration ----
 //
-// Fetches assets/logos/favicon.svg and injects it as inline <svg> into every
-// .brand-mark element so the three F-paths can be animated via CSS
-// stroke-dashoffset (see .brand-mark.is-animated rules in tokens.css).
+// Injects assets/logos/favicon.svg inline into every .brand-mark so its three
+// F-paths can animate via CSS stroke-dashoffset (.brand-mark.is-animated in
+// tokens.css). Loading from the file rather than inlining lets a drop-in
+// replacement propagate with no code edits.
 //
-// The draw-on cascade plays only the first time a browser session sees the
-// mark (sessionStorage key BRAND_MARK_PLAYED_KEY). Navigating between Studio,
-// Screenspace, and Transcripts within the same tab re-injects the SVG but
-// skips the animation — closing the tab/browser clears the flag and the
-// next visit replays.
-//
-// On fetch failure (e.g. file:// open with no server, blocked by CSP) the
-// existing mask-image fallback in tokens.css renders the static mark — no
-// flicker, no broken state.
-//
-// Loading from the file rather than inlining means future drop-in replacement
-// of assets/logos/favicon.svg propagates without code edits.
+// The draw-on cascade plays once per browser session (sessionStorage
+// BRAND_MARK_PLAYED_KEY): navigating between pages in the same tab re-injects the
+// SVG but skips the animation, and closing the tab replays it next visit. On
+// fetch failure (file:// with no server, CSP) the mask-image fallback in
+// tokens.css renders the static mark — no flicker, no broken state.
 var BRAND_MARK_PLAYED_KEY = "clipgen.brand-mark.played";
 
 var clipgenInitBrandMark = function () {
@@ -579,17 +571,14 @@ var estimateRemainingSec = function (elapsedSec, progress) {
   return (elapsedSec * (1 - progress)) / progress;
 };
 
-// Track elapsed time and a smoothed remaining-time estimate for one long-running
-// operation. Frontend-only; fed a 0..1 progress fraction on each update. For
-// indeterminate operations (no progress signal) callers omit progress and read
-// elapsedSec only — remainingSec stays null. Returns a plain object (not a class,
-// per project convention) closing over the start timestamp and an EMA of the raw
-// estimate to damp jitter.
+// Elapsed time plus a smoothed remaining-time estimate for one long-running
+// operation, fed a 0..1 progress fraction per update. Indeterminate callers omit
+// progress and read elapsedSec only, leaving remainingSec null. Returns a plain
+// object closing over the start timestamp and an EMA of the raw estimate, to damp
+// jitter.
 //
-// pause()/resume() are opt-in: elapsed freezes while paused and continues afterward,
-// with the paused span excluded from elapsed. Callers that never call pause() see the
-// original continuous wall-clock behavior (so e.g. the Transcripts timers are
-// unaffected).
+// pause()/resume() are opt-in: elapsed freezes while paused and the paused span is
+// excluded, so callers that never pause keep continuous wall-clock behavior.
 var createEtaTracker = function (opts) {
   opts = opts || {};
   var emaAlpha = opts.emaAlpha != null ? opts.emaAlpha : 0.3;
@@ -746,14 +735,12 @@ var parseClockTimestamp = function (str) {
   return null;
 };
 
-// Parse a Sheet cell's timestamp tokens into [{startSeconds, duration}].
-// When baselineSeconds > 0, tokens are treated as absolute clock times
-// (2-part = HH:MM) and the baseline is subtracted from both ends of each
-// range. Mirrors files.prepare_clip + utils.convert_clock_pairs_to_relative.
-// Pairs that resolve to negative or zero-length intervals are skipped.
-// defaultDuration: required (per-clip duration when only a start time is
-// given). Callers must pass CLIPGEN_CONFIG.defaultDuration; a missing value
-// is a contract bug.
+// Parse a Sheet cell's timestamp tokens into [{startSeconds, duration}], mirroring
+// files.prepare_clip + utils.convert_clock_pairs_to_relative. With
+// baselineSeconds > 0 the tokens are absolute clock times (2-part = HH:MM) and the
+// baseline is subtracted from both ends; pairs resolving to negative or
+// zero-length intervals are skipped. defaultDuration is required — callers pass
+// CLIPGEN_CONFIG.defaultDuration, and a missing value is a contract bug.
 var parseClipSegmentsForCell = function (raw, baselineSeconds, defaultDuration) {
   var DEFAULT_DUR = defaultDuration;
   var hasBaseline = baselineSeconds && baselineSeconds > 0;
@@ -1095,38 +1082,26 @@ var toastError = function (prefix) {
 
 var POLL_INTERVAL = 3000;
 
-// Generic poller. Encapsulates the recurring `setInterval` + `visibilitychange`
-// + `document.hidden` dance used by Studio intake counters, Screenspace task
-// status, and similar live-refresh loops.
-//
-//   var poller = createPoller(fn, ms, opts);
-//   poller.start();   // arm; pauses automatically when tab hidden
-//   poller.stop();    // disarm; safe to call multiple times
+// Generic poller: the recurring `setInterval` + `visibilitychange` +
+// `document.hidden` dance behind every live-refresh loop. `start()` arms (and
+// auto-pauses when the tab hides), `stop()` disarms and is safe to repeat. fn
+// exceptions are swallowed so a transient error can't kill the loop.
 //
 // Options:
-//   pauseWhenHidden (default true)  — pause when document.hidden, resume on
-//                                     visibilitychange and run fn() once to
-//                                     catch up.
-//   runImmediately  (default true)  — run fn() once on start (and again on
-//                                     resume) before the next interval tick.
-//   maxIntervalMs   (default = intervalMs) — enable idle backoff. When set
-//                                     above intervalMs the loop self-reschedules
-//                                     with setTimeout instead of setInterval:
-//                                     fn's resolved value is an "active this
-//                                     tick" signal — truthy resets to the base
-//                                     interval, falsy backs the delay off toward
-//                                     maxIntervalMs after backoffAfter quiet
-//                                     ticks (e.g. 5s → 10 → 20 → 30, capped).
-//   backoffAfter    (default 3)     — consecutive quiet ticks before backing off.
+//   pauseWhenHidden (true)  — pause on document.hidden, resume on
+//                             visibilitychange and run fn() once to catch up.
+//   runImmediately  (true)  — run fn() on start and resume, before the next tick.
+//   maxIntervalMs   (=intervalMs) — above intervalMs, enables idle backoff (see
+//                             below).
+//   backoffAfter    (3)     — consecutive quiet ticks before backing off.
 //
-// In backoff mode fn may return a value or a Promise; the loop waits for it
-// before scheduling the next tick (so slow polls never overlap). The returned
-// object also gains wake(): snap back to the base cadence and refresh now —
-// call it after a user action so polling both refreshes and speeds back up.
-// wake() returns a promise settling when that refresh has landed, so a caller
-// driving a spinner can await it.
-//
-// fn exceptions are swallowed so a transient error does not kill the loop.
+// Backoff mode self-reschedules with setTimeout rather than setInterval, and
+// treats fn's resolved value as an "active this tick" signal: truthy resets to
+// the base interval, falsy backs off toward maxIntervalMs after backoffAfter
+// quiet ticks (5s → 10 → 20 → 30, capped). fn may return a value or a Promise and
+// the loop waits for it, so slow polls never overlap. The returned object also
+// gains wake(): snap back to base cadence and refresh now, returning a promise
+// that settles once the refresh lands (so a caller can drive a spinner on it).
 var createPoller = function (fn, intervalMs, opts) {
   opts = opts || {};
   var pauseWhenHidden = opts.pauseWhenHidden !== false;
@@ -1260,17 +1235,14 @@ var createPoller = function (fn, intervalMs, opts) {
 };
 
 // ---- SSE stream with standard parse + fallback hook ----
-// Open an EventSource with the project's standard JSON-parse onmessage wrapper
-// and auto-close-on-error. The caller owns its polling fallback — each subscriber
+// An EventSource with the project's standard JSON-parse onmessage wrapper and
+// auto-close-on-error. The caller owns its polling fallback — each subscriber
 // stores its own stream/poller and reacts to a drop differently — so onError
-// fires AFTER the stream is closed. Returns the EventSource (or null if the
-// browser lacks EventSource, in which case onUnsupported runs).
+// fires AFTER the stream is closed. Returns the EventSource, or null when the
+// browser lacks EventSource (onUnsupported runs instead).
 //
-// Options:
-//   onMessage(data)   — called with the parsed JSON of each message
-//   onOpen()          — called when the connection (re)opens
-//   onError()         — called once the dropped stream has been closed
-//   onUnsupported()   — called instead of opening when window.EventSource is absent
+// Options: onMessage(data) per parsed message, onOpen() on (re)open, onError()
+// once the dropped stream is closed, onUnsupported() when EventSource is absent.
 var createSSEStream = function (url, opts) {
   opts = opts || {};
   if (!window.EventSource) {
@@ -1325,16 +1297,14 @@ var readNDJSONStream = function (response, onLine) {
 // ---- File downloads ----
 // Save generated text (JSON/CSV) to disk from any page.
 //
-// Two mechanisms, because the desktop shell cannot use the browser one. In a
-// real browser this is the usual blob + <a download> click. Inside the pywebview
-// window it is not: WKWebView ignores the download attribute for blob:, data:
-// AND for HTTP responses carrying Content-Disposition (the request is made and
-// the body silently discarded), so every export would look like a dead button.
-// desktop.py therefore exposes save_file, which raises a native save dialog and
-// writes the bytes from Python.
+// Two mechanisms, because the desktop shell cannot use the browser one: normally
+// a blob + <a download> click, but WKWebView ignores the download attribute for
+// blob:, data: AND for HTTP responses carrying Content-Disposition — the request
+// is made and the body silently discarded — so every export would look like a
+// dead button. desktop.py therefore exposes save_file, raising a native dialog
+// and writing the bytes from Python.
 //
-// onDone(path|null, error|null) is optional; path is null when the user
-// cancelled the native dialog.
+// onDone(path|null, error|null) is optional; path is null on user cancel.
 var clipgenSaveFile = function (filename, content, mime, onDone) {
   var api = window.pywebview && window.pywebview.api;
   if (api && typeof api.save_file === "function") {
@@ -1430,19 +1400,14 @@ var createSeekCoalescer = function (getVideo, onDeferred, applySeek) {
 };
 
 // ---- Blocking modal lifecycle (Escape / backdrop / optional focus trap) ----
-// Shared lifecycle for blocking overlays: closes on Escape, optionally on
-// backdrop click, optionally traps Tab/Shift+Tab inside the overlay and restores
-// focus to the trigger on release. Singleton — opening a new modal releases the
-// previous one (callers never stack blocking overlays). The returned trap's
-// release() is idempotent cleanup-only, so any dismiss path (button, backdrop,
-// Escape) can call closeBlockingModal safely.
+// Shared lifecycle for blocking overlays: closes on Escape, optionally on backdrop
+// click, optionally traps Tab inside the overlay and restores focus to the trigger
+// on release. Singleton — opening a new modal releases the previous one, since
+// callers never stack blocking overlays. release() is idempotent cleanup-only, so
+// any dismiss path can call closeBlockingModal safely.
 //
-// Options:
-//   onEscape()        — fired on Escape
-//   onBackdropClick() — fired when the overlay element itself is clicked
-//   trapFocus         — keep Tab/Shift+Tab inside the overlay and focus its first
-//                       control on open
-//   restoreFocus      — restore focus to the prior element on release
+// Options: onEscape(), onBackdropClick() (the overlay element itself),
+// trapFocus (also focuses the first control on open), restoreFocus.
 var _TRAP_FOCUSABLE =
   'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 var _activeBlockingModal = null;

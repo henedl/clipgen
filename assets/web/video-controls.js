@@ -36,29 +36,24 @@
 
   // ---- Audio-level popover (glass hover panel + Web Audio master gain) ----
   //
-  // HTML5 <video>.volume caps at 1.0, so >100% ("boost") is impossible with the
-  // element alone. We route the element through a Web Audio GainNode
-  // (createMediaElementSource -> gain -> destination) whose gain runs 0..2.0.
-  //
-  // The single-track graph is built lazily on the first real user gesture on the
+  // HTML5 <video>.volume caps at 1.0, so ">100% boost" needs the element routed
+  // through a Web Audio GainNode (createMediaElementSource -> gain -> destination)
+  // running 0..2.0. That graph is built lazily on the first real gesture on the
   // slider, never on hover: autoplay policy only resumes an AudioContext inside a
   // user-activation handler, and connecting a suspended context to an
-  // already-playing element would cut its sound. Until then the video plays
-  // natively; the first interaction activates gain seamlessly.
+  // already-playing element would cut its sound.
   //
   // MULTITRACK: a browser plays only the container's default audio track, so
-  // independent per-track volume needs each track as its own media source. When
-  // a (single-file) participant has >1 track and the page supplies trackAudioUrl,
-  // the module mutes the <video> (visual only) and plays N hidden <audio>
-  // elements — one per extracted track (/api/.../audio-track/…) — each through
-  // its own GainNode into a shared master, kept time-aligned with the video
-  // (play/pause/seek/rate + drift correction). The popover then shows one slider
-  // per track. Any audio-element error bails back to the video's own track so
-  // there's always sound. Multi-part participants keep the single master slider.
+  // per-track volume needs each track as its own media source. Given a
+  // single-file participant with >1 track and a page-supplied trackAudioUrl, the
+  // <video> is muted (visual only) and N hidden <audio> elements play instead —
+  // one per extracted track, each through its own GainNode into a shared master,
+  // kept time-aligned with the video (play/pause/seek/rate + drift correction).
+  // Any audio-element error bails back to the video's own track so there is always
+  // sound; multi-part participants keep the single master slider.
   //
-  // The page drives mode via ctrl.setMuted() (mute intent) and ctrl.refresh()
-  // (call after the track list for the current participant is known). Volume is
-  // in-memory only and resets to 100% on reload.
+  // The page drives mode via ctrl.setMuted() and ctrl.refresh() (once the current
+  // participant's track list is known). Volume is in-memory and resets on reload.
 
   var AUDIO_CTX = null; // one AudioContext shared by every attached player
 
