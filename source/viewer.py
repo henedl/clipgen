@@ -1,27 +1,29 @@
 """Timeline and gallery viewer generation, manifest persistence.
 
-Timeline viewer (--viewer / interactive 'viewer'):
-  Injects window.CLIPGEN_DATA into viewer.html, replacing <!-- CLIPGEN_DATA_HERE -->.
-  Data shape: { meta: {study, participant, generatedAt, mode, sourceSpreadsheet,
-    sourceFileType, filmstripEnabled}, artifacts: [{id, type, file, start, end,
-    study, participant, category, description, cellRow, cellCol, cellA1, annotations,
-    sourceVideo}], timeline: {duration, startOffset} }
-  Artifact ``type`` is one of clip / screen / gif / reel (timeline events) or the
-    non-timeline "attachment" types timelapse / heatmap / export (start/end 0; the viewer JS
-    branches on type and surfaces these in a separate Attachments panel).
-  Key functions: build_artifact_records_for_clip(), finalize_timeline_data(),
-    generate_timeline_viewer().
+Both viewers inject ``window.CLIPGEN_DATA`` into their HTML template, replacing
+``<!-- CLIPGEN_DATA_HERE -->``.
 
-Gallery viewer (--gallery):
-  Same inlining pattern using gallery.html.
-  Data shape: { meta: {sourceVideo, generatedAt, mode, format, interval, videoDuration},
-    artifacts: [{file, timestamp, timestamp_formatted, type, duration}] }
-  Key functions: finalize_gallery_data(), generate_gallery_viewer().
-  Gallery artifacts are NOT written to the manifest by default.
+Timeline (--viewer / interactive 'viewer'), from viewer.html::
 
-Artifact manifest (save_manifest / load_manifest_*):
-  Merges new artifacts/reels into clipgen_manifest.json, deduplicating by id (newer wins).
-  Consumed by --regenerate and standalone --viewer.
+    { meta: {study, participant, generatedAt, mode, sourceSpreadsheet,
+      sourceFileType, filmstripEnabled},
+      artifacts: [{id, type, file, start, end, study, participant, category,
+      description, cellRow, cellCol, cellA1, annotations, sourceVideo}],
+      timeline: {duration, startOffset} }
+
+Artifact ``type`` is clip / screen / gif / reel (timeline events) or the
+non-timeline "attachment" types timelapse / heatmap / export, which carry
+start/end 0 — the viewer JS branches on type and gives those their own panel.
+
+Gallery (--gallery), from gallery.html::
+
+    { meta: {sourceVideo, generatedAt, mode, format, interval, videoDuration},
+      artifacts: [{file, timestamp, timestamp_formatted, type, duration}] }
+
+Gallery artifacts are NOT written to the manifest by default.
+
+The manifest helpers merge new artifacts/reels into clipgen_manifest.json,
+deduplicating by id (newer wins), for --regenerate and standalone --viewer.
 """
 
 import base64

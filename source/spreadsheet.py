@@ -160,18 +160,10 @@ def _detect_baseline_row(sheet_data: list[list[str]]) -> int | None:
 def get_num_participants(header_row: list[str], id_cell: Any, col_count: int) -> int:
     """Count the number of participant columns in the worksheet.
 
-    Scans every column after ID and counts those whose header starts with one
-    of ``config.PARTICIPANT_PREFIXES`` (P / G). Layout-agnostic: makes no
-    assumption about where Observation, Category, or other non-participant
-    columns sit relative to ID.
-
-    Args:
-        header_row: List of header cell values
-        id_cell: The ID header cell object (1-based ``col``)
-        col_count: Total number of columns to consider in ``header_row``
-
-    Returns:
-        Number of participant columns found
+    Scans every column after ID and counts those whose header starts with one of
+    ``config.PARTICIPANT_PREFIXES`` (P / G). Layout-agnostic: assumes nothing about
+    where Observation, Category or other non-participant columns sit relative to
+    ID. *id_cell* is the ID header cell (1-based ``col``).
     """
     start_col = (
         id_cell.col
@@ -298,18 +290,10 @@ def parse_participant_selection(input_str: str) -> list[str]:
 def parse_cell_specifications(cell_input: str) -> list[tuple[str, int]]:
     """Parse cell specification string into list of (participant_id, row_number) tuples.
 
-    Expected format: "P01.11" (participant_id.row_number). Multiple cells separated by
-    + or , e.g. "P01.11 + P03.11" or "P01.11, P03.09". Participant ID must start with
-    P or G; row_number must be a positive integer (1-based sheet row).
-
-    Args:
-        cell_input: String like "P01.11" or "P01.11 + P03.11 + P03.09"
-
-    Returns:
-        List of (participant_id, row_number) tuples
-
-    Raises:
-        ValueError: If format is invalid
+    Format is "P01.11" (participant_id.row_number), multiple cells separated by +
+    or , — "P01.11 + P03.11", "P01.11, P03.09". Participant ID must start with P or
+    G, row_number must be a positive 1-based sheet row. Raises ValueError on a
+    malformed input.
     """
     # Support both + and , as separators; normalize to + then split
     specs = []
@@ -835,24 +819,15 @@ def generate_list(
 ) -> list[ClipRecord]:
     """Generate clip records from a sheet based on mode and resolved parameters.
 
-    This function is pure: it takes resolved parameters (no interactive prompts).
-    Interactive prompts are handled by clipgen.py using functions from interactive.py.
+    Pure: takes resolved parameters and never prompts — interactive.py owns the
+    prompts. *mode* is one of 'batch', 'line', 'range', 'category', 'cell',
+    'participant', 'keyword', 'reel', and each mode reads its own parameter
+    (*line_numbers*, *range_start*/*range_end*, *cell_specs* as
+    ``(participant_id, row_number)`` tuples, *participant_id* as a comma/plus
+    separated string, *reel_input*, *categories*).
 
-    Args:
-        sheet: The gspread worksheet object
-        mode: One of 'batch', 'line', 'range', 'category', 'cell', 'participant', 'keyword', 'reel'
-        ctx: Pre-built SheetContext to reuse (skips the sheet API call when provided)
-        line_numbers: List of line numbers for 'line' mode
-        range_start: Start line for 'range' mode
-        range_end: End line for 'range' mode
-        skip_prompts: If True, skip confirmation prompts (CLI --no-input flag, for batch/keyword)
-        cell_specs: List of (participant_id, row_number) tuples for 'cell' mode
-        participant_id: Participant ID(s) for 'participant' mode (comma/plus-separated string)
-        reel_input: Reel selector string for 'reel' mode
-        categories: List of category names for 'category' mode
-
-    Returns:
-        List of clip records
+    Passing a pre-built *ctx* skips the sheet API call. *skip_prompts* (the CLI
+    ``--no-input`` flag) drops the batch/keyword confirmations.
     """
     if config.DEBUGGING:
         config.debug_ic(mode, line_numbers, range_start, range_end)

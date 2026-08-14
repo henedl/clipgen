@@ -100,12 +100,11 @@ WHISPER_MODELS: list[dict[str, Any]] = [
 
 _cached_model: Any = None
 _cached_model_name: str | None = None
-# The full construction signature the cached model was built from. The name
-# alone is not enough: device, compute type and thread count are all read at
-# WhisperModel() time and are all user-editable in Studio settings, so keying
-# on the name meant changing TRANSCRIBE_DEVICE to cuda saved, persisted, and
-# displayed while every later transcription silently kept running on the model
-# already loaded for cpu.
+# The full construction signature the cached model was built from. The name alone
+# is not enough: device, compute type and thread count are all read at
+# WhisperModel() time and all user-editable, so name-keying let a switch to
+# TRANSCRIBE_DEVICE=cuda save and display while transcription silently kept
+# running on the model already loaded for cpu.
 _cached_model_key: tuple[Any, ...] | None = None
 _model_load_lock = threading.Lock()
 # True while _load_model is actually constructing a WhisperModel — the ~10s a
@@ -297,9 +296,8 @@ def _load_model(model_name: str | None = None) -> Any:
             )
             return None
 
-        # Drop the previous model before loading a new one so we don't
-        # double-hold ~1-2 GB of weights (per CPU/GPU) until the next GC
-        # cycle. gc.collect() prods CUDA/MPS allocator cleanup as well.
+        # Drop the previous model first, or ~1-2 GB of weights is double-held
+        # until the next GC cycle; gc.collect() also prods CUDA/MPS cleanup.
         if _cached_model is not None:
             import gc
 
@@ -313,10 +311,10 @@ def _load_model(model_name: str | None = None) -> Any:
             # is exactly what was constructed even if a setting changes while
             # this load is in flight.
             #
-            # cpu_threads: 0 = auto (all cores). CTranslate2's own default heuristic
-            # under-uses many-core CPUs, so resolve to os.cpu_count() when unset.
-            # num_workers is left at its default — the transcript poller runs one job
-            # at a time and >1 workers multiplies model memory for no gain here.
+            # cpu_threads 0 = auto: CTranslate2's own heuristic under-uses
+            # many-core CPUs, so resolve to os.cpu_count(). num_workers stays
+            # default — the poller runs one job at a time, so >1 only multiplies
+            # model memory.
             _name, device, compute_type, threads = load_key
             load_kwargs: dict[str, Any] = {
                 "compute_type": compute_type,
@@ -359,9 +357,9 @@ def _build_transcribe_kwargs(
         "compression_ratio_threshold": config.TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD,
         "condition_on_previous_text": config.TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT,
     }
-    # Recall-safe VAD tuning: a lower threshold plus boundary padding so quiet
-    # speech and word edges aren't clipped. Only sent when VAD is on; faster-whisper
-    # merges this partial dict with its VadOptions defaults.
+    # Recall-safe VAD tuning: a low threshold plus boundary padding so quiet speech
+    # and word edges aren't clipped. Sent only when VAD is on; faster-whisper merges
+    # this partial dict with its VadOptions defaults.
     if config.TRANSCRIBE_VAD_FILTER:
         kwargs["vad_parameters"] = {
             "threshold": config.TRANSCRIBE_VAD_THRESHOLD,

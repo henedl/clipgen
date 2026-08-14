@@ -24,10 +24,10 @@ import itertools
 
 INVALID_END_TIMESTAMP = None
 
-# Two-stage ffmpeg seek window. We pre-seek (fast, key-frame-aligned) to
-# `target - FFMPEG_PRESEEK_SECONDS` and then seek the rest accurately after
-# `-i`. This keeps long-video performance while landing on the exact frame
-# the caller asked for, instead of the nearest preceding key-frame.
+# Two-stage seek: pre-seek fast (key-frame-aligned) to
+# `target - FFMPEG_PRESEEK_SECONDS`, then seek the rest accurately after `-i`.
+# Keeps long-video performance while landing on the exact frame asked for rather
+# than the nearest preceding key-frame.
 FFMPEG_PRESEEK_SECONDS = 2.0
 
 # Caches are keyed on (resolved_path, mtime_ns) so a re-encoded or replaced
@@ -48,9 +48,9 @@ _GENERIC_AUDIO_HANDLERS = frozenset(
     {"soundhandler", "core media audio", "isom", "audio"}
 )
 
-# Track-name hints for pick_speech_audio_track(). Screen recorders name their
-# streams ("Participant Mic", "System Audio"), and that name is the only signal
-# available without decoding, so the heuristic is purely lexical.
+# Track-name hints for pick_speech_audio_track(). A stream's name ("Participant
+# Mic", "System Audio") is the only signal available without decoding, so the
+# heuristic is purely lexical.
 _SPEECH_TRACK_HINTS = [
     "participant", "participants", "interview", "interviewee", "interviewer",
     "meeting", "mic", "mics", "microphone", "mikrofon", "voice", "voices",
@@ -59,10 +59,9 @@ _SPEECH_TRACK_HINTS = [
     "boom", "call", "zoom", "teams", "webex",
     "deltagare", "intervju", "röst", "samtal",
 ]  # fmt: skip
-# "speaker"/"speakers" is deliberately NEGATIVE: on macOS/Windows a track named
-# "Speakers" is the *output* capture (an aggregate device), not a person. Reading
-# it as speech would silently transcribe system audio — the exact failure this
-# whole feature exists to prevent.
+# "speaker"/"speakers" is deliberately NEGATIVE: on macOS/Windows a "Speakers"
+# track is the *output* capture, not a person, and reading it as speech would
+# silently transcribe system audio — the failure this feature exists to prevent.
 _NON_SPEECH_TRACK_HINTS = [
     "system", "screen", "desktop", "display", "music", "game", "output",
     "loopback", "playback", "monitor", "soundtrack", "background", "ambience",
@@ -173,9 +172,9 @@ def check_ffmpeg_tools_available() -> bool:
         "clipgen requires both ffmpeg and ffprobe to cut and inspect videos.",
     ]
     if getattr(sys, "frozen", False):
-        # Desktop builds bundle both tools under <bundle>/bin, so reaching
-        # this branch means the bundle itself is damaged — installing a system
-        # ffmpeg would paper over a broken download or a stripped app.
+        # Desktop builds bundle both tools under <bundle>/bin, so reaching this
+        # branch means a damaged bundle — a system ffmpeg would only paper over a
+        # broken download or a stripped app.
         details.append(
             "This build bundles ffmpeg — if it is missing, the app is "
             "damaged. Reinstall clipgen, or place ffmpeg on your PATH as a "
@@ -187,7 +186,7 @@ def check_ffmpeg_tools_available() -> bool:
         # bundle has no repo to run it from, so only mention it when there is.
         details.append("Or, from this checkout: scripts/install-ffmpeg-ollama.sh")
     # Not error_print: this aborts startup, and a windowed launch has no console
-    # to read the guidance above — the app would just quit with nothing on screen.
+    # for the guidance above — the app would quit with nothing on screen.
     utils.fatal_startup_error("Required video tools are missing from PATH.", details)
     return False
 
@@ -202,8 +201,8 @@ def _probe_ffmpeg_listing(listing_arg: str, target_tokens: set[str]) -> bool:
     """
     try:
         # check=False throughout this module: every ffmpeg/ffprobe call inspects
-        # returncode itself and turns a failure into a warning or a None return.
-        # check=True would raise past that handling and lose the diagnostics.
+        # returncode itself and degrades to a warning or None. check=True would
+        # raise past that handling and lose the diagnostics.
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", listing_arg],
             capture_output=True,
@@ -227,9 +226,9 @@ _vp9_support_cache: bool | None = None
 _vp9_missing_warned: bool = False
 _videotoolbox_support_cache: bool | None = None
 _hw_encoder_warned: bool = False
-# Session-sticky: one hardware-encode failure disables the hardware encoder for
-# the rest of the run, so a broken media engine costs one wasted encode, not one
-# per clip. Reset only by restarting clipgen (or by tests).
+# Session-sticky: one hardware-encode failure disables it for the rest of the
+# run, so a broken media engine costs one wasted encode rather than one per clip.
+# Reset only by restarting clipgen (or by tests).
 _hw_encode_failed: bool = False
 
 
@@ -482,10 +481,9 @@ def run_ffmpeg_process(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            # Drain pipes via communicate() in a polling loop. Reading them
-            # only after proc.poll() returns can deadlock once ffmpeg fills
-            # the OS pipe buffer (~64 KB). Per Python docs, retrying after
-            # TimeoutExpired does not lose output.
+            # Drain pipes via communicate() in a polling loop: reading only after
+            # proc.poll() returns deadlocks once ffmpeg fills the ~64 KB OS pipe
+            # buffer. Retrying after TimeoutExpired does not lose output.
             while True:
                 if cancel_flag():
                     utils.terminate_subprocess(proc)
@@ -784,9 +782,8 @@ def build_ffmpeg_cut_command(
 
 
 # Output containers mux_subtitles can write, and the codec each needs. Public
-# because the frontend needs the same list: it flows to JS through
-# utils.get_frontend_config()["subtitleContainers"] so the Embed Subtitles
-# dialog can filter out sources this function would reject, rather than
+# because it flows to JS via utils.get_frontend_config()["subtitleContainers"],
+# so the Embed Subtitles dialog filters out sources this would reject rather than
 # promising output and collecting a failure line per participant.
 SUBTITLE_CODEC_BY_CONTAINER = {
     ".mp4": "mov_text",
@@ -796,8 +793,8 @@ SUBTITLE_CODEC_BY_CONTAINER = {
     ".webm": "webvtt",
 }
 # The mp4 family reports the subtitle track default=1 whatever -disposition:s:0
-# is given (measured on ffmpeg 8.1.2): an ISOBMFF track is enabled or absent,
-# with no present-but-off state. Only .mkv/.webm honour the flag.
+# says (measured on ffmpeg 8.1.2): an ISOBMFF track is enabled or absent, with no
+# present-but-off state. Only .mkv/.webm honour the flag.
 SUBTITLE_ALWAYS_DEFAULT_CONTAINERS = frozenset({".mp4", ".m4v", ".mov"})
 
 
@@ -866,14 +863,12 @@ def mux_subtitles(
         input_video,
         "-i",
         srt_path,
-        # Video + audio only from the source, never `-map 0`. Mapping every
-        # input stream carries any pre-existing subtitle track into the output
-        # *ahead* of the new one, and the three index-0 arguments below then
-        # address that old track instead: it would be relabelled and marked
-        # default while the transcript arrives untagged. A pre-existing bitmap
-        # track (PGS/VobSub) is worse — `-c:s` targets it too, mov_text cannot
-        # encode it, and the whole command fails. The `?` suffixes make each
-        # map optional, so a silent video still muxes.
+        # Video + audio only, never `-map 0`: mapping every input stream carries a
+        # pre-existing subtitle track in *ahead* of the new one, so the index-0
+        # arguments below would relabel and default that old track while the
+        # transcript arrives untagged. A pre-existing bitmap track (PGS/VobSub) is
+        # worse — `-c:s` targets it, mov_text can't encode it, and the command
+        # fails. The `?` suffixes make each map optional so a silent video muxes.
         "-map",
         "0:v?",
         "-map",
@@ -1032,11 +1027,10 @@ def run_ffmpeg(
         os_error_message="ffmpeg could not successfully run.",
         cancel_flag=cancel_flag,
     )
-    # NB: file-size enforcement is deliberately NOT done here. A cut is often
-    # followed by a titlecard wrap or a concat that re-encodes the body, which
-    # would discard any bitrate targeting applied at cut time (and waste two
-    # passes). Callers apply enforce_filesize_limit() to the *final* artifact
-    # after all wrapping/concat instead.
+    # File-size enforcement is deliberately NOT done here: a cut is often followed
+    # by a titlecard wrap or concat that re-encodes the body, discarding any
+    # bitrate targeting (and wasting two passes). Callers apply
+    # enforce_filesize_limit() to the *final* artifact instead.
     return _finalize_ffmpeg_output(
         ffmpeg_result,
         output_file,

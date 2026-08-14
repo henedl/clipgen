@@ -1,16 +1,8 @@
-"""Clip processing pipeline for clipgen.
+"""Clip processing pipeline: clips, reels, screenshots, GIFs, and manifest
+regeneration.
 
-Reusable functions for generating clips, reels, screenshots, GIFs, and
-regenerating artifacts from manifests.  Extracted from clipgen.py so that
-the web layer (server.py) can use the pipeline without importing the CLI
-entry-point module.
-
-Public API:
-    is_excel_worksheet(worksheet) -> bool
-    process_clips(clips_list, output_format, include_severity) -> (count, artifacts)
-    process_reel(clips_list, output_file) -> (count, reel_records)
-    compute_reel_id(components) -> str
-    regenerate_from_manifest(artifacts, reels) -> int
+Deliberately separate from the CLI entry-point module so the web layer can drive
+the pipeline without importing it.
 """
 
 import concurrent.futures
@@ -117,10 +109,9 @@ def _resolve_clip_workers() -> int:
 # Large .mp4 files in the input dir, keyed by path + mtime_ns (one glob/stat pass per run).
 _fuzzy_input_videos_cache: dict[str, tuple[int | None, list[tuple[int, Path]]]] = {}
 
-# Serializes the missing-video branch of _check_source_video. Reel preparation
-# runs per-clip in worker threads (_run_clip_pipeline parallel=True), so the
-# shared missing_videos / fuzzy_matches structures and any fuzzy-match prompt
-# must not be touched concurrently.
+# Serializes the missing-video branch of _check_source_video: reel preparation
+# runs per-clip in worker threads, so the shared missing_videos / fuzzy_matches
+# structures and any fuzzy-match prompt must not be touched concurrently.
 _fuzzy_match_lock = threading.Lock()
 
 
@@ -557,10 +548,10 @@ def _process_single_clip_segments(
     # path (unchanged behavior, no probing).
     timeline = clip.get("source_timeline")
 
-    # Padding / max-duration (Workflows artifact nodes). The default path is a
-    # no-op and never probes. We only need the EOF limit when *extending* the end
-    # (pad_post > 0), since run_ffmpeg silently skips a clip that runs past EOF;
-    # trimming or capping can never push the end out.
+    # Padding / max-duration (Workflows artifact nodes); the default path is a
+    # no-op and never probes. The EOF limit is only needed when *extending* the
+    # end, since run_ffmpeg silently skips a clip running past EOF — trimming or
+    # capping can never push the end out.
     padding_active = pad_pre != 0.0 or pad_post != 0.0 or max_duration > 0.0
     span_limit: float | None = None
     if pad_post > 0.0:
@@ -638,10 +629,9 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             if ok and cards_enabled:
-                # Wrap at the generated clip's own resolution (probed inside
-                # wrap_clip_with_cards). For multi-video participants a clip may
-                # be cut from a later part whose resolution differs from the
-                # first source, so trusting the clip avoids a concat mismatch.
+                # Wrap at the clip's own resolution: for multi-video participants
+                # a clip may come from a later part whose resolution differs from
+                # the first source, so trusting the clip avoids a concat mismatch.
                 ok, cards_applied = titlecards.wrap_clip_with_cards(
                     clip,
                     out_name,
@@ -677,9 +667,9 @@ def _process_single_clip_segments(
                     cancel_flag=cancel_flag,
                 )
             else:  # output_format == 'gif'
-                # pad_pre already shifted cut_ts (start) above; pad_post is moot
-                # for a fixed-length gif. max_duration caps the gif's length,
-                # floored at 1s so a fractional cap (< 1) never yields a 0s gif.
+                # pad_pre already shifted cut_ts above and pad_post is moot for a
+                # fixed-length gif. max_duration caps the length, floored at 1s so
+                # a fractional cap never yields a 0s gif.
                 gif_duration = config.DEFAULT_GIF_DURATION_SECONDS
                 if remaining is not None:
                     gif_duration = min(gif_duration, remaining)
@@ -900,9 +890,8 @@ def _run_clip_pipeline(
 
     if missing_videos:
         utils.standard_print(f"* Missing source video files: {len(missing_videos)}")
-    # Drop slots from cancelled futures in the parallel path so callers get a
-    # list of completed results only (the sequential path naturally produces
-    # the same shape via early-break + append).
+    # Drop slots from cancelled futures so callers get completed results only —
+    # the sequential path produces the same shape via early-break + append.
     results = [r for r in results if r is not None]
     return (results, missing_videos)
 
