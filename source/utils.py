@@ -1593,21 +1593,12 @@ def parse_timestamps(
 ) -> list[tuple[str, str]]:
     """Parse timestamp pairs from a cell value string.
 
-    Pipeline: (1) Normalize delimiters to spaces and split into tokens,
-    (2) Clean each token and parse into (start, end) pairs,
-    (3) Report any unparseable tokens as warnings.
+    Supported formats: "MM:SS-MM:SS", "HH:MM:SS-HH:MM:SS", or a single
+    "MM:SS"/"HH:MM:SS" whose end becomes start + the default duration. Multiple
+    pairs may be separated by space, comma, semicolon or plus.
 
-    Supported formats: "MM:SS-MM:SS", "HH:MM:SS-HH:MM:SS", or a single time
-    "MM:SS"/"HH:MM:SS" (end time is start + default duration). Delimiters
-    between multiple pairs: space, comma, semicolon, or plus.
-
-    Args:
-        cell_value: The raw cell value containing timestamps
-        cell_ref: Optional cell reference (e.g., 'B5') for error messages
-
-    Returns:
-        A list of (start_time, end_time) tuples. Invalid tokens are skipped
-        and reported via warning_print.
+    *cell_ref* (e.g. 'B5') only labels error messages. Invalid tokens are skipped
+    and reported via warning_print rather than raising.
     """
     if config.DEBUGGING:
         config.debug_ic(cell_value, cell_ref)
@@ -2300,13 +2291,12 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
     :func:`numbered_parts_are_contiguous`). Only ids starting with a recognised
     prefix (``config.PARTICIPANT_PREFIXES``) are included.
 
-    Results are cached per input-dir state (keyed on the directory's ``mtime_ns``),
-    so the many hot callers — ``/api/status``, the Workflows video-source node,
-    the watch-dir daemon — reuse one glob/parse pass until the directory changes.
+    Cached on the input directory's ``mtime_ns``, so the many hot callers
+    (``/api/status``, the Workflows video-source node, the watch-dir daemon) share
+    one glob/parse pass until the directory changes.
 
     Returns:
-        List of ``{"id": str, "video_paths": list[str], "has_video": bool}``
-        dicts, sorted by participant id.
+        ``{"id", "video_paths", "has_video"}`` dicts, sorted by participant id.
     """
     input_dir = Path(get_effective_input_dir())
     dir_str = str(input_dir)
