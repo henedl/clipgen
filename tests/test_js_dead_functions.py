@@ -1,25 +1,23 @@
 """No new unreferenced top-level function may appear in ``assets/web/*.js``.
 
-Nothing else in the suite can see dead JS. ``node --check`` proves a file parses;
-``test_frontend_satellite_wiring.py`` proves a call *resolves*; neither asks
-whether anything calls a given function at all. So a function can be written,
-wired to nothing, and live in the bundle indefinitely — which is what the five
-below did.
+Nothing else in the suite sees dead JS: ``node --check`` proves a file parses and
+``test_frontend_satellite_wiring.py`` proves a call *resolves*, but neither asks
+whether anything calls a function at all — so one can be written, wired to
+nothing, and live in the bundle indefinitely.
 
 The signal is deliberately narrow: a top-level ``function name(...)`` whose name
 occurs exactly **once** across every ``.js``, ``.html`` and ``source/*.py`` file,
-that one occurrence being its own definition. At that threshold there is no
-judgement call left — nothing references it, under any spelling, including the
-``window.Clipgen*`` namespace publishes and the guarded hub delegators.
+that occurrence being its own definition. At that threshold there is no judgement
+call left — nothing references it under any spelling, including the
+``window.Clipgen*`` publishes and the guarded hub delegators.
 
-The looser "never appears in call position" variant was measured at ~174 hits and
-is dominated by handlers passed by reference (``addEventListener("click", onX)``)
-and namespace exports (``{ foo: foo }``), both legitimate. It would make a decent
-human-reviewed worklist and a terrible gate, so it is not implemented here.
+The looser "never appears in call position" variant measured ~174 hits, dominated
+by legitimate handlers passed by reference and namespace exports. A decent
+human-reviewed worklist and a terrible gate, so it is not implemented.
 
-This is a **ratchet**, not a cleanup: the five known-dead functions are listed so
-the current state passes, and the list may only shrink. Deleting one means
-deleting its entry in the same commit; adding a sixth fails ``/check``.
+This is a **ratchet**, not a cleanup: the known-dead functions are listed so the
+current state passes, and the list may only shrink. Deleting one means deleting
+its entry in the same commit; adding another fails ``/check``.
 """
 
 import re

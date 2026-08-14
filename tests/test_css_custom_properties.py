@@ -1,22 +1,19 @@
 """Every ``var(--x)`` in the CSS must resolve to a property something defines.
 
-An undefined custom property fails in one of two ways, and neither of them is
-loud. Without a fallback the whole declaration is invalid and gets dropped, so
-the element silently inherits — that is how ``.attachment-label`` in the timeline
-viewer and four Screenspace hover rules lost their color and background outright.
-With a fallback the literal simply wins forever, which is how Screenspace spent a
-year rendering warnings in ``#f59e0b`` while every medium-severity chip elsewhere
-in the app used ``#fbbf24``: the token the rules referenced had never existed.
+An undefined custom property fails two ways, neither loud. Without a fallback the
+whole declaration is invalid and dropped, so the element silently inherits — that
+is how ``.attachment-label`` and four Screenspace hover rules lost their color
+outright. With a fallback the literal wins forever, which is how Screenspace spent
+a year rendering warnings in ``#f59e0b`` while every other medium-severity chip
+used ``#fbbf24``: the token those rules referenced had never existed.
 
-Nothing else catches this. The browser reports no error, the page still boots so
-the UI smoke passes, and a screenshot only shows it if you already know which
-shade to expect. A one-pass scan is enough, so it runs in ``/check`` rather than
-the opt-in browser harness.
+Nothing else catches it. The browser reports no error, the page boots so the UI
+smoke passes, and a screenshot only shows it if you already know the right shade.
+One pass is enough, so this runs in ``/check`` rather than the browser harness.
 
-Scope note: this checks that a name is *defined somewhere*, not that it is in
-scope at the point of use. A property defined only on ``.co-icon-play`` and read
-from an unrelated element would pass here and still resolve to nothing. That is a
-narrower bug than the one this exists for, and catching it needs the runtime
+Scope note: this checks a name is *defined somewhere*, not that it is in scope at
+the point of use. A property defined only on ``.co-icon-play`` and read elsewhere
+passes here and still resolves to nothing — a narrower bug, needing the runtime
 census rather than a text scan.
 """
 
