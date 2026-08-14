@@ -197,6 +197,16 @@ stay the **first statement** of the launcher's `__main__` block, before any clip
   symlinks, and signature through the round trip); Windows ships a **`.zip`**.
 - **Actions artifacts need a login and expire after 90 days.** Tagged builds publish to **GitHub
   Releases**; that step needs `permissions: contents: write`.
+- **`upload-artifact` always zips, with no opt-out** (Actions has stored artifacts as zips since
+  v4), so an artifact download is always one wrapper deeper than the Release asset: a zip *around*
+  the `.dmg` / `.zip`. It costs nothing in size — the outer zip is a wash or a small win — but on a
+  tag it would be a redundant ~800 MB copy of what the Release already carries, so the upload steps
+  are gated on `github.ref_type != 'tag'`. Dev (`workflow_dispatch`) builds keep their artifacts.
+- **`fail_on_unmatched_files: true` needs a per-leg glob.** Each matrix leg produces exactly one
+  shippable file, so the publish step takes `matrix.release_glob` (`dist/*.dmg` / `dist/*.zip`); a
+  shared two-pattern list would fail whichever leg didn't produce the other platform's file. This
+  is the only guard on a tag that packaging produced anything, since the `if-no-files-found: error`
+  uploads are skipped there.
 - **Never publish `dist/clipgen` as a file.** Under one-dir it is a *directory*. The old raw-binary
   step was removed for exactly this reason — it would have silently published the wrong thing
   rather than failing.

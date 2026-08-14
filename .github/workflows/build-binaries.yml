@@ -17,10 +17,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # release_glob is per-leg on purpose: each OS produces exactly one
+          # shippable file, so a shared two-pattern list could never be checked
+          # with fail_on_unmatched_files (see the publish step).
           - os: macos-latest
             artifact_name: clipgen-macos
+            release_glob: dist/*.dmg
           - os: windows-latest
             artifact_name: clipgen-windows
+            release_glob: dist/*.zip
 
     runs-on: ${{ matrix.os }}
 
@@ -201,7 +206,7 @@ jobs:
           cp build/THIRD-PARTY-LICENSES dmg-staging/ 2>/dev/null || true
           ln -s /Applications dmg-staging/Applications
           hdiutil create -volname "clipgen" -srcfolder dmg-staging \
-            -ov -format UDZO "dist/clipgen-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}.dmg"
+            -ov -format UDZO "dist/clipgen-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-macos.dmg"
           rm -rf dmg-staging
           ls -la dist/*.dmg
 
@@ -232,18 +237,21 @@ jobs:
           Compress-Archive -Path dist/clipgen -DestinationPath "dist/clipgen-$ver-windows.zip" -Force
           Get-ChildItem dist/*.zip
 
+      # Only the upload steps below consume this, and they are non-tag-only, so
+      # the short sha is the whole answer — a tag branch here would be dead.
+      # GitHub expressions have no substring function, hence the step.
       - name: Compute artifact suffix
         id: suffix
         shell: bash
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            echo "suffix=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "suffix=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-          fi
+        run: echo "suffix=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # Non-tag builds only. upload-artifact always zips its payload (no opt-out
+      # — Actions has stored artifacts as zips since v4), so on a tag these would
+      # be a redundant double-zipped copy of assets the Release already carries,
+      # at ~800 MB of artifact storage per release. Dev builds keep them because
+      # the Actions tab is the only way to get one.
       - name: Upload artifact (macOS)
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-latest' && github.ref_type != 'tag'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
@@ -252,7 +260,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload artifact (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && github.ref_type != 'tag'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
@@ -265,7 +273,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.dmg
-            dist/*.zip
-          fail_on_unmatched_files: false
+          # This leg's own artifact only — the other leg uploads its own.
+          files: ${{ matrix.release_glob }}
+          # On a tag this is the only guard left that packaging produced anything
+          # (the upload-artifact steps above, which carry if-no-files-found:
+          # error, are skipped there) — a silent miss would otherwise publish a
+          # release with a platform absent.
+          fail_on_unmatched_files: true
