@@ -1860,10 +1860,70 @@
       }
       var skipSpreadsheet = state.activeTab === "none" || !state.selection;
       if (skipSpreadsheet) {
-        recordSession(inputVal, outputVal, null, nameVal).finally(function () {
-          releaseConfirm();
-          close();
-        });
+        // "No spreadsheet" has to actually close whatever is open, not just
+        // record the session. Nothing else in the UI ever posted to
+        // /api/spreadsheets/close, so a source opened earlier lived for the
+        // rest of the process — a mind map especially, since it is never
+        // cleared by opening a sheet either.
+        var st = state.statusData || {};
+        var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
+        // One call per source: the route drops the mind map for
+        // {type: "mindnode"} and the worksheet otherwise, and the two coexist,
+        // so closing both takes both calls. Each is checked for r.ok like the
+        // open path below — the route refuses with 409 while a generation is
+        // running, and swallowing that would record a no-spreadsheet session
+        // and reload with the source still very much loaded.
+        function postClose(body) {
+          return fetch("/api/spreadsheets/close", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }).then(function (r) {
+            return r.json().then(
+              function (j) { return { ok: r.ok && j && j.ok !== false, body: j }; },
+              function () { return { ok: false, body: null }; }
+            );
+          });
+        }
+        var closeStep = Promise.resolve({ ok: true, body: null });
+        function chainClose(prev, payload) {
+          return prev.then(function (res) {
+            if (!res.ok) return res; // first failure wins; don't keep closing
+            return postClose(payload);
+          });
+        }
+        if (st.mindnode_loaded) {
+          closeStep = chainClose(closeStep, { type: "mindnode" });
+        }
+        if (st.sheet_loaded) {
+          closeStep = chainClose(closeStep, {});
+        }
+        closeStep
+          .then(function (res) {
+            if (!res.ok) {
+              releaseConfirm();
+              markSheetError(
+                (res.body && res.body.error) || "Could not close the current source"
+              );
+              return null;
+            }
+            return recordSession(inputVal, outputVal, null, nameVal).finally(
+              function () {
+                releaseConfirm();
+                // Reload only when something was actually unloaded — the other
+                // frontends are holding data for a source that is now gone.
+                if (needsClose) {
+                  window.location.reload();
+                  return;
+                }
+                close();
+              }
+            );
+          })
+          .catch(function (err) {
+            releaseConfirm();
+            markSheetError("Close failed: " + (err && err.message));
+          });
         return;
       }
       // Built explicitly rather than posting state.selection verbatim so the
@@ -2052,9 +2112,20 @@
 
   function applyCurrentSessionPrefill() {
     var s = state.statusData || {};
-    // A mind map is an independent source with no worksheet, so it is restored
-    // ahead of the spreadsheet branches and short-circuits them.
-    if (s.mindnode_loaded && s.mindnode_path) {
+    // A mind map is an independent source with no worksheet, so it gets its own
+    // branch ahead of the spreadsheet ones. Gate on active_source, NOT on
+    // mindnode_loaded: opening a mind map never clears the sheet and opening a
+    // sheet never clears the mind map (they coexist by design), so a bare
+    // mindnode_loaded check meant that once a mind map had been opened it
+    // hijacked the prefill for the rest of the session — the recents list would
+    // highlight the spreadsheet the user opened afterwards while this panel
+    // switched to the Mind map tab, and confirming re-opened the map.
+    // currentSessionKey() already keys on active_source; these must agree.
+    // An empty active_source (nothing recorded for this session yet) keeps the
+    // original precedence, so a mind-map-only launch still prefills.
+    var activeType = (s.active_source && s.active_source.type) || "";
+    var mindnodeIsActive = activeType === "mindnode" || !activeType;
+    if (mindnodeIsActive && s.mindnode_loaded && s.mindnode_path) {
       setTab("mindnode");
       setSelection({
         type: "mindnode",

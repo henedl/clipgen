@@ -1004,7 +1004,8 @@ def test_embed_subtitles_happy_path(tr_client, tmp_path, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.mimetype == "application/x-ndjson"
-    header, result = _ndjson(resp)
+    header, result, done = _ndjson(resp)
+    assert done == {"done": True}
     assert header == {"total": 1, "output_dir": str(tmp_path)}
     assert result["index"] == 0
     assert result["participant"] == "P01"
@@ -1077,7 +1078,7 @@ def test_embed_subtitles_streams_failure_for_missing_transcript(
     assert resp.status_code == 200
     lines = _ndjson(resp)
     assert lines[0]["total"] == 2
-    assert [ln["participant"] for ln in lines[1:]] == ["P01", "P02"]
+    assert [ln["participant"] for ln in lines[1:-1]] == ["P01", "P02"]
     assert lines[1]["ok"] is True
     assert lines[2]["ok"] is False
     assert lines[2]["error"] == "No transcript for participant"
@@ -1103,9 +1104,43 @@ def test_embed_subtitles_streams_failure_when_ffmpeg_fails(
         "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
     )
     assert resp.status_code == 200
-    _, result = _ndjson(resp)
+    _, result, done = _ndjson(resp)
+    assert done == {"done": True}
     assert result["ok"] is False
     assert result["error"] == "ffmpeg failed to mux subtitles"
+    # get_unique_filename reserves by creating an empty file; a failed mux that
+    # does not release it leaves a 0-byte artifact looking like a real export.
+    assert not list(tmp_path.glob("*-subtitled.mp4"))
+
+
+def test_embed_subtitles_truncated_stream_has_no_done_sentinel(
+    tr_client, tmp_path, monkeypatch
+):
+    """A generator that dies mid-run just truncates the body, which the client's
+    NDJSON reader cannot distinguish from a clean end — so the terminal
+    sentinel's absence is what marks the run as incomplete."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    _seed_transcript("P01", str(video_path))
+    monkeypatch.setattr(
+        transcripts_server.utils, "get_effective_output_dir", lambda: tmp_path
+    )
+
+    def _explode(*_a, **_kw):
+        raise RuntimeError("mux blew up")
+
+    monkeypatch.setattr(transcripts_server, "_embed_subtitle_for_participant", _explode)
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    with pytest.raises(RuntimeError, match="mux blew up"):
+        resp.get_data()
+    # The slot must still be free — the generator's finally runs on teardown.
+    assert transcripts_server._embed_busy is False
 
 
 def test_embed_subtitles_cancel_stops_before_the_next_file(
@@ -1140,7 +1175,8 @@ def test_embed_subtitles_cancel_stops_before_the_next_file(
     lines = _ndjson(resp)
     assert lines[0]["total"] == 2
     assert lines[1]["participant"] == "P01"
-    assert lines[-1] == {"cancelled": True}
+    assert lines[-2] == {"cancelled": True}
+    assert lines[-1] == {"done": True}
     assert not any(ln.get("participant") == "P02" for ln in lines)
     # The slot is released even on the cancel path, so the next run can claim it.
     assert transcripts_server._embed_busy is False
@@ -1154,6 +1190,47 @@ def test_embed_subtitles_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
     )
     assert resp.status_code == 409
     assert resp.get_json()["ok"] is False
+
+
+def test_embed_slot_is_freed_when_the_stream_is_never_consumed(tr_client, monkeypatch):
+    """Closing a generator that was never *started* runs no body at all — not
+    its finally — so a response discarded before the first read would have left
+    the slot held and every later embed answering 409 until restart."""
+    monkeypatch.setattr(transcripts_server, "_embed_busy", False)
+    monkeypatch.setattr(transcripts_server, "_embed_owner", None)
+
+    resp = tr_client.post(
+        "/transcripts/api/embed-subtitles", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    # Tear the response down without ever pulling a line from the body.
+    resp.close()
+
+    assert transcripts_server._embed_busy is False
+    assert transcripts_server._embed_owner is None
+
+
+def test_embed_slot_release_is_scoped_to_its_own_run(monkeypatch):
+    """The release is attempted twice per run (the generator's finally and the
+    response's call_on_close). An ungated release would let the late one clear
+    a successor's claim — the 863edf8f pattern."""
+    monkeypatch.setattr(transcripts_server, "_embed_busy", False)
+    monkeypatch.setattr(transcripts_server, "_embed_owner", None)
+
+    first = transcripts_server._claim_embed_slot()
+    assert first is not None
+    transcripts_server._release_embed_slot(first)
+
+    second = transcripts_server._claim_embed_slot()
+    assert second is not None and second != first
+
+    # The first run's straggler release must not free the second run's slot.
+    transcripts_server._release_embed_slot(first)
+    assert transcripts_server._embed_busy is True
+    assert transcripts_server._claim_embed_slot() is None
+
+    transcripts_server._release_embed_slot(second)
+    assert transcripts_server._embed_busy is False
 
 
 def test_embed_subtitles_cancel_route_sets_the_event(tr_client):
@@ -2196,10 +2273,24 @@ def test_ollama_install_rejected_where_unsupported(tr_client, monkeypatch):
 
 
 def test_ollama_install_short_circuits_when_installed(tr_client, monkeypatch):
+    """The idempotent path: a working install must not re-download.
+
+    Stubs is_working_install, which is what the route gates on — stubbing only
+    is_installed leaves the real predicate running, and on a machine with no
+    ollama on PATH that answers False, so the route falls through and spawns a
+    genuine 145 MB install_managed() on a daemon thread.
+    """
     import ollama_client
 
     monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: True)
+
+    def _must_not_run(on_progress=None):
+        raise AssertionError("install_managed must not run for a working install")
+
+    monkeypatch.setattr(ollama_client, "install_managed", _must_not_run)
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+
     resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
     assert resp.status_code == 200
     assert resp.get_json()["already_installed"] is True
@@ -2220,7 +2311,9 @@ def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
     import ollama_client
 
     monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
+    # The route gates on is_working_install (is_installed only asks whether a
+    # file exists, which a half-extracted tree also satisfies).
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
 
     def _fake_install(on_progress=None):
         if on_progress:
@@ -2248,13 +2341,32 @@ def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
     assert status["status"] == "success"
 
 
+def test_ollama_install_retries_a_broken_install(tr_client, monkeypatch):
+    """A half-extracted tree satisfies is_installed(), and this route is the
+    only way to repair one — so gating on it answered already_installed
+    forever and stranded the user with no in-app recovery."""
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
+    monkeypatch.setattr(ollama_client, "install_managed", lambda on_progress=None: True)
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+
+    body = tr_client.post("/transcripts/api/models/ollama/install", json={}).get_json()
+    assert body.get("already_installed") is not True
+    assert body["started"] is True
+
+
 def test_ollama_install_second_post_attaches(tr_client, monkeypatch):
     import threading as threading_mod
 
     import ollama_client
 
     monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
+    # The route gates on is_working_install (is_installed only asks whether a
+    # file exists, which a half-extracted tree also satisfies).
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
     release = threading_mod.Event()
     monkeypatch.setattr(
         ollama_client,

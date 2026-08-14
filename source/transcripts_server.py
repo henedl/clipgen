@@ -620,23 +620,37 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
 _embed_cancel_event = threading.Event()
 _embed_lock = threading.Lock()
 _embed_busy = False
+# Identifies the run currently holding the slot. The release is attempted twice
+# per run (the generator's finally, and the response's call_on_close for the
+# case where the generator is never started at all), and a bare release would
+# let the second of those clear a *successor* run's claim. Releasing by token
+# makes both attempts idempotent and scoped to their own run.
+_embed_owner: str | None = None
 
 
-def _claim_embed_slot() -> bool:
-    """Take the single embed slot, or return False if a run already holds it."""
-    global _embed_busy
+def _claim_embed_slot() -> str | None:
+    """Take the single embed slot, returning its token, or None if held."""
+    global _embed_busy, _embed_owner
     with _embed_lock:
         if _embed_busy:
-            return False
+            return None
         _embed_busy = True
+        _embed_owner = uuid.uuid4().hex
         _embed_cancel_event.clear()
-        return True
+        return _embed_owner
 
 
-def _release_embed_slot() -> None:
-    global _embed_busy
+def _release_embed_slot(token: str | None = None) -> None:
+    """Free the slot, but only if *token* still owns it.
+
+    ``token=None`` releases unconditionally (tests and teardown).
+    """
+    global _embed_busy, _embed_owner
     with _embed_lock:
+        if token is not None and _embed_owner != token:
+            return
         _embed_busy = False
+        _embed_owner = None
 
 
 def _embed_subtitle_for_participant(
@@ -730,6 +744,12 @@ def _embed_subtitle_for_participant(
                 pass
 
     if not ok:
+        # get_unique_filename reserves by *creating* an empty placeholder, so
+        # aborting without releasing leaves a 0-byte file that looks like a
+        # finished export — one per participant on a whole-study run whose
+        # container ffmpeg cannot mux — and pushes the next run's names onto
+        # -1/-2 suffixes.
+        files.release_reservation(output_path)
         return {
             "participant": participant,
             "ok": False,
@@ -768,7 +788,8 @@ def api_embed_subtitles() -> FlaskResponse:
         return err("No participants specified")
     default_track = bool(data.get("default_track", True))
 
-    if not _claim_embed_slot():
+    embed_token = _claim_embed_slot()
+    if embed_token is None:
         return err("A subtitle embed is already in progress", 409)
 
     output_dir = Path(utils.get_effective_output_dir())
@@ -794,16 +815,28 @@ def api_embed_subtitles() -> FlaskResponse:
                 yield json.dumps(outcome) + "\n"
             if cancel_flag():
                 yield json.dumps({"cancelled": True}) + "\n"
+            # Terminal sentinel. A generator that dies mid-run just truncates
+            # the body, and a truncated NDJSON stream is indistinguishable from
+            # a complete one to the reader — the client would report the
+            # partial count as a success. Its absence is the failure signal.
+            yield json.dumps({"done": True}) + "\n"
         finally:
             # Also runs when the client disconnects mid-stream, so a closed tab
             # cannot wedge the slot for the rest of the session.
-            _release_embed_slot()
+            _release_embed_slot(embed_token)
 
-    return Response(
+    response = Response(
         stream(),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
+    # The generator's finally covers a stream that was started and then dropped.
+    # It does *not* cover one that was never started: closing an unstarted
+    # generator just marks it closed, running no body at all. call_on_close
+    # fires whenever the response is torn down either way, and the token makes
+    # the double release harmless.
+    response.call_on_close(lambda: _release_embed_slot(embed_token))
+    return response
 
 
 @transcripts_bp.route("/api/embed-subtitles/cancel", methods=["POST"])
@@ -1604,7 +1637,7 @@ def api_ollama_start() -> FlaskResponse:
 
 @transcripts_bp.route("/api/models/ollama/install", methods=["POST"])
 def api_ollama_install() -> FlaskResponse:
-    """Download the Ollama CLI itself into clipgen's managed dir (macOS only).
+    """Download and install the Ollama CLI (macOS and Windows).
 
     The consent-gated counterpart of /api/models/ollama/pull one level down:
     same background-thread + status-dict + polling shape, so the frontend
@@ -1614,7 +1647,12 @@ def api_ollama_install() -> FlaskResponse:
     global _ollama_install_status
     if not ollama_client.can_install_managed():
         return err("In-app Ollama install is not supported on this platform")
-    if ollama_client.is_installed():
+    # is_working_install, not is_installed: the latter only asks whether a file
+    # is present, which a half-extracted tree also satisfies — and answering
+    # already_installed there is a dead end, since this route is the only way
+    # to repair one. install_managed applies the same predicate internally, so
+    # a genuinely working install still short-circuits immediately.
+    if ollama_client.is_working_install():
         return ok(already_installed=True)
     with _ollama_install_lock:
         if _ollama_install_status is not None and not _ollama_install_status.get(

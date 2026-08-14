@@ -783,13 +783,22 @@ def build_ffmpeg_cut_command(
     return base + encoder_args + [output_file]
 
 
-_SUBTITLE_CODEC_BY_CONTAINER = {
+# Output containers mux_subtitles can write, and the codec each needs. Public
+# because the frontend needs the same list: it flows to JS through
+# utils.get_frontend_config()["subtitleContainers"] so the Embed Subtitles
+# dialog can filter out sources this function would reject, rather than
+# promising output and collecting a failure line per participant.
+SUBTITLE_CODEC_BY_CONTAINER = {
     ".mp4": "mov_text",
     ".m4v": "mov_text",
     ".mov": "mov_text",
     ".mkv": "srt",
     ".webm": "webvtt",
 }
+# The mp4 family reports the subtitle track default=1 whatever -disposition:s:0
+# is given (measured on ffmpeg 8.1.2): an ISOBMFF track is enabled or absent,
+# with no present-but-off state. Only .mkv/.webm honour the flag.
+SUBTITLE_ALWAYS_DEFAULT_CONTAINERS = frozenset({".mp4", ".m4v", ".mov"})
 
 
 def mux_subtitles(
@@ -837,13 +846,13 @@ def mux_subtitles(
         return False
 
     suffix = Path(output_video).suffix.lower()
-    codec = _SUBTITLE_CODEC_BY_CONTAINER.get(suffix)
+    codec = SUBTITLE_CODEC_BY_CONTAINER.get(suffix)
     if codec is None:
         utils.error_print(
             f"Unsupported output container '{suffix}' for subtitle muxing.",
             [
                 f"Output: '{output_video}'",
-                "Supported: " + ", ".join(sorted(_SUBTITLE_CODEC_BY_CONTAINER)),
+                "Supported: " + ", ".join(sorted(SUBTITLE_CODEC_BY_CONTAINER)),
             ],
         )
         return False
@@ -857,8 +866,18 @@ def mux_subtitles(
         input_video,
         "-i",
         srt_path,
+        # Video + audio only from the source, never `-map 0`. Mapping every
+        # input stream carries any pre-existing subtitle track into the output
+        # *ahead* of the new one, and the three index-0 arguments below then
+        # address that old track instead: it would be relabelled and marked
+        # default while the transcript arrives untagged. A pre-existing bitmap
+        # track (PGS/VobSub) is worse — `-c:s` targets it too, mov_text cannot
+        # encode it, and the whole command fails. The `?` suffixes make each
+        # map optional, so a silent video still muxes.
         "-map",
-        "0",
+        "0:v?",
+        "-map",
+        "0:a?",
         "-map",
         "1:0",
         "-c",

@@ -42,7 +42,8 @@ def wf_client(wf_app, tmp_path, monkeypatch):
     monkeypatch.setattr(
         workflows_server, "_manifest", workflows.empty_workflows_manifest()
     )
-    monkeypatch.setattr(workflows_server, "_input_dir", str(tmp_path))
+    # The input dir is read live from config, not snapshotted on the module.
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(workflows_server, "_sheet_context", None)
     monkeypatch.setattr(workflows_server, "_worksheet", None)
     # Reset run state so runners/SSE clients never leak across tests.
@@ -95,6 +96,22 @@ def test_page_serves(wf_client):
     body = resp.get_data(as_text=True)
     assert 'data-frontend="workflows"' in body
     assert "workflows.js" in body
+
+
+def test_node_context_follows_the_live_input_dir(wf_client, tmp_path, monkeypatch):
+    """Both dirs resolve per run, not at blueprint init.
+
+    _init_workflows_state runs once, from build_combined_app, and the Start
+    overlay's folder picker moves config.INPUT_DIR long afterwards — a snapshot
+    taken at init pointed every run at the process's launch directory.
+    """
+    picked = tmp_path / "picked-later"
+    picked.mkdir()
+    monkeypatch.setattr(config, "INPUT_DIR", str(picked))
+
+    ctx = workflows_server._build_node_context(threading.Event())
+
+    assert ctx.input_dir == picked
 
 
 def test_blueprints_empty_by_default(wf_client):

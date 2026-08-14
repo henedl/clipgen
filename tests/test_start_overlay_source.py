@@ -81,3 +81,62 @@ def test_refresh_button_has_its_css():
     css = read("start-overlay.css")
     for rule in (".sheet-panel__status-row", ".sheet-panel__refresh", "is-spinning"):
         assert rule in css, f"{rule} toggled/used in the overlay but absent from CSS"
+
+
+def test_session_prefill_follows_active_source_not_mindnode_loaded():
+    """A mind map and a spreadsheet coexist by design — _open_mindnode never
+    clears the sheet and api_spreadsheets_open never clears the map. Branching
+    on mindnode_loaded therefore meant that once a map had been opened it
+    hijacked the prefill forever: the recents list highlighted the spreadsheet
+    opened afterwards (currentSessionKey keys on active_source) while the panel
+    switched to the Mind map tab, and confirming re-opened the map."""
+    src = strip_comments(read("start-overlay.js"))
+    body = src[src.index("function applyCurrentSessionPrefill") :]
+    body = body[: body.index("\n  function ")]
+    assert "active_source" in body, (
+        "the mindnode branch must agree with currentSessionKey's active_source"
+    )
+    assert body.index("active_source") < body.index("mindnode_loaded"), (
+        "active_source has to gate the mindnode branch, not follow it"
+    )
+
+
+def test_no_spreadsheet_actually_closes_the_open_source():
+    """The 'No spreadsheet' tab only recorded a session. Nothing in the UI ever
+    posted to /api/spreadsheets/close, so a source opened earlier stayed loaded
+    for the rest of the process — a mind map especially, since opening a sheet
+    does not clear one."""
+    src = strip_comments(read("start-overlay.js"))
+    assert "/api/spreadsheets/close" in src, (
+        "the overlay must be able to close what it opened"
+    )
+    body = src[src.index("var skipSpreadsheet") :][:1600]
+    assert "/api/spreadsheets/close" in body, (
+        "the close belongs on the skipSpreadsheet path"
+    )
+    # One call per source: the route drops the map for {type: "mindnode"} and
+    # the worksheet otherwise, and both can be open at once.
+    assert "mindnode_loaded" in body and "sheet_loaded" in body, (
+        "both sources have to be closed, not just whichever is active"
+    )
+
+
+def test_close_failures_do_not_record_a_session_or_reload():
+    """/api/spreadsheets/close answers 409 while a generation is running. A
+    catch-only handler treats that as success: it records a no-spreadsheet
+    session and reloads with the source still loaded. The open path right
+    below has always checked r.ok; this one must too."""
+    src = strip_comments(read("start-overlay.js"))
+    body = src[src.index("var skipSpreadsheet") :][:2200]
+    assert "r.ok" in body, "the close response status must be checked"
+    assert "markSheetError(" in body, (
+        "a refused close has to surface, not fall through to the reload"
+    )
+    # The reload and the session record both sit behind the ok branch.
+    ok_gate = body.index("if (!res.ok)")
+    assert ok_gate < body.index("recordSession("), (
+        "recordSession must not run when the source is still loaded"
+    )
+    assert ok_gate < body.index("window.location.reload()"), (
+        "the reload must not run when the close was refused"
+    )

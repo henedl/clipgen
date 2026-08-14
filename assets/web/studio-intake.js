@@ -617,28 +617,45 @@
   // updateCellClasses highlights queued spreadsheet cells. Driven by the render
   // queue functions (so every mutation re-syncs) and the intake render functions
   // (so the highlight survives the poll that rebuilds cards).
+  // Every intake panel, not just the two that existed first: MindNode and
+  // Composer cards also carry .in-queue (and the CSS rule for it), but were
+  // never visited here, so a queued card showed no "already queued" state and
+  // clicking it again silently toggled it back out. Driven off each panel's
+  // own config so a new panel cannot be forgotten the same way.
+  function intakeCardPanels() {
+    return [
+      {
+        cardsSel: "#intakeCards",
+        cardSel: ".intake-queue-card",
+        idxAttr: "intakeIdx",
+        filtered: filteredIntakeClusters,
+        clusterToItem: screenspaceClusterToItem,
+      },
+      {
+        cardsSel: "#trIntakeCards",
+        cardSel: ".tr-intake-queue-card",
+        idxAttr: "trIntakeIdx",
+        filtered: filteredTranscriptIntakeClusters,
+        clusterToItem: transcriptClusterToItem,
+      },
+      CO_INTAKE,
+      MN_INTAKE,
+    ];
+  }
+
   function refreshIntakeCardStates() {
-    var ssClusters = filteredIntakeClusters();
-    qsa("#intakeCards .intake-queue-card").forEach(function (card) {
-      var c = ssClusters[parseInt(card.dataset.intakeIdx, 10)];
-      if (!c) return;
-      var item = screenspaceClusterToItem(c);
-      card.classList.toggle(
-        "in-queue",
-        findIntakeInQueue(state.artifactQueue, item) >= 0 ||
-          findIntakeInQueue(state.reelQueue, item) >= 0,
-      );
-    });
-    var trClusters = filteredTranscriptIntakeClusters();
-    qsa("#trIntakeCards .tr-intake-queue-card").forEach(function (card) {
-      var c = trClusters[parseInt(card.dataset.trIntakeIdx, 10)];
-      if (!c) return;
-      var item = transcriptClusterToItem(c);
-      card.classList.toggle(
-        "in-queue",
-        findIntakeInQueue(state.artifactQueue, item) >= 0 ||
-          findIntakeInQueue(state.reelQueue, item) >= 0,
-      );
+    intakeCardPanels().forEach(function (panel) {
+      var items = panel.filtered();
+      qsa(panel.cardsSel + " " + panel.cardSel).forEach(function (card) {
+        var c = items[parseInt(card.dataset[panel.idxAttr], 10)];
+        if (!c) return;
+        var item = panel.clusterToItem(c);
+        card.classList.toggle(
+          "in-queue",
+          findIntakeInQueue(state.artifactQueue, item) >= 0 ||
+            findIntakeInQueue(state.reelQueue, item) >= 0,
+        );
+      });
     });
   }
 

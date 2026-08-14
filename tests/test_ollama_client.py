@@ -677,7 +677,7 @@ class TestManagedInstall:
         monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
         self._make_managed(tmp_path)
         monkeypatch.setattr(
-            ollama_client, "_managed_binary_works", lambda _binary: True
+            ollama_client, "_managed_binary_works", lambda _binary, **_kw: True
         )
         assert ollama_client.install_managed() is True
         mock_urlopen.assert_not_called()
@@ -685,6 +685,111 @@ class TestManagedInstall:
     def test_install_managed_refused_on_linux(self, monkeypatch):
         monkeypatch.setattr(ollama_client.sys, "platform", "linux")
         assert ollama_client.install_managed() is False
+
+    @patch("ollama_client.shutil.which", return_value=None)
+    def test_is_working_install_rejects_a_present_but_broken_binary(
+        self, mock_which, tmp_path, monkeypatch
+    ):
+        """is_installed() only asks "is a file there"; a half-extracted tree
+        satisfies it. is_working_install() must actually run the binary, or a
+        broken install reports itself finished and can never be repaired."""
+        self._make_managed(tmp_path)
+        assert ollama_client.is_installed() is True
+        monkeypatch.setattr(
+            ollama_client, "_managed_binary_works", lambda _binary, **_kw: False
+        )
+        assert ollama_client.is_working_install() is False
+        monkeypatch.setattr(
+            ollama_client, "_managed_binary_works", lambda _binary, **_kw: True
+        )
+        assert ollama_client.is_working_install() is True
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_clears_the_dir_when_the_binary_will_not_run(
+        self, mock_urlopen, tmp_path, monkeypatch
+    ):
+        """A download that unpacks but produces a binary that does not run must
+        not leave the wreckage behind — managed_ollama_path() would keep
+        reporting it as installed forever."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        payload = b"fake tarball"
+        monkeypatch.setattr(
+            ollama_client, "_OLLAMA_DARWIN_SHA256", hashlib.sha256(payload).hexdigest()
+        )
+        mock_urlopen.return_value = self._make_download_resp(payload)
+        # Extraction "succeeds" and drops a binary that never runs.
+        binary = tmp_path / "cfg" / "tools" / "ollama" / "ollama"
+        monkeypatch.setattr(
+            ollama_client,
+            "_extract_darwin_archive",
+            lambda _a, _t: (binary.write_bytes(b"junk"), binary.chmod(0o755), True)[2],
+        )
+        monkeypatch.setattr(
+            ollama_client, "_managed_binary_works", lambda _binary, **_kw: False
+        )
+
+        assert ollama_client.install_managed() is False
+        assert ollama_client.managed_ollama_path() is None
+        assert not (tmp_path / "cfg" / "tools" / "ollama").exists()
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_clears_the_dir_on_a_failed_extract(
+        self, mock_urlopen, tmp_path, monkeypatch
+    ):
+        """Same contract for a partial extractall: `ollama` can already be on
+        disk with its exec bit when the disk fills before the runner libs."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        payload = b"fake tarball"
+        monkeypatch.setattr(
+            ollama_client, "_OLLAMA_DARWIN_SHA256", hashlib.sha256(payload).hexdigest()
+        )
+        mock_urlopen.return_value = self._make_download_resp(payload)
+        binary = tmp_path / "cfg" / "tools" / "ollama" / "ollama"
+
+        def _partial_extract(_archive, _target):
+            binary.write_bytes(b"#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+            return False
+
+        monkeypatch.setattr(ollama_client, "_extract_darwin_archive", _partial_extract)
+
+        assert ollama_client.install_managed() is False
+        assert ollama_client.managed_ollama_path() is None
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_install_managed_sweeps_orphaned_partial_downloads(
+        self, mock_urlopen, tmp_path, monkeypatch
+    ):
+        """The download thread is a daemon, so quitting mid-download skips every
+        finally and strands the temp file. Nothing else ever removes it."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        managed = tmp_path / "cfg" / "tools" / "ollama"
+        managed.mkdir(parents=True, exist_ok=True)
+        orphan = managed / "tmpabcdef.tgz"
+        orphan.write_bytes(b"x" * 1024)
+
+        mock_urlopen.return_value = self._make_download_resp(b"tampered")
+        assert ollama_client.install_managed() is False
+        assert not orphan.exists()
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_download_gives_up_on_a_trickling_server(
+        self, mock_urlopen, tmp_path, monkeypatch
+    ):
+        """urlopen's timeout bounds a stall *between* reads, so a server that
+        dribbles one chunk per window never trips it. The wall-clock deadline
+        is what stops the install slot being held for the session."""
+        monkeypatch.setattr(ollama_client.sys, "platform", "darwin")
+        monkeypatch.setattr(ollama_client, "_INSTALL_DEADLINE", 0)
+        resp = MagicMock()
+        resp.headers = {"Content-Length": "999999"}
+        resp.read.return_value = b"z" * 16  # never yields b"" — an endless trickle
+        resp.__enter__ = lambda self_: resp
+        resp.__exit__ = lambda self_, *exc: False
+        mock_urlopen.return_value = resp
+
+        assert ollama_client.install_managed() is False
+        assert ollama_client.managed_ollama_path() is None
 
     @patch("ollama_client.urllib.request.urlopen")
     def test_install_managed_rejects_bad_hash(self, mock_urlopen, monkeypatch):
@@ -737,7 +842,7 @@ class TestManagedInstall:
 
         mock_run.side_effect = _fake_install
         monkeypatch.setattr(
-            ollama_client, "_managed_binary_works", lambda _binary: True
+            ollama_client, "_managed_binary_works", lambda _binary, **_kw: True
         )
         progress: list[dict] = []
         assert ollama_client.install_managed(on_progress=progress.append) is True

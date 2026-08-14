@@ -100,6 +100,13 @@ WHISPER_MODELS: list[dict[str, Any]] = [
 
 _cached_model: Any = None
 _cached_model_name: str | None = None
+# The full construction signature the cached model was built from. The name
+# alone is not enough: device, compute type and thread count are all read at
+# WhisperModel() time and are all user-editable in Studio settings, so keying
+# on the name meant changing TRANSCRIBE_DEVICE to cuda saved, persisted, and
+# displayed while every later transcription silently kept running on the model
+# already loaded for cpu.
+_cached_model_key: tuple[Any, ...] | None = None
 _model_load_lock = threading.Lock()
 # True while _load_model is actually constructing a WhisperModel — the ~10s a
 # cold load takes. Lets the model-status endpoint report "warming" for
@@ -117,12 +124,36 @@ def is_transcription_model_loading() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _model_load_key(model_name: str) -> tuple[Any, ...]:
+    """The full signature ``_do_load`` would construct a WhisperModel from.
+
+    Every element is read at construction time and is user-editable, so any of
+    them changing means the cached model is no longer the one the settings
+    describe. Resolved rather than raw: ``TRANSCRIBE_DEVICE="auto"`` and
+    ``"cpu"`` are the same model in a frozen build, and reloading between them
+    would cost ~10s for nothing.
+    """
+    threads = config.TRANSCRIBE_CPU_THREADS or (os.cpu_count() or 0)
+    return (
+        model_name,
+        _resolve_transcribe_device(),
+        config.TRANSCRIBE_COMPUTE_TYPE,
+        threads,
+    )
+
+
 def is_transcription_model_loaded() -> bool:
-    """Return True if the cached Whisper model matches the current config name."""
+    """Return True if a usable model for the current settings is warm.
+
+    Keyed on the whole load signature, not just the name: after a device change
+    the loaded model no longer matches the settings, and reporting it as loaded
+    would hide the reload the next transcription pays for.
+    """
     if config.DEBUGGING:
         return True
-    model_name = config.TRANSCRIBE_MODEL
-    return _cached_model is not None and _cached_model_name == model_name
+    return _cached_model is not None and _cached_model_key == _model_load_key(
+        config.TRANSCRIBE_MODEL
+    )
 
 
 def is_whisper_model_cached(model_name: str | None = None) -> bool:
@@ -242,16 +273,19 @@ def _load_model(model_name: str | None = None) -> Any:
     """Lazy-load the WhisperModel, caching it for reuse (thread-safe).
 
     When *model_name* is None, uses ``config.TRANSCRIBE_MODEL``. Passing a
-    different name swaps the cached model.
+    different name swaps the cached model — as does changing any other setting
+    the construction reads (device, compute type, thread count); see
+    :func:`_model_load_key`.
     """
-    global _cached_model, _cached_model_name
+    global _cached_model, _cached_model_name, _cached_model_key
 
     model_name = model_name or config.TRANSCRIBE_MODEL
-    if _cached_model is not None and _cached_model_name == model_name:
+    load_key = _model_load_key(model_name)
+    if _cached_model is not None and _cached_model_key == load_key:
         return _cached_model
 
     with _model_load_lock:
-        if _cached_model is not None and _cached_model_name == model_name:
+        if _cached_model is not None and _cached_model_key == load_key:
             return _cached_model
 
         try:
@@ -271,17 +305,22 @@ def _load_model(model_name: str | None = None) -> Any:
 
             _cached_model = None
             _cached_model_name = None
+            _cached_model_key = None
             gc.collect()
 
         def _do_load() -> Any:
+            # Built from load_key, not re-read from config, so what is cached
+            # is exactly what was constructed even if a setting changes while
+            # this load is in flight.
+            #
             # cpu_threads: 0 = auto (all cores). CTranslate2's own default heuristic
             # under-uses many-core CPUs, so resolve to os.cpu_count() when unset.
             # num_workers is left at its default — the transcript poller runs one job
             # at a time and >1 workers multiplies model memory for no gain here.
-            threads = config.TRANSCRIBE_CPU_THREADS or (os.cpu_count() or 0)
+            _name, device, compute_type, threads = load_key
             load_kwargs: dict[str, Any] = {
-                "compute_type": config.TRANSCRIBE_COMPUTE_TYPE,
-                "device": _resolve_transcribe_device(),
+                "compute_type": compute_type,
+                "device": device,
             }
             if threads > 0:
                 load_kwargs["cpu_threads"] = threads
@@ -298,6 +337,7 @@ def _load_model(model_name: str | None = None) -> Any:
                 "Loading transcription model...", _do_load
             )
             _cached_model_name = model_name
+            _cached_model_key = load_key
             return _cached_model
         finally:
             _model_loading = False
@@ -1227,7 +1267,22 @@ class TranscriptWorker:
                     continue
                 task["status"] = TASK_STATUS_RUNNING
 
-            self._execute_task(task)
+            # The worker must outlive any single task. _execute_task owns its
+            # own try/except for the transcription itself, but work outside it
+            # (the model preload, ffprobe/timeline setup) can still raise, and
+            # there is no restart path for this thread — is_alive is reported
+            # to the frontend but never acted on, so a death here wedges every
+            # later transcribe request in a queue nothing drains.
+            try:
+                self._execute_task(task)
+            except Exception as exc:
+                utils.error_print(f"Transcription task failed: {exc}")
+                with self._lock:
+                    if task.get("status") == TASK_STATUS_RUNNING:
+                        task["status"] = TASK_STATUS_FAILED
+                        task["error"] = str(exc)
+                        task.setdefault("partial_segments", [])
+                        task["completed_at"] = datetime.now(UTC).isoformat()
 
             if self.on_task_complete:
                 try:
@@ -1302,10 +1357,24 @@ class TranscriptWorker:
         if not config.DEBUGGING and not task.get("_cancelled"):
             with self._lock:
                 task["phase"] = "loading_model"
-            if _load_model(task.get("model")) is None:
+            # _load_model does not only return None on failure — it raises.
+            # run_with_spinner calls its callback bare, and the WhisperModel
+            # construction inside has a finally but no except, so a CTranslate2
+            # "Library cublas64_12.dll is not found", an unsupported
+            # compute_type, or a huggingface download OSError all propagate.
+            # This sits outside the try below, so without this handler the
+            # exception escapes _run and kills the worker thread for good.
+            try:
+                loaded = _load_model(task.get("model"))
+            except Exception as exc:
+                loaded = None
+                load_error = f"Transcription model failed to load: {exc}"
+            else:
+                load_error = "Transcription model failed to load."
+            if loaded is None:
                 with self._lock:
                     task["status"] = TASK_STATUS_FAILED
-                    task["error"] = "Transcription model failed to load."
+                    task["error"] = load_error
                     task["partial_segments"] = []
                     task["completed_at"] = datetime.now(UTC).isoformat()
                 return

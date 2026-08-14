@@ -853,6 +853,21 @@ def test_screenspace_map_participant_time(monkeypatch):
 # ---- Transcripts worker: single vs multi-video execution ----
 
 
+@pytest.fixture(autouse=True)
+def _stub_whisper_load(monkeypatch):
+    """Keep _execute_task's model preload out of these tests.
+
+    The preload (added with the loading_model phase) runs before the
+    transcribe_video/transcribe_timeline stubs below get a look in, and it is
+    not stubbed by them — so without this these tests constructed a *real*
+    WhisperModel, downloading ~140 MB on any machine with a cold HF cache and
+    leaving the shared transcripts._cached_model populated for whatever ran
+    next. That shared cache is what made them fail intermittently depending on
+    file order.
+    """
+    monkeypatch.setattr(transcripts, "_load_model", lambda name=None: object())
+
+
 def test_transcript_worker_multi_video_builds_timeline(monkeypatch):
     worker = transcripts.TranscriptWorker()
     task = transcripts.create_transcript_task("P01", ["a.mp4", "b.mp4"])

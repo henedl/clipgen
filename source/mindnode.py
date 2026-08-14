@@ -45,6 +45,7 @@ import html
 import plistlib
 import re
 from pathlib import Path
+from xml.parsers import expat
 from typing import Any
 
 import config
@@ -106,13 +107,32 @@ def _is_timestamp_token(token: str) -> bool:
     return utils.timestamp_to_seconds(cleaned) is not None
 
 
+def _is_timestamp_run(token: str) -> bool:
+    """Whether a whitespace-split token is *entirely* timestamps.
+
+    ``utils._split_timestamp_tokens`` also splits on ``+``, ``;`` and ``,``, so
+    ``0:01:00+0:05:00`` parses as two pairs — but a whitespace-only split
+    leaves it as one token that ``_is_timestamp_token`` rejects, and the raw
+    times then survive into the description and the output filename. Splitting
+    on the separators *within* a token rather than splitting the whole string
+    on them keeps prose punctuation intact: "obs, 1:00" still describes as
+    "obs," because "obs," is not a run of timestamps.
+    """
+    parts = [p for p in re.split(r"[+;,]", token) if p]
+    if len(parts) < 2:
+        return False
+    return all(_is_timestamp_token(p) for p in parts)
+
+
 def _describe(text: str) -> str:
     """Strip timestamp and annotation tokens, leaving the observation text."""
     known_annotations = set(utils.get_known_annotation_map().keys())
     kept = [
         tok
         for tok in text.split()
-        if tok.lower() not in known_annotations and not _is_timestamp_token(tok)
+        if tok.lower() not in known_annotations
+        and not _is_timestamp_token(tok)
+        and not _is_timestamp_run(tok)
     ]
     return " ".join(kept).strip()
 
@@ -133,7 +153,19 @@ def load_document(path: str | Path) -> list[dict[str, Any]]:
     try:
         with contents.open("rb") as fh:
             data = plistlib.load(fh)
-    except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+    except (
+        OSError,
+        plistlib.InvalidFileException,
+        ValueError,
+        # A .mindnode saved in XML rather than binary plist format (and then
+        # truncated, e.g. by a sync client) raises ExpatError, which derives
+        # from Exception — not from any of the above. Without it the error
+        # escapes this function's documented ValueError contract and every
+        # caller's `except ValueError`, surfacing as a 500 with a stack trace
+        # instead of "Could not read …". The binary path is already fine:
+        # _BinaryPlistParser normalizes to InvalidFileException.
+        expat.ExpatError,
+    ) as exc:
         raise ValueError(f"Could not read {contents}: {exc}") from exc
 
     canvas = data.get("canvas") if isinstance(data, dict) else None

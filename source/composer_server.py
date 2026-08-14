@@ -1387,8 +1387,26 @@ def _init_composer_state(sheet_context: Any = None) -> None:
 
     Participants are resolved from ``_sheet_context`` + the input dir on demand
     (:func:`files.resolve_participant_videos`), so nothing is snapshotted here.
+
+    Called once, from ``build_combined_app``. A worksheet swap goes through
+    :func:`repin_sheet_state` instead — re-running this would reload the
+    manifest and could drop a write still sitting in the persist debounce.
     """
     global _sheet_context, _manifest
 
     _sheet_context = sheet_context
     _manifest = _load_manifest()
+
+
+def repin_sheet_state(sheet_context: Any = None) -> None:
+    """Point the blueprint at a newly opened (or closed) worksheet.
+
+    The sheet-only half of :func:`_init_composer_state`, called by
+    ``server._swap_worksheet``. Without it Composer kept the sheet the
+    *process* started with — normally none — so opening a spreadsheet from the
+    Start overlay left its participant list on bare disk discovery, missing
+    every sheet-only column and every filename override.
+    """
+    global _sheet_context
+
+    _sheet_context = sheet_context
