@@ -2220,7 +2220,9 @@ def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
     import ollama_client
 
     monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
+    # The route gates on is_working_install (is_installed only asks whether a
+    # file exists, which a half-extracted tree also satisfies).
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
 
     def _fake_install(on_progress=None):
         if on_progress:
@@ -2248,13 +2250,50 @@ def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
     assert status["status"] == "success"
 
 
+def test_ollama_install_retries_a_broken_install(tr_client, monkeypatch):
+    """A half-extracted tree satisfies is_installed(), and this route is the
+    only way to repair one — so gating on it answered already_installed
+    forever and stranded the user with no in-app recovery."""
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
+    monkeypatch.setattr(ollama_client, "install_managed", lambda on_progress=None: True)
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+
+    body = tr_client.post("/transcripts/api/models/ollama/install", json={}).get_json()
+    assert body.get("already_installed") is not True
+    assert body["started"] is True
+
+
+def test_ollama_install_short_circuits_a_working_install(tr_client, monkeypatch):
+    """The idempotent path still has to short-circuit, or every dialog open
+    would re-download."""
+    import ollama_client
+
+    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: True)
+
+    def _must_not_run(on_progress=None):
+        raise AssertionError("install_managed must not run for a working install")
+
+    monkeypatch.setattr(ollama_client, "install_managed", _must_not_run)
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+
+    body = tr_client.post("/transcripts/api/models/ollama/install", json={}).get_json()
+    assert body["already_installed"] is True
+
+
 def test_ollama_install_second_post_attaches(tr_client, monkeypatch):
     import threading as threading_mod
 
     import ollama_client
 
     monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: False)
+    # The route gates on is_working_install (is_installed only asks whether a
+    # file exists, which a half-extracted tree also satisfies).
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
     release = threading_mod.Event()
     monkeypatch.setattr(
         ollama_client,

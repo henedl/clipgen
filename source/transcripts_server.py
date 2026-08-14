@@ -1604,7 +1604,7 @@ def api_ollama_start() -> FlaskResponse:
 
 @transcripts_bp.route("/api/models/ollama/install", methods=["POST"])
 def api_ollama_install() -> FlaskResponse:
-    """Download the Ollama CLI itself into clipgen's managed dir (macOS only).
+    """Download and install the Ollama CLI (macOS and Windows).
 
     The consent-gated counterpart of /api/models/ollama/pull one level down:
     same background-thread + status-dict + polling shape, so the frontend
@@ -1614,7 +1614,12 @@ def api_ollama_install() -> FlaskResponse:
     global _ollama_install_status
     if not ollama_client.can_install_managed():
         return err("In-app Ollama install is not supported on this platform")
-    if ollama_client.is_installed():
+    # is_working_install, not is_installed: the latter only asks whether a file
+    # is present, which a half-extracted tree also satisfies — and answering
+    # already_installed there is a dead end, since this route is the only way
+    # to repair one. install_managed applies the same predicate internally, so
+    # a genuinely working install still short-circuits immediately.
+    if ollama_client.is_working_install():
         return ok(already_installed=True)
     with _ollama_install_lock:
         if _ollama_install_status is not None and not _ollama_install_status.get(

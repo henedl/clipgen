@@ -2763,11 +2763,20 @@
         }, function () { return cancelled; }).then(function (installed) {
           if (cancelled) return;
           if (!installed) {
-            progressText.textContent = "Installation failed. You can install Ollama yourself:";
+            progressText.textContent = "Installation failed. Retry, or install Ollama yourself:";
             if (opts.hint && opts.hint.length) {
               hintEl.textContent = opts.hint.join("\n");
               hintEl.classList.remove("hidden");
             }
+            // Both buttons come back, same as stillUnavailable() above: hiding
+            // them left the only recovery path behind a dismiss-and-redo of
+            // the whole AI action. Retrying is safe now that the server no
+            // longer reports a broken install as already_installed.
+            progress.classList.add("hidden");
+            confirmBtn.classList.remove("hidden");
+            confirmBtn.disabled = false;
+            altBtn.classList.remove("hidden");
+            altBtn.disabled = false;
             cancelBtn.textContent = "Close";
             return;
           }

@@ -15,8 +15,10 @@ Key functions:
   resolve_ollama_bin()- the binary actually used: PATH first, managed second
   start_server()      - spawn `ollama serve` and wait for it to answer
   install_guidance_lines() - platform-specific "how to install Ollama" text
+  is_working_install()- stronger than is_installed(): the binary actually runs
   can_install_managed() / install_managed() - consent-gated in-app download of
-    the official standalone CLI into clipgen's config dir (macOS only)
+    the official CLI: the standalone tarball into clipgen's config dir on
+    macOS, the silent OllamaSetup.exe on Windows
   list_models()       - enumerate installed models with metadata
   is_model_installed()- check whether a specific model is installed locally
   generate()          - send a prompt and get a text response
@@ -91,9 +93,18 @@ _OLLAMA_WINDOWS_SHA256 = (
 )
 _OLLAMA_WINDOWS_SIZE_BYTES = 1_563_078_600
 _INSTALL_CHUNK = 1024 * 1024
-_INSTALL_TIMEOUT = 120  # seconds; connect + first byte, GitHub is normally fast
+_INSTALL_TIMEOUT = 120  # seconds; per-socket-read stall, GitHub is normally fast
+# Wall-clock backstop for the whole download, same reasoning as
+# _GENERATE_DEADLINE: _INSTALL_TIMEOUT bounds a stall *between* reads, so a
+# server trickling a byte per window never trips it. Generous — the Windows
+# asset is ~1.5 GB, which is ~14 min on a 15 Mbit line.
+_INSTALL_DEADLINE = 3600  # seconds
 _INSTALLER_RUN_TIMEOUT = 900  # seconds; silent Inno Setup unpacks ~2 GB of runners
 _VERSION_PROBE_TIMEOUT = 15  # seconds; `ollama --version` sanity check
+# The post-install probe is the binary's *first* execution, so it pays for the
+# OS scanning the freshly written tree (Defender real-time over ~2 GB of runner
+# libs). Timing out there fails a correct install.
+_FIRST_RUN_PROBE_TIMEOUT = 120  # seconds
 # 0 off-Windows, so passing it unconditionally leaves darwin/linux unchanged.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -256,6 +267,20 @@ def managed_ollama_path() -> Path | None:
     return None
 
 
+def is_working_install() -> bool:
+    """True when a reachable ``ollama`` binary actually runs.
+
+    Deliberately stronger than :func:`is_installed`, which only answers "a file
+    is present" — a half-extracted managed tree (disk filled partway through
+    the tarball, an installer killed mid-run) satisfies that and then reports
+    itself installed forever. Callers that gate *whether to install* must use
+    this one; :func:`is_installed` remains right for gating advice text, where
+    the extra ``--version`` subprocess would be wasteful.
+    """
+    binary = resolve_ollama_bin()
+    return binary is not None and _managed_binary_works(Path(binary))
+
+
 def resolve_ollama_bin() -> str | None:
     """The ``ollama`` binary clipgen should run, or None when there is none.
 
@@ -339,19 +364,60 @@ def managed_install_size_mb() -> int:
     return round(_OLLAMA_DARWIN_SIZE_BYTES / 1e6)
 
 
-def _managed_binary_works(binary: Path) -> bool:
-    """Sanity-run ``ollama --version`` on the managed copy."""
+def _managed_binary_works(
+    binary: Path, timeout: float = _VERSION_PROBE_TIMEOUT
+) -> bool:
+    """Sanity-run ``ollama --version`` on the managed copy.
+
+    *timeout* is widened by the post-install verification caller: the very
+    first execution of a freshly written binary pays for the OS scanning the
+    whole install tree (Defender real-time on ~2 GB of Windows runner libs),
+    which the steady-state probe budget does not allow for. A false negative
+    there reports a correct install as broken.
+    """
     try:
         probe = subprocess.run(
             [str(binary), "--version"],
-            capture_output=True,
-            timeout=_VERSION_PROBE_TIMEOUT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
             check=False,
             creationflags=_NO_WINDOW,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return probe.returncode == 0
+
+
+def _sweep_stale_downloads(target_dir: Path) -> None:
+    """Remove partial download temp files left in the managed dir.
+
+    ``tempfile.NamedTemporaryFile(dir=target_dir)`` names are ``tmp*``; the
+    real payload is ``ollama`` (plus runner libs), so the prefix cannot
+    collide with anything the install produces. Best-effort by design — a
+    sweep failure must not block the install that follows.
+    """
+    for stale in target_dir.glob("tmp*"):
+        try:
+            if stale.is_file():
+                stale.unlink()
+        except OSError:
+            pass
+
+
+def _clear_managed_dir(target_dir: Path) -> None:
+    """Delete clipgen's managed Ollama tree after a failed install.
+
+    Only ever called on ``_managed_ollama_dir()``, which clipgen creates and
+    owns outright — never on the Windows per-user install location, which the
+    user may have populated themselves. Best-effort: if the removal fails the
+    caller is already returning False, and a stale tree is no worse than the
+    one we were trying to clear.
+    """
+    try:
+        shutil.rmtree(target_dir, ignore_errors=True)
+    except OSError as exc:  # rmtree(ignore_errors) is quiet, but be safe
+        utils.warning_print(f"Could not clear the managed Ollama dir: {exc}")
 
 
 def _download_pinned(
@@ -367,23 +433,42 @@ def _download_pinned(
     Verifies the SHA256 incrementally; on any failure (network, disk, hash
     mismatch) the temp file is removed and None is returned. On success the
     caller owns the returned path and must unlink it when done.
+
+    ``_INSTALL_TIMEOUT`` reaches urlopen as the *socket* timeout, which bounds
+    a stall between reads and not total elapsed time — a server trickling one
+    byte per timeout window would keep the loop alive forever, and with it the
+    install slot (``_ollama_install_status["done"]`` never flips, so every
+    later click answers ``already_installing``). ``_INSTALL_DEADLINE`` is the
+    wall-clock backstop, mirroring ``generate()``'s ``_GENERATE_DEADLINE``.
+
+    The NamedTemporaryFile call is inside the try: it takes a filesystem hit
+    of its own (read-only mount, ENOSPC on the directory entry) and this
+    function's contract — like install_managed's — is to return None rather
+    than raise.
     """
-    with tempfile.NamedTemporaryFile(
-        dir=target_dir, suffix=suffix, delete=False
-    ) as tmp:
-        download_path = Path(tmp.name)
+    download_path: Path | None = None
     digest = hashlib.sha256()
     received = 0
     request = urllib.request.Request(
         url, headers={"User-Agent": "clipgen-ollama-install"}
     )
+    deadline = time.monotonic() + _INSTALL_DEADLINE
     try:
+        with tempfile.NamedTemporaryFile(
+            dir=target_dir, suffix=suffix, delete=False
+        ) as tmp:
+            download_path = Path(tmp.name)
         with (
             urllib.request.urlopen(request, timeout=_INSTALL_TIMEOUT) as response,
             download_path.open("wb") as out,
         ):
             total = int(response.headers.get("Content-Length") or size_fallback)
             while chunk := response.read(_INSTALL_CHUNK):
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"download exceeded the {_INSTALL_DEADLINE}s deadline "
+                        f"after {received} of {total} bytes"
+                    )
                 digest.update(chunk)
                 out.write(chunk)
                 received += len(chunk)
@@ -397,7 +482,8 @@ def _download_pinned(
                     )
     except (urllib.error.URLError, OSError, ValueError) as exc:
         utils.warning_print(f"Ollama install failed (download): {exc}")
-        download_path.unlink(missing_ok=True)
+        if download_path is not None:
+            download_path.unlink(missing_ok=True)
         return None
 
     if digest.hexdigest() != expected_sha256:
@@ -428,15 +514,27 @@ def _run_windows_installer(
     setup_path: Path,
     on_progress: Callable[[dict[str, Any]], None] | None,
 ) -> bool:
-    """Run the verified OllamaSetup.exe silently and wait for it to finish."""
+    """Run the verified OllamaSetup.exe silently and wait for it to finish.
+
+    Output goes to DEVNULL rather than being captured. ``capture_output=True``
+    makes subprocess.run wait on ``communicate()``, which returns when the
+    pipes reach EOF — i.e. when every handle holder closes them, not when the
+    direct child exits. Inno Setup extracts and launches a ``setup.tmp`` helper
+    that inherits those handles, so a 60-second successful install can sit on
+    the pipe until the timeout fires and be reported as a failure. Nothing
+    reads the captured text anyway; only the return code is used.
+    """
     if on_progress is not None:
-        # No completed/total — the frontend renders total-less statuses as
-        # plain text, same as "unpacking Ollama" on macOS.
+        # No completed/total. _on_progress in transcripts_server merges chunks
+        # into a status dict rather than replacing it, so the download's final
+        # completed/total survive and the bar reads 100% under this label —
+        # cosmetic, and better than resetting the bar to zero mid-install.
         on_progress({"status": "running installer"})
     try:
         proc = subprocess.run(
             [str(setup_path), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=_INSTALLER_RUN_TIMEOUT,
             check=False,
             creationflags=_NO_WINDOW,
@@ -484,6 +582,13 @@ def install_managed(
         utils.warning_print(f"Ollama install failed (create dir): {exc}")
         return False
 
+    # Reclaim temp files a previous attempt orphaned. The download runs on a
+    # daemon thread, which is killed at interpreter shutdown *without*
+    # unwinding, so quitting clipgen mid-download leaves the partial file
+    # behind and nothing else ever removes it — at ~1.5 GB for the Windows
+    # asset that adds up fast across retries.
+    _sweep_stale_downloads(target_dir)
+
     on_windows = sys.platform == "win32"
     download_path = _download_pinned(
         url=_OLLAMA_WINDOWS_URL if on_windows else _OLLAMA_DARWIN_URL,
@@ -505,6 +610,16 @@ def install_managed(
             if on_progress is not None:
                 on_progress({"status": "unpacking Ollama"})
             if not _extract_darwin_archive(download_path, target_dir):
+                # A partial extractall leaves `ollama` (0755) on disk without
+                # its runner libs, and managed_ollama_path() only tests
+                # is_file() + the exec bit — so the wreckage reads as a
+                # finished install and every later attempt short-circuits.
+                # Clearing our own managed dir is the only way back. Windows
+                # installs into %LOCALAPPDATA%\Programs\Ollama, which clipgen
+                # does not own (a user may have installed there themselves),
+                # so that side is left alone and recovers by re-running the
+                # installer, which repairs in place.
+                _clear_managed_dir(target_dir)
                 return False
     finally:
         download_path.unlink(missing_ok=True)
@@ -519,10 +634,14 @@ def install_managed(
             except OSError:
                 pass
             installed = managed_ollama_path()
-    if installed is None or not _managed_binary_works(installed):
+    if installed is None or not _managed_binary_works(
+        installed, timeout=_FIRST_RUN_PROBE_TIMEOUT
+    ):
         utils.warning_print(
             "Ollama install failed: installed binary is missing or does not run."
         )
+        if not on_windows:
+            _clear_managed_dir(target_dir)
         return False
     if on_progress is not None:
         on_progress({"status": "success"})
