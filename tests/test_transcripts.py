@@ -1271,6 +1271,7 @@ class TestLoadModelCpuThreads:
         monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
         monkeypatch.setattr(transcripts, "_cached_model", None)
         monkeypatch.setattr(transcripts, "_cached_model_name", None)
+        monkeypatch.setattr(transcripts, "_cached_model_key", None)
         return seen
 
     def test_cpu_threads_passed_when_set(self, monkeypatch):
@@ -1292,6 +1293,50 @@ class TestLoadModelCpuThreads:
         monkeypatch.setattr(transcripts.os, "cpu_count", lambda: None)
         transcripts._load_model("base")
         assert "cpu_threads" not in seen["kwargs"]
+
+    def test_changing_the_device_reloads_the_cached_model(self, monkeypatch):
+        """TRANSCRIBE_DEVICE is a user-editable Studio setting, but device is
+        read at WhisperModel() time — keying the cache on the model name alone
+        meant a cpu→cuda change saved, persisted and displayed while every
+        later transcription silently kept running the model loaded for cpu."""
+        seen = self._capture_model(monkeypatch)
+        loads: list[str] = []
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "cpu")
+        transcripts._load_model("base")
+        loads.append(seen["kwargs"]["device"])
+
+        # Same name, different device → must construct again.
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "cuda")
+        assert transcripts.is_transcription_model_loaded() is False
+        transcripts._load_model("base")
+        loads.append(seen["kwargs"]["device"])
+        assert loads == ["cpu", "cuda"]
+
+        # ...and an unchanged signature must still hit the cache.
+        seen.clear()
+        transcripts._load_model("base")
+        assert seen == {}, "an unchanged load signature must not reconstruct"
+
+    def test_changing_the_thread_count_reloads_the_cached_model(self, monkeypatch):
+        """Same contract for the other construction-time settings."""
+        seen = self._capture_model(monkeypatch)
+        monkeypatch.setattr(config, "TRANSCRIBE_CPU_THREADS", 4)
+        transcripts._load_model("base")
+        assert seen["kwargs"]["cpu_threads"] == 4
+        monkeypatch.setattr(config, "TRANSCRIBE_CPU_THREADS", 8)
+        transcripts._load_model("base")
+        assert seen["kwargs"]["cpu_threads"] == 8
+
+    def test_download_gate_stays_keyed_on_the_name(self, monkeypatch):
+        """is_whisper_model_cached answers "is this model downloaded", which
+        device and thread count do not affect — it must not start reporting
+        False (and re-prompting for a download) after a device change."""
+        self._capture_model(monkeypatch)
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "cpu")
+        transcripts._load_model("base")
+        assert transcripts.is_whisper_model_cached("base") is True
+        monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "cuda")
+        assert transcripts.is_whisper_model_cached("base") is True
 
     def test_device_is_always_passed_explicitly(self, monkeypatch):
         """Never leave it to faster-whisper's ``device="auto"`` default."""
