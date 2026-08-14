@@ -1661,14 +1661,13 @@
     kbPaintCursor();
   }
 
-  // ---- Keyboard cursor (arrows / j / k selection over cells and intake cards) ----
+  // ---- Keyboard cursor (arrows / j / k over cells and intake cards) ----
   //
-  // One logical cursor per surface: the sheet grid when the Sheet tab is
-  // active, otherwise the active intake tab's card row (satellite access via
-  // STUDIO.intakeCardCount/intakeCardAt/intakeToggleAt). Enter mirrors click
-  // (toggle in the artifact work area), Shift+Enter mirrors shift-click
-  // (toggle in the reel). The cursor is logical state — re-renders repaint it
-  // via kbPaintCursor() rather than keeping a live element reference.
+  // One logical cursor per surface: the sheet grid when the Sheet tab is active,
+  // otherwise the active intake tab's card row. Enter mirrors click (toggle in the
+  // artifact work area), Shift+Enter mirrors shift-click (toggle in the reel). The
+  // cursor is logical state — re-renders repaint it via kbPaintCursor() rather
+  // than holding a live element reference.
 
   var _kbCursor = null; // {surface: "sheet", participant, row} | {surface: <intake tab | list surface>, idx}
   var _kbRegion = null; // explicit list-surface override set by the jump hotkeys (kbJumpTo)
@@ -2599,17 +2598,15 @@
   var _CELL_GHOST_OFFSET_X = 14;
   var _CELL_GHOST_OFFSET_Y = 10;
 
-  // Build the shared .queue-card-thumb (img + duration overlay) and append it
-  // to `card`. Returns the thumb element so callers can layer call-site badges
-  // on top. opts: { participant, start, duration, observe, nativeLazy,
-  //                 editItem, renderFn }
-  //   observe    true  -> lazy IntersectionObserver via ssObserveThumb
-  //              false -> eager img.src with the standard error fallback
-  //   nativeLazy eager-only; set img.loading="lazy" (default true; pass false
-  //              for the drag ghost, an off-DOM image that must load now)
-  //   editItem   when set, the duration overlay becomes a trim trigger for that
-  //              queue item (Artifact/Reel cards); renderFn re-renders its queue
-  //              after edits. Omit for read-only thumbs (drag ghost, intakes).
+  // Build the shared .queue-card-thumb (img + duration overlay), append it to
+  // `card`, and return it so callers can layer their own badges on top.
+  //   observe    lazy IntersectionObserver via ssObserveThumb, else eager img.src
+  //              with the standard error fallback
+  //   nativeLazy eager-only img.loading="lazy"; pass false for the drag ghost, an
+  //              off-DOM image that must load now
+  //   editItem   makes the duration overlay a trim trigger for that queue item,
+  //              with renderFn re-rendering its queue after edits. Omit for
+  //              read-only thumbs (drag ghost, intakes).
   function buildQueueCardThumb(card, opts) {
     var thumb = el("div", "queue-card-thumb");
     // Window coordinates for the optional hover card scrubber (sprite + audio).
@@ -4090,12 +4087,11 @@
 
   // ---- Modal focus trap (shared by the blocking overlays) ----
   //
-  // Thin delegators onto utils.js's openBlockingModal — Studio's overlays all
-  // want the full lifecycle (Tab/Shift+Tab trap, Escape close, focus restore to
-  // the trigger). role=dialog + aria-modal live statically on each overlay's
-  // card in the HTML. Studio never stacks these overlays, so the helper's single
-  // active modal is enough. release() is idempotent cleanup-only, so any dismiss
-  // path (button, backdrop, Escape) can call closeModalTrap safely.
+  // Thin delegators onto utils.js's openBlockingModal, since Studio's overlays all
+  // want the full lifecycle (Tab trap, Escape close, focus restore to the
+  // trigger); role=dialog + aria-modal live statically in the HTML. Studio never
+  // stacks these, so the helper's single active modal suffices, and release() is
+  // idempotent so any dismiss path can call closeModalTrap safely.
   function openModalTrap(overlayEl, onEscape) {
     return openBlockingModal(overlayEl, {
       onEscape: onEscape,

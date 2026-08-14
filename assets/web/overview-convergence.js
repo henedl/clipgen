@@ -26,12 +26,11 @@
     active: false,
     initialized: false,
     baselines: null,
-    // Per-lane display offset (seconds, signed) for compensating for videos
-    // recorded starting at different wall-clock moments, or a single data
-    // source (e.g. spreadsheet timestamps) drifting from the others. Nested:
-    //   { "P01": { sheet: 12.5, screenspace: 12.5, transcript: 0 } }
-    // A source key is omitted when 0; a participant with no offsets has no
-    // entry. Stacks on top of `baselines` (a sheet-only clock→video shift).
+    // Per-lane display offset (signed seconds) compensating for videos that
+    // started at different wall-clock moments, or one source drifting from the
+    // others: { "P01": { sheet: 12.5, screenspace: 12.5, transcript: 0 } }. A key
+    // is omitted when 0, a participant with no offsets has no entry. Stacks on
+    // top of `baselines` (a sheet-only clock→video shift).
     offsets: {},
     // Transient per-participant "uncoupled" edit flag ({pid: true}). When set,
     // each of the participant's source lanes is edited independently; when
@@ -382,12 +381,9 @@
 
   // --- Convergence Algorithm ---
   //
-  // Two passes:
-  //   1. For each event, count distinct participants whose events overlap
-  //      the window [start - W, start + W]. Events meeting `minParticipants`
-  //      are "qualifying".
-  //   2. Walk qualifying events in time order and merge any two within W of
-  //      each other into a single zone.
+  // Two passes: (1) per event, count distinct participants whose events overlap
+  // [start - W, start + W] — those meeting `minParticipants` qualify; (2) walk the
+  // qualifying events in time order, merging any two within W into one zone.
 
   function computeConvergenceZones(events, windowSec, minParticipants) {
     if (!events.length) return [];
