@@ -95,12 +95,11 @@
     });
   }
 
-  // Vertical layout, driven by fold state: ruler → cuts track (the user's
-  // working track) → the annotations lane right under it (both are Composer-
-  // owned, editable content; only present when annotations exist) → one lane
-  // per visible read-only source. Every lane folds to a single row and
-  // unfolds to its minimal packed row count. The strip's height follows via
-  // updateTimelineHeight(), not vice versa.
+  // Vertical layout, driven by fold state: ruler → cuts track → the annotations
+  // lane beneath it (both Composer-owned and editable, the latter only when
+  // annotations exist) → one lane per visible read-only source. Every lane folds to
+  // a single row and unfolds to its minimal packed row count; the strip's height
+  // follows via updateTimelineHeight(), not vice versa.
   function layout() {
     var cutY = RULER_H + STEP_TRACK_H + 2;
     var y = cutY + cutTrackH() + 4;

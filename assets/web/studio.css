@@ -126,11 +126,11 @@ body {
 
 /* Sheet preview
  *
- * Floating-nav scroll-under: TopNav (48px) + subheader (44px) are
- * `position: fixed`. #sheetPreview fills body's flex column from viewport y:0
- * down — chrome overlays its top edge. Each scrollable sub-tab below carries
- * its own `padding-top: 92px` so visible content starts below the chrome
- * strip while scrolled content slides *under* the glass. */
+ * Floating-nav scroll-under: TopNav (48px) + subheader (44px) are fixed, and
+ * #sheetPreview fills body's flex column from viewport y:0 down, so the chrome
+ * overlays its top edge. Each scrollable sub-tab carries its own
+ * `padding-top: 92px`, putting visible content below the chrome strip while
+ * scrolled content slides *under* the glass. */
 #sheetPreview {
   flex: 1 1 auto;
   min-width: 0;
@@ -149,15 +149,11 @@ body {
   overflow: hidden;
 }
 
-/* Intake sub-tabs need their own breathing room since
- * #sheetMain is now flush. Sheet sub-tab keeps its table flush to viewport
- * edges (matches prototype).
- *
- * The 92px top inset comes from the floating-nav scroll-under: TopNav +
- * subheader are fixed, so each sub-tab needs to push its visible content
- * below the chrome strip. The intake panels override this with a tighter
- * `padding: 92px var(--space-1) 0` further down. (`--space-0` doesn't exist;
- * use a bare `0` so the shorthand stays valid.) */
+/* Intake sub-tabs need their own breathing room since #sheetMain is flush; the
+ * Sheet sub-tab keeps its table flush to the viewport edges. The 92px top inset
+ * is the scroll-under offset described above, which the intake panels override
+ * with a tighter `padding: 92px var(--space-1) 0` further down. (`--space-0`
+ * doesn't exist — use a bare `0` so the shorthand stays valid.) */
 #intakePanel,
 #trIntakePanel,
 #coIntakePanel,
@@ -1272,13 +1268,11 @@ body.dragging #sheetMain {
   text-align: center;
 }
 
-/* Cell drag ghost — fixed-position cascade preview shown while dragging
- * timestamp cells from the sheet. The native drag image is replaced by a
- * transparent 1×1 GIF in studio.js, so this overlay is the only visual.
- *
- * The wrapper itself translates to follow the cursor (RAF-coalesced in
- * studio.js). Cards stack down-right inside; card --i=0 is on top so it
- * appears at/near the cursor with the rest of the stack peeking out behind. */
+/* Cell drag ghost — fixed-position cascade preview while dragging timestamp
+ * cells from the sheet. studio.js replaces the native drag image with a
+ * transparent 1×1 GIF, so this overlay is the only visual. The wrapper
+ * translates to follow the cursor (RAF-coalesced); cards stack down-right
+ * inside, with --i=0 on top so it sits at the cursor and the rest peek out. */
 .cell-drag-ghost {
   position: fixed;
   top: 0;
@@ -1331,14 +1325,12 @@ body.dragging #sheetMain {
 
 #artifactsList {
   display: grid;
-  /* Fixed 160px tracks (no 1fr stretch) keep cards compact and gaps tight,
-   * even when only a couple of cards are queued. Excess row width becomes
-   * a trailing gutter, matching the prototype's spacing.
-   *
-   * grid-auto-rows: max-content + align-content:start pins rows to their
-   * intrinsic content height and packs them at the top — without these,
-   * Chrome distributes free space across rows when the container shrinks
-   * below its content, which squishes the cards vertically. */
+  /* Fixed 160px tracks (no 1fr stretch) keep cards compact and gaps tight even
+   * with only a couple queued, leaving excess row width as a trailing gutter.
+   * grid-auto-rows: max-content + align-content: start pin rows to their
+   * intrinsic height and pack them at the top — without both, Chrome distributes
+   * free space across rows when the container shrinks below its content and
+   * squishes the cards vertically. */
   grid-template-columns: repeat(auto-fill, 160px);
   grid-auto-rows: max-content;
   gap: var(--space-2);
@@ -2231,14 +2223,12 @@ html[data-theme="dark"] .queue-card-error .queue-card-thumb {
 
 /* Status overlay */
 
-/* Studio overlay cards (.status-card / .confirm-card / .gallery-card / .log-panel
- * / .build-status-card) pop in and out via utils.js's popModalIn/popModalOut,
- * which also ramps the shared .cg-modal-veil backdrop (tokens.css) — hence no
- * background and no transition on the overlay shells here. The former
- * cg-overlay-pop @keyframes was retired to keep a single animation system;
- * motion.js handles the prefers-reduced-motion fallback (a short opacity fade).
- * #buildStatus is the one exception: a non-blocking corner card, so it carries no
- * veil and only its card animates. */
+/* Studio overlay cards pop via utils.js's popModalIn/popModalOut, which also ramps
+ * the shared .cg-modal-veil backdrop (tokens.css) — hence no background and no
+ * transition on the overlay shells here. A separate cg-overlay-pop @keyframes was
+ * retired to keep one animation system, and motion.js owns the
+ * prefers-reduced-motion fallback. #buildStatus is the exception: a non-blocking
+ * corner card, so no veil and only its card animates. */
 
 #statusOverlay {
   position: fixed;

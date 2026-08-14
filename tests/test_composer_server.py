@@ -364,7 +364,7 @@ def test_trim_put_rejects_inverted_span(co_client):
     assert resp.status_code == 400
 
 
-# ---- Annotations (P3) ----
+# ---- Annotations ----
 
 
 def _make_annotation(co_client, **overrides):

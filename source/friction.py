@@ -6,11 +6,10 @@ six categories and produces, per segment, a friction score plus the matched
 markers, then aggregates session-level stats and selects the top candidates for
 the LLM refinement stage (``thinking_agents._run_friction``).
 
-This module is intentionally pure: no Ollama, no I/O, no ``config`` import. It is
-the deterministic engine; the LLM/prompt/parse layer lives in
-``thinking_agents.py`` per the project's module roles. Category keys here are
-mirrored by ``config.FRICTION_CATEGORIES`` (display labels) and the equality of
-the two key sets is asserted by ``tests/test_friction_scorer.py``.
+Intentionally pure: no Ollama, no I/O, no ``config`` import — the LLM/prompt/parse
+layer lives in ``thinking_agents.py``. Category keys here are mirrored by
+``config.FRICTION_CATEGORIES`` (display labels), and ``tests/test_friction_scorer``
+asserts the two key sets stay equal.
 
 Score formula (per segment):
     Σ(weight[cat] × match_count[cat]) / max(word_count, 1), clamped to [0, 1].
@@ -30,9 +29,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Category weights. Frustration and confusion are stronger UX-research signals
-# than baseline hesitation, so they are weighted higher. Tunable in code; not
-# user-facing in v1.
+# Category weights: frustration and confusion are stronger UX-research signals
+# than baseline hesitation. Tunable in code, not user-facing.
 CATEGORY_WEIGHTS: dict[str, float] = {
     "hesitation": 1.0,
     "confusion": 1.5,

@@ -79,23 +79,21 @@
       if (!dot) return null;
       var card = dot.closest(".wf-node");
       if (!card) return null;
-      // Measure relative to the card and divide out the card's ACTUAL rendered
-      // scale → zoom-1 layout offset, exact across borders/padding. Cached, so
-      // this layout read happens once per renderAllNodes, not per drag frame.
+      // Measure relative to the card and divide out its ACTUAL rendered scale to
+      // get an exact zoom-1 layout offset. Cached, so this layout read happens
+      // once per renderAllNodes rather than per drag frame.
       //
-      // Use the measured scale (transformed rect width vs untransformed
-      // offsetWidth), NOT state.viewport.zoom: renderAllNodes measures
-      // synchronously but applyViewport writes the #wfWorld transform a frame
-      // later, so on a fresh load of a blueprint saved at zoom != 1 the card is
-      // still at identity scale while the assumed zoom differs — that cached an
-      // offset wrong by offset*(zoom-1) and the wires rendered detached until a
-      // re-measure (clean up / node click). Measuring the real scale is correct
-      // whether or not the transform has been applied yet.
+      // Use the *measured* scale (transformed rect width vs offsetWidth), NOT
+      // state.viewport.zoom: renderAllNodes measures synchronously while
+      // applyViewport writes the #wfWorld transform a frame later, so loading a
+      // blueprint saved at zoom != 1 measures a card still at identity scale.
+      // That cached offsets wrong by offset*(zoom-1) and rendered the wires
+      // detached until something forced a re-measure.
       var dotRect = dot.getBoundingClientRect();
       var cardRect = card.getBoundingClientRect();
       var ow = card.offsetWidth;
-      // Degenerate layout (card not yet sized / hidden) — skip without poisoning
-      // the cache so the next render re-measures once it has layout.
+      // Degenerate layout (card not yet sized/hidden): skip without poisoning the
+      // cache, so the next render re-measures once layout exists.
       if (!ow || !cardRect.width) return null;
       var scale = cardRect.width / ow;
       off = _portOffsets[key] = {
@@ -106,13 +104,12 @@
     return { x: (node.position.x || 0) + off.x, y: (node.position.y || 0) + off.y };
   }
 
-  // Horizontal S-curve from an output (a, exits right) to an input (b, enters from
-  // the left), using React Flow's curvature model. A forward edge (b right of a)
-  // puts both control points at the horizontal midpoint → a clean S. A backward
-  // edge (b left of a — e.g. a cleaned-up cycle's back-reference) gets a small
-  // sqrt-bounded bow instead of a wide loop slung under the cards. The old linear
-  // `max(40, |dx|*0.4)` did the opposite: its 40px floor crossed the control
-  // points on near-vertical forward edges (a kink), and the linear term ballooned
+  // Horizontal S-curve from an output (exits right) to an input (enters left),
+  // on React Flow's curvature model. A forward edge puts both control points at
+  // the horizontal midpoint for a clean S; a backward edge gets a small
+  // sqrt-bounded bow rather than a wide loop slung under the cards. A linear
+  // `max(40, |dx|*0.4)` does the opposite — the 40px floor crosses the control
+  // points on near-vertical forward edges (a kink) and the linear term balloons
   // backward edges.
   var WIRE_CURVATURE = 0.25;
 

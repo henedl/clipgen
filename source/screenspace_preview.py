@@ -1,19 +1,15 @@
 """Preprocessing preview generation for the Screenspace "Model view" pane.
 
-Given a frame (and optionally a prev_frame / reference_frame / template_image),
-a region, a tool type, and the tool's parameters, returns a composite BGR image
-showing what that tool's CV pipeline actually operates on — grayscale crops,
-diff masks, edge maps, flow vectors, pHash bit grids, etc.
-
-The produced image is always a single ``numpy.ndarray`` of shape (H, W, 3) in
-BGR uint8, suitable for ``cv2.imencode('.png', img)``.
+Renders what a tool's CV pipeline actually operates on — grayscale crops, diff
+masks, edge maps, flow vectors, pHash bit grids — from a frame (plus optional
+prev_frame / reference_frame / template_image), a region, and the tool's params.
+Output is always a (H, W, 3) BGR uint8 ndarray, ready for ``cv2.imencode``.
 
 Entry points:
 
 - :func:`build_preview` — labeled multi-panel composite for the side panel.
-- :func:`build_overlay_layer` — single layer at native region / frame
-  resolution, suitable for painting on top of the live frame canvas. The
-  catalog of overlay-eligible layers per tool lives in :data:`OVERLAY_LAYERS`.
+- :func:`build_overlay_layer` — one layer at native region/frame resolution, for
+  painting over the live frame canvas. Per-tool catalog: :data:`OVERLAY_LAYERS`.
 """
 
 from typing import Any
@@ -26,8 +22,8 @@ import screenspace_ocr
 import screenspace_primitives
 
 
-# Max width (px) of the composite preview image.  Kept modest: the UI pane is
-# small and generating larger images just wastes bandwidth.
+# Max width (px) of the composite preview. Kept modest — the UI pane is small,
+# so anything larger just wastes bandwidth.
 _MAX_WIDTH = 512
 _PANEL_GAP = 6
 _LABEL_HEIGHT = 16
@@ -82,10 +78,10 @@ def build_preview(
 
 
 # ---------------------------------------------------------------------------
-# Overlay layers — single-layer images sized to the region (or frame) that
-# the frontend paints on top of the live frame canvas as a "blink comparator".
-# Tools whose preview output isn't pixel-aligned (timelapse, inactivity) are
-# omitted on purpose; the toggle stays disabled in those cases.
+# Overlay layers — region- (or frame-) sized images the frontend paints over the
+# live frame canvas as a "blink comparator". Tools whose preview isn't
+# pixel-aligned (timelapse, inactivity) are omitted on purpose, leaving the
+# toggle disabled.
 # ---------------------------------------------------------------------------
 
 
@@ -182,10 +178,9 @@ def build_overlay_layer(
     if tool == "scene" and layer == "edges":
         gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, 100, 200)
-        # Dilate proportionally so 1-px Canny lines remain visible after the
-        # browser scales this region-native overlay down to the display rect.
-        # Capped so high-res regions don't get chunky lines that obscure
-        # underlying frame content.
+        # Dilate proportionally so 1-px Canny lines survive the browser scaling
+        # this region-native overlay down; capped so high-res regions don't get
+        # chunky lines that obscure the frame underneath.
         thickness = max(1, min(2, min(gray.shape[:2]) // 300))
         if thickness > 1:
             kernel = np.ones((thickness, thickness), np.uint8)
@@ -249,9 +244,9 @@ def _overlay_change(
             )
             out[mask_clean > 0] = (220, 220, 0)  # BGR cyan-ish
             return out
-        # layer == "changes": tint the real region where it changed (same as the
-        # composite's "changes on frame" panel). Unchanged pixels keep the live
-        # frame so the default overlay does not darken it.
+        # layer == "changes": tint the region where it changed (as the composite's
+        # "changes on frame" panel does). Unchanged pixels keep the live frame so
+        # the default overlay doesn't darken it.
         return _tint_changes(pixels, diff, mask_clean)
     return None
 
@@ -355,10 +350,9 @@ def _overlay_flow(
     prev_gray = cv2.cvtColor(prev_pixels, cv2.COLOR_BGR2GRAY)
 
     # Compute flow at the same downscaled resolution as
-    # screenspace_primitives.compute_optical_flow so the overlay shows the same vectors
-    # the CV pipeline actually scored. Background gray stays at native
-    # resolution so the user sees a crisp image; arrow coordinates are
-    # scaled up via _draw_flow_arrows' coord_scale.
+    # primitives.compute_optical_flow, so the overlay shows the vectors the CV
+    # pipeline actually scored. Background gray stays native for a crisp image;
+    # arrow coordinates scale up via _draw_flow_arrows' coord_scale.
     h, w = prev_gray.shape[:2]
     max_dim = 256
     if h > max_dim or w > max_dim:
@@ -408,9 +402,9 @@ def _overlay_template_heatmap(
     mask = params.get("template_mask")
     if not (isinstance(mask, np.ndarray) and mask.size > 0):
         mask = None
-    # Reuse the scan's template-prep + correlation helpers so the preview
-    # heatmap reflects exactly what a real scan computes: the mask is binarized
-    # (not blurred), and the degeneracy/oversize checks match the scan path.
+    # Reuse the scan's template-prep + correlation helpers so the preview matches
+    # what a real scan computes: mask binarized (not blurred), and the same
+    # degeneracy/oversize checks.
     prepared = screenspace_primitives._prepare_template(template, mask)
     result = screenspace_primitives._template_correlation_map(frame, prepared)
     if result is None:
@@ -419,11 +413,10 @@ def _overlay_template_heatmap(
     norm = np.empty_like(result)
     cv2.normalize(result, norm, 0, 255, cv2.NORM_MINMAX)
     heat = cv2.applyColorMap(norm.astype(np.uint8), cv2.COLORMAP_JET)
-    # matchTemplate output indexes the top-left anchor of each candidate match,
-    # so offset by half the template size to center the heatmap response over
-    # the match's actual location in the frame. Edge pixels (outside the valid
-    # match range) are filled by replicating nearest values so the overlay
-    # visually covers the whole frame rather than leaving a black border.
+    # matchTemplate indexes each candidate's top-left anchor, so offset by half
+    # the template size to center the response on the match. Edge pixels (outside
+    # the valid match range) replicate their nearest value, so the overlay covers
+    # the whole frame instead of leaving a black border.
     fh, fw = frame.shape[:2]
     hh, hw = heat.shape[:2]
     if (hh, hw) == (fh, fw):
@@ -570,9 +563,8 @@ def _clip_region_pixels(
     pixels = screenspace_primitives.extract_region(frame, region)
     if pixels.size == 0:
         return None
-    # Shaped region: dim everything outside the polygon so every per-tool
-    # preview panel and region-scoped overlay layer shows what the masked
-    # analysis actually weighs (preview mirrors the real scan's preprocessing).
+    # Shaped region: dim outside the polygon so every preview panel and overlay
+    # layer shows what the masked analysis actually weighs.
     mask = screenspace_primitives.region_mask_for(region, *pixels.shape[:2])
     if mask is not None:
         pixels = pixels.copy()
@@ -673,8 +665,8 @@ def _preview_change(
     mk = config.SCREENSPACE_MORPH_KERNEL
     mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((mk, mk), np.uint8))
 
-    # Shaped region: mirror scan_changes — count and normalize only inside
-    # the polygon (dimming alone merely attenuates outside changes).
+    # Shaped region: mirror scan_changes by counting and normalizing only inside
+    # the polygon — dimming alone merely attenuates outside changes.
     region_mask = (
         screenspace_primitives.region_mask_for(region, *mask_clean.shape[:2])
         if region is not None
@@ -687,8 +679,8 @@ def _preview_change(
         denom = float(mask_clean.size)
     ratio = float(np.count_nonzero(mask_clean)) / denom if denom else 0.0
 
-    # "Changes on frame": tint the real region warm where the cleaned mask fired,
-    # so the change reads in context (colorized magnitude, not a bare binary mask).
+    # "Changes on frame": tint the region warm where the cleaned mask fired, so
+    # change reads in context — colorized magnitude, not a bare binary mask.
     changes = _tint_changes(pixels, diff, mask_clean)
 
     return _hstack_panels(

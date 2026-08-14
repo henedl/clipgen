@@ -432,7 +432,7 @@ def test_blueprint_update_and_delete_404_on_missing(wf_client):
     assert wf_client.delete("/workflows/api/blueprints/bp_missing").status_code == 404
 
 
-# ---- Stash CRUD (M5) + built-in recipes (P4) ----
+# ---- Stash CRUD + built-in recipes ----
 
 
 def test_stashes_default_to_builtins_only(wf_client):
@@ -1043,7 +1043,7 @@ def test_batch_children_survive_run_history_cap(wf_client, monkeypatch):
     assert wf_client.get(f"/workflows/api/runs/{loose_ids[0]}").status_code == 404
 
 
-# ---- Per-node result sidecars (P5) ----
+# ---- Per-node result sidecars ----
 
 
 def test_node_result_endpoint_serves_sidecar(wf_client, monkeypatch):
@@ -1096,7 +1096,7 @@ def test_node_result_sidecars_pruned_with_history(wf_client, monkeypatch):
     )
 
 
-# ---- Watch-dir triggers (P6) ----
+# ---- Auto-run triggers ----
 
 
 def _video_source_blueprint(client, participant="P01"):

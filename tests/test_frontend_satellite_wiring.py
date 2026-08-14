@@ -1,31 +1,25 @@
 """Guard that hub/satellite JS groups have no undefined cross-file calls.
 
-Several web pages are split into an IIFE-wrapped hub plus IIFE-wrapped feature
-satellites that share state through a ``window.Clipgen*`` namespace (Screenspace,
-Transcripts, Studio, Workflows — see AGENTS.md "Workspace facts"). Because every
-file is its own ``(function(){ ... })()`` scope, a function defined in one file
-is **not** visible in a sibling: the hub reaches a satellite's function through a
-same-named guarded delegator (``function f(){ return SS.f && SS.f.apply(...); }``)
-or a late-bound ``SS.f(...)`` call, and satellites reach the hub the same way.
+Each hub+satellite page is a set of separate ``(function(){ ... })()`` scopes, so
+a function defined in one file is **not** visible in a sibling: cross-file calls
+go through a same-named guarded delegator or a late-bound ``SS.f(...)``.
 
-When a carve forgets a delegator (or never publishes a moved helper), the bare
-call survives ``node --check`` — it is syntactically valid — but throws
-``ReferenceError`` at runtime, often aborting page init. This shipped at least
-3x (``e4f67b2`` screenspace tasks/results, ``8c7f347`` transcripts, plus the
-historical ``_calibrationGen`` bug). ``node --check`` cannot see it and neither
-can the linter; this static check does, the same way ``test_packaging.py`` guards
-the Python ``py-modules`` analogue.
+When a carve forgets a delegator, the bare call is syntactically valid — so
+``node --check`` and the linter both pass it — and throws ``ReferenceError`` at
+runtime, often aborting page init. That shipped at least 3x (``e4f67b2``
+screenspace, ``8c7f347`` transcripts, plus the ``_calibrationGen`` bug). This
+static check catches it, as ``test_packaging.py`` does for the Python
+``py-modules`` analogue.
 
-Detection is a heuristic source scan (no node runtime, no browser — per the
-"no heavy software" rule): for each IIFE file in a group, every *bare* function
-call must resolve to a local definition/import, an ambient global (a top-level
-def in a non-IIFE shared script such as ``utils.js``/``screenspace-utils.js``),
-or a JS/DOM builtin. A bare call that resolves to none of those **but is defined
-in a sibling file of the same group** is the carve-bug signature and fails here.
+Detection is a heuristic source scan, no node runtime or browser: in each IIFE
+file, every *bare* call must resolve to a local definition/import, an ambient
+global (a top-level def in a non-IIFE script like ``utils.js``), or a builtin. One
+resolving to none of those **but defined in a sibling of the same group** is the
+carve-bug signature.
 
-This covers the function-call ReferenceError class. The rarer bare-*variable*
-class (a moved ``var`` read across files, e.g. ``_segTooltipRaf``) is a manual
-checklist item in agents/skills/carve-satellite/SKILL.md.
+This covers the function-call class only. The rarer bare-*variable* class (a moved
+``var`` read across files) is a manual checklist item in
+agents/skills/carve-satellite/SKILL.md.
 """
 
 import re

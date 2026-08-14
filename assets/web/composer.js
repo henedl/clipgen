@@ -820,12 +820,12 @@
   }
   CO.commitAnnotationField = commitAnnotationField;
 
-  // Batch commit of *field* ("style" or "geometry") across many annotations —
-  // each ann[field] is already mutated; *before* is the pre-edit value. Records
-  // one undo step so a group style change / group move undoes atomically, and
-  // rolls every edit back if any patch is rejected. Each op's *after* is taken
-  // from the PATCH response (the server-sanitized value), like the single-
-  // annotation path — a partial local object can't reset backfilled defaults.
+  // Batch commit of *field* ("style" or "geometry") across many annotations, each
+  // already mutated, with *before* the pre-edit value. One undo step, so a group
+  // style change or move undoes atomically; every edit rolls back if any patch is
+  // rejected. Each op's *after* comes from the PATCH response (server-sanitized),
+  // as in the single-annotation path — a partial local object can't reset
+  // backfilled defaults.
   function commitAnnotationFieldGroup(field, edits) {
     if (!edits.length) return Promise.resolve();
     var patches = edits.map(function (e) {
@@ -1369,9 +1369,9 @@
   // ---- Artifact log (TopNav #logBtn) ----
   //
   // Shares Studio's markup, styling AND open/close path: utils.js's
-  // popModalIn/popModalOut drive the card pop and ramp the shared
-  // .cg-modal-veil backdrop. This used to be a separate copy with its own veil
-  // constants and exit timer, which is why spam-toggling it popped.
+  // popModalIn/popModalOut drive the card pop and ramp the shared .cg-modal-veil
+  // backdrop. A separate copy with its own veil constants and exit timer is what
+  // made spam-toggling pop.
 
   function logArtifactResult(data, cut) {
     var artifact = data.artifact || {};

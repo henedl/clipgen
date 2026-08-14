@@ -127,16 +127,16 @@ def titlebar_double_click() -> None:
 # The last rect is persisted to start.json and restored on the next launch.
 # Two things shape the implementation:
 #
-# - pywebview's moved/resized events carry the new values directly, and each
-#   fires on its own thread, per frame, for the whole of a drag. So the handlers
-#   only stash a tuple and the disk write is debounced. Reading window.x/.width
-#   instead would round-trip to the GUI thread on every one of those events.
+# - pywebview's moved/resized events carry the new values directly, each firing
+#   on its own thread, per frame, for a whole drag — so the handlers only stash a
+#   tuple and the disk write is debounced. Reading window.x/.width instead would
+#   round-trip to the GUI thread on every one of those events.
 # - x/y are reported and applied *relative to the window's current screen*
 #   (cocoa.py's move() offsets from self.screen.origin, windowDidMove_ flips
-#   against window.screen()). A window dragged to a secondary display therefore
-#   comes back at the same offset on the primary one. _window_kwargs guarantees
-#   it is at least visible; matching the exact display is not worth the
-#   per-backend screen bookkeeping.
+#   against window.screen()), so a window dragged to a secondary display comes
+#   back at the same offset on the primary one. _window_kwargs guarantees it is at
+#   least visible; matching the exact display is not worth the per-backend screen
+#   bookkeeping.
 
 # Latched by _sample_reset_modifier: the user held Shift while the app started.
 _reset_requested = False
@@ -152,10 +152,10 @@ def _shift_held() -> bool:
     """
     try:
         if sys.platform == "darwin":
-            # Imported by name and typed Any for the two reasons spelled out in
-            # desktop_chrome._appkit: pyobjc does not exist on the Linux
-            # typecheck CI, where a literal import is an unresolved-import
-            # error, and its stubs omit half the framework (NSEvent included).
+            # Imported by name and typed Any for the two reasons in
+            # desktop_chrome._appkit: pyobjc is absent on the Linux typecheck CI,
+            # where a literal import is an unresolved-import error, and its stubs
+            # omit half the framework (NSEvent included).
             appkit: Any = importlib.import_module("AppKit")
             flags = appkit.NSEvent.modifierFlags()
             return bool(flags & appkit.NSEventModifierFlagShift)
@@ -290,10 +290,10 @@ def _restore_geometry() -> dict[str, int]:
         start_settings.clear_window_geometry()
         return {"width": _WINDOW_SIZE[0], "height": _WINDOW_SIZE[1]}
     try:
-        # A lazy proxy that resolves the display list on access, which works
-        # before webview.start(). It also initialises the GUI toolkit, so a
-        # headless box raises here — swallow it and let create_window report the
-        # real problem, which launch() turns into the browser fallback.
+        # A lazy proxy resolving the display list on access, which works before
+        # webview.start(). It also initialises the GUI toolkit, so a headless box
+        # raises here — swallow that and let create_window report the real problem,
+        # which launch() turns into the browser fallback.
         screens = list(webview.screens)
     except (RuntimeError, OSError, AttributeError, webview.WebViewException):
         screens = []
@@ -346,8 +346,8 @@ def launch_desktop(
     _sample_reset_modifier()
 
     # Only clicks landing *directly* on a .pywebview-drag-region element drag the
-    # window. Without this a mousedown anywhere inside the topnav — a tab, the
-    # settings button — would bubble up to the bar and drag it too.
+    # window; without this a mousedown anywhere inside the topnav (a tab, the
+    # settings button) would bubble up to the bar and drag it too.
     webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
 
     live = server.serve_combined_app(
@@ -363,9 +363,9 @@ def launch_desktop(
 
     try:
         # render_index_html() bakes this into every page it serves. Set inside the
-        # try so the finally below always clears it — a browser fallback launch
-        # must not inherit a chrome flag. Nothing has requested a page yet: the
-        # server is up but the first GET only happens when the window loads.
+        # try so the finally always clears it — a browser fallback launch must not
+        # inherit a chrome flag. Nothing has requested a page yet: the server is up,
+        # but the first GET only happens when the window loads.
         utils.DESKTOP_CHROME = desktop_chrome.chrome_style()
         geometry = _restore_geometry()
         window = webview.create_window(
@@ -392,8 +392,8 @@ def launch_desktop(
         )
         window.events.loaded += lambda: window.run_js(_EXTERNAL_LINK_SHIM)
         # before_show is a locking event, so this runs inline on AppKit's thread
-        # after the backend has finished its own titlebar styling. The shown hook
-        # is not optional: ordering the window front re-lays out the titlebar and
+        # after the backend finishes its own titlebar styling. The shown hook is
+        # not optional: ordering the window front re-lays out the titlebar and
         # undoes the button placement.
         window.events.before_show += lambda: desktop_chrome.apply(window)
         window.events.shown += lambda: desktop_chrome.on_shown(window)
@@ -406,10 +406,10 @@ def launch_desktop(
         _hide_own_console()
         webview.start(
             debug=config.DEBUGGING,
-            # pywebview defaults private_mode=True, which discards localStorage
-            # and sessionStorage between runs. The frontends keep real user state
-            # there (settings toggles, viewer prefs, the Studio generate queue),
-            # so persistence has to be opted into explicitly.
+            # pywebview defaults private_mode=True, discarding localStorage and
+            # sessionStorage between runs — but the frontends keep real user state
+            # there (settings toggles, viewer prefs, the Studio generate queue), so
+            # persistence must be opted into explicitly.
             private_mode=False,
             storage_path=str(start_settings.config_dir() / "webview"),
         )

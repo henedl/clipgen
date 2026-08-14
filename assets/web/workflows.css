@@ -814,7 +814,7 @@ body[data-frontend="workflows"] {
   cursor: not-allowed;
 }
 
-/* ---- Stash palette (M5) ---- */
+/* ---- Stash palette ---- */
 
 .wf-stash-list {
   display: flex;
@@ -975,7 +975,7 @@ body[data-frontend="workflows"] {
   --wf-swatch-color: var(--wf-type-value);
 }
 
-/* ---- Watch-dir trigger toggle (P6) ---- */
+/* ---- Auto-run trigger toggle ---- */
 
 #wfTriggerBtn {
   display: inline-flex;
@@ -1548,7 +1548,7 @@ body[data-frontend="workflows"] {
   transition: width var(--duration-fast);
 }
 
-/* ---- Pre-run validation panel (P5) ---- */
+/* ---- Pre-run validation panel ---- */
 
 .wf-validation {
   padding: var(--space-3) var(--space-4);
@@ -1845,7 +1845,7 @@ body[data-frontend="workflows"] {
   color: var(--fg-muted);
 }
 
-/* Re-run button on a terminal run card (P5). */
+/* Re-run button on a terminal run card. */
 .wf-run-rerun {
   flex: 0 0 auto;
   font-size: var(--text-xs);
@@ -1867,7 +1867,7 @@ body[data-frontend="workflows"] {
   cursor: default;
 }
 
-/* Expandable per-node result rows + lazily-fetched result panel (P5). */
+/* Expandable per-node result rows + lazily-fetched result panel. */
 .wf-run-node-expandable {
   cursor: pointer;
 }
@@ -1938,7 +1938,7 @@ body[data-frontend="workflows"] {
   word-break: break-word;
 }
 
-/* Batch card (P3: whole-study fan-out) — a run card with an accent edge so the
+/* Batch card (whole-study fan-out) — a run card with an accent edge so the
    "all participants" group reads as distinct from loose single runs. */
 .wf-batch-card {
   margin-bottom: var(--space-3);

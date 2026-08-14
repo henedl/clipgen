@@ -265,14 +265,13 @@
     return parts.join("+");
   }
 
-  // Fallback combo for a *bare* digit binding on a layout whose number row is
-  // shifted: on AZERTY the physical Digit1 produces e.key "&", so "1" would
-  // never match and the digit shortcuts (Studio preview tabs, Screenspace tool
-  // selection, transcript mark categories) would be unreachable. The DigitN
-  // codes are layout-stable. Returned as a *second* lookup key rather than
-  // replacing the primary name, so combos that legitimately are "&" still work.
-  // Alt/AltGr is excluded: on ISO layouts that is how punctuation is typed, and
-  // there the produced character — not the physical key — is the combo.
+  // Fallback combo for a *bare* digit binding on a layout with a shifted number
+  // row: AZERTY's physical Digit1 produces e.key "&", so "1" would never match and
+  // every digit shortcut would be unreachable. The DigitN codes are layout-stable.
+  // Returned as a *second* lookup key rather than replacing the primary name, so
+  // combos that legitimately are "&" still work. Alt/AltGr is excluded — on ISO
+  // layouts that is how punctuation is typed, so there the produced character, not
+  // the physical key, is the combo.
   function codeDigitCombo(e) {
     if (e.altKey || e.shiftKey) return null; // shifted digits: see normalizeEvent
     if (!/^Digit[0-9]$/.test(e.code)) return null;

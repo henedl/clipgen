@@ -668,14 +668,13 @@
     var results = state.selectedTaskResults;
     var task = state.selectedTaskId ? findTask(state.selectedTaskId) : null;
 
-    // Streaming-append fast path: while the selected task is still running, each
-    // push only grows state.selectedTaskResults at the tail (events aren't fetched
-    // until completion, so there's no per-timestamp event matching / exclude
-    // buttons to reconcile). Append just the new rows instead of wiping + rebuilding
-    // the whole list and re-creating the IntersectionObserver every ~500ms — the
-    // latter is O(n) per push, O(n²) over a scan. Any change to the task, filters,
-    // events, or heatmap breaks the signature match and falls through to the full
-    // render (which, while running, renders eagerly with no observer — see below).
+    // Streaming-append fast path: while the task runs, each push only grows
+    // state.selectedTaskResults at the tail (events aren't fetched until
+    // completion, so there is nothing to reconcile). Appending the new rows beats
+    // wiping and rebuilding the list plus its IntersectionObserver every ~500ms,
+    // which is O(n) per push and O(n²) over a scan. Any change to the task,
+    // filters, events or heatmap breaks the signature and falls through to the
+    // full render.
     if (!state.resultsLoading && task && task.status === "running" && Array.isArray(results)) {
       var sig = resultsSignature(results, task);
       var prev = _lastResultsSig;

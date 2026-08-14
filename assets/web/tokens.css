@@ -1,55 +1,39 @@
 /*
  * clipgen design tokens — single source of truth for shared design values (see AGENTS.md).
  *
- * Default theme is DARK. Light is opt-in via html[data-theme="light"] (or .theme-light).
- * The redesign collapsed prefers-color-scheme handling — the product is dark-first;
- * users toggle to light explicitly.
+ * Default theme is DARK; light is opt-in via html[data-theme="light"] (or
+ * .theme-light). The product is dark-first, so users toggle explicitly and there
+ * is no prefers-color-scheme handling.
  *
- * Two parallel naming systems coexist intentionally:
- *   1. Prototype-aligned names (--bg, --fg, --accent, --severity-*, --cell-data, ...)
- *      — used by new redesign code. Source of truth.
- *   2. Legacy names (--color-bg, --color-text, --color-accent, --sev-*, ...) — aliased
- *      to the prototype names so existing pages keep rendering. Page CSS may continue
- *      to reference the legacy names; they resolve through var() chains.
+ * Two naming systems coexist intentionally:
+ *   1. Prototype-aligned names (--bg, --fg, --accent, --severity-*, --cell-data,
+ *      ...) — the source of truth, used by new code.
+ *   2. Legacy names (--color-bg, --color-text, --sev-*, ...) — aliased to those
+ *      so existing pages keep rendering. Page CSS may keep referencing them, but
+ *      do not introduce new references.
  *
- * SPACING:    --space-1 (4px) | --space-1-5 (6px) | --space-2 (8px) | --space-2-5 (10px) | --space-3 (12px) | --space-4 (16px) | --space-5 (24px) | --space-6 (32px) | --space-8 (48px)
- * TEXT:       --text-2xs (11px) | --text-xs (12px) | --text-sm (13px) | --text-base (14px) | --text-md (16px) | --text-lg (18px) | --text-xl (20px) | --text-2xl (24px)
- * RADIUS:     --radius-xs (2px) | --radius-sm (4px) | --radius-md (8px) | --radius-lg (14px) | --radius-full (999px)
- * SHADOW:     --shadow-sm | --shadow-md | --shadow-lg | --shadow-xl | --shadow-focus | --shadow-pop
- * DURATION:   --duration-instant (120ms) | --duration-fast (150ms) | --duration-normal (250ms) | --duration-slow (350ms)
- * Z-INDEX:    --z-float (10) | --z-dropdown (100) | --z-modal (1000) | --z-overlay (2000) | --z-toast (3000)
+ * The declarations below are the authoritative list; this is a map of what lives
+ * where, not an enumeration (one went stale by a third before being cut back).
  *
- * SURFACES:   --bg | --bg-elevated | --bg-input | --bg-hover | --bg-active
- * TEXT:       --fg | --fg-muted | --fg-faint | --fg-dim
- * ACCENT:     --accent | --accent-hover | --accent-fg
- * BORDERS:    --border | --border-strong | --hairline
- * CELL DATA:  --cell-data | --cell-data-fg | --cell-data-bright (cyan-tinted timestamp chips)
- * SEVERITY:   --severity-positive | --severity-medium | --severity-high | --severity-na
- * FONTS:      --font-sans (Inter stack) | --font-mono (JetBrains Mono stack, with 'tnum')
- *
- * Legacy aliases (keep working, do not introduce new references):
- *             --color-bg | --color-surface | --color-surface-alt | --color-text | --color-text-dim
- *             --color-accent | --color-border | --color-selected | --color-accent-hover | --color-accent-highlight | --color-accent-strong-hover
- *             --color-panel-bg | --color-panel-border | --color-panel-shadow
- *             --sev-critical | --sev-high | --sev-medium | --sev-low | --sev-na
- *             --sev-positive | --sev-very-positive | --sev-unknown
+ * SCALES:     --space-* (4-48px) | --text-* (11-24px) | --radius-* (2px-full)
+ *             --shadow-* | --duration-* (120-350ms) | --z-* (float→toast)
+ *             --icon-size-* (12-24px) | --bp-tablet (JS-read only, see below)
+ * SURFACES:   --bg, --bg-elevated, --bg-input, --bg-hover, --bg-active
+ * TEXT:       --fg, --fg-muted, --fg-faint, --fg-dim | --font-sans, --font-mono
+ * ACCENT:     --accent, --accent-hover, --accent-fg
+ * BORDERS:    --border, --border-strong, --hairline
+ * CELL DATA:  --cell-data* — cyan-tinted timestamp chips, plus per-severity bg/fg
+ * SEVERITY:   --severity-* (prototype) and --sev-* (legacy alias)
  * CONTENT:    --color-clip | --color-screen | --color-gif
- * FRICTION:   --color-friction — Transcripts friction heatmap / tints / mark
- * TASK:       --color-task-multitool | --color-task-color | --color-task-change | --color-task-similarity
- *             --color-task-text | --color-task-numbers | --color-task-timelapse | --color-task-template
- *             --color-task-flow | --color-task-scene | --color-task-inactivity | --color-task-boundary
- *             --color-task-attention
- * REGIONS:    --region-color-1..8 — palette cycled by Screenspace region index
+ * FRICTION:   --color-friction — Transcripts heatmap / tints / mark
+ * TASK:       --color-task-<tool> — one per Screenspace detector
+ * STREAMS:    --stream-* — cross-stream metadata visualisations
+ * CATEGORIES: --cat-* — transcript mark categories
+ * REGIONS:    --region-color-1..8 — cycled by Screenspace region index
+ * LAYOUT:     --layout-* | --sidebar-width-* | --bottom-panel-height
  *
- * LAYOUT:     --layout-max-width | --layout-padding-x
- * SIDEBAR:    --sidebar-width-default | --sidebar-width-wide
- * PANEL:      --bottom-panel-height
- * ICON SIZE:  --icon-size-xs (12px) | --icon-size-sm (14px) | --icon-size-md (16px) | --icon-size-lg (20px) | --icon-size-xl (24px)
- * BREAKPOINT: --bp-tablet (768px) — documentation/JS-read only, see note below
- *
- * Category hue palette (for chip rings, dots, density bars) — runtime via
- * categoryHue(label) in utils.js, not pre-flattened. Hue values are documented
- * in redesign/README.md and mirrored in utils.js.
+ * Category hues for chip rings, dots and density bars are computed at runtime by
+ * categoryHue(label) in utils.js rather than pre-flattened here.
  */
 
 :root {
@@ -211,13 +195,12 @@
   --color-task-boundary:   #e879f9;
   --color-task-attention:  #a3e635;
 
-  /* Stream colors — for metadata cross-stream visualisations
-   * (sheet=yellow, screenspace=blue, transcript=green, mindnode=purple).
-   * Constant across themes so the streams stay distinguishable on either
-   * background. They stack side by side as cross-reference badges, so a new
-   * stream needs a hue that reads apart from *all* the others — purple was the
-   * only free slot left (blue is spoken for twice over by screenspace and the
-   * Composer accent). */
+  /* Stream colors for cross-stream metadata visualisations (sheet=yellow,
+   * screenspace=blue, transcript=green, mindnode=purple). Constant across themes
+   * so streams stay distinguishable on either background. They stack side by side
+   * as cross-reference badges, so a new stream needs a hue that reads apart from
+   * *all* the others — purple was the last free slot (blue is spoken for twice,
+   * by screenspace and the Composer accent). */
   --stream-sheet:        #eab308;
   --stream-screenspace:  #3498db;
   --stream-transcript:   #10a34a;
@@ -294,12 +277,9 @@
   --bp-tablet: 768px;
 }
 
-/* Light theme — opt-in via the theme toggle (sets data-theme="light"), or
- * by adding .theme-light to a wrapper element (used by the prototype's
- * Themed component pattern, kept available for embedded views).
- *
- * Severity tokens are intentionally NOT overridden here — the prototype
- * keeps them constant across themes for visual consistency. */
+/* Light theme — opt-in via the theme toggle (data-theme="light") or .theme-light
+ * on a wrapper element, the latter kept available for embedded views. Severity
+ * tokens are intentionally NOT overridden: they stay constant across themes. */
 html[data-theme="light"],
 .theme-light {
   /* Surfaces */
@@ -439,12 +419,10 @@ html[data-theme="light"] .cg-logo {
   to { transform: rotate(360deg); }
 }
 /* Shared opacity breathe for every "working" indicator dot. Like `spin` above,
- * pages reference it by name rather than redefining it: they set their own
- * duration and, when they want a different trough than the default, declare
- * --pulse-trough on the animated selector. To start AT the trough rather than at
- * full opacity, give the animation a negative delay of half its duration — in
- * the shorthand's 4th slot, since a trailing animation-delay would be reset by
- * the shorthand. */
+ * pages reference it by name rather than redefining it, setting their own
+ * duration and declaring --pulse-trough for a different trough. To start AT the
+ * trough, give it a negative delay of half its duration — in the shorthand's 4th
+ * slot, since a trailing animation-delay would be reset by the shorthand. */
 @keyframes cg-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: var(--pulse-trough, 0.35); }

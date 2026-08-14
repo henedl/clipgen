@@ -4,21 +4,16 @@ A "thinking agent" is a small, self-contained unit of Ollama-powered reasoning
 over a transcript: summary generation, citation linking, friction detection,
 and mini-report writing.
 
-This module owns:
-  - The ``Agent`` shape (prompt building, model selection, response parsing,
-    dependency metadata, manifest field).
-  - The ``AGENTS`` registry, ordered so dependencies come before dependents.
-  - The built-in agents: ``summary`` (Pass 1), ``citations`` (Pass 2),
-    ``friction`` (Pass 3), and ``report`` (Pass 4 — a per-participant
-    mini-report over the summary, sheet observations, and transcript marks;
-    the latter two arrive via the ``configure()`` injection seam and the
-    agent is disabled by default, so it only runs when triggered manually).
+Owns the ``Agent`` shape (prompt building, model selection, response parsing,
+dependency metadata, manifest field) and the ``AGENTS`` registry, ordered so
+dependencies precede dependents: ``summary``, ``citations``, ``friction``, and
+``report`` — a per-participant mini-report over the summary, sheet observations
+and transcript marks, the latter two arriving via the ``configure()`` injection
+seam. ``report`` is disabled by default, so it only runs when triggered manually.
 
-It does *not* own HTTP transport — that stays in ``ollama_client.generate()``.
-It does *not* own orchestration — that stays in ``transcripts_server._run_agent_chain()``.
-
-Adding a new agent is a matter of writing a ``run`` callable, defining an
-``Agent`` dict, and appending it to ``AGENTS``. No edits elsewhere required.
+Owns neither HTTP transport (``ollama_client.generate()``) nor orchestration
+(``transcripts_server._run_agent_chain()``). Adding an agent means writing a
+``run`` callable, defining an ``Agent`` dict, and appending it to ``AGENTS``.
 """
 
 from __future__ import annotations

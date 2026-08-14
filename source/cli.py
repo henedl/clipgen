@@ -862,10 +862,10 @@ def get_runtime_working_dir() -> str:
         if bundle.suffix == ".app":
             return str(bundle.parent)
     # .../clipgen/clipgen.exe with the payload in .../clipgen/_internal/ → .../
-    # Under one-dir, _MEIPASS is that payload directory, i.e. a *child* of the
-    # executable's own directory. (On macOS the payload is Contents/Frameworks,
-    # which is not a child of Contents/MacOS — handled by the .app branch above.)
-    # One-file's _MEIPASS is an unrelated temp dir, so it never matches.
+    # Under one-dir, _MEIPASS is that payload directory — a *child* of the
+    # executable's own directory. One-file's _MEIPASS is an unrelated temp dir, so
+    # it never matches. (macOS puts the payload in Contents/Frameworks, not a child
+    # of Contents/MacOS; the .app branch above handles it.)
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass and Path(meipass).resolve().parent == exe_dir:
         return str(exe_dir.parent)
@@ -966,17 +966,17 @@ def authenticate_google() -> Any | None:
     try:
         utils.debug_print("Attempting login...")
         if credentials is None:
-            # No file anywhere; let gspread raise against its own default path
-            # so the error names a location the user can act on.
+            # No file anywhere: let gspread raise against its own default path, so
+            # the error names a location the user can act on.
             gspread_client = gspread.oauth()
         else:
             utils.debug_print(f"Using credentials at {credentials}")
             gspread_client = gspread.oauth(credentials_filename=str(credentials))
         utils.debug_print("Login successful!")
         return gspread_client
-    # ValueError covers json.JSONDecodeError: a credentials.json that exists but
-    # is malformed used to escape this handler entirely and surface as a
-    # traceback, when it is exactly the case the guidance below is written for.
+    # ValueError covers json.JSONDecodeError: a malformed-but-present
+    # credentials.json would otherwise escape this handler as a traceback — the
+    # exact case the guidance below is written for.
     except (
         gspread.exceptions.GSpreadException,
         FileNotFoundError,
@@ -1050,8 +1050,8 @@ def select_worksheet(gspread_client: Any, args: Any, cli_mode: bool) -> Any:
     _doc_list_cache: list[list[str]] = []
 
     def get_doc_list() -> list[str]:
-        # Fetch the (rate-limited) Drive listing at most once, and only when a
-        # code path actually needs it. URL / Excel opens skip it entirely.
+        # Fetch the rate-limited Drive listing at most once, and only when a path
+        # actually needs it — URL / Excel opens skip it entirely.
         if not _doc_list_cache:
             _doc_list_cache.append(google_api.get_all_spreadsheets(gspread_client))
         return _doc_list_cache[0]
@@ -1313,9 +1313,8 @@ def _run_gallery_cli(args: argparse.Namespace) -> None:
         return
 
     output_format = "gif" if getattr(args, "gif", False) else "screen"
-    # Mirror the interactive gallery guard: a missing, zero, or negative
-    # interval falls back to the default (a bare ``or`` would let a negative
-    # value through since it is truthy).
+    # Mirror the interactive gallery guard: a missing, zero or negative interval
+    # falls back to the default (a bare ``or`` would pass a negative through).
     interval = getattr(args, "interval", None)
     if interval is None or interval <= 0:
         interval = config.GALLERY_INTERVAL_SECONDS

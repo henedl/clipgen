@@ -1,29 +1,14 @@
 """Ollama local LLM transport for clipgen.
 
-A thin, reusable HTTP wrapper around the Ollama REST API. All functions fail
-gracefully (return None / False) and never raise on network errors. On
-connection refused, ``generate()`` auto-starts ``ollama serve`` and retries
-once.
+A thin HTTP wrapper around the Ollama REST API: server/binary probing, managed
+CLI install, model listing and pulls, generation, and model unload. Every
+function fails gracefully (returns None / False) and never raises on a network
+error; on connection refused, ``generate()`` auto-starts ``ollama serve`` and
+retries once.
 
-This module is intentionally small — higher-level reasoning lives in
+Deliberately small — higher-level reasoning lives in
 [thinking_agents.py](thinking_agents.py), which routes every call through
 ``generate()`` here.
-
-Key functions:
-  is_available()      - check Ollama server connectivity
-  is_installed()      - check whether the `ollama` binary is reachable at all
-  resolve_ollama_bin()- the binary actually used: PATH first, managed second
-  start_server()      - spawn `ollama serve` and wait for it to answer
-  install_guidance_lines() - platform-specific "how to install Ollama" text
-  is_working_install()- stronger than is_installed(): the binary actually runs
-  can_install_managed() / install_managed() - consent-gated in-app download of
-    the official CLI: the standalone tarball into clipgen's config dir on
-    macOS, the silent OllamaSetup.exe on Windows
-  list_models()       - enumerate installed models with metadata
-  is_model_installed()- check whether a specific model is installed locally
-  generate()          - send a prompt and get a text response
-  pull_model()        - download (install) a model, streaming progress
-  unload_model()      - ask Ollama to evict a model from memory immediately
 """
 
 import hashlib

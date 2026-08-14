@@ -1,29 +1,21 @@
-"""Workflows: node-based scripting engine (data model + persistence + run engine).
+"""Workflows node-graph engine: executors, import-time wiring, facade.
 
-Workflows is clipgen's fourth top-level frontend (next to Studio, Screenspace,
-and Transcripts). It is a free-form 2D node canvas where users drag "blueprint
-cards" — each wrapping one backend action — and wire typed outputs into typed
-inputs to chain capabilities across all three domains (artifact generation,
-Screenspace analysis, transcription + thinking agents). A ``WorkflowRunner``
-executes the resulting DAG.
-
-This module is the backend home for:
-
-* ``NODE_TYPES`` — a declarative single-source-of-truth registry of node types
-  (typed ports + param schema), modelled on ``thinking_agents.AGENTS``. Present
-  as of M1; ``serialize_catalog`` feeds the frontend via ``/api/catalog``.
-* ``NodeContext`` + the per-node ``execute`` callables (M3) — each a thin adapter
-  over an existing pure function, keyed by output-port name. Every domain value a
-  node emits embeds a "source descriptor" so the adapters below stay pure.
-* ``ADAPTERS`` (M3) — the typed-port coercion table (e.g. ``events -> clipRecords``),
-  pure ``value -> value`` callables the runner applies when an output type differs
-  from the consuming input type.
-* ``WorkflowRunner`` (M4) — DAG topo-sort + sequential ready-set execution, calling
-  the executors directly with the uniform ``on_progress`` / ``cancel_flag`` /
-  ``cancel_event`` contract ``NodeContext`` carries. ``topo_order`` rejects cycles;
-  control edges (a gate's ``control`` output) gate downstream without feeding data.
-
+A free-form 2D node canvas where users wire typed outputs into typed inputs to
+chain capabilities across domains (artifact generation, Screenspace analysis,
+transcription + thinking agents); ``WorkflowRunner`` executes the resulting DAG.
 See ``plans/archive/WORKFLOWS-PLAN.md``.
+
+Owned here: the per-node ``execute`` callables, each a thin adapter over an
+existing pure function and keyed by output-port name. Every domain value a node
+emits embeds a "source descriptor", which is what keeps ``ADAPTERS`` pure.
+
+The declarative catalog (``NODE_TYPES``, ``BUILTIN_STASHES``, ``ADAPTERS``) lives
+in ``workflows_catalog``, the run engine in ``workflows_runner``; this facade
+re-exports both, so ``workflows.NAME`` still resolves every public name and the
+private ones tests reach for. The wiring below mutates the *shared* ``NODE_TYPES``
+dict rather than a copy — tests patch node executors through
+``workflows.NODE_TYPES`` and depend on that identity. Re-binding a name here only
+rebinds it on the facade; patch the owning sibling to stub a seam.
 
 Manifest shape (``workflows_manifest.json`` in the output directory)::
 
@@ -33,29 +25,15 @@ Manifest shape (``workflows_manifest.json`` in the output directory)::
         "runs":       [ {id, blueprintId, status, nodeStates, startedAt, completedAt} ]
     }
 
-``trigger`` holds the auto-launch binding: ``null`` (or ``{"type": <t>,
-"enabled": false}``) when disarmed, or ``{"type": <t>, "enabled": true}`` on an
-armed blueprint, where ``<t>`` is one of ``TRIGGER_TYPES`` (``new_video`` /
-``transcript_complete`` / ``scan_event``). At most one blueprint is armed *per
-trigger type* (so a new-video pipeline can chain into a transcript-complete
-one). The watcher daemon in ``workflows_server`` fires the matching armed
-blueprint once per arriving participant/completion, bound via
-``bind_participant``. Feedback-loop note: the workflow ``transcribe`` node
-calls ``transcripts.transcribe_video`` directly and never writes the
-transcripts manifest, so a transcript-complete-triggered graph containing a
-Transcribe node cannot re-fire itself.
-
-This module is now the executors + wiring half and the re-export facade:
-the declarative catalog (``NodeContext``, ``NODE_TYPES``, ``BUILTIN_STASHES``,
-``ADAPTERS``) lives in ``workflows_catalog`` and the run engine
-(``WorkflowRunner``, ``topo_order``, statuses, triggers, sidecars, resume) in
-``workflows_runner``; ``import workflows; workflows.NAME`` keeps resolving
-every public name — and the private names the test suite reaches for — from
-their new homes. The import-time wiring below mutates the *shared*
-``NODE_TYPES`` dict imported from ``workflows_catalog`` (never a copy: tests
-patch node executors via ``workflows.NODE_TYPES`` and rely on the identity).
-Re-binding a name here only rebinds it on the facade — to stub a seam in a
-test, patch the owning sibling module.
+``trigger`` is the auto-launch binding: ``null`` (or ``{"type": <t>, "enabled":
+false}``) when disarmed, else ``{"type": <t>, "enabled": true}`` for one of
+``TRIGGER_TYPES``. At most one blueprint is armed *per trigger type*, so a
+new-video pipeline can chain into a transcript-complete one; the watcher daemon
+in ``workflows_server`` fires the match once per arriving participant, bound via
+``bind_participant``. No feedback loop is possible: the ``transcribe`` node calls
+``transcripts.transcribe_video`` directly and never writes the transcripts
+manifest, so a transcript-complete graph containing a Transcribe node cannot
+re-fire itself.
 """
 
 from __future__ import annotations
@@ -135,9 +113,8 @@ def load_workflows_manifest() -> dict[str, Any]:
     # Backfill any missing top-level keys so callers can index unconditionally.
     base = empty_workflows_manifest()
     base.update({k: v for k, v in data.items() if k in base})
-    # A trigger whose type isn't in TRIGGER_TYPES (e.g. the pre-chaining
-    # "watch_dir") reads as disarmed: the watcher only fires known types, so
-    # keeping it enabled would render an armed toolbar state that never fires.
+    # An unknown trigger type reads as disarmed: the watcher only fires known
+    # types, so keeping it enabled would render an armed toolbar that never fires.
     for blueprint in base.get("blueprints", []):
         if not isinstance(blueprint, dict):
             continue
@@ -189,16 +166,14 @@ def save_workflows_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Executors (M3) — thin adapters over existing pure functions
+# Executors — thin adapters over existing pure functions
 # ---------------------------------------------------------------------------
 #
-# Each executor has the uniform shape ``execute(ctx, inputs, params) -> {port:
-# value}`` (keyed by OUTPUT-port name). Backend modules are imported lazily
-# inside each executor (mirrors ``cli._run_ss_clips``) to avoid import cost and
-# cycles — Workflows sits at the top of the dependency DAG. The concrete value
-# carried on each wire is documented in ``plans/archive/WORKFLOWS-PLAN.md``; the unifying
-# primitive is a "source descriptor" embedded in every domain value so the pure
-# ``ADAPTERS`` (value -> value, no ctx/params) can still reach a clip's source.
+# Uniform shape: ``execute(ctx, inputs, params) -> {port: value}``, keyed by
+# OUTPUT-port name. Backend modules import lazily inside each executor (mirroring
+# ``cli._run_ss_clips``) to avoid import cost and cycles — Workflows sits at the
+# top of the dependency DAG. Per-wire value shapes are documented in
+# ``plans/archive/WORKFLOWS-PLAN.md``.
 
 
 # ---- Sources ----
@@ -282,11 +257,11 @@ def _exec_transcribe(
     language = str(params.get("language", "") or "").strip()
     lang = None if language in ("", "auto") else language
     model_name = str(params.get("model", "") or "").strip() or None
-    # No audio-track param on purpose: passing no audio_index gets speech-track
-    # auto-detection, and a *pinned index* would be portable-looking and wrong —
-    # "track 1" is the mic for P01 and system audio for P07 whose recorder wrote
-    # the streams in the other order. If control is ever wanted here it should be
-    # a name hint ("audio_track_contains"), not an index.
+    # No audio-track param on purpose: omitting audio_index gets speech-track
+    # auto-detection, whereas a pinned index looks portable and isn't — "track 1"
+    # is the mic for P01 and system audio for P07, whose recorder ordered the
+    # streams differently. Any future control here should be a name hint
+    # ("audio_track_contains"), not an index.
 
     result: Any = None
     if len(paths) >= 2:
@@ -605,8 +580,8 @@ def _run_ss_detector(
             "__note__": note,
         }
 
-    # Unwired region scans the whole frame (zero-size coords would make the scan a
-    # silent no-op — see _resolve_region_coords).
+    # Unwired region scans the whole frame; zero-size coords would make the scan
+    # a silent no-op (see _resolve_region_coords).
     region_name, region_coords = _resolve_region_coords(
         inputs.get("region") or {}, paths[0]
     )
@@ -635,8 +610,8 @@ def _run_ss_detector(
     raw_results: list[dict[str, Any]] = []
     scan_targets = windows or [None]
     # Each underlying scan reports progress on its own 0->1 scale (multi-video
-    # scans even force on_progress(1.0) at the end), so map each window into its
-    # span-weighted slice of the job to keep job-level progress monotonic.
+    # scans even force on_progress(1.0) at the end), so map each window into a
+    # span-weighted slice to keep job-level progress monotonic.
     spans = [
         max(0.0, float(w[1]) - float(w[0])) if w is not None else 1.0
         for w in scan_targets
@@ -1245,8 +1220,8 @@ def _exec_data_export(
             try:
                 Path(output_path).write_text(payload, encoding="utf-8")
             except OSError:
-                # All-or-nothing: also remove any files this node already wrote,
-                # so a half-bundle never orphans behind an artifact-less result.
+                # All-or-nothing: remove files this node already wrote, so a
+                # half-bundle never orphans behind an artifact-less result.
                 files.release_reservation(output_path)
                 for prior in written:
                     files.release_reservation(prior)
@@ -1271,11 +1246,11 @@ def _exec_timeline_viewer(
     artifacts_in = inputs.get("artifacts") or {}
     incoming = list(artifacts_in.get("artifacts") or [])
     study = str(artifacts_in.get("study", "") or "")
-    # build_reel emits reel records (carrying ``components``, no start/end) onto
-    # the same ``artifacts`` wire as clip/screen/gif artifacts. The viewer renders
-    # them from separate slots — timeline artifacts on the timeline, reels in the
-    # Attachments pane — so split them out here (otherwise reels land in the
-    # timeline slot, get filtered for lack of start/end, and the viewer is empty).
+    # build_reel emits reel records (``components``, no start/end) onto the same
+    # ``artifacts`` wire as clip/screen/gif artifacts, but the viewer renders the
+    # two from separate slots — timeline vs Attachments pane. Split them here, or
+    # reels land in the timeline slot, get filtered for lacking start/end, and the
+    # viewer comes up empty.
     reels = [
         a for a in incoming if isinstance(a, dict) and a.get("components") is not None
     ]
@@ -1411,12 +1386,12 @@ def _exec_gate_collection(
 
 # ---- Collection-algebra control nodes (filter / merge / partition / limit / dedup) ----
 #
-# These thin / combine / branch / cap / dedup the collections that already flow
-# through the graph (events, clipRecords, segments) — the collections *are* the
-# iteration, so no per-item ``foreach`` (which would force runtime DAG expansion,
-# breaking the static ``topo_order`` model). All are pure single-pass nodes: no
-# runner changes. Per-type families (mirroring the ss_* split) keep every port
-# exact-typed, so no adapters or frontend ``canConnect`` changes are needed.
+# These thin / combine / branch / cap / dedup the collections already flowing
+# through the graph (events, clipRecords, segments). The collections *are* the
+# iteration, hence no per-item ``foreach``, which would force runtime DAG
+# expansion and break the static ``topo_order`` model. All pure single-pass
+# nodes; per-type families (mirroring the ss_* split) keep every port exact-typed,
+# so neither adapters nor the frontend's ``canConnect`` need changes.
 
 # One ``{field, op, value}`` clause reuses the gate's comparison table; ``contains``
 # is the one string-only addition (kept out of ``_GATE_OPS``, which must stay

@@ -723,12 +723,11 @@
 
   // --- Search (Transcripts-style dropdown, jump-to-result) ---
   //
-  // Client-side only: everything is already in mdState.cache. buildSearchIndex
-  // stamps a stable `_searchId` onto each cache entry so its rendered row can be
-  // located regardless of table sort order (participants have no cache object;
-  // they're located by coverage-cell text). Searchable fields cover the four the
-  // user asked for: type (event type), category (transcript + spreadsheet),
-  // description (observation), and participant.
+  // Client-side only — everything is already in mdState.cache. buildSearchIndex
+  // stamps a stable `_searchId` on each cache entry so its rendered row is
+  // locatable whatever the table sort order; participants have no cache object and
+  // are found by coverage-cell text instead. Searchable fields: type, category,
+  // description and participant.
 
   function buildSearchIndex(cache) {
     var index = [];

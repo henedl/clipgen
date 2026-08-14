@@ -1,14 +1,11 @@
-/* Workflows hub — the node-canvas frontend (4th top-level surface).
+/* Workflows hub — the node-canvas frontend.
  *
- * Establishes the window.ClipgenWorkflows (WF) namespace that satellite files
- * (workflows-nodes, workflows-canvas) share state and functions through —
- * mirroring screenspace.js + window.ClipgenScreenspace and transcripts.js +
- * window.ClipgenTranscripts.
+ * Establishes the window.ClipgenWorkflows (WF) namespace the satellite files
+ * share state and functions through, mirroring screenspace.js and transcripts.js.
  *
- * The hub owns: WF.state, boot, the node catalog fetch + palette, the
- * blueprint switcher (create/name/switch/delete), and the debounced autosave.
- * The canvas interaction layer and card rendering live in the satellites, which
- * attach their functions back onto WF. Vanilla JS, ES5-style (no build step).
+ * The hub owns WF.state, boot, the node catalog fetch + palette, the blueprint
+ * switcher, and the debounced autosave. Canvas interaction and card rendering
+ * live in the satellites, which attach their functions back onto WF.
  */
 
 (function () {
@@ -25,13 +22,13 @@
     context: { sheet: false, videoDir: false }, // launch context for grey-out
     blueprints: [], // all saved blueprints (full objects)
     nodes: [], // placed cards of the active blueprint: {id, type, params, position}
-    edges: [], // wires (M2): {from, fromPort, to, toPort}
+    edges: [], // wires: {from, fromPort, to, toPort}
     viewport: { x: 0, y: 0, zoom: 1 }, // pan/zoom of the active blueprint
     selection: [], // selected node ids (transient — not persisted)
     selectedEdge: null, // selected wire id (transient — not persisted)
     activeBlueprintId: null,
     ready: false, // false until a blueprint is active; gates canvas edits
-    // ---- Run state (M4; owned by the workflows-runs satellite) ----
+    // ---- Run state (owned by the workflows-runs satellite) ----
     runs: [], // recent run snapshots (newest first)
     activeRunId: null, // the run currently streamed/polled, or null
     nodeRunStatus: {}, // node id -> {status, progress} for canvas tinting
@@ -39,12 +36,12 @@
     runScope: "blueprint", // history scope: this blueprint | all (owned by -runs)
     allRuns: [], // cross-blueprint history for the "All" scope (owned by -runs)
     pendingFocusRunId: null, // history click-through handshake (owned by -runs)
-    // ---- Batch state (P3: whole-study fan-out; owned by workflows-runs) ----
+    // ---- Batch state (whole-study fan-out; owned by workflows-runs) ----
     batches: [], // recent batch summaries (newest first)
     activeBatchId: null, // the batch currently streamed/polled, or null
-    // ---- Stash state (M5; owned by the workflows-stashes satellite) ----
+    // ---- Stash state (owned by the workflows-stashes satellite) ----
     stashes: [], // built-in recipes + saved sub-graph stashes (built-ins first)
-    // ---- Validation (P5; owned by the workflows-validate satellite) ----
+    // ---- Validation (owned by the workflows-validate satellite) ----
     validation: { errors: [], warnings: [] }, // recomputed on every edit
   };
 
@@ -77,9 +74,9 @@
   }
 
   // Every node gets a universal optional `control` input (`__gate__`): a Gate's
-  // `control`-typed `pass` output wires here (exact-match) to gate the node, so a
-  // false gate skips the whole downstream branch. It carries no data — the runner
-  // excludes control edges from a node's inputs (see workflows.py _gather_inputs).
+  // `control`-typed `pass` output wires here to gate the node, so a false gate
+  // skips the whole downstream branch. It carries no data — the runner excludes
+  // control edges from a node's inputs (see workflows.py _gather_inputs).
   function injectControlPort(node) {
     node.inputs = node.inputs || [];
     var has = node.inputs.some(function (p) {
@@ -107,9 +104,9 @@
   function buildPaletteItem(node) {
     var item = el("div", "wf-palette-item", node.label);
     item.setAttribute("data-domain", node.domain || "");
-    // Brief description tooltip for every palette row (mirrors the on-card `?`).
-    // Use the [data-tooltip] singleton, not native title — title doesn't render
-    // on draggable=true rows, and the singleton is styled/positioned in-viewport.
+    // Description tooltip per palette row (mirrors the on-card `?`). The
+    // [data-tooltip] singleton, not native title: title doesn't render on
+    // draggable=true rows.
     if (node.description) item.setAttribute("data-tooltip", node.description);
     if (nodeContextMet(node)) {
       item.draggable = true;
@@ -135,9 +132,9 @@
     return item;
   }
 
-  // The ~23 collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/
-  // dedup_*) share one "Collection" category; group them by operation so the
-  // palette shows 5 collapsible sub-groups instead of a long flat list.
+  // The collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/dedup_*)
+  // share one "Collection" category; group by operation so the palette shows
+  // collapsible sub-groups instead of a long flat list.
   var _COLLECTION_OPS = [
     ["filter", "Filter"],
     ["partition", "Partition"],
@@ -193,9 +190,9 @@
     palette.innerHTML = "";
     var searchInput = qs("#wfPaletteSearch");
     var query = (searchInput ? searchInput.value : "").trim().toLowerCase();
-    // Group by category, preserving catalog order (per the perf rule, build a
-    // DocumentFragment and append once). A group label is only emitted when at
-    // least one of its nodes survives the search filter.
+    // Group by category, preserving catalog order; build a DocumentFragment and
+    // append once. A group label is emitted only when one of its nodes survives
+    // the search filter.
     var order = [];
     var byCat = {};
     state.catalog.forEach(function (node) {
@@ -260,9 +257,9 @@
   // first so a debounced edit is never lost or mis-attributed on switch.
   function openBlueprint(bp) {
     if (!bp) return;
-    // Drop any in-flight wire gesture before swapping context — otherwise its
-    // armed listeners survive and the next click could persist an edge that
-    // references a node from the old blueprint.
+    // Drop any in-flight wire gesture before swapping context, or its armed
+    // listeners survive and the next click can persist an edge referencing a node
+    // from the old blueprint.
     if (WF.cancelConnect) WF.cancelConnect();
     flushSave();
     state.activeBlueprintId = bp.id;
@@ -275,11 +272,10 @@
     resetHistory(); // history doesn't span blueprints
     syncToolbar();
     // A corrupt blueprint (e.g. a node missing its `type`) must not hard-fail the
-    // whole page. Without this guard a render throw propagates to loadWorkspace,
-    // which shows the error overlay and disables the ENTIRE toolbar — leaving no
-    // way to switch to, or delete, the offending blueprint. Isolating the
-    // render/validation keeps the blueprint-management controls usable so the
-    // user can always recover (delete it, or pick/create another).
+    // page. Unguarded, a render throw reaches loadWorkspace, which shows the error
+    // overlay and disables the ENTIRE toolbar — leaving no way to switch away from
+    // or delete the offending blueprint. Isolating the render keeps the management
+    // controls usable so the user can always recover.
     try {
       syncTriggerButton();
       if (WF.renderAllNodes) WF.renderAllNodes();
@@ -355,9 +351,9 @@
 
   // ---- Import / export ------------------------------------------------------
 
-  // Download the active blueprint as JSON (the same {name,nodes,edges,viewport}
-  // shape the autosave PUT sends, so import round-trips losslessly bar the
-  // server-assigned id/createdAt).
+  // Download the active blueprint as JSON — the same {name,nodes,edges,viewport}
+  // the autosave PUT sends, so import round-trips losslessly bar the
+  // server-assigned id/createdAt.
   function exportBlueprint() {
     var bp = findBlueprint(state.activeBlueprintId);
     if (!bp) return;
@@ -459,13 +455,12 @@
     });
   }
 
-  // ---- Auto-run triggers (P6 + chaining) ------------------------------------
-  // An armed blueprint auto-runs when its trigger source fires: a new video
-  // lands, a transcript completes, or a Screenspace scan completes. Arming is
-  // single-active PER TRIGGER TYPE (the server disarms same-type triggers on
-  // every other blueprint; mirrored client-side so the toolbar hint is accurate
-  // without a refetch). The button opens a small type-picker menu; the type
-  // list arrives via /api/catalog context (no duplicated constants).
+  // ---- Auto-run triggers ----------------------------------------------------
+  // An armed blueprint auto-runs when its source fires: a new video lands, or a
+  // transcript / Screenspace scan completes. Arming is single-active PER TRIGGER
+  // TYPE — the server disarms same-type triggers on every other blueprint, and we
+  // mirror that client-side so the toolbar hint stays accurate without a refetch.
+  // The type list arrives via /api/catalog context (no duplicated constants).
 
   var _triggerMenuCtl = null; // bindMenuToggle handle for the type picker
 

@@ -613,15 +613,15 @@
     intakeToggleItem(state.reelQueue, screenspaceClusterToItem(cluster), renderReelQueue);
   }
 
-  // Mark intake cards whose cluster is in either queue, mirroring how
-  // updateCellClasses highlights queued spreadsheet cells. Driven by the render
-  // queue functions (so every mutation re-syncs) and the intake render functions
-  // (so the highlight survives the poll that rebuilds cards).
-  // Every intake panel, not just the two that existed first: MindNode and
-  // Composer cards also carry .in-queue (and the CSS rule for it), but were
-  // never visited here, so a queued card showed no "already queued" state and
-  // clicking it again silently toggled it back out. Driven off each panel's
-  // own config so a new panel cannot be forgotten the same way.
+  // Mark intake cards whose cluster is in either queue, as updateCellClasses does
+  // for queued spreadsheet cells. Driven by the render-queue functions (so every
+  // mutation re-syncs) and the intake render functions (so the highlight survives
+  // the poll that rebuilds cards).
+  //
+  // Covers *every* intake panel: MindNode and Composer cards carry .in-queue too
+  // but were once never visited here, so a queued card showed no "already queued"
+  // state and clicking it again silently toggled it out. Driven off each panel's
+  // own config, so a new panel cannot be forgotten the same way.
   function intakeCardPanels() {
     return [
       {

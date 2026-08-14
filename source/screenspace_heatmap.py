@@ -1,10 +1,8 @@
 """Screenspace heatmap generation (pure cv2/PIL leaf).
 
-Template-, flow-, change-, and attention-heatmap PNGs plus animated-GIF views:
-a cumulative accumulation and a rolling-window (recent-only, fading) variant.
-A GIF gives the browser no way to seek, so build_gif_sprite_bytes() re-tiles one
-into a sprite sheet on demand for the frontend's hover-scrub.
-No sibling-module dependencies beyond config/utils.
+Template/flow/change/attention PNGs plus two animated-GIF views: cumulative, and
+a rolling window (recent-only, fading). A GIF gives the browser no way to seek,
+so build_gif_sprite_bytes() re-tiles one into a sprite sheet for hover-scrub.
 """
 
 import io
@@ -20,11 +18,6 @@ import utils
 
 if TYPE_CHECKING:
     from PIL import Image
-
-
-# ---------------------------------------------------------------------------
-# Heatmap generation
-# ---------------------------------------------------------------------------
 
 
 def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray:
@@ -308,12 +301,10 @@ def build_gif_sprite_bytes(gif_path: str, cols: int) -> bytes | None:
         with Image.open(gif_path) as anim:
             frames = [f.convert("RGB") for f in ImageSequence.Iterator(anim)]
     except Exception as exc:
-        # Deliberately broad: this decodes a file that may be truncated or
-        # half-written (a scan killed mid-save), and PIL's GIF frame walk leaks
-        # whatever its parser hits — IndexError and struct.error as readily as
-        # OSError. Every one of them means the same thing to the caller: no
-        # sprite, fall back to plain playback. Letting one escape would 500 the
-        # route instead of degrading a thumbnail.
+        # Deliberately broad: decoding a truncated or half-written GIF (a scan
+        # killed mid-save) leaks whatever PIL's frame walk hits — IndexError and
+        # struct.error as readily as OSError — and all of them mean the same
+        # thing here: no sprite, fall back to plain playback rather than 500.
         utils.warning_print(f"Could not read heatmap GIF {gif_path}: {exc}")
         return None
     if not frames:
@@ -361,9 +352,8 @@ def generate_heatmap_gif(
     if heatmap_type in _GRID_KEYS:
         acc_h = acc_w = 256
 
-    # Pass 1: accumulate everything to find the shared ceiling. Accumulation is
-    # monotonic, so the final cumulative state already carries the global max —
-    # no per-frame snapshots needed to compute it.
+    # Pass 1: find the shared ceiling. Accumulation is monotonic, so the final
+    # state already carries the global max — no per-frame snapshots needed.
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
     for r in results:
         _accumulate_heatmap_result(accumulator, r, heatmap_type)
@@ -371,11 +361,10 @@ def generate_heatmap_gif(
     if global_max == 0:
         return None
 
-    # Pass 2: replay the accumulation bucket-by-bucket, colorizing each frame
-    # inline against that shared max. Only one float32 accumulator is ever
-    # resident, so peak memory is ~one frame instead of all `num_frames`
-    # snapshots at once (~190MB → ~8MB at 1080p). `_heatmap_frame_image` reads
-    # the accumulator without mutating it, so accumulation safely continues.
+    # Pass 2: replay bucket-by-bucket, colorizing inline against that max. Only
+    # one float32 accumulator stays resident, so peak memory is ~one frame rather
+    # than all `num_frames` snapshots (~190MB → ~8MB at 1080p).
+    # `_heatmap_frame_image` reads without mutating, so accumulation continues.
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
     frames: list[Image.Image] = []
     for frame_idx in range(num_frames):
@@ -447,15 +436,3 @@ def generate_rolling_heatmap_gif(
         )
 
     return _save_animation(frames, output_path, frame_duration_ms)
-
-
-# ---------------------------------------------------------------------------
-# Analysis tools (strategy registry)
-# ---------------------------------------------------------------------------
-#
-# Each tool is a small class wrapping the corresponding module-level ``scan_*``
-# function (preserved for tests that monkeypatch them). The two registry-level
-# dispatch points are:
-#   - :func:`check_frame_for_tool` (single-frame eval used by multitool)
-#   - :meth:`ScreenspaceWorker._dispatch` (full-video scan, called by the worker)
-# Both look up the tool by name in ``TOOLS`` and delegate to its methods.

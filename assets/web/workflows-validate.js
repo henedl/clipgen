@@ -1,12 +1,11 @@
 /* Workflows — pre-run validation panel (satellite of workflows.js).
  *
- * Aggregates the graph's pre-run issues into one panel (#wfValidation) and gates
- * the Run button on errors (warnings never block). Recomputed on every edit via
+ * Aggregates the graph's pre-run issues into #wfValidation and gates the Run
+ * button on errors (warnings never block). Recomputed on every edit via
  * WF.refreshValidation, which the hub calls from scheduleSave + openBlueprint.
- * Owns the per-node issue computation (WF.nodeIssues) — shared with the node-card
- * cue in workflows-nodes.js — plus a JS port of workflows.topo_order's cycle
- * check (the server 400 stays a backstop). Reads shared state through WF.state —
- * never re-`var`s a divergent `state` (the carve gotcha).
+ * Owns the per-node issue computation (WF.nodeIssues), shared with the node-card
+ * cue in workflows-nodes.js, plus a JS port of workflows.topo_order's cycle check
+ * (the server 400 stays a backstop).
  */
 
 (function () {

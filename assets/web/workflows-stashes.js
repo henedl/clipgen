@@ -2,11 +2,9 @@
  *
  * Owns the stash sidebar: load the built-in recipes + user stashes, render them
  * as draggable/clickable items, save the current selection as a new stash, and
- * instantiate a stash onto the canvas as a fresh copy (id remap + position
- * offset). The server does CRUD only; instantiation is client-side here. Reads
- * shared state through WF.state — never re-`var`s a divergent `state` (the carve
- * gotcha). Cross-file calls go through WF.* (late-bound) so the wiring test is
- * happy and load order stays flexible.
+ * instantiate one onto the canvas as a fresh copy (id remap + position offset).
+ * The server does CRUD only; instantiation is client-side here. Cross-file calls
+ * go through WF.* late-bound, so load order stays flexible.
  */
 
 (function () {

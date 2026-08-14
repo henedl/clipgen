@@ -169,7 +169,7 @@ def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
     assert {n["status"] for n in runner.node_states.values()} == {"completed"}
 
 
-# ---- Per-node result sidecars (P5) ----
+# ---- Per-node result sidecars ----
 
 
 def test_runner_writes_node_result_sidecars(tmp_path, monkeypatch):

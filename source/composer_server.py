@@ -73,9 +73,9 @@ _manifest_lock = threading.Lock()
 # Shortest allowed cut pair. Anything under this is a misclick, not a clip.
 MIN_CUT_SECONDS = 0.2
 
-# The read-only marker lanes shown in Composer are the *other* streams, never
-# Composer itself. "composer" is a Convergence swim-lane source (Overview), so we
-# strip it here to keep Composer's Sheet/Screenspace/Transcript lanes unchanged.
+# Composer's read-only marker lanes are the *other* streams, never itself.
+# "composer" is a Convergence swim-lane source (Overview), so strip it here to keep
+# the Sheet/Screenspace/Transcript lanes unchanged.
 _MARKER_SOURCES: tuple[str, ...] = tuple(
     src for src in config.CONVERGENCE_SOURCES if src != "composer"
 )
@@ -182,10 +182,9 @@ def api_participants() -> Any:
         if not p.get("has_video"):
             continue
         parts = _participant_parts(p["video_paths"])
-        # Resolution + fps for the subheader source readout (mirrors Screenspace's
-        # video-info line). Probed from the first part; stitched parts share the
-        # same source setup. probe_video_properties returns None on unprobeable
-        # files and only ever reports width/height > 0.
+        # Resolution + fps for the subheader readout, probed from the first part —
+        # stitched parts share one source setup. probe_video_properties returns None
+        # on unprobeable files and only ever reports width/height > 0.
         props = (
             video.probe_video_properties(str(p["video_paths"][0]))
             if p["video_paths"]
@@ -208,8 +207,8 @@ def api_participants() -> Any:
                 "audio_track_count": props.get("audio_track_count") if props else 0,
             }
         )
-    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
-    # is ``in_sheet: False`` and marking them all would be noise.
+    # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
+    # ``in_sheet: False``, and marking them all would be noise.
     return ok(
         participants=participants,
         has_sheet=_sheet_context is not None,

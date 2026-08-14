@@ -7,9 +7,9 @@
 //
 // Why this exists: OBS's "fragmented recording" writes an MP4 with no movie
 // duration and no sample index. ffmpeg reads it via the mfra tail box, so every
-// server-side path is fine; browsers do not read mfra, so video.duration comes
-// back Infinity and a seek lands wherever the download happens to have reached.
-// See video.probe_container_seekability for the backend half.
+// server-side path is fine — but browsers don't read mfra, so video.duration is
+// Infinity and a seek lands wherever the download happens to have reached. See
+// video.probe_container_seekability for the backend half.
 
 (function () {
   var POLL_MS = 1000;

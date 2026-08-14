@@ -556,15 +556,13 @@
     tryPostTranscriptionWarmup();
   }
 
-  // Ask the backend to preload the Whisper model. Idempotent per page load
-  // via `_transcriptionWarmupPosted`; we reset the flag whenever the post
-  // didn't actually lead to a load (skipped / error / no-op response) so a
-  // later trigger (e.g. pill hover) can retry. Five response branches:
-  //   skipped         — backend declined (e.g. no GPU policy met); keep flag
-  //                     down so a later hover can re-prompt.
-  //   already_loaded  — model is in memory; nothing to poll.
-  //   started / warming — kick off the model-hint poller until it finishes.
-  //   !ok / catch     — treat as transient; clear flag for retry.
+  // Ask the backend to preload the Whisper model. Idempotent per page load via
+  // `_transcriptionWarmupPosted`, whose flag resets whenever the post didn't lead
+  // to a load (skipped / error / no-op) so a later trigger can retry.
+  //   skipped           — backend declined; flag stays down to allow a re-prompt.
+  //   already_loaded    — in memory, nothing to poll.
+  //   started / warming — run the model-hint poller until it finishes.
+  //   !ok / catch       — transient; clear the flag for retry.
   function tryPostTranscriptionWarmup() {
     if (_transcriptionWarmupPosted) return;
     if (state.transcribePrewarm === "off") return;
@@ -774,14 +772,12 @@
     video.pause();
     cancelPendingSeek();
 
-    // Set video source. ?v=<mtime_ns> mirrors the screenspace cache-bust so
-    // a re-encoded or replaced source file invalidates the browser HTTP cache
-    // instead of relying on send_from_directory's Last-Modified revalidation.
-    // Reset the audio-track layout to single-track, which tears down the
-    // previous participant's mix. Outside the has_video branch on purpose:
-    // selecting a participant *without* video must also drop the mix, or its
+    // ?v=<mtime_ns> mirrors the screenspace cache-bust, so a replaced source file
+    // invalidates the browser cache rather than relying on Last-Modified
+    // revalidation. The audio-layout reset sits outside the has_video branch on
+    // purpose: selecting a participant *without* video must also drop the mix, or
     // orphaned <audio> elements keep playing, the <video> stays force-muted, and
-    // the volume popover goes on showing the previous participant's sliders.
+    // the volume popover shows the previous participant's sliders.
     state.audioTracks = [];
     if (state.audioPanel) state.audioPanel.refresh();
 
@@ -2216,14 +2212,12 @@
     });
   }
 
-  // Reconcile a participant that is still showing the streaming view against the
-  // backend: if its whisper task has finished (no running/queued task remains
-  // and a completed one exists) and its transcript is ready, swap the streaming
-  // "Transcribing… X%" footer for the finalized transcript and reveal the
-  // analysis panel — mirroring selectParticipant's has_transcript path. Called
-  // every poll, so it self-heals: state.streamingParticipant is only cleared
-  // once the finalized transcript has actually rendered, so a transient API
-  // failure just retries on the next poll instead of freezing the footer.
+  // Reconcile a participant still showing the streaming view against the backend:
+  // once its whisper task is done and the transcript ready, swap the
+  // "Transcribing… X%" footer for the finalized transcript and reveal the analysis
+  // panel, mirroring selectParticipant's has_transcript path. Self-healing because
+  // state.streamingParticipant clears only after the finalized transcript really
+  // rendered, so a transient API failure retries next poll instead of freezing.
   function _finalizeStreamingIfComplete(pid) {
     var running = false;
     var completed = false;
@@ -2624,15 +2618,12 @@
       altBtn.disabled = false;
 
       if (opts.kind === "ollama-runtime") {
-        // Ollama itself is missing or down — a different problem from "the
-        // model isn't pulled", and previously the one case the gate stayed
-        // silent about. On macOS clipgen can download the CLI itself
-        // (consent-gated, this dialog *is* the consent); elsewhere we show the
-        // commands and offer a re-check. For "stopped", starting the server is
-        // something clipgen can genuinely do on the user's behalf.
-        // Not status.message: that one is written for a panel banner and ends
-        // in "then Refresh", which is the wrong instruction next to a button
-        // that does the re-check itself.
+        // Ollama missing or down is a different problem from "the model isn't
+        // pulled", and the one case the gate used to stay silent about. On macOS
+        // clipgen can download the CLI itself (this dialog *is* the consent);
+        // elsewhere show the commands and offer a re-check. Not status.message —
+        // that is written for a panel banner and ends in "then Refresh", the wrong
+        // instruction beside a button that does the re-check itself.
         if (opts.state === "missing") {
           titleEl.textContent = "Ollama isn't installed";
           if (opts.canInstall) {
@@ -2849,15 +2840,14 @@
     });
   }
 
-  // Gate an agent run on Ollama being usable and its model being installed.
-  // Resolves true to proceed, false to abort.
+  // Gate an agent run on Ollama being usable and its model installed; resolves
+  // true to proceed, false to abort.
   //
-  // This used to return true whenever Ollama was unreachable, on the theory
-  // that the downstream "model unavailable" error would explain it — but that
-  // error only appears on two of the agent surfaces, and never says how to fix
-  // anything. An unreachable Ollama is the state a first-time user is actually
-  // in, so it gets its own dialog. An *unknown* state (fetch failed) still
-  // passes through: never block an action on a question we couldn't ask.
+  // An unreachable Ollama gets its own dialog rather than falling through to the
+  // downstream "model unavailable" error, which only appears on two agent
+  // surfaces and never says how to fix anything — and it is the state a
+  // first-time user is actually in. An *unknown* state (fetch failed) still
+  // passes: never block an action on a question we couldn't ask.
   function ensureAgentModelInstalled(agentKey) {
     return _trFetchModels().then(function (data) {
       var oll = data && data.ollama;
@@ -2982,13 +2972,12 @@
 
   // ---- Clip marked lines ----
   //
-  // Cuts one clip per cluster of manually marked lines through Studio's
-  // ../studio/api/generate-intake — the same endpoint Studio's Transcript
-  // Intake tab uses, so the output lands in clipgen_manifest.json exactly as if
-  // it had been queued there, and the page needs no generation backend of its
-  // own. Unlike Studio's queue path we also send `text`/`label`, which is what
-  // gives each artifact a readable description instead of a bare category
-  // (see _process_intake_item in server.py).
+  // Cuts one clip per cluster of marked lines through Studio's
+  // ../studio/api/generate-intake — the endpoint Studio's Transcript Intake tab
+  // uses — so output lands in clipgen_manifest.json as if queued there and this
+  // page needs no generation backend. Unlike Studio's queue path it also sends
+  // `text`/`label`, which is what gives each artifact a readable description
+  // instead of a bare category (see _process_intake_item in server.py).
 
   // Mirrors Studio's #trIntakeClusterThreshold default so identical marks
   // cluster identically on both pages. Padding defaults to 0 for the same
@@ -3205,16 +3194,14 @@
 
   // ---- Embed subtitles ----
   //
-  // Muxes each participant's transcript back into a copy of their source video
-  // as a soft subtitle track (a stream copy — no re-encode). Structurally a
-  // twin of the Clip Marked Lines dialog above: same scope picker, same live
-  // summary, same NDJSON progress bar. The one parameter beyond scope is the
-  // track's default disposition; everything else the mux takes (container
-  // codec, track title, language) is derived server-side.
+  // Muxes each participant's transcript back into a copy of their source video as
+  // a soft subtitle track (stream copy, no re-encode). Structurally a twin of the
+  // Clip Marked Lines dialog above — same scope picker, live summary and NDJSON
+  // progress bar — with the track's default disposition as its only extra
+  // parameter; container codec, track title and language are derived server-side.
   //
-  // Unlike clip-marks there is no fetch on open — state.participants already
-  // carries has_transcript and video_paths from the poll, so the dialog opens
-  // with its counts already correct.
+  // No fetch on open, unlike clip-marks: state.participants already carries
+  // has_transcript and video_paths from the poll.
 
   // { done, failed, total, abort } while a batch streams; null when idle. Lives
   // out here so the dialog can be dismissed mid-run and reopened onto the live

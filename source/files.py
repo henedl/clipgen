@@ -41,24 +41,15 @@ def safe_truncate(text: str, max_chars: int) -> str:
 
 
 def get_unique_filename(filename: str, file_format: str | None = None) -> str:
-    """Atomically reserve a unique output path.
+    """Atomically reserve a unique output path, as an empty placeholder file.
 
-    Creates an empty placeholder file at the returned path so that parallel
-    clip / reel / gallery workers each receive a distinct path even when their
-    filename templates collide. The placeholder is overwritten by the ffmpeg
-    process (or file writer) that fills the artifact. Callers that abort before
-    writing real content should remove the placeholder with
-    ``release_reservation()``.
+    The placeholder is what makes this atomic: parallel clip / reel / gallery
+    workers each get a distinct path even when their filename templates collide.
+    Whoever fills the artifact overwrites it; a caller that aborts before writing
+    real content must remove it with ``release_reservation()``.
 
-    If a file with the given name already exists, appends '-1', '-2', etc.
-    until a free name is found. Also truncates if filename exceeds max length.
-
-    Args:
-        filename: Original filename
-        file_format: File extension to preserve (defaults to config.FILEFORMAT)
-
-    Returns:
-        Unique filename path as a string, reserved on disk as an empty file.
+    Appends '-1', '-2', … when the name is taken, and truncates over-long names.
+    *file_format* defaults to ``config.FILEFORMAT``.
     """
     file_extension = file_format or config.FILEFORMAT
     resolved = Path(utils.resolve_output_path(filename))
@@ -266,20 +257,19 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
       prefix, so ``study_P13.mp4`` must NOT be re-resolved against the sheet's
       study name — that would invent a ``clipgen-test_P13.mp4`` that is not there.
 
-    Sheet order first, then disk-only ids sorted; deduped by id with the sheet
-    winning. ``in_sheet`` lets the frontend mark the disk-only ones. With
-    ``sheet_context=None`` this is a plain scan and every entry is
+    Sheet order first, then disk-only ids sorted; deduped by id, sheet winning.
+    ``sheet_context=None`` makes this a plain scan with every entry
     ``in_sheet: False``.
 
-    The input directory is derived here rather than passed in: letting a caller
-    hand the sheet half a different directory than ``discover_participant_videos``
-    (which always derives its own) would be a silent-mismatch bug.
+    The input directory is derived here rather than passed in — handing the sheet
+    half a different directory than ``discover_participant_videos`` (which always
+    derives its own) would be a silent-mismatch bug.
 
     Returns:
-        ``[{"id", "video_paths", "has_video", "in_sheet", "browser_seekable"}]`` —
-        freshly built dicts. Never the memoized ones
-        ``discover_participant_videos`` returns; those are shared with the
-        Workflows blueprint and must not be stamped on.
+        ``[{"id", "video_paths", "has_video", "in_sheet", "browser_seekable"}]``,
+        freshly built. Never the memoized dicts ``discover_participant_videos``
+        returns — those are shared with the Workflows blueprint and must not be
+        stamped on.
     """
     import spreadsheet  # lazy: files.py is CLI-hot; spreadsheet pulls in google_api
 
@@ -504,26 +494,19 @@ def build_clip_records(
     CLI ``--ss-clips`` / ``--transcript-clips`` paths.
 
     Args:
-        participant: Participant id stamped on every record (e.g. ``"P01"``).
         source_filename: Source video basename, or a ``" + "``-joined list of
             parts for a multi-video participant (resolved by
             ``pipeline._check_source_video``).
-        time_ranges: ``(start_seconds, end_seconds)`` pairs to cut.
-        description: Clip description applied to every produced record.
-        category: Clip category applied to every produced record.
-        study: Normalized study name for output paths.
-        severity: Optional severity label.
         cell_col: Synthetic cell column for artifact-id namespacing.
         cell_row_base: Added to each record's synthetic (negative) cell row so
             callers can keep ids unique/stable across batches.
-        cluster_gap: When set, merge ranges whose gap is within this many seconds
-            via :func:`utils.cluster_spans` before building records.
-        pad_pre / pad_post / max_duration: Forwarded to ``cluster_spans`` when
-            ``cluster_gap`` is set.
+        cluster_gap: When set, merge ranges closer than this many seconds via
+            :func:`utils.cluster_spans` first; *pad_pre* / *pad_post* /
+            *max_duration* are forwarded to it and ignored otherwise.
 
     Returns:
-        A list of ClipRecords ready for ``pipeline.process_clips`` /
-        ``process_reel`` (not yet prepared — those call :func:`prepare_clip`).
+        ClipRecords ready for ``pipeline.process_clips`` / ``process_reel``, but
+        not yet prepared — those call :func:`prepare_clip`.
     """
     if cluster_gap is not None:
         clustered = utils.cluster_spans(

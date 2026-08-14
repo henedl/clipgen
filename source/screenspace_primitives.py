@@ -15,9 +15,9 @@ from typing import TYPE_CHECKING, Any
 import cv2
 
 try:
-    # cv2.data.haarcascades is a submodule attribute; ty needs the explicit
-    # import. Absent on cv2 builds without the bundled cascade data (the face
-    # channel feature-detects it and degrades to a zeros map).
+    # cv2.data.haarcascades is a submodule attribute, so ty needs the explicit
+    # import. Absent on cv2 builds without the bundled cascade data — the face
+    # channel feature-detects it and degrades to a zeros map.
     import cv2.data
 except ImportError:  # pragma: no cover - depends on the installed cv2 build
     pass
@@ -68,10 +68,10 @@ class _ConsecutiveBuffer:
         self._timestamps.append(ts)
         if len(self._events) >= self.size:
             median_ts = statistics.median(self._timestamps)
-            # Pair the median timestamp with the payload of the frame closest to
-            # it. For odd-length runs this is the exact middle frame; for even
-            # lengths (the median is interpolated between two frames) it picks
-            # the nearer real frame instead of an arbitrary upper-middle one.
+            # Pair the median timestamp with the nearest frame's payload: the exact
+            # middle for odd-length runs, and for even lengths (median interpolated
+            # between two frames) the nearer real frame rather than an arbitrary
+            # upper-middle one.
             nearest = min(
                 range(len(self._timestamps)),
                 key=lambda i: abs(self._timestamps[i] - median_ts),
@@ -85,12 +85,11 @@ class _ConsecutiveBuffer:
     def carry(self, ts: float) -> dict[str, Any] | None:
         """Extend an active run when a frame is skipped as static.
 
-        A static frame is near-identical to the last processed frame, so a match
-        that was on screen is still there -- the run should continue, not break.
-        Re-pushes the most recent matched event under *ts* (returning an emit if
-        that completes the run). No-op when no run is active (nothing to carry),
-        which keeps ``size == 1`` -- where ``push`` emits and resets every frame
-        -- on its legacy path.
+        A static frame is near-identical to the last processed one, so a match
+        that was on screen still is — the run continues rather than breaking.
+        Re-pushes the most recent matched event under *ts*, emitting if that
+        completes the run. No-op when no run is active, which leaves ``size == 1``
+        (where ``push`` emits and resets every frame) on its original path.
         """
         if not self._events:
             return None
@@ -114,13 +113,13 @@ def _is_static_skip(
 ) -> bool:
     """Decide whether *pixels* is a near-duplicate of the previous frame.
 
-    Returns True when the mean grayscale diff from the last processed frame is
-    below ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD`` -- the caller should then
-    ``return None`` from its per-frame callback. The content (and any active
-    match) is unchanged, so carry the consecutive-match run via ``buf.carry``
-    (emitting through *results*/*on_result*) and report progress rather than
-    breaking the run. Otherwise records *pixels* as the new baseline and returns
-    False so the caller runs its real analysis. Shared by scan_text/scan_numbers.
+    True when the mean grayscale diff from the last processed frame is below
+    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; the caller then returns from its
+    per-frame callback. Content and any active match are unchanged, so this
+    carries the consecutive-match run via ``buf.carry`` (emitting through
+    *results*/*on_result*) and reports progress instead of breaking it. Otherwise
+    records *pixels* as the new baseline and returns False. Shared by
+    scan_text/scan_numbers.
     """
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     if prev_gray[0] is not None:
@@ -141,13 +140,13 @@ def _is_static_skip(
 def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> bool:
     """True when *curr_gray* is a near-duplicate of the last processed gray frame.
 
-    A frame is "static" when its mean grayscale diff from *prev_gray* is below
-    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``. Returns False when *prev_gray*
-    is ``None`` (no baseline yet). Unlike :func:`_is_static_skip`, this is a bare
-    predicate with no consecutive-buffer/progress side effects, so callers apply
-    whatever skip semantics fit their scan (reset a motion run, extend a span,
-    skip a per-frame op, or carry the last result). Shared by scan_similarity,
-    scan_flow, scan_inactivity, scan_boundaries, scan_scene, and scan_template.
+    "Static" means a mean grayscale diff below
+    ``SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD``; False when *prev_gray* is
+    ``None`` (no baseline yet). Unlike :func:`_is_static_skip` this is a bare
+    predicate with no buffer/progress side effects, so each caller applies the
+    skip semantics its scan needs (reset a motion run, extend a span, carry the
+    last result). Shared by scan_similarity, scan_flow, scan_inactivity,
+    scan_boundaries, scan_scene, and scan_template.
     """
     if prev_gray is None:
         return False
@@ -293,17 +292,11 @@ def _point_in_polygon(u: float, v: float, points: list[Any]) -> bool:
 def denormalize_region(
     region: dict[str, Any], target_w: int, target_h: int
 ) -> dict[str, Any]:
-    """Convert a normalized region (0–1 floats) to pixel coordinates.
+    """Convert a normalized region (0–1 floats) to integer pixel coordinates.
 
-    Args:
-        region: Dict with normalized ``x``, ``y``, ``w``, ``h`` keys and,
-            for shaped regions, bbox-relative ``points`` + ``shape``.
-        target_w: Target frame width in pixels.
-        target_h: Target frame height in pixels.
-
-    Returns:
-        Dict with integer pixel ``x``, ``y``, ``w``, ``h`` keys, plus
-        ``mask_points``/``shape`` passed through for shaped regions.
+    *region* carries normalized ``x``/``y``/``w``/``h`` plus, for shaped regions,
+    bbox-relative ``points`` + ``shape``; those pass through to the result as
+    ``mask_points``/``shape``.
     """
     out: dict[str, Any] = {
         "x": round(region["x"] * target_w),
@@ -311,10 +304,10 @@ def denormalize_region(
         "w": round(region["w"] * target_w),
         "h": round(region["h"] * target_h),
     }
-    # Shaped regions: contour vertices are bbox-relative (0-1 of the region's
-    # own rect), so they pass through denormalization verbatim. Copying them
-    # here threads the mask into every region_coords consumer (task snapshots,
-    # multitool steps, workflows, calibration) without further plumbing.
+    # Contour vertices are bbox-relative (0-1 of the region's own rect), so they
+    # survive denormalization verbatim. Copying here threads the mask into every
+    # region_coords consumer (task snapshots, multitool steps, workflows,
+    # calibration) with no further plumbing.
     points = region.get("points")
     if points:
         out["mask_points"] = points
@@ -367,8 +360,7 @@ def resolve_region_request(
 
     if not isinstance(region_ref, dict):
         # ValueError, not TypeError: this resolver's contract is "ValueError means
-        # bad request", and every caller (cli.py, screenspace_server's
-        # _resolve_region_request) catches ValueError to render a hint or a 400.
+        # bad request", and every caller catches it to render a hint or a 400.
         raise ValueError("region_ref must be an object")  # noqa: TRY004
 
     source = str(region_ref.get("source", "")).strip()
@@ -478,21 +470,17 @@ def color_present(
 ) -> tuple[bool, float]:
     """Check whether the target color appears *anywhere* in the region.
 
-    Unlike :func:`color_matches` (which averages the whole region), this builds
-    a per-pixel HSV match mask and fires when the fraction of matching pixels
-    reaches ``min_coverage``. A small element of the target color in an
-    otherwise neutral region is detected here but averaged away by
-    :func:`color_matches`. Hue wraparound (red at the 0/180 boundary) is handled
-    the same way as :func:`color_matches`.
+    Where :func:`color_matches` averages the whole region, this builds a per-pixel
+    HSV match mask and fires once the matching fraction reaches ``min_coverage``
+    — so a small patch of target color in an otherwise neutral region is caught
+    here but averaged away there. Hue wraparound is handled identically.
 
-    The region is scanned at full resolution (no ``INTER_AREA`` downscale) so
-    small patches survive; callers running in fast-scan mode must avoid the
-    ``max_region_dim`` downscale for this path.
+    Scanned at full resolution (no ``INTER_AREA`` downscale) so small patches
+    survive; fast-scan callers must skip ``max_region_dim`` on this path.
 
     Returns:
-        Tuple of (matches, coverage) where ``coverage`` is the 0.0–1.0 fraction
-        of pixels matching the target. With ``min_coverage <= 0`` a single
-        matching pixel fires; otherwise ``coverage >= min_coverage`` is required.
+        ``(matches, coverage)``, coverage being the 0.0–1.0 matching fraction.
+        ``min_coverage <= 0`` fires on a single pixel.
     """
     if region_pixels.size == 0:
         return False, 0.0
@@ -507,9 +495,9 @@ def color_present(
         & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
         & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
     )
-    # Shaped regions: only pixels inside the polygon count, both in the match
-    # numerator and the coverage denominator. A mask emptied by extreme
-    # downscale falls back to the full rect (matching average_color_hsv).
+    # Shaped regions: only pixels inside the polygon count, in both the match
+    # numerator and the coverage denominator. A mask emptied by extreme downscale
+    # falls back to the full rect, as average_color_hsv does.
     if mask is not None and not np.any(mask):
         mask = None
     denom = match.size
@@ -698,19 +686,17 @@ def _prepare_template(
     """
     k = config.SCREENSPACE_BLUR_KERNEL
     tmpl_gray = cv2.cvtColor(cv2.GaussianBlur(template, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    # Binarize the alpha mask (>= 128 -> 255, else 0) instead of blurring it.
-    # Soft-blurred masks let semi-transparent edge pixels contribute partially
-    # to cv2.matchTemplate, which inflates TM_CCOEFF_NORMED scores for
-    # mostly-transparent PNG icons and produces false positives.
+    # Binarize the alpha mask (>= 128 -> 255) rather than blurring it: soft masks
+    # let semi-transparent edge pixels contribute partially to cv2.matchTemplate,
+    # inflating TM_CCOEFF_NORMED for mostly-transparent PNG icons.
     if mask is not None:
         _, gray_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
     else:
         gray_mask = None
-    # Degenerate if the pixels that will actually contribute to matching have
-    # no variance. TM_CCOEFF_NORMED normalizes by the masked template std —
-    # when that is ~0 (e.g. a mostly-transparent PNG with a flat opaque patch,
-    # especially after scaling down) the denominator underflows and every
-    # position gets a near-1.0 score.
+    # Degenerate if the pixels that actually contribute to matching have no
+    # variance: TM_CCOEFF_NORMED normalizes by the masked template std, so at ~0
+    # (a mostly-transparent PNG with a flat opaque patch, especially scaled down)
+    # the denominator underflows and every position scores ~1.0.
     if gray_mask is not None:
         masked = tmpl_gray[gray_mask > 0]
         contributing_std = float(masked.std()) if masked.size else 0.0
@@ -732,8 +718,7 @@ def _template_correlation_map(
     """
     tmpl_gray, gray_mask, degenerate = prepared
     if degenerate:
-        # A constant (zero-variance) template produces undefined TM_CCOEFF_NORMED
-        # results — every position may score ~1.0.  Bail out.
+        # Zero-variance template: see _prepare_template's degeneracy note.
         return None
     k = config.SCREENSPACE_BLUR_KERNEL
     frame_gray = cv2.cvtColor(cv2.GaussianBlur(frame, (k, k), 0), cv2.COLOR_BGR2GRAY)
@@ -764,10 +749,9 @@ def _match_template_prepared(
     if len(locs[0]) == 0:
         return []
 
-    # Guard against pathological matchTemplate outputs (e.g. low-variance
-    # masked templates at certain scales) that can produce tens of thousands
-    # of above-threshold candidates. The O(n^2) NMS below would otherwise
-    # freeze the worker. Cap to the top _MAX_CANDIDATES by raw score.
+    # Pathological matchTemplate output (low-variance masked templates at certain
+    # scales) can yield tens of thousands of above-threshold candidates, and the
+    # O(n^2) NMS below would freeze the worker. Cap by raw score.
     _MAX_CANDIDATES = 5000
     scores = result[locs]
     if len(locs[0]) > _MAX_CANDIDATES:
@@ -820,18 +804,16 @@ def match_template(
 ) -> list[dict[str, Any]]:
     """Find all locations where template appears in frame.
 
-    Uses ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``.  Non-maximum
-    suppression removes overlapping detections.  An optional *mask*
-    (same size as *template*, single-channel) restricts matching to
-    non-transparent regions — useful for uploaded PNGs with alpha.
+    ``cv2.matchTemplate`` with ``TM_CCOEFF_NORMED``, then non-maximum suppression
+    to drop overlapping detections. An optional *mask* (template-sized,
+    single-channel) restricts matching to non-transparent regions — for uploaded
+    PNGs with alpha.
 
-    When calling repeatedly with the same *template* / *mask* (e.g. one
-    scan over many frames), build a *prepared* tuple once with
-    :func:`_prepare_template` and pass it in to skip the per-call blur
-    and grayscale conversion of the template.
+    Across many frames with one template, build *prepared* once via
+    :func:`_prepare_template` to skip the per-call blur and grayscale conversion.
 
     Returns:
-        List of ``{x, y, w, h, score}`` dicts for each match above *threshold*.
+        ``{x, y, w, h, score}`` dicts for each match above *threshold*.
     """
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_TEMPLATE_MATCH_THRESHOLD
@@ -852,16 +834,14 @@ def compute_optical_flow(
 ) -> dict[str, Any]:
     """Compute dense optical flow between two grayscale frames.
 
-    Farneback has no mask parameter, so for shaped regions the flow is computed
-    over the full rect and *mask* (uint8, crop-sized) restricts the statistics:
-    mean magnitude, the circular-mean angle, and which ``flow_grid`` cells are
-    emitted. Vectors within ~one window of the polygon edge still see outside
-    pixels — acceptable contamination for motion detection.
+    Farneback takes no mask, so shaped regions compute flow over the full rect and
+    *mask* (uint8, crop-sized) restricts the statistics instead. Vectors within
+    ~one window of the polygon edge still see outside pixels — acceptable
+    contamination for motion detection.
 
     Returns:
-        Dict with ``magnitude`` (mean flow vector length),
-        ``angle`` (dominant direction in degrees, 0-360), and optionally
-        ``flow_grid`` (sparse grid of motion vectors for visualization).
+        ``magnitude`` (mean vector length), ``angle`` (dominant direction, 0-360),
+        and optionally ``flow_grid`` (sparse vectors for visualization).
     """
     if pyr_scale <= 0.0:
         pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE

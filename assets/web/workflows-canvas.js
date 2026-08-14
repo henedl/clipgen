@@ -87,9 +87,8 @@
     // The wire-delete button is screen-positioned, so reposition it when the
     // viewport changes (wires themselves move with the SVG transform).
     if (WF.refreshWireDelete) WF.refreshWireDelete();
-    // Zoom % readout beside the minimap zoom buttons (click resets to 100%).
-    // writeViewport is the single chokepoint every pan/zoom path funnels
-    // through, so the readout can never go stale.
+    // Zoom % readout beside the minimap buttons. writeViewport is the single
+    // chokepoint every pan/zoom path funnels through, so it can't go stale.
     var zoomLevel = qs("#wfZoomLevel");
     if (zoomLevel) zoomLevel.textContent = Math.round(vp.zoom * 100) + "%";
     // Pan/zoom moved the viewport rectangle — redraw the minimap to match.
@@ -123,7 +122,7 @@
   function onDrop(e) {
     if (!state.ready) return;
     // A stash drop instantiates a whole sub-graph (the stashes satellite remaps
-    // ids); a node-type drop creates one card. Try the stash MIME first.
+    // ids), a node-type drop one card — so try the stash MIME first.
     var stashId = e.dataTransfer.getData("application/x-wf-stash");
     if (stashId) {
       e.preventDefault();
@@ -163,8 +162,8 @@
 
   function onCanvasMouseDown(e) {
     if (!state.ready) return;
-    // Middle button → pan (grab to navigate), anywhere on the canvas — a
-    // navigation gesture shouldn't depend on hitting empty space.
+    // Middle button pans anywhere on the canvas: a navigation gesture shouldn't
+    // depend on hitting empty space.
     if (e.button === 1) {
       e.preventDefault(); // suppress middle-click autoscroll
       startPan(e);
@@ -183,13 +182,11 @@
       startMarquee(e);
       return;
     }
-    // The floating wire-delete button handles its own click — don't let the
-    // mousedown fall through to a gesture handler (startNodeDrag/startMarquee),
-    // whose e.preventDefault() would swallow the button's click.
+    // The floating wire-delete button handles its own click; a gesture handler's
+    // e.preventDefault() would swallow it.
     if (t.closest("#wfWireDelete")) return;
-    // Likewise the floating minimap + its zoom controls: let them handle their
-    // own clicks (the minimap canvas also stops propagation) rather than starting
-    // a marquee that would clear the selection.
+    // Likewise the minimap + its zoom controls: let them take their own clicks
+    // rather than starting a marquee that would clear the selection.
     if (t.closest("#wfMinimapWrap")) return;
     // 1. Port dot → start a typed wire drag (wires satellite owns the gesture).
     var dot = t.closest(".wf-port-dot");
@@ -241,9 +238,8 @@
       document.removeEventListener("mousemove", move);
       document.removeEventListener("mouseup", up);
       canvas.classList.remove("panning");
-      // Pan is a navigation gesture — it never changes the selection
-      // (deselect-on-empty-click is handled by left-click → marquee) and never
-      // lands on the undo stack (viewport-only save).
+      // Pan is navigation: it never changes the selection (left-click → marquee
+      // owns deselect-on-empty) and never lands on the undo stack.
       if (moved) WF.scheduleViewportSave();
     }
     document.addEventListener("mousemove", move);
@@ -252,8 +248,8 @@
 
   function startNodeDrag(e, card) {
     var id = card.getAttribute("data-node-id");
-    // Selecting a node clears any wire selection (mirror selectEdge clearing the
-    // node selection), so Delete targets the node, not the previously-picked wire.
+    // Selecting a node clears any wire selection (selectEdge mirrors this), so
+    // Delete targets the node, not the previously-picked wire.
     state.selectedEdge = null;
     // Update selection on mousedown so a plain drag moves what you grabbed.
     if (e.shiftKey) {
@@ -265,11 +261,10 @@
     }
     if (WF.renderAllNodes) WF.renderAllNodes();
 
-    // Anchor the drag in world space: store each selected node's offset from the
-    // cursor's world point at grab time, then on every frame set its position to
-    // (cursorWorld + offset). World-anchoring (vs a screen-pixel delta) is what
-    // lets the node keep trailing the cursor while auto-pan scrolls the viewport
-    // — a pure screen delta would drift the node away from the cursor by the pan.
+    // Anchor the drag in world space: store each node's offset from the cursor's
+    // world point at grab time, then set position to (cursorWorld + offset) each
+    // frame. This is what keeps the node under the cursor while auto-pan scrolls
+    // the viewport — a screen-pixel delta would drift by the pan amount.
     var canvasEl = qs("#wfCanvas");
     _dragRect = canvasEl ? canvasEl.getBoundingClientRect() : null;
     _dragCursorX = e.clientX;
@@ -340,18 +335,17 @@
     return nudged;
   }
 
-  // RAF-throttled per-card style update (cf. the code-review canvas perf rule).
-  // Recomputes dragged-node positions from the live cursor world point so they
-  // track the cursor across auto-pan; updates only the moved cards + wires.
+  // RAF-throttled per-card style update. Recomputes dragged-node positions from
+  // the live cursor world point so they track across auto-pan, touching only the
+  // moved cards + wires.
   function scheduleNodePositionFlush() {
     if (_moveRaf) return;
     _moveRaf = requestAnimationFrame(function () {
       _moveRaf = 0;
       var panned = autoPanWhileDragging();
-      // Apply the auto-panned transform now, in this same frame, so the world
-      // transform and the card positions below are computed from one viewport
-      // value. Deferring via applyViewport() would lag the world a frame behind
-      // the cards, leaving dragged nodes a pan-step (EDGE_STEP) off the cursor.
+      // Apply the auto-panned transform in this same frame, so the world and the
+      // card positions below use one viewport value. Deferring via applyViewport()
+      // lags the world a frame behind, leaving nodes a pan-step off the cursor.
       if (panned) writeViewport();
       if (_dragRect && _dragOffsets) {
         var vp = state.viewport;
@@ -423,8 +417,8 @@
     e.preventDefault();
   }
 
-  // Select cards whose rendered rect intersects the marquee (client-coord test —
-  // robust to zoom/pan without re-deriving world geometry).
+  // Select cards whose rendered rect intersects the marquee — a client-coord test,
+  // robust to zoom/pan without re-deriving world geometry.
   function selectInMarquee(rect, ax, ay, bx, by, additive) {
     var ml = Math.min(ax, bx);
     var mt = Math.min(ay, by);
@@ -450,10 +444,9 @@
 
   // ---- Snap & alignment guides ----
 
-  // Snap a world point (the grabbed card's top-left corner): prefer aligning to
-  // another card's left/top edge within SNAP_TOL screen px (showing a guide
-  // line), else round to the background grid. Only consulted while the snap
-  // toggle is on.
+  // Snap the grabbed card's top-left corner: prefer another card's left/top edge
+  // within SNAP_TOL screen px (drawing a guide), else round to the grid. Only
+  // consulted while the snap toggle is on.
   function applySnap(x, y) {
     var out = { x: x, y: y, gx: null, gy: null };
     var tol = SNAP_TOL / (state.viewport.zoom || 1);
@@ -487,9 +480,8 @@
     return out;
   }
 
-  // The two guide lines live inside #wfWorld so they inherit the world
-  // transform; renderAllNodes preserves only the wire <svg>, so re-append
-  // whenever a rebuild dropped them.
+  // The guide lines live inside #wfWorld to inherit the world transform, but
+  // renderAllNodes preserves only the wire <svg> — so re-append after a rebuild.
   var _guideV = null;
   var _guideH = null;
 
@@ -583,9 +575,9 @@
     return true;
   }
 
-  // Move the selection by (dx, dy) world px with direct style writes (mirrors
-  // the drag flush — cheap under key repeat); the scheduleSave debounce
-  // coalesces a nudge burst into one undo step.
+  // Move the selection by (dx, dy) world px with direct style writes (as the drag
+  // flush does — cheap under key repeat); scheduleSave's debounce coalesces a
+  // nudge burst into one undo step.
   function nudgeSelection(dx, dy) {
     if (!state.selection.length) return false;
     state.selection.forEach(function (sid) {
@@ -614,9 +606,9 @@
 
   // ---- Sticky notes ----
 
-  // Drop a fresh note pseudo-node at the viewport centre and focus its
-  // textarea so typing can start immediately. Notes live in state.nodes (the
-  // runner ignores them), so save/undo/copy/delete need no special casing.
+  // Drop a note pseudo-node at the viewport centre and focus its textarea. Notes
+  // live in state.nodes (the runner ignores them), so save/undo/copy/delete need
+  // no special casing.
   function addNote() {
     if (!state.ready) return;
     var canvas = qs("#wfCanvas");
@@ -670,9 +662,9 @@
     WF.scheduleViewportSave();
   }
 
-  // Zoom by `factor` about the canvas centre (the minimap +/- buttons; mirrors
-  // onWheel's re-pin math but anchored to the viewport centre rather than the
-  // cursor). > 1 zooms in, < 1 out; clamped to [ZOOM_MIN, ZOOM_MAX].
+  // Zoom by `factor` about the canvas centre (minimap +/- buttons): onWheel's
+  // re-pin math anchored to the viewport centre. >1 in, <1 out, clamped to
+  // [ZOOM_MIN, ZOOM_MAX].
   function zoomAtCenter(factor) {
     if (!state.ready) return;
     var canvas = qs("#wfCanvas");
@@ -694,8 +686,8 @@
 
   // ---- Clipboard (copy / paste / duplicate) ----
 
-  // In-memory clipboard ({nodes, edges}); not the system clipboard (vanilla JS,
-  // no async-clipboard permission dance, and node graphs aren't text anyway).
+  // In-memory clipboard ({nodes, edges}), not the system one: no async-clipboard
+  // permission dance, and node graphs aren't text anyway.
   var _clipboard = null;
 
   // Capture the current selection + induced edges (both endpoints selected) as a

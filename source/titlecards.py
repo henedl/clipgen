@@ -291,19 +291,17 @@ def _build_card_frame(
 def resolve_card_background(kind: str) -> tuple[Path | None, bool, bool, str]:
     """Resolve the configured background for a card from config.
 
-    *kind* is "title" or "end". Returns (background_path, allow_color, skip, fill_color):
-      - background_path: image to use, or None for a solid-color card.
-      - allow_color: whether to fall back to a color fill when no image is present.
-      - skip: True when no card should be produced at all (endcard "none").
-      - fill_color: the color used for the fill (the configured solid color when
-        the card is set to a solid color, otherwise "black" for the
-        missing-image fallback).
+    *kind* is "title" or "end". Returns
+    ``(background_path, allow_color, skip, fill_color)``: the image or None for a
+    solid-color card; whether a missing image may fall back to a color fill;
+    whether to produce no card at all (endcard "none"); and the fill color — the
+    configured solid color, else "black" for the missing-image fallback.
 
     Selection ids (config.TITLECARD_IMAGE / config.ENDCARD_IMAGE): empty = bundled
-    default asset; CARD_IMAGE_COLOR = solid color; CARD_IMAGE_NONE = no endcard;
-    any other value is an uploaded filename under TITLECARD_IMAGES_DIRNAME (falling
-    back to the bundled default when the file is missing). Title cards always render
-    (their text is the point), so they never skip.
+    default asset, CARD_IMAGE_COLOR = solid color, CARD_IMAGE_NONE = no endcard,
+    anything else an uploaded filename under TITLECARD_IMAGES_DIRNAME (falling back
+    to the bundled default when absent). Title cards never skip — their text is the
+    point.
     """
     if kind == "end":
         value = config.ENDCARD_IMAGE
@@ -568,28 +566,24 @@ def wrap_clip_with_cards(
 ) -> tuple[bool, bool]:
     """Prepend a titlecard and append an endcard to a clip.
 
-    Fast path: when the clip body is a copy-safe shape (see _body_is_copy_safe), only
-    the two cards are encoded — matched to the body's fps/pixel-format and (if present)
-    a silent AAC track at the body's audio params — then all three are joined with the
-    concat demuxer + ``-c copy``, so the already-cut body is not re-encoded. Any
-    non-copy-safe body, or a failed copy concat, falls back to a single filter_complex
-    encode that re-encodes the whole clip.
+    Fast path: a copy-safe body (see _body_is_copy_safe) means only the two cards
+    are encoded — matched to the body's fps/pixel-format and, if present, a silent
+    AAC track at its audio params — then all three join via the concat demuxer with
+    ``-c copy``, leaving the cut body untouched. A non-copy-safe body or a failed
+    copy concat falls back to one filter_complex encode of the whole clip.
 
-    Returns ``(clip_ok, cards_applied)``:
+    Returns ``(clip_ok, cards_applied)``. ``clip_ok`` is True whenever the clip file
+    is usable afterwards — wrapped, or left untouched on soft failure — and False
+    only on a hard failure such as a missing clip. ``cards_applied`` is True only
+    when the cards really are in the output.
 
-    - ``clip_ok`` is True when the clip file is usable afterwards (either wrapped or
-      left untouched on soft failure), and False only on a hard failure (e.g. the clip
-      file is missing).
-    - ``cards_applied`` is True only when the cards are actually in the output file.
+    Both matter: a soft failure leaves a perfectly good *unwrapped* clip that must
+    still be recorded, but recording it as ``titlecards: true`` makes the manifest
+    lie, and the generate-cache check then skips that clip forever so the card can
+    never be applied. Persist ``cards_applied``, not the requested flag.
 
-    Both values matter to the caller. A soft failure leaves a perfectly good *unwrapped*
-    clip, so it must still be recorded — but recording it as ``titlecards: true`` makes
-    the manifest lie, and the generate-cache check (``server.py`` Phase 1) then skips
-    the clip forever, so the card can never be applied. Callers must persist
-    ``cards_applied``, not the requested flag.
-
-    When *cancel_flag* is supplied and returns True during a card or wrap encode, the
-    in-flight ffmpeg is terminated and the original clip is left untouched.
+    A *cancel_flag* returning True mid-encode terminates ffmpeg and leaves the
+    original clip untouched.
     """
     cards_enabled = (
         config.TITLECARDS_ENABLED

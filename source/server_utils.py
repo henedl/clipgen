@@ -1,28 +1,22 @@
-"""Shared Flask helpers for the four server blueprints.
+"""Shared Flask scaffolding for the server blueprints.
 
-All four server modules (``server``, ``screenspace_server``,
-``transcripts_server``, ``workflows_server``) return the same JSON envelope —
-``{"ok": True, ...}`` on success and ``{"ok": False, "error": msg}`` with an
-HTTP status on failure — and repeat the same numeric-arg parse-and-validate
-block dozens of times. This module collapses that scaffolding:
+Every blueprint returns the same JSON envelope — ``{"ok": True, ...}`` on success,
+``{"ok": False, "error": msg}`` plus an HTTP status on failure — and repeats the
+same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 
-- :func:`ok` / :func:`err` build the success / error envelope in one call.
+- :func:`ok` / :func:`err` build either envelope in one call.
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
-  400/4xx instead of threading an ``err(...)`` tuple back through every guard.
-- :func:`parse_number_arg` parses + bound-checks one numeric value, raising
-  :class:`ApiError` on bad input (caught by :func:`json_endpoint`).
-- :func:`make_debounced_persist` builds the manifest-write debounce shared by
-  the screenspace and transcripts blueprints.
-- :func:`make_sse_channel` builds one Server-Sent-Events pub/sub channel
-  (bounded per-client queue + coalesce-on-overflow + keepalive + cleanup),
-  shared by the run / batch / task streaming endpoints.
-- :class:`MediaCache` + :func:`parse_clip_window` back the hover-scrubber
-  media routes (sprite sheets / audio snippets) on the Studio and Composer
-  blueprints.
+  4xx instead of threading an ``err(...)`` tuple back through every guard.
+- :func:`parse_number_arg` parses + bound-checks one numeric value.
+- :func:`make_debounced_persist` builds the manifest-write debounce.
+- :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
+  queue + coalesce-on-overflow + keepalive + cleanup).
+- :class:`MediaCache` + :func:`parse_clip_window` back the hover-scrubber media
+  routes (sprite sheets / audio snippets).
 
-Kept deliberately tiny and Flask-only (no ``config``/``utils`` imports) so it
-stays import-clean — ``utils`` is Flask-free on purpose and imported by
-non-server modules, so these helpers must not live there.
+Deliberately tiny and Flask-only (no ``config``/``utils`` imports) so it stays
+import-clean: ``utils`` is Flask-free on purpose and imported by non-server
+modules, so these helpers must not live there.
 """
 
 from __future__ import annotations

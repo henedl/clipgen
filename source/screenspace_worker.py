@@ -1,9 +1,8 @@
 """Screenspace background worker.
 
-A daemon-thread task queue that runs analysis tasks sequentially with
+A daemon-thread task queue running analysis tasks sequentially, with
 pause/resume/cancel, multi-video timeline mapping, heatmap rendering, and event
-generation. Imports the tool registry, heatmap/manifest helpers, the multitool
-offset probe, and the ffprobe metadata helper from sibling modules.
+generation.
 """
 
 import copy
@@ -48,10 +47,10 @@ from screenspace_frames import _probe_video_meta
 # external reads and dropped from results once heatmaps are written.
 _SERVER_ONLY_GRID_KEYS = ("change_grid", "saliency_grid")
 
-# Task keys carrying a heatmap artifact filename. The frontend turns every one of
-# these into an image URL, so they must never name a file that isn't on disk. Each
-# GIF also carries a "<key>_sprite" geometry descriptor, but that names no file —
-# the sprite sheet is rendered on demand from the GIF by /api/heatmap-sprite.
+# Task keys carrying a heatmap artifact filename. The frontend turns each into an
+# image URL, so none may name a file that isn't on disk. The "<key>_sprite"
+# companion is exempt: it is geometry, not a file — /api/heatmap-sprite renders
+# the sheet from the GIF on demand.
 _HEATMAP_FILE_KEYS = ("heatmap", "heatmap_gif", "heatmap_rolling_gif")
 
 
@@ -194,10 +193,10 @@ def dispatch_tool_scan(
             fast_opts=fast_opts,
         )
 
-    # Multi-video: map the task's GLOBAL [start, end] range onto the timeline
-    # and scan each spanned sub-video at its local offsets. Emitted result
-    # times are shifted back to the global timeline and tagged with the
-    # sub-video they came from so events line up with clips/transcripts.
+    # Multi-video: map the task's GLOBAL [start, end] onto the timeline and scan
+    # each spanned sub-video at its local offsets. Result times shift back to the
+    # global timeline, tagged with their sub-video, so events line up with
+    # clips/transcripts.
     total = timeline[-1][1] + timeline[-1][2]
     global_start = params.get("start_seconds", 0.0) or 0.0
     global_end = params.get("end_seconds")
@@ -447,12 +446,11 @@ class ScreenspaceWorker:
             progress = task.get("progress", 0.0)
             params = task.get("parameters", {})
 
-            # Offset multitool chains run the two-phase scan: phase 2 joins
-            # across every frame from the original start, so they cannot resume
-            # mid-stream (advancing start_seconds would drop the pre-pause
-            # frames the join depends on). Restart these from scratch instead —
-            # ``start_seconds`` is left untouched and no partial results carry
-            # over, so the re-run reproduces the full result set.
+            # Offset multitool chains cannot resume mid-stream: phase 2 joins
+            # across every frame from the original start, so advancing
+            # start_seconds would drop the pre-pause frames the join needs.
+            # Restart from scratch — start_seconds untouched, no partial results
+            # carried over — so the re-run reproduces the full result set.
             if task.get("type") == "multitool" and _multitool_has_offset(
                 params.get("steps", [])
             ):
@@ -479,12 +477,10 @@ class ScreenspaceWorker:
                     end = timeline[-1][1] + timeline[-1][2]
                 else:
                     _, end = _probe_video_meta(task["video_paths"][0])
-            # ``progress`` is a GLOBAL fraction of the original scan range
-            # (mapped via _progress_offset/_progress_scale in _on_progress),
-            # but ``start`` is the CURRENT segment start — already advanced by
-            # any previous resume. Convert back to the current segment's local
-            # fraction before projecting, or a 2nd+ resume overshoots the true
-            # stop point and skips frames.
+            # ``progress`` is a GLOBAL fraction of the original scan range (mapped
+            # in _on_progress), but ``start`` is the CURRENT segment start, already
+            # advanced by any previous resume. Convert back to the segment-local
+            # fraction first, or a 2nd+ resume overshoots and skips frames.
             prev_offset = task.get("_progress_offset", 0.0)
             prev_scale = task.get("_progress_scale", 1.0)
             local = max(0.0, min(1.0, (progress - prev_offset) / prev_scale))
@@ -507,13 +503,11 @@ class ScreenspaceWorker:
             if task is None:
                 return False
             if task["status"] == TASK_STATUS_RUNNING:
-                # The running scan's cancel_flag looks the task up by id, so the
-                # task must stay in ``_tasks`` for the cancel to land — popping it
-                # here would strand the worker thread, which would run the scan to
-                # completion and keep streaming progress (CPU + SSE spam). Flag it
-                # cancelled + remove-on-finish; ``get_all_tasks`` hides it from the
-                # UI/manifest immediately and ``_execute_task`` pops it once the
-                # scan unwinds.
+                # The scan's cancel_flag looks the task up by id, so it must stay
+                # in ``_tasks`` for the cancel to land — popping here strands the
+                # worker, which runs to completion streaming progress (CPU + SSE
+                # spam). Flag cancelled + remove-on-finish instead: ``get_all_tasks``
+                # hides it at once, ``_execute_task`` pops it as the scan unwinds.
                 task["_cancelled"] = True
                 task["_remove_on_finish"] = True
                 return True
@@ -615,8 +609,7 @@ class ScreenspaceWorker:
             )
         elif task_type == "attention":
             # Full-frame tool: region_coords is {0,0,0,0}, so size to the video
-            # frame like template. The rolling GIF is the eye-tracking-style
-            # gaze-replay deliverable.
+            # frame like template. The rolling GIF is the gaze-replay deliverable.
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
@@ -783,11 +776,10 @@ class ScreenspaceWorker:
             result = self._dispatch(task, _on_progress, _cancel_flag, _on_result)
 
             def _visible_results(seq: Any) -> Any:
-                # Attention's visible results are the confirmed shifts only;
-                # the full per-sample stream (one entry per 0.5s, thousands on
-                # long videos) exists solely to feed heatmap dwell weighting
-                # and must never reach the results/timeline API — neither in
-                # the completed→heatmap-attached window nor while paused.
+                # Attention shows confirmed shifts only. The full per-sample stream
+                # (one per 0.5s, thousands on long videos) exists solely to weight
+                # heatmap dwell and must never reach the results/timeline API —
+                # not while paused, nor in the completed→heatmap-attached window.
                 if task.get("type") == "attention" and isinstance(seq, list):
                     return [r for r in seq if isinstance(r, dict) and r.get("shift")]
                 return seq
@@ -800,14 +792,12 @@ class ScreenspaceWorker:
                 if t:
                     if t.get("_paused_flag"):
                         t["status"] = TASK_STATUS_PAUSED
-                        # ``result`` holds only THIS invocation's detections;
-                        # prepend the pre-pause carry-over (like the completed
-                        # branch below) or a pause on a resumed scan drops the
-                        # earlier results for good — the next resume re-seeds
-                        # _partial_results from t["result"]. For attention that
-                        # re-seed is shift-only, so a resumed scan's heatmap
-                        # under-accumulates the pre-pause segment (accepted;
-                        # see plans/archive/ATTENTION-PLAN.md).
+                        # ``result`` holds only THIS invocation's detections, so
+                        # prepend the pre-pause carry-over (as the completed branch
+                        # does) or pausing a resumed scan drops the earlier results
+                        # for good. Attention's re-seed is shift-only, so a resumed
+                        # scan's heatmap under-accumulates the pre-pause segment
+                        # (accepted; see plans/archive/ATTENTION-PLAN.md).
                         partial = t.get("_partial_results")
                         if partial and isinstance(result, list):
                             result = partial + result
@@ -831,10 +821,9 @@ class ScreenspaceWorker:
                             t, raw
                         )
                         if isinstance(result, list) and result:
-                            # Defer heatmap/GIF generation to outside the lock —
-                            # it's heavy I/O (PNG + cumulative/rolling GIFs) that
-                            # would otherwise block status reads, cancellation,
-                            # dismissal, and SSE snapshots after scan completion.
+                            # Defer heatmap/GIF generation outside the lock: heavy
+                            # I/O that would otherwise block status reads,
+                            # cancellation, dismissal and SSE snapshots.
                             heatmap_inputs = (
                                 t.get("type", ""),
                                 list(t.get("video_paths", [])),
@@ -842,17 +831,17 @@ class ScreenspaceWorker:
                             )
                     t["completed_at"] = datetime.now(UTC).isoformat()
 
-            # Generate heatmaps without holding the lock, then reacquire it to
-            # strip the grids and attach the filenames. Safe because the scan has
-            # finished (no more _on_result appends); the strip+attach still needs
-            # the lock because readers deep-copy `result` under it.
+            # Generate heatmaps lock-free, then reacquire to strip grids and attach
+            # filenames. Safe because the scan has finished (no more _on_result
+            # appends); the strip+attach still needs the lock, since readers
+            # deep-copy `result` under it.
             if heatmap_inputs is not None and isinstance(result, list) and result:
                 task_type, video_paths, region_coords = heatmap_inputs
-                # Own try/except, deliberately not the outer one: the scan has
-                # already completed with valid results and emitted its events, so
-                # a failure to render a decorative artifact (zero-size region,
-                # disk error, missing PIL in a frozen bundle) must not demote the
-                # task to `failed` and throw those results away.
+                # Own try/except, deliberately not the outer one: the scan already
+                # completed with valid results and emitted its events, so failing
+                # to render a decorative artifact (zero-size region, disk error,
+                # missing PIL in a frozen bundle) must not demote it to `failed`
+                # and discard them.
                 try:
                     attachments = self._generate_heatmap(
                         task_type, task_id, video_paths, region_coords, result
@@ -862,18 +851,16 @@ class ScreenspaceWorker:
                         f"Heatmap generation failed for task {task_id}: {exc}"
                     )
                     attachments = {}
-                # change_grid/saliency_grid are consumed only by heatmap
-                # generation; drop them so completed tasks don't retain
-                # per-frame grids in memory until dismissal. Attention's
-                # shift-only t["result"] shares these dicts, so its visible
-                # entries are stripped by the same pass.
+                # change_grid/saliency_grid feed heatmap generation only; drop them
+                # so completed tasks don't hold per-frame grids until dismissal.
+                # Attention's shift-only t["result"] shares these dicts, so the
+                # same pass strips its visible entries.
                 #
-                # This strip must hold the lock: these dicts are reachable from
-                # self._tasks[task_id]["result"], and _copy_task_for_read /
-                # get_task_result_tail iterate r.items() under the lock. Popping
-                # concurrently raises "dictionary changed size during iteration"
-                # in whichever reader is mid-copy (a 500 on /api/tasks). The scan
-                # itself is finished, so nothing else appends here.
+                # Must hold the lock: these dicts are reachable from
+                # self._tasks[task_id]["result"], which _copy_task_for_read /
+                # get_task_result_tail iterate under it. Popping concurrently
+                # raises "dictionary changed size during iteration" in whichever
+                # reader is mid-copy (a 500 on /api/tasks).
                 with self._lock:
                     for r in result:
                         if isinstance(r, dict):
@@ -882,10 +869,10 @@ class ScreenspaceWorker:
                     t = self._tasks.get(task_id)
                     if t is not None:
                         t.update(attachments)
-                # The task was already marked completed before these heatmap
-                # filenames were attached, so emit an SSE update now — otherwise
-                # the frontend (which may already have seen the completed task via
-                # another worker's progress push) never re-renders the heatmap
+                # The task was marked completed before these filenames attached, so
+                # emit an SSE update now — otherwise a frontend that already saw
+                # the completed task (via another worker's progress push) never
+                # re-renders the heatmap
                 # section until a page reload.
                 if attachments and self.on_progress_update:
                     self.on_progress_update()

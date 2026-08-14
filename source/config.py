@@ -77,9 +77,8 @@ def debug_ic(*args: Any, **kwargs: Any) -> Any:
 
 
 # ── Directories ──────────────────────────────────────────────────────
-# When left empty, clipgen will use the current working directory for
-# both input (source videos) and output (generated artifacts), matching
-# the existing default behavior.
+# Empty means the current working directory for both input (source videos) and
+# output (generated artifacts).
 INPUT_DIR: str = ""
 OUTPUT_DIR: str = ""
 
@@ -147,14 +146,13 @@ SERVER_PORT: int = (
     8089  # port for the combined Studio/Screenspace/Transcripts Flask server
 )
 # Desktop-window chrome (see desktop_chrome.py). The native title bar is hidden and
-# the traffic lights float inside the topnav, so AppKit and CSS have to agree on the
-# same two numbers: these flow to the frontend as CSS custom properties via
-# utils.render_index_html(), rather than being written twice.
+# the traffic lights float inside the topnav, so AppKit and CSS must agree on the
+# same two numbers — hence these flow to the frontend as CSS custom properties via
+# utils.render_index_html() rather than being written twice.
 DESKTOP_CHROME_BAR_HEIGHT: int = 48  # titlebar band height; drives --topnav-height
-# Left gutter the three buttons need. They are inset from the window edge by the
-# same margin that centering leaves above them ((bar - 16) / 2 = 16) and pitched
-# 20px apart, so the row ends at 16 + 40 + 14 = 70; the rest is breathing room
-# before the brand.
+# Left gutter the three buttons need: inset from the window edge by the same
+# margin centering leaves above them ((bar - 16) / 2 = 16), pitched 20px apart, so
+# the row ends at 16 + 40 + 14 = 70. The rest is breathing room before the brand.
 DESKTOP_TRAFFIC_LIGHT_INSET: int = 87
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
@@ -162,51 +160,47 @@ STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 WORKFLOWS_MANIFEST_FILENAME: str = (
     "workflows_manifest.json"  # node-canvas blueprints, stashes, run history
 )
-# Prefix for our own scratch temp-files written into the output dir (currently the
-# reel-builder's mkstemp clips). Lets sweep_stale_temp_artifacts() reclaim orphans
-# left by a hard kill without ever touching user files.
+# Prefix for clipgen's own scratch temp-files in the output dir, so
+# sweep_stale_temp_artifacts() can reclaim orphans left by a hard kill without
+# ever touching user files.
 TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
-# Watch-dir trigger (P6): poll interval for the daemon that auto-runs an armed
-# blueprint when a new participant video lands in the input dir. The partial-copy
-# stability window is 2x this (a file must stat identically across two polls).
-# Server-only — never mirrored to the frontend.
+# Poll interval for the daemon that auto-runs an armed blueprint when a new
+# participant video lands in the input dir. The partial-copy stability window is
+# 2x this (a file must stat identically across two polls). Server-only.
 WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
-# Concurrent participants per Workflows whole-study batch. 1 = sequential (the
-# default). Values >1 run child runs in a thread pool, multiplying peak
-# ffmpeg/Whisper/OCR/Ollama load — heavy graphs (Transcribe, Detect) serialize
-# on those shared resources anyway and rarely benefit past 2. The server clamps
-# to [1, 4]. Server-only — never mirrored to the frontend.
+# Concurrent participants per Workflows whole-study batch; 1 = sequential. Higher
+# values pool the child runs, multiplying peak ffmpeg/Whisper/OCR/Ollama load —
+# and heavy graphs serialize on those shared resources anyway, so they rarely
+# benefit past 2. Clamped to [1, 4]. Server-only.
 WORKFLOWS_BATCH_WORKERS: int = 1
 CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
 COMPOSER_MANIFEST_FILENAME: str = (
     "composer_manifest.json"  # Composer cut pairs, trims, annotations, UI state
 )
-# Composer annotation defaults. Geometry is normalized to the video frame
-# (stroke width to frame width, font size to frame height) so the browser
-# preview and the PIL/ffmpeg burn-in agree at any resolution. Mirrored to the
-# frontend via utils.get_frontend_config() — do not hardcode these in JS.
+# Composer annotation defaults. Geometry is normalized to the video frame (stroke
+# width to frame width, font size to frame height) so the browser preview and the
+# PIL/ffmpeg burn-in agree at any resolution. Mirrored to JS via
+# get_frontend_config() (never hardcode).
 COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
 COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
 COMPOSER_ANNOTATION_STROKE_STYLE: str = "solid"  # solid | dashed | dotted
 COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height
 COMPOSER_ANNOTATION_SPAN_SECONDS: float = 10.0  # default visibility span
-# Double-click the Composer timeline to set the pending in point, then again
-# to commit the out point. Mirrored to the frontend via
-# utils.get_frontend_config() — do not hardcode this in JS.
+# Double-click the Composer timeline to set the pending in point, then again to
+# commit the out point. Mirrored to JS via get_frontend_config() (never hardcode).
 COMPOSER_DOUBLE_CLICK_CUTS: bool = True
 # Warn on pages that play source video when a recording is a fragmented MP4 the
-# browser cannot seek (OBS "fragmented recording"), and offer the one-click
-# remux that fixes it. Mirrored to the frontend via utils.get_frontend_config()
-# — do not hardcode this in JS.
+# browser cannot seek (OBS "fragmented recording"), and offer the one-click remux
+# that fixes it. Mirrored to JS via get_frontend_config() (never hardcode).
 MEDIA_CONTAINER_WARNING: bool = True
 # Cap on the WAV extracted for Composer's marker/cut audio scrub — markers can
-# span minutes (unlike Studio clips). Mirrored to the frontend via
-# utils.get_frontend_config() so the client skips scrubbing longer spans and
-# hover fraction ↔ audio buffer stay aligned; do not hardcode this in JS.
+# span minutes, unlike Studio clips. Mirrored to JS via get_frontend_config()
+# (never hardcode), so the client skips longer spans and hover fraction ↔ audio
+# buffer stay aligned.
 COMPOSER_SCRUB_MAX_AUDIO_SECONDS: float = 180.0
-# Data-source lanes shown (in order) per participant in the Convergence Browser.
-# Mirrored to the frontend via utils.get_frontend_config() so the swim-lane
-# layout and per-lane offset keys stay in sync; do not hardcode this list in JS.
+# Data-source lanes shown, in order, per participant in the Convergence Browser.
+# Mirrored to JS via get_frontend_config() (never hardcode) so the swim-lane layout
+# and per-lane offset keys stay in sync.
 CONVERGENCE_SOURCES: tuple[str, ...] = (
     "sheet",
     "screenspace",
@@ -219,18 +213,17 @@ GOOGLE_API_MAX_RETRIES: int = 3  # Retries for transient Google API errors (429,
 STUDIO_THUMBNAIL_WIDTH: int = 200
 
 # Card scrubber: hover a queue card to scrub frames (sprite sheet) + hear audio
-# with a waveform overlay. Opt-in. The sprite grid dims are mirrored to the
-# frontend via utils.get_frontend_config() (the scrubber computes frameCount /
-# per-frame interval from them), so they must not be hardcoded in JS.
+# with a waveform overlay. Opt-in. The sprite grid dims go to JS via
+# get_frontend_config() (never hardcode) — the scrubber derives frameCount and the
+# per-frame interval from them.
 STUDIO_CARD_SCRUBBER: bool = False
 STUDIO_SCRUBBER_SPRITE_COLS: int = 5
 STUDIO_SCRUBBER_SPRITE_ROWS: int = 5
 
-# Metadata tab: count Screenspace as time-adjacent clusters instead of raw
-# events, so a dense scan (e.g. 10k events) reads as a handful of blocks and
-# doesn't overshadow the sheet/transcript streams in the tab's tables/charts.
-# Boot-embedded into /api/sheet (like STUDIO_CARD_SCRUBBER); not mirrored via
-# get_frontend_config.
+# Metadata tab: count Screenspace as time-adjacent clusters rather than raw
+# events, so a dense 10k-event scan reads as a handful of blocks instead of
+# overshadowing the sheet/transcript streams. Boot-embedded into /api/sheet, not
+# mirrored via get_frontend_config.
 STUDIO_METADATA_CLUSTER_SCREENSPACE: bool = True
 
 # ── Screenspace ──────────────────────────────────────────────────────
@@ -322,9 +315,9 @@ SCREENSPACE_BOUNDARY_HASH_DIM: int = (
 SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON: float = (
     0.05  # confidence floor for a boundary that just crosses threshold
 )
-# Phase 4: scene-aware period segmentation. "phash" is the v1 consecutive-frame
-# spike detector; "scene" measures a content fingerprint against the current
-# period's reference (robust to motion); "hybrid" fires only when both agree.
+# Scene-aware period segmentation. "phash" is the consecutive-frame spike
+# detector, "scene" measures a content fingerprint against the current period's
+# reference (robust to motion), "hybrid" fires only when both agree.
 SCREENSPACE_BOUNDARY_METRIC: str = "hybrid"
 SCREENSPACE_BOUNDARY_SCENE_THRESHOLD: float = 0.25  # fingerprint distance (1 − similarity) to call a scene shift; mirrors scene's 0.75 sim
 SCREENSPACE_BOUNDARY_CONFIRM_WINDOW: int = 2  # samples a scene shift must persist before it counts (suppresses one-frame blips)

@@ -71,44 +71,38 @@ FlaskResponse = Response | tuple[Response, int]
 _manifest: dict[str, Any] = {}
 _worker: transcripts.TranscriptWorker | None = None
 _participants: list[dict[str, Any]] = []
-# What the current _participants list was built from: {"sheet_context", "dir",
-# "mtime"}, or None before _init_transcripts_state has run (same "not configured
-# yet" state _worker = None expresses). While None, _refresh_participants() is a
-# no-op, so a directly-assigned _participants survives.
+# What _participants was built from: {"sheet_context", "dir", "mtime"}, or None
+# before _init_transcripts_state has run (the same "not configured yet" state
+# _worker = None expresses). While None, _refresh_participants() is a no-op, so a
+# directly-assigned _participants survives.
 _participant_source: dict[str, Any] | None = None
 _participants_lock = threading.Lock()
 _manifest_lock = threading.Lock()
-# Task ids whose result has already been merged into the in-memory manifest.
-# Merging is idempotent per task so a later persist cannot re-apply a task's
-# frozen segments over in-memory edits. Re-transcription mints a fresh task id,
-# so its new segments still merge (and win) exactly once.
+# Task ids already merged into the in-memory manifest. Merging is idempotent per
+# task, so a later persist can't re-apply frozen segments over in-memory edits;
+# re-transcription mints a fresh id, so its segments still merge (and win) once.
 _merged_task_ids: set[str] = set()
-# Participants whose transcript was freshly merged but whose completion side
-# effects (clearing stale agent fields + starting the thinking-agent chain)
-# have not run yet. The merge can be reached from either _on_task_complete or
-# a debounced _do_persist — whichever wins _manifest_lock merges the task — so
-# the reaction must drain this queue rather than key off which caller merged.
+# Participants merged but whose completion side effects (clearing stale agent
+# fields + starting the agent chain) haven't run. The merge is reachable from
+# _on_task_complete *or* a debounced _do_persist — whichever wins _manifest_lock
+# does it — so the reaction drains this queue rather than keying off the caller.
 # Guarded by _manifest_lock.
 _pending_chain_pids: list[str] = []
 _transcript_model_warming = False
 _transcript_model_warming_lock = threading.Lock()
-# Thinking-agent orchestrator. Owns per-agent in-flight, cancel-event, and
-# thread state. The `AgentOrchestrator` class is defined further down and the
-# instance is bound at module load. Routes call methods on this; nothing else
-# should reach into orchestrator internals.
+# Thinking-agent orchestrator: owns per-agent in-flight, cancel-event and thread
+# state. Routes call its methods; nothing else reaches into its internals.
 _orchestrator: "AgentOrchestrator"
 
-# After a Stop, schedule a delayed Ollama model unload so the model is evicted
-# from memory if no follow-up run starts soon. Keyed by model name → Timer.
-# A new run for the same model cancels the pending unload so we don't churn
-# on rapid stop→run cycles.
+# After a Stop, a delayed unload evicts the Ollama model if no follow-up run
+# starts soon (model name → Timer). A new run for the same model cancels the
+# pending unload, so rapid stop→run cycles don't churn.
 _pending_model_unloads: dict[str, threading.Timer] = {}
 _pending_model_unloads_lock = threading.Lock()
 
-# Progress tracking for in-flight Ollama model pulls, keyed by model name.
-# Each entry: {status, completed, total, done, succeeded, error}. The UI polls
-# /api/models/ollama/pull-status after kicking off /api/models/ollama/pull so a
-# new local model is only installed after explicit user confirmation.
+# In-flight Ollama pulls by model name: {status, completed, total, done,
+# succeeded, error}. The UI polls /api/models/ollama/pull-status after kicking off
+# the pull, so a model is only ever installed on explicit user confirmation.
 _ollama_pull_status: dict[str, dict[str, Any]] = {}
 _ollama_pull_lock = threading.Lock()
 
@@ -228,18 +222,16 @@ utils.register_static_routes(
     transcripts_bp,
     "transcripts.html",
     # Resolved per request, never snapshotted at init: POST /api/dirs moves
-    # config.INPUT_DIR mid-session without re-running _init_transcripts_state,
-    # and _refresh_participants already follows the move. A snapshot here left
-    # the page listing participants from the new directory while /media/<file>
-    # still served the old one — every video 404'd even though the page's own
-    # ?v= mtime proved the file was there. Same reasoning as studio_bp's.
+    # config.INPUT_DIR mid-session without re-running _init_transcripts_state, and
+    # _refresh_participants already follows. A snapshot left the page listing
+    # participants from the new directory while /media/<file> served the old one,
+    # so every video 404'd. Same reasoning as studio_bp's.
     #
-    # This hit *every* desktop launch, not just people who switch folders: at
-    # startup nothing has configured an input directory yet, so
-    # get_effective_input_dir() falls back to Path.cwd() — which cli.main() has
-    # chdir'd to the folder containing the app. The snapshot was therefore that
-    # folder (e.g. the Desktop), a directory that exists but holds no videos,
-    # which is why the failure read as 404 rather than "not configured".
+    # This hit *every* desktop launch, not just folder-switchers: at startup no
+    # input dir is configured, so get_effective_input_dir() falls back to
+    # Path.cwd() — which cli.main() has chdir'd to the app's folder. Snapshotting
+    # that (e.g. the Desktop) gave a real directory holding no videos, which is
+    # why it read as 404 rather than "not configured".
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
@@ -335,9 +327,9 @@ def api_participants() -> FlaskResponse:
                     "report": _step_state_agent(pid, entry, "report"),
                 },
             }
-            # Multi-video: expose the timeline so the frontend can switch the
-            # <video> source per part and seek the local offset. Omitted for a
-            # single video (no probe) → the frontend keeps its one-file path.
+            # Multi-video: expose the timeline so the frontend can switch <video>
+            # source per part and seek the local offset. Omitted for a single video
+            # (no probe), leaving the frontend on its one-file path.
             if p["has_video"] and len(video_paths) >= 2:
                 timeline = video.timeline_or_none(video_paths)
                 if timeline is not None:
@@ -353,8 +345,8 @@ def api_participants() -> FlaskResponse:
                 info["language"] = entry.get("language", "")
                 info["model"] = entry.get("model", "")
                 info["transcribed_at"] = entry.get("transcribed_at", "")
-                # What the last run actually transcribed — the picker shows it
-                # back so an auto-detect deviation is explainable after the fact.
+                # What the last run actually transcribed; the picker shows it back
+                # so an auto-detect deviation is explainable afterwards.
                 info["audio_index"] = entry.get("audio_index", 0)
                 info["audio_track_label"] = entry.get("audio_track_label", "")
                 info["has_summary"] = bool(entry.get("summary"))
@@ -384,8 +376,8 @@ def api_participants() -> FlaskResponse:
                 break
         info["has_stale_artifacts"] = has_stale
 
-    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
-    # is ``in_sheet: False`` and marking them all would be noise.
+    # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
+    # ``in_sheet: False``, and marking them all would be noise.
     return ok(
         participants=result,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
@@ -398,13 +390,12 @@ def api_participants() -> FlaskResponse:
 
 # ---- Corrected-segments cache ----
 #
-# apply_corrections() is pure given (segments, corrections) but was re-run on
-# every read — api_transcript per request, api_search across *all* participants
-# per query. Corrections change rarely and segments are static post-transcription,
-# so memoize the corrected list per participant, invalidated by a version counter
-# bumped whenever corrections or a participant's segments change. Own lock so both
-# the lock-holding caller (api_search) and the lock-free one (api_transcript) are
-# safe; lock order is always _manifest_lock -> _corrected_cache_lock.
+# apply_corrections() is pure given (segments, corrections) but ran on every read
+# — api_transcript per request, api_search across *all* participants per query.
+# Corrections change rarely and segments are static post-transcription, so memoize
+# per participant behind a version counter bumped on any corrections/segments
+# change. Its own lock covers both the lock-holding caller (api_search) and the
+# lock-free one; lock order is always _manifest_lock -> _corrected_cache_lock.
 _corrected_cache: dict[str, tuple[int, list[Any]]] = {}
 _corrected_cache_lock = threading.Lock()
 _corrections_version = 0

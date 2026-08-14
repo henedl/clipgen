@@ -1,20 +1,19 @@
 """Guard the source layout: `source/` holds every module, and `pyproject.toml`
 lists them all.
 
-The project is a flat set of top-level modules that live in ``source/`` and are
-imported by bare name (``import config``). ``source/`` is not a package — it has
-no ``__init__.py`` — it is simply put on ``sys.path``, by the repo-root
-``clipgen.py`` launcher for real runs and by ``tests/conftest.py`` under pytest.
+The project is a flat set of top-level modules in ``source/``, imported by bare
+name (``import config``). ``source/`` is not a package — no ``__init__.py`` — it
+is just put on ``sys.path`` by the ``clipgen.py`` launcher for real runs and by
+``tests/conftest.py`` under pytest.
 
-Two ways that drifts, both silent from the source tree:
+Two drifts, both silent from the source tree:
 
-* A module missing from ``[tool.setuptools] py-modules`` still imports fine
-  locally, but ``uv pip install .`` ships only the listed modules, so installed
-  and frozen environments die with ``ModuleNotFoundError``.
-* A new module dropped in the *repo root* also imports fine locally (the root is
-  still ``sys.path[1]``) and PyInstaller still bundles it (``pathex`` includes
-  ``..``), so nothing fails until an install — by which time the flat root has
-  quietly grown back.
+* A module missing from ``[tool.setuptools] py-modules`` imports fine locally, but
+  ``uv pip install .`` ships only the listed ones, so installed and frozen
+  environments die with ``ModuleNotFoundError``.
+* A new module in the *repo root* also imports fine locally (the root is still
+  ``sys.path[1]``) and PyInstaller still bundles it, so nothing fails until an
+  install — by which time the flat root has quietly grown back.
 """
 
 import os

@@ -1,11 +1,9 @@
 /* Workflows — node card rendering (satellite of workflows.js).
  *
  * Renders a placed node generically from its catalog NodeType: title, domain
- * accent, ParamSpec-driven param editors, the typed input/output port markers
- * (the wires satellite hooks drag-to-connect onto them), and validation cues
- * (greyed when the launch context is unmet; warned when a required input is
- * unwired). Reads shared state through WF.state — never re-`var`s a divergent
- * `state` (the carve gotcha).
+ * accent, ParamSpec-driven param editors, the typed port markers the wires
+ * satellite hooks drag-to-connect onto, and validation cues (greyed when the
+ * launch context is unmet, warned when a required input is unwired).
  */
 
 (function () {
@@ -14,10 +12,10 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
-  // One column of port rows (inputs on the left, outputs on the right; the
-  // outputs column is flipped via CSS so its dot sits on the card edge). Ports
-  // already wired (per `state.edges`) get `.wf-port-connected` so CSS can fill
-  // the dot (occupied) vs. leave it a hollow ring (open).
+  // One column of port rows (inputs left, outputs right — the outputs column is
+  // CSS-flipped so its dot sits on the card edge). Ports already wired per
+  // `state.edges` get `.wf-port-connected`, which fills the dot rather than
+  // leaving it a hollow ring.
   function buildPortColumn(node, ports, isOutput) {
     var col = el("div", "wf-port-col " + (isOutput ? "outputs" : "inputs"));
     var edges = state.edges || [];
@@ -61,10 +59,10 @@
     return col;
   }
 
-  // Multitool step types: the per-frame (check_frame) detectors that need no
-  // uploaded reference, derived from the catalog's `multitoolStep` flag (the
-  // backend's _MULTITOOL_STEP_TOOLS is the single source — no hardcoded JS list).
-  // Each step reuses its ss_<type> catalog params (also from the catalog).
+  // Multitool step types: the per-frame (check_frame) detectors needing no
+  // uploaded reference, derived from the catalog's `multitoolStep` flag — the
+  // backend's _MULTITOOL_STEP_TOOLS is the single source, no hardcoded JS list.
+  // Each step reuses its ss_<type> catalog params.
   function multitoolStepTypes() {
     var out = [];
     (state.catalog || []).forEach(function (n) {
@@ -90,9 +88,9 @@
     return out;
   }
 
-  // The unified Detect node: a detector dropdown plus the selected detector's
-  // param set (the ss_<tool> specs), which swaps in place on change. Generalises
-  // the Multitool step editor to a single, node-level step.
+  // The unified Detect node: a detector dropdown plus that detector's ss_<tool>
+  // param set, swapped in place on change. The Multitool step editor generalised
+  // to a single node-level step.
   function buildDetectEditor(node) {
     if (!node.params) node.params = {};
     var types = detectTypes();
@@ -136,9 +134,9 @@
   }
 
   // One ParamSpec editor (number / enum / bool / participant / string / step-list),
-  // writing back to `store` (defaults to node.params) on change and autosaving.
-  // Scalar editors do NOT re-render on edit, so focus/caret survive typing (the
-  // mousedown router also leaves param controls alone for the same reason).
+  // writing back to `store` (default node.params) on change and autosaving. Scalar
+  // editors do NOT re-render on edit, so focus/caret survive typing — the mousedown
+  // router leaves param controls alone for the same reason.
   function buildParamControl(node, spec, store) {
     if (spec.type === "step-list") return buildStepList(node, spec);
     store = store || node.params;
@@ -191,17 +189,15 @@
     return input;
   }
 
-  // Multi-select participant picker: a summary button opening a checkbox popover
-  // (one row per discovered participant + an "All participants" shortcut). Writes
-  // a normalized value back to store[spec.name]:
-  //   • a single id string  → single run (server's scalar path, unchanged),
+  // Multi-select participant picker: a summary button opening a checkbox popover.
+  // Writes a normalized value back to store[spec.name]:
+  //   • a single id string  → single run (server's scalar path),
   //   • the ALL sentinel     → batch over every participant,
   //   • an array of ≥2 ids   → batch over that subset,
   //   • an empty array       → nothing selected (flagged by validation).
-  // Normalizing a single pick to a string (never a 1-element array) keeps the
-  // server's single-run path untouched. Does NOT re-render the card on change
-  // (focus/open popover survive) — only the summary text updates, matching the
-  // scalar editors. Reuses the hub's bindMenuToggle for outside-click/Escape.
+  // Normalizing a single pick to a string, never a 1-element array, keeps the
+  // server's single-run path untouched. Like the scalar editors it doesn't
+  // re-render the card on change, so focus and the open popover survive.
   function buildParticipantSelect(spec, store) {
     var ALL = WF.ALL_PARTICIPANTS;
     var participants = (state.context && state.context.participants) || [];
@@ -308,10 +304,10 @@
     return wrap;
   }
 
-  // Compound editor for the multitool `steps` param: an ordered list of step
-  // objects {type, logic, …per-type fields}. Structural changes (add/remove/
-  // reorder/type) re-render the list container only; scalar field edits write
-  // through buildParamControl(step) without a re-render (focus preserved).
+  // Compound editor for the multitool `steps` param: an ordered list of
+  // {type, logic, …per-type fields}. Structural changes (add/remove/reorder/type)
+  // re-render the list container only; scalar edits write through
+  // buildParamControl(step) with no re-render, preserving focus.
   function buildStepList(node, spec) {
     if (!Array.isArray(node.params[spec.name])) node.params[spec.name] = [];
     var steps = node.params[spec.name];

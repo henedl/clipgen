@@ -1,9 +1,8 @@
-/* Unified top navigation — shared chrome across Studio, Screenspace, Transcripts.
- * Replaces the per-page frontend-switcher. Mounted by topnav.js into a
- * <topnav-mount> placeholder element.
+/* Unified top navigation — shared chrome across every page. Mounted by topnav.js
+ * into a <topnav-mount> placeholder.
  *
  * Anatomy:
- *   [logo · clipgen]    [Studio | Screenspace | Transcripts]    [Quick actions ▾ | Log | Theme | v0.10.x]
+ *   [logo · clipgen]   [page tabs]   [Quick actions ▾ | Log | Theme | version]
  */
 
 /* Floating glass nav. The translucent background + backdrop-filter let any

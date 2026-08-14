@@ -4,7 +4,6 @@ Each scan sweeps a video via the frame-extraction drivers and applies one
 analysis primitive (color, change, similarity, text, numbers, timelapse,
 template, flow, scene, inactivity, boundary, attention). Scans never call
 each other.
-Imports primitives, OCR helpers, and frame extractors from sibling modules.
 """
 
 import subprocess
@@ -181,9 +180,8 @@ def scan_changes(
             region_mask = mask_for(pixels)
             if region_mask is not None:
                 # Shaped region: only changes inside the polygon count, and the
-                # magnitude is relative to the polygon's area. The ANDed mask
-                # also feeds change_grid below, so heatmap cells outside the
-                # polygon are suppressed for free.
+                # magnitude is relative to the polygon's area. The ANDed mask also
+                # feeds change_grid below, suppressing outside cells for free.
                 mask = cv2.bitwise_and(mask, region_mask)
                 denom = float(np.count_nonzero(region_mask))
             else:
@@ -192,10 +190,9 @@ def scan_changes(
             if mag >= threshold:
                 rd: dict[str, Any] = {"timestamp": ts, "magnitude": round(mag, 4)}
                 if build_grid:
-                    # Downsample the change mask to a small, thresholded grid
-                    # (mirrors flow_grid) recording the fraction of pixels changed
-                    # per cell, so the Change heatmap can show where pixels move
-                    # without bloating the per-frame results.
+                    # Downsample the mask to a small thresholded grid (mirroring
+                    # flow_grid) of per-cell changed fractions, so the Change
+                    # heatmap can show *where* without bloating per-frame results.
                     cells = (
                         cv2.resize(
                             mask, (grid, grid), interpolation=cv2.INTER_AREA
@@ -669,16 +666,14 @@ def generate_timelapse(
         returncode = encode("libx264")
 
     # A cancel must not report completion: encode() returns None for it, and the
-    # caller's progress bar would otherwise jump to 100% on a task the user just
-    # stopped. A failed spawn no longer arrives here — encode() raises for that.
+    # progress bar would otherwise jump to 100% on a task the user just stopped.
     if returncode is None:
         return None
 
     if returncode != 0:
-        # The worker only inspects its cancel flag when deciding a task's final
-        # status, so returning None here would mark a failed encode "completed"
-        # with no output. Raise so it lands in the failure branch with a reason —
-        # and before on_progress(1.0), so the bar never fills on a failed encode.
+        # The worker only checks its cancel flag when settling a task's status, so
+        # returning None here would mark a failed encode "completed" with no
+        # output. Raise instead — before on_progress(1.0), so the bar never fills.
         raise RuntimeError(f"ffmpeg exited with code {returncode} encoding timelapse")
 
     if on_progress:
@@ -729,9 +724,9 @@ def scan_template(
         template_image, template_mask, template_scale
     )
 
-    # Hoist the constant template prep (blur + grayscale + variance check)
-    # out of the per-frame callback. A degenerate template yields [] every
-    # frame, so bail early before even opening the ffmpeg pipe.
+    # Hoist the constant template prep (blur + grayscale + variance check) out of
+    # the per-frame callback. A degenerate template yields [] every frame, so bail
+    # before even opening the ffmpeg pipe.
     _prepared = _prepare_template(scaled_template, scaled_mask)
     if _prepared[2]:  # degenerate template
         if on_progress:
@@ -739,19 +734,18 @@ def scan_template(
         return results
 
     _nms_overlap = config.SCREENSPACE_TEMPLATE_NMS_OVERLAP
-    # Frame is already at cv_scale * original due to ffmpeg scaling. We need
-    # to undo both the user-set cv_scale and the fast-scan internal 2x
-    # downscale to report match boxes in original-frame pixels.
+    # ffmpeg already scaled the frame by cv_scale, so match boxes need both that
+    # and the fast-scan internal 2x downscale undone to land in original pixels.
     _cv_scale = (
         config.SCREENSPACE_CV_RESOLUTION_SCALE
         if config.SCREENSPACE_CV_RESOLUTION_SCALE > 0
         else 1.0
     )
 
-    # Static-frame carry: template results are per-frame rows with no consecutive
-    # buffer, so a naive skip would drop a persistent match's rows and make the
-    # detection flicker. Cache the last processed frame's result and, on a static
-    # frame, re-emit it (re-stamped) instead of re-running the expensive match.
+    # Static-frame carry: template rows are per-frame with no consecutive buffer,
+    # so a naive skip would drop a persistent match's rows and flicker the
+    # detection. Cache the last result and re-emit it (re-stamped) on a static
+    # frame instead of re-running the expensive match.
     prev_skip_gray: list[np.ndarray | None] = [None]
     last_rd: list[dict[str, Any] | None] = [None]
 
@@ -802,12 +796,11 @@ def scan_template(
                     m["y"] = round(m["y"] * inv)
                     m["w"] = round(m["w"] * inv)
                     m["h"] = round(m["h"] * inv)
-            # Shaped region: the match itself runs full-frame (as for rects,
-            # which don't restrict template search either), but detections
-            # whose center falls outside the polygon are dropped. Runs before
-            # the static-frame carry caches last_rd, so carried rows are
-            # already filtered. This mask is the *region's* shape — distinct
-            # from template_mask, the template's own alpha channel.
+            # Shaped region: the match runs full-frame (rects don't restrict
+            # template search either), but detections centered outside the polygon
+            # are dropped. Runs before the static-frame carry caches last_rd, so
+            # carried rows are already filtered. This is the *region's* mask —
+            # distinct from template_mask, the template's own alpha channel.
             matches = filter_matches_by_region_mask(matches, region)
         if matches:
             best = max(m["score"] for m in matches)
@@ -888,10 +881,9 @@ def scan_flow(
         if cancel_flag and cancel_flag():
             return False
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
-        # Static-frame skip: a near-duplicate of the previous frame produces
-        # ~zero optical flow, so the expensive Farneback pass would only confirm
-        # magnitude < threshold and reset the run anyway. Short-circuit to that
-        # outcome, still advancing prev_gray (flow is measured frame-to-frame).
+        # Static-frame skip: a near-duplicate produces ~zero flow, so Farneback
+        # would only confirm magnitude < threshold and reset the run anyway.
+        # Short-circuit to that, still advancing prev_gray (flow is per-pair).
         if _frame_is_static(prev_gray[0], curr_gray):
             buf.reset()
             prev_gray[0] = curr_gray
@@ -974,10 +966,10 @@ def scan_scene(
     if interval_seconds <= 0:
         interval_seconds = config.SCREENSPACE_DEFAULT_INTERVAL
 
-    # Pre-compute fingerprints for reference scenes (with per-scene thresholds).
-    # Shaped regions: fingerprints are only comparable when both sides use the
-    # mask, so each reference crop gets the mask rasterized at its own size
-    # (references are source-resolution; scan crops may be rescaled).
+    # Pre-compute reference fingerprints (with per-scene thresholds). For shaped
+    # regions both sides must use the mask to be comparable, so each reference
+    # crop rasterizes it at its own size — references are source-resolution,
+    # scan crops may be rescaled.
     mask_for = region_masker(region)
     ref_fps: list[tuple[str, dict[str, Any], float]] = []
     for ref in reference_scenes:
@@ -1124,11 +1116,11 @@ def scan_inactivity(
         last_ts[0] = ts
 
         # Static-frame fast-path: a gray mean-diff below the static threshold
-        # implies a phash Hamming distance of ~0 — well within the (always ≥1)
-        # inactivity threshold — so the frame is provably inactive. Extend the
-        # span with a nominal 0 distance and skip the much heavier compute_phash.
-        # prev_hash/prev_skip_gray are left as the run baseline so slow drift is
-        # still measured against the start of the frozen run.
+        # implies a phash distance of ~0 — well inside the (always ≥1) inactivity
+        # threshold — so the frame is provably inactive. Extend the span at a
+        # nominal 0 and skip the far heavier compute_phash. prev_hash and
+        # prev_skip_gray stay put so slow drift is still measured from the start
+        # of the frozen run.
         curr_gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
         if _frame_is_static(prev_skip_gray[0], curr_gray):
             _extend_span(ts, 0)
@@ -1375,28 +1367,26 @@ def scan_boundaries(
 
     Three metrics (``metric``):
 
-    - ``"phash"`` (v1): a boundary fires when the perceptual-hash Hamming
-      distance to the *previous* sampled frame is ≥ *threshold*, debounced by
-      *min_gap* seconds. Streams each boundary live via *on_result*.
-    - ``"scene"``: each sample's content fingerprint is measured against the
-      *current period's* reference (not the previous frame); a boundary fires
-      only when the fingerprint distance crosses
-      ``SCREENSPACE_BOUNDARY_SCENE_THRESHOLD`` and *holds* for
-      ``SCREENSPACE_BOUNDARY_CONFIRM_WINDOW`` samples. Robust to motion.
-    - ``"hybrid"``: a confirmed scene shift that is *also* corroborated by a
-      phash spike — catches hard cuts and rejects both motion (phash spikes
-      that don't sustain) and slow fades (drift with no spike).
+    - ``"phash"``: fires when the perceptual-hash Hamming distance to the
+      *previous* sampled frame is ≥ *threshold*, debounced by *min_gap* seconds.
+      Streams each boundary live via *on_result*.
+    - ``"scene"``: measures each sample's content fingerprint against the
+      *current period's* reference rather than the previous frame, firing only
+      when the distance crosses ``SCREENSPACE_BOUNDARY_SCENE_THRESHOLD`` and
+      *holds* for ``SCREENSPACE_BOUNDARY_CONFIRM_WINDOW`` samples. Motion-robust.
+    - ``"hybrid"``: a confirmed scene shift also corroborated by a phash spike —
+      catches hard cuts while rejecting motion (spikes that don't sustain) and
+      slow fades (drift with no spike).
 
-    ``scene``/``hybrid`` run a post-run consolidation pass
+    ``scene``/``hybrid`` consolidate afterwards
     (:func:`_consolidate_boundary_periods`) and emit ``on_result`` only for the
-    *final* boundaries (the worker derives events from the stream), so the
-    progress bar advances live but ticks appear together at completion. The
-    function param defaults to ``"phash"``; the tool layer applies the policy
-    default (``config.SCREENSPACE_BOUNDARY_METRIC``).
+    *final* boundaries, so the progress bar advances live but ticks all appear at
+    completion. This param defaults to ``"phash"``; the tool layer applies the
+    policy default (``config.SCREENSPACE_BOUNDARY_METRIC``).
 
-    Region is ignored (full-frame only); the parameter exists for signature
-    parity. Returns ``{timestamp, distance, _confidence}`` dicts (scene/hybrid
-    also carry ``period_start``/``period_end``).
+    Region is ignored (full-frame only) and exists for signature parity. Returns
+    ``{timestamp, distance, _confidence}`` dicts, scene/hybrid also carrying
+    ``period_start``/``period_end``.
     """
     if threshold <= 0:
         threshold = config.SCREENSPACE_BOUNDARY_PHASH_THRESHOLD
