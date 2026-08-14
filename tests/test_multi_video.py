@@ -762,6 +762,14 @@ def test_participant_id_from_source_name():
     assert utils.participant_id_from_source_name("study_P03 copy 2.mp4") is None
 
 
+def test_split_source_stem():
+    assert utils.split_source_stem("study_P01.mp4") == ("study", "P01")
+    assert utils.split_source_stem("study_P01-2.mp4") == ("study", "P01")
+    assert utils.split_source_stem("my-study_G02-10.mp4") == ("my-study", "G02")
+    assert utils.split_source_stem("random.mp4") == ("", "random")
+    assert utils.split_source_stem("study_P03 copy.mp4") == ("study", "P03 copy")
+
+
 def test_numbered_parts_are_contiguous():
     assert utils.numbered_parts_are_contiguous([1, 2, 3]) is True
     assert utils.numbered_parts_are_contiguous([2, 1, 3]) is True  # order-insensitive

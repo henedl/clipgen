@@ -1408,8 +1408,7 @@ _DEFAULT_EVENT_CLUSTER_GAP = 5.0  # seconds; matches the CLI --cluster-gap defau
 
 def _study_from_filename(filename: str) -> str:
     """Derive the study name from a ``{study}_{pid}`` basename ('' when absent)."""
-    head, _sep, _tail = Path(filename).stem.rpartition("_")
-    return head
+    return utils.split_source_stem(filename)[0]
 
 
 def _source_descriptor(participant: str, video_paths: list[str]) -> dict[str, Any]:

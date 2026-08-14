@@ -2235,6 +2235,23 @@ def numbered_parts_are_contiguous(indices: list[int]) -> bool:
     return sorted(indices) == list(range(1, len(indices) + 1))
 
 
+def split_source_stem(name: str) -> tuple[str, str]:
+    """Split a source-video filename into ``(study, remainder)``.
+
+    Strips a numbered-part ``-N`` suffix first so ``study_P01-2.mp4`` yields
+    ``("study", "P01")``. When the stem has no ``_``, study is ``""`` and
+    remainder is the stripped stem.
+    """
+    stem = Path(name).stem
+    head, sep, tail = stem.rpartition("-")
+    if sep and head and tail.isdigit():
+        stem = head
+    parts = stem.rsplit("_", 1)
+    if len(parts) == 2:
+        return (parts[0], parts[1])
+    return ("", stem)
+
+
 def participant_id_from_source_name(name: str) -> str | None:
     """Extract the participant id from a source-video filename, or None.
 
@@ -2243,15 +2260,14 @@ def participant_id_from_source_name(name: str) -> str | None:
     stripped first so a part groups under its base participant id. Returns None
     when the trailing segment is not a recognised id (config.PARTICIPANT_PREFIXES).
     """
-    stem = Path(name).stem
-    head, sep, tail = stem.rpartition("-")
-    if sep and head and tail.isdigit():
-        stem = head  # strip the numbered-part suffix
-    parts = stem.rsplit("_", 1)
-    if len(parts) != 2:
+    study, pid = split_source_stem(name)
+    if not pid:
         return None
-    pid = parts[1]
-    if not pid or pid[0] not in config.PARTICIPANT_PREFIXES:
+    # A stem with no ``_`` maps to ``("", stripped_stem)``. That is not a
+    # participant id — unlike ``_P01.mp4``, which splits to ``("", "P01")``.
+    if not study and "_" not in Path(name).stem:
+        return None
+    if pid[0] not in config.PARTICIPANT_PREFIXES:
         return None
     # Reject ids with whitespace: real participant ids are clean tokens (P01,
     # G02). A space is the signature of a Finder/Explorer duplicate
