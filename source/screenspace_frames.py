@@ -1,9 +1,4 @@
-"""Screenspace frame extraction (ffmpeg pipe + ffprobe).
-
-The per-frame scan drivers (``scan_video_frames`` / ``scan_video_full_frames``),
-the ffmpeg-pipe extractor, the timelapse command builder, and a small ffprobe
-metadata helper. Imports perceptual hashing from screenspace_primitives.
-"""
+"""Screenspace frame extraction (ffmpeg pipe + ffprobe)."""
 
 import queue
 import re
@@ -47,21 +42,17 @@ def scan_video_frames(
     """Iterate through video at interval, extract region, call callback.
 
     The *callback* receives ``(timestamp_seconds, region_pixels)`` and may
-    return ``False`` to stop iteration early.  When *region* is ``None``
-    the full frame is passed (used by template detection).
+    return ``False`` to stop early. ``region=None`` passes the full frame
+    (used by template detection). *fps* / *duration*, when given, skip an
+    internal metadata probe.
 
-    When *fps* and *duration* are provided, skips internal metadata reads.
-    Uses sequential frame reading (grab/retrieve) for small intervals
-    to avoid expensive H.264 seeking.
-
-    *fast_opts* enables fast-scan optimizations when provided:
+    *fast_opts* enables fast-scan optimizations:
     - ``phash_skip``: skip frames whose perceptual hash is unchanged
     - ``max_region_dim``: downscale extracted region to this max dimension
     """
     full_frame = region is None
-    # Reject zero-dimension regions early so ffmpeg's crop filter doesn't
-    # produce empty frames downstream (which would crash cv2.cvtColor /
-    # cv2.GaussianBlur with an opaque shape mismatch).
+    # Reject zero-dimension regions early: ffmpeg's crop would emit empty frames,
+    # crashing cv2.cvtColor/GaussianBlur downstream with a shape mismatch.
     if region is not None and (region.get("w", 0) <= 0 or region.get("h", 0) <= 0):
         utils.warning_print(
             f"Skipping scan: region has zero width or height ({region})"
@@ -70,7 +61,6 @@ def scan_video_frames(
     if cv_scale is None:
         cv_scale = config.SCREENSPACE_CV_RESOLUTION_SCALE
 
-    # Extract frames via ffmpeg pipe (faster H.264 decoding, no cv2.VideoCapture)
     if not _scan_via_ffmpeg_pipe(
         video_path,
         None if full_frame else region,
@@ -84,11 +74,8 @@ def scan_video_frames(
         full_frame=full_frame,
         cv_scale=cv_scale,
     ):
-        # This used to warn and return, so the scan "completed" having examined
-        # zero frames — the user saw an empty result list and read it as "the
-        # detector found nothing", not "nothing was ever looked at". The cv2
-        # fallback this fell back to is long gone. Raise so the worker marks the
-        # task failed with a reason.
+        # Raise, don't warn: a scan that examined zero frames must not return an
+        # empty result list, which reads as "the detector found nothing".
         raise RuntimeError(
             f"Could not extract frames from {Path(video_path).name} — "
             "check that ffmpeg is installed and the file is readable."
@@ -107,10 +94,7 @@ def scan_video_full_frames(
     fast_opts: dict[str, Any] | None = None,
     cv_scale: float | None = None,
 ) -> None:
-    """Like :func:`scan_video_frames` but passes the full frame (no region crop).
-
-    Thin wrapper that calls ``scan_video_frames`` with ``region=None``.
-    """
+    """Like :func:`scan_video_frames` but passes the full frame (no region crop)."""
     scan_video_frames(
         video_path,
         None,
@@ -126,7 +110,7 @@ def scan_video_full_frames(
 
 
 # ---------------------------------------------------------------------------
-# Batch frame extraction via ffmpeg pipe (experiment 2E)
+# Batch frame extraction via ffmpeg pipe
 # ---------------------------------------------------------------------------
 
 
@@ -143,40 +127,24 @@ def _ffmpeg_pipe_frames(
     cv_scale: float = 1.0,
     skip_non_keyframes: bool = False,
 ) -> Iterator[tuple[float, np.ndarray]]:
-    """Yield ``(timestamp, frame)`` tuples extracted via an ffmpeg pipe.
+    """Yield ``(timestamp, frame)`` tuples from one ``-f rawvideo`` ffmpeg pipe.
 
-    Uses a single ffmpeg process with ``-f rawvideo`` piped to stdout,
-    which is typically faster than per-frame ``cv2.VideoCapture`` seeking
-    for H.264 content.
+    *region* crops in ffmpeg so only ROI pixels are decoded and transferred;
+    *max_dim* caps the largest output dimension. Stopping iteration early (e.g.
+    on cancel) is safe — the ``finally`` tears the subprocess down.
 
-    *region* applies an ffmpeg ``crop`` filter so only the ROI pixels are
-    decoded and transferred.  *max_dim* adds a ``scale`` filter to cap the
-    largest output dimension (useful for fast-scan downscaling).
-
-    *skip_non_keyframes* adds the input-level ``-skip_frame nokey`` decoder
-    option so only keyframes are decoded (GOP-sized savings). The ``select``
-    filter still thins them to ``interval_seconds`` apart, and ``showinfo``
-    still reports each keyframe's true PTS, so timestamps stay accurate — only
-    temporal resolution drops to keyframe granularity. The caller must gate this
-    so it is used only when keyframes are frequent enough (see
-    ``_scan_via_ffmpeg_pipe``).
-
-    The caller can stop iteration at any time (e.g. on cancel); the
-    ``finally`` block ensures the subprocess is cleaned up.
+    *skip_non_keyframes* decodes keyframes only (GOP-sized savings). Timestamps
+    stay accurate since ``showinfo`` reports true PTS; only temporal resolution
+    drops to keyframe granularity, so the caller must gate this on keyframes
+    being frequent enough (see ``_scan_via_ffmpeg_pipe``).
     """
     if not shutil.which("ffmpeg"):
         return
 
-    # Determine output dimensions.
-    #
-    # `select` instead of `fps`: at interval N, fps=1/N picks the *last*
-    # source frame whose PTS rounds to each output slot — for 30 fps source
-    # that's ~0.5 s past the slot — and assigns it the slot's PTS in the
-    # output. The preview path seeks to that slot PTS and lands on a
-    # different source frame, hence the long-running click-vs-preview drift.
-    # `select` passes the chosen frame through with its original PTS, which
-    # showinfo (below) reports verbatim. Paired with `-fps_mode vfr` below to
-    # stop ffmpeg from duplicating frames to fill the source rate.
+    # `select`, not `fps`: fps=1/N rewrites each kept frame's PTS to the output
+    # slot, so the preview seeking to that PTS lands on a different source frame
+    # (the long-running click-vs-preview drift). `select` preserves the original
+    # PTS, which showinfo reports verbatim. Needs `-fps_mode vfr` below.
     filters = [
         f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{interval_seconds})'"
     ]
@@ -190,9 +158,8 @@ def _ffmpeg_pipe_frames(
     if out_w <= 0 or out_h <= 0:
         return
 
-    # Global CV resolution scale: applied after the region crop, before any
-    # max_dim cap. Skipped at 1.0 so default-config runs are byte-identical
-    # to pre-feature behavior.
+    # Global CV resolution scale: after the region crop, before any max_dim cap.
+    # Skipped at 1.0 so default-config runs emit byte-identical argv.
     if cv_scale > 0 and abs(cv_scale - 1.0) > 1e-6:
         scaled_w = max(2, round(out_w * cv_scale))
         scaled_h = max(2, round(out_h * cv_scale))
@@ -210,20 +177,18 @@ def _ffmpeg_pipe_frames(
         out_h += out_h % 2
         filters.append(f"scale={out_w}:{out_h}")
 
-    # showinfo last so its `pts_time:` lines correspond 1-to-1 with the
-    # rawvideo frames pushed to stdout. The drain thread below parses these
-    # and queues them so each yielded frame is tagged with its actual source
-    # PTS instead of a synthetic frame_idx*interval.
+    # showinfo last so its `pts_time:` lines map 1-to-1 onto the rawvideo frames
+    # on stdout, tagging each yielded frame with its real source PTS rather than
+    # a synthetic frame_idx*interval.
     filters.append("showinfo")
 
     cmd: list[str] = ["ffmpeg"]
     if start_seconds > 0:
         cmd += ["-ss", str(start_seconds)]
     if skip_non_keyframes:
-        # Input-level decoder option (must precede -i): the H.264/HEVC decoder
-        # drops non-keyframe packets before decode, so only keyframes reach the
-        # filter graph. The first yielded frame may land up to one GOP past
-        # start_seconds, which is benign — showinfo still reports its real PTS.
+        # Must precede -i: the decoder drops non-keyframe packets before decode.
+        # The first frame can land up to one GOP past start_seconds — benign,
+        # since showinfo still reports its real PTS.
         cmd += ["-skip_frame", "nokey"]
     cmd += ["-i", video_path]
     if end_seconds > start_seconds:
@@ -231,18 +196,16 @@ def _ffmpeg_pipe_frames(
     cmd += [
         "-vf",
         ",".join(filters),
-        # `select` keeps source PTS, so without `vfr` ffmpeg pads the output
-        # back up to the source frame rate by duplicating each kept frame
-        # (~30 dupes per kept frame at 30 fps). vfr emits only the actual
-        # kept frames, one-to-one with the showinfo log lines.
+        # `select` keeps source PTS, so without `vfr` ffmpeg pads back up to the
+        # source rate by duplicating each kept frame (~30x at 30 fps).
         "-fps_mode",
         "vfr",
         "-pix_fmt",
         "bgr24",
         "-f",
         "rawvideo",
-        # showinfo emits at the `info` level; with `error` its lines never
-        # reach stderr and we'd have no PTS data to read.
+        # showinfo emits at `info`; at `error` its lines never reach stderr and
+        # there is no PTS data to read.
         "-loglevel",
         "info",
         "pipe:1",
@@ -256,9 +219,8 @@ def _ffmpeg_pipe_frames(
     assert proc.stdout is not None  # guaranteed by stdout=PIPE
     assert proc.stderr is not None  # guaranteed by stderr=PIPE
 
-    # Daemon thread drains stderr so the OS buffer never blocks ffmpeg, and
-    # forwards every `pts_time:` line to the read loop as a float (seconds
-    # since the seek point).
+    # Daemon thread drains stderr so its OS buffer never blocks ffmpeg, forwarding
+    # each `pts_time:` as a float (seconds since the seek point).
     stop_drain = threading.Event()
 
     def _drain_stderr() -> None:
@@ -273,10 +235,9 @@ def _ffmpeg_pipe_frames(
                 value = float(m.group(1))
             except ValueError:
                 continue
-            # Bounded put: when the consumer stops early (break below), the
-            # queue fills and an unbounded put() would wedge this thread
-            # forever. Time out and re-check stop_drain so the thread exits
-            # instead of leaking once we tear the subprocess down.
+            # Bounded put: once the consumer breaks early the queue fills, and an
+            # unbounded put() would wedge this thread. Time out and re-check
+            # stop_drain so it exits at teardown instead of leaking.
             while not stop_drain.is_set():
                 try:
                     pts_q.put(value, timeout=0.2)
@@ -329,12 +290,10 @@ def _scan_via_ffmpeg_pipe(
 ) -> bool:
     """Try to scan frames via ffmpeg pipe, calling *callback* for each.
 
-    Returns ``True`` if the ffmpeg path succeeded, ``False`` if it could not
-    run at all (no ffmpeg on PATH, unprobeable video, zero dimensions).
-
-    There is no longer a cv2 fallback for a ``False`` here — ``scan_video_frames``
-    raises instead, because a scan that quietly yields zero frames is
-    indistinguishable to the user from a scan that legitimately found nothing.
+    ``True`` if the ffmpeg path ran, ``False`` if it could not start at all (no
+    ffmpeg on PATH, unprobeable video, zero dimensions). There is no cv2
+    fallback for ``False`` — ``scan_video_frames`` raises, since a scan that
+    quietly yields zero frames looks like one that legitimately found nothing.
     """
     if not shutil.which("ffmpeg"):
         return False
@@ -359,16 +318,13 @@ def _scan_via_ffmpeg_pipe(
     _prev_phash: list[imagehash.ImageHash | None] = [None]
 
     pipe_region = None if full_frame else region
-    # For the pipe, push max_dim downscaling into ffmpeg when phash_skip is off.
-    # When phash_skip is on, we need the un-downscaled frame for hashing, so
-    # we downscale in Python after the hash check.
+    # Push max_dim downscaling into ffmpeg only when phash_skip is off; hashing
+    # needs the un-downscaled frame, so that path downscales in Python instead.
     pipe_max_dim = _max_dim if (not _phash_skip and _max_dim > 0) else 0
 
-    # Keyframe-only decode (fast-scan only): decode just keyframes when the
-    # source is an inter-coded codec whose GOP is short enough. Gated on
-    # fast_opts (so precise/boundary scans are untouched), a codec allowlist, the
-    # master switch, and a per-video probe of the *worst-case* keyframe gap. Any
-    # probe uncertainty (None) leaves it off — full decode.
+    # Keyframe-only decode, gated on fast_opts (precise/boundary scans stay on
+    # full decode), a codec allowlist, the master switch, and a probe of the
+    # *worst-case* keyframe gap. Probe uncertainty (None) means full decode.
     skip_non_keyframes = False
     select_interval = interval_seconds
     if (
@@ -382,13 +338,11 @@ def _scan_via_ffmpeg_pipe(
             and max_gap <= interval_seconds * config.SCREENSPACE_KEYFRAME_SKIP_MARGIN
         ):
             skip_non_keyframes = True
-            # `select` snaps each sample up to the next keyframe, overshooting
-            # the interval grid whenever the GOP doesn't divide the interval
-            # (e.g. 2s GOP, 3s interval → samples at 0,4,8 not 0,3,6). Shrinking
-            # the select interval by the worst-case gap guarantees consecutive
-            # samples stay < interval apart (in [interval-max_gap, interval)), so
-            # coverage is never coarser than requested — at the cost of a bounded
-            # (<2x for uniform GOP) oversample that phash-skip largely absorbs.
+            # `select` snaps each sample up to the next keyframe, overshooting the
+            # grid when the GOP doesn't divide the interval (2s GOP, 3s interval →
+            # 0,4,8 not 0,3,6). Shrinking by the worst-case gap keeps consecutive
+            # samples < interval apart, so coverage is never coarser than asked —
+            # at a bounded oversample that phash-skip largely absorbs.
             select_interval = max(0.0, interval_seconds - max_gap)
 
     try:
@@ -409,7 +363,6 @@ def _scan_via_ffmpeg_pipe(
                 if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
                     continue
                 _prev_phash[0] = fh
-                # Downscale after phash if needed
                 if _max_dim > 0:
                     rh, rw = frame.shape[:2]
                     if rh > _max_dim or rw > _max_dim:
@@ -444,12 +397,9 @@ def build_timelapse_command(
 ) -> list[str]:
     """Construct ffmpeg argv for a cropped timelapse.
 
-    *sample_interval* (seconds) controls frame sampling: when > 0, only one
-    frame per interval is kept before cropping and speed-up.  0 means every
-    frame is used (default).
-
-    *encoder* selects the H.264 encoder for mp4 output (see
-    ``video.resolve_video_encoder``); gif output has no video encoder to pick.
+    *sample_interval* (seconds) keeps one frame per interval before crop and
+    speed-up; 0 (default) uses every frame. *encoder* picks the H.264 encoder
+    for mp4 (see ``video.resolve_video_encoder``); gif has none to pick.
     """
     x, y, w, h = region["x"], region["y"], region["w"], region["h"]
     filters: list[str] = []
