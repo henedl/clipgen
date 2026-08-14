@@ -3217,14 +3217,27 @@ def _spreadsheet_label() -> str:
 
 
 def _swap_worksheet(new_worksheet: Any) -> None:
-    """Replace the active worksheet and refresh all three blueprints' state.
+    """Replace the active worksheet and refresh every blueprint's sheet state.
 
-    Atomic: if any of the three init steps fails, the prior state is restored
-    so Studio / Screenspace / Transcripts don't end up pointing at different
-    sheets. Used by ``/api/spreadsheets/open`` and ``/api/spreadsheets/close``.
+    All five that ``build_combined_app`` initializes, not just the three that
+    hold a full init: Workflows and Composer were left holding whatever sheet
+    the *process* started with, which on a desktop launch is none — so a
+    spreadsheet opened from the Start overlay never reached a workflow run's
+    NodeContext or Composer's participant list.
+
+    Those two re-pin through a sheet-only ``repin_sheet_state`` rather than
+    their init: re-running the full init would reload their manifests, and
+    Workflows' would also reseed the watch-dir baseline and restart the trigger
+    daemon on every spreadsheet the user opens.
+
+    Atomic: if any step fails, the prior state is restored so the blueprints
+    don't end up pointing at different sheets. Used by
+    ``/api/spreadsheets/open`` and ``/api/spreadsheets/close``.
     """
+    import composer_server
     import screenspace_server
     import transcripts_server
+    import workflows_server
 
     global _worksheet, _generated_artifacts, _generated_reels
     prev_worksheet = _worksheet
@@ -3239,6 +3252,11 @@ def _swap_worksheet(new_worksheet: Any) -> None:
         transcripts_server._init_transcripts_state(
             sheet_context=_sheet_context,
         )
+        workflows_server.repin_sheet_state(
+            sheet_context=_sheet_context,
+            worksheet=new_worksheet,
+        )
+        composer_server.repin_sheet_state(sheet_context=_sheet_context)
     except Exception:
         _worksheet = prev_worksheet
         _set_sheet_context(prev_sheet_context)
@@ -3246,7 +3264,7 @@ def _swap_worksheet(new_worksheet: Any) -> None:
             _generated_artifacts = prev_artifacts
             _generated_reels = prev_reels
             _rebuild_artifact_index()
-        # Best-effort: re-pin the two sister blueprints to the restored state.
+        # Best-effort: re-pin the sister blueprints to the restored state.
         # If these themselves throw, swallow — the studio state is already
         # consistent and the original exception is what we want to surface.
         try:
@@ -3259,6 +3277,14 @@ def _swap_worksheet(new_worksheet: Any) -> None:
             transcripts_server._init_transcripts_state(
                 sheet_context=_sheet_context,
             )
+        except Exception:  # noqa: S110 - deliberate, see the comment above
+            pass
+        try:
+            workflows_server.repin_sheet_state(
+                sheet_context=_sheet_context,
+                worksheet=prev_worksheet,
+            )
+            composer_server.repin_sheet_state(sheet_context=_sheet_context)
         except Exception:  # noqa: S110 - deliberate, see the comment above
             pass
         raise

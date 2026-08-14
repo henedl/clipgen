@@ -2419,6 +2419,120 @@ def test_swap_worksheet_rollback_clears_sheet_payload_cache(monkeypatch):
     assert server._sheet_payload_cache is None
 
 
+def test_swap_worksheet_repins_workflows_and_composer(monkeypatch):
+    """All five blueprints follow the swap, not just the three with a full init.
+
+    Workflows and Composer used to keep whatever sheet the *process* started
+    with — none, on a desktop launch — so a spreadsheet opened from the Start
+    overlay never reached a run's NodeContext or Composer's participant list.
+    """
+    import types
+
+    import composer_server
+    import screenspace_server
+    import spreadsheet
+    import transcripts_server
+    import workflows_server
+
+    new_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="opened",
+    )
+    new_ws = object()
+
+    def fake_init_studio_state(worksheet):
+        server._worksheet = worksheet
+        server._sheet_context = new_ctx if worksheet is not None else None
+
+    monkeypatch.setattr(server, "_worksheet", None)
+    monkeypatch.setattr(server, "_sheet_context", None)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_init_studio_state", fake_init_studio_state)
+    monkeypatch.setattr(
+        screenspace_server, "_init_screenspace_state", lambda **kw: None
+    )
+    monkeypatch.setattr(
+        transcripts_server, "_init_transcripts_state", lambda **kw: None
+    )
+    monkeypatch.setattr(workflows_server, "_sheet_context", None)
+    monkeypatch.setattr(workflows_server, "_worksheet", None)
+    monkeypatch.setattr(composer_server, "_sheet_context", None)
+
+    server._swap_worksheet(new_ws)
+
+    assert workflows_server._sheet_context is new_ctx
+    assert workflows_server._worksheet is new_ws
+    assert composer_server._sheet_context is new_ctx
+
+    # ...and closing has to clear them again, or both keep a dead worksheet.
+    server._swap_worksheet(None)
+
+    assert workflows_server._sheet_context is None
+    assert workflows_server._worksheet is None
+    assert composer_server._sheet_context is None
+
+
+def test_swap_worksheet_rollback_restores_workflows_and_composer(monkeypatch):
+    """A failed swap must leave the sister blueprints on the prior sheet, not
+    the half-applied one."""
+    import types
+
+    import composer_server
+    import screenspace_server
+    import spreadsheet
+    import workflows_server
+
+    prev_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="previous",
+    )
+    prev_ws = object()
+
+    attempted_ctx = spreadsheet.SheetContext(
+        sheet_data=[["ID"]],
+        id_cell=types.SimpleNamespace(row=1, col=1),
+        observation_cell=types.SimpleNamespace(row=1, col=1),
+        category_cell=types.SimpleNamespace(row=1, col=1),
+        num_participants=0,
+        study_name="attempted",
+    )
+
+    def fake_init_studio_state(worksheet):
+        server._worksheet = worksheet
+        server._sheet_context = attempted_ctx
+
+    monkeypatch.setattr(server, "_worksheet", prev_ws)
+    monkeypatch.setattr(server, "_sheet_context", prev_ctx)
+    monkeypatch.setattr(server, "_sheet_payload_cache", None)
+    monkeypatch.setattr(server, "_generated_artifacts", [])
+    monkeypatch.setattr(server, "_generated_reels", [])
+    monkeypatch.setattr(server, "_init_studio_state", fake_init_studio_state)
+
+    def _boom(**kwargs):
+        raise RuntimeError("screenspace failed")
+
+    monkeypatch.setattr(screenspace_server, "_init_screenspace_state", _boom)
+    monkeypatch.setattr(workflows_server, "_sheet_context", prev_ctx)
+    monkeypatch.setattr(workflows_server, "_worksheet", prev_ws)
+    monkeypatch.setattr(composer_server, "_sheet_context", prev_ctx)
+
+    with pytest.raises(RuntimeError, match="screenspace failed"):
+        server._swap_worksheet(object())
+
+    assert workflows_server._sheet_context is prev_ctx
+    assert workflows_server._worksheet is prev_ws
+    assert composer_server._sheet_context is prev_ctx
+
+
 def test_api_generate_passes_titlecard_options_to_pipeline(client, monkeypatch):
     """Generate passes per-request titlecard options without mutating config."""
     import types

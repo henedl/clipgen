@@ -8,8 +8,9 @@ lifecycle: ``POST /api/runs`` spawns a :class:`workflows.WorkflowRunner` on a
 daemon thread, with per-run SSE (``/api/runs/<id>/stream``) + a polling fallback
 (``GET /api/runs/<id>``), mirroring ``screenspace_server``'s task stream.
 
-Module-level state (``_input_dir``, ``_sheet_context``, ``_worksheet``,
-``_manifest``, ``_runs``) is initialized by :func:`_init_workflows_state`,
+Module-level state (``_sheet_context``, ``_worksheet``, ``_manifest``,
+``_runs``) is initialized by :func:`_init_workflows_state`, and the sheet half
+is re-pointed on a worksheet swap by :func:`repin_sheet_state`,
 mirroring the Screenspace and Transcripts blueprints. Mutations hold
 ``_manifest_lock`` and persist via :func:`_persist_locked` (mirrors
 ``screenspace_server._do_persist``). Live runner progress stays in ``_runs``;
@@ -38,7 +39,6 @@ from server_utils import err, make_sse_channel, ok
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
-_input_dir: str = ""
 _sheet_context: Any = None
 _worksheet: Any = None
 _manifest: dict[str, Any] = {}
@@ -105,8 +105,6 @@ utils.register_static_routes(
     "workflows.html",
     # Per request, not a snapshot — POST /api/dirs moves config.INPUT_DIR
     # mid-session and never re-inits this blueprint. See transcripts_bp.
-    # (_input_dir survives below for _build_node_context, which pins the
-    # directory a run started against on purpose.)
     media_dir_getter=lambda: str(utils.get_effective_input_dir()),
     media_error="Input directory not configured",
     icons=True,
@@ -367,10 +365,14 @@ def api_stashes_delete(stash_id: str) -> Any:
 
 
 def _build_node_context(cancel_event: threading.Event) -> workflows.NodeContext:
-    """Build the per-run ``NodeContext`` from the active launch context."""
-    input_dir = Path(_input_dir) if _input_dir else utils.get_effective_input_dir()
+    """Build the per-run ``NodeContext`` from the active launch context.
+
+    Both directories resolve live, for the same reason the media route does:
+    the Start overlay's folder picker moves ``config.INPUT_DIR`` long after
+    this blueprint was initialized.
+    """
     return workflows.NodeContext(
-        input_dir=input_dir,
+        input_dir=utils.get_effective_input_dir(),
         output_dir=utils.get_effective_output_dir(),
         sheet_context=_sheet_context,
         worksheet=_worksheet,
@@ -1304,14 +1306,18 @@ def _init_workflows_state(
 ) -> None:
     """Initialize module-level state for Workflows routes.
 
-    Loads the workflows manifest and records the active input dir + sheet
-    context + worksheet (the latter feeds the ``sheet_selection`` executor), then
-    seeds the watch-dir baseline and starts the trigger daemon (P6).
-    Per-participant video paths are resolved on demand.
-    """
-    global _input_dir, _sheet_context, _worksheet, _manifest
+    Loads the workflows manifest and records the active sheet context +
+    worksheet (the latter feeds the ``sheet_selection`` executor), then seeds
+    the watch-dir baseline and starts the trigger daemon (P6). Per-participant
+    video paths and the input dir are resolved on demand.
 
-    _input_dir = str(utils.get_effective_input_dir())
+    Called once, from ``build_combined_app``. A worksheet swap goes through
+    :func:`repin_sheet_state` instead — re-running this would reload the
+    manifest, reseed the watch baseline and restart the trigger daemon on
+    every spreadsheet the user opens.
+    """
+    global _sheet_context, _worksheet, _manifest
+
     _sheet_context = sheet_context
     _worksheet = worksheet
     _manifest = workflows.load_workflows_manifest()
@@ -1322,3 +1328,18 @@ def _init_workflows_state(
         _persist_locked()
     _seed_watch_seen()
     _start_watch_thread()
+
+
+def repin_sheet_state(sheet_context: Any = None, worksheet: Any = None) -> None:
+    """Point the blueprint at a newly opened (or closed) worksheet.
+
+    The sheet-only half of :func:`_init_workflows_state`, called by
+    ``server._swap_worksheet``. Without it this blueprint kept whatever sheet
+    the *process* started with — normally none, since a desktop launch has no
+    ``-s`` — so a spreadsheet opened from the Start overlay never reached the
+    canvas or any run's ``NodeContext``.
+    """
+    global _sheet_context, _worksheet
+
+    _sheet_context = sheet_context
+    _worksheet = worksheet
