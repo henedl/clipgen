@@ -147,16 +147,16 @@ def _template_bgr_and_mask_from_b64(upload_b64: str) -> tuple[Any, Any]:
 _manifest: dict[str, Any] = {}
 _worker: "screenspace.ScreenspaceWorker | None" = None
 _participants: list[dict[str, Any]] = []
-# What the current _participants list was built from: {"sheet_context", "dir",
-# "mtime"}, or None before _init_screenspace_state has run (same "not configured
-# yet" state _worker = None expresses). While None, _refresh_participants() is a
-# no-op, so a directly-assigned _participants survives.
+# What _participants was built from: {"sheet_context", "dir", "mtime"}, or None
+# before _init_screenspace_state has run (the same "not configured yet" state
+# _worker = None expresses). While None, _refresh_participants() is a no-op, so a
+# directly-assigned _participants survives.
 _participant_source: dict[str, Any] | None = None
 _participants_lock = threading.Lock()
-# Per-participant source timeline for multi-video participants (one continuous
-# recording across several files). Keyed by participant id; value is
-# (parts_mtimes, timeline) so a re-encoded part invalidates the cached offsets.
-# Single-video participants are never cached here (mapping is a no-op).
+# Source timeline for multi-video participants (one continuous recording across
+# several files), keyed by participant id as (parts_mtimes, timeline) so a
+# re-encoded part invalidates the offsets. Single-video is never cached — mapping
+# is a no-op.
 _participant_timeline_cache: dict[
     str, tuple[tuple[int, ...], list[tuple[str, int, int]] | None]
 ] = {}
@@ -164,18 +164,16 @@ _participant_timeline_lock = threading.Lock()
 # Values are (mtime_ns, info) so a stale file is re-probed automatically.
 _video_metadata_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _video_metadata_cache_lock = threading.Lock()
-# Bounded LRU so long scrub sessions don't grow unbounded; entries are
-# JPEG bytes (tens of KB each), so a few hundred is plenty. Cache key
-# includes ``mtime_ns`` so a re-encoded source file is treated as a
-# distinct entry rather than served from stale bytes.
+# Bounded LRU: entries are JPEG bytes (tens of KB), so a few hundred is plenty.
+# The key includes ``mtime_ns``, so a re-encoded source is a distinct entry rather
+# than stale bytes.
 _FRAME_CACHE_MAX = 256
 _frame_cache: "OrderedDict[tuple[str, int, float, int], bytes]" = OrderedDict()
 _frame_cache_lock = threading.Lock()
 
-# Decoded-frame cache for synchronous CV helpers. Calibration and preview are
-# re-run on every parameter nudge, so decoded BGR frames are memoized separately
-# from the JPEG byte cache above. Keys include ``mtime_ns`` so re-encoded source
-# videos invalidate naturally.
+# Decoded-frame cache for the synchronous CV helpers: calibration and preview
+# re-run on every parameter nudge, so BGR frames memoize separately from the JPEG
+# cache above. Keyed with ``mtime_ns``, so re-encodes invalidate naturally.
 _DECODED_FRAME_CACHE_MAX = max(8, 2 * config.SCREENSPACE_MAX_PINS)
 _decoded_frame_cache: "OrderedDict[tuple[str, int, float], Any]" = OrderedDict()
 _decoded_frame_cache_lock = threading.Lock()
@@ -183,11 +181,10 @@ _PIN_OCR_CACHE_MAX = 64
 _pin_ocr_cache: "OrderedDict[tuple[Any, ...], list[Any]]" = OrderedDict()
 _pin_ocr_cache_lock = threading.Lock()
 
-# Heatmap hover-scrub sprite sheets, re-tiled from the heatmap GIFs on demand and
-# never written to the output directory (sprites are a derived view everywhere
-# else in clipgen too — see studio's /api/sprite). At most a handful of tasks are
-# on screen at once, and each sheet is a small PNG. Keyed with ``mtime_ns`` so a
-# regenerated GIF invalidates naturally.
+# Heatmap hover-scrub sprite sheets, re-tiled from the GIFs on demand and never
+# written to the output dir — sprites are a derived view everywhere in clipgen.
+# A handful of small PNGs at most; keyed with ``mtime_ns`` so a regenerated GIF
+# invalidates naturally.
 _heatmap_sprite_cache = MediaCache(32)
 
 # ---- SSE (Server-Sent Events) client registry ----
@@ -197,9 +194,8 @@ _heatmap_sprite_cache = MediaCache(32)
 _sse_notify, _sse_stream, _sse_clients = make_sse_channel()
 _manifest_lock = threading.Lock()
 
-# Monotonic counter bumped (under _manifest_lock) on every _manifest["events"]
-# mutation — append via drain and per-event exclude/include. The poll routes
-# echo it so an unchanged tick short-circuits the deep-copy + sanitize + ship.
+# Bumped under _manifest_lock on every _manifest["events"] mutation. The poll
+# routes echo it, so an unchanged tick short-circuits the deep-copy + sanitize.
 _events_version = 0
 
 
@@ -241,10 +237,10 @@ utils.register_static_routes(
     screenspace_bp,
     "screenspace.html",
     # Resolved per request, never snapshotted: POST /api/dirs moves
-    # config.OUTPUT_DIR mid-session without re-running _init_screenspace_state
-    # (the Start overlay's "no spreadsheet" path closes without a reload), and a
-    # snapshot then served heatmaps/timelapses from the previous directory —
-    # every artifact URL a dead link until something re-inited the blueprint.
+    # config.OUTPUT_DIR mid-session without re-running _init_screenspace_state (the
+    # Start overlay's "no spreadsheet" path closes without a reload), and a snapshot
+    # then served heatmaps/timelapses from the old directory — every artifact URL a
+    # dead link until something re-inited the blueprint.
     media_dir_getter=lambda: str(utils.get_effective_output_dir()),
     media_error="Output directory not configured",
     icons=True,
@@ -317,9 +313,9 @@ def api_participants() -> FlaskResponse:
         entry = dict(p)
         if p.get("has_video"):
             entry["version"] = _participant_video_version(p["id"])
-            # Multi-video: expose the timeline so the frontend can switch the
-            # <video> source per part and seek the local offset. Omitted for a
-            # single video (no probe) → frontend keeps its one-file path.
+            # Multi-video: expose the timeline so the frontend can switch <video>
+            # source per part and seek the local offset. Omitted for a single video
+            # (no probe), leaving the frontend on its one-file path.
             timeline = _participant_timeline(p["id"])
             if timeline is not None:
                 entry["timeline"] = [
@@ -333,8 +329,8 @@ def api_participants() -> FlaskResponse:
         payload.append(entry)
     # Bootstrap channel for shared frontend config (hotkey overrides etc.);
     # this page has no sheet-data fetch, so the config rides along here.
-    # ``has_sheet`` gates the off-sheet badge: with no sheet loaded every entry
-    # is ``in_sheet: False`` and marking them all would be noise.
+    # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
+    # ``in_sheet: False``, and marking them all would be noise.
     return ok(
         participants=payload,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
@@ -432,9 +428,8 @@ def api_participant_issues(pid: str) -> FlaskResponse:
             }
         )
 
-    # Sort ascending on severity score so the most-negative (Critical = -4)
-    # comes first; positives (Positive = 1, Very Positive = 2) and unranked
-    # rows fall to the end. Tie-break by row order for stability.
+    # Ascending severity score puts the most-negative (Critical = -4) first, with
+    # positives and unranked rows at the end. Tie-break by row order for stability.
     candidates.sort(
         key=lambda c: (utils.severity_sort_key(c["severity"]), c["_row_idx"])
     )
@@ -462,13 +457,12 @@ def api_participant_marks(pid: str) -> FlaskResponse:
 
 # ---- Calibration pins ----
 #
-# A pin is a tool-agnostic, region-agnostic marker that "this frame matters",
-# carrying only a timestamp and a polarity (``positive`` = the condition is
-# true here / ``negative`` = it must not fire here). Pins are stored per
-# participant under the manifest ``pins`` key and drive synchronous detector
-# calibration (Phase 2). Frames themselves are never stored — they are fetched
-# on demand through the frame API, so a re-encoded source invalidates naturally
-# via ``mtime_ns`` versioning.
+# A pin is a tool- and region-agnostic marker that "this frame matters", carrying
+# only a timestamp and a polarity (``positive`` = the condition is true here,
+# ``negative`` = it must not fire here). Stored per participant under the manifest
+# ``pins`` key, driving synchronous detector calibration. Frames are never stored
+# — they're fetched through the frame API, so a re-encode invalidates via
+# ``mtime_ns``.
 
 _PIN_POLARITIES = ("positive", "negative")
 _PIN_LABEL_MAX_CHARS = 120

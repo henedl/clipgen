@@ -113,32 +113,29 @@ _sheet_payload_cache_lock = threading.Lock()
 _google_sheet_list_cache: tuple[float, list[dict[str, str]]] | None = None
 _google_sheet_list_lock = threading.Lock()
 _GOOGLE_SHEET_LIST_TTL_SEC = 300.0
-# Metadata for the active spreadsheet — used by /api/status so the Start
-# overlay can pre-select the right tab (Google/Excel) and re-highlight the
-# right item. Only set when the spreadsheet was opened via the runtime
-# picker; CLI-loaded sheets leave this None.
+# Active spreadsheet metadata, read by /api/status so the Start overlay can
+# pre-select the right tab (Google/Excel) and re-highlight the right item. Only
+# set when opened via the runtime picker; CLI-loaded sheets leave it None.
 _active_sheet_meta: dict[str, str] | None = None
-# The parsed MindNode document, when the session was opened from a mind map
-# instead of (or alongside) a spreadsheet. Teams that work in mind maps run
-# Studio with no sheet at all, so this is an independent source: it is never
-# cleared by a sheet swap, and Studio's MindNode Intake tab is its only reader.
+# The parsed MindNode document, when the session opened from a mind map instead
+# of (or alongside) a spreadsheet. Mind-map teams run Studio with no sheet at all,
+# so it is an independent source: never cleared by a sheet swap, and read only by
+# Studio's MindNode Intake tab.
 _mindnode_doc: dict[str, Any] | None = None
 _mindnode_lock = threading.Lock()
-# The source descriptor most recently handed to `record_project_session` — i.e.
-# what this session's recent-projects entry is keyed by. The Start overlay's
-# "current session" highlight compares against exactly this, so it cannot be
-# re-derived from _active_sheet_meta / _mindnode_doc alone: with both a sheet
-# and a mind map open, only the one opened *last* is what got recorded.
+# What this session's recent-projects entry is keyed by (the last descriptor given
+# to `record_project_session`). The Start overlay's "current session" highlight
+# compares against exactly this, so it can't be re-derived from _active_sheet_meta
+# / _mindnode_doc: with both open, only the one opened *last* was recorded.
 _active_project_source: dict[str, str] | None = None
 _generated_artifacts: list[dict[str, Any]] = []
 # Index by (cellRow, cellCol, type) for O(1) lookup in /api/generate Phase 1.
 # Mutated under _generated_output_lock together with _generated_artifacts.
 _generated_artifacts_index: dict[tuple[int, int, str], list[dict[str, Any]]] = {}
 _generated_reels: list[dict[str, Any]] = []
-# Bounded LRU so long sessions don't grow unbounded; entries are JPEG bytes
-# (tens of KB each), so a few hundred is plenty. See _MediaCache below for the
-# single-flight semantics that keep concurrent identical misses from each
-# spawning ffmpeg (api_* routes are served by Flask's threaded dev server).
+# Bounded LRU: entries are JPEG bytes (tens of KB), so a few hundred is plenty.
+# _MediaCache below adds single-flight semantics, so concurrent identical misses
+# don't each spawn ffmpeg (Flask's dev server serves api_* routes threaded).
 _THUMBNAIL_CACHE_MAX = 256
 # Card-scrubber assets (opt-in hover preview). Sprite sheets are small JPEGs;
 # audio segments are PCM WAV (~1 MB per short clip), so cap audio far lower.
@@ -148,24 +145,22 @@ _AUDIO_CACHE_MAX = 32
 # shared cancel event; reject with 409 instead while one is in flight.
 _reel_cancel_event = threading.Event()
 _generate_cancel_event = threading.Event()
-# Independent cancel event for /api/generate-intake — sheet and intake
-# branches run concurrently from one Studio Generate click but have
-# separate streams, so the Cancel button posts to both /api/generate/cancel
-# and /api/generate-intake/cancel.
+# Independent cancel event for /api/generate-intake: the sheet and intake branches
+# run concurrently from one Studio Generate click on separate streams, so Cancel
+# posts to both /api/generate/cancel and /api/generate-intake/cancel.
 _intake_cancel_event = threading.Event()
-# Cancel events for the two long-running viewer builds. /api/timeline-viewer
-# re-cuts every clip (process_clips) plus optional intake clips; /api/gallery
-# extracts frames/GIFs (generate_interval_captures). Both run synchronously in
-# the request thread, but Flask is threaded so the matching /cancel endpoint
-# can set the event mid-build and the cancel_flag checks short-circuit it.
+# Cancel events for the two long-running viewer builds (/api/timeline-viewer
+# re-cuts every clip, /api/gallery extracts frames/GIFs). Both run synchronously in
+# the request thread, but Flask is threaded, so the matching /cancel endpoint can
+# set the event mid-build and the cancel_flag checks short-circuit it.
 _timeline_viewer_cancel_event = threading.Event()
 _gallery_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
 _generate_in_progress = False
 _reel_in_progress = False
-# Single-job slots for the two long-running viewer builds. Each shares one
-# module-level cancel event, so a second concurrent build (e.g. a second Studio
-# tab) must be rejected rather than allowed to clear/clobber the other's signal.
+# Single-job slots for those builds: each shares one module-level cancel event, so
+# a second concurrent build (a second Studio tab) must be rejected rather than
+# allowed to clobber the other's signal.
 _timeline_viewer_in_progress = False
 _gallery_in_progress = False
 # Count of in-flight /api/generate-intake streams. Intake has no single-job
@@ -177,9 +172,8 @@ _intake_active = 0
 _stash_lock = threading.Lock()
 # Serializes mutations to in-memory generated lists and quiet manifest saves.
 _generated_output_lock = threading.Lock()
-# Latest progress snapshots for in-flight jobs, exposed by /api/job-status so
-# the Studio UI can re-attach (show progress + Cancel) after the user
-# navigates away to /screenspace/ or /transcripts/ mid-build and comes back.
+# Latest progress per in-flight job, exposed by /api/job-status so Studio can
+# re-attach (progress + Cancel) after navigating away mid-build and back.
 _job_state_lock = threading.Lock()
 # `started_at` is a wall-clock epoch (seconds) stamped when a build begins, so a
 # Studio reattach can show accurate elapsed time after a page reload.
@@ -225,9 +219,8 @@ _settings_defaults: dict[str, Any] = {
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _MARK_KEY_RE = re.compile(r"^[a-z0-9_]+$")
 
-# Hotkey overrides: structural validation only. The action catalog (which ids
-# exist, what they do) lives in assets/web/hotkeys.js; unknown ids are stored
-# as-is and simply never dispatch client-side.
+# Hotkey overrides: structural validation only. The action catalog lives in
+# assets/web/hotkeys.js, so unknown ids are stored as-is and never dispatch.
 _HOTKEY_ID_RE = re.compile(r"^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+$")
 _HOTKEY_COMBO_RE = re.compile(
     r"^((Mod|Ctrl|Alt|Shift)\+)*([\x21-\x7E]|[A-Za-z][A-Za-z0-9]+)$"
@@ -522,10 +515,9 @@ def _override_config(**overrides: Any) -> Iterator[None]:
 
 studio_bp = Blueprint("studio", __name__)
 
-# media_dir_getter resolves per request (not a snapshot like screenspace's
-# _output_dir) so /studio/media/<file> keeps serving generated artifacts even
-# after POST /api/dirs moves config.OUTPUT_DIR mid-session. The Overview
-# Reports tab's clip strip plays clips from here.
+# media_dir_getter resolves per request, not as a snapshot, so /studio/media/<file>
+# keeps serving artifacts after POST /api/dirs moves config.OUTPUT_DIR mid-session.
+# The Overview Reports tab's clip strip plays from here.
 utils.register_static_routes(
     studio_bp,
     "studio.html",
@@ -576,9 +568,8 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
 
-    # Thumbnails are second-granular; int_only floors "12.5" (float-tolerant) and
-    # the max(0, ...) clamps negatives to 0 rather than rejecting, matching the
-    # float-tolerant parsing the project's other media routes use.
+    # Thumbnails are second-granular: int_only floors "12.5" and max(0, ...) clamps
+    # negatives rather than rejecting, matching the other media routes.
     start_sec = max(0, parse_number_arg(start_seconds, "timestamp", int_only=True))
     sources = _resolve_participant_sources(participant)
     if not sources or not sources[0].is_file():
@@ -859,10 +850,9 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
-        # A mind-map-only session still has a study and participants. They ride
-        # on their own keys rather than `participants`, which every consumer
-        # (Studio's grid, Overview's tabs) reads as *sheet columns* paired with
-        # `rows` — filling it here would invent a cohort that has no rows.
+        # A mind-map-only session still has a study and participants, but they ride
+        # their own keys: every consumer reads `participants` as *sheet columns*
+        # paired with `rows`, so filling it would invent a cohort with no rows.
         mn = _mindnode_doc or {}
         return jsonify(
             {
@@ -930,11 +920,10 @@ def api_mindnode() -> FlaskResponse:
         # rather than serving a stale tree the researcher can no longer see.
         return err(str(exc), 404)
     with _mindnode_lock:
-        # Re-check under the lock: the parse above runs with it released (it is
-        # slow, and the route re-parses on every request so an edited map shows
-        # new notes), so a close landing in that window would otherwise be
-        # undone here — the map would be open again on the server while the UI
-        # believed it was shut.
+        # Re-check under the lock: the parse above runs with it released (slow, and
+        # re-run per request so an edited map shows new notes), so a close landing
+        # in that window would otherwise be undone here — leaving the map open
+        # server-side while the UI believed it shut.
         if _mindnode_doc is not doc:
             return jsonify(
                 {
@@ -1118,10 +1107,10 @@ def _process_intake_item(
         files.release_reservation(out_path)
         return {"_ok": False, "_error": "cancelled", "_cancelled": True}
 
-    # Map the global span into the participant's source video(s) (stitching across
-    # a recording boundary for multi-video participants); single-video is a plain cut.
-    # Release the reserved placeholder on any failure — a None return *or* an
-    # exception — so we never leave a 0-byte file behind.
+    # Map the global span into the participant's source video(s), stitching across
+    # a recording boundary when multi-video; single-video is a plain cut. Release
+    # the reserved placeholder on any failure (None return *or* exception) so no
+    # 0-byte file is left behind.
     try:
         source_fields = pipeline.cut_global_range(
             timeline,
@@ -1521,9 +1510,8 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
                 continue
             if end_sec <= start_sec:
                 continue
-            # Force hours on both ends when either crosses the hour mark, so we
-            # never emit a mixed M:SS / H:MM:SS pair (which breaks downstream
-            # duration parsing — see AGENTS.md timestamp gotcha).
+            # Force hours on both ends when either crosses the hour mark: a mixed
+            # M:SS / H:MM:SS pair breaks downstream duration parsing.
             needs_hours = start_sec >= 3600 or end_sec >= 3600
             new_times.append(
                 (
@@ -1599,14 +1587,11 @@ def api_generate() -> FlaskResponse:
                 output_format,
                 existence_cache=existence_cache,
             )
-            # A cached clip is only reusable when its recorded titlecard state
-            # matches the request; mismatched ones are discarded and regenerated
-            # so toggling Titlecards on/off (or changing the duration) takes
-            # effect on the next Generate.
-            # An overridden cell carries edited in/out points, but existing
-            # artifacts are keyed only by cell row/col/format — they'd be reused
-            # at the old duration. Treat them all as stale so the clip always
-            # regenerates with the new times.
+            # A cached clip is reusable only when its recorded titlecard state
+            # matches the request, so toggling Titlecards (or its duration) takes
+            # effect on the next Generate. An overridden cell is always stale:
+            # artifacts are keyed by cell row/col/format only, so an edited in/out
+            # point would otherwise be reused at the old duration.
             cell_overridden = cell_str in overrides
             fresh: list[dict[str, Any]] = []
             stale: list[dict[str, Any]] = []
@@ -1662,10 +1647,9 @@ def api_generate() -> FlaskResponse:
                             pass
                 to_generate.append((clip, cell_str))
 
-        # Pass 2: generate in parallel and yield as each completes. The
-        # per-clip worker self-persists via _extend_generated_artifacts so
-        # that results landing while the client is disconnecting (shutdown
-        # waits for in-flight futures) still reach the manifest.
+        # Pass 2: generate in parallel, yielding as each completes. The per-clip
+        # worker self-persists via _extend_generated_artifacts, so results landing
+        # while the client disconnects still reach the manifest.
         def _generate_and_persist(
             clip: Any,
         ) -> tuple[int, list[dict[str, Any]]]:
@@ -1677,10 +1661,9 @@ def api_generate() -> FlaskResponse:
                 titlecard_duration_seconds=titlecard_duration_seconds,
                 clear_titlecard_cache=False,
             )
-            # A future that happened to finish concurrently with the cancel
-            # signal still produces (generated, artifacts); per the streaming
-            # contract we must not append those to the manifest after cancel.
-            # Drop the files on disk too so the user does not see orphan media.
+            # A future finishing concurrently with the cancel signal still returns
+            # (generated, artifacts), but the streaming contract forbids appending
+            # those post-cancel — drop the files too, so no orphan media.
             if cancel_flag():
                 for a in artifacts:
                     try:
@@ -1767,11 +1750,10 @@ def api_generate() -> FlaskResponse:
         try:
             yield from stream()
         finally:
-            # Persist + purge the per-request endcard cache even when the
-            # client disconnects mid-stream, so generated artifacts are not
-            # left on disk without manifest records and endcard temp files
-            # do not leak. Per-cell process_clips() calls run with
-            # clear_titlecard_cache=False, so the cache is purged once here.
+            # Persist + purge the endcard cache even on a mid-stream disconnect,
+            # so artifacts never sit on disk without manifest records and temp
+            # files don't leak. Per-cell process_clips() runs with
+            # clear_titlecard_cache=False, so the purge happens once, here.
             titlecards.clear_endcard_cache()
             _save_manifest_quiet()
             _release_busy("generate")
@@ -1854,9 +1836,9 @@ def api_reel() -> FlaskResponse:
         return err("A reel build is already in progress", 409)
 
     def stream() -> Any:
-        # _stream_process_reel's worker takes ownership of the busy slot once
-        # we hand control to it; until then we release on every exit path so
-        # the slot doesn't leak when the route returns without starting work.
+        # _stream_process_reel's worker owns the busy slot once control passes to
+        # it; until then every exit path releases, so the slot can't leak when the
+        # route returns without starting work.
         worker_started = False
         try:
             with _override_config(**highlights_overrides):
