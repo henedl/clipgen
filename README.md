@@ -1,149 +1,75 @@
 # clipgen
 
-clipgen is a program for quickly generating video clips, screenshots, and GIFs based on your research notes and recordings. It includes web-based interfaces for interactive clip generation (Studio), extracting and modifying transcripts (Transcripts), and video frame analysis (Screenspace).
+clipgen turns user research recordings into video clips, screenshots, GIFs, and highlight reels, driven by the timestamps in your research notes (a Google Sheet, a local Excel file, or MindNode mind map). Around that core it bundles interactive tools — served locally in your browser or the desktop app — for clip building, visual analysis, transcription, freeform cutting, automation, and study-level overviews.
 
-The target audience for the program is user experience researchers and UX professionals who prefer to manage videos and analysis locally. The author intends specifically to support games user researchers conducting playtests.
+It is built for UX researchers — especially games user researchers running playtests — who prefer to keep videos and analysis on their own machine. Everything runs locally: [ffmpeg](https://www.ffmpeg.org) for media, [faster-whisper](https://github.com/SYSTRAN/faster-whisper) for transcription, and optionally [Ollama](https://ollama.com) for AI features.
 
-clipgen is written in Python and interacts with local video files through [ffmpeg](https://www.ffmpeg.org) and expects structured data in a Google Sheets document or local Excel file. clipgen can be run from source or a compiled binary.
+## Quick start
 
-## How to use
+### Desktop app
 
-### Downloading the desktop app
+Download the macOS `.dmg` or Windows `.zip` from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`. ffmpeg is included (GPL builds — see `THIRD-PARTY-LICENSES` in the download); there is nothing else to install.
 
-Tagged releases publish a macOS `.dmg` and a Windows `.zip` on the [Releases page](https://github.com/henedl/clipgen/releases). These bundle ffmpeg/ffprobe (GPL builds — see `THIRD-PARTY-LICENSES` in the download), so there is nothing else to install: follow the bundled `INSTALL.txt` and you are running. Everything below this point concerns running from source.
+The macOS build is unsigned, so Gatekeeper blocks the first launch: right-click the app and choose **Open** once, or run `xattr -dr com.apple.quarantine clipgen.app`. Double-clicking the app opens clipgen in its own desktop window; the same binary is the full CLI when given arguments.
 
-### Pre-requisites
+### From source
 
-1. To run from source: install [uv](https://docs.astral.sh/uv/) and run `uv sync` to install Python dependencies.
-2. **Install ffmpeg** and ensure `ffmpeg` and `ffprobe` are on your `PATH`. Source runs refuse to start without it (the desktop builds above bundle their own). From a source checkout, `scripts/install-ffmpeg-ollama.sh` (macOS/Linux) or `scripts/install-ffmpeg-ollama.bat` (Windows) installs it for you; otherwise use `brew install ffmpeg`, `sudo apt install ffmpeg`, `winget install Gyan.FFmpeg`, or a build from [ffmpeg.org](https://www.ffmpeg.org/download.html).
-3. For Google Sheets: configure Google authentication per [gspread's setup guide](https://docs.gspread.org/en/latest/oauth2.html), then save the OAuth client file as `credentials.json` in any one of the folders clipgen searches, in this order: the working directory (for a binary, the folder containing the app), `~/.config/gspread/`, or clipgen's own config dir (`~/.config/clipgen/`, `%LOCALAPPDATA%\clipgen\` on Windows). Not needed for local Excel files, and not needed at all for Screenspace, Transcripts, Composer or Workflows.
-4. Optional — **local AI (Ollama)**: the Transcripts thinking agents (summary, citations, friction) and the Overview per-participant reports call a local [Ollama](https://ollama.com/download) server. Without it, everything else works and those panels tell you what is missing. On macOS clipgen offers to download the Ollama CLI for you (~140 MB, into `~/.config/clipgen/tools/`) the first time you run an AI action; or install it yourself with `brew install ollama`, `winget install Ollama.Ollama`, or `curl -fsSL https://ollama.com/install.sh | sh`. Either way clipgen starts `ollama serve` for you and offers to pull an agent's model the first time you run it. Transcription itself (faster-whisper) does not need Ollama.
+1. Install [uv](https://docs.astral.sh/uv/) and run `uv sync`.
+2. Install ffmpeg: `scripts/install-ffmpeg-ollama.sh` (macOS/Linux) or `scripts/install-ffmpeg-ollama.bat` (Windows) does it for you, or use `brew install ffmpeg`, `sudo apt install ffmpeg`, or `winget install Gyan.FFmpeg`.
+3. Run `uv run clipgen.py`.
 
-### Starting clipgen
+### Your videos
 
-Place your video files in the same directory as the program and name them following this syntax: `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`).
+Name recordings `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4`) and place them next to the program. If a session spans several files, add a numbered suffix (`mystudy_P01-1.mp4`, `mystudy_P01-2.mp4`, ...) and clipgen treats them as one continuous recording.
 
-If a participant's session spans **several video files** (a recording that broke off, or a diary study), name them with a numbered suffix (`mystudy_P01-1.mp4`, `mystudy_P01-2.mp4`, ...), and clipgen treats them as one continuous recording: a timestamp is mapped into the right file by cumulative duration (if file 1 is 1m20s long, a timestamp at `2:04` becomes `0:44` into file 2). The plain `mystudy_P01.mp4` takes precedence when it exists; numbered parts are used only when it is absent.
+### Google Sheets (optional)
 
-Then run the program interactively by launching the binary or:
+Only reading a Google Sheet needs Google auth: follow [gspread's setup guide](https://docs.gspread.org/en/latest/oauth2.html) and save the OAuth client file as `credentials.json` next to the app, in `~/.config/gspread/`, or in clipgen's config dir (`~/.config/clipgen/`; `%LOCALAPPDATA%\clipgen\` on Windows). Local Excel files need no credentials, and Screenspace, Transcripts, Composer, and Workflows need no spreadsheet at all.
+
+### Local AI (optional)
+
+The Transcripts thinking agents and Overview reports use a local [Ollama](https://ollama.com/download) server; everything else works without it. clipgen offers to install Ollama and pull the models the first time you use an AI feature, and starts `ollama serve` for you. Transcription itself does not need Ollama.
+
+## The spreadsheet
+
+clipgen expects a particular layout — make a copy of the [reference spreadsheet](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing) to start. Timestamps in a cell are separated by `+`, `,`, or `;`; ranges use `-` (e.g. `1:23-1:45`).
+
+Two optional rows: a `Baseline time` row converts clock timestamps (e.g. `09:12:00`) to relative offsets per participant, and a `Filename` row overrides the source video per participant (plus split videos).
+
+## Command line
+
+Launch with no flags for the interactive prompt, or script it:
 
 ```shell
-uv run clipgen.py
+uv run clipgen.py -H --no-input                      # Highlight reel of the most severe issues
+uv run clipgen.py -b --no-input                      # Batch: every clip in the study
+uv run clipgen.py --gif -C "Onboarding" --no-input   # GIFs for one category
 ```
 
-clipgen can also be launched noninteractively, meaning you can script it as part of your workflows. For example:
+Selection modes: batch (`-b`), line (`-l`), range (`-r`), category (`-C`), cell (`-c`), participant (`-p`), keyword (`-k`), severity (`-S`). Outputs: clips (default), `--screen`, `--gif`. Reels: custom (`-R`), chronological (`-T`), highlights (`-H`). `--gallery VIDEO` builds a browsable interval-screenshot gallery. Run `uv run clipgen.py --help` for the full reference.
 
-```shell
-uv run clipgen.py -H --no-input               # Highlight reel of the most severe issues
-uv run clipgen.py -R "11, 13-16, P01" --no-input  # Custom reel from mixed selectors
-uv run clipgen.py -b --no-input               # Batch: all clips in study
-uv run clipgen.py -l 5+7+12 --no-input        # Lines: rows 5, 7, 12
-uv run clipgen.py -r 5-12 --no-input          # Range: rows 5-12
-uv run clipgen.py -C "Onboarding" --no-input  # Category
-uv run clipgen.py --gif -b --no-input         # GIFs instead of clips
-```
+## Tools
 
-Run `uv run clipgen.py --help` for the full flag reference.
+- **Studio** (`--studio`) — click timestamp cells in your spreadsheet to generate clips, screenshots, and GIFs, and build reels interactively.
+- **Screenspace** (`--screenspace`) — automated visual analysis of recordings: draw a region and detect color, change, text, motion, and more across the video.
+- **Transcripts** (`--transcripts`) — local transcription, with optional AI summaries.
+- **Composer** (`--composer`) — cut and annotate moments that aren't in the spreadsheet, on a timeline over the full recording.
+- **Workflows** (`--workflows`) — chain the tools above into automated pipelines on a node canvas.
+- **Overview** (`--overview`) — study-level views: a shared participant timeline, aggregate stats, and per-participant reports.
 
-### Terminal modes
-
-clipgen supports a range of generation modes, selectable interactively or via CLI flags:
-
-- **Selection modes**: `batch` (-b), `line` (-l), `range` (-r), `category` (-C), `cell` (-c), `participant` (-p), `keyword` (-k), `severity` (-S)
-- **Output formats**: clips (default), `--screen` (screenshots), `--gif` (GIFs)
-- **Reels**: `reel` (-R), `chronologic` (-T), `highlights` (-H), `reellate` (interactive)
-- **Gallery**: `--gallery VIDEO` — interval screenshots/GIFs with a browser-viewable gallery
-- **Browse**: interactive terminal spreadsheet viewer (no output)
-
-### About the spreadsheet
-
-clipgen assumes that you are using a spreadsheet with a particular layout. A reference spreadsheet is [available here](https://docs.google.com/spreadsheets/d/1O51wnzRrYyz63tT6qy1HlJyVzdh9RT3t6QL5NohrcPc/edit?usp=sharing). Feel free to make a copy and use it in your studies.
-
-Timestamps must be separated by characters ```+ , ;```
-Ranges must be separated by character ```-```
-
-An optional `Baseline time` row supports clock/absolute timestamps: add a baseline timestamp per participant column (e.g. `09:12:00`), and clipgen automatically converts those timestamps to relative offsets before cutting clips. Columns without a baseline value use relative timestamps.
-
-An optional `Filename` row overrides the source video filename per participant column. To declare **multiple source videos** for a participant (one continuous timeline), list them plus-separated in this row — order matters: `morning.mp4 + afternoon.mp4`. This takes precedence over the on-disk `-N` auto-detection. A clip whose range straddles the boundary between two files is cut from both and stitched into a single clip.
-
-## Features
-
-### Studio - interactive artifact composing
-
-clipgen can launch a web-based **Studio** interface for interactive artifact generation and reel building from your spreadsheet data. Studio opens in your browser and provides, among other things:
-
-- An interactive spreadsheet grid with color-coded timestamp cells.
-- Click cells to queue clips, screenshots, or GIFs for generation; shift-click or right-click cells for reel queue.
-- Drag-to-reorder reel building from queued cells.
-- Regenerate all artifacts from a saved manifest.
-
-### Screenspace - run visual analysis to extract findings
-
-clipgen includes **Screenspace** for analyzing video frames. Draw regions of interest and run automated analysis tasks to find patterns across the video.
-
-Available analysis tools:
-
-- **Color**: match a region's color
-- **Change**: detect content changes
-- **Similarity**: find frames matching a reference
-- **Text**: OCR fuzzy search
-- **Numbers**: OCR numeric comparison
-- **Template**: pattern matching frame contents
-- **Flow**: detect motion direction and magnitude
-- **Scene**: detect scene changes by visual fingerprint
-- **Inactivity**: detect periods with no change
-- **Boundary**: segment the session into scenes across the full frame
-- **Attention**: computational saliency across the full frame
-- **Timelapse**: sped-up region video
-- **Multitool**: chain several of the above, optionally joined by time-offset windows
-
-### Transcripts - generate transcripts using local models
-
-clipgen features local **Transcripts**, generated via [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
-
-### Composer - cut clips from the full source video
-
-**Composer** is a cutting timeline for a whole session recording, for when the moments you want aren't in the spreadsheet. Scrub the source video, mark as many named in/out cut pairs as you like (`i` and `o`, or double-click the timeline), and drag their edges to adjust. Multi-part recordings are stitched into one continuous timeline.
-
-Three read-only marker lanes ride alongside the cuts — spreadsheet timestamps, Screenspace events, and Transcript marks — so you can cut against what the other tools already found. Dragging a marker's edge trims it for your purposes without touching the source manifest, and right-click resets it.
-
-An annotation layer adds text labels, freehand strokes, and rectangles/ellipses over the video, each visible for a span you control. Annotations can be exported as a screenshot or GIF, or burned into a generated clip. Finished cuts feed into Studio's generation queue via its Composer Intake tab; the spreadsheet is never written.
+Tools that read videos directly take input/output directories:
 
 ```shell
 uv run clipgen.py --composer -i ./videos -o ./out
 ```
 
-### Workflows - chain analyses on a node canvas
-
-clipgen includes **Workflows**, a node-based canvas for scripting clipgen's capabilities without writing code. Drag blueprint cards, each wrapping one backend action (clip generation, Screenspace scans, transcription, thinking agents), onto a canvas and wire typed outputs into typed inputs to build a pipeline. clipgen executes the resulting graph in dependency order, with per-node status and inspectable results stored under `workflow_runs/` in the output directory. Built-in recipes ship as read-only stashes to start from.
-
-A blueprint can run once, fan out across every participant in a study, or be armed to auto-run whenever a new session video lands in the input directory.
-
-```shell
-uv run clipgen.py --workflows -i ./videos -o ./out
-```
-
-### Overview - the birds-eye view of a study
-
-The **Overview** frontend (reachable from the top navigation on any served page, at `/overview/`) gathers the cohort-level lenses in one place, as three tabs:
-
-- **Convergence** aligns all participants' events on a shared timeline and highlights the moments where many participants do the same thing, with per-participant alignment offsets for misaligned recordings.
-- **Metadata** shows aggregate statistics across every loaded session and stream.
-- **Reports** builds a per-participant AI mini-report from sheet observations, the transcript summary, and marked lines, with a playable clip strip.
-
-Overview works in any launch mode; panels that need a spreadsheet show what still works without one.
-
-```shell
-uv run clipgen.py --overview -i ./videos -o ./out
-```
-
 ## Third-party code
 
-The web UIs are hand-written vanilla JavaScript. SVG icons are [Heroicons](https://heroicons.com) (MIT) plus GitHub's [Octicons](https://primer.style/octicons/) (MIT); see [assets/icons/octicon/README.md](assets/icons/octicon/README.md).
+Icons are [Heroicons](https://heroicons.com) and GitHub's [Octicons](https://primer.style/octicons/), both MIT-licensed.
 
 ## Building from source
 
-Cross-platform executables (macOS and Windows) are built automatically via GitHub Actions (`.github/workflows/build-binaries.yml`) on version tag pushes. To build locally with PyInstaller:
+Executables are built by GitHub Actions (`.github/workflows/build-binaries.yml`) on version tag pushes. To build locally with PyInstaller:
 
 ```shell
 pip install pyinstaller
@@ -151,25 +77,8 @@ uv run build/fetch_binaries.py      # pinned ffmpeg/ffprobe for the bundle (SHA2
 pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
-Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows — a folder containing `clipgen.exe` and `_internal/`; keep them together and put `credentials.json` beside the folder).
-
-Double-clicking `clipgen.app` opens clipgen in its own desktop window (a native webview over a loopback server) — no Terminal, no browser tab. The same binary is still the full CLI when given arguments:
-
-```shell
-clipgen.app/Contents/MacOS/clipgen --help          # macOS
-clipgen.exe --help                                 # Windows
-```
-
-Only an argument-less launch opens the window. Use `--desktop` to force a window from a source checkout, or `--browser` to fall back to the default browser. Tagged builds publish a `.dmg` to GitHub Releases; the `.dmg` matters because GitHub's artifact zips do not preserve the executable bit or the code signature.
-
-The macOS build is **unsigned** (no paid Apple Developer account). When downloaded from GitHub, macOS quarantines the app and Gatekeeper blocks the first launch. To clear the quarantine attribute, run:
-
-```shell
-xattr -dr com.apple.quarantine clipgen.app
-```
-
-Alternatively, right-click the `.app` in Finder and choose **Open** once to bypass Gatekeeper for that build.
+Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows — keep `clipgen.exe` and `_internal/` together, with `credentials.json` beside the folder).
 
 ## AI disclosure
 
-The author has used an LLM coding agent for assistance in writing parts of this program. If you want to avoid software connected to LLMs; I get it. All code in this repository prior to 2026 was written by a human, if you would like to fork the project.
+The author used an LLM coding agent for assistance in writing parts of this program. If you want to avoid software connected to LLMs; I get it. All code in this repository prior to 2026 was written by a human, if you would like to fork the project.
