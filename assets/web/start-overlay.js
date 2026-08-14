@@ -1869,36 +1869,60 @@
         var needsClose = !!(st.sheet_loaded || st.mindnode_loaded);
         // One call per source: the route drops the mind map for
         // {type: "mindnode"} and the worksheet otherwise, and the two coexist,
-        // so closing both takes both calls.
+        // so closing both takes both calls. Each is checked for r.ok like the
+        // open path below — the route refuses with 409 while a generation is
+        // running, and swallowing that would record a no-spreadsheet session
+        // and reload with the source still very much loaded.
         function postClose(body) {
           return fetch("/api/spreadsheets/close", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
-          }).catch(function () { return null; });
-        }
-        var closeStep = Promise.resolve(null);
-        if (st.mindnode_loaded) {
-          closeStep = closeStep.then(function () {
-            return postClose({ type: "mindnode" });
+          }).then(function (r) {
+            return r.json().then(
+              function (j) { return { ok: r.ok && j && j.ok !== false, body: j }; },
+              function () { return { ok: false, body: null }; }
+            );
           });
         }
+        var closeStep = Promise.resolve({ ok: true, body: null });
+        function chainClose(prev, payload) {
+          return prev.then(function (res) {
+            if (!res.ok) return res; // first failure wins; don't keep closing
+            return postClose(payload);
+          });
+        }
+        if (st.mindnode_loaded) {
+          closeStep = chainClose(closeStep, { type: "mindnode" });
+        }
         if (st.sheet_loaded) {
-          closeStep = closeStep.then(function () { return postClose({}); });
+          closeStep = chainClose(closeStep, {});
         }
         closeStep
-          .then(function () {
-            return recordSession(inputVal, outputVal, null, nameVal);
-          })
-          .finally(function () {
-            releaseConfirm();
-            // Reload only when something was actually unloaded — the other
-            // frontends are holding data for a source that no longer exists.
-            if (needsClose) {
-              window.location.reload();
-              return;
+          .then(function (res) {
+            if (!res.ok) {
+              releaseConfirm();
+              markSheetError(
+                (res.body && res.body.error) || "Could not close the current source"
+              );
+              return null;
             }
-            close();
+            return recordSession(inputVal, outputVal, null, nameVal).finally(
+              function () {
+                releaseConfirm();
+                // Reload only when something was actually unloaded — the other
+                // frontends are holding data for a source that is now gone.
+                if (needsClose) {
+                  window.location.reload();
+                  return;
+                }
+                close();
+              }
+            );
+          })
+          .catch(function (err) {
+            releaseConfirm();
+            markSheetError("Close failed: " + (err && err.message));
           });
         return;
       }

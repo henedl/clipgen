@@ -119,3 +119,24 @@ def test_no_spreadsheet_actually_closes_the_open_source():
     assert "mindnode_loaded" in body and "sheet_loaded" in body, (
         "both sources have to be closed, not just whichever is active"
     )
+
+
+def test_close_failures_do_not_record_a_session_or_reload():
+    """/api/spreadsheets/close answers 409 while a generation is running. A
+    catch-only handler treats that as success: it records a no-spreadsheet
+    session and reloads with the source still loaded. The open path right
+    below has always checked r.ok; this one must too."""
+    src = strip_comments(read("start-overlay.js"))
+    body = src[src.index("var skipSpreadsheet") :][:2200]
+    assert "r.ok" in body, "the close response status must be checked"
+    assert "markSheetError(" in body, (
+        "a refused close has to surface, not fall through to the reload"
+    )
+    # The reload and the session record both sit behind the ok branch.
+    ok_gate = body.index("if (!res.ok)")
+    assert ok_gate < body.index("recordSession("), (
+        "recordSession must not run when the source is still loaded"
+    )
+    assert ok_gate < body.index("window.location.reload()"), (
+        "the reload must not run when the close was refused"
+    )

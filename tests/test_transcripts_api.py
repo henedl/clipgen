@@ -2273,10 +2273,24 @@ def test_ollama_install_rejected_where_unsupported(tr_client, monkeypatch):
 
 
 def test_ollama_install_short_circuits_when_installed(tr_client, monkeypatch):
+    """The idempotent path: a working install must not re-download.
+
+    Stubs is_working_install, which is what the route gates on — stubbing only
+    is_installed leaves the real predicate running, and on a machine with no
+    ollama on PATH that answers False, so the route falls through and spawns a
+    genuine 145 MB install_managed() on a daemon thread.
+    """
     import ollama_client
 
     monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
+    monkeypatch.setattr(ollama_client, "is_working_install", lambda: True)
+
+    def _must_not_run(on_progress=None):
+        raise AssertionError("install_managed must not run for a working install")
+
+    monkeypatch.setattr(ollama_client, "install_managed", _must_not_run)
+    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
+
     resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
     assert resp.status_code == 200
     assert resp.get_json()["already_installed"] is True
@@ -2342,24 +2356,6 @@ def test_ollama_install_retries_a_broken_install(tr_client, monkeypatch):
     body = tr_client.post("/transcripts/api/models/ollama/install", json={}).get_json()
     assert body.get("already_installed") is not True
     assert body["started"] is True
-
-
-def test_ollama_install_short_circuits_a_working_install(tr_client, monkeypatch):
-    """The idempotent path still has to short-circuit, or every dialog open
-    would re-download."""
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_working_install", lambda: True)
-
-    def _must_not_run(on_progress=None):
-        raise AssertionError("install_managed must not run for a working install")
-
-    monkeypatch.setattr(ollama_client, "install_managed", _must_not_run)
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-
-    body = tr_client.post("/transcripts/api/models/ollama/install", json={}).get_json()
-    assert body["already_installed"] is True
 
 
 def test_ollama_install_second_post_attaches(tr_client, monkeypatch):
