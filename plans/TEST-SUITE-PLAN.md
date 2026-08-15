@@ -114,13 +114,13 @@ Reuse `make_clip` from `tests/conftest.py`. Point the clip at the encoded file
 via the same `{study}_{participant}.mp4` contract `files` expects. Set
 `config.OUTPUT_DIR` to `tmp_path`, `CLIP_PARALLEL_WORKERS = 1`.
 
-- [ ] **Cut:** `pipeline.process_clips([clip], output_format="clip")` returns
+- [x] **Cut:** `pipeline.process_clips([clip], output_format="clip")` returns
       count 1, the output `.mp4` exists and is non-empty, and
       `video.get_file_duration` is in range for the requested window (a 2s
       source, ~1s cut).
-- [ ] **Screenshot:** same setup, `output_format="screen"`, output `.png`
+- [x] **Screenshot:** same setup, `output_format="screen"`, output `.png`
       exists and `PIL.Image.open` can read it (dimensions > 0).
-- [ ] **Reel of two cuts:** two adjacent windows on the same 2s source,
+- [x] **Reel of two cuts:** two adjacent windows on the same 2s source,
       `pipeline.process_reel(...)`. Assert the reel path exists, duration is
       roughly the sum of the windows (not one window), and a mocked-False
       second cut does **not** produce a reel file (locks the silent-wrong
