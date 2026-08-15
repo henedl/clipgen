@@ -1,6 +1,6 @@
 """Regression checks for the shared server-injected ``<head>`` partial (C6).
 
-The four live pages embed ``<!-- CLIPGEN_HEAD_HERE -->`` where the shared
+The six live pages embed ``<!-- CLIPGEN_HEAD_HERE -->`` where the shared
 favicon + fonts block belongs; ``utils.render_index_html`` expands it from
 ``assets/web/_head.html``. Exported viewers stay self-contained and must not
 gain the marker.
@@ -16,7 +16,14 @@ import utils
 from _frontend_source import WEB
 
 HEAD_MARKER = "<!-- CLIPGEN_HEAD_HERE -->"
-LIVE_PAGES = ("studio.html", "screenspace.html", "transcripts.html", "workflows.html")
+LIVE_PAGES = (
+    "studio.html",
+    "screenspace.html",
+    "transcripts.html",
+    "workflows.html",
+    "composer.html",
+    "overview.html",
+)
 EXPORT_PAGES = ("viewer.html", "gallery.html", "timeline-viewer.html")
 FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="logos/favicon.svg">'
 FONTS_LINK = '<link rel="stylesheet" href="fonts.css">'
