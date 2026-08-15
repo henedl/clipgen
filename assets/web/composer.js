@@ -1270,7 +1270,7 @@
   readPersistedSidebarOpen();
 
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
-  // readNDJSONStream is an ambient utils.js global.
+  // apiPostNDJSON is an ambient utils.js global.
 
   var _generateAbort = null;
 
@@ -1330,16 +1330,12 @@
     }
 
     _generateAbort = new AbortController();
-    fetch("../studio/api/generate-intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, format: "clip" }),
-      signal: _generateAbort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () { finish(); });
-      })
+    apiPostNDJSON(
+      "../studio/api/generate-intake",
+      { items: items, format: "clip" },
+      { signal: _generateAbort.signal, onLine: handleLine }
+    )
+      .then(function () { finish(); })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);
         finish(aborted ? "Generation cancelled" : "Generation failed: " + (err && err.message));

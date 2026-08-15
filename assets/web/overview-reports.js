@@ -772,21 +772,18 @@
     var ctrl = new AbortController();
     rpState.clipsAbort = ctrl;
     renderClips();
-    fetch("../studio/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cells: cells, format: "clip" }),
-      signal: ctrl.signal,
-    })
-      .then(function (resp) {
-        if (resp.status === 409) throw new Error("generate-busy");
-        if (!resp.ok) throw new Error("Server error " + resp.status);
-        return readNDJSONStream(resp, function (line) {
+    apiPostNDJSON(
+      "../studio/api/generate",
+      { cells: cells, format: "clip" },
+      {
+        signal: ctrl.signal,
+        onLine: function (line) {
           if (!line || line.cancelled) return;
           rpState.clipsDone++;
           renderClipsProgress();
-        });
-      })
+        },
+      }
+    )
       .then(function () {
         resetClipsGeneration();
         if (g !== rpState.gen || !rpState.active) return;
@@ -795,7 +792,7 @@
       .catch(function (err) {
         resetClipsGeneration();
         if (g !== rpState.gen || !rpState.active) return;
-        if (err && err.message === "generate-busy") {
+        if (err && err.status === 409) {
           showNotice("Studio is already generating — wait for it to finish, then try again.", null, null, null);
         } else if (!(err && err.name === "AbortError")) {
           showNotice("Clip generation failed.", null, null, null);

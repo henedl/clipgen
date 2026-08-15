@@ -3505,8 +3505,8 @@
   // The streaming api/generate + api/generate-intake flow (onGenerate /
   // onCancelGenerate / buildGenerateCardIndex) lives in studio-generate.js; the
   // hub keeps onGenerate/onCancelGenerate delegators (below, for the button
-  // wiring) and publishes the card painters / ETA trackers / readNDJSONStream it
-  // shares with the reel/build path.
+  // wiring) and publishes the card painters / ETA trackers it shares with the
+  // reel/build path (both stream through utils.js's apiPostNDJSON).
 
   // ---- Elapsed-time tracking for long Studio jobs ----
   // Reels (parallel/bursty clip generation), artifact generation, and viewer
@@ -3722,31 +3722,24 @@
       }
     }
 
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(reelBody),
-    })
-      .then(function (response) {
-        // Any 4xx/5xx (including 409 "reel already in progress") is a JSON
-        // error body, not an NDJSON stream — parse it as text/JSON.
-        if (!response.ok && response.status >= 400) {
-          return response.text().then(function (txt) {
-            try {
-              finalPayload = JSON.parse(txt);
-            } catch (_) {
-              finalPayload = {
-                ok: false,
-                error: txt || ("HTTP " + response.status),
-              };
-            }
-            finish();
-          });
-        }
-        return readNDJSONStream(response, handleLine).then(finish);
-      })
+    apiPostNDJSON(endpoint, reelBody, { onLine: handleLine })
+      .then(finish)
       .catch(function (err) {
-        finalPayload = { ok: false, error: "Request failed: " + err };
+        // Any 4xx/5xx (including 409 "reel already in progress") is a JSON
+        // error body, not an NDJSON stream — apiPostNDJSON delivers it as
+        // err.bodyText; parse it back into the payload shape finish() reads.
+        if (err && err.status >= 400) {
+          try {
+            finalPayload = JSON.parse(err.bodyText);
+          } catch (_) {
+            finalPayload = {
+              ok: false,
+              error: err.bodyText || ("HTTP " + err.status),
+            };
+          }
+        } else {
+          finalPayload = { ok: false, error: "Request failed: " + err };
+        }
         finish();
       });
   }

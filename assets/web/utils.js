@@ -1313,6 +1313,40 @@ var readNDJSONStream = function (response, onLine) {
   return pump();
 };
 
+// Streaming NDJSON POST: fetch + the r.ok check + readNDJSONStream in one call
+// (the raw-Response prologue every generate flow used to repeat). opts:
+// { signal, onLine }. Resolves when the stream drains. On !r.ok rejects with an
+// Error carrying .status and .bodyText (the error body, normally a JSON
+// envelope) so callers can branch (409 busy, reel error payloads); an abort
+// passes through unchanged as AbortError.
+var apiPostNDJSON = function (path, body, opts) {
+  opts = opts || {};
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  }).then(function (r) {
+    if (!r.ok) {
+      var mkError = function (txt) {
+        var e = new Error("Server error " + r.status);
+        e.status = r.status;
+        e.bodyText = txt || "";
+        return e;
+      };
+      return r.text().then(
+        function (txt) {
+          throw mkError(txt);
+        },
+        function () {
+          throw mkError("");
+        }
+      );
+    }
+    return readNDJSONStream(r, opts.onLine || function () {});
+  });
+};
+
 // ---- File downloads ----
 // Save generated text (JSON/CSV) to disk from any page.
 //

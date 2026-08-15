@@ -3153,22 +3153,18 @@
       showToast(message);
     }
 
-    fetch("../studio/api/generate-intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, format: "clip" }),
-      signal: run.abort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () {
-          var made = run.done - run.failed;
-          finish(
-            run.failed
-              ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
-              : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
-          );
-        });
+    apiPostNDJSON(
+      "../studio/api/generate-intake",
+      { items: items, format: "clip" },
+      { signal: run.abort.signal, onLine: handleLine }
+    )
+      .then(function () {
+        var made = run.done - run.failed;
+        finish(
+          run.failed
+            ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
+            : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
+        );
       })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);
@@ -3431,35 +3427,31 @@
       showToast(message);
     }
 
-    fetch("api/embed-subtitles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participants: pids, default_track: defaultTrack }),
-      signal: run.abort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () {
-          var made = run.done - run.failed;
-          var where = outputDir ? " to " + outputDir : "";
-          // No sentinel means the server died partway and the body simply
-          // stopped. readNDJSONStream cannot tell that from a clean end, so
-          // without this check a run that blew up at participant 4 of 10
-          // reported "3 subtitled videos written" and nothing else.
-          if (!sawDone) {
-            finish(
-              "Subtitle embedding stopped early — " +
-                clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
-                " of " + run.total + ". Check the clipgen log."
-            );
-            return;
-          }
+    apiPostNDJSON(
+      "api/embed-subtitles",
+      { participants: pids, default_track: defaultTrack },
+      { signal: run.abort.signal, onLine: handleLine }
+    )
+      .then(function () {
+        var made = run.done - run.failed;
+        var where = outputDir ? " to " + outputDir : "";
+        // No sentinel means the server died partway and the body simply
+        // stopped. The stream reader cannot tell that from a clean end, so
+        // without this check a run that blew up at participant 4 of 10
+        // reported "3 subtitled videos written" and nothing else.
+        if (!sawDone) {
           finish(
-            run.failed
-              ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"
-              : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where
+            "Subtitle embedding stopped early — " +
+              clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
+              " of " + run.total + ". Check the clipgen log."
           );
-        });
+          return;
+        }
+        finish(
+          run.failed
+            ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"
+            : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where
+        );
       })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);
