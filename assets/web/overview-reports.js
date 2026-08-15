@@ -671,19 +671,19 @@
 
   function startReportPoll(pid, g) {
     stopReportPoll();
-    rpState.reportPoll = setInterval(function () {
+    rpState.reportPoll = createPoller(function () {
       if (!rpState.active || g !== rpState.gen) {
         stopReportPoll();
         return;
       }
-      if (document.hidden) return;
       fetchReport(pid, g);
-    }, REPORT_POLL_MS);
+    }, REPORT_POLL_MS, { runImmediately: false });
+    rpState.reportPoll.start();
   }
 
   function stopReportPoll() {
     if (rpState.reportPoll) {
-      clearInterval(rpState.reportPoll);
+      rpState.reportPoll.stop();
       rpState.reportPoll = null;
     }
   }
@@ -772,21 +772,18 @@
     var ctrl = new AbortController();
     rpState.clipsAbort = ctrl;
     renderClips();
-    fetch("../studio/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cells: cells, format: "clip" }),
-      signal: ctrl.signal,
-    })
-      .then(function (resp) {
-        if (resp.status === 409) throw new Error("generate-busy");
-        if (!resp.ok) throw new Error("Server error " + resp.status);
-        return readNDJSONStream(resp, function (line) {
+    apiPostNDJSON(
+      "../studio/api/generate",
+      { cells: cells, format: "clip" },
+      {
+        signal: ctrl.signal,
+        onLine: function (line) {
           if (!line || line.cancelled) return;
           rpState.clipsDone++;
           renderClipsProgress();
-        });
-      })
+        },
+      }
+    )
       .then(function () {
         resetClipsGeneration();
         if (g !== rpState.gen || !rpState.active) return;
@@ -795,7 +792,7 @@
       .catch(function (err) {
         resetClipsGeneration();
         if (g !== rpState.gen || !rpState.active) return;
-        if (err && err.message === "generate-busy") {
+        if (err && err.status === 409) {
           showNotice("Studio is already generating — wait for it to finish, then try again.", null, null, null);
         } else if (!(err && err.name === "AbortError")) {
           showNotice("Clip generation failed.", null, null, null);
@@ -1007,12 +1004,11 @@
   function startTaskPoll() {
     rpState.taskIdleTicks = 0;
     if (rpState.taskPoll) return;
-    rpState.taskPoll = setInterval(function () {
+    rpState.taskPoll = createPoller(function () {
       if (!rpState.active) {
         stopTaskPoll();
         return;
       }
-      if (document.hidden) return;
       apiGet("../transcripts/api/participants")
         .then(function (data) {
           if (!rpState.active) return;
@@ -1027,12 +1023,13 @@
           }
         })
         .catch(function () {});
-    }, TASK_POLL_MS);
+    }, TASK_POLL_MS, { runImmediately: false });
+    rpState.taskPoll.start();
   }
 
   function stopTaskPoll() {
     if (rpState.taskPoll) {
-      clearInterval(rpState.taskPoll);
+      rpState.taskPoll.stop();
       rpState.taskPoll = null;
     }
   }

@@ -4,14 +4,6 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* Generic hide utility — every page CSS defines this (studio/screenspace/
- * transcripts/workflows all do). The moved Convergence/Metadata satellites
- * toggle `.hidden` on banners, buttons, and detail panels; without this rule
- * all of them render unconditionally. */
-.hidden {
-  display: none !important;
-}
-
 body {
   font-family: var(--font-sans);
   background: var(--bg);

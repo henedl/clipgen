@@ -505,7 +505,7 @@
   function selectTab(name) {
     state.activeTab = name;
     var pid = state.selectedParticipant;
-    if (pid) setStoredUIStateField("transcripts", "tabByParticipant", _withKey(getStoredUIState("transcripts").tabByParticipant, pid, name));
+    if (pid) setStoredUIMapEntry("transcripts", "tabByParticipant", pid, name);
     var isSummary = name === "summary";
     qs("#tabBtnSummary").classList.toggle("active", isSummary);
     qs("#tabBtnSummary").setAttribute("aria-selected", isSummary ? "true" : "false");
@@ -515,15 +515,11 @@
     qs("#frictionTab").classList.toggle("hidden", isSummary);
   }
 
-  function _withKey(obj, key, value) {
-    var next = obj && typeof obj === "object" ? obj : {};
-    next[key] = value;
-    return next;
-  }
-
   function _restoreActiveTab(pid) {
-    var map = getStoredUIState("transcripts").tabByParticipant;
-    var saved = map && map[pid] === "friction" ? "friction" : "summary";
+    var saved =
+      getStoredUIMapEntry("transcripts", "tabByParticipant", pid) === "friction"
+        ? "friction"
+        : "summary";
     selectTab(saved);
   }
 

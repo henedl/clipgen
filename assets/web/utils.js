@@ -1011,13 +1011,49 @@ var severityRank = function (raw) {
   return null;
 };
 
+// Convert vertical wheel motion to horizontal scroll on an overflowing strip
+// (card queues, pill rows, chip bars). { passive: false } because it must
+// preventDefault to stop the page scrolling instead.
+var clipgenWheelToHorizontal = function (el) {
+  el.addEventListener(
+    "wheel",
+    function (e) {
+      if (el.scrollWidth > el.clientWidth) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    { passive: false }
+  );
+};
+
 // ---- API helpers (always check r.ok) ----
 
+// Shared !r.ok handling: reject with the server's {ok:false, error} envelope
+// message when the body carries one (so toasts show "The span is outside the
+// recording", not "Server error 400"), with .status set for callers that
+// branch on it (409 busy, etc.).
+var _apiJson = function (r) {
+  if (!r.ok) {
+    var mkError = function (message) {
+      var e = new Error(message || "Server error " + r.status);
+      e.status = r.status;
+      return e;
+    };
+    return r.json().then(
+      function (data) {
+        throw mkError(data && data.error);
+      },
+      function () {
+        throw mkError(null);
+      }
+    );
+  }
+  return r.json();
+};
+
 var apiGet = function (path) {
-  return fetch(path).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  return fetch(path).then(_apiJson);
 };
 
 var apiPost = function (path, body) {
@@ -1025,10 +1061,7 @@ var apiPost = function (path, body) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  }).then(_apiJson);
 };
 
 var apiPut = function (path, body) {
@@ -1036,17 +1069,19 @@ var apiPut = function (path, body) {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  }).then(_apiJson);
+};
+
+var apiPatch = function (path, body) {
+  return fetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(_apiJson);
 };
 
 var apiDelete = function (path) {
-  return fetch(path, { method: "DELETE" }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  return fetch(path, { method: "DELETE" }).then(_apiJson);
 };
 
 // Blob variants for image/media routes (frame thumbnails, preview renders).
@@ -1292,6 +1327,40 @@ var readNDJSONStream = function (response, onLine) {
     });
   }
   return pump();
+};
+
+// Streaming NDJSON POST: fetch + the r.ok check + readNDJSONStream in one call
+// (the raw-Response prologue every generate flow used to repeat). opts:
+// { signal, onLine }. Resolves when the stream drains. On !r.ok rejects with an
+// Error carrying .status and .bodyText (the error body, normally a JSON
+// envelope) so callers can branch (409 busy, reel error payloads); an abort
+// passes through unchanged as AbortError.
+var apiPostNDJSON = function (path, body, opts) {
+  opts = opts || {};
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  }).then(function (r) {
+    if (!r.ok) {
+      var mkError = function (txt) {
+        var e = new Error("Server error " + r.status);
+        e.status = r.status;
+        e.bodyText = txt || "";
+        return e;
+      };
+      return r.text().then(
+        function (txt) {
+          throw mkError(txt);
+        },
+        function () {
+          throw mkError("");
+        }
+      );
+    }
+    return readNDJSONStream(r, opts.onLine || function () {});
+  });
 };
 
 // ---- File downloads ----
@@ -1976,6 +2045,35 @@ var setStoredTooltipPref = function (enabled) {
 // load (set by the Overview Map's explain-panel links). Accepts any simple
 // token so participant-prefix rules stay in config.py alone; the consuming
 // page validates the id against its actual participant list.
+// Which part of a multi-file recording owns global second *g*. *startKey*
+// names the part-start field: "cumulativeStart" (screenspace / transcripts
+// api payloads, the default) or "offset" (the composer manifest's name for
+// the same value). Falls back to the last part so a seek past the end clamps
+// instead of going nowhere.
+var clipgenPartForGlobal = function (parts, g, startKey) {
+  var k = startKey || "cumulativeStart";
+  for (var i = 0; i < parts.length; i++) {
+    if (g >= parts[i][k] && g < parts[i][k] + parts[i].duration) return i;
+  }
+  return Math.max(0, parts.length - 1);
+};
+
+// Resolve a page's initial participant: the first of hashPid (deep link) /
+// currentId / storedId that exists in *participants* ([{id, ...}]); "" when
+// none do. Page-specific final fallbacks (first, only-one,
+// first-with-transcript) stay at the call site.
+var clipgenPickParticipant = function (participants, opts) {
+  opts = opts || {};
+  function present(id) {
+    if (!id) return "";
+    for (var i = 0; i < participants.length; i++) {
+      if (participants[i].id === id) return id;
+    }
+    return "";
+  }
+  return present(opts.hashPid) || present(opts.currentId) || present(opts.storedId) || "";
+};
+
 var clipgenHashParticipant = function () {
   var raw = (window.location.hash || "").replace(/^#/, "");
   if (!raw) return "";
@@ -2059,6 +2157,23 @@ var setStoredUIStateField = function (page, field, value) {
     else all[page][field] = value;
     window.localStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(all));
   } catch (_) {}
+};
+
+// Read/write one key inside a map-valued stored field (videoTimeByParticipant,
+// tabByParticipant, ...) without every caller repeating the is-it-an-object
+// defensive dance.
+var getStoredUIMapEntry = function (page, field, key, fallback) {
+  var map = getStoredUIState(page)[field];
+  return map && typeof map === "object" && Object.prototype.hasOwnProperty.call(map, key)
+    ? map[key]
+    : fallback;
+};
+
+var setStoredUIMapEntry = function (page, field, key, value) {
+  var st = getStoredUIState(page);
+  var map = st[field] && typeof st[field] === "object" ? st[field] : {};
+  map[key] = value;
+  setStoredUIStateField(page, field, map);
 };
 
 // ---- Canvas helpers (timeline overlays) ----

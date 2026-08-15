@@ -37,10 +37,6 @@ body {
 
 /* Utility */
 
-.hidden {
-  display: none !important;
-}
-
 /* Task-type icons (mask-image, color follows currentColor).
  * Used in tooltip headers, multitool step badges, and result rows. */
 .ss-task-icon {
@@ -423,16 +419,8 @@ body {
   height: 8px;
   border-radius: var(--radius-full);
   margin-top: 0.45em;
-  background: var(--color-text-dim);
+  background: var(--sev, var(--color-text-dim)); /* tokens.css severity indirection */
 }
-
-.ss-info-issue-dot.sev-critical { background: var(--sev-critical); }
-.ss-info-issue-dot.sev-high     { background: var(--sev-high); }
-.ss-info-issue-dot.sev-medium   { background: var(--sev-medium); }
-.ss-info-issue-dot.sev-low      { background: var(--sev-low); }
-.ss-info-issue-dot.sev-na       { background: var(--sev-na); }
-.ss-info-issue-dot.sev-positive { background: var(--sev-positive); }
-.ss-info-issue-dot.sev-very-positive { background: var(--sev-very-positive); }
 
 .ss-info-issue-text {
   flex: 1;
@@ -4174,22 +4162,10 @@ body.panel-dragging #bottomPanel {
   background: var(--color-backdrop);
 }
 
+/* Shell comes from .cg-modal-card (tokens.css); this owns width + padding. */
 .modal-card {
-  background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--color-panel-border);
-  box-shadow: var(--shadow-xl);
   padding: var(--space-5);
   width: 340px;
-  max-width: 92vw;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.modal-card h3 {
-  font-size: var(--text-md);
-  font-weight: 600;
 }
 
 .modal-label {

@@ -143,10 +143,6 @@ body[data-frontend="workflows"] {
   line-height: 1.5;
 }
 
-.hidden {
-  display: none !important;
-}
-
 /* ---- Canvas pane: toolbar + pannable canvas ---- */
 
 #wfCanvasWrap {
@@ -1997,17 +1993,10 @@ body[data-frontend="workflows"] {
   display: none;
 }
 
+/* Shell comes from .cg-modal-card (tokens.css); this owns width + padding. */
 .wf-dialog {
-  background: var(--color-surface);
-  border: 1px solid var(--color-panel-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
   width: 360px;
-  max-width: 92vw;
   padding: var(--space-4) var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
 }
 
 .wf-dialog-title {

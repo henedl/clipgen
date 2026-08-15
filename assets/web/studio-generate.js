@@ -12,7 +12,7 @@
  * _generateEtaTracker + _studioEtaTicker objects are shared elapsed-time
  * infrastructure (also driven by job-status polling and the reel/build flows);
  * buildCellOverrides lives in studio-trim.js (reached via STUDIO). isIntakeSource
- * is a hub helper. apiPost / qs / readNDJSONStream / setButtonProgress /
+ * is a hub helper. apiPost / qs / apiPostNDJSON / setButtonProgress /
  * clipgenPluralUnit are ambient utils.js / primitives.js globals (scope chain).
  *
  * The hub keeps same-named onGenerate/onCancelGenerate delegators for the button
@@ -234,18 +234,11 @@
         if (tcDur) genBody.titlecard_duration = parseInt(tcDur.value, 10) || 2;
       }
 
-      // Streaming NDJSON response — needs the raw Response (reader + AbortSignal),
-      // so this intentionally stays a manual fetch rather than an api* helper.
-      fetch("api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(genBody),
+      apiPostNDJSON("api/generate", genBody, {
         signal: sheetAbort.signal,
+        onLine: handleLine,
       })
-        .then(function (response) {
-          if (!response.ok) throw new Error("Server error " + response.status);
-          return readNDJSONStream(response, handleLine).then(finishBranch);
-        })
+        .then(finishBranch)
         .catch(function (err) {
           if (isGenerateFetchAborted(err)) {
             cancelled = true;
@@ -316,18 +309,12 @@
         updateGenerateButtonProgress();
       }
 
-      // Streaming NDJSON response — manual fetch is required to get a reader
-      // and parse line-delimited per-item events as ffmpeg finishes each cut.
-      fetch("api/generate-intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: intakePayload, format: format }),
-        signal: intakeAbort.signal,
-      })
-        .then(function (response) {
-          if (!response.ok) throw new Error("Server error " + response.status);
-          return readNDJSONStream(response, handleIntakeLine).then(finishBranch);
-        })
+      apiPostNDJSON(
+        "api/generate-intake",
+        { items: intakePayload, format: format },
+        { signal: intakeAbort.signal, onLine: handleIntakeLine }
+      )
+        .then(finishBranch)
         .catch(function (err) {
           if (isGenerateFetchAborted(err)) {
             cancelled = true;

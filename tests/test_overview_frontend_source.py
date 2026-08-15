@@ -74,7 +74,9 @@ def test_hub_wires_shared_chrome_buttons():
     the buttons; each surface wires them — a missed call means dead chrome)."""
     hub = (_WEB / "overview.js").read_text(encoding="utf-8")
     assert "initThemeToggle()" in hub
-    assert "openSettingsModal" in hub
+    # Settings wiring goes through settings-modal.js's shared helper, which
+    # owns the #settingsBtn lookup.
+    assert "wireSettingsButton" in hub
 
 
 def test_hub_reads_metadata_cluster_setting_from_sheet_payload():
@@ -98,12 +100,12 @@ def test_metadata_screenspace_clustering():
 
 
 def test_hidden_utility_class_defined():
-    """overview.css must define the generic `.hidden` utility (CSS toggle
-    completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata
-    satellites toggle `.hidden` on their status banners and controls, and on
-    Studio that rule came from studio.css — which this page doesn't load.
-    Without it the "analysis running"/"data changed" banners render always."""
-    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    """tokens.css must define the generic `.hidden` utility (CSS toggle
+    completeness, agents/CODE-REVIEW.md): the Convergence/Metadata satellites
+    toggle `.hidden` on their status banners and controls, and every app page
+    (this one included) gets the rule from tokens.css. Without it the
+    "analysis running"/"data changed" banners render always."""
+    css = (_WEB / "tokens.css").read_text(encoding="utf-8")
     assert re.search(r"^\.hidden \{\n  display: none !important;", css, re.MULTILINE)
 
 

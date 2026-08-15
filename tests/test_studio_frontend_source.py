@@ -81,21 +81,22 @@ def test_on_cancel_generate_aborts_and_posts_intake_cancel():
 
 
 def test_studio_uses_shared_ndjson_reader():
-    """The shared NDJSON helper lives in utils.js (also used by Composer) and is
-    reused by the sheet/intake/reel readers (the three sites used to duplicate
-    the loop); Studio must not grow a local copy back."""
+    """The shared NDJSON streaming helpers live in utils.js (also used by
+    Composer/Transcripts/Overview); Studio must not grow a local copy back."""
     utils_src = (_WEB / "utils.js").read_text(encoding="utf-8")
     assert "var readNDJSONStream = function (response, onLine)" in utils_src
     # response.body guard
     assert "if (!response.body" in utils_src
+    assert "var apiPostNDJSON = function (path, body, opts)" in utils_src
     src = _studio_js()
     # The duplicated raw .getReader() blocks should be gone (only the utils.js
     # helper calls it).
     assert "response.body.getReader()" not in src
-    # Used by all three streaming endpoints.
-    assert "readNDJSONStream(response, handleLine).then(finishBranch)" in src
-    assert "readNDJSONStream(response, handleIntakeLine).then(finishBranch)" in src
-    assert "readNDJSONStream(response, handleLine).then(finish)" in src
+    # All three streaming endpoints go through the fetch+drain helper.
+    assert 'apiPostNDJSON("api/generate", genBody' in src
+    assert '"api/generate-intake"' in src
+    assert "onLine: handleIntakeLine" in src
+    assert "apiPostNDJSON(endpoint, reelBody, { onLine: handleLine })" in src
 
 
 def test_sheet_branch_catch_marks_failures():

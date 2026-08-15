@@ -74,33 +74,14 @@
   function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
   function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
 
-  // ---- API client ----
-
-  function apiGet(path) {
-    return fetch(path).then(function (r) { return r.json(); });
-  }
-
-  function apiSend(method, path, body) {
-    return fetch(path, {
-      method: method,
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }).then(function (r) { return r.json(); });
-  }
-
-  CO.apiGet = apiGet;
-  CO.apiSend = apiSend;
-
-  // ---- Multi-part video (forked from transcripts-video.js) ----
+  // ---- Multi-part video ----
   // The <video> plays one part at a time; these helpers present a single
   // GLOBAL timeline so the playhead, cuts, and markers all use global seconds.
+  // Composer's manifest calls the part-start field "offset" where the other
+  // pages say "cumulativeStart" — the startKey argument documents the fork.
 
   function partForGlobal(g) {
-    var parts = state.parts;
-    for (var i = 0; i < parts.length; i++) {
-      if (g >= parts[i].offset && g < parts[i].offset + parts[i].duration) return i;
-    }
-    return Math.max(0, parts.length - 1);
+    return clipgenPartForGlobal(state.parts, g, "offset");
   }
 
   function videoGlobalTime() {
@@ -458,7 +439,7 @@
   }
 
   function applyCreate(cutData) {
-    return apiSend("POST", "api/cuts", {
+    return apiPost("api/cuts", {
       participant: cutData.participant,
       start: cutData.start,
       end: cutData.end,
@@ -472,7 +453,7 @@
   }
 
   function applyDelete(id) {
-    return apiSend("DELETE", "api/cuts/" + encodeURIComponent(id)).then(function (data) {
+    return apiDelete("api/cuts/" + encodeURIComponent(id)).then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not delete cut");
       state.cuts = state.cuts.filter(function (c) { return c.id !== id; });
       if (state.selectedCutId === id) state.selectedCutId = null;
@@ -481,7 +462,7 @@
   }
 
   function applyTimes(id, times) {
-    return apiSend("PATCH", "api/cuts/" + encodeURIComponent(id), {
+    return apiPatch("api/cuts/" + encodeURIComponent(id), {
       start: times.start,
       end: times.end,
     }).then(function (data) {
@@ -534,8 +515,8 @@
       payload.source = meta.source;
     }
     var call = payload
-      ? apiSend("PUT", "api/trims/" + encodeURIComponent(key), payload)
-      : apiSend("DELETE", "api/trims/" + encodeURIComponent(key));
+      ? apiPut("api/trims/" + encodeURIComponent(key), payload)
+      : apiDelete("api/trims/" + encodeURIComponent(key));
     return call.then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save trim");
       var marker = findMarker(key);
@@ -744,7 +725,7 @@
   CO.refreshAnnotationViews = refreshAnnotationViews;
 
   function applyAnnCreate(record) {
-    return apiSend("POST", "api/annotations", record).then(function (data) {
+    return apiPost("api/annotations", record).then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save annotation");
       state.annotations.push(data.annotation);
       refreshAnnotationViews();
@@ -753,7 +734,7 @@
   }
 
   function applyAnnDelete(id) {
-    return apiSend("DELETE", "api/annotations/" + encodeURIComponent(id))
+    return apiDelete("api/annotations/" + encodeURIComponent(id))
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not delete annotation");
         state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
@@ -764,7 +745,7 @@
   }
 
   function applyAnnPatch(id, fields) {
-    return apiSend("PATCH", "api/annotations/" + encodeURIComponent(id), fields)
+    return apiPatch("api/annotations/" + encodeURIComponent(id), fields)
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not save annotation");
         var idx = state.annotations.findIndex(function (a) { return a.id === id; });
@@ -963,14 +944,16 @@
     if (_exporting) { showToast("An export is already running"); return; }
     _exporting = true;
     showToast(busyLabel + "…");
-    apiSend("POST", path, body).then(function (data) {
+    apiPost(path, body).then(function (data) {
       _exporting = false;
       if (!data.ok) { showToast(data.error || "Export failed"); return; }
       logArtifactResult({ ok: true, artifact: data.artifact }, null);
       showToast("Exported " + (data.artifact.file || ""));
-    }).catch(function () {
+    }).catch(function (err) {
       _exporting = false;
-      showToast("Export failed");
+      // A 4xx envelope now rejects; err.message carries the server's text
+      // ("An export is already running", "The span is outside the recording").
+      showToast(err && err.message ? err.message : "Export failed");
     });
   }
 
@@ -1059,7 +1042,7 @@
 
   function commitCutLabel(cut, label) {
     if (label === (cut.label || "")) return;
-    apiSend("PATCH", "api/cuts/" + encodeURIComponent(cut.id), { label: label })
+    apiPatch("api/cuts/" + encodeURIComponent(cut.id), { label: label })
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not save name");
         cut.label = data.cut.label;
@@ -1285,7 +1268,7 @@
   readPersistedSidebarOpen();
 
   // ---- Generate (Studio intake endpoint; NDJSON streaming) ----
-  // readNDJSONStream is an ambient utils.js global.
+  // apiPostNDJSON is an ambient utils.js global.
 
   var _generateAbort = null;
 
@@ -1345,16 +1328,12 @@
     }
 
     _generateAbort = new AbortController();
-    fetch("../studio/api/generate-intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, format: "clip" }),
-      signal: _generateAbort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () { finish(); });
-      })
+    apiPostNDJSON(
+      "../studio/api/generate-intake",
+      { items: items, format: "clip" },
+      { signal: _generateAbort.signal, onLine: handleLine }
+    )
+      .then(function () { finish(); })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);
         finish(aborted ? "Generation cancelled" : "Generation failed: " + (err && err.message));
@@ -1362,7 +1341,7 @@
   }
 
   function onCancelGenerate() {
-    apiSend("POST", "../studio/api/generate-intake/cancel").catch(function () {});
+    apiPost("../studio/api/generate-intake/cancel", {}).catch(function () {});
     if (_generateAbort) _generateAbort.abort();
   }
 
@@ -1690,24 +1669,20 @@
         renderTimeline();
       });
     }
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        // Saved/reset settings apply live on this page: re-sync the mirrored
-        // config flag and the footer hint that advertises it.
-        function syncComposerSettings(settings) {
-          (settings || []).forEach(function (s) {
-            if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
-              CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
-            }
-          });
-          updateTimelineHint();
+    // Saved/reset settings apply live on this page: re-sync the mirrored
+    // config flag and the footer hint that advertises it.
+    function syncComposerSettings(settings) {
+      (settings || []).forEach(function (s) {
+        if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
+          CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
         }
-        window.openSettingsModal({
-          initialTab: "Composer",
-          onSave: function (_applied, settings) { syncComposerSettings(settings); },
-          onReset: function (_scope, settings) { syncComposerSettings(settings); },
-        });
+      });
+      updateTimelineHint();
+    }
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
+        initialTab: "Composer",
+        onApply: function (_applied, settings) { syncComposerSettings(settings); },
       });
     }
 
@@ -1800,13 +1775,10 @@
         // A /composer/#P07 hash (command palette / cross-page links) wins;
         // otherwise restore the last-worked-on participant, falling back to
         // auto-select when there is only one.
-        var hashPid = clipgenHashParticipant();
-        var stored = getStoredUIState("composer").participant;
-        var initial = hashPid && findParticipant(hashPid)
-          ? hashPid
-          : stored && findParticipant(stored)
-            ? stored
-            : state.participants.length === 1 ? state.participants[0].id : null;
+        var initial = clipgenPickParticipant(state.participants, {
+          hashPid: clipgenHashParticipant(),
+          storedId: getStoredUIState("composer").participant,
+        }) || (state.participants.length === 1 ? state.participants[0].id : null);
         if (initial) {
           qs("#coParticipantSelect").value = initial;
           selectParticipant(initial);

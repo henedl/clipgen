@@ -46,8 +46,9 @@ def test_hub_wires_topnav_chrome():
     them (they appear but do nothing otherwise)."""
     src = _workflows_js()
     assert "initThemeToggle(" in src
-    assert "#settingsBtn" in src
-    assert "openSettingsModal(" in src
+    # Settings wiring goes through settings-modal.js's shared helper, which
+    # owns the #settingsBtn lookup.
+    assert "wireSettingsButton(" in src
 
 
 def test_start_overlay_treats_workflows_as_video_tool():

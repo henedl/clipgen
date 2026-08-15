@@ -684,35 +684,19 @@
       }
       refreshTranscriptionModelHintOnce();
 
-      // Deep link (#P07, from the Overview Map's explain panel) wins once,
-      // on the first load that has the participant list.
+      // Precedence: deep link (#P07, from the Overview Map's explain panel;
+      // wins once, on the first load that has the participant list) > current
+      // in-memory selection (soft refresh) > localStorage (fresh page load).
       var hashPid = _hashPidApplied ? "" : clipgenHashParticipant();
-      if (hashPid && state.participants.length) {
-        _hashPidApplied = true;
-        for (var h = 0; h < state.participants.length; h++) {
-          if (state.participants[h].id === hashPid) {
-            selectParticipant(hashPid);
-            return;
-          }
-        }
-      }
-
-      // Preserve current in-memory selection if still valid (soft refresh)
-      if (state.selectedParticipant) {
-        for (var i = 0; i < state.participants.length; i++) {
-          if (state.participants[i].id === state.selectedParticipant) return;
-        }
-      }
-
-      // Restore from localStorage if present and still valid (fresh page load)
-      var storedPid = getStoredUIState("transcripts").selectedParticipant;
-      if (storedPid) {
-        for (var j = 0; j < state.participants.length; j++) {
-          if (state.participants[j].id === storedPid) {
-            selectParticipant(storedPid);
-            return;
-          }
-        }
+      if (hashPid && state.participants.length) _hashPidApplied = true;
+      var pick = clipgenPickParticipant(state.participants, {
+        hashPid: hashPid,
+        currentId: state.selectedParticipant,
+        storedId: getStoredUIState("transcripts").selectedParticipant,
+      });
+      if (pick) {
+        if (pick !== state.selectedParticipant) selectParticipant(pick);
+        return;
       }
 
       // Auto-select first participant with a transcript, or just the first
@@ -2943,30 +2927,19 @@
   }
 
   function initTranscriptSettings() {
-    var btn = qs("#settingsBtn");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      openSettingsModal({
-        initialTab: "Transcription",
-        onSave: function (applied, settings) {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          _onTranscribeModelMaybeChanged(
-            (applied && applied.TRANSCRIBE_MODEL) !== undefined
-              ? applied.TRANSCRIBE_MODEL
-              : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-          );
-          _applySettingsSnapshot(applied, settings);
-        },
-        onReset: function (scope, settings) {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          _onTranscribeModelMaybeChanged(
-            _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-          );
-          _applySettingsSnapshot(null, settings);
-        },
-      });
+    if (!window.wireSettingsButton) return;
+    window.wireSettingsButton({
+      initialTab: "Transcription",
+      onApply: function (applied, settings) {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        _onTranscribeModelMaybeChanged(
+          applied && applied.TRANSCRIBE_MODEL !== undefined
+            ? applied.TRANSCRIBE_MODEL
+            : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
+        );
+        _applySettingsSnapshot(applied, settings);
+      },
     });
   }
 
@@ -3153,22 +3126,18 @@
       showToast(message);
     }
 
-    fetch("../studio/api/generate-intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: items, format: "clip" }),
-      signal: run.abort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () {
-          var made = run.done - run.failed;
-          finish(
-            run.failed
-              ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
-              : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
-          );
-        });
+    apiPostNDJSON(
+      "../studio/api/generate-intake",
+      { items: items, format: "clip" },
+      { signal: run.abort.signal, onLine: handleLine }
+    )
+      .then(function () {
+        var made = run.done - run.failed;
+        finish(
+          run.failed
+            ? clipgenPluralUnit(made, "clip", "clips") + " generated, " + run.failed + " failed"
+            : clipgenPluralUnit(made, "clip", "clips") + " generated — open Studio to review"
+        );
       })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);
@@ -3431,35 +3400,31 @@
       showToast(message);
     }
 
-    fetch("api/embed-subtitles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ participants: pids, default_track: defaultTrack }),
-      signal: run.abort.signal,
-    })
-      .then(function (response) {
-        if (!response.ok) throw new Error("Server error " + response.status);
-        return readNDJSONStream(response, handleLine).then(function () {
-          var made = run.done - run.failed;
-          var where = outputDir ? " to " + outputDir : "";
-          // No sentinel means the server died partway and the body simply
-          // stopped. readNDJSONStream cannot tell that from a clean end, so
-          // without this check a run that blew up at participant 4 of 10
-          // reported "3 subtitled videos written" and nothing else.
-          if (!sawDone) {
-            finish(
-              "Subtitle embedding stopped early — " +
-                clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
-                " of " + run.total + ". Check the clipgen log."
-            );
-            return;
-          }
+    apiPostNDJSON(
+      "api/embed-subtitles",
+      { participants: pids, default_track: defaultTrack },
+      { signal: run.abort.signal, onLine: handleLine }
+    )
+      .then(function () {
+        var made = run.done - run.failed;
+        var where = outputDir ? " to " + outputDir : "";
+        // No sentinel means the server died partway and the body simply
+        // stopped. The stream reader cannot tell that from a clean end, so
+        // without this check a run that blew up at participant 4 of 10
+        // reported "3 subtitled videos written" and nothing else.
+        if (!sawDone) {
           finish(
-            run.failed
-              ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"
-              : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where
+            "Subtitle embedding stopped early — " +
+              clipgenPluralUnit(made, "video was", "videos were") + " written" + where +
+              " of " + run.total + ". Check the clipgen log."
           );
-        });
+          return;
+        }
+        finish(
+          run.failed
+            ? clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where + ", " + run.failed + " failed"
+            : clipgenPluralUnit(made, "subtitled video", "subtitled videos") + " written" + where
+        );
       })
       .catch(function (err) {
         var aborted = err && (err.name === "AbortError" || err.code === 20);

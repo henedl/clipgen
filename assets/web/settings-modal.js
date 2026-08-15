@@ -1521,4 +1521,33 @@
     _open();
     _load();
   };
+
+  // Wire the TopNav #settingsBtn to the shared modal — one call per page
+  // instead of six hand-rolled listeners with divergent guards. opts:
+  //   initialTab — tab to open on
+  //   version    — string, or a function evaluated at click time (Studio's
+  //                sheet version loads after boot)
+  //   onApply(applied, settings) — called after Save (applied = the changed
+  //                map) and after Reset (applied = null); pages re-sync their
+  //                mirrored config the same way in both cases.
+  window.wireSettingsButton = function (opts) {
+    opts = opts || {};
+    var btn = document.getElementById("settingsBtn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var options = {
+        initialTab: opts.initialTab,
+        version: typeof opts.version === "function" ? opts.version() : opts.version,
+      };
+      if (opts.onApply) {
+        options.onSave = function (applied, settings) {
+          opts.onApply(applied, settings);
+        };
+        options.onReset = function (_scope, settings) {
+          opts.onApply(null, settings);
+        };
+      }
+      window.openSettingsModal(options);
+    });
+  };
 })();
