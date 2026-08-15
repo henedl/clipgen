@@ -2598,68 +2598,54 @@ def api_export_events() -> FlaskResponse:
     return err(f"Unsupported format: {fmt}")
 
 
-@screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
-def api_event_exclude(event_id: str) -> FlaskResponse:
-    """Set an event as excluded."""
+def _set_event_excluded(event_id: str, excluded: bool) -> FlaskResponse:
+    """Set one event's excluded flag; 404 when the id is unknown."""
     with _manifest_lock:
         for e in _manifest.get("events", []):
             if e["id"] == event_id:
-                e["excluded"] = True
+                e["excluded"] = excluded
                 _bump_events_version()
                 _do_persist(drain_events=False)
                 return ok()
     return err("Event not found", 404)
+
+
+def _bulk_set_excluded(excluded: bool) -> FlaskResponse:
+    """Set the excluded flag on every event named in the request's id list."""
+    data = request.get_json(silent=True) or {}
+    ids = set(data.get("ids", []))
+    if not ids:
+        return err("ids list required")
+    with _manifest_lock:
+        count = 0
+        for e in _manifest.get("events", []):
+            if e["id"] in ids:
+                e["excluded"] = excluded
+                count += 1
+        if count:
+            _bump_events_version()
+        _do_persist(drain_events=False)
+    return ok(updated=count)
+
+
+@screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
+def api_event_exclude(event_id: str) -> FlaskResponse:
+    return _set_event_excluded(event_id, True)
 
 
 @screenspace_bp.route("/api/events/<event_id>/include", methods=["PUT"])
 def api_event_include(event_id: str) -> FlaskResponse:
-    """Set an event as included."""
-    with _manifest_lock:
-        for e in _manifest.get("events", []):
-            if e["id"] == event_id:
-                e["excluded"] = False
-                _bump_events_version()
-                _do_persist(drain_events=False)
-                return ok()
-    return err("Event not found", 404)
+    return _set_event_excluded(event_id, False)
 
 
 @screenspace_bp.route("/api/events/bulk-exclude", methods=["PUT"])
 def api_events_bulk_exclude() -> FlaskResponse:
-    """Bulk-exclude events by ID list."""
-    data = request.get_json(silent=True) or {}
-    ids = set(data.get("ids", []))
-    if not ids:
-        return err("ids list required")
-    with _manifest_lock:
-        count = 0
-        for e in _manifest.get("events", []):
-            if e["id"] in ids:
-                e["excluded"] = True
-                count += 1
-        if count:
-            _bump_events_version()
-        _do_persist(drain_events=False)
-    return ok(updated=count)
+    return _bulk_set_excluded(True)
 
 
 @screenspace_bp.route("/api/events/bulk-include", methods=["PUT"])
 def api_events_bulk_include() -> FlaskResponse:
-    """Bulk-include events by ID list."""
-    data = request.get_json(silent=True) or {}
-    ids = set(data.get("ids", []))
-    if not ids:
-        return err("ids list required")
-    with _manifest_lock:
-        count = 0
-        for e in _manifest.get("events", []):
-            if e["id"] in ids:
-                e["excluded"] = False
-                count += 1
-        if count:
-            _bump_events_version()
-        _do_persist(drain_events=False)
-    return ok(updated=count)
+    return _bulk_set_excluded(False)
 
 
 # ---- Helpers ----
