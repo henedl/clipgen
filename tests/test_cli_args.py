@@ -645,6 +645,59 @@ def test_help_text_reports_version(monkeypatch, capsys):
     assert f"clipgen v{utils.get_version()}" in capsys.readouterr().out
 
 
+# ---- --licenses flag ----
+
+
+def test_licenses_flag_prints_the_notice_and_exits(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--licenses"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "THIRD-PARTY SOFTWARE NOTICES AND LICENSES" in out
+    # Attribution for the copyleft components is the whole point of the file;
+    # a notice that lost its GPL/LGPL sections would still pass a length check.
+    assert "GNU GENERAL PUBLIC LICENSE" in out
+    assert "LGPL-3.0-OR-LATER" in out
+
+
+def test_licenses_flag_fails_loudly_when_the_notice_is_missing(
+    monkeypatch, capsys, tmp_path
+):
+    """A stripped installation must say so, not print an empty notice."""
+    monkeypatch.setattr(utils, "get_bundled_assets_root", lambda: tmp_path)
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--licenses"])
+    with pytest.raises(SystemExit) as exc:
+        cli.parse_arguments()
+    assert exc.value.code == 1
+    assert "THIRD-PARTY-LICENSES is missing" in capsys.readouterr().err
+
+
+def test_licenses_notice_is_only_read_when_the_flag_is_passed(monkeypatch):
+    """The custom action exists solely so the ~78 KB read stays lazy.
+
+    Reverting to `action="version"` would silently reintroduce a file read into
+    every single clipgen invocation, which no other test would catch.
+    """
+    calls = 0
+
+    def counting_get_licenses_text():
+        nonlocal calls
+        calls += 1
+        return "stub"
+
+    monkeypatch.setattr(utils, "get_licenses_text", counting_get_licenses_text)
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--no-input"])
+    cli.parse_arguments()
+    assert calls == 0
+
+    monkeypatch.setattr("sys.argv", ["clipgen.py", "--licenses"])
+    with pytest.raises(SystemExit):
+        cli.parse_arguments()
+    assert calls == 1
+
+
 def test_settings_rejected_with_no_input(monkeypatch, capsys):
     import os
 
