@@ -74,16 +74,14 @@
   function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
   function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
 
-  // ---- Multi-part video (forked from transcripts-video.js) ----
+  // ---- Multi-part video ----
   // The <video> plays one part at a time; these helpers present a single
   // GLOBAL timeline so the playhead, cuts, and markers all use global seconds.
+  // Composer's manifest calls the part-start field "offset" where the other
+  // pages say "cumulativeStart" — the startKey argument documents the fork.
 
   function partForGlobal(g) {
-    var parts = state.parts;
-    for (var i = 0; i < parts.length; i++) {
-      if (g >= parts[i].offset && g < parts[i].offset + parts[i].duration) return i;
-    }
-    return Math.max(0, parts.length - 1);
+    return clipgenPartForGlobal(state.parts, g, "offset");
   }
 
   function videoGlobalTime() {

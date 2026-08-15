@@ -111,14 +111,6 @@
     var last = tl[tl.length - 1];
     return last.cumulativeStart + last.duration;
   }
-  function _partForGlobal(tl, g) {
-    for (var i = 0; i < tl.length; i++) {
-      if (g >= tl[i].cumulativeStart && g < tl[i].cumulativeStart + tl[i].duration) {
-        return i;
-      }
-    }
-    return tl.length - 1;
-  }
   function _partMediaUrl(i) {
     var url = "media/" + state.videoTimeline[i].filename;
     if (state.videoVersion != null) url += "?v=" + encodeURIComponent(state.videoVersion);
@@ -1124,7 +1116,7 @@
     if (state.videoTimeline) {
       var tl = state.videoTimeline;
       var g = time < 0 ? 0 : Math.min(time, _timelineTotal(tl));
-      var i = _partForGlobal(tl, g);
+      var i = clipgenPartForGlobal(tl, g);
       var local = g - tl[i].cumulativeStart;
       if (i !== state.videoActivePart) {
         _switchToPart(i, local, true);
@@ -1270,7 +1262,7 @@
   }
 
   // ---- Published back to the hub ----
-  // Boot wires the init*; selectParticipant uses _partForGlobal/_partMediaUrl/
+  // Boot wires the init*; selectParticipant uses clipgenPartForGlobal/_partMediaUrl/
   // applyCaptionMode/cancelPendingSeek; renderEmptyState uses clearTimelineMarkers;
   // the segment list, loadTranscript, search, and the agents panel use seekVideo/
   // renderTimeline/scrollToSegment; the friction tooltip uses hasTimelineHover;
@@ -1286,7 +1278,7 @@
   TS.scrollToSegment = scrollToSegment;
   TS.ignoreNextScroll = ignoreNextScroll;
   TS.applyCaptionMode = applyCaptionMode;
-  TS._partForGlobal = _partForGlobal;
+  TS._partForGlobal = clipgenPartForGlobal;
   TS._partMediaUrl = _partMediaUrl;
   TS.cancelPendingSeek = cancelPendingSeek;
   TS.clearTimelineMarkers = clearTimelineMarkers;

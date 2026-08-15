@@ -2045,6 +2045,19 @@ var setStoredTooltipPref = function (enabled) {
 // load (set by the Overview Map's explain-panel links). Accepts any simple
 // token so participant-prefix rules stay in config.py alone; the consuming
 // page validates the id against its actual participant list.
+// Which part of a multi-file recording owns global second *g*. *startKey*
+// names the part-start field: "cumulativeStart" (screenspace / transcripts
+// api payloads, the default) or "offset" (the composer manifest's name for
+// the same value). Falls back to the last part so a seek past the end clamps
+// instead of going nowhere.
+var clipgenPartForGlobal = function (parts, g, startKey) {
+  var k = startKey || "cumulativeStart";
+  for (var i = 0; i < parts.length; i++) {
+    if (g >= parts[i][k] && g < parts[i][k] + parts[i].duration) return i;
+  }
+  return Math.max(0, parts.length - 1);
+};
+
 // Resolve a page's initial participant: the first of hashPid (deep link) /
 // currentId / storedId that exists in *participants* ([{id, ...}]); "" when
 // none do. Page-specific final fallbacks (first, only-one,

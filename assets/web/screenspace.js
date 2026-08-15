@@ -450,14 +450,6 @@
     var info = state.videoInfo;
     return info && info.parts && info.parts.length > 1 ? info.parts : null;
   }
-  function _ssPartForGlobal(parts, g) {
-    for (var i = 0; i < parts.length; i++) {
-      if (g >= parts[i].cumulativeStart && g < parts[i].cumulativeStart + parts[i].duration) {
-        return i;
-      }
-    }
-    return parts.length - 1;
-  }
   function _ssStreamUrlForPart(pid, i) {
     var url = videoStreamUrl(pid);
     return url + (url.indexOf("?") >= 0 ? "&" : "?") + "part=" + i;
@@ -1809,7 +1801,7 @@
     var parts = _ssParts();
     if (parts) {
       // Multi-video: play the part that owns the global playhead, seeking local.
-      var i = _ssPartForGlobal(parts, state.currentTimestamp);
+      var i = clipgenPartForGlobal(parts, state.currentTimestamp);
       state.videoActivePart = i;
       state.videoOffset = parts[i].cumulativeStart;
       var wantSrc = _ssStreamUrlForPart(state.selectedParticipant, i);
