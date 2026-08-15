@@ -74,23 +74,6 @@
   function setAnnotateTool() { return CO.setAnnotateTool && CO.setAnnotateTool.apply(null, arguments); }
   function initMarkerScrub() { return CO.initMarkerScrub && CO.initMarkerScrub.apply(null, arguments); }
 
-  // ---- API client ----
-
-  function apiGet(path) {
-    return fetch(path).then(function (r) { return r.json(); });
-  }
-
-  function apiSend(method, path, body) {
-    return fetch(path, {
-      method: method,
-      headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }).then(function (r) { return r.json(); });
-  }
-
-  CO.apiGet = apiGet;
-  CO.apiSend = apiSend;
-
   // ---- Multi-part video (forked from transcripts-video.js) ----
   // The <video> plays one part at a time; these helpers present a single
   // GLOBAL timeline so the playhead, cuts, and markers all use global seconds.
@@ -458,7 +441,7 @@
   }
 
   function applyCreate(cutData) {
-    return apiSend("POST", "api/cuts", {
+    return apiPost("api/cuts", {
       participant: cutData.participant,
       start: cutData.start,
       end: cutData.end,
@@ -472,7 +455,7 @@
   }
 
   function applyDelete(id) {
-    return apiSend("DELETE", "api/cuts/" + encodeURIComponent(id)).then(function (data) {
+    return apiDelete("api/cuts/" + encodeURIComponent(id)).then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not delete cut");
       state.cuts = state.cuts.filter(function (c) { return c.id !== id; });
       if (state.selectedCutId === id) state.selectedCutId = null;
@@ -481,7 +464,7 @@
   }
 
   function applyTimes(id, times) {
-    return apiSend("PATCH", "api/cuts/" + encodeURIComponent(id), {
+    return apiPatch("api/cuts/" + encodeURIComponent(id), {
       start: times.start,
       end: times.end,
     }).then(function (data) {
@@ -534,8 +517,8 @@
       payload.source = meta.source;
     }
     var call = payload
-      ? apiSend("PUT", "api/trims/" + encodeURIComponent(key), payload)
-      : apiSend("DELETE", "api/trims/" + encodeURIComponent(key));
+      ? apiPut("api/trims/" + encodeURIComponent(key), payload)
+      : apiDelete("api/trims/" + encodeURIComponent(key));
     return call.then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save trim");
       var marker = findMarker(key);
@@ -744,7 +727,7 @@
   CO.refreshAnnotationViews = refreshAnnotationViews;
 
   function applyAnnCreate(record) {
-    return apiSend("POST", "api/annotations", record).then(function (data) {
+    return apiPost("api/annotations", record).then(function (data) {
       if (!data.ok) throw new Error(data.error || "Could not save annotation");
       state.annotations.push(data.annotation);
       refreshAnnotationViews();
@@ -753,7 +736,7 @@
   }
 
   function applyAnnDelete(id) {
-    return apiSend("DELETE", "api/annotations/" + encodeURIComponent(id))
+    return apiDelete("api/annotations/" + encodeURIComponent(id))
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not delete annotation");
         state.annotations = state.annotations.filter(function (a) { return a.id !== id; });
@@ -764,7 +747,7 @@
   }
 
   function applyAnnPatch(id, fields) {
-    return apiSend("PATCH", "api/annotations/" + encodeURIComponent(id), fields)
+    return apiPatch("api/annotations/" + encodeURIComponent(id), fields)
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not save annotation");
         var idx = state.annotations.findIndex(function (a) { return a.id === id; });
@@ -963,14 +946,16 @@
     if (_exporting) { showToast("An export is already running"); return; }
     _exporting = true;
     showToast(busyLabel + "…");
-    apiSend("POST", path, body).then(function (data) {
+    apiPost(path, body).then(function (data) {
       _exporting = false;
       if (!data.ok) { showToast(data.error || "Export failed"); return; }
       logArtifactResult({ ok: true, artifact: data.artifact }, null);
       showToast("Exported " + (data.artifact.file || ""));
-    }).catch(function () {
+    }).catch(function (err) {
       _exporting = false;
-      showToast("Export failed");
+      // A 4xx envelope now rejects; err.message carries the server's text
+      // ("An export is already running", "The span is outside the recording").
+      showToast(err && err.message ? err.message : "Export failed");
     });
   }
 
@@ -1059,7 +1044,7 @@
 
   function commitCutLabel(cut, label) {
     if (label === (cut.label || "")) return;
-    apiSend("PATCH", "api/cuts/" + encodeURIComponent(cut.id), { label: label })
+    apiPatch("api/cuts/" + encodeURIComponent(cut.id), { label: label })
       .then(function (data) {
         if (!data.ok) throw new Error(data.error || "Could not save name");
         cut.label = data.cut.label;
@@ -1362,7 +1347,7 @@
   }
 
   function onCancelGenerate() {
-    apiSend("POST", "../studio/api/generate-intake/cancel").catch(function () {});
+    apiPost("../studio/api/generate-intake/cancel", {}).catch(function () {});
     if (_generateAbort) _generateAbort.abort();
   }
 

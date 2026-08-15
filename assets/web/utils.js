@@ -1013,11 +1013,31 @@ var severityRank = function (raw) {
 
 // ---- API helpers (always check r.ok) ----
 
+// Shared !r.ok handling: reject with the server's {ok:false, error} envelope
+// message when the body carries one (so toasts show "The span is outside the
+// recording", not "Server error 400"), with .status set for callers that
+// branch on it (409 busy, etc.).
+var _apiJson = function (r) {
+  if (!r.ok) {
+    var mkError = function (message) {
+      var e = new Error(message || "Server error " + r.status);
+      e.status = r.status;
+      return e;
+    };
+    return r.json().then(
+      function (data) {
+        throw mkError(data && data.error);
+      },
+      function () {
+        throw mkError(null);
+      }
+    );
+  }
+  return r.json();
+};
+
 var apiGet = function (path) {
-  return fetch(path).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  return fetch(path).then(_apiJson);
 };
 
 var apiPost = function (path, body) {
@@ -1025,10 +1045,7 @@ var apiPost = function (path, body) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  }).then(_apiJson);
 };
 
 var apiPut = function (path, body) {
@@ -1036,17 +1053,19 @@ var apiPut = function (path, body) {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  }).then(_apiJson);
+};
+
+var apiPatch = function (path, body) {
+  return fetch(path, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then(_apiJson);
 };
 
 var apiDelete = function (path) {
-  return fetch(path, { method: "DELETE" }).then(function (r) {
-    if (!r.ok) throw new Error("Server error " + r.status);
-    return r.json();
-  });
+  return fetch(path, { method: "DELETE" }).then(_apiJson);
 };
 
 // Blob variants for image/media routes (frame thumbnails, preview renders).

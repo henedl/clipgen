@@ -29,17 +29,13 @@
     return typeof off === "number" && isFinite(off) ? off : 0;
   }
 
-  function fetchJson(path) {
-    return fetch(path).then(function (r) { return r.json(); });
-  }
-
   function loadMarkers(pid) {
     var version = ++_loadVersion;
     // Overview, not Studio: the convergence-offsets route is deliberately on the
     // overview blueprint (see agents/ARCHITECTURE.md) so its own satellites can
     // reach it page-relative. Pointing at ../studio/ 404s, and because the catch
     // below degrades to {} every lane silently rendered at offset 0.
-    fetchJson("../overview/api/convergence/offsets")
+    apiGet("../overview/api/convergence/offsets")
       .catch(function () { return {}; })
       .then(function (offData) {
         var offsets = (offData && offData.offsets) || {};
@@ -73,8 +69,8 @@
   function loadSheetMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "sheet");
     Promise.all([
-      fetchJson("../studio/api/sheet"),
-      fetchJson("../studio/api/sheet/baseline"),
+      apiGet("../studio/api/sheet"),
+      apiGet("../studio/api/sheet/baseline"),
     ]).then(function (results) {
       var sheet = results[0] || {};
       var baselines = (results[1] && results[1].baselines) || {};
@@ -116,7 +112,7 @@
 
   function loadScreenspaceMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "screenspace");
-    fetchJson("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
+    apiGet("../screenspace/api/events?excluded=false&participant=" + encodeURIComponent(pid))
       .then(function (data) {
         var events = ((data && data.events) || []).filter(function (ev) {
           // Boundaries are orientation scaffolding, not clip candidates —
@@ -152,7 +148,7 @@
   // skipped (a full transcript would carpet the lane edge-to-edge).
   function loadTranscriptMarkers(pid, version, offsets) {
     var off = offsetFor(offsets, pid, "transcript");
-    fetchJson("../transcripts/api/transcript/" + encodeURIComponent(pid))
+    apiGet("../transcripts/api/transcript/" + encodeURIComponent(pid))
       .then(function (data) {
         var segments = (data && data.segments) || [];
         var markers = [];
@@ -187,7 +183,7 @@
   }
 
   function persistUi() {
-    CO.apiSend("PUT", "api/ui", {
+    apiPut("api/ui", {
       markerSources: state.sourceToggles,
       laneFolds: state.laneFolds,
       markerThumbnails: state.markerThumbnails,
