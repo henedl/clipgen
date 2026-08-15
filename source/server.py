@@ -807,6 +807,20 @@ def _sheet_observation_rows() -> list[dict[str, Any]]:
     return records
 
 
+def _sheet_common_fields() -> dict[str, Any]:
+    """Payload fields shared by both branches of :func:`api_sheet`."""
+    return {
+        "version": utils.get_version(),
+        "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
+        "titlecardsEnabled": config.TITLECARDS_ENABLED,
+        "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
+        "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
+        "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
+        "metadataClusterScreenspace": config.STUDIO_METADATA_CLUSTER_SCREENSPACE,
+        "config": utils.get_frontend_config(),
+    }
+
+
 @studio_bp.route("/api/sheet")
 def api_sheet() -> FlaskResponse:
     if _sheet_context is None:
@@ -820,14 +834,7 @@ def api_sheet() -> FlaskResponse:
                 "sheet_loaded": False,
                 "study": str(mn.get("study", "")),
                 "mindnodeParticipants": list(mn.get("participants", [])),
-                "version": utils.get_version(),
-                "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
-                "titlecardsEnabled": config.TITLECARDS_ENABLED,
-                "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
-                "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-                "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
-                "metadataClusterScreenspace": config.STUDIO_METADATA_CLUSTER_SCREENSPACE,
-                "config": utils.get_frontend_config(),
+                **_sheet_common_fields(),
                 "participants": [],
                 "rows": [],
             }
@@ -841,15 +848,8 @@ def api_sheet() -> FlaskResponse:
             "ok": True,
             "sheet_loaded": True,
             "study": ctx.study_name,
-            "version": utils.get_version(),
-            "highlightsDuration": config.HIGHLIGHTS_REEL_DURATION_SECONDS,
-            "titlecardsEnabled": config.TITLECARDS_ENABLED,
-            "titlecardDuration": config.TITLECARD_DURATION_SECONDS,
-            "cellExpandHover": config.STUDIO_CELL_EXPAND_HOVER,
-            "cardScrubberEnabled": config.STUDIO_CARD_SCRUBBER,
-            "metadataClusterScreenspace": config.STUDIO_METADATA_CLUSTER_SCREENSPACE,
+            **_sheet_common_fields(),
             "defaultDuration": config.DEFAULT_DURATION_SECONDS,
-            "config": utils.get_frontend_config(),
             "participants": sheet_payload["participants"],
             "rows": sheet_payload["rows"],
         }
