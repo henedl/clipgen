@@ -54,6 +54,9 @@ def _export_config() -> dict[str, Any]:
     """
     cfg = utils.get_frontend_config()
     cfg.pop("hotkeyOverrides", None)
+    # Exported HTML never profiles: the flag mirrors a live --profile launch,
+    # and a standalone file has no report sink to read the marks from.
+    cfg.pop("profiling", None)
     return cfg
 
 

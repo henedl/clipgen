@@ -1437,7 +1437,10 @@
   function startJobStatusPoll() {
     if (state.jobStatusPoller) return;
     // runImmediately is false: the first poll fires after one interval (1s).
-    state.jobStatusPoller = createPoller(pollJobStatus, 1000, { runImmediately: false });
+    state.jobStatusPoller = createPoller(pollJobStatus, 1000, {
+      runImmediately: false,
+      label: "studio.jobStatus",
+    });
     state.jobStatusPoller.start();
   }
 
@@ -1481,6 +1484,10 @@
   var _gridEventsBound = false;
 
   function renderGrid() {
+    return clipgenPerf.span("studio.renderGrid", renderGridImpl);
+  }
+
+  function renderGridImpl() {
     var d = state.sheetData;
     var grid = qs("#sheetGrid");
     var prevScrollTop = grid.scrollTop;
@@ -4789,10 +4796,10 @@
     // visibility-pause and (via maxIntervalMs) idle backoff: 5s while work is
     // active/changing, easing to 30s when everything is quiet. Handles live on
     // `state` so on-demand user actions can wake() them back to the fast cadence.
-    state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000 });
-    state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000 });
-    state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000 });
-    state.mnIntakePoller = createPoller(pollMindnodeIntake, 5000, { maxIntervalMs: 30000 });
+    state.ssIntakePoller = createPoller(pollScreenspaceIntake, 5000, { maxIntervalMs: 30000, label: "studio.ssIntake" });
+    state.trIntakePoller = createPoller(pollTranscriptIntake, 5000, { maxIntervalMs: 30000, label: "studio.trIntake" });
+    state.coIntakePoller = createPoller(pollComposerIntake, 5000, { maxIntervalMs: 30000, label: "studio.coIntake" });
+    state.mnIntakePoller = createPoller(pollMindnodeIntake, 5000, { maxIntervalMs: 30000, label: "studio.mnIntake" });
     state.ssIntakePoller.start();
     state.trIntakePoller.start();
     state.coIntakePoller.start();

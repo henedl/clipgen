@@ -162,7 +162,7 @@
     _sheetXrefIdle = false;
     // createPoller runs loadCrossRefData once immediately (runImmediately
     // default), then every 30s.
-    state.xrefPoller = createPoller(loadCrossRefData, 30000);
+    state.xrefPoller = createPoller(loadCrossRefData, 30000, { label: "transcripts.xref" });
     state.xrefPoller.start();
   }
 
@@ -546,7 +546,7 @@
     };
     // createPoller runs poll() once immediately (runImmediately default), then
     // every 1.5s.
-    _modelHintPoller = createPoller(poll, 1500);
+    _modelHintPoller = createPoller(poll, 1500, { label: "transcripts.modelHint" });
     _modelHintPoller.start();
   }
 
@@ -2129,7 +2129,10 @@
   function startPolling() {
     if (state.pollPoller) return;
     // runImmediately is false to match the previous setInterval (first poll after POLL_INTERVAL).
-    state.pollPoller = createPoller(pollTaskStatus, POLL_INTERVAL, { runImmediately: false });
+    state.pollPoller = createPoller(pollTaskStatus, POLL_INTERVAL, {
+      runImmediately: false,
+      label: "transcripts.tasks",
+    });
     state.pollPoller.start();
   }
 

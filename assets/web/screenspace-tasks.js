@@ -1256,7 +1256,10 @@
     // createPoller pauses while the tab is hidden and resumes on return, so the
     // old `if (document.hidden) return` guard is no longer needed. runImmediately
     // is false to match the previous setInterval (first poll after POLL_INTERVAL).
-    state.poller = createPoller(pollTasks, POLL_INTERVAL, { runImmediately: false });
+    state.poller = createPoller(pollTasks, POLL_INTERVAL, {
+      runImmediately: false,
+      label: "screenspace.tasks",
+    });
     state.poller.start();
   }
 

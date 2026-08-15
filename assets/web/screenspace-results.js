@@ -654,6 +654,10 @@
   var RESULTS_CHUNK = 120;
 
   function renderResults() {
+    return clipgenPerf.span("screenspace.renderResults", renderResultsImpl);
+  }
+
+  function renderResultsImpl() {
     var container = qs("#resultsList");
     var prevResultsScrollTop = container.scrollTop;
     // Tear down any lazy-load observer from a previous render — its sentinel is
@@ -956,15 +960,17 @@
     // more rows remain, so callers can keep pulling.
     var rendered = 0;
     function renderChunk() {
-      var endIdx = Math.min(rendered + RESULTS_CHUNK, visibleRows.length);
-      var frag = document.createDocumentFragment();
-      for (var i = rendered; i < endIdx; i++) {
-        var d = visibleRows[i];
-        frag.appendChild(buildResultRow(d.r, d.rIdx, d.matchedEvent, d.isExcluded, task));
-      }
-      container.appendChild(frag);
-      rendered = endIdx;
-      return rendered < visibleRows.length;
+      return clipgenPerf.span("screenspace.renderChunk", function () {
+        var endIdx = Math.min(rendered + RESULTS_CHUNK, visibleRows.length);
+        var frag = document.createDocumentFragment();
+        for (var i = rendered; i < endIdx; i++) {
+          var d = visibleRows[i];
+          frag.appendChild(buildResultRow(d.r, d.rIdx, d.matchedEvent, d.isExcluded, task));
+        }
+        container.appendChild(frag);
+        rendered = endIdx;
+        return rendered < visibleRows.length;
+      });
     }
 
     // Stamp what this render covers so a subsequent streaming push can append the

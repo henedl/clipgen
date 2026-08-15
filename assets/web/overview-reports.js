@@ -677,7 +677,7 @@
         return;
       }
       fetchReport(pid, g);
-    }, REPORT_POLL_MS, { runImmediately: false });
+    }, REPORT_POLL_MS, { runImmediately: false, label: "overview.report" });
     rpState.reportPoll.start();
   }
 
@@ -1023,7 +1023,7 @@
           }
         })
         .catch(function () {});
-    }, TASK_POLL_MS, { runImmediately: false });
+    }, TASK_POLL_MS, { runImmediately: false, label: "overview.tasks" });
     rpState.taskPoll.start();
   }
 
