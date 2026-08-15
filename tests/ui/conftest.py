@@ -71,31 +71,44 @@ def live_server(ui_env: None) -> Iterator[_ui_server.LiveServer]:
 
 
 @pytest.fixture(scope="session")
-def browser_context(live_server: _ui_server.LiveServer) -> Iterator[Any]:
-    """A Chromium context with the blocking start overlay pre-dismissed.
+def browser(live_server: _ui_server.LiveServer) -> Iterator[Any]:
+    """One Chromium instance for the whole session.
 
-    The context arguments live in ``_ui_session.new_context`` so this fixture and
-    ``shot.py`` cannot drift apart again — they had already, on locale/timezone.
+    Split from ``browser_context`` so a test that needs a differently-configured
+    context (the start-overlay journey runs without the dismissal pin) can build
+    its own via ``_ui_session.new_context`` without launching a second browser.
+    Depends on ``live_server`` purely for teardown order: LIFO guarantees the
+    browser closes before the server socket does.
     """
     try:
         playwright = _ui_browser.sync_playwright()().start()
     except _ui_fixtures.UiUnavailable as exc:
         pytest.skip(str(exc))
-    browser = None
-    context = None
+    launched = None
     try:
-        browser = playwright.chromium.launch(
+        launched = playwright.chromium.launch(
             executable_path=str(_ui_browser.resolve_chromium()),
             headless=True,
             args=_ui_browser.LAUNCH_ARGS,
         )
-        context = _ui_session.new_context(browser)
-        yield context
+        yield launched
     except _ui_fixtures.UiUnavailable as exc:
         pytest.skip(str(exc))
     finally:
-        if context is not None:
-            context.close()
-        if browser is not None:
-            browser.close()
+        if launched is not None:
+            launched.close()
         playwright.stop()
+
+
+@pytest.fixture(scope="session")
+def browser_context(browser: Any) -> Iterator[Any]:
+    """A Chromium context with the blocking start overlay pre-dismissed.
+
+    The context arguments live in ``_ui_session.new_context`` so this fixture and
+    ``shot.py`` cannot drift apart again — they had already, on locale/timezone.
+    """
+    context = _ui_session.new_context(browser)
+    try:
+        yield context
+    finally:
+        context.close()

@@ -1,7 +1,7 @@
 # Test suite evolution plan
 
-> **Status: not started.** Do not rebuild the suite. Evolve it in place. Keep this
-> file's checkboxes current as work lands.
+> **Status: Done** (phases 1–3 shipped; phase 4 remains optional and unstarted).
+> Journey #2 shipped adapted — see the note on its checkbox.
 
 **Goal:** Buy confidence that researcher paths still work, without slowing `/check`.
 
@@ -160,7 +160,7 @@ as `PAGES` in `_ui_pages.py`).
 
 Cap: these five, no more, until a real shipped bug is a sixth.
 
-- [ ] **Studio generate.** Open Studio (`#sheetGrid tbody tr` already ready).
+- [x] **Studio generate.** Open Studio (`#sheetGrid tbody tr` already ready).
       Select one valid timestamp cell (`.valid-ts`), get it into the artifact
       work area (`#artifactsList` / `#artifactsCount`), click `#generateBtn`,
       wait until the spinner (`#artifactsSpinner`) is gone and the list has
@@ -169,21 +169,26 @@ Cap: these five, no more, until a real shipped bug is a sixth.
       of job/stream timing, drive the same click path but assert on a
       completion signal the page already exposes (progress snapshot / queue
       item class) rather than adding a `data-testid`.
-- [ ] **Screenspace seek-to-event.** Open Screenspace `#P01` (player already
-      has `src`). Click a seeded event on the timeline (fixture already seeds
-      2 events). Assert `video.currentTime` is within ~0.5s of that event's
-      timestamp. **Do not** start a detector scan (OpenCV/OCR would dominate
-      the run).
-- [ ] **Transcripts seek-to-segment.** Open Transcripts `#P01`. Click
+- [x] **Screenspace seek-to-event.** *Shipped adapted:* the seeded events
+      render nowhere as written (the timeline is a canvas that only draws
+      tasks, and the fixture seeded none), and Screenspace seeks never touch
+      `video.currentTime` (`loadFrame` pauses the video and moves only the
+      playhead state). The fixture now seeds one **completed** task (safe:
+      SSE/polling only start for queued/running/paused) with `ui-evt-1`
+      attached; the journey clicks the task, then a `.result-row`, and
+      asserts the playhead (`#timestampInput`) landed on 2.0s. Still no
+      detector scan.
+- [x] **Transcripts seek-to-segment.** Open Transcripts `#P01`. Click
       `#segmentList .segment-row` (already the readiness selector). Assert
-      player time matches the segment's start.
-- [ ] **Settings persist.** Open settings via `window.openSettingsModal`
+      player time matches the segment's start. (Shipped against the row's
+      `.segment-timestamp` child — row-level clicks are deliberately a no-op.)
+- [x] **Settings persist.** Open settings via `window.openSettingsModal`
       (already in `GLOBAL_OVERLAYS`). Change one durable setting that the
       fixture does not depend on (e.g. a numeric pad or a theme-adjacent
       toggle that round-trips through `/api/settings`). Reload Studio. Re-open
       settings. Assert the value stuck. Do not use `localStorage` as the
       assertion if the product persists through the settings file.
-- [ ] **Start overlay → Studio rows.** Needs a context **without**
+- [x] **Start overlay → Studio rows.** Needs a context **without**
       `clipgen.startOverlayDismissed` (today `tests/ui/_ui_session.py`
       `build_init_script` always sets it). Add a parameter or a second
       factory so this one test can see the overlay. Pick the fixture workbook

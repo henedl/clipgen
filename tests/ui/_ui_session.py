@@ -58,13 +58,24 @@ class Session:
     origin: str
 
 
-def build_init_script(theme: str = "dark") -> str:
-    """JS run before any page script, in every context this module creates."""
+def build_init_script(theme: str = "dark", *, dismiss_start: bool = True) -> str:
+    """JS run before any page script, in every context this module creates.
+
+    ``dismiss_start=False`` leaves the start-overlay dismissal key unset so the
+    journey that drives the overlay's own UI sees its real ``close()`` semantics.
+    (The overlay still never auto-opens in this harness — ``shouldAutoOpen``
+    bails on ``sheet_loaded`` — so every other context keeps the pin.)
+    """
     if theme not in THEMES:
         raise ValueError(f"theme must be one of {THEMES}, got {theme!r}")
+    dismiss = (
+        " sessionStorage.setItem('clipgen.startOverlayDismissed', '1');"
+        if dismiss_start
+        else ""
+    )
     return (
         "try {"
-        " sessionStorage.setItem('clipgen.startOverlayDismissed', '1');"
+        f"{dismiss}"
         f" localStorage.setItem('clipgen-theme', '{theme}');"
         "} catch (e) {}"
         "window.CLIPGEN_DEV_TOKEN_TWEAK = false;"
@@ -76,6 +87,7 @@ def new_context(
     *,
     viewport: dict[str, int] | None = None,
     theme: str = "dark",
+    dismiss_start: bool = True,
 ) -> Any:
     """Build the one Chromium context shape every UI tool should use.
 
@@ -92,7 +104,7 @@ def new_context(
         timezone_id="UTC",
         color_scheme="light" if theme == "light" else "dark",
     )
-    context.add_init_script(build_init_script(theme))
+    context.add_init_script(build_init_script(theme, dismiss_start=dismiss_start))
     return context
 
 
