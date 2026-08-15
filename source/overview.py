@@ -10,7 +10,6 @@ the Convergence tab's per-lane display offsets, persisted in the output dir.
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from typing import Any, cast
 
 from flask import Blueprint, request
@@ -90,15 +89,9 @@ def api_convergence_offsets_put():
 
     cleaned = _clean_convergence_offsets(raw)
 
-    settings_path = (
-        Path(utils.get_effective_output_dir()) / config.CONVERGENCE_OFFSETS_FILENAME
-    )
     if not cleaned:
-        if settings_path.is_file():
-            try:
-                settings_path.unlink()
-            except OSError:
-                pass
+        # Also sweeps a stale .tmp sibling from an interrupted save.
+        utils.remove_json_manifest(config.CONVERGENCE_OFFSETS_FILENAME)
     else:
         utils.save_json_manifest(
             config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}

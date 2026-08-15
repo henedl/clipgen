@@ -44,7 +44,6 @@ Mutations hold ``_manifest_lock`` and persist via :func:`_persist_locked`.
 from __future__ import annotations
 
 import copy
-import json
 import math
 import os
 import threading
@@ -107,10 +106,6 @@ remux_server.register_remux_routes(composer_bp, lambda: _sheet_context)
 # ---- Manifest I/O ----
 
 
-def _manifest_path() -> Path:
-    return Path(utils.get_effective_output_dir()) / config.COMPOSER_MANIFEST_FILENAME
-
-
 def _empty_manifest() -> dict[str, Any]:
     return {
         "cuts": [],
@@ -124,17 +119,10 @@ def _empty_manifest() -> dict[str, Any]:
 
 
 def _load_manifest() -> dict[str, Any]:
-    path = _manifest_path()
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            utils.warning_print(
-                f"Could not read {path.name}; starting with an empty composer manifest."
-            )
-    return _empty_manifest()
+    data = utils.load_json_manifest(
+        config.COMPOSER_MANIFEST_FILENAME, warn_label="the composer manifest"
+    )
+    return data if isinstance(data, dict) else _empty_manifest()
 
 
 def _persist_locked() -> None:

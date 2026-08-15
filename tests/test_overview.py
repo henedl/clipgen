@@ -136,6 +136,20 @@ def test_api_convergence_offsets_put_empty_removes_file(
     assert not settings_file.is_file()
 
 
+def test_api_convergence_offsets_put_empty_sweeps_stale_tmp(
+    overview_client, seeded_output_dir
+):
+    """An interrupted save's .tmp sibling is removed along with the manifest."""
+    stale_tmp = seeded_output_dir / (config.CONVERGENCE_OFFSETS_FILENAME + ".tmp")
+    stale_tmp.write_text("{}")
+
+    resp = overview_client.put(
+        "/overview/api/convergence/offsets", json={"offsets": {}}
+    )
+    assert resp.status_code == 200
+    assert not stale_tmp.exists()
+
+
 def test_api_convergence_offsets_put_rejects_non_dict(
     overview_client, seeded_output_dir
 ):
