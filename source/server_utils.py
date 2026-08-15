@@ -11,6 +11,8 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :func:`find_by_id` / :func:`remove_by_id` are the manifest-collection CRUD
   lookups (stashes, blueprints, cuts, annotations).
 - :func:`make_debounced_persist` builds the manifest-write debounce.
+- :func:`make_participant_cache` builds the mtime-guarded participant cache
+  (Transcripts + Screenspace).
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
 - :class:`MediaCache` + :func:`parse_clip_window` back the hover-scrubber media
@@ -29,6 +31,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 from flask import Response, jsonify, request
@@ -254,6 +257,65 @@ def make_debounced_persist(
                 persist()
 
     return schedule_persist, flush_pending_persist, cancel_pending_persist_timer
+
+
+def make_participant_cache(
+    module: Any,
+    *,
+    input_dir_getter: Callable[[], Any],
+    resolve: Callable[[Any], list[dict[str, Any]]],
+) -> tuple[Callable[[], None], Callable[[str], dict[str, Any] | None]]:
+    """Build the mtime-guarded participant cache shared by the Transcripts and
+    Screenspace blueprints; returns ``(refresh, find)``.
+
+    Operates on ``module._participants`` / ``module._participant_source`` under
+    ``module._participants_lock`` — module attributes, not closure state — so
+    the blueprints' init/set-source functions, the remux ``sheet_context``
+    getters, and tests that monkeypatch those globals all keep working (the
+    same late-binding contract as :func:`make_debounced_persist`).
+
+    ``refresh()`` rebuilds ``module._participants`` when the input directory
+    changed since the last build. Keyed on the dir's ``st_mtime_ns`` (which
+    advances on add/remove/rename), mirroring
+    ``utils.discover_participant_videos``' own memo — the steady-state cost is
+    one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
+    show up without a server restart. No-op while ``_participant_source`` is
+    None (blueprint not configured yet). The rebuild rebinds ``_participants``
+    (atomic under the GIL), so a concurrent reader sees either the old list or
+    the new one, never a torn one.
+
+    ``find(pid)`` refreshes, then returns the cached record or None. The
+    ``input_dir_getter`` / ``resolve`` callables keep ``utils``/``files``
+    imports out of this module.
+    """
+
+    def refresh() -> None:
+        source = module._participant_source
+        if source is None:
+            return
+        input_dir = str(Path(input_dir_getter()))
+        try:
+            mtime: int | None = Path(input_dir).stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        if source["dir"] == input_dir and source["mtime"] == mtime:
+            return
+        with module._participants_lock:
+            # A racing request may have rebuilt, or a sheet swap may have
+            # replaced the source entirely, while we waited on the lock.
+            if module._participant_source is not source:
+                return
+            if source["dir"] == input_dir and source["mtime"] == mtime:
+                return
+            module._participants = resolve(source["sheet_context"])
+            source["dir"] = input_dir
+            source["mtime"] = mtime
+
+    def find(participant_id: str) -> dict[str, Any] | None:
+        refresh()
+        return find_by_id(module._participants, participant_id)
+
+    return refresh, find
 
 
 def make_sse_channel(
