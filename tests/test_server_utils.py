@@ -157,3 +157,13 @@ def test_remove_by_id_missing_leaves_list_untouched():
     items = [{"id": "a"}]
     assert server_utils.remove_by_id(items, "z") is None
     assert items == [{"id": "a"}]
+
+
+def test_opt_number_missing_returns_default():
+    assert server_utils.opt_number({}, "x") is None
+    assert server_utils.opt_number({}, "x", 3.0) == 3.0
+
+
+def test_opt_number_parses_and_falls_back():
+    assert server_utils.opt_number({"x": "1.5"}, "x") == 1.5
+    assert server_utils.opt_number({"x": "nope"}, "x", 7.0) == 7.0

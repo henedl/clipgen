@@ -86,9 +86,24 @@ from server_utils import (
     make_participant_cache,
     make_sse_channel,
     ok,
+    opt_number,
     parse_number_arg,
     remove_by_id,
 )
+
+# Per-tool optional float overrides api_preview reads straight into params.
+_PREVIEW_FLOAT_ARGS: dict[str, tuple[str, ...]] = {
+    "color": ("h", "s", "v"),
+    "attention": (
+        # Channel-weight / center-bias overrides so the Model view tunes the
+        # same math the scan runs (saliency_kwargs_from_params on both paths).
+        "weight_spectral",
+        "weight_contrast",
+        "weight_motion",
+        "weight_face",
+        "center_bias",
+    ),
+}
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -1205,77 +1220,37 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         default_gap = (
             config.SCREENSPACE_ATTENTION_INTERVAL if tool == "attention" else 1.0
         )
-        prev_ts_raw = request.args.get("prev")
-        if prev_ts_raw is not None:
-            try:
-                prev_ts = float(prev_ts_raw)
-            except ValueError:
-                prev_ts = max(0.0, ts - default_gap)
-        else:
-            prev_ts = max(0.0, ts - default_gap)
+        prev_raw = opt_number(request.args, "prev")
+        prev_ts = prev_raw if prev_raw is not None else max(0.0, ts - default_gap)
         if prev_ts < ts:
             prev_frame = frame_at(prev_ts)
 
     # Build params dict for the preview (subset of task parameters)
     params: dict[str, Any] = {}
-    if tool == "color":
-        for key in ("h", "s", "v"):
-            raw = request.args.get(key)
-            if raw is not None:
-                try:
-                    params[key] = float(raw)
-                except ValueError:
-                    pass
-    elif tool == "change":
-        raw = request.args.get("noise")
-        if raw is not None:
-            try:
-                params["noise_threshold"] = int(float(raw))
-            except ValueError:
-                pass
+    for key in _PREVIEW_FLOAT_ARGS.get(tool, ()):
+        value = opt_number(request.args, key)
+        if value is not None:
+            params[key] = value
+    if tool == "change":
+        value = opt_number(request.args, "noise")
+        if value is not None and math.isfinite(value):
+            params["noise_threshold"] = int(value)
     elif tool == "flow":
-        raw = request.args.get("magnitude")
-        if raw is not None:
-            try:
-                params["magnitude_threshold"] = float(raw)
-            except ValueError:
-                pass
-    elif tool == "attention":
-        # Channel-weight / center-bias overrides so the Model view tunes the
-        # same math the scan runs (saliency_kwargs_from_params on both paths).
-        for key in (
-            "weight_spectral",
-            "weight_contrast",
-            "weight_motion",
-            "weight_face",
-            "center_bias",
-        ):
-            raw = request.args.get(key)
-            if raw is not None:
-                try:
-                    params[key] = float(raw)
-                except ValueError:
-                    pass
+        value = opt_number(request.args, "magnitude")
+        if value is not None:
+            params["magnitude_threshold"] = value
     elif tool in ("text", "numbers"):
         raw = (request.args.get("ocr_preprocess") or "").strip().lower()
         if raw in ("1", "true", "yes", "on"):
             params["ocr_preprocess"] = True
     elif tool == "similarity":
-        ref_ts_raw = request.args.get("ref")
-        if ref_ts_raw is not None and region_coords is not None:
-            ref_ts: float | None = None
-            try:
-                ref_ts = float(ref_ts_raw)
-            except ValueError:
-                pass
-            if ref_ts is not None:
-                ref_frame = frame_at(ref_ts)
-                if ref_frame is not None:
-                    import screenspace as _ss
+        ref_ts = opt_number(request.args, "ref")
+        if ref_ts is not None and region_coords is not None:
+            ref_frame = frame_at(ref_ts)
+            if ref_frame is not None:
+                import screenspace as _ss
 
-                    params["reference_frame"] = _ss.extract_region(
-                        ref_frame, region_coords
-                    )
+                params["reference_frame"] = _ss.extract_region(ref_frame, region_coords)
 
     elif tool == "template":
         import screenspace as _ss_tpl
@@ -1296,19 +1271,13 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             if mask is not None:
                 params["template_mask"] = mask
         else:
-            ref_ts_raw = request.args.get("ref")
-            if ref_ts_raw is not None and region_coords is not None:
-                ref_ts_tpl: float | None = None
-                try:
-                    ref_ts_tpl = float(ref_ts_raw)
-                except ValueError:
-                    pass
-                if ref_ts_tpl is not None:
-                    ref_frame_tpl = frame_at(ref_ts_tpl)
-                    if ref_frame_tpl is not None:
-                        params["template_image"] = _ss_tpl.extract_region(
-                            ref_frame_tpl, region_coords
-                        )
+            ref_ts_tpl = opt_number(request.args, "ref")
+            if ref_ts_tpl is not None and region_coords is not None:
+                ref_frame_tpl = frame_at(ref_ts_tpl)
+                if ref_frame_tpl is not None:
+                    params["template_image"] = _ss_tpl.extract_region(
+                        ref_frame_tpl, region_coords
+                    )
 
     layer = (request.args.get("layer") or "").strip()
     if layer:

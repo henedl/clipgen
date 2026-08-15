@@ -7,7 +7,8 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :func:`ok` / :func:`err` build either envelope in one call.
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
-- :func:`parse_number_arg` parses + bound-checks one numeric value.
+- :func:`parse_number_arg` parses + bound-checks one numeric value;
+  :func:`opt_number` is its lenient fall-back-don't-fail sibling.
 - :func:`find_by_id` / :func:`remove_by_id` are the manifest-collection CRUD
   lookups (stashes, blueprints, cuts, annotations).
 - :func:`make_debounced_persist` builds the manifest-write debounce.
@@ -113,6 +114,22 @@ def parse_number_arg(
     if max_ is not None and value > max_:
         raise ApiError(f"{name} must be <= {max_}")
     return int(value) if int_only else value
+
+
+def opt_number(args: Any, name: str, default: float | None = None) -> float | None:
+    """Lenient optional float from a request-args mapping.
+
+    Missing or unparseable returns *default* — never raises. For preview-style
+    override knobs where a malformed value silently falls back; the strict,
+    raising sibling is :func:`parse_number_arg`.
+    """
+    raw = args.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
 
 
 def find_by_id(items: Any, id_: Any) -> dict[str, Any] | None:
