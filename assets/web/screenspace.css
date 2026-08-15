@@ -423,16 +423,8 @@ body {
   height: 8px;
   border-radius: var(--radius-full);
   margin-top: 0.45em;
-  background: var(--color-text-dim);
+  background: var(--sev, var(--color-text-dim)); /* tokens.css severity indirection */
 }
-
-.ss-info-issue-dot.sev-critical { background: var(--sev-critical); }
-.ss-info-issue-dot.sev-high     { background: var(--sev-high); }
-.ss-info-issue-dot.sev-medium   { background: var(--sev-medium); }
-.ss-info-issue-dot.sev-low      { background: var(--sev-low); }
-.ss-info-issue-dot.sev-na       { background: var(--sev-na); }
-.ss-info-issue-dot.sev-positive { background: var(--sev-positive); }
-.ss-info-issue-dot.sev-very-positive { background: var(--sev-very-positive); }
 
 .ss-info-issue-text {
   flex: 1;

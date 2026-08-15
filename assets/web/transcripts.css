@@ -1398,16 +1398,8 @@ body {
   border-radius: var(--radius-full);
   margin-top: var(--space-2);
   margin-left: calc(var(--space-1-5) - var(--space-3));
-  background: var(--sev-unknown);
+  background: var(--sev, var(--sev-unknown)); /* tokens.css severity indirection */
 }
-
-.segment-sev-dot.sev-critical { background: var(--sev-critical); }
-.segment-sev-dot.sev-high { background: var(--sev-high); }
-.segment-sev-dot.sev-medium { background: var(--sev-medium); }
-.segment-sev-dot.sev-low { background: var(--sev-low); }
-.segment-sev-dot.sev-na { background: var(--sev-na); }
-.segment-sev-dot.sev-positive { background: var(--sev-positive); }
-.segment-sev-dot.sev-very-positive { background: var(--sev-very-positive); }
 
 /* Mark popover — mirrors the redesign's AnnoPopover anatomy
    (180 px wide, 10 px padding, 18 px circular swatches with white border on

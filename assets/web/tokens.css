@@ -738,6 +738,22 @@ audio.cg-audiotrack { display: none; }
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
+/* Per-severity color indirection. Elements carrying a severityClass() class
+   (utils.js: sev-critical … sev-very-positive, sev-na, sev-unknown — kept in
+   sync with Python via tests/test_shared_constants.py) get --sev bound to
+   their severity color; a component then paints whichever property it colors
+   from `var(--sev, <fallback>)` instead of repeating an eight-line ladder.
+   NOT for viewer.css/gallery.css — exported HTML strips tokens.css, so those
+   keep their local ladders. */
+.sev-critical      { --sev: var(--sev-critical); }
+.sev-high          { --sev: var(--sev-high); }
+.sev-medium        { --sev: var(--sev-medium); }
+.sev-low           { --sev: var(--sev-low); }
+.sev-na            { --sev: var(--sev-na); }
+.sev-positive      { --sev: var(--sev-positive); }
+.sev-very-positive { --sev: var(--sev-very-positive); }
+.sev-unknown       { --sev: var(--sev-unknown); }
+
 /* Centered blocking-modal overlay shell — shared across pages. Add ALONGSIDE a
    page-local class that owns the backdrop color and the show/hide toggle, e.g.
    class="wf-dialog-overlay cg-modal-overlay". Unlike .cg-menu this DOES set

@@ -547,14 +547,8 @@
 }
 
 /* Severity segment colors */
-.md-stacked-segment.sev-critical { background: var(--sev-critical); }
-.md-stacked-segment.sev-high { background: var(--sev-high); }
-.md-stacked-segment.sev-medium { background: var(--sev-medium); }
-.md-stacked-segment.sev-low { background: var(--sev-low); }
-.md-stacked-segment.sev-na { background: var(--sev-na); }
-.md-stacked-segment.sev-positive { background: var(--sev-positive); }
-.md-stacked-segment.sev-very-positive { background: var(--sev-very-positive); }
-.md-stacked-segment.sev-unknown { background: var(--sev-unknown); }
+/* tokens.css severity indirection */
+.md-stacked-segment { background: var(--sev, var(--sev-unknown)); }
 
 /* Severity legend */
 .md-severity-legend {
@@ -578,14 +572,8 @@
   border-radius: var(--radius-full);
 }
 
-.md-sev-dot.sev-critical { background: var(--sev-critical); }
-.md-sev-dot.sev-high { background: var(--sev-high); }
-.md-sev-dot.sev-medium { background: var(--sev-medium); }
-.md-sev-dot.sev-low { background: var(--sev-low); }
-.md-sev-dot.sev-na { background: var(--sev-na); }
-.md-sev-dot.sev-positive { background: var(--sev-positive); }
-.md-sev-dot.sev-very-positive { background: var(--sev-very-positive); }
-.md-sev-dot.sev-unknown { background: var(--sev-unknown); }
+/* tokens.css severity indirection */
+.md-sev-dot { background: var(--sev, var(--sev-unknown)); }
 
 /* ---- Category breakdown bars ---- */
 

@@ -314,17 +314,9 @@ body {
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
-  background: currentColor;
+  background: var(--sev, currentColor); /* tokens.css severity indirection */
   flex-shrink: 0;
 }
-.studio-sidebar-row-dot.sev-critical      { background: var(--sev-critical); }
-.studio-sidebar-row-dot.sev-high          { background: var(--sev-high); }
-.studio-sidebar-row-dot.sev-medium        { background: var(--sev-medium); }
-.studio-sidebar-row-dot.sev-low           { background: var(--sev-low); }
-.studio-sidebar-row-dot.sev-na            { background: var(--sev-na); }
-.studio-sidebar-row-dot.sev-positive      { background: var(--sev-positive); }
-.studio-sidebar-row-dot.sev-very-positive { background: var(--sev-very-positive); }
-.studio-sidebar-row-dot.sev-unknown       { background: var(--sev-unknown); }
 .studio-sidebar-row-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -850,33 +842,17 @@ body.bottom-animating #stashedArtifactsArea {
   flex-shrink: 0;
 }
 
-.sev-pill.sev-critical {
-  color: var(--severity-critical);
-  background: color-mix(in srgb, var(--severity-critical) 18%, transparent);
-}
-.sev-pill.sev-high {
-  color: var(--severity-high);
-  background: color-mix(in srgb, var(--severity-high) 18%, transparent);
-}
-.sev-pill.sev-medium,
-.sev-pill.sev-low {
-  color: var(--severity-medium);
-  background: color-mix(in srgb, var(--severity-medium) 18%, transparent);
+/* One rule per property via the tokens.css --sev indirection; na/unknown
+ * (below) and the light-theme positive overrides out-specify it. */
+.sev-pill {
+  color: var(--sev, var(--fg-muted));
+  background: color-mix(in srgb, var(--sev, var(--fg-muted)) 18%, transparent);
 }
 .sev-pill.sev-na,
 .sev-pill.sev-unknown {
   color: var(--fg-muted);
   background: rgba(255, 255, 255, 0.06);
 }
-.sev-pill.sev-positive {
-  color: var(--severity-positive);
-  background: color-mix(in srgb, var(--severity-positive) 18%, transparent);
-}
-.sev-pill.sev-very-positive {
-  color: var(--severity-very-positive);
-  background: color-mix(in srgb, var(--severity-very-positive) 18%, transparent);
-}
-
 html[data-theme="light"] .sev-pill.sev-na,
 html[data-theme="light"] .sev-pill.sev-unknown,
 .theme-light .sev-pill.sev-na,
