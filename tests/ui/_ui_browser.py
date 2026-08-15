@@ -83,13 +83,19 @@ def _build_number(name: str) -> int:
     return int(tail) if tail.isdigit() else -1
 
 
-def resolve_chromium() -> Path:
+def resolve_chromium(prefer_full: bool = False) -> Path:
     """Return the highest-numbered installed Chromium executable.
+
+    ``prefer_full=True`` flips the candidate order so the full Chromium build
+    wins over the headless shell: the shell's paint/compositor timings are
+    only indicative (no GPU/compositor parity), so perf captures that care
+    about paint fidelity opt into the full build (``shot.py --full-chromium``).
 
     Raises :class:`UiUnavailable` with the install command when none is found.
     """
     root = browsers_root()
-    for dir_glob, exe_globs in _CANDIDATES:
+    candidates = tuple(reversed(_CANDIDATES)) if prefer_full else _CANDIDATES
+    for dir_glob, exe_globs in candidates:
         directories = sorted(
             (path for path in root.glob(dir_glob) if path.is_dir()),
             key=lambda path: _build_number(path.name),

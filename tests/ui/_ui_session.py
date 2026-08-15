@@ -136,6 +136,7 @@ def ui_session(
     *,
     viewport: dict[str, int] | None = None,
     theme: str = "dark",
+    full_chromium: bool = False,
 ) -> Iterator[Session]:
     """Boot fixtures, server and browser once; yield a context to drive.
 
@@ -143,12 +144,15 @@ def ui_session(
     ffmpeg or the fixture workbook is missing — callers decide whether that is a
     skip or an error.
 
+    ``full_chromium=True`` prefers the full Chromium build over the headless
+    shell (see ``_ui_browser.resolve_chromium``) for paint-sensitive perf runs.
+
     Teardown order matters and is enforced by the nesting below: the browser
     closes before the socket does, which is what keeps the server's
     connection-thread join from hanging (see ``_ui_server``).
     """
     _ui_fixtures.ensure_inputs()
-    chromium_path = _ui_browser.resolve_chromium()
+    chromium_path = _ui_browser.resolve_chromium(prefer_full=full_chromium)
     playwright_factory = _ui_browser.sync_playwright()
     _ui_fixtures.ensure_run_dirs()
     redirect_config()
