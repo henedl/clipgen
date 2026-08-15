@@ -337,6 +337,16 @@ class AnalysisTool:
     # Detail-dict key holding the threshold-independent calibration scalar that
     # ``check_frame`` populates on both branches. Empty ⇒ tool not calibratable.
     score_key: ClassVar[str] = ""
+    # Name of the module-global ``scan_<x>`` function the base ``scan`` calls.
+    # A *name* resolved via ``globals()`` at call time — never the function
+    # object, which would snapshot the original and blind tests that
+    # monkeypatch ``screenspace_tools.scan_<x>``. Empty ⇒ the subclass
+    # overrides ``scan`` outright (template, timelapse, multitool).
+    scan_fn_name: ClassVar[str] = ""
+    # Tool-specific scan kwargs, forwarded as ``params.get(key, default)``.
+    scan_defaults: ClassVar[dict[str, Any]] = {}
+    # Sampling interval when ``params`` carries none (the OCR tools use 2.0).
+    scan_interval_default: ClassVar[float] = 0
 
     def check_frame(
         self,
@@ -373,6 +383,21 @@ class AnalysisTool:
         passed, detail = self.check_frame(frame, prev_frame, region, params)
         return _score_result(self.score_key, passed, detail)
 
+    def _scan_kwargs(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Tool-specific kwargs for the scan function, from ``scan_defaults``.
+
+        Subclasses override to post-process (or-expression defaults, config
+        reads, saliency merges). Dict-valued defaults are copied so a callee
+        can never mutate the shared ClassVar.
+        """
+        kwargs: dict[str, Any] = {}
+        for key, default in self.scan_defaults.items():
+            value = params.get(key, default)
+            if value is default and isinstance(default, dict):
+                value = dict(default)
+            kwargs[key] = value
+        return kwargs
+
     def scan(
         self,
         video_path: str,
@@ -386,14 +411,41 @@ class AnalysisTool:
         on_result: Callable[[dict[str, Any]], None] | None,
         fast_opts: dict[str, Any] | None,
     ) -> Any:
-        """Run a full-video scan. Subclasses must override."""
-        raise NotImplementedError
+        """Run a full-video scan.
+
+        Declarative dispatch: forwards the common tail plus ``_scan_kwargs``
+        to the module-global named by ``scan_fn_name``. Tools whose scan
+        differs structurally (template's downscale, timelapse's output file,
+        multitool's chaining) override this outright.
+        """
+        if not self.scan_fn_name:
+            raise NotImplementedError
+        scan_fn = globals()[self.scan_fn_name]
+        return scan_fn(
+            video_path,
+            region,
+            interval_seconds=params.get("interval", self.scan_interval_default),
+            start_seconds=params.get("start_seconds", 0.0),
+            end_seconds=params.get("end_seconds"),
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=on_result,
+            fast_opts=fast_opts,
+            **self._scan_kwargs(params),
+        )
 
 
 class ColorTool(AnalysisTool):
     name = "color"
     fast_scan_region_dim = 32
     score_key = "_confidence"
+    scan_fn_name = "scan_color"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "target_color": {"h": 0, "s": 0, "v": 0},
+        "tolerance": {"h": 10, "s": 50, "v": 50},
+        "color_mode": "average",
+        "min_coverage": 0.0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -423,21 +475,16 @@ class ColorTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        color_mode = params.get("color_mode", "average")
         # Presence scans must stay full-resolution: the fast-scan max_region_dim
         # downscale uses INTER_AREA averaging, which erases small color patches.
-        if color_mode == "presence":
+        if params.get("color_mode", "average") == "presence":
             fast_opts = None
-        return scan_color(
+        return super().scan(
             video_path,
             region,
-            target_color=params.get("target_color", {"h": 0, "s": 0, "v": 0}),
-            tolerance=params.get("tolerance", {"h": 10, "s": 50, "v": 50}),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            color_mode=color_mode,
-            min_coverage=params.get("min_coverage", 0.0),
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,
@@ -449,6 +496,12 @@ class ChangeTool(AnalysisTool):
     name = "change"
     fast_scan_region_dim = 128
     score_key = "magnitude"
+    scan_fn_name = "scan_changes"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "threshold": 0,
+        "noise_threshold": 0,
+        "require_consecutive": 1,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -469,34 +522,6 @@ class ChangeTool(AnalysisTool):
         )
         return mag >= threshold, {"magnitude": round(mag, 4)}
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_changes(
-            video_path,
-            region,
-            threshold=params.get("threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            noise_threshold=params.get("noise_threshold", 0),
-            require_consecutive=params.get("require_consecutive", 1),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class SimilarityTool(AnalysisTool):
     # A spatial Similarity heatmap is feasible but deferred: this tool computes
@@ -507,6 +532,11 @@ class SimilarityTool(AnalysisTool):
     name = "similarity"
     fast_scan_region_dim = 128
     score_key = "score"
+    scan_fn_name = "scan_similarity"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "reference_frame": None,
+        "threshold": 0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -532,17 +562,16 @@ class SimilarityTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        ref_frame = params.get("reference_frame")
-        if ref_frame is None:
+        # `is None` on purpose (contrast Scene's falsy check): the reference is
+        # an ndarray, whose truthiness is ambiguous.
+        if params.get("reference_frame") is None:
             raise ValueError("Similarity scan requires a reference_frame parameter")
-        return scan_similarity(
+        return super().scan(
             video_path,
             region,
-            reference_frame=ref_frame,
-            threshold=params.get("threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,
@@ -556,6 +585,22 @@ class TextTool(AnalysisTool):
     # ``_extract_confidence``'s "confidence" key (OCR reading confidence) — two
     # different axes; do not unify them.
     score_key = "fuzzy_ratio"
+    scan_fn_name = "scan_text"
+    scan_interval_default = 2.0
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "search_string": "",
+        "fuzzy_threshold": 0,
+        "ocr_confidence_threshold": None,
+        "ocr_preprocess": False,
+        "require_consecutive": 1,
+        "languages": None,
+    }
+
+    def _scan_kwargs(self, params):
+        kwargs = super()._scan_kwargs(params)
+        # or-expression, not a get-default: an explicit "" must coerce to "off".
+        kwargs["ocr_normalize"] = params.get("ocr_normalize") or "off"
+        return kwargs
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -572,42 +617,23 @@ class TextTool(AnalysisTool):
         )
         return _score_text_readings(readings, params)
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_text(
-            video_path,
-            region,
-            search_string=params.get("search_string", ""),
-            interval_seconds=params.get("interval", 2.0),
-            fuzzy_threshold=params.get("fuzzy_threshold", 0),
-            ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
-            ocr_preprocess=params.get("ocr_preprocess", False),
-            ocr_normalize=params.get("ocr_normalize") or "off",
-            require_consecutive=params.get("require_consecutive", 1),
-            languages=params.get("languages"),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class NumbersTool(AnalysisTool):
     name = "numbers"
     score_key = "confidence"
+    scan_fn_name = "scan_numbers"
+    scan_interval_default = 2.0
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "operator": "gt",
+        "target_value": 0,
+        "range_min": None,
+        "range_max": None,
+        "ocr_confidence_threshold": None,
+        "ocr_preprocess": False,
+        "integers_only": False,
+        "require_consecutive": 1,
+        "languages": None,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -624,40 +650,6 @@ class NumbersTool(AnalysisTool):
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_numbers_readings(readings, params)
-
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_numbers(
-            video_path,
-            region,
-            operator=params.get("operator", "gt"),
-            target_value=params.get("target_value", 0),
-            interval_seconds=params.get("interval", 2.0),
-            range_min=params.get("range_min"),
-            range_max=params.get("range_max"),
-            ocr_confidence_threshold=params.get("ocr_confidence_threshold"),
-            ocr_preprocess=params.get("ocr_preprocess", False),
-            integers_only=params.get("integers_only", False),
-            require_consecutive=params.get("require_consecutive", 1),
-            languages=params.get("languages"),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
 
 
 class TemplateTool(AnalysisTool):
@@ -768,6 +760,11 @@ class FlowTool(AnalysisTool):
     name = "flow"
     fast_scan_region_dim = 128
     score_key = "magnitude"
+    scan_fn_name = "scan_flow"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "magnitude_threshold": 0,
+        "require_consecutive": 1,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -787,38 +784,16 @@ class FlowTool(AnalysisTool):
             "angle": flow_result["angle"],
         }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_flow(
-            video_path,
-            region,
-            magnitude_threshold=params.get("magnitude_threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            require_consecutive=params.get("require_consecutive", 1),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class SceneTool(AnalysisTool):
     name = "scene"
     fast_scan_region_dim = 64
     score_key = "score"
+    scan_fn_name = "scan_scene"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "reference_scenes": None,
+        "threshold": 0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -875,17 +850,16 @@ class SceneTool(AnalysisTool):
         on_result,
         fast_opts,
     ):
-        ref_scenes = params.get("reference_scenes")
-        if not ref_scenes:
+        # Falsy on purpose (an empty reference list is as unusable as None);
+        # contrast Similarity's `is None`, forced by ndarray truthiness.
+        if not params.get("reference_scenes"):
             raise ValueError("Scene scan requires reference_scenes parameter")
-        return scan_scene(
+        return super().scan(
             video_path,
             region,
-            reference_scenes=ref_scenes,
-            threshold=params.get("threshold", 0),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
+            params,
+            task_id=task_id,
+            scan_mode=scan_mode,
             on_progress=on_progress,
             cancel_flag=cancel_flag,
             on_result=on_result,
@@ -899,6 +873,11 @@ class InactivityTool(AnalysisTool):
     # Calibration scalar is the raw phash distance (Sensitivity-slider units);
     # the strip inverts the axis for display (lower distance = more inactive).
     score_key = "distance"
+    scan_fn_name = "scan_inactivity"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "threshold": 0,
+        "min_duration": 0.0,
+    }
 
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
@@ -915,33 +894,6 @@ class InactivityTool(AnalysisTool):
             conf = 1.0 if dist <= thresh else 0.0
         return dist <= thresh, {"distance": dist, "_confidence": conf}
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_inactivity(
-            video_path,
-            region,
-            threshold=params.get("threshold", 0),
-            min_duration=params.get("min_duration", 0.0),
-            interval_seconds=params.get("interval", 0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
-
 
 class BoundaryTool(AnalysisTool):
     name = "boundary"
@@ -953,37 +905,19 @@ class BoundaryTool(AnalysisTool):
     # calibration later means adding score_key + a per-frame check_frame here,
     # plus a `needs_prev` entry and full-frame handling in the calibrate endpoint
     # (boundary needs the previous sampled frame and always scans the full frame).
+    scan_fn_name = "scan_boundaries"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "threshold": 0,
+        "min_gap": 0.0,
+    }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_boundaries(
-            video_path,
-            region,
-            threshold=params.get("threshold", 0),
-            min_gap=params.get("min_gap", 0.0),
-            interval_seconds=params.get("interval", 0),
-            # Policy default lives here, not in the scan primitive: a task with
-            # no metric (UI "Auto") gets the configured default; the primitive's
-            # own default stays "phash" for direct callers/tests.
-            metric=params.get("metric") or config.SCREENSPACE_BOUNDARY_METRIC,
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-        )
+    def _scan_kwargs(self, params):
+        kwargs = super()._scan_kwargs(params)
+        # Policy default lives here, not in the scan primitive: a task with
+        # no metric (UI "Auto") gets the configured default; the primitive's
+        # own default stays "phash" for direct callers/tests.
+        kwargs["metric"] = params.get("metric") or config.SCREENSPACE_BOUNDARY_METRIC
+        return kwargs
 
 
 class AttentionTool(AnalysisTool):
@@ -995,36 +929,18 @@ class AttentionTool(AnalysisTool):
     # Scan-only: full-frame with temporal state (EMA + shift confirmation), so
     # it is neither a multitool step nor calibratable (no score_key); the
     # pinned-frame strip and /api/calibrate correctly skip it.
+    scan_fn_name = "scan_attention"
+    scan_defaults: ClassVar[dict[str, Any]] = {
+        "shift_threshold": 0.0,
+        "ema_alpha": 0.0,
+    }
 
-    def scan(
-        self,
-        video_path,
-        region,
-        params,
-        *,
-        task_id,
-        scan_mode,
-        on_progress,
-        cancel_flag,
-        on_result,
-        fast_opts,
-    ):
-        return scan_attention(
-            video_path,
-            region,
-            shift_threshold=params.get("shift_threshold", 0.0),
-            interval_seconds=params.get("interval", 0),
-            ema_alpha=params.get("ema_alpha", 0.0),
-            start_seconds=params.get("start_seconds", 0.0),
-            end_seconds=params.get("end_seconds"),
-            on_progress=on_progress,
-            cancel_flag=cancel_flag,
-            on_result=on_result,
-            fast_opts=fast_opts,
-            # Per-task channel weights / center bias / face toggle (absent
-            # keys fall back to the SCREENSPACE_ATTENTION_* config defaults).
-            **saliency_kwargs_from_params(params),
-        )
+    def _scan_kwargs(self, params):
+        kwargs = super()._scan_kwargs(params)
+        # Per-task channel weights / center bias / face toggle (absent
+        # keys fall back to the SCREENSPACE_ATTENTION_* config defaults).
+        kwargs.update(saliency_kwargs_from_params(params))
+        return kwargs
 
 
 class TimelapseTool(AnalysisTool):
@@ -1129,3 +1045,29 @@ TOOLS: dict[str, AnalysisTool] = {
         MultitoolTool(),
     )
 }
+
+# ``AnalysisTool.scan`` dispatches by *name* — ``globals()[scan_fn_name]``,
+# resolved at call time so tests monkeypatching ``screenspace_tools.scan_<x>``
+# are seen. This set keeps those imports lexically referenced (they would
+# otherwise read as unused), and the loop turns a typo'd ``scan_fn_name`` into
+# an import-time failure instead of a KeyError mid-scan.
+_DISPATCHABLE_SCAN_FNS = {
+    scan_attention,
+    scan_boundaries,
+    scan_changes,
+    scan_color,
+    scan_flow,
+    scan_inactivity,
+    scan_numbers,
+    scan_scene,
+    scan_similarity,
+    scan_text,
+}
+for _tool in TOOLS.values():
+    if (
+        _tool.scan_fn_name
+        and globals()[_tool.scan_fn_name] not in _DISPATCHABLE_SCAN_FNS
+    ):
+        raise AssertionError(
+            f"{_tool.name}: unknown scan_fn_name {_tool.scan_fn_name!r}"
+        )

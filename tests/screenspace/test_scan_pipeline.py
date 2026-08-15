@@ -744,3 +744,206 @@ class TestFacadeReExports:
 # ---------------------------------------------------------------------------
 # 2F: Parallel worker
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Declarative AnalysisTool.scan kwarg forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestDeclarativeScanForwarding:
+    """The exact kwargs each declarative tool forwards to its scan function.
+
+    Expectations were written from the pre-refactor per-tool scan bodies; a
+    mismatch here means a tool's scan function silently receives different
+    arguments than it used to (the failure mode reviews miss).
+    """
+
+    _REF_FRAME = object()
+    _REF_SCENES = [{"name": "menu", "frame": object()}]
+
+    # tool -> (scan_fn_name, params passed in, expected tool-specific kwargs,
+    #          expected interval_seconds default)
+    CASES = {
+        "color": (
+            "scan_color",
+            {},
+            {
+                "target_color": {"h": 0, "s": 0, "v": 0},
+                "tolerance": {"h": 10, "s": 50, "v": 50},
+                "color_mode": "average",
+                "min_coverage": 0.0,
+            },
+            0,
+        ),
+        "change": (
+            "scan_changes",
+            {},
+            {"threshold": 0, "noise_threshold": 0, "require_consecutive": 1},
+            0,
+        ),
+        "similarity": (
+            "scan_similarity",
+            {"reference_frame": _REF_FRAME},
+            {"reference_frame": _REF_FRAME, "threshold": 0},
+            0,
+        ),
+        "text": (
+            "scan_text",
+            {},
+            {
+                "search_string": "",
+                "fuzzy_threshold": 0,
+                "ocr_confidence_threshold": None,
+                "ocr_preprocess": False,
+                "ocr_normalize": "off",
+                "require_consecutive": 1,
+                "languages": None,
+            },
+            2.0,
+        ),
+        "numbers": (
+            "scan_numbers",
+            {},
+            {
+                "operator": "gt",
+                "target_value": 0,
+                "range_min": None,
+                "range_max": None,
+                "ocr_confidence_threshold": None,
+                "ocr_preprocess": False,
+                "integers_only": False,
+                "require_consecutive": 1,
+                "languages": None,
+            },
+            2.0,
+        ),
+        "flow": (
+            "scan_flow",
+            {},
+            {"magnitude_threshold": 0, "require_consecutive": 1},
+            0,
+        ),
+        "scene": (
+            "scan_scene",
+            {"reference_scenes": _REF_SCENES},
+            {"reference_scenes": _REF_SCENES, "threshold": 0},
+            0,
+        ),
+        "inactivity": (
+            "scan_inactivity",
+            {},
+            {"threshold": 0, "min_duration": 0.0},
+            0,
+        ),
+        "boundary": (
+            "scan_boundaries",
+            {},
+            {
+                "threshold": 0,
+                "min_gap": 0.0,
+                "metric": config.SCREENSPACE_BOUNDARY_METRIC,
+            },
+            0,
+        ),
+    }
+
+    @pytest.mark.parametrize("tool_name", sorted(CASES))
+    def test_forwards_expected_kwargs(self, monkeypatch, tool_name):
+        fn_name, params, expected_specific, expected_interval = self.CASES[tool_name]
+        captured = {}
+
+        def fake_scan(video_path, region, **kwargs):
+            captured["positional"] = (video_path, region)
+            captured["kwargs"] = kwargs
+            return []
+
+        monkeypatch.setattr(screenspace_tools, fn_name, fake_scan)
+
+        def on_progress(f):
+            pass
+
+        def cancel_flag():
+            return False
+
+        region = {"x": 0, "y": 0, "w": 10, "h": 10}
+        result = screenspace_tools.TOOLS[tool_name].scan(
+            "/fake.mp4",
+            region,
+            dict(params),
+            task_id="t1",
+            scan_mode="precise",
+            on_progress=on_progress,
+            cancel_flag=cancel_flag,
+            on_result=None,
+            fast_opts=None,
+        )
+
+        assert result == []
+        assert captured["positional"] == ("/fake.mp4", region)
+        assert captured["kwargs"] == {
+            "interval_seconds": expected_interval,
+            "start_seconds": 0.0,
+            "end_seconds": None,
+            "on_progress": on_progress,
+            "cancel_flag": cancel_flag,
+            "on_result": None,
+            "fast_opts": None,
+            **expected_specific,
+        }
+
+    def test_attention_merges_saliency_kwargs(self, monkeypatch):
+        captured = {}
+
+        def fake_scan(video_path, region, **kwargs):
+            captured["kwargs"] = kwargs
+            return []
+
+        monkeypatch.setattr(screenspace_tools, "scan_attention", fake_scan)
+        screenspace_tools.TOOLS["attention"].scan(
+            "/fake.mp4",
+            {"x": 0, "y": 0, "w": 10, "h": 10},
+            {"weight_face": 0.5},
+            task_id="t1",
+            scan_mode="precise",
+            on_progress=lambda f: None,
+            cancel_flag=lambda: False,
+            on_result=None,
+            fast_opts=None,
+        )
+        kwargs = captured["kwargs"]
+        assert kwargs["shift_threshold"] == 0.0
+        assert kwargs["ema_alpha"] == 0.0
+        expected_saliency = screenspace_tools.saliency_kwargs_from_params(
+            {"weight_face": 0.5}
+        )
+        for key, value in expected_saliency.items():
+            assert kwargs[key] == value
+
+    def test_scan_defaults_dicts_are_copied(self, monkeypatch):
+        """A callee mutating a dict-valued default must not corrupt the ClassVar."""
+        seen = {}
+
+        def fake_scan(video_path, region, **kwargs):
+            kwargs["target_color"]["h"] = 999
+            seen["target_color"] = kwargs["target_color"]
+            return []
+
+        monkeypatch.setattr(screenspace_tools, "scan_color", fake_scan)
+        for _ in range(2):
+            screenspace_tools.TOOLS["color"].scan(
+                "/fake.mp4",
+                {"x": 0, "y": 0, "w": 10, "h": 10},
+                {},
+                task_id="t1",
+                scan_mode="precise",
+                on_progress=lambda f: None,
+                cancel_flag=lambda: False,
+                on_result=None,
+                fast_opts=None,
+            )
+        assert screenspace_tools.ColorTool.scan_defaults["target_color"] == {
+            "h": 0,
+            "s": 0,
+            "v": 0,
+        }
