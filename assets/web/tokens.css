@@ -3,7 +3,10 @@
  *
  * Default theme is DARK; light is opt-in via html[data-theme="light"] (or
  * .theme-light). The product is dark-first, so users toggle explicitly and there
- * is no prefers-color-scheme handling.
+ * is no prefers-color-scheme handling. Each theme block does declare
+ * `color-scheme`, which is a different thing: it tells the engine which way to
+ * paint UA-drawn furniture (scrollbars, <select> popups, checkboxes, spinners,
+ * autofill) and never reads the OS preference.
  *
  * Two naming systems coexist intentionally:
  *   1. Prototype-aligned names (--bg, --fg, --accent, --severity-*, --cell-data,
@@ -30,6 +33,7 @@
  * STREAMS:    --stream-* — cross-stream metadata visualisations
  * CATEGORIES: --cat-* — transcript mark categories
  * REGIONS:    --region-color-1..8 — cycled by Screenspace region index
+ * SCROLLBAR:  --scrollbar-* — thumb/track/size for the global scrollbar rule
  * LAYOUT:     --layout-* | --sidebar-width-* | --bottom-panel-height
  *
  * Category hues for chip rings, dots and density bars are computed at runtime by
@@ -37,6 +41,13 @@
  */
 
 :root {
+  /* Tell the engine which way the page leans so every UA-drawn control —
+   * scrollbars, <select> popups, checkboxes, number spinners, the file-picker
+   * button, autofill — is painted for this theme instead of the OS default.
+   * Independent of prefers-color-scheme, which reports the OS preference and is
+   * not affected by this property. */
+  color-scheme: dark;
+
   /* Spacing */
   --space-1: 0.25rem;
   --space-1-5: 0.375rem; /* 6px — half-step, recurring off-scale spacing */
@@ -96,6 +107,20 @@
   --border:           #23252a;
   --border-strong:    #2e3138;
   --hairline:         rgba(255, 255, 255, 0.06);
+
+  /* Scrollbars — consumed by the global rule further down (search "Scrollbars").
+   * Alpha rather than the opaque --border tokens on purpose: a scrollbar shows
+   * up over --bg, over --bg-elevated panels and behind the glass chrome alike,
+   * and an opaque #2e3138 thumb disappears against #141518. 0.16 white is about
+   * where --border-strong lands composited over --bg, so the thumb reads at
+   * hairline weight; the hover step is one notch above --fg-dim (0.28). The
+   * track is transparent deliberately: the main page scrollers start at
+   * viewport y=0 and run *under* the fixed translucent chrome, and a painted
+   * track reads as a bright vertical stripe through the blur. */
+  --scrollbar-size: 10px; /* legacy ::-webkit-scrollbar path only — see below */
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: rgba(255, 255, 255, 0.16);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
 
   /* Cell data (timestamp chips on Studio Sheet) */
   --cell-data:        #1d4d5a;
@@ -282,6 +307,8 @@
  * tokens are intentionally NOT overridden: they stay constant across themes. */
 html[data-theme="light"],
 .theme-light {
+  color-scheme: light;
+
   /* Surfaces */
   --bg:               #fafafa;
   --bg-elevated:      #ffffff;
@@ -305,6 +332,14 @@ html[data-theme="light"],
   --border:           #e0ddd5;
   --border-strong:    #c9c5bc;
   --hairline:         rgba(0, 0, 0, 0.06);
+
+  /* Scrollbars — cool grey rather than the warm paper borders (#e0ddd5), for
+   * the same reason the --fg-* family is rgba(20, 21, 26, a): a scrollbar is
+   * neutral furniture, not part of the card language. A touch heavier than the
+   * dark-theme alphas because a thin bar on a light surface needs the weight.
+   * --scrollbar-size / --scrollbar-track carry over from :root unchanged. */
+  --scrollbar-thumb: rgba(20, 21, 26, 0.2);
+  --scrollbar-thumb-hover: rgba(20, 21, 26, 0.34);
 
   /* Cell data */
   --cell-data:        #b3e3ec;
@@ -868,19 +903,62 @@ audio.cg-audiotrack { display: none; }
   }
 }
 
-/* Thin custom scrollbar — theme-aware thumb (adapts to light mode via --border).
-   Apply to any overflow container that wants the slim 6px scrollbar. */
-.cg-scroll-thin {
+/* ---- Scrollbars ------------------------------------------------------------
+ *
+ * Every scroller in the product, on every page and in the exported viewers
+ * (tokens.css is prepended into those by viewer.py). Global rather than an
+ * opt-in utility class: the retired thin-scrollbar class reached 5 elements out
+ * of ~50 scrollers, and the other 45 rendered the OS default — chunky,
+ * light-grey and, because the main page scrollers run under the fixed glass
+ * chrome, a bright stripe showing through the navbar's blur.
+ *
+ * Two paths, one look. The standard properties are what Firefox, Chromium 121+
+ * and Safari 18.2+ use. The ::-webkit-scrollbar block only ever reaches older
+ * WebKit (WKWebView on macOS 13/14) and old Chromium, because Chromium ignores
+ * those pseudo-elements on any element whose scrollbar-width / scrollbar-color
+ * is not `auto` — which, after the rule below, is every element. Keep the two
+ * in sync and keep the legacy one plain; a fancier webkit path just means two
+ * platforms that look different. Corollary: --scrollbar-size governs the legacy
+ * path only. Modern engines pick their own `thin` width and there is no way to
+ * ask for a number.
+ *
+ * Deliberately ungated, and the received wisdom that this breaks macOS turned
+ * out to be half true. Measured on macOS Chromium: with the standard properties
+ * set, an overflowing div still reports offsetWidth - clientWidth === 0, i.e.
+ * the overlay scrollbar stays an auto-hiding overlay and merely gets themed.
+ * The always-visible-bar problem belongs to the ::-webkit path, which only
+ * older WebKit reaches — and there it is unavoidable. If a platform does end up
+ * with unwanted permanent bars, wrap this whole block in
+ * html[data-scrollbars="classic"] and set that attribute from a probe measuring
+ * that same gutter width (overlay platforms measure 0). Nothing else changes. */
+* {
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
-.cg-scroll-thin::-webkit-scrollbar { width: 6px; }
-.cg-scroll-thin::-webkit-scrollbar-track { background: transparent; }
-.cg-scroll-thin::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
+
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
 }
-.cg-scroll-thin::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-full);
+}
+/* --scrollbar-thumb-hover serves the legacy path only. The standard properties
+ * have no thumb-hover hook, and a `*:hover { scrollbar-color }` companion would
+ * fire on *element* hover rather than thumb hover while invalidating style
+ * through a universal rule on every mousemove across the Studio sheet grid. */
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+/* Windows-classic arrow buttons — an affordance nothing else in the UI has. */
+*::-webkit-scrollbar-button {
+  display: none;
+}
 
 /* Base button — shared across Studio / Screenspace / Transcripts. (Was copy-pasted
  * verbatim into all three page CSS files; consolidated here.) `.cg-btn`

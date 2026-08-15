@@ -1987,15 +1987,6 @@ html[data-theme="light"] .start-overlay .rail__shimmer::before {
   );
 }
 
-/* Scrollbar thumbs default to white-on-dark; darken for light bg. */
-html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb,
-html[data-theme="light"] .start-overlay .about::-webkit-scrollbar-thumb {
-  background: rgba(20, 21, 26, 0.16);
-}
-html[data-theme="light"] .start-overlay .changelog::-webkit-scrollbar-thumb:hover {
-  background: rgba(20, 21, 26, 0.28);
-}
-
 /* ---- Reduced motion ------------------------------------------------- */
 
 @media (prefers-reduced-motion: reduce) {

@@ -1159,7 +1159,6 @@ body {
   gap: var(--space-1);
   overflow-x: auto;
   white-space: nowrap;
-  scrollbar-width: thin;
 }
 
 .friction-jump-chip {
@@ -1733,7 +1732,6 @@ body {
   justify-content: center;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
 }
 
 .pill-row-empty {
