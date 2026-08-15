@@ -2045,6 +2045,22 @@ var setStoredTooltipPref = function (enabled) {
 // load (set by the Overview Map's explain-panel links). Accepts any simple
 // token so participant-prefix rules stay in config.py alone; the consuming
 // page validates the id against its actual participant list.
+// Resolve a page's initial participant: the first of hashPid (deep link) /
+// currentId / storedId that exists in *participants* ([{id, ...}]); "" when
+// none do. Page-specific final fallbacks (first, only-one,
+// first-with-transcript) stay at the call site.
+var clipgenPickParticipant = function (participants, opts) {
+  opts = opts || {};
+  function present(id) {
+    if (!id) return "";
+    for (var i = 0; i < participants.length; i++) {
+      if (participants[i].id === id) return id;
+    }
+    return "";
+  }
+  return present(opts.hashPid) || present(opts.currentId) || present(opts.storedId) || "";
+};
+
 var clipgenHashParticipant = function () {
   var raw = (window.location.hash || "").replace(/^#/, "");
   if (!raw) return "";

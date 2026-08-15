@@ -684,35 +684,19 @@
       }
       refreshTranscriptionModelHintOnce();
 
-      // Deep link (#P07, from the Overview Map's explain panel) wins once,
-      // on the first load that has the participant list.
+      // Precedence: deep link (#P07, from the Overview Map's explain panel;
+      // wins once, on the first load that has the participant list) > current
+      // in-memory selection (soft refresh) > localStorage (fresh page load).
       var hashPid = _hashPidApplied ? "" : clipgenHashParticipant();
-      if (hashPid && state.participants.length) {
-        _hashPidApplied = true;
-        for (var h = 0; h < state.participants.length; h++) {
-          if (state.participants[h].id === hashPid) {
-            selectParticipant(hashPid);
-            return;
-          }
-        }
-      }
-
-      // Preserve current in-memory selection if still valid (soft refresh)
-      if (state.selectedParticipant) {
-        for (var i = 0; i < state.participants.length; i++) {
-          if (state.participants[i].id === state.selectedParticipant) return;
-        }
-      }
-
-      // Restore from localStorage if present and still valid (fresh page load)
-      var storedPid = getStoredUIState("transcripts").selectedParticipant;
-      if (storedPid) {
-        for (var j = 0; j < state.participants.length; j++) {
-          if (state.participants[j].id === storedPid) {
-            selectParticipant(storedPid);
-            return;
-          }
-        }
+      if (hashPid && state.participants.length) _hashPidApplied = true;
+      var pick = clipgenPickParticipant(state.participants, {
+        hashPid: hashPid,
+        currentId: state.selectedParticipant,
+        storedId: getStoredUIState("transcripts").selectedParticipant,
+      });
+      if (pick) {
+        if (pick !== state.selectedParticipant) selectParticipant(pick);
+        return;
       }
 
       // Auto-select first participant with a transcript, or just the first

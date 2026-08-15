@@ -5070,25 +5070,11 @@
         var pickId = null;
         if (state.participants.length > 0) {
           var stored = getStoredUIState("screenspace");
-          pickId = state.participants[0].id;
-          if (stored.selectedParticipant) {
-            for (var spi = 0; spi < state.participants.length; spi++) {
-              if (state.participants[spi].id === stored.selectedParticipant) {
-                pickId = stored.selectedParticipant;
-                break;
-              }
-            }
-          }
           // Deep link (#P07, from the Overview Map) beats the stored pick.
-          var hashPid = clipgenHashParticipant();
-          if (hashPid) {
-            for (var hpi = 0; hpi < state.participants.length; hpi++) {
-              if (state.participants[hpi].id === hashPid) {
-                pickId = hashPid;
-                break;
-              }
-            }
-          }
+          pickId = clipgenPickParticipant(state.participants, {
+            hashPid: clipgenHashParticipant(),
+            storedId: stored.selectedParticipant,
+          }) || state.participants[0].id;
           var initialTs = getStoredUIMapEntry("screenspace", "videoTimeByParticipant", pickId);
           if (typeof initialTs !== "number") initialTs = undefined;
           selectParticipant(pickId, initialTs);

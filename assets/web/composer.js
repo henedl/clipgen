@@ -1777,13 +1777,10 @@
         // A /composer/#P07 hash (command palette / cross-page links) wins;
         // otherwise restore the last-worked-on participant, falling back to
         // auto-select when there is only one.
-        var hashPid = clipgenHashParticipant();
-        var stored = getStoredUIState("composer").participant;
-        var initial = hashPid && findParticipant(hashPid)
-          ? hashPid
-          : stored && findParticipant(stored)
-            ? stored
-            : state.participants.length === 1 ? state.participants[0].id : null;
+        var initial = clipgenPickParticipant(state.participants, {
+          hashPid: clipgenHashParticipant(),
+          storedId: getStoredUIState("composer").participant,
+        }) || (state.participants.length === 1 ? state.participants[0].id : null);
         if (initial) {
           qs("#coParticipantSelect").value = initial;
           selectParticipant(initial);
