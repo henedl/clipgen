@@ -21,6 +21,35 @@ class TestComputeFrameDiff:
         diff = screenspace.compute_frame_diff(black, white)
         assert diff > 0.9
 
+    def test_gray_split_is_bit_identical(self):
+        """The carried-forward blur_gray path must equal the pairwise BGR path.
+
+        scan_changes / ChangeTool now compute blur_gray once per frame and diff
+        via the _gray variants; any divergence from compute_frame_diff would
+        silently change every Change magnitude.
+        """
+        rng = np.random.default_rng(42)
+        for shape in ((50, 50, 3), (37, 61, 3), (128, 72, 3)):
+            a = rng.integers(0, 256, shape, dtype=np.uint8)
+            b = rng.integers(0, 256, shape, dtype=np.uint8)
+            assert screenspace.compute_frame_diff(a, b) == (
+                screenspace.compute_frame_diff_gray(
+                    screenspace.blur_gray(a), screenspace.blur_gray(b)
+                )
+            )
+
+    def test_gray_split_mask_is_bit_identical(self):
+        rng = np.random.default_rng(7)
+        a = rng.integers(0, 256, (60, 60, 3), dtype=np.uint8)
+        b = rng.integers(0, 256, (60, 60, 3), dtype=np.uint8)
+        mask = np.zeros((60, 60), dtype=np.uint8)
+        mask[10:40, 10:40] = 255
+        assert screenspace.compute_frame_diff(a, b, mask=mask) == (
+            screenspace.compute_frame_diff_gray(
+                screenspace.blur_gray(a), screenspace.blur_gray(b), mask=mask
+            )
+        )
+
 
 class TestRegionsAreSimilar:
     def test_identical(self):
@@ -50,6 +79,17 @@ class TestComputePhash:
         hash_a = screenspace.compute_phash(a)
         hash_b = screenspace.compute_phash(b)
         assert hash_a != hash_b
+
+    def test_precomputed_gray_matches(self):
+        """The gray= fast path (scan_similarity) must hash identically."""
+        import cv2
+
+        rng = np.random.default_rng(11)
+        region = rng.integers(0, 256, (64, 96, 3), dtype=np.uint8)
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        assert screenspace.compute_phash(region) == screenspace.compute_phash(
+            region, gray=gray
+        )
 
 
 class TestSceneFingerprint:

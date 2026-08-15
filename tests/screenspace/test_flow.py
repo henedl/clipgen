@@ -21,6 +21,33 @@ class TestComputeOpticalFlow:
         result = screenspace.compute_optical_flow(prev, curr)
         assert result["magnitude"] > 0
 
+    def test_predownscaled_inputs_match_full_size(self):
+        """scan_flow's carried-forward flow_downscale path must be bit-identical.
+
+        flow_downscale replicates exactly the resize compute_optical_flow used
+        to apply internally; pre-downscaled inputs (with the mask downscaled
+        alongside) must therefore produce the same result dict.
+        """
+        rng = np.random.default_rng(5)
+        prev = rng.integers(0, 256, (480, 640), dtype=np.uint8)
+        curr = rng.integers(0, 256, (480, 640), dtype=np.uint8)
+        mask = np.zeros((480, 640), dtype=np.uint8)
+        mask[100:300, 200:500] = 255
+
+        full = screenspace.compute_optical_flow(prev, curr, return_grid=True, mask=mask)
+        small_prev, _ = screenspace.flow_downscale(prev)
+        small_curr, small_mask = screenspace.flow_downscale(curr, mask)
+        pre = screenspace.compute_optical_flow(
+            small_prev, small_curr, return_grid=True, mask=small_mask
+        )
+        assert full == pre
+
+    def test_small_inputs_are_not_resized(self):
+        gray = np.full((50, 50), 128, dtype=np.uint8)
+        out, mask = screenspace.flow_downscale(gray)
+        assert out is gray
+        assert mask is None
+
 
 class TestOpticalFlowGrid:
     def test_no_grid_by_default(self):

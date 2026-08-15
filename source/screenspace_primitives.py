@@ -123,7 +123,7 @@ def _is_static_skip(
     """
     gray = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
     if prev_gray[0] is not None:
-        diff = float(np.mean(cv2.absdiff(prev_gray[0], gray)))
+        diff = mean_gray_diff(prev_gray[0], gray)
         if diff < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD:
             emitted = buf.carry(ts)
             if emitted is not None:
@@ -151,9 +151,20 @@ def _frame_is_static(prev_gray: np.ndarray | None, curr_gray: np.ndarray) -> boo
     if prev_gray is None:
         return False
     return (
-        float(np.mean(cv2.absdiff(prev_gray, curr_gray)))
+        mean_gray_diff(prev_gray, curr_gray)
         < config.SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD
     )
+
+
+def mean_gray_diff(a: np.ndarray, b: np.ndarray) -> float:
+    """Mean absolute difference between two same-shaped uint8 arrays.
+
+    Equals ``float(np.mean(cv2.absdiff(a, b)))`` exactly (both accumulate the
+    integer L1 sum in double), but ``cv2.norm`` fuses absdiff+sum in one SIMD
+    pass with no full-size temporaries — and this line runs on every tool's
+    per-frame path via the static-frame skip above.
+    """
+    return cv2.norm(a, b, cv2.NORM_L1) / a.size
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +521,19 @@ def color_present(
     return matched, float(coverage)
 
 
+def blur_gray(region: np.ndarray) -> np.ndarray:
+    """The frame-diff front-end: Gaussian blur then grayscale one BGR region.
+
+    Split out of the diff so per-frame callers (``scan_changes``,
+    ``ChangeTool``) can compute it once per frame and carry it forward —
+    frame N is otherwise blurred twice, as ``region_b`` at step N and again
+    as ``region_a`` at step N+1, and this 3-channel blur is the most
+    expensive op on the Change hot path.
+    """
+    k = config.SCREENSPACE_BLUR_KERNEL
+    return cv2.cvtColor(cv2.GaussianBlur(region, (k, k), 0), cv2.COLOR_BGR2GRAY)
+
+
 def _frame_diff_mask(
     region_a: np.ndarray,
     region_b: np.ndarray,
@@ -520,13 +544,22 @@ def _frame_diff_mask(
     Returns the binary change mask; callers derive a change ratio from it or
     downsample it to a grid (the Change heatmap). Single source of truth for the
     frame-diff computation shared by ``compute_frame_diff``, ``ChangeTool`` and
-    ``scan_changes``.
+    ``scan_changes`` — the per-frame callers go through the ``_gray`` variants
+    with a carried-forward ``blur_gray`` result instead of this pairwise form.
     """
+    return _frame_diff_mask_gray(
+        blur_gray(region_a), blur_gray(region_b), noise_threshold
+    )
+
+
+def _frame_diff_mask_gray(
+    a_gray: np.ndarray,
+    b_gray: np.ndarray,
+    noise_threshold: int = 0,
+) -> np.ndarray:
+    """Diff back-end: absdiff, threshold and morph-open two ``blur_gray`` outputs."""
     if noise_threshold <= 0:
         noise_threshold = config.SCREENSPACE_NOISE_THRESHOLD
-    k = config.SCREENSPACE_BLUR_KERNEL
-    a_gray = cv2.cvtColor(cv2.GaussianBlur(region_a, (k, k), 0), cv2.COLOR_BGR2GRAY)
-    b_gray = cv2.cvtColor(cv2.GaussianBlur(region_b, (k, k), 0), cv2.COLOR_BGR2GRAY)
     diff = cv2.absdiff(a_gray, b_gray)
     _, mask = cv2.threshold(diff, noise_threshold, 255, cv2.THRESH_BINARY)
     kernel = _morph_kernel(config.SCREENSPACE_MORPH_KERNEL)
@@ -548,7 +581,19 @@ def compute_frame_diff(
     Returns:
         Change ratio 0.0-1.0 (fraction of pixels that changed).
     """
-    diff = _frame_diff_mask(region_a, region_b, noise_threshold)
+    return compute_frame_diff_gray(
+        blur_gray(region_a), blur_gray(region_b), noise_threshold, mask
+    )
+
+
+def compute_frame_diff_gray(
+    a_gray: np.ndarray,
+    b_gray: np.ndarray,
+    noise_threshold: int = 0,
+    mask: np.ndarray | None = None,
+) -> float:
+    """``compute_frame_diff`` on precomputed ``blur_gray`` outputs (hot paths)."""
+    diff = _frame_diff_mask_gray(a_gray, b_gray, noise_threshold)
     if diff.size == 0:
         return 0.0
     if mask is not None and np.any(mask):
@@ -617,16 +662,21 @@ def ssim_diff_map(
     return float(score), np.asarray(smap, dtype=np.float32)
 
 
-def compute_phash(region_pixels: np.ndarray) -> "imagehash.ImageHash":
+def compute_phash(
+    region_pixels: np.ndarray, gray: np.ndarray | None = None
+) -> "imagehash.ImageHash":
     """Compute perceptual hash of a region for fast similarity scanning.
 
     Mirrors ``imagehash.phash`` (grayscale → 32×32 → 2D DCT → top-left 8×8 →
     median threshold) natively in cv2, skipping the per-frame BGR→RGB +
     ``PIL.Image`` round-trip that dominates this hot scan-callback path.
+    Callers that already hold the unblurred grayscale (scan_similarity's
+    static-skip check) pass it as *gray* to skip the second conversion.
     """
     import imagehash
 
-    gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
+    if gray is None:
+        gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
     small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
     dct = cv2.dct(small)
     dctlowfreq = dct[:8, :8]
@@ -825,6 +875,28 @@ def match_template(
     return _match_template_prepared(frame, prepared, threshold, nms_overlap)
 
 
+def flow_downscale(
+    gray: np.ndarray, mask: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """The <=256px downscale ``compute_optical_flow`` applies to its inputs.
+
+    Exposed so per-frame callers can downscale each frame once and carry the
+    result forward as the next pair's "previous" side — otherwise every frame
+    is INTER_AREA-resized twice (as curr at step N, as prev at step N+1).
+    No-op (returns the inputs) when *gray* already fits.
+    """
+    max_dim = 256
+    h, w = gray.shape[:2]
+    if h <= max_dim and w <= max_dim:
+        return gray, mask
+    scale = max_dim / max(h, w)
+    new_w, new_h = int(w * scale), int(h * scale)
+    small = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    if mask is not None:
+        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    return small, mask
+
+
 def compute_optical_flow(
     prev_gray: np.ndarray,
     curr_gray: np.ndarray,
@@ -846,16 +918,11 @@ def compute_optical_flow(
     if pyr_scale <= 0.0:
         pyr_scale = config.SCREENSPACE_FLOW_PYR_SCALE
 
-    # Resize to max 256px for speed
-    max_dim = 256
-    h, w = prev_gray.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        new_w, new_h = int(w * scale), int(h * scale)
-        prev_gray = cv2.resize(prev_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        curr_gray = cv2.resize(curr_gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        if mask is not None:
-            mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    # Resize to max 256px for speed. Per-frame callers (scan_flow) pre-downscale
+    # via flow_downscale and carry the previous frame's result forward, in which
+    # case the inputs arrive <=256px and these are no-ops.
+    prev_gray, _ = flow_downscale(prev_gray)
+    curr_gray, mask = flow_downscale(curr_gray, mask)
     if mask is not None and not np.any(mask):
         mask = None
 

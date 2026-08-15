@@ -24,10 +24,11 @@ from screenspace_primitives import (
     _prepare_template,
     _scale_template,
     _template_correlation_map,
+    blur_gray,
     color_matches,
     color_present,
     compare_scene_fingerprints,
-    compute_frame_diff,
+    compute_frame_diff_gray,
     compute_optical_flow,
     compute_phash,
     compute_scene_fingerprint,
@@ -175,6 +176,22 @@ def _cached_gray(
         cache,
         _region_key("gray", region),
         lambda: cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY),
+    )
+
+
+def _cached_blur_gray(
+    cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
+) -> np.ndarray:
+    """``blur_gray`` of the region crop, memoized on *cache* (reuses the crop).
+
+    The multitool dispatcher rolls this frame's memo dict forward as the next
+    frame's ``prev_cache``, so ChangeTool's previous-side blur+grayscale is a
+    dict hit rather than a recompute.
+    """
+    return _memo(
+        cache,
+        _region_key("blurgray", region),
+        lambda: blur_gray(_cached_crop(cache, frame, region)),
     )
 
 
@@ -508,15 +525,13 @@ class ChangeTool(AnalysisTool):
     ):
         if prev_frame is None:
             return False, None
-        pixels = _cached_crop(cache, frame, region)
-        prev_pixels = _cached_crop(prev_cache, prev_frame, region)
         threshold = params.get("threshold", config.SCREENSPACE_CHANGE_RATIO_THRESHOLD)
         noise_threshold = params.get(
             "noise_threshold", config.SCREENSPACE_NOISE_THRESHOLD
         )
-        mag = compute_frame_diff(
-            prev_pixels,
-            pixels,
+        mag = compute_frame_diff_gray(
+            _cached_blur_gray(prev_cache, prev_frame, region),
+            _cached_blur_gray(cache, frame, region),
             noise_threshold,
             mask=_cached_mask(cache, frame, region),
         )

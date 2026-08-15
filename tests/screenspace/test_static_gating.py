@@ -28,6 +28,22 @@ def _disable_gate(monkeypatch):
     monkeypatch.setattr(screenspace_scans, "_frame_is_static", lambda prev, curr: False)
 
 
+def test_mean_gray_diff_equals_numpy_mean_absdiff():
+    """mean_gray_diff is the fused form of float(np.mean(cv2.absdiff(a, b))).
+
+    Both accumulate the exact integer L1 sum in double, so equality is exact —
+    this is the guard that lets every static-frame gate use the allocation-free
+    cv2.norm form without any behavioral drift.
+    """
+    rng = np.random.default_rng(3)
+    for shape in ((50, 50), (37, 61), (1, 1), (240, 135)):
+        a = rng.integers(0, 256, shape, dtype=np.uint8)
+        b = rng.integers(0, 256, shape, dtype=np.uint8)
+        assert screenspace.mean_gray_diff(a, b) == float(np.mean(cv2.absdiff(a, b)))
+    zero = np.zeros((16, 16), dtype=np.uint8)
+    assert screenspace.mean_gray_diff(zero, zero) == 0.0
+
+
 def _feed_region(monkeypatch, sequence):
     """Patch the region-frame scan driver to replay ``[(ts, frame), ...]``."""
 
