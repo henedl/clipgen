@@ -948,7 +948,7 @@ def test_google_auth_records_thread_error(client, monkeypatch):
 def test_spreadsheets_open_rejected_during_generation(client, monkeypatch):
     """Switching spreadsheets is rejected with 409 while a clip generation is
     in progress, so the generated lists are not rebound under an active stream."""
-    monkeypatch.setattr(server, "_generate_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "generate", True)
     resp = client.post(
         "/api/spreadsheets/open",
         json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
@@ -974,7 +974,7 @@ def test_spreadsheets_open_rejected_during_timeline_viewer(client, monkeypatch):
     """A timeline-viewer build blocks a spreadsheet switch: it appends into the
     shared generated list/manifest, so a swap mid-build would rebind those under
     it and mix old-sheet artifacts into the new sheet."""
-    monkeypatch.setattr(server, "_timeline_viewer_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "timeline_viewer", True)
     resp = client.post(
         "/api/spreadsheets/open",
         json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
@@ -985,7 +985,7 @@ def test_spreadsheets_open_rejected_during_timeline_viewer(client, monkeypatch):
 
 def test_spreadsheets_open_rejected_during_gallery(client, monkeypatch):
     """A gallery build also blocks a spreadsheet switch."""
-    monkeypatch.setattr(server, "_gallery_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "gallery", True)
     resp = client.post(
         "/api/spreadsheets/open",
         json={"type": "excel", "id_or_path": "/tmp/whatever.xlsx"},
@@ -996,7 +996,7 @@ def test_spreadsheets_open_rejected_during_gallery(client, monkeypatch):
 
 def test_spreadsheets_close_rejected_during_reel(client, monkeypatch):
     """Closing the spreadsheet is rejected with 409 while a reel build runs."""
-    monkeypatch.setattr(server, "_reel_in_progress", True)
+    monkeypatch.setitem(server._busy_slots, "reel", True)
     resp = client.post("/api/spreadsheets/close")
     assert resp.status_code == 409
     assert resp.get_json()["ok"] is False

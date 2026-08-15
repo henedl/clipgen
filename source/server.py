@@ -156,13 +156,15 @@ _intake_cancel_event = threading.Event()
 _timeline_viewer_cancel_event = threading.Event()
 _gallery_cancel_event = threading.Event()
 _busy_lock = threading.Lock()
-_generate_in_progress = False
-_reel_in_progress = False
 # Single-job slots for those builds: each shares one module-level cancel event, so
 # a second concurrent build (a second Studio tab) must be rejected rather than
 # allowed to clobber the other's signal.
-_timeline_viewer_in_progress = False
-_gallery_in_progress = False
+_busy_slots: dict[str, bool] = {
+    "generate": False,
+    "reel": False,
+    "timeline_viewer": False,
+    "gallery": False,
+}
 # Count of in-flight /api/generate-intake streams. Intake has no single-job
 # slot (it must run alongside /api/generate for mixed queues), but a sheet
 # swap still needs to know whether any intake work is active.
@@ -290,37 +292,15 @@ _audio_cache = _MediaCache(_AUDIO_CACHE_MAX)
 def _try_claim_busy(slot: str) -> bool:
     """Atomically reserve the single-job slot for *slot*.
 
-    Valid slots: ``'generate'``, ``'reel'``, ``'timeline_viewer'``, ``'gallery'``.
-    Returns True on success (caller must call ``_release_busy`` when done) or
-    False if another request is already holding the slot.
+    Valid slots: the ``_busy_slots`` keys. Returns True on success (caller must
+    call ``_release_busy`` when done) or False if another request is already
+    holding the slot (or the slot name is unknown).
     """
-    global \
-        _generate_in_progress, \
-        _reel_in_progress, \
-        _timeline_viewer_in_progress, \
-        _gallery_in_progress
     with _busy_lock:
-        if slot == "generate":
-            if _generate_in_progress:
-                return False
-            _generate_in_progress = True
-            return True
-        if slot == "reel":
-            if _reel_in_progress:
-                return False
-            _reel_in_progress = True
-            return True
-        if slot == "timeline_viewer":
-            if _timeline_viewer_in_progress:
-                return False
-            _timeline_viewer_in_progress = True
-            return True
-        if slot == "gallery":
-            if _gallery_in_progress:
-                return False
-            _gallery_in_progress = True
-            return True
-    return False
+        if slot not in _busy_slots or _busy_slots[slot]:
+            return False
+        _busy_slots[slot] = True
+        return True
 
 
 def _parse_titlecard_request(
@@ -387,24 +367,10 @@ def _append_generated_reel(reel: dict[str, Any]) -> None:
 
 
 def _release_busy(slot: str) -> None:
-    """Release the single-job slot for *slot*.
-
-    Valid slots: ``'generate'``, ``'reel'``, ``'timeline_viewer'``, ``'gallery'``.
-    """
-    global \
-        _generate_in_progress, \
-        _reel_in_progress, \
-        _timeline_viewer_in_progress, \
-        _gallery_in_progress
+    """Release the single-job slot for *slot* (unknown slots are a no-op)."""
     with _busy_lock:
-        if slot == "generate":
-            _generate_in_progress = False
-        elif slot == "reel":
-            _reel_in_progress = False
-        elif slot == "timeline_viewer":
-            _timeline_viewer_in_progress = False
-        elif slot == "gallery":
-            _gallery_in_progress = False
+        if slot in _busy_slots:
+            _busy_slots[slot] = False
 
 
 def _reset_reel_job_state(endpoint: str) -> None:
@@ -489,13 +455,7 @@ def _generation_busy() -> bool:
     old-sheet artifacts into the new sheet's freshly-rebound list/manifest).
     """
     with _busy_lock:
-        return (
-            _generate_in_progress
-            or _reel_in_progress
-            or _timeline_viewer_in_progress
-            or _gallery_in_progress
-            or _intake_active > 0
-        )
+        return any(_busy_slots.values()) or _intake_active > 0
 
 
 @contextmanager
@@ -3061,8 +3021,8 @@ def api_job_status() -> FlaskResponse:
     shared cancel events, which the workers continue to honor.
     """
     with _busy_lock:
-        reel_busy = _reel_in_progress
-        generate_busy = _generate_in_progress
+        reel_busy = _busy_slots["reel"]
+        generate_busy = _busy_slots["generate"]
         intake_busy = _intake_active > 0
     with _job_state_lock:
         reel_snapshot = dict(_reel_job_state)
