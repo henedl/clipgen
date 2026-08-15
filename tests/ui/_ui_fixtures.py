@@ -344,10 +344,36 @@ def _seed_screenspace() -> None:
                     "source_height": 240,
                 }
             },
-            # Empty on purpose: an active task makes the page open an SSE stream,
-            # which both defeats any settle heuristic and risks hanging teardown
-            # on the server's connection-thread join.
-            "tasks": [],
+            # Completed only, never queued/running/paused: an *active* task makes
+            # the page open an SSE stream, which both defeats any settle heuristic
+            # and risks hanging teardown on the server's connection-thread join.
+            # A completed task starts neither SSE nor the fallback poller (both
+            # gate on queued/running/paused) and restore_tasks keeps it verbatim,
+            # so the journeys can click it and read real results.
+            "tasks": [
+                {
+                    "id": "ss-ui-task-1",
+                    "type": "change",
+                    "name": "Change · toolbar",
+                    "participant": "P01",
+                    "source_video": f"{STUDY}_P01.mp4",
+                    "video_paths": [str(INPUT_DIR / f"{STUDY}_P01.mp4")],
+                    "region": "toolbar",
+                    # Pixel-space copy of the normalized region above (320×240).
+                    "region_coords": {"x": 16, "y": 12, "w": 128, "h": 48},
+                    "parameters": {},
+                    "status": "completed",
+                    "progress": 1.0,
+                    "priority": 100,
+                    "result": [
+                        {"timestamp": 2.0, "magnitude": 0.62},
+                        {"timestamp": 3.5, "magnitude": 0.47},
+                    ],
+                    "error": None,
+                    "created_at": "2026-01-05T12:00:00+00:00",
+                    "completed_at": "2026-01-05T12:01:00+00:00",
+                },
+            ],
             "events": [
                 {
                     "id": "ui-evt-1",
@@ -360,7 +386,10 @@ def _seed_screenspace() -> None:
                     "confidence": 0.82,
                     "metadata": {},
                     "excluded": False,
-                    "task_id": "",
+                    # Attached to the completed task so its results view and the
+                    # event agree; ui-evt-2 stays detached (it belongs to P02, and
+                    # a task is per-participant).
+                    "task_id": "ss-ui-task-1",
                     "region": "toolbar",
                 },
                 {

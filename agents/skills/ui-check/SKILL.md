@@ -1,7 +1,10 @@
 # clipgen-ui-check — Headless page smoke, screenshots, and in-page probing
 
 Boots the real combined server against a generated fixture project, loads all six
-pages in headless Chromium, and fails on any uncaught error. Use it after touching
+pages in headless Chromium, and fails on any uncaught error. It also runs five
+click-through journeys (`tests/ui/test_ui_journeys.py`): Studio generate,
+Screenspace result-row seek, Transcripts segment seek, settings persistence, and
+opening the fixture workbook through the Start overlay. Use it after touching
 anything in `assets/web/` — it is the runtime confirmation that used to be "ask the
 human to open the page".
 
@@ -37,14 +40,15 @@ CLIPGEN_UI_CHECK=1 uv run --extra dev --extra ui pytest -c tests/pytest.ini \
   tests/ui -p no:randomly -q
 ```
 
-`-p no:randomly` because shuffling six independent page loads buys nothing and
-makes failure output harder to read. Cold run ~35 s (ffmpeg encodes the fixture
-videos once), warm ~20 s.
+`-p no:randomly` because shuffling independent page loads buys nothing and
+makes failure output harder to read. Cold run ~45 s (ffmpeg encodes the fixture
+videos once), warm ~30 s — the boot smoke plus the five journeys.
 
 ## 3. Inspect — actually look at the screenshots
 
 ```
 .context/ui-check/screenshots/{studio,screenspace,transcripts,workflows,composer,overview}.png
+.context/ui-check/screenshots/journey-{generate,screenspace,transcripts,settings,start-overlay}.png
 .context/ui-check/ui-report.json
 ```
 
@@ -53,8 +57,9 @@ at the UI** rather than trusting the exit code. What you are checking for:
 
 - Does the page show real content, or an empty state? The fixture project has 6
   observations, 2 participants with video, 4 transcript segments, 2 Screenspace
-  events, 1 Composer cut and 1 Workflows blueprint. A zero-state screenshot means
-  the seeding in `tests/ui/_ui_fixtures.py` drifted, even though the test passed.
+  events plus 1 completed Screenspace task, 1 Composer cut and 1 Workflows
+  blueprint. A zero-state screenshot means the seeding in
+  `tests/ui/_ui_fixtures.py` drifted, even though the test passed.
 - Does your change look right — spacing, alignment, colors, truncation?
 
 `ui-report.json` holds the non-fatal detail that never reaches stdout: XHR 404s
@@ -129,11 +134,12 @@ Two honest limits, worth knowing before you read the output:
 - **Never** add `tests/ui` to `/check` or to `.github/workflows/`. It needs a
   browser, a fixture encode and ~20 s; `/check` must stay fast and hermetic.
 - **Never** remove `ui` from `norecursedirs` in `tests/pytest.ini`, or the
-  `CLIPGEN_UI_CHECK` gate in `test_ui_smoke.py`. They are two independent locks
-  and both are deliberate.
+  `CLIPGEN_UI_CHECK` gates in `test_ui_smoke.py` / `test_ui_journeys.py`. They
+  are two independent locks and both are deliberate.
 - `tests/test_frontend_syntax.py` (the `node --check` gate) is **not** part of this
   suite and *does* belong in `/check`. Don't move it here.
-- This is not an interaction crawl. It loads pages; it does not click through them.
+- This is not an interaction crawl. The journey list is capped at five until a
+  real shipped bug earns a sixth (`agents/skills/test/SKILL.md` has the policy).
   Feel, motion, drag behaviour and real-media playback still need a human.
 
 ## Housekeeping
