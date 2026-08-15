@@ -1011,6 +1011,22 @@ var severityRank = function (raw) {
   return null;
 };
 
+// Convert vertical wheel motion to horizontal scroll on an overflowing strip
+// (card queues, pill rows, chip bars). { passive: false } because it must
+// preventDefault to stop the page scrolling instead.
+var clipgenWheelToHorizontal = function (el) {
+  el.addEventListener(
+    "wheel",
+    function (e) {
+      if (el.scrollWidth > el.clientWidth) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    },
+    { passive: false }
+  );
+};
+
 // ---- API helpers (always check r.ok) ----
 
 // Shared !r.ok handling: reject with the server's {ok:false, error} envelope

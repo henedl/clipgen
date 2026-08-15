@@ -1068,14 +1068,8 @@
       }
     });
 
-    // Convert vertical scroll to horizontal on region chips
     var chipsEl = qs("#regionChips");
-    chipsEl.addEventListener("wheel", function (e) {
-      if (chipsEl.scrollWidth > chipsEl.clientWidth) {
-        e.preventDefault();
-        chipsEl.scrollLeft += e.deltaY;
-      }
-    }, { passive: false });
+    clipgenWheelToHorizontal(chipsEl);
     chipsEl.addEventListener("scroll", updateRegionChipsOverflow);
   }
 

@@ -831,12 +831,7 @@
   function initPillWheelScroll() {
     var el = qs("#participantPills");
     if (!el) return;
-    el.addEventListener("wheel", function (e) {
-      if (el.scrollWidth > el.clientWidth) {
-        e.preventDefault();
-        el.scrollLeft += e.deltaY;
-      }
-    }, { passive: false });
+    clipgenWheelToHorizontal(el);
   }
 
   function startTranscribe(pid, force) {
