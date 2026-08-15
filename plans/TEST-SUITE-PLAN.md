@@ -77,18 +77,18 @@ in `tests/test_studio_api.py` (not the whole 4.5k-line file); journey →
 Update [agents/skills/test/SKILL.md](../agents/skills/test/SKILL.md) so agents
 stop defaulting to "another mocked route test" and "another `in src` pin."
 
-- [ ] Add the taxonomy table above (kinds, where they live, `/check` or not).
-- [ ] Add the source-scan freeze: no new `assert "<code>" in src` unless the
+- [x] Add the taxonomy table above (kinds, where they live, `/check` or not).
+- [x] Add the source-scan freeze: no new `assert "<code>" in src` unless the
       bug is a vanished symbol; prefer `KNOWN_DEAD`-style shrink-only lists.
-- [ ] Add: every new CLI mode / flag / selector still needs a smoke test
+- [x] Add: every new CLI mode / flag / selector still needs a smoke test
       (existing rule). That is the *only* additive-by-default rule.
-- [ ] Add: if the bug was "page booted but the click did nothing," add a
+- [x] Add: if the bug was "page booted but the click did nothing," add a
       journey — only if the journey list is still ≤ 5.
-- [ ] Add: if the bug was "ffmpeg produced garbage / success-with-partial,"
+- [x] Add: if the bug was "ffmpeg produced garbage / success-with-partial,"
       add an I/O test, not another mocked argv assert. Check
       `test_clip_pipeline.py` first; the silent-wrong reel class is already
       locked under mocks.
-- [ ] Add optional local speed tip (not a CI change):
+- [x] Add optional local speed tip (not a CI change):
 
 ```bash
 uv run --extra dev --with pytest-xdist pytest -c tests/pytest.ini -n auto
