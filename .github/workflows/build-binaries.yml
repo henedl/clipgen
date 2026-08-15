@@ -94,6 +94,34 @@ jobs:
           find dist/clipgen.app -path "*faster_whisper/assets/*.onnx" | grep -q . \
             || { echo "::error::bundle lacks the faster_whisper VAD .onnx asset"; exit 1; }
 
+      - name: Verify bundled FFmpeg library licenses (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          # cv2 and PyAV each bundle their own FFmpeg shared libraries, and
+          # THIRD-PARTY-LICENSES states each one's license explicitly. Those
+          # strings come from the wheels' build config, so a wheel bump can
+          # silently change them and leave us shipping a false notice — which
+          # is a distribution problem, not a runtime one, so nothing else here
+          # would catch it. Assert the recorded state instead.
+          #
+          # cv2's GPLv3 is upstream bug opencv/opencv-python#1260 (macOS arm64
+          # skips the GPL-stripping step). When they fix it this check fails,
+          # which is the point: update the notice rather than let it go stale.
+          check_license() {
+            lib="$(find dist/clipgen.app -type f -path "*$1*" -name "libavcodec*.dylib" | head -1)"
+            test -n "$lib" || { echo "::error::no libavcodec found under $1"; exit 1; }
+            got="$(strings -a "$lib" | grep -m1 -o "libavcodec license: .*" || true)"
+            if [ "$got" != "libavcodec license: $2" ]; then
+              echo "::error::$1 FFmpeg license changed: expected '$2', got '${got:-<none>}'."
+              echo "::error::Update the FFmpeg sections of build/THIRD-PARTY-LICENSES to match."
+              exit 1
+            fi
+            echo "$1 → $got"
+          }
+          check_license "cv2/.dylibs" "GPL version 3 or later"
+          check_license "av/.dylibs"  "LGPL version 3 or later"
+
       - name: Verify bundled ffmpeg features (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
@@ -174,9 +202,19 @@ jobs:
              message again.
 
           Nothing else to install: ffmpeg and ffprobe, which clipgen uses to cut
-          and inspect video, are bundled inside the app. They are GPL-licensed
-          free software — see the THIRD-PARTY-LICENSES file next to this one for
-          the license text and where to get their source code.
+          and inspect video, are bundled inside the app.
+
+          LICENSING
+
+          clipgen's own source code is MIT-licensed and lives at
+          https://github.com/henedl/clipgen. This macOS app bundles GPL-3.0-or-later
+          software (the ffmpeg/ffprobe executables, and the FFmpeg libraries that
+          ship inside OpenCV), so the app as distributed is conveyed to you under
+          the GNU General Public License version 3 or later. See the
+          THIRD-PARTY-LICENSES file next to this one for the full notices and for
+          where to get the corresponding source code. You can also print it with:
+
+              /Applications/clipgen.app/Contents/MacOS/clipgen --licenses
 
           Ollama (https://ollama.com/download) is optional — it powers the AI
           summaries and reports. Everything else works without it, and clipgen
@@ -203,7 +241,10 @@ jobs:
           mkdir -p dmg-staging
           cp -R dist/clipgen.app dmg-staging/
           cp dist/INSTALL.txt dmg-staging/
-          cp build/THIRD-PARTY-LICENSES dmg-staging/ 2>/dev/null || true
+          # Hard failure, not `|| true`: the bundle ships GPL/LGPL/MPL software,
+          # so a DMG without this file is a distribution defect, not a cosmetic
+          # one. The Windows copy below has always failed hard; match it.
+          cp build/THIRD-PARTY-LICENSES dmg-staging/
           ln -s /Applications dmg-staging/Applications
           hdiutil create -volname "clipgen" -srcfolder dmg-staging \
             -ov -format UDZO "dist/clipgen-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-macos.dmg"
@@ -225,8 +266,12 @@ jobs:
           Unzip this folder anywhere and run clipgen.exe. Nothing else to
           install: ffmpeg and ffprobe, which clipgen uses to cut and inspect
           video, are bundled (in _internal/bin/). They are GPL-licensed free
-          software - see THIRD-PARTY-LICENSES in this folder for the license
-          text and where to get their source code.
+          software, run as separate programs - see THIRD-PARTY-LICENSES in this
+          folder for the license text and where to get their source code, or
+          run: clipgen.exe --licenses
+
+          clipgen's own source code is MIT-licensed and lives at
+          https://github.com/henedl/clipgen.
 
           Ollama (https://ollama.com/download) is optional - it powers the AI
           summaries and reports. Everything else works without it.

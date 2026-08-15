@@ -16,6 +16,7 @@ Two drifts, both silent from the source tree:
   install — by which time the flat root has quietly grown back.
 """
 
+import itertools
 import os
 import subprocess
 import sys
@@ -176,6 +177,64 @@ def test_gitignore_allowlists_the_fetch_script() -> None:
     fetch script exists locally but never lands in a commit."""
     gitignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "!build/fetch_binaries.py" in gitignore.splitlines()
+
+
+def test_license_notice_is_tracked_and_bundled() -> None:
+    """The bundle ships GPL/LGPL/MPL software, so the notice must travel with it.
+
+    Three ways it could silently go missing, all covered here: dropping out of
+    the ``build/*`` gitignore allowlist, dropping out of the spec's ``datas``
+    (which is what ``--licenses`` reads inside a frozen app), or the file simply
+    not being there. None of these break a build or a test run on their own.
+    """
+    gitignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "!build/THIRD-PARTY-LICENSES" in gitignore.splitlines()
+
+    spec_text = (_ROOT / "build" / "clipgen.spec").read_text(encoding="utf-8")
+    assert 'datas += [("THIRD-PARTY-LICENSES", ".")]' in spec_text, (
+        "the notice must be in the spec's datas or `--licenses` finds nothing "
+        "in a frozen bundle"
+    )
+
+    notice = _ROOT / "build" / "THIRD-PARTY-LICENSES"
+    assert notice.is_file()
+    text = notice.read_text(encoding="utf-8")
+    # The copyleft sections carry actual obligations; a truncated or
+    # accidentally-regenerated notice would still look plausible without them.
+    for heading in (
+        "GPL-3.0-OR-LATER (bundled ffmpeg and ffprobe executables)",
+        "GPL-3.0-OR-LATER (FFmpeg bundled inside opencv-python-headless)",
+        "LGPL-3.0-OR-LATER (FFmpeg bundled inside PyAV, and python-bidi)",
+        "MOZILLA PUBLIC LICENSE 2.0",
+    ):
+        assert heading in text, f"THIRD-PARTY-LICENSES lost its {heading!r} section"
+
+
+def test_license_notice_sections_are_well_formed() -> None:
+    """Every heading sits between exactly one rule above and one below.
+
+    The file grew two malformed rules before anyone looked (a doubled rule, and
+    a heading with no opening rule). Nothing reads the file programmatically
+    today, but the layout is the only thing making a 1700-line notice navigable.
+    """
+    rule = "=" * 79
+    lines = (
+        (_ROOT / "build" / "THIRD-PARTY-LICENSES")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    rules = [i for i, line in enumerate(lines) if line == rule]
+    assert rules, "no section rules found"
+
+    doubled = [i for a, i in itertools.pairwise(rules) if i == a + 1]
+    assert not doubled, f"consecutive section rules at lines {[i + 1 for i in doubled]}"
+
+    for i in rules:
+        # A rule either opens a section (heading + closing rule follow) or
+        # closes one (heading + opening rule precede). Anything else is a stray.
+        opens = i + 2 < len(lines) and lines[i + 2] == rule
+        closes = i >= 2 and lines[i - 2] == rule
+        assert opens or closes, f"stray section rule at line {i + 1}"
 
 
 def test_launcher_bootstraps_from_a_foreign_cwd() -> None:

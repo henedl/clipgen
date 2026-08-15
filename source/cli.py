@@ -40,6 +40,45 @@ class CliModeArgs(NamedTuple):
 # ---- Argument parsing ----
 
 
+class _LicensesAction(argparse.Action):
+    """Print the bundled third-party license notice and exit.
+
+    Not `action="version"`: that action takes a *static* string, so the notice
+    would be read on every single run just to build the parser. This one reads
+    the ~78 KB file only when the flag is actually passed.
+    """
+
+    def __init__(
+        self,
+        option_strings: list[str],
+        dest: str = argparse.SUPPRESS,
+        default: str = argparse.SUPPRESS,
+        help: str | None = None,
+    ) -> None:
+        super().__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            nargs=0,
+            help=help,
+        )
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        text = utils.get_licenses_text()
+        if text is None:
+            parser.exit(1, "THIRD-PARTY-LICENSES is missing from this installation.\n")
+        # Bare print, not utils.standard_print(): that one is verbosity-gated and
+        # Rich-formatted, which would re-wrap license text that must be verbatim.
+        print(text)
+        parser.exit()
+
+
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments for non-interactive mode.
 
@@ -725,6 +764,11 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         action="version",
         version=utils.get_version(),
         help="Print the clipgen version and exit",
+    )
+    run_opts.add_argument(
+        "--licenses",
+        action=_LicensesAction,
+        help="Print third-party license notices for the bundled software and exit",
     )
 
     titlecards_grp = parser.add_argument_group("title cards (choose at most one)")

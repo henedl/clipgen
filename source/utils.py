@@ -876,6 +876,29 @@ def get_version() -> str:
     return "0.0.0+unknown"
 
 
+def get_licenses_text() -> str | None:
+    """Return the bundled `THIRD-PARTY-LICENSES` notice, or None if absent.
+
+    Same `build/`-vs-bundle-root split as `get_version()`: `clipgen.spec` copies
+    the file to the bundle root, while a source checkout keeps it in `build/`.
+    Returns None rather than raising — `--licenses` reports that itself, and no
+    other caller should hard-fail on a stripped-down installation.
+
+    Deliberately not cached: this is a ~78 KB read on a path that exits
+    immediately afterwards, so caching would only pin the string in memory.
+    """
+    root = get_bundled_assets_root()
+    for candidate in (
+        root / "THIRD-PARTY-LICENSES",
+        root / "build" / "THIRD-PARTY-LICENSES",
+    ):
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return None
+
+
 def terminate_subprocess(proc: subprocess.Popen, timeout: int = 5) -> None:
     """Terminate a subprocess, escalating to kill if it ignores SIGTERM."""
     proc.terminate()

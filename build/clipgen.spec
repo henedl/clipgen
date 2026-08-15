@@ -52,6 +52,10 @@ datas += _fw_datas
 datas += [("../assets", "assets")]
 datas += [("VERSION", ".")]
 datas += [("../CHANGELOG.md", ".")]
+# Attribution for the bundled GPL/LGPL/MPL components is a distribution
+# obligation, so the notice ships *inside* the bundle where `--licenses` can
+# read it — not only beside it in the DMG/zip, where a user can delete it.
+datas += [("THIRD-PARTY-LICENSES", ".")]
 
 
 excludes = [

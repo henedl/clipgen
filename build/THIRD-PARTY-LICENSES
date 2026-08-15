@@ -16,8 +16,10 @@ icecream                    2.1.10     MIT
 rich                        14.3.3     MIT
 faster-whisper              1.2.1      MIT
 CTranslate2                 4.7.1      MIT
+pyobjc-core                 12.2.1     MIT (macOS only)
+pyobjc-framework-Cocoa      12.2.1     MIT (macOS only)
 opencv-python-headless      4.13.0     MIT (bindings) + Apache 2.0 (OpenCV)
-  FFmpeg (bundled in cv2)     7.1        LGPL-2.1-or-later
+  FFmpeg (bundled in cv2)     7.1.1      GPL-3.0-or-later (macOS; LGPL on Windows)
 Flask                       3.1.3      BSD-3-Clause
 Werkzeug                    3.1.6      BSD-3-Clause
 Jinja2                      3.1.6      BSD-3-Clause
@@ -25,12 +27,18 @@ MarkupSafe                  3.0.3      BSD-3-Clause
 PyTorch                     2.11.0     BSD-3-Clause
 NumPy                       2.4.3      BSD-3-Clause
 SciPy                       1.17.1     BSD-3-Clause
+PyAV (av)                   17.0.0     BSD-3-Clause
+  FFmpeg (bundled in av)      8.0        LGPL-3.0-or-later
+pywebview                   6.2.1      BSD-3-Clause
 ImageHash                   4.3.2      BSD-2-Clause
 scikit-image                0.26.0     BSD-3-Clause (+ BSD-2-Clause, MIT)
 Pillow                      12.1.1     HPND (MIT-CMU)
 EasyOCR                     1.7.2      Apache-2.0
 google-auth                 2.49.1     Apache-2.0
 google-auth-oauthlib        1.3.0      Apache-2.0
+python-bidi                 0.6.7      LGPL-3.0-or-later
+certifi                     2026.2.25  MPL-2.0
+tqdm                        4.67.3     MPL-2.0 AND MIT
 
 
 ===============================================================================
@@ -39,7 +47,8 @@ MIT LICENSE
 
 The following components are licensed under the MIT License:
   gspread, openpyxl, icecream, rich, faster-whisper, CTranslate2,
-  opencv-python-headless (Python bindings)
+  opencv-python-headless (Python bindings), pyobjc-core,
+  pyobjc-framework-Cocoa
 
 ---
 
@@ -202,13 +211,41 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+---
+
+pyobjc-core, pyobjc-framework-Cocoa
+Copyright (c) Ronald Oussoren and contributors
+
+Bundled in the macOS build only. clipgen reaches AppKit through these to hide
+the native title bar and re-center the window's traffic lights (see
+source/desktop_chrome.py).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 ===============================================================================
 BSD-3-CLAUSE LICENSE
 ===============================================================================
 
 The following components are licensed under the BSD 3-Clause License:
-  Flask, Werkzeug, Jinja2, MarkupSafe, PyTorch, NumPy, SciPy, scikit-image
+  Flask, Werkzeug, Jinja2, MarkupSafe, PyTorch, NumPy, SciPy, scikit-image,
+  PyAV, pywebview
 
 ---
 
@@ -502,6 +539,75 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+---
+
+PyAV (av)
+Copyright (c) 2017 Mike Boers and PyAV contributors
+License: BSD-3-Clause
+
+The PyAV Python bindings are BSD-3-Clause. The wheel additionally bundles its
+own FFmpeg shared libraries, which are LGPL-3.0-or-later — see the
+LGPL-3.0-OR-LATER section below. These are distinct from both the cv2-bundled
+FFmpeg and the standalone ffmpeg/ffprobe executables.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+pywebview
+Copyright (c) 2014-2025 Roman Sirokov and contributors
+License: BSD-3-Clause
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
 
 ===============================================================================
 BSD-2-CLAUSE LICENSE
@@ -770,35 +876,93 @@ Copyright notices:
 
 
 ===============================================================================
-LGPL-2.1-OR-LATER (FFmpeg and related libraries)
+LGPL-3.0-OR-LATER (FFmpeg bundled inside PyAV, and python-bidi)
 ===============================================================================
 
-The opencv-python-headless package bundles FFmpeg shared libraries and several
-codec/protocol libraries as dynamic libraries inside cv2/.dylibs/.  These are
-built by the opencv-python project as LGPL (without --enable-gpl), so the
-FFmpeg libraries remain LGPL-2.1-or-later.
+PyAV (the `av` package) bundles its own FFmpeg shared libraries inside
+av/.dylibs/ (av.libs/ on Linux).  These are built without --enable-gpl:
+avcodec_license() reports "LGPL version 3 or later", so they are
+LGPL-3.0-or-later.
 
 The bundled FFmpeg libraries are:
   libavcodec, libavformat, libavfilter, libavutil, libavdevice,
-  libswresample, libswscale, libpostproc
+  libswresample, libswscale
 
-Additional codec and protocol libraries bundled under LGPL-2.1-or-later:
-  libmp3lame, libbluray, libgnutls, libnettle, libhogweed,
-  libsoxr, libtasn1, libopencore-amrnb, libopencore-amrwb
+libx264 and libx265 are also present in that directory as transitive dynamic
+dependencies, but they are not compiled into FFmpeg -- were they enabled, the
+build would require --enable-gpl and avcodec_license() would report GPL.
 
-clipgen does not call cv2.VideoCapture or any other FFmpeg-backed cv2 function.
-Video decoding uses the bundled ffmpeg executable via subprocess (see the
-GPL-3.0-OR-LATER section below).  The FFmpeg shared libraries above are bundled
-solely because cv2.abi3.so links against them at load time.
+clipgen does not import `av` directly for media work.  faster-whisper does:
+faster_whisper/audio.py decodes the audio stream of a recording through PyAV
+before handing samples to Whisper.  These libraries are dynamically linked and
+unmodified, so the LGPL is satisfied by this notice plus the source pointers
+below; recipients may replace the libraries with their own build.
+
+python-bidi (0.6.7), a transitive dependency of EasyOCR used for bidirectional
+text reordering, is likewise LGPL and dynamically loaded in-process.
+
+Source code for FFmpeg is available at: https://ffmpeg.org/download.html
+Source code for the PyAV build (including its FFmpeg build configuration) is
+available at: https://github.com/PyAV-Org/PyAV
+Source code for python-bidi is available at:
+  https://github.com/MeirKriheli/python-bidi
+
+The full text of the GNU Lesser General Public License version 3 is the GNU
+General Public License version 3 (reproduced in the GPL-3.0-OR-LATER section
+below) as supplemented by the additional permissions in the LGPL v3, available
+at: https://www.gnu.org/licenses/lgpl-3.0.html
+
+
+===============================================================================
+GPL-3.0-OR-LATER (FFmpeg bundled inside opencv-python-headless)
+===============================================================================
+
+IMPORTANT -- this supersedes an earlier claim in this file that the FFmpeg
+libraries bundled with opencv-python-headless are LGPL-2.1.  They are not, on
+macOS.  Verified against the exact pinned wheel (opencv-python-headless
+4.13.0.92), cv2/.dylibs/libavcodec.61.19.101.dylib reports:
+
+  libavcodec license: GPL version 3 or later
+  configuration: --enable-gpl --enable-version3 --enable-libx264 --enable-libx265
+
+The upstream project confirms this is an unintended side effect of building
+against Homebrew's FFmpeg: opencv-python's macOS arm64 workflow never sets
+CONFIG_PATH, so the GPL-stripping step in its travis_config.sh does not run.
+See https://github.com/opencv/opencv-python/issues/1260 (acknowledged upstream
+2026-08-14; note that the wheel's own LICENSE-3RD-PARTY.txt and README still
+misstate the license as LGPL-2.1).
+
+Scope: this affects the macOS build only.  opencv-python's Linux wheels
+configure FFmpeg without --enable-gpl, and the Windows build uses a separately
+compiled LGPL opencv_videoio_ffmpeg DLL.
+
+The affected libraries are:
+  libavcodec, libavformat, libavutil, libavdevice, libswscale,
+  and the codec libraries they link: libx264, libx265, libdav1d,
+  librav1e, libSvtAv1Enc
+
+clipgen does not call cv2.VideoCapture or any other FFmpeg-backed cv2
+function -- video decoding uses the bundled ffmpeg executable via subprocess
+(see the next section).  The libraries are present only because cv2.abi3.so
+lists them as load-time dependencies; they cannot be removed without rebuilding
+OpenCV with -DWITH_FFMPEG=OFF.  Note that non-use does not change the license:
+the GPL obligation follows from linking and distribution, not from invocation.
+
+Consequence: because these GPL-3.0-or-later libraries are loaded into the
+clipgen process, the macOS binary distribution as a whole is conveyed under the
+GNU General Public License version 3 or later.  clipgen's own source code
+remains MIT-licensed (MIT is GPL-compatible; no relicensing of clipgen's files
+is required or implied), and the source is published at
+https://github.com/henedl/clipgen.
 
 Source code for FFmpeg is available at: https://ffmpeg.org/download.html
 Source code for the opencv-python build (including FFmpeg build configuration)
 is available at: https://github.com/opencv/opencv-python
+Source code for x264 is available at: https://www.videolan.org/developers/x264.html
+Source code for x265 is available at: https://bitbucket.org/multicoreware/x265_git
 
-The full text of the GNU Lesser General Public License version 2.1 is
-reproduced in the opencv-python-headless LICENSE-3RD-PARTY.txt file,
-which is included in this distribution at cv2/LICENSE-3RD-PARTY.txt.
-
+The full text of the GNU General Public License version 3 is reproduced in the
+next section.
 
 
 ===============================================================================
@@ -810,7 +974,10 @@ clipgen ships standalone ffmpeg and ffprobe executables under <bundle>/bin/
 Windows folder). They are full-featured static builds compiled with
 --enable-gpl and --enable-version3, which makes the executables
 GPL-3.0-or-later. clipgen invokes them strictly as separate subprocesses
-("mere aggregation" in GPL terms); clipgen itself remains MIT-licensed.
+("mere aggregation" in GPL terms), so on their own they would not place the
+rest of the distribution under the GPL. (On macOS the opencv-bundled FFmpeg
+libraries do, independently -- see the previous section.) clipgen's own source
+code remains MIT-licensed in all cases.
 
 Exact builds (pinned by SHA256 in build/fetch_binaries.py, which also records
 this provenance):
@@ -828,10 +995,10 @@ https://git.ffmpeg.org/ffmpeg.git. Sources and build configuration for the
 third-party libraries compiled into these static builds are published by each
 provider at the URLs above.
 
-These executables are distinct from the LGPL FFmpeg *shared libraries* that
-arrive inside opencv-python-headless (previous section): those are linked into
-cv2 and remain LGPL-2.1-or-later; the executables here are separate GPL
-programs.
+These executables are distinct from the FFmpeg *shared libraries* that arrive
+inside opencv-python-headless and PyAV (two sections back): those are linked
+into cv2.abi3.so and av respectively and loaded in-process. The executables
+here are separate GPL programs, pinned and verified by clipgen's own build.
 
 The full text of the GNU General Public License version 3 follows.
 
@@ -1512,6 +1679,31 @@ Public License instead of this License.  But first, please read
 
 
 ===============================================================================
+MOZILLA PUBLIC LICENSE 2.0
+===============================================================================
+
+The following components are licensed under the Mozilla Public License 2.0:
+
+  certifi   (2026.2.25)  MPL-2.0
+              The Mozilla CA certificate bundle, pulled in by requests via
+              huggingface-hub; used when downloading Whisper models.
+  tqdm      (4.67.3)     MPL-2.0 AND MIT
+              Progress bars, pulled in by huggingface-hub and EasyOCR.
+
+MPL-2.0 is a file-level copyleft: it attaches to the covered files themselves,
+not to the larger work, and it explicitly permits distribution of the covered
+software as part of a larger work under other terms (MPL-2.0 section 3.3).
+Section 3.2 requires that the source form of the covered files be made
+available to recipients; both projects are unmodified here, so the upstream
+sources apply:
+
+  https://github.com/certifi/python-certifi
+  https://github.com/tqdm/tqdm
+
+The full text of the Mozilla Public License 2.0 is available at:
+https://mozilla.org/MPL/2.0/
+
+
 ===============================================================================
 SIL OPEN FONT LICENSE 1.1 (bundled web fonts)
 ===============================================================================
@@ -1529,6 +1721,8 @@ https://openfontlicense.org and in each upstream project:
   https://github.com/rsms/inter
   https://github.com/JetBrains/JetBrainsMono
 
+
+===============================================================================
 BUILD TOOL NOTICE
 ===============================================================================
 
