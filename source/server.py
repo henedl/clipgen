@@ -91,10 +91,11 @@ import video
 import viewer
 from server_utils import (
     MediaCache,
+    clip_media_response,
     err,
     json_endpoint,
+    mtime_or_zero,
     ok,
-    parse_clip_window,
     parse_number_arg,
 )
 from datetime import UTC
@@ -549,12 +550,8 @@ def api_thumbnail(participant: str, start_seconds: str) -> FlaskResponse:
         video_path = Path(mapped[0])
         cut_sec = int(mapped[1])
 
-    try:
-        mtime = video_path.stat().st_mtime
-    except OSError:
-        mtime = 0.0
     # Include mtime so replacing a source file on disk invalidates stale thumbnails.
-    cache_key = (str(video_path), cut_sec, mtime)
+    cache_key = (str(video_path), cut_sec, mtime_or_zero(video_path))
     jpeg_bytes = _thumbnail_cache.get_or_compute(
         cache_key,
         lambda: video.extract_thumbnail_bytes(
@@ -594,6 +591,17 @@ def _resolve_clip_media_source(
     return sources[0], max(0.0, start_sec)
 
 
+def _resolve_clip_media_paths(
+    participant: str, start_sec: float, duration: float
+) -> tuple[str, float, float] | None:
+    """clip_media_response-shaped adapter over :func:`_resolve_clip_media_source`."""
+    resolved = _resolve_clip_media_source(participant, start_sec)
+    if resolved is None:
+        return None
+    video_path, local_start = resolved
+    return str(video_path), local_start, duration
+
+
 @studio_bp.route("/api/sprite/<participant>")
 def api_sprite(participant: str) -> FlaskResponse:
     """Tiled JPEG sprite sheet of a clip for the opt-in hover card scrubber.
@@ -603,43 +611,17 @@ def api_sprite(participant: str) -> FlaskResponse:
     """
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
-    window = parse_clip_window()
-    if window is None:
-        return err("Invalid clip range")
-    start_sec, duration = window
-
-    resolved = _resolve_clip_media_source(participant, start_sec)
-    if resolved is None:
-        return err("Source video not found", 404)
-    video_path, local_start = resolved
     cols = config.STUDIO_SCRUBBER_SPRITE_COLS
     rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
-
-    try:
-        mtime = video_path.stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    cache_key = (
-        str(video_path),
-        round(local_start, 3),
-        round(duration, 3),
-        cols,
-        rows,
-        mtime,
-    )
-    sprite_bytes = _sprite_cache.get_or_compute(
-        cache_key,
-        lambda: video.extract_sprite_sheet_bytes(
-            str(video_path), local_start, duration, cols, rows
+    return clip_media_response(
+        cache=_sprite_cache,
+        resolve=lambda start, dur: _resolve_clip_media_paths(participant, start, dur),
+        produce=lambda path, local_start, dur: video.extract_sprite_sheet_bytes(
+            path, local_start, dur, cols, rows
         ),
-    )
-    if sprite_bytes is None:
-        return err("Sprite extraction failed", 404)
-
-    return Response(
-        sprite_bytes,
         mimetype="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        kind_label="Sprite",
+        key_extras=(cols, rows),
     )
 
 
@@ -653,34 +635,12 @@ def api_clip_audio(participant: str) -> FlaskResponse:
     """
     if _sheet_context is None:
         return err("No spreadsheet loaded", 404)
-    window = parse_clip_window()
-    if window is None:
-        return err("Invalid clip range")
-    start_sec, duration = window
-
-    resolved = _resolve_clip_media_source(participant, start_sec)
-    if resolved is None:
-        return err("Source video not found", 404)
-    video_path, local_start = resolved
-
-    try:
-        mtime = video_path.stat().st_mtime
-    except OSError:
-        mtime = 0.0
-    cache_key = (str(video_path), round(local_start, 3), round(duration, 3), mtime)
-    wav_bytes = _audio_cache.get_or_compute(
-        cache_key,
-        lambda: video.extract_audio_segment_bytes(
-            str(video_path), local_start, duration
-        ),
-    )
-    if wav_bytes is None:
-        return err("Audio extraction failed", 404)
-
-    return Response(
-        wav_bytes,
+    return clip_media_response(
+        cache=_audio_cache,
+        resolve=lambda start, dur: _resolve_clip_media_paths(participant, start, dur),
+        produce=video.extract_audio_segment_bytes,
         mimetype="audio/wav",
-        headers={"Cache-Control": "public, max-age=86400"},
+        kind_label="Audio",
     )
 
 

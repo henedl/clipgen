@@ -16,8 +16,9 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
   (Transcripts + Screenspace).
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
-- :class:`MediaCache` + :func:`parse_clip_window` back the hover-scrubber media
-  routes (sprite sheets / audio snippets).
+- :class:`MediaCache` + :func:`parse_clip_window` + :func:`clip_media_response`
+  + :func:`mtime_or_zero` back the hover-scrubber media routes (sprite sheets /
+  audio snippets).
 
 Deliberately tiny and Flask-only (no ``config``/``utils`` imports) so it stays
 import-clean: ``utils`` is Flask-free on purpose and imported by non-server
@@ -200,6 +201,14 @@ class MediaCache:
             self._inflight.clear()
 
 
+def mtime_or_zero(path: str | Path) -> float:
+    """A file's ``st_mtime`` for cache keys, or 0.0 when it can't be stat'd."""
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def parse_clip_window() -> tuple[float, float] | None:
     """Parse + validate the ``?start=&end=`` seconds shared by the scrubber
     media routes. Returns ``(start_seconds, duration_seconds)`` or ``None`` when
@@ -213,6 +222,54 @@ def parse_clip_window() -> tuple[float, float] | None:
     if duration <= 0:
         return None
     return start_sec, duration
+
+
+def clip_media_response(
+    *,
+    cache: MediaCache,
+    resolve: Callable[[float, float], tuple[str, float, float] | None],
+    produce: Callable[[str, float, float], bytes | None],
+    mimetype: str,
+    kind_label: str,
+    key_extras: tuple[Any, ...] = (),
+    invalid_message: str = "Invalid clip range",
+):
+    """Shared guts of the hover-scrubber sprite / audio routes.
+
+    Parses the ``?start=&end=`` window, maps it through *resolve* →
+    ``(path, local_start, duration)`` (None → 404), then serves *produce*'s
+    bytes from *cache* keyed on
+    ``(path, start, duration, *key_extras, mtime)`` — the mtime so a replaced
+    source file invalidates stale media. *kind_label* names the 404 when
+    extraction fails (``"Sprite extraction failed"``).
+    """
+    window = parse_clip_window()
+    if window is None:
+        return err(invalid_message)
+    start_sec, duration = window
+
+    resolved = resolve(start_sec, duration)
+    if resolved is None:
+        return err("Source video not found", 404)
+    path, local_start, duration = resolved
+
+    key = (
+        path,
+        round(local_start, 3),
+        round(duration, 3),
+        *key_extras,
+        mtime_or_zero(path),
+    )
+    media_bytes = cache.get_or_compute(
+        key, lambda: produce(path, local_start, duration)
+    )
+    if media_bytes is None:
+        return err(f"{kind_label} extraction failed", 404)
+    return Response(
+        media_bytes,
+        mimetype=mimetype,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 def make_debounced_persist(

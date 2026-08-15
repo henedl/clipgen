@@ -52,7 +52,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, request, send_file
+from flask import Blueprint, request, send_file
 
 import config
 import files
@@ -62,11 +62,11 @@ import utils
 import video
 from server_utils import (
     MediaCache,
+    clip_media_response,
     err,
     err_no_video,
     find_by_id,
     ok,
-    parse_clip_window,
     remove_by_id,
 )
 import itertools
@@ -880,64 +880,6 @@ def _resolve_scrub_source(
     return part["path"], local_start, clamped
 
 
-def _scrub_media_response(participant: str, cache: MediaCache, kind: str) -> Any:
-    """Shared guts of the sprite / audio scrub routes (parse → resolve → cache)."""
-    window = parse_clip_window()
-    if window is None:
-        return err("Invalid time range")
-    start_sec, duration = window
-    if kind == "audio":
-        duration = min(duration, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
-
-    resolved = _resolve_scrub_source(participant, start_sec, duration)
-    if resolved is None:
-        return err("Source video not found", 404)
-    video_path, local_start, duration = resolved
-
-    try:
-        mtime = os.stat(video_path).st_mtime
-    except OSError:
-        mtime = 0.0
-
-    if kind == "sprite":
-        cols = config.STUDIO_SCRUBBER_SPRITE_COLS
-        rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
-        cache_key: tuple = (
-            video_path,
-            round(local_start, 3),
-            round(duration, 3),
-            cols,
-            rows,
-            mtime,
-        )
-        media_bytes = cache.get_or_compute(
-            cache_key,
-            # seek_frames: per-frame fast seeks keep the cost O(frames), not
-            # O(span) — timeline tiles can cover minutes of source video.
-            lambda: video.extract_sprite_sheet_bytes(
-                video_path, local_start, duration, cols, rows, seek_frames=True
-            ),
-        )
-        mimetype = "image/jpeg"
-    else:
-        cache_key = (video_path, round(local_start, 3), round(duration, 3), mtime)
-        media_bytes = cache.get_or_compute(
-            cache_key,
-            lambda: video.extract_audio_segment_bytes(
-                video_path, local_start, duration
-            ),
-        )
-        mimetype = "audio/wav"
-
-    if media_bytes is None:
-        return err(f"{kind.capitalize()} extraction failed", 404)
-    return Response(
-        media_bytes,
-        mimetype=mimetype,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
-
-
 @composer_bp.route("/api/sprite/<participant>")
 def api_sprite(participant: str) -> Any:
     """Tiled JPEG sprite sheet for one thumbnail-strip tile.
@@ -946,7 +888,21 @@ def api_sprite(participant: str) -> Any:
     slot-seconds ladder), not per marker span, so zooming in refines the strip
     with additional frames instead of stretching the same ones.
     """
-    return _scrub_media_response(participant, _sprite_cache, "sprite")
+    cols = config.STUDIO_SCRUBBER_SPRITE_COLS
+    rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
+    return clip_media_response(
+        cache=_sprite_cache,
+        resolve=lambda start, dur: _resolve_scrub_source(participant, start, dur),
+        # seek_frames: per-frame fast seeks keep the cost O(frames), not
+        # O(span) — timeline tiles can cover minutes of source video.
+        produce=lambda path, local_start, dur: video.extract_sprite_sheet_bytes(
+            path, local_start, dur, cols, rows, seek_frames=True
+        ),
+        mimetype="image/jpeg",
+        kind_label="Sprite",
+        key_extras=(cols, rows),
+        invalid_message="Invalid time range",
+    )
 
 
 @composer_bp.route("/api/audio/<participant>")
@@ -956,7 +912,16 @@ def api_audio(participant: str) -> Any:
     Capped at ``config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS`` — markers can span
     minutes, and the WAV is decoded whole in the browser's WebAudio context.
     """
-    return _scrub_media_response(participant, _audio_cache, "audio")
+    return clip_media_response(
+        cache=_audio_cache,
+        resolve=lambda start, dur: _resolve_scrub_source(
+            participant, start, min(dur, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
+        ),
+        produce=video.extract_audio_segment_bytes,
+        mimetype="audio/wav",
+        kind_label="Audio",
+        invalid_message="Invalid time range",
+    )
 
 
 @composer_bp.route("/api/audio-track/<participant>/<int:idx>")
