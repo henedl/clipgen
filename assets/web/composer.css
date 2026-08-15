@@ -21,10 +21,6 @@ html.theme-light {
   --co-timeline-grid: rgba(0, 0, 0, 0.12);
 }
 
-.hidden {
-  display: none !important;
-}
-
 html {
   /* Root rem anchor — must stay a concrete px so rem-based tokens (--text-*,
      --space-*) resolve identically to the other frontends (see workflows.css). */

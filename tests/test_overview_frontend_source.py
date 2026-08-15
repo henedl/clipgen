@@ -100,12 +100,12 @@ def test_metadata_screenspace_clustering():
 
 
 def test_hidden_utility_class_defined():
-    """overview.css must define the generic `.hidden` utility (CSS toggle
-    completeness, agents/CODE-REVIEW.md): the moved Convergence/Metadata
-    satellites toggle `.hidden` on their status banners and controls, and on
-    Studio that rule came from studio.css — which this page doesn't load.
-    Without it the "analysis running"/"data changed" banners render always."""
-    css = (_WEB / "overview.css").read_text(encoding="utf-8")
+    """tokens.css must define the generic `.hidden` utility (CSS toggle
+    completeness, agents/CODE-REVIEW.md): the Convergence/Metadata satellites
+    toggle `.hidden` on their status banners and controls, and every app page
+    (this one included) gets the rule from tokens.css. Without it the
+    "analysis running"/"data changed" banners render always."""
+    css = (_WEB / "tokens.css").read_text(encoding="utf-8")
     assert re.search(r"^\.hidden \{\n  display: none !important;", css, re.MULTILINE)
 
 

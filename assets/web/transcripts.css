@@ -36,10 +36,6 @@ body {
 
 /* Utility */
 
-.hidden {
-  display: none !important;
-}
-
 /* Header — subheader (status / corrections / search, right-aligned) +
    participant pills row. The chromed panel treatment was dropped so the
    subheader's sticky glass background can read against the topnav like the
