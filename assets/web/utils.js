@@ -2130,6 +2130,23 @@ var setStoredUIStateField = function (page, field, value) {
   } catch (_) {}
 };
 
+// Read/write one key inside a map-valued stored field (videoTimeByParticipant,
+// tabByParticipant, ...) without every caller repeating the is-it-an-object
+// defensive dance.
+var getStoredUIMapEntry = function (page, field, key, fallback) {
+  var map = getStoredUIState(page)[field];
+  return map && typeof map === "object" && Object.prototype.hasOwnProperty.call(map, key)
+    ? map[key]
+    : fallback;
+};
+
+var setStoredUIMapEntry = function (page, field, key, value) {
+  var st = getStoredUIState(page);
+  var map = st[field] && typeof st[field] === "object" ? st[field] : {};
+  map[key] = value;
+  setStoredUIStateField(page, field, map);
+};
+
 // ---- Canvas helpers (timeline overlays) ----
 
 // Draw stacked per-series amplitude bands inside a canvas rect.

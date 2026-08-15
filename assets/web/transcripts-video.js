@@ -1161,11 +1161,7 @@
 
   function persistVideoTime(t) {
     if (!state.selectedParticipant || !isFinite(t)) return;
-    var stored = getStoredUIState("transcripts");
-    var map = (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant === "object")
-      ? stored.videoTimeByParticipant : {};
-    map[state.selectedParticipant] = t;
-    setStoredUIStateField("transcripts", "videoTimeByParticipant", map);
+    setStoredUIMapEntry("transcripts", "videoTimeByParticipant", state.selectedParticipant, t);
   }
 
   // Move the .active highlight to *newIndex* and optionally seek the video to its

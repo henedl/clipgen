@@ -1583,13 +1583,8 @@
         var sec = this.closest(".ss-info-section");
         if (!sec) return;
         var n = sec.getAttribute("data-section");
-        var st = getStoredUIState("screenspace");
-        var s = (st.infoSectionsCollapsed && typeof st.infoSectionsCollapsed === "object")
-          ? st.infoSectionsCollapsed
-          : {};
-        var newCollapsed = !s[n];
-        s[n] = newCollapsed;
-        setStoredUIStateField("screenspace", "infoSectionsCollapsed", s);
+        var newCollapsed = !getStoredUIMapEntry("screenspace", "infoSectionsCollapsed", n, false);
+        setStoredUIMapEntry("screenspace", "infoSectionsCollapsed", n, newCollapsed);
         applyInfoSectionCollapsed(sec, newCollapsed);
       });
     }
@@ -1804,11 +1799,7 @@
 
   function persistVideoTime(t) {
     if (!state.selectedParticipant || !isFinite(t)) return;
-    var stored = getStoredUIState("screenspace");
-    var map = (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant === "object")
-      ? stored.videoTimeByParticipant : {};
-    map[state.selectedParticipant] = t;
-    setStoredUIStateField("screenspace", "videoTimeByParticipant", map);
+    setStoredUIMapEntry("screenspace", "videoTimeByParticipant", state.selectedParticipant, t);
   }
 
   function playVideo() {
@@ -5058,11 +5049,8 @@
     qs("#participantSelect").addEventListener("change", function () {
       var pid = this.value;
       if (pid) {
-        var stored = getStoredUIState("screenspace");
-        var ts;
-        if (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant[pid] === "number") {
-          ts = stored.videoTimeByParticipant[pid];
-        }
+        var ts = getStoredUIMapEntry("screenspace", "videoTimeByParticipant", pid);
+        if (typeof ts !== "number") ts = undefined;
         selectParticipant(pid, ts);
         state.runParticipants = [pid];
         renderRunParticipantPicker();
@@ -5109,10 +5097,8 @@
               }
             }
           }
-          var initialTs;
-          if (stored.videoTimeByParticipant && typeof stored.videoTimeByParticipant[pickId] === "number") {
-            initialTs = stored.videoTimeByParticipant[pickId];
-          }
+          var initialTs = getStoredUIMapEntry("screenspace", "videoTimeByParticipant", pickId);
+          if (typeof initialTs !== "number") initialTs = undefined;
           selectParticipant(pickId, initialTs);
           state.runParticipants = [pickId];
           if (stored.rightPaneTab === "queue" || stored.rightPaneTab === "results") {
