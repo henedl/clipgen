@@ -57,6 +57,7 @@ WORKSHEET_PRIORITY: list[str] = [  # tried in order before falling back to first
 DEBUGGING: bool = (
     False  # enables icecream output, skips ffmpeg execution, returns stub transcripts
 )
+PROFILING: bool = False  # opt-in perf instrumentation (--profile); never changes behavior, only measures
 QUIET: int = 0
 STANDARD: int = 1
 VERBOSE: int = 2

@@ -38,6 +38,9 @@ from typing import Any
 
 from flask import Response, jsonify, request
 
+import config
+import profiling
+
 
 def ok(**fields: Any):
     """Success envelope: ``jsonify({"ok": True, **fields})``."""
@@ -169,6 +172,8 @@ class MediaCache:
             cached = self._store.get(key)
             if cached is not None:
                 self._store.move_to_end(key)
+                if config.PROFILING:
+                    profiling.count("media_cache.hit")
                 return cached
             keylock = self._inflight.get(key)
             if keylock is None:
@@ -181,9 +186,14 @@ class MediaCache:
                 cached = self._store.get(key)
                 if cached is not None:
                     self._store.move_to_end(key)
+                    if config.PROFILING:
+                        profiling.count("media_cache.hit")
                     return cached
 
-            value = compute()  # expensive; no main lock held
+            if config.PROFILING:
+                profiling.count("media_cache.miss")
+            with profiling.span("media_cache.compute"):
+                value = compute()  # expensive; no main lock held
 
             with self._lock:
                 if value is not None:

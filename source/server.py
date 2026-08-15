@@ -72,6 +72,7 @@ from flask import (
     Blueprint,
     Flask,
     Response,
+    g,
     jsonify,
     redirect,
     request,
@@ -85,6 +86,7 @@ import config
 import files
 import spreadsheet
 import pipeline
+import profiling
 import titlecards
 import utils
 import video
@@ -3359,6 +3361,25 @@ def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
     )
 
 
+def _profile_request_start() -> None:
+    """before_request hook: stamp the start time when profiling is on."""
+    if config.PROFILING:
+        g._prof_t0 = time.perf_counter()
+
+
+def _profile_request_end(response):
+    """after_request hook: accumulate per-route wall time under ``route <rule>``.
+
+    Labeling by ``url_rule.rule`` (not path) bounds label cardinality to the
+    app's ~200 rules and aggregates poll endpoints instead of spamming one
+    line per hit — the totals view is the useful one for polls anyway.
+    """
+    t0 = getattr(g, "_prof_t0", None)
+    if t0 is not None and request.url_rule is not None:
+        profiling.add(f"route {request.url_rule.rule}", time.perf_counter() - t0)
+    return response
+
+
 def _set_cache_headers(response):
     """after_request hook: apply content-type-aware caching to static assets.
 
@@ -3488,10 +3509,26 @@ def build_combined_app(
     combined.register_blueprint(overview.overview_bp, url_prefix="/overview")
 
     combined.after_request(_set_cache_headers)
+    combined.before_request(_profile_request_start)
+    combined.after_request(_profile_request_end)
 
     @combined.route("/")
     def root():
         return redirect(f"/{default_page}/")
+
+    @combined.route("/api/profile")
+    def api_profile() -> FlaskResponse:
+        """Profiling snapshot for agents (``?reset=1`` brackets a window).
+
+        404 when profiling is off so a plain launch exposes nothing — the
+        endpoint mirrors the ``--profile`` opt-in rather than adding its own.
+        """
+        if not config.PROFILING:
+            return err("profiling is off (launch with --profile)", 404)
+        snap = profiling.snapshot()
+        if request.args.get("reset") == "1":
+            profiling.reset()
+        return ok(profile=snap)
 
     @combined.route("/api/status")
     def status() -> Response:

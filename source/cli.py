@@ -19,6 +19,7 @@ from typing import Any, NamedTuple
 import app
 import config
 import files
+import profiling
 import spreadsheet
 import transcripts
 import utils
@@ -752,6 +753,12 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--verbose",
         action="store_true",
         help="Increase verbosity (-v = verbose output; default is quiet in CLI, standard in interactive mode)",
+    )
+    run_opts.add_argument(
+        "--profile",
+        action="store_true",
+        help="Collect and print performance timings (grep 'profile |'; "
+        "see agents/skills/profile/SKILL.md)",
     )
     run_opts.add_argument(
         "--settings",
@@ -3536,6 +3543,9 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.VERBOSITY = config.VERBOSE if args.verbose else config.QUIET
     else:
         config.VERBOSITY = config.VERBOSE if args.verbose else config.STANDARD
+
+    if getattr(args, "profile", False):
+        profiling.enable()
 
     if getattr(args, "titlecards", None) is not None:
         config.TITLECARDS_ENABLED = bool(args.titlecards)

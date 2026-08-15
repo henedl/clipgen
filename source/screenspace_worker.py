@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+import profiling
 import utils
 import video
 from screenspace_tools import TOOLS
@@ -747,7 +748,14 @@ class ScreenspaceWorker:
                     self.on_progress_update()
 
         def _on_progress(progress: float) -> None:
+            # Lock-wait timing settles whether SSE-snapshot reads under the same
+            # lock actually stall per-frame progress writes.
+            _t0 = time.perf_counter() if config.PROFILING else 0.0
             with self._lock:
+                if _t0:
+                    profiling.add(
+                        "worker.progress_lock_wait", time.perf_counter() - _t0
+                    )
                 t = self._tasks.get(task_id)
                 if t and not t.get("_paused_flag"):
                     offset = t.get("_progress_offset", 0.0)
