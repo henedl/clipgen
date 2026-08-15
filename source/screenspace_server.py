@@ -78,11 +78,13 @@ import video
 from server_utils import (
     MediaCache,
     err,
+    find_by_id,
     json_endpoint,
     make_debounced_persist,
     make_sse_channel,
     ok,
     parse_number_arg,
+    remove_by_id,
 )
 
 FlaskResponse = Response | tuple[Response, int]
@@ -1821,7 +1823,7 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     name = data.get("name", "").strip()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        stash = find_by_id(stashes, stash_id)
         if stash is None:
             return err("Stash not found", 404)
         if name:
@@ -1834,11 +1836,8 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
 def api_stashes_delete(stash_id: str) -> FlaskResponse:
     """Dismiss a region stash."""
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("stashes", []), stash_id) is None:
             return err("Stash not found", 404)
-        stashes.pop(idx)
         _do_persist(drain_events=False)
     return ok()
 
@@ -1847,8 +1846,7 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
 def api_stashes_restore(stash_id: str) -> FlaskResponse:
     """Restore a stash: replace active regions with stashed ones (stash is kept)."""
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
         _manifest["regions"] = copy.deepcopy(stash["regions"])
@@ -1874,9 +1872,7 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
         regions = _manifest.get("regions", {})
         if name not in regions:
             return err(f"Region '{name}' not found", 404)
-        stash = next(
-            (s for s in _manifest.get("stashes", []) if s["id"] == stash_id), None
-        )
+        stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
         stash.setdefault("regions", {})[name] = copy.deepcopy(regions[name])

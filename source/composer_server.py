@@ -61,7 +61,14 @@ import pipeline
 import remux_server
 import utils
 import video
-from server_utils import MediaCache, err, ok, parse_clip_window
+from server_utils import (
+    MediaCache,
+    err,
+    find_by_id,
+    ok,
+    parse_clip_window,
+    remove_by_id,
+)
 import itertools
 
 # ---- Module state (initialized by _init_composer_state) ----
@@ -268,9 +275,7 @@ def api_cut_create() -> Any:
 def api_cut_update(cut_id: str) -> Any:
     data = request.get_json(silent=True) or {}
     with _manifest_lock:
-        cut = next(
-            (c for c in _manifest.get("cuts", []) if c.get("id") == cut_id), None
-        )
+        cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
             return err(f"No cut {cut_id}", 404)
         start = cut["start"]
@@ -294,11 +299,8 @@ def api_cut_update(cut_id: str) -> Any:
 @composer_bp.route("/api/cuts/<cut_id>", methods=["DELETE"])
 def api_cut_delete(cut_id: str) -> Any:
     with _manifest_lock:
-        cuts = _manifest.get("cuts", [])
-        remaining = [c for c in cuts if c.get("id") != cut_id]
-        if len(remaining) == len(cuts):
+        if remove_by_id(_manifest.get("cuts", []), cut_id) is None:
             return err(f"No cut {cut_id}", 404)
-        _manifest["cuts"] = remaining
         _persist_locked()
     return ok()
 
@@ -529,10 +531,7 @@ def api_annotation_create() -> Any:
 def api_annotation_update(ann_id: str) -> Any:
     data = request.get_json(silent=True) or {}
     with _manifest_lock:
-        ann = next(
-            (a for a in _manifest.get("annotations", []) if a.get("id") == ann_id),
-            None,
-        )
+        ann = find_by_id(_manifest.get("annotations", []), ann_id)
         if ann is None:
             return err(f"No annotation {ann_id}", 404)
         if data.get("span") is not None:
@@ -554,11 +553,8 @@ def api_annotation_update(ann_id: str) -> Any:
 @composer_bp.route("/api/annotations/<ann_id>", methods=["DELETE"])
 def api_annotation_delete(ann_id: str) -> Any:
     with _manifest_lock:
-        annotations = _manifest.get("annotations", [])
-        remaining = [a for a in annotations if a.get("id") != ann_id]
-        if len(remaining) == len(annotations):
+        if remove_by_id(_manifest.get("annotations", []), ann_id) is None:
             return err(f"No annotation {ann_id}", 404)
-        _manifest["annotations"] = remaining
         _persist_locked()
     return ok()
 

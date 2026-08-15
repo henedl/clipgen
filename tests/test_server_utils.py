@@ -134,3 +134,26 @@ def test_json_endpoint_does_not_swallow_other_exceptions(app):
 
     with app.app_context(), pytest.raises(ValueError):
         handler()
+
+
+def test_find_by_id_returns_first_match():
+    items = [{"id": "a", "n": 1}, {"id": "b", "n": 2}, {"id": "b", "n": 3}]
+    assert server_utils.find_by_id(items, "b") == {"id": "b", "n": 2}
+
+
+def test_find_by_id_missing_and_idless_entries():
+    assert server_utils.find_by_id([], "x") is None
+    assert server_utils.find_by_id([{"name": "no id"}], "x") is None
+
+
+def test_remove_by_id_pops_in_place():
+    items = [{"id": "a"}, {"id": "b"}]
+    removed = server_utils.remove_by_id(items, "a")
+    assert removed == {"id": "a"}
+    assert items == [{"id": "b"}]
+
+
+def test_remove_by_id_missing_leaves_list_untouched():
+    items = [{"id": "a"}]
+    assert server_utils.remove_by_id(items, "z") is None
+    assert items == [{"id": "a"}]

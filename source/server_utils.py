@@ -8,6 +8,8 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
 - :func:`parse_number_arg` parses + bound-checks one numeric value.
+- :func:`find_by_id` / :func:`remove_by_id` are the manifest-collection CRUD
+  lookups (stashes, blueprints, cuts, annotations).
 - :func:`make_debounced_persist` builds the manifest-write debounce.
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
@@ -103,6 +105,19 @@ def parse_number_arg(
     if max_ is not None and value > max_:
         raise ApiError(f"{name} must be <= {max_}")
     return int(value) if int_only else value
+
+
+def find_by_id(items: Any, id_: Any) -> dict[str, Any] | None:
+    """First item whose ``"id"`` equals *id_*, else None."""
+    return next((it for it in items if it.get("id") == id_), None)
+
+
+def remove_by_id(items: list[dict[str, Any]], id_: Any) -> dict[str, Any] | None:
+    """Pop and return the first item whose ``"id"`` equals *id_*; None when absent."""
+    for i, it in enumerate(items):
+        if it.get("id") == id_:
+            return items.pop(i)
+    return None
 
 
 class MediaCache:
