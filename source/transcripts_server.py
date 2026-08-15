@@ -63,7 +63,13 @@ import thinking_agents
 import transcripts
 import utils
 import video
-from server_utils import err, make_debounced_persist, make_participant_cache, ok
+from server_utils import (
+    err,
+    err_no_video,
+    make_debounced_persist,
+    make_participant_cache,
+    ok,
+)
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -533,11 +539,8 @@ def api_vtt(participant: str) -> FlaskResponse:
 
 def _video_paths_for_participant(participant: str) -> list[str]:
     """Return the ordered source video path(s) for *participant*, or [] if unknown."""
-    _refresh_participants()
-    for p in _participants:
-        if p["id"] == participant:
-            return list(p["video_paths"])
-    return []
+    record = _find_participant_record(participant)
+    return list(record["video_paths"]) if record else []
 
 
 @transcripts_bp.route("/api/audio-info/<participant>")
@@ -554,7 +557,7 @@ def api_audio_info(participant: str) -> FlaskResponse:
     """
     video_paths = _video_paths_for_participant(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     props = video.probe_video_properties(video_paths[0])
     if props is None:
         return err("Could not probe video file", 500)
@@ -571,7 +574,7 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     video_paths = _video_paths_for_participant(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     out = video.extract_audio_track(video_paths[0], idx)
     if out is None:
         return err("Could not extract audio track", 500)

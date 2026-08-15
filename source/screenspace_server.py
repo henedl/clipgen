@@ -79,6 +79,7 @@ import video
 from server_utils import (
     MediaCache,
     err,
+    err_no_video,
     find_by_id,
     json_endpoint,
     make_debounced_persist,
@@ -748,7 +749,7 @@ def api_calibrate() -> FlaskResponse:
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, _mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
@@ -859,11 +860,8 @@ def _participant_video_paths(participant_id: str) -> list[str]:
     The refresh is one ``stat()`` in the steady state — nothing against the
     ffmpeg work these callers are about to do.
     """
-    _refresh_participants()
-    for p in _participants:
-        if p["id"] == participant_id:
-            return list(p["video_paths"]) if p.get("has_video") else []
-    return []
+    record = _find_participant_record(participant_id)
+    return list(record["video_paths"]) if record and record.get("has_video") else []
 
 
 def _part_mtimes(paths: list[str]) -> tuple[int, ...] | None:
@@ -1034,7 +1032,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     # frontend can keep requesting frames by global time; single-video unchanged.
     mapped = _map_participant_time(participant, ts)
     if mapped is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, local_ts = mapped
     mtime_ns = _mtime_or_zero(video_path)
 
@@ -1152,7 +1150,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
 
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
 
     tool = (request.args.get("tool") or "").strip() or "color"
     if tool not in _VALID_TASK_TYPES:
@@ -1412,7 +1410,7 @@ def api_video_info(participant: str) -> FlaskResponse:
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, mtime_ns = resolved
 
     with _video_metadata_cache_lock:
@@ -1464,7 +1462,7 @@ def api_video_stream(participant: str) -> FlaskResponse:
     """
     paths = _participant_video_paths(participant)
     if not paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     # Multi-video participants: ?part=N selects the sub-video; the frontend swaps
     # the <video> source per part as it scrubs the global timeline. Defaults to
     # part 0 (and is the only file for single-video participants).
@@ -1482,7 +1480,7 @@ def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     paths = _participant_video_paths(participant)
     if not paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     part = request.args.get("part", type=int)
     video_path = (
         paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
@@ -2276,7 +2274,7 @@ def api_tasks_create() -> FlaskResponse:
 
     video_paths = _participant_video_paths(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}")
+        return err_no_video(participant, 400)
     video_path = video_paths[0]
 
     # Default per-task source label; the per-part scan tags each event with the

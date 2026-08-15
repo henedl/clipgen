@@ -982,10 +982,8 @@ def _resolve_intake_video_paths(participant: str, source: str = "") -> list[str]
     scan and report "No video for P01". ``source`` is kept for call-site
     compatibility — both tool lists scan the same files.
     """
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            return list(p["video_paths"])
-    return []
+    p = files.find_participant_record(_sheet_context, participant)
+    return list(p["video_paths"]) if p is not None and p.get("has_video") else []
 
 
 def _effective_study() -> str:

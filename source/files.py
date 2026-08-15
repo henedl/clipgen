@@ -319,6 +319,21 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
     return entries
 
 
+def find_participant_record(
+    sheet_context: Any, participant_id: str
+) -> dict[str, Any] | None:
+    """First :func:`resolve_participant_videos` record matching *participant_id*.
+
+    A fresh resolve on every call — for routes that must see the live input
+    directory (e.g. after ``POST /api/dirs``) rather than a blueprint's
+    ``_participants`` cache.
+    """
+    for participant in resolve_participant_videos(sheet_context):
+        if participant["id"] == participant_id:
+            return participant
+    return None
+
+
 def prepare_clip(clip: ClipRecord) -> ClipRecord:
     """Parse timestamps and sanitize description/category for filename use.
 

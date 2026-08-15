@@ -47,6 +47,11 @@ def err(message: str, code: int = 400):
     return jsonify({"ok": False, "error": message}), code
 
 
+def err_no_video(participant: str, code: int = 404):
+    """The shared "No video for participant <id>" error envelope."""
+    return err(f"No video for participant {participant}", code)
+
+
 class ApiError(Exception):
     """Raised inside a :func:`json_endpoint` handler to short-circuit to ``err``.
 

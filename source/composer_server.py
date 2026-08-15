@@ -63,6 +63,7 @@ import video
 from server_utils import (
     MediaCache,
     err,
+    err_no_video,
     find_by_id,
     ok,
     parse_clip_window,
@@ -834,15 +835,15 @@ MAX_OVERLAY_WINDOWS = 20
 
 def _find_participant_parts(participant: str) -> list[dict[str, Any]] | None:
     """Ordered ``{name, path, duration, offset}`` parts, or None."""
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            parts = _participant_parts(p["video_paths"])
-            if parts is None:
-                return None
-            for part, vp in zip(parts, p["video_paths"]):
-                part["path"] = str(vp)
-            return parts
-    return None
+    p = files.find_participant_record(_sheet_context, participant)
+    if p is None or not p.get("has_video"):
+        return None
+    parts = _participant_parts(p["video_paths"])
+    if parts is None:
+        return None
+    for part, vp in zip(parts, p["video_paths"]):
+        part["path"] = str(vp)
+    return parts
 
 
 def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
@@ -963,7 +964,7 @@ def api_audio_track(participant: str, idx: int) -> Any:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     out = video.extract_audio_track(parts[0]["path"], idx)
     if out is None:
         return err("Could not extract audio track", 500)

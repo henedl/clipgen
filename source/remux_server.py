@@ -32,10 +32,10 @@ _jobs_lock = threading.Lock()
 
 def _participant_paths(sheet_context_getter: Any, pid: str) -> list[str]:
     """Existing source files for ``pid``, or [] when it has none."""
-    for participant in files.resolve_participant_videos(sheet_context_getter()):
-        if participant["id"] == pid:
-            return [str(p) for p in participant["video_paths"] if Path(p).is_file()]
-    return []
+    record = files.find_participant_record(sheet_context_getter(), pid)
+    if record is None:
+        return []
+    return [str(p) for p in record["video_paths"] if Path(p).is_file()]
 
 
 def _media_state(sheet_context_getter: Any) -> tuple[dict[str, list[str]], list[str]]:
