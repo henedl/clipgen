@@ -3773,26 +3773,34 @@
     var silent = !!(opts && opts.silent);
     function toast(msg) { if (!silent) showToast(msg); }
     var sfx = "_mt" + idx;
+    // Suffix-aware DOM readers — collapse the (qs("#id" + sfx) || {}) idiom so
+    // each branch reads as "param, default". rawNum is the deliberate-NaN
+    // reader for inputs whose emptiness is checked (target/range/scale).
+    function num(id, d) { return numberOrDefault((qs("#" + id + sfx) || {}).value, d); }
+    function intv(id, d) { return intOrDefault((qs("#" + id + sfx) || {}).value, d); }
+    function chk(id) { return !!((qs("#" + id + sfx) || {}).checked); }
+    function str(id, d) { return (qs("#" + id + sfx) || {}).value || d; }
+    function rawNum(id) { return parseFloat((qs("#" + id + sfx) || {}).value); }
     var p = {};
     if (stepType === "color") {
       p.target_color = {
-        h: numberOrDefault((qs("#paramColorH" + sfx) || {}).value, 0),
-        s: numberOrDefault((qs("#paramColorS" + sfx) || {}).value, 0),
-        v: numberOrDefault((qs("#paramColorV" + sfx) || {}).value, 0),
+        h: num("paramColorH", 0),
+        s: num("paramColorS", 0),
+        v: num("paramColorV", 0),
       };
-      var tol = numberOrDefault((qs("#paramColorTol" + sfx) || {}).value, 30);
+      var tol = num("paramColorTol", 30);
       p.tolerance = {
         h: Math.round(tol * 90 / 100),
         s: Math.round(tol * 128 / 100),
         v: Math.round(tol * 128 / 100),
       };
-      if (((qs("#paramColorMode" + sfx) || {}).value) === "presence") {
+      if (str("paramColorMode", "") === "presence") {
         p.color_mode = "presence";
-        p.min_coverage = numberOrDefault((qs("#paramColorMinArea" + sfx) || {}).value, 1) / 100;
+        p.min_coverage = num("paramColorMinArea", 1) / 100;
       }
     } else if (stepType === "change") {
-      p.threshold = numberOrDefault((qs("#paramChangeThresh" + sfx) || {}).value, 0.03);
-      p.noise_threshold = intOrDefault((qs("#paramChangeNoise" + sfx) || {}).value, 30);
+      p.threshold = num("paramChangeThresh", 0.03);
+      p.noise_threshold = intv("paramChangeNoise", 30);
     } else if (stepType === "similarity") {
       var step = state.multitoolSteps[idx];
       if (!step || step._refTs === undefined) {
@@ -3800,27 +3808,27 @@
         return null;
       }
       p.reference_timestamp = step._refTs;
-      p.threshold = numberOrDefault((qs("#paramSimThresh" + sfx) || {}).value, 0.90);
+      p.threshold = num("paramSimThresh", 0.90);
     } else if (stepType === "text") {
-      p.search_string = (qs("#paramTextSearch" + sfx) || {}).value || "";
+      p.search_string = str("paramTextSearch", "");
       if (!p.search_string.trim()) {
         toast("Step " + (idx + 1) + ": enter a search string");
         return null;
       }
-      p.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold);
-      p.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
-      p.ocr_preprocess = !!((qs("#paramTextOcrPreprocess" + sfx) || {}).checked);
-      p.ocr_normalize = (qs("#paramTextOcrNormalize" + sfx) || {}).value || "off";
+      p.fuzzy_threshold = num("paramTextFuzzy", CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold);
+      p.ocr_confidence_threshold = num("paramTextOcrConf", CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      p.ocr_preprocess = chk("paramTextOcrPreprocess");
+      p.ocr_normalize = str("paramTextOcrNormalize", "off");
     } else if (stepType === "numbers") {
-      p.operator = (qs("#paramNumOperator" + sfx) || {}).value || "gt";
-      p.target_value = parseFloat((qs("#paramNumTarget" + sfx) || {}).value);
+      p.operator = str("paramNumOperator", "gt");
+      p.target_value = rawNum("paramNumTarget");
       if (isNaN(p.target_value)) {
         toast("Step " + (idx + 1) + ": enter a valid target number");
         return null;
       }
-      p.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf" + sfx) || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
-      p.ocr_preprocess = !!((qs("#paramNumOcrPreprocess" + sfx) || {}).checked);
-      p.integers_only = !!((qs("#paramNumIntegersOnly" + sfx) || {}).checked);
+      p.ocr_confidence_threshold = num("paramNumOcrConf", CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      p.ocr_preprocess = chk("paramNumOcrPreprocess");
+      p.integers_only = chk("paramNumIntegersOnly");
     } else if (stepType === "template") {
       step = state.multitoolSteps[idx];
       if (step && step._upload) {
@@ -3831,13 +3839,13 @@
         toast("Step " + (idx + 1) + ": capture a template frame or upload a PNG");
         return null;
       }
-      p.threshold = numberOrDefault((qs("#paramTemplateThresh" + sfx) || {}).value, 0.70);
-      var tScalePct = parseFloat((qs("#paramTemplateScale" + sfx) || {}).value);
+      p.threshold = num("paramTemplateThresh", 0.70);
+      var tScalePct = rawNum("paramTemplateScale");
       if (!isNaN(tScalePct) && tScalePct > 0 && tScalePct !== 100) {
         p.template_scale = tScalePct / 100;
       }
     } else if (stepType === "flow") {
-      p.magnitude_threshold = numberOrDefault((qs("#paramFlowMag" + sfx) || {}).value, 2.0);
+      p.magnitude_threshold = num("paramFlowMag", 2.0);
     } else if (stepType === "scene") {
       step = state.multitoolSteps[idx];
       if (!step || !step._scenes || step._scenes.length === 0) {
@@ -3848,7 +3856,7 @@
         return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
       });
     } else if (stepType === "inactivity") {
-      p.threshold = intOrDefault((qs("#paramInactThresh" + sfx) || {}).value, 10);
+      p.threshold = intv("paramInactThresh", 10);
     }
     var stepRegionRef = normalizeRegionRef(state.multitoolSteps[idx].region_ref)
       || (state.multitoolSteps[idx].region ? activeRegionRef(state.multitoolSteps[idx].region) : null);
@@ -3862,6 +3870,15 @@
     // strip, which probes params continuously); the Run path omits it.
     var silent = !!(opts && opts.silent);
     function toast(msg) { if (!silent) showToast(msg); }
+    var sfx = "";
+    // Suffix-aware DOM readers — collapse the (qs("#id" + sfx) || {}) idiom so
+    // each branch reads as "param, default". rawNum is the deliberate-NaN
+    // reader for inputs whose emptiness is checked (target/range/scale).
+    function num(id, d) { return numberOrDefault((qs("#" + id + sfx) || {}).value, d); }
+    function intv(id, d) { return intOrDefault((qs("#" + id + sfx) || {}).value, d); }
+    function chk(id) { return !!((qs("#" + id + sfx) || {}).checked); }
+    function str(id, d) { return (qs("#" + id + sfx) || {}).value || d; }
+    function rawNum(id) { return parseFloat((qs("#" + id + sfx) || {}).value); }
     var params = {};
     if (type === "multitool") {
       if (state.multitoolSteps.length < 2) {
@@ -3886,7 +3903,7 @@
         }
         params.steps.push(stepP);
       }
-      params.interval = numberOrDefault((qs("#paramMultitoolInterval") || {}).value, 1.0);
+      params.interval = num("paramMultitoolInterval", 1.0);
       var mtLabelEl = qs("#paramEventLabel");
       if (mtLabelEl && mtLabelEl.value.trim()) params.event_label = mtLabelEl.value.trim();
       var mtDfEl = qs("#paramDetectFirst");
@@ -3894,26 +3911,26 @@
       return params;
     } else if (type === "color") {
       params.target_color = {
-        h: numberOrDefault((qs("#paramColorH") || {}).value, 0),
-        s: numberOrDefault((qs("#paramColorS") || {}).value, 0),
-        v: numberOrDefault((qs("#paramColorV") || {}).value, 0),
+        h: num("paramColorH", 0),
+        s: num("paramColorS", 0),
+        v: num("paramColorV", 0),
       };
-      var tol = numberOrDefault((qs("#paramColorTol") || {}).value, 30);
+      var tol = num("paramColorTol", 30);
       params.tolerance = {
         h: Math.round(tol * 90 / 100),
         s: Math.round(tol * 128 / 100),
         v: Math.round(tol * 128 / 100),
       };
-      if (((qs("#paramColorMode") || {}).value) === "presence") {
+      if (str("paramColorMode", "") === "presence") {
         params.color_mode = "presence";
-        params.min_coverage = numberOrDefault((qs("#paramColorMinArea") || {}).value, 1) / 100;
+        params.min_coverage = num("paramColorMinArea", 1) / 100;
       }
-      params.interval = numberOrDefault((qs("#paramColorInterval") || {}).value, 1.0);
+      params.interval = num("paramColorInterval", 1.0);
     } else if (type === "change") {
-      params.threshold = numberOrDefault((qs("#paramChangeThresh") || {}).value, 0.03);
-      params.noise_threshold = intOrDefault((qs("#paramChangeNoise") || {}).value, 30);
-      params.interval = numberOrDefault((qs("#paramChangeInterval") || {}).value, 1.0);
-      var rcChange = intOrDefault((qs("#paramChangeConsecutive") || {}).value, 1);
+      params.threshold = num("paramChangeThresh", 0.03);
+      params.noise_threshold = intv("paramChangeNoise", 30);
+      params.interval = num("paramChangeInterval", 1.0);
+      var rcChange = intv("paramChangeConsecutive", 1);
       if (rcChange > 1) params.require_consecutive = rcChange;
     } else if (type === "similarity") {
       if (state.referenceTimestamp === null) {
@@ -3921,29 +3938,29 @@
         return null;
       }
       params.reference_timestamp = state.referenceTimestamp;
-      params.threshold = numberOrDefault((qs("#paramSimThresh") || {}).value, 0.90);
-      params.interval = numberOrDefault((qs("#paramSimInterval") || {}).value, 1.0);
+      params.threshold = num("paramSimThresh", 0.90);
+      params.interval = num("paramSimInterval", 1.0);
     } else if (type === "text") {
-      params.search_string = (qs("#paramTextSearch") || {}).value || "";
+      params.search_string = str("paramTextSearch", "");
       if (!params.search_string.trim()) {
         toast("Enter a search string");
         return null;
       }
-      params.fuzzy_threshold = numberOrDefault((qs("#paramTextFuzzy") || {}).value, CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold);
-      params.ocr_confidence_threshold = numberOrDefault((qs("#paramTextOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
-      params.ocr_preprocess = !!((qs("#paramTextOcrPreprocess") || {}).checked);
-      params.ocr_normalize = (qs("#paramTextOcrNormalize") || {}).value || "off";
-      params.interval = numberOrDefault((qs("#paramTextInterval") || {}).value, 2.0);
-      var lang = (qs("#paramTextLang") || {}).value || "en";
+      params.fuzzy_threshold = num("paramTextFuzzy", CLIPGEN_CONFIG.screenspaceOcrFuzzyThreshold);
+      params.ocr_confidence_threshold = num("paramTextOcrConf", CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      params.ocr_preprocess = chk("paramTextOcrPreprocess");
+      params.ocr_normalize = str("paramTextOcrNormalize", "off");
+      params.interval = num("paramTextInterval", 2.0);
+      var lang = str("paramTextLang", "en");
       params.languages = [lang];
-      var rcText = intOrDefault((qs("#paramTextConsecutive") || {}).value, 1);
+      var rcText = intv("paramTextConsecutive", 1);
       if (rcText > 1) params.require_consecutive = rcText;
     } else if (type === "numbers") {
-      var op = (qs("#paramNumOperator") || {}).value || "gt";
+      var op = str("paramNumOperator", "gt");
       params.operator = op;
       if (op === "range") {
-        params.range_min = parseFloat((qs("#paramNumMin") || {}).value);
-        params.range_max = parseFloat((qs("#paramNumMax") || {}).value);
+        params.range_min = rawNum("paramNumMin");
+        params.range_max = rawNum("paramNumMax");
         if (isNaN(params.range_min) || isNaN(params.range_max)) {
           toast("Enter valid min and max values");
           return null;
@@ -3953,23 +3970,23 @@
           return null;
         }
       } else {
-        params.target_value = parseFloat((qs("#paramNumTarget") || {}).value);
+        params.target_value = rawNum("paramNumTarget");
         if (isNaN(params.target_value)) {
           toast("Enter a valid target number");
           return null;
         }
       }
-      params.ocr_confidence_threshold = numberOrDefault((qs("#paramNumOcrConf") || {}).value, CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
-      params.ocr_preprocess = !!((qs("#paramNumOcrPreprocess") || {}).checked);
-      params.integers_only = !!((qs("#paramNumIntegersOnly") || {}).checked);
-      params.interval = numberOrDefault((qs("#paramNumInterval") || {}).value, 2.0);
-      var rcNum = intOrDefault((qs("#paramNumConsecutive") || {}).value, 1);
+      params.ocr_confidence_threshold = num("paramNumOcrConf", CLIPGEN_CONFIG.screenspaceOcrMinConfidence);
+      params.ocr_preprocess = chk("paramNumOcrPreprocess");
+      params.integers_only = chk("paramNumIntegersOnly");
+      params.interval = num("paramNumInterval", 2.0);
+      var rcNum = intv("paramNumConsecutive", 1);
       if (rcNum > 1) params.require_consecutive = rcNum;
     } else if (type === "timelapse") {
-      params.speedup_factor = numberOrDefault((qs("#paramTlSpeed") || {}).value, 10);
-      var si = parseFloat((qs("#paramTlSampleInterval") || {}).value);
+      params.speedup_factor = num("paramTlSpeed", 10);
+      var si = rawNum("paramTlSampleInterval");
       if (si > 0) params.sample_interval = si;
-      params.output_format = (qs("#paramTlFormat") || {}).value || "mp4";
+      params.output_format = str("paramTlFormat", "mp4");
     } else if (type === "template") {
       if (state.uploadedTemplate) {
         params.template_image_data = state.uploadedTemplate.data;
@@ -3980,16 +3997,16 @@
         toast("Capture a template region or upload a PNG");
         return null;
       }
-      params.threshold = numberOrDefault((qs("#paramTemplateThresh") || {}).value, 0.70);
-      params.interval = numberOrDefault((qs("#paramTemplateInterval") || {}).value, 1.0);
-      var scalePct = parseFloat((qs("#paramTemplateScale") || {}).value);
+      params.threshold = num("paramTemplateThresh", 0.70);
+      params.interval = num("paramTemplateInterval", 1.0);
+      var scalePct = rawNum("paramTemplateScale");
       if (!isNaN(scalePct) && scalePct > 0 && scalePct !== 100) {
         params.template_scale = scalePct / 100;
       }
     } else if (type === "flow") {
-      params.magnitude_threshold = numberOrDefault((qs("#paramFlowMag") || {}).value, 2.0);
-      params.interval = numberOrDefault((qs("#paramFlowInterval") || {}).value, 1.0);
-      var rcFlow = intOrDefault((qs("#paramFlowConsecutive") || {}).value, 1);
+      params.magnitude_threshold = num("paramFlowMag", 2.0);
+      params.interval = num("paramFlowInterval", 1.0);
+      var rcFlow = intv("paramFlowConsecutive", 1);
       if (rcFlow > 1) params.require_consecutive = rcFlow;
     } else if (type === "scene") {
       if (state.sceneReferences.length === 0) {
@@ -3999,27 +4016,27 @@
       params.scene_references = state.sceneReferences.map(function (ref) {
         return { name: ref.name, timestamp: ref.timestamp, threshold: numberOrDefault(ref.threshold, 0.75) };
       });
-      params.interval = numberOrDefault((qs("#paramSceneInterval") || {}).value, 1.0);
+      params.interval = num("paramSceneInterval", 1.0);
     } else if (type === "inactivity") {
-      params.threshold = intOrDefault((qs("#paramInactThresh") || {}).value, 10);
-      params.min_duration = numberOrDefault((qs("#paramInactMinDur") || {}).value, 2.0);
-      params.interval = numberOrDefault((qs("#paramInactInterval") || {}).value, 1.0);
+      params.threshold = intv("paramInactThresh", 10);
+      params.min_duration = num("paramInactMinDur", 2.0);
+      params.interval = num("paramInactInterval", 1.0);
     } else if (type === "boundary") {
-      params.threshold = intOrDefault((qs("#paramBoundaryThresh") || {}).value, 14);
-      params.min_gap = numberOrDefault((qs("#paramBoundaryMinGap") || {}).value, 3.0);
-      params.interval = numberOrDefault((qs("#paramBoundaryInterval") || {}).value, 1.0);
+      params.threshold = intv("paramBoundaryThresh", 14);
+      params.min_gap = num("paramBoundaryMinGap", 3.0);
+      params.interval = num("paramBoundaryInterval", 1.0);
       // Auto ("") omits metric so the server applies its configured default.
-      var boundaryMetric = (qs("#paramBoundaryMetric") || {}).value || "";
+      var boundaryMetric = str("paramBoundaryMetric", "");
       if (boundaryMetric) params.metric = boundaryMetric;
     } else if (type === "attention") {
-      params.shift_threshold = numberOrDefault((qs("#paramAttnShift") || {}).value, 0.15);
-      params.ema_alpha = numberOrDefault((qs("#paramAttnSmooth") || {}).value, 0.6);
-      params.weight_spectral = numberOrDefault((qs("#paramAttnWSpectral") || {}).value, 1.0);
-      params.weight_contrast = numberOrDefault((qs("#paramAttnWContrast") || {}).value, 0.7);
-      params.weight_motion = numberOrDefault((qs("#paramAttnWMotion") || {}).value, 1.2);
-      params.weight_face = numberOrDefault((qs("#paramAttnWFace") || {}).value, 0);
-      params.center_bias = numberOrDefault((qs("#paramAttnCenterBias") || {}).value, 0.25);
-      params.interval = numberOrDefault((qs("#paramAttnInterval") || {}).value, 0.5);
+      params.shift_threshold = num("paramAttnShift", 0.15);
+      params.ema_alpha = num("paramAttnSmooth", 0.6);
+      params.weight_spectral = num("paramAttnWSpectral", 1.0);
+      params.weight_contrast = num("paramAttnWContrast", 0.7);
+      params.weight_motion = num("paramAttnWMotion", 1.2);
+      params.weight_face = num("paramAttnWFace", 0);
+      params.center_bias = num("paramAttnCenterBias", 0.25);
+      params.interval = num("paramAttnInterval", 0.5);
     }
     var labelEl = qs("#paramEventLabel");
     if (labelEl && labelEl.value.trim()) {
