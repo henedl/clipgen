@@ -7,12 +7,18 @@ same numeric-arg parse-and-validate block dozens of times. Collapsed here:
 - :func:`ok` / :func:`err` build either envelope in one call.
 - :class:`ApiError` + :func:`json_endpoint` let a handler ``raise`` a uniform
   4xx instead of threading an ``err(...)`` tuple back through every guard.
-- :func:`parse_number_arg` parses + bound-checks one numeric value.
+- :func:`parse_number_arg` parses + bound-checks one numeric value;
+  :func:`opt_number` is its lenient fall-back-don't-fail sibling.
+- :func:`find_by_id` / :func:`remove_by_id` are the manifest-collection CRUD
+  lookups (stashes, blueprints, cuts, annotations).
 - :func:`make_debounced_persist` builds the manifest-write debounce.
+- :func:`make_participant_cache` builds the mtime-guarded participant cache
+  (Transcripts + Screenspace).
 - :func:`make_sse_channel` builds one SSE pub/sub channel (bounded per-client
   queue + coalesce-on-overflow + keepalive + cleanup).
-- :class:`MediaCache` + :func:`parse_clip_window` back the hover-scrubber media
-  routes (sprite sheets / audio snippets).
+- :class:`MediaCache` + :func:`parse_clip_window` + :func:`clip_media_response`
+  + :func:`mtime_or_zero` back the hover-scrubber media routes (sprite sheets /
+  audio snippets).
 
 Deliberately tiny and Flask-only (no ``config``/``utils`` imports) so it stays
 import-clean: ``utils`` is Flask-free on purpose and imported by non-server
@@ -27,6 +33,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from functools import wraps
+from pathlib import Path
 from typing import Any
 
 from flask import Response, jsonify, request
@@ -40,6 +47,11 @@ def ok(**fields: Any):
 def err(message: str, code: int = 400):
     """Error envelope: ``(jsonify({"ok": False, "error": message}), code)``."""
     return jsonify({"ok": False, "error": message}), code
+
+
+def err_no_video(participant: str, code: int = 404):
+    """The shared "No video for participant <id>" error envelope."""
+    return err(f"No video for participant {participant}", code)
 
 
 class ApiError(Exception):
@@ -105,6 +117,35 @@ def parse_number_arg(
     return int(value) if int_only else value
 
 
+def opt_number(args: Any, name: str, default: float | None = None) -> float | None:
+    """Lenient optional float from a request-args mapping.
+
+    Missing or unparseable returns *default* — never raises. For preview-style
+    override knobs where a malformed value silently falls back; the strict,
+    raising sibling is :func:`parse_number_arg`.
+    """
+    raw = args.get(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def find_by_id(items: Any, id_: Any) -> dict[str, Any] | None:
+    """First item whose ``"id"`` equals *id_*, else None."""
+    return next((it for it in items if it.get("id") == id_), None)
+
+
+def remove_by_id(items: list[dict[str, Any]], id_: Any) -> dict[str, Any] | None:
+    """Pop and return the first item whose ``"id"`` equals *id_*; None when absent."""
+    for i, it in enumerate(items):
+        if it.get("id") == id_:
+            return items.pop(i)
+    return None
+
+
 class MediaCache:
     """Bounded-LRU byte cache with single-flight compute.
 
@@ -160,6 +201,14 @@ class MediaCache:
             self._inflight.clear()
 
 
+def mtime_or_zero(path: str | Path) -> float:
+    """A file's ``st_mtime`` for cache keys, or 0.0 when it can't be stat'd."""
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def parse_clip_window() -> tuple[float, float] | None:
     """Parse + validate the ``?start=&end=`` seconds shared by the scrubber
     media routes. Returns ``(start_seconds, duration_seconds)`` or ``None`` when
@@ -173,6 +222,54 @@ def parse_clip_window() -> tuple[float, float] | None:
     if duration <= 0:
         return None
     return start_sec, duration
+
+
+def clip_media_response(
+    *,
+    cache: MediaCache,
+    resolve: Callable[[float, float], tuple[str, float, float] | None],
+    produce: Callable[[str, float, float], bytes | None],
+    mimetype: str,
+    kind_label: str,
+    key_extras: tuple[Any, ...] = (),
+    invalid_message: str = "Invalid clip range",
+):
+    """Shared guts of the hover-scrubber sprite / audio routes.
+
+    Parses the ``?start=&end=`` window, maps it through *resolve* →
+    ``(path, local_start, duration)`` (None → 404), then serves *produce*'s
+    bytes from *cache* keyed on
+    ``(path, start, duration, *key_extras, mtime)`` — the mtime so a replaced
+    source file invalidates stale media. *kind_label* names the 404 when
+    extraction fails (``"Sprite extraction failed"``).
+    """
+    window = parse_clip_window()
+    if window is None:
+        return err(invalid_message)
+    start_sec, duration = window
+
+    resolved = resolve(start_sec, duration)
+    if resolved is None:
+        return err("Source video not found", 404)
+    path, local_start, duration = resolved
+
+    key = (
+        path,
+        round(local_start, 3),
+        round(duration, 3),
+        *key_extras,
+        mtime_or_zero(path),
+    )
+    media_bytes = cache.get_or_compute(
+        key, lambda: produce(path, local_start, duration)
+    )
+    if media_bytes is None:
+        return err(f"{kind_label} extraction failed", 404)
+    return Response(
+        media_bytes,
+        mimetype=mimetype,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 def make_debounced_persist(
@@ -239,6 +336,65 @@ def make_debounced_persist(
                 persist()
 
     return schedule_persist, flush_pending_persist, cancel_pending_persist_timer
+
+
+def make_participant_cache(
+    module: Any,
+    *,
+    input_dir_getter: Callable[[], Any],
+    resolve: Callable[[Any], list[dict[str, Any]]],
+) -> tuple[Callable[[], None], Callable[[str], dict[str, Any] | None]]:
+    """Build the mtime-guarded participant cache shared by the Transcripts and
+    Screenspace blueprints; returns ``(refresh, find)``.
+
+    Operates on ``module._participants`` / ``module._participant_source`` under
+    ``module._participants_lock`` — module attributes, not closure state — so
+    the blueprints' init/set-source functions, the remux ``sheet_context``
+    getters, and tests that monkeypatch those globals all keep working (the
+    same late-binding contract as :func:`make_debounced_persist`).
+
+    ``refresh()`` rebuilds ``module._participants`` when the input directory
+    changed since the last build. Keyed on the dir's ``st_mtime_ns`` (which
+    advances on add/remove/rename), mirroring
+    ``utils.discover_participant_videos``' own memo — the steady-state cost is
+    one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
+    show up without a server restart. No-op while ``_participant_source`` is
+    None (blueprint not configured yet). The rebuild rebinds ``_participants``
+    (atomic under the GIL), so a concurrent reader sees either the old list or
+    the new one, never a torn one.
+
+    ``find(pid)`` refreshes, then returns the cached record or None. The
+    ``input_dir_getter`` / ``resolve`` callables keep ``utils``/``files``
+    imports out of this module.
+    """
+
+    def refresh() -> None:
+        source = module._participant_source
+        if source is None:
+            return
+        input_dir = str(Path(input_dir_getter()))
+        try:
+            mtime: int | None = Path(input_dir).stat().st_mtime_ns
+        except OSError:
+            mtime = None
+        if source["dir"] == input_dir and source["mtime"] == mtime:
+            return
+        with module._participants_lock:
+            # A racing request may have rebuilt, or a sheet swap may have
+            # replaced the source entirely, while we waited on the lock.
+            if module._participant_source is not source:
+                return
+            if source["dir"] == input_dir and source["mtime"] == mtime:
+                return
+            module._participants = resolve(source["sheet_context"])
+            source["dir"] = input_dir
+            source["mtime"] = mtime
+
+    def find(participant_id: str) -> dict[str, Any] | None:
+        refresh()
+        return find_by_id(module._participants, participant_id)
+
+    return refresh, find
 
 
 def make_sse_channel(

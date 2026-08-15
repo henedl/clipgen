@@ -757,10 +757,14 @@ def require_optional(module_name: str, feature_label: str) -> None:
         ) from None
 
 
-def load_json_manifest(filename: str, *, default: Any = None) -> Any:
+def load_json_manifest(
+    filename: str, *, default: Any = None, warn_label: str = ""
+) -> Any:
     """Load a JSON manifest from the output directory.
 
-    Returns parsed data, or *default* on missing/corrupt file.
+    Returns parsed data, or *default* on missing/corrupt file. An unreadable
+    (as opposed to missing) file logs a warning when *warn_label* is set,
+    mirroring :func:`save_json_manifest`.
     """
     path = Path(get_effective_output_dir()) / filename
     if not path.is_file():
@@ -768,6 +772,8 @@ def load_json_manifest(filename: str, *, default: Any = None) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        if warn_label:
+            warning_print(f"Could not read {warn_label}; using defaults.")
         return default
 
 

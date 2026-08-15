@@ -32,7 +32,7 @@ from flask import Blueprint, Response, request
 import config
 import utils
 import workflows
-from server_utils import err, make_sse_channel, ok
+from server_utils import err, find_by_id, make_sse_channel, ok, remove_by_id
 
 # ---- Module state (initialized by _init_workflows_state) ----
 
@@ -197,7 +197,7 @@ def api_blueprints_update(bp_id: str) -> Any:
         return err("JSON body required")
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
-        blueprint = next((b for b in blueprints if b.get("id") == bp_id), None)
+        blueprint = find_by_id(blueprints, bp_id)
         if blueprint is None:
             return err("Blueprint not found", 404)
         for key in ("name", "nodes", "edges", "viewport"):
@@ -211,11 +211,8 @@ def api_blueprints_update(bp_id: str) -> Any:
 def api_blueprints_delete(bp_id: str) -> Any:
     """Delete a blueprint by id."""
     with _manifest_lock:
-        blueprints = _manifest.get("blueprints", [])
-        idx = next((i for i, b in enumerate(blueprints) if b.get("id") == bp_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("blueprints", []), bp_id) is None:
             return err("Blueprint not found", 404)
-        blueprints.pop(idx)
         _persist_locked()
     return ok()
 
@@ -241,7 +238,7 @@ def api_blueprint_trigger(bp_id: str) -> Any:
         return err("Unknown trigger type")
     with _manifest_lock:
         blueprints = _manifest.get("blueprints", [])
-        target = next((b for b in blueprints if b.get("id") == bp_id), None)
+        target = find_by_id(blueprints, bp_id)
         if target is None:
             return err("Blueprint not found", 404)
         if enabled:
@@ -331,7 +328,7 @@ def api_stashes_update(stash_id: str) -> Any:
         return err("JSON body required")
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s.get("id") == stash_id), None)
+        stash = find_by_id(stashes, stash_id)
         if stash is None:
             return err("Stash not found", 404)
         if "name" in data:
@@ -346,11 +343,8 @@ def api_stashes_delete(stash_id: str) -> Any:
     if any(s["id"] == stash_id for s in workflows.BUILTIN_STASHES):
         return err("Built-in recipes are read-only", 403)
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        idx = next((i for i, s in enumerate(stashes) if s.get("id") == stash_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("stashes", []), stash_id) is None:
             return err("Stash not found", 404)
-        stashes.pop(idx)
         _persist_locked()
     return ok()
 

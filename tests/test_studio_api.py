@@ -3448,12 +3448,12 @@ def test_api_reel_continues_worker_after_client_disconnect(
         # No auto-cancel on disconnect anymore.
         assert server._reel_cancel_event.is_set() is False
         # Slot still held: worker is running.
-        assert server._reel_in_progress is True
+        assert server._busy_slots["reel"] is True
     finally:
         allow_finish.set()
 
     # Once the worker finishes, manifest is updated and slot is released.
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert reel_record in server._generated_reels
 
 
@@ -3494,7 +3494,7 @@ def test_api_reel_busy_slot_held_during_worker_after_disconnect(
         allow_finish.set()
 
     # After worker exits, the slot frees and a fresh request can proceed.
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     third = client.post("/studio/api/reel", json={"cells": ["P01.5"]})
     assert third.status_code == 200
 
@@ -3535,7 +3535,7 @@ def test_api_reel_explicit_cancel_still_works(client, monkeypatch, tmp_path):
     # The worker observes the cancel and emits a cancelled-error event.
     final = json.loads(resp.data.decode().strip().split("\n")[-1])
     assert final.get("cancelled") is True
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_reel_releases_slot_on_no_clips_early_return(client, monkeypatch, tmp_path):
@@ -3548,7 +3548,7 @@ def test_api_reel_releases_slot_on_no_clips_early_return(client, monkeypatch, tm
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     assert lines[-1]["ok"] is False
     assert "No clips" in lines[-1]["error"]
-    assert server._reel_in_progress is False
+    assert server._busy_slots["reel"] is False
 
 
 def test_api_reel_releases_slot_on_cached_match(client, monkeypatch, tmp_path):
@@ -3575,7 +3575,7 @@ def test_api_reel_releases_slot_on_cached_match(client, monkeypatch, tmp_path):
     lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
     assert lines[-1]["ok"] is True
     assert lines[-1]["skipped"] is True
-    assert server._reel_in_progress is False
+    assert server._busy_slots["reel"] is False
 
 
 def test_api_reel_releases_slot_on_pipeline_exception(client, monkeypatch, tmp_path):
@@ -3595,7 +3595,7 @@ def test_api_reel_releases_slot_on_pipeline_exception(client, monkeypatch, tmp_p
         ln.get("ok") is False and "ffmpeg exploded" in ln.get("error", "")
         for ln in lines
     )
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_reel_direct_continues_worker_after_client_disconnect(
@@ -3638,11 +3638,11 @@ def test_api_reel_direct_continues_worker_after_client_disconnect(
         assert concat_blocked.wait(timeout=5)
         resp.close()
         assert server._reel_cancel_event.is_set() is False
-        assert server._reel_in_progress is True
+        assert server._busy_slots["reel"] is True
     finally:
         allow_finish.set()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert len(server._generated_reels) == 1
     assert server._generated_reels[0]["source"] == "intake"
 
@@ -3703,7 +3703,7 @@ def test_api_reel_direct_cleans_temp_clips_after_disconnect(
     finally:
         allow_finish.set()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert created_temps  # sanity: ffmpeg ran
     for tmp in created_temps:
         assert not Path(tmp).exists(), f"temp clip {tmp} was not cleaned up"
@@ -3751,7 +3751,7 @@ def test_api_reel_direct_explicit_cancel_still_works(client, monkeypatch, tmp_pa
 
     final = json.loads(resp.data.decode().strip().split("\n")[-1])
     assert final.get("cancelled") is True
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_generate_persists_artifacts_after_disconnect(
@@ -3841,7 +3841,7 @@ def test_api_generate_persists_artifacts_after_disconnect(
         "no worker was still in flight when the client disconnected; "
         f"raise HOLD_SECONDS ({started_count[0]} started, {finished_count[0]} done)"
     )
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
     persisted_rows = {a["cellRow"] for a in server._generated_artifacts}
     assert persisted_rows == {5, 6, 7, 8}
 
@@ -3913,7 +3913,7 @@ def test_api_job_status_reflects_reel_progress(client, monkeypatch, tmp_path):
         proceed.set()
         resp.close()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     final = client.get("/studio/api/job-status").get_json()
     assert final["reel"]["in_progress"] is False
 
@@ -3991,7 +3991,7 @@ def test_api_job_status_reflects_generate_progress(client, monkeypatch, tmp_path
         proceed.set()
         resp.close()
 
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
 
 
 def test_api_job_status_cancelling_flag(client, monkeypatch, tmp_path):
@@ -4027,7 +4027,7 @@ def test_api_job_status_cancelling_flag(client, monkeypatch, tmp_path):
         proceed.set()
         resp.close()
 
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
 
 
 def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path):
@@ -4086,7 +4086,7 @@ def test_api_generate_explicit_cancel_still_works(client, monkeypatch, tmp_path)
     text = resp.data.decode()
     lines = [json.loads(ln) for ln in text.strip().split("\n") if ln.strip()]
     assert any(ln.get("cancelled") is True for ln in lines)
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
 
 
 # ---- /api/reel-direct titlecards ----
@@ -4139,7 +4139,7 @@ def test_api_generate_discards_artifacts_completed_after_cancel(
     resp.data  # drain stream
     server._generate_cancel_event.clear()
 
-    assert _poll_until(lambda: server._generate_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["generate"] is False)
     ids = [a.get("id") for a in server._generated_artifacts]
     assert "a" not in ids
     assert not file_a.exists()
@@ -4369,7 +4369,7 @@ def test_api_reel_direct_wraps_segments_when_titlecards_enabled(
         },
     )
     _drain_ndjson(resp)
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert len(wrap_calls) == 2
     assert wrap_calls[0]["duration"] == 3
     assert wrap_calls[0]["enabled"] is True
@@ -4411,7 +4411,7 @@ def test_api_reel_direct_skips_wrap_when_titlecards_disabled(
         },
     )
     _drain_ndjson(resp)
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert wrap_calls == []
 
 
@@ -4439,7 +4439,7 @@ def test_api_reel_direct_clears_endcard_cache(client, monkeypatch, tmp_path):
         json={"segments": [{"participant": "P01", "start": 0, "end": 5}]},
     )
     _drain_ndjson(resp)
-    assert _poll_until(lambda: server._reel_in_progress is False)
+    assert _poll_until(lambda: server._busy_slots["reel"] is False)
     assert len(clear_calls) == 1
 
 

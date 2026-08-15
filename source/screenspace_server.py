@@ -58,6 +58,7 @@ import binascii
 import copy
 import json
 import math
+import sys
 import threading
 import uuid
 from collections import OrderedDict
@@ -78,12 +79,31 @@ import video
 from server_utils import (
     MediaCache,
     err,
+    err_no_video,
+    find_by_id,
     json_endpoint,
     make_debounced_persist,
+    make_participant_cache,
     make_sse_channel,
     ok,
+    opt_number,
     parse_number_arg,
+    remove_by_id,
 )
+
+# Per-tool optional float overrides api_preview reads straight into params.
+_PREVIEW_FLOAT_ARGS: dict[str, tuple[str, ...]] = {
+    "color": ("h", "s", "v"),
+    "attention": (
+        # Channel-weight / center-bias overrides so the Model view tunes the
+        # same math the scan runs (saliency_kwargs_from_params on both paths).
+        "weight_spectral",
+        "weight_contrast",
+        "weight_motion",
+        "weight_face",
+        "center_bias",
+    ),
+}
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -258,45 +278,18 @@ remux_server.register_remux_routes(
 _NOTES_MAX_BYTES = 64 * 1024
 
 
-def _refresh_participants() -> None:
-    """Rebuild ``_participants`` when the input directory changed since the last build.
-
-    Keyed on the input dir's ``st_mtime_ns`` (which advances on add/remove/rename),
-    mirroring ``utils.discover_participant_videos``' own memo — the steady-state
-    cost is one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
-    show up without a server restart.
-
-    No-op until :func:`_init_screenspace_state` has configured the source. The
-    rebuild rebinds ``_participants`` (atomic under the GIL), so a concurrent
-    reader sees either the old list or the new one, never a torn one.
-    """
-    global _participants
-
-    source = _participant_source
-    if source is None:
-        return
-    input_dir = str(Path(utils.get_effective_input_dir()))
-    try:
-        mtime: int | None = Path(input_dir).stat().st_mtime_ns
-    except OSError:
-        mtime = None
-    if source["dir"] == input_dir and source["mtime"] == mtime:
-        return
-    with _participants_lock:
-        # A racing request may have rebuilt, or a sheet swap may have replaced the
-        # source entirely, while we waited on the lock.
-        if _participant_source is not source:
-            return
-        if source["dir"] == input_dir and source["mtime"] == mtime:
-            return
-        _participants = files.resolve_participant_videos(source["sheet_context"])
-        source["dir"] = input_dir
-        source["mtime"] = mtime
+# The refresh/find pair over this module's _participants globals; the factory
+# reads them as module attributes so _init_screenspace_state and tests that
+# monkeypatch them keep working. See server_utils.make_participant_cache.
+_refresh_participants, _find_participant_record = make_participant_cache(
+    sys.modules[__name__],
+    input_dir_getter=utils.get_effective_input_dir,
+    resolve=files.resolve_participant_videos,
+)
 
 
 def _participant_exists(pid: str) -> bool:
-    _refresh_participants()
-    return any(p["id"] == pid for p in _participants)
+    return _find_participant_record(pid) is not None
 
 
 @screenspace_bp.route("/api/participants")
@@ -771,7 +764,7 @@ def api_calibrate() -> FlaskResponse:
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, _mtime_ns = resolved
 
     props = video.probe_video_properties(video_path)
@@ -882,11 +875,8 @@ def _participant_video_paths(participant_id: str) -> list[str]:
     The refresh is one ``stat()`` in the steady state — nothing against the
     ffmpeg work these callers are about to do.
     """
-    _refresh_participants()
-    for p in _participants:
-        if p["id"] == participant_id:
-            return list(p["video_paths"]) if p.get("has_video") else []
-    return []
+    record = _find_participant_record(participant_id)
+    return list(record["video_paths"]) if record and record.get("has_video") else []
 
 
 def _part_mtimes(paths: list[str]) -> tuple[int, ...] | None:
@@ -1057,7 +1047,7 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
     # frontend can keep requesting frames by global time; single-video unchanged.
     mapped = _map_participant_time(participant, ts)
     if mapped is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, local_ts = mapped
     mtime_ns = _mtime_or_zero(video_path)
 
@@ -1175,7 +1165,7 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
 
     video_path = _find_participant_video(participant)
     if video_path is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
 
     tool = (request.args.get("tool") or "").strip() or "color"
     if tool not in _VALID_TASK_TYPES:
@@ -1230,77 +1220,37 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
         default_gap = (
             config.SCREENSPACE_ATTENTION_INTERVAL if tool == "attention" else 1.0
         )
-        prev_ts_raw = request.args.get("prev")
-        if prev_ts_raw is not None:
-            try:
-                prev_ts = float(prev_ts_raw)
-            except ValueError:
-                prev_ts = max(0.0, ts - default_gap)
-        else:
-            prev_ts = max(0.0, ts - default_gap)
+        prev_raw = opt_number(request.args, "prev")
+        prev_ts = prev_raw if prev_raw is not None else max(0.0, ts - default_gap)
         if prev_ts < ts:
             prev_frame = frame_at(prev_ts)
 
     # Build params dict for the preview (subset of task parameters)
     params: dict[str, Any] = {}
-    if tool == "color":
-        for key in ("h", "s", "v"):
-            raw = request.args.get(key)
-            if raw is not None:
-                try:
-                    params[key] = float(raw)
-                except ValueError:
-                    pass
-    elif tool == "change":
-        raw = request.args.get("noise")
-        if raw is not None:
-            try:
-                params["noise_threshold"] = int(float(raw))
-            except ValueError:
-                pass
+    for key in _PREVIEW_FLOAT_ARGS.get(tool, ()):
+        value = opt_number(request.args, key)
+        if value is not None:
+            params[key] = value
+    if tool == "change":
+        value = opt_number(request.args, "noise")
+        if value is not None and math.isfinite(value):
+            params["noise_threshold"] = int(value)
     elif tool == "flow":
-        raw = request.args.get("magnitude")
-        if raw is not None:
-            try:
-                params["magnitude_threshold"] = float(raw)
-            except ValueError:
-                pass
-    elif tool == "attention":
-        # Channel-weight / center-bias overrides so the Model view tunes the
-        # same math the scan runs (saliency_kwargs_from_params on both paths).
-        for key in (
-            "weight_spectral",
-            "weight_contrast",
-            "weight_motion",
-            "weight_face",
-            "center_bias",
-        ):
-            raw = request.args.get(key)
-            if raw is not None:
-                try:
-                    params[key] = float(raw)
-                except ValueError:
-                    pass
+        value = opt_number(request.args, "magnitude")
+        if value is not None:
+            params["magnitude_threshold"] = value
     elif tool in ("text", "numbers"):
         raw = (request.args.get("ocr_preprocess") or "").strip().lower()
         if raw in ("1", "true", "yes", "on"):
             params["ocr_preprocess"] = True
     elif tool == "similarity":
-        ref_ts_raw = request.args.get("ref")
-        if ref_ts_raw is not None and region_coords is not None:
-            ref_ts: float | None = None
-            try:
-                ref_ts = float(ref_ts_raw)
-            except ValueError:
-                pass
-            if ref_ts is not None:
-                ref_frame = frame_at(ref_ts)
-                if ref_frame is not None:
-                    import screenspace as _ss
+        ref_ts = opt_number(request.args, "ref")
+        if ref_ts is not None and region_coords is not None:
+            ref_frame = frame_at(ref_ts)
+            if ref_frame is not None:
+                import screenspace as _ss
 
-                    params["reference_frame"] = _ss.extract_region(
-                        ref_frame, region_coords
-                    )
+                params["reference_frame"] = _ss.extract_region(ref_frame, region_coords)
 
     elif tool == "template":
         import screenspace as _ss_tpl
@@ -1321,19 +1271,13 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             if mask is not None:
                 params["template_mask"] = mask
         else:
-            ref_ts_raw = request.args.get("ref")
-            if ref_ts_raw is not None and region_coords is not None:
-                ref_ts_tpl: float | None = None
-                try:
-                    ref_ts_tpl = float(ref_ts_raw)
-                except ValueError:
-                    pass
-                if ref_ts_tpl is not None:
-                    ref_frame_tpl = frame_at(ref_ts_tpl)
-                    if ref_frame_tpl is not None:
-                        params["template_image"] = _ss_tpl.extract_region(
-                            ref_frame_tpl, region_coords
-                        )
+            ref_ts_tpl = opt_number(request.args, "ref")
+            if ref_ts_tpl is not None and region_coords is not None:
+                ref_frame_tpl = frame_at(ref_ts_tpl)
+                if ref_frame_tpl is not None:
+                    params["template_image"] = _ss_tpl.extract_region(
+                        ref_frame_tpl, region_coords
+                    )
 
     layer = (request.args.get("layer") or "").strip()
     if layer:
@@ -1435,7 +1379,7 @@ def api_video_info(participant: str) -> FlaskResponse:
 
     resolved = _find_participant_video_with_mtime(participant)
     if resolved is None:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     video_path, mtime_ns = resolved
 
     with _video_metadata_cache_lock:
@@ -1487,7 +1431,7 @@ def api_video_stream(participant: str) -> FlaskResponse:
     """
     paths = _participant_video_paths(participant)
     if not paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     # Multi-video participants: ?part=N selects the sub-video; the frontend swaps
     # the <video> source per part as it scrubs the global timeline. Defaults to
     # part 0 (and is the only file for single-video participants).
@@ -1505,7 +1449,7 @@ def api_video_audio_track(participant: str, idx: int) -> FlaskResponse:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     paths = _participant_video_paths(participant)
     if not paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     part = request.args.get("part", type=int)
     video_path = (
         paths[part] if part is not None and 0 <= part < len(paths) else paths[0]
@@ -1821,7 +1765,7 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
     name = data.get("name", "").strip()
     with _manifest_lock:
         stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        stash = find_by_id(stashes, stash_id)
         if stash is None:
             return err("Stash not found", 404)
         if name:
@@ -1834,11 +1778,8 @@ def api_stashes_update(stash_id: str) -> FlaskResponse:
 def api_stashes_delete(stash_id: str) -> FlaskResponse:
     """Dismiss a region stash."""
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        idx = next((i for i, s in enumerate(stashes) if s["id"] == stash_id), None)
-        if idx is None:
+        if remove_by_id(_manifest.get("stashes", []), stash_id) is None:
             return err("Stash not found", 404)
-        stashes.pop(idx)
         _do_persist(drain_events=False)
     return ok()
 
@@ -1847,8 +1788,7 @@ def api_stashes_delete(stash_id: str) -> FlaskResponse:
 def api_stashes_restore(stash_id: str) -> FlaskResponse:
     """Restore a stash: replace active regions with stashed ones (stash is kept)."""
     with _manifest_lock:
-        stashes = _manifest.get("stashes", [])
-        stash = next((s for s in stashes if s["id"] == stash_id), None)
+        stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
         _manifest["regions"] = copy.deepcopy(stash["regions"])
@@ -1874,9 +1814,7 @@ def api_stashes_add_region(stash_id: str) -> FlaskResponse:
         regions = _manifest.get("regions", {})
         if name not in regions:
             return err(f"Region '{name}' not found", 404)
-        stash = next(
-            (s for s in _manifest.get("stashes", []) if s["id"] == stash_id), None
-        )
+        stash = find_by_id(_manifest.get("stashes", []), stash_id)
         if stash is None:
             return err("Stash not found", 404)
         stash.setdefault("regions", {})[name] = copy.deepcopy(regions[name])
@@ -2305,7 +2243,7 @@ def api_tasks_create() -> FlaskResponse:
 
     video_paths = _participant_video_paths(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}")
+        return err_no_video(participant, 400)
     video_path = video_paths[0]
 
     # Default per-task source label; the per-part scan tags each event with the
@@ -2598,68 +2536,54 @@ def api_export_events() -> FlaskResponse:
     return err(f"Unsupported format: {fmt}")
 
 
-@screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
-def api_event_exclude(event_id: str) -> FlaskResponse:
-    """Set an event as excluded."""
+def _set_event_excluded(event_id: str, excluded: bool) -> FlaskResponse:
+    """Set one event's excluded flag; 404 when the id is unknown."""
     with _manifest_lock:
         for e in _manifest.get("events", []):
             if e["id"] == event_id:
-                e["excluded"] = True
+                e["excluded"] = excluded
                 _bump_events_version()
                 _do_persist(drain_events=False)
                 return ok()
     return err("Event not found", 404)
+
+
+def _bulk_set_excluded(excluded: bool) -> FlaskResponse:
+    """Set the excluded flag on every event named in the request's id list."""
+    data = request.get_json(silent=True) or {}
+    ids = set(data.get("ids", []))
+    if not ids:
+        return err("ids list required")
+    with _manifest_lock:
+        count = 0
+        for e in _manifest.get("events", []):
+            if e["id"] in ids:
+                e["excluded"] = excluded
+                count += 1
+        if count:
+            _bump_events_version()
+        _do_persist(drain_events=False)
+    return ok(updated=count)
+
+
+@screenspace_bp.route("/api/events/<event_id>/exclude", methods=["PUT"])
+def api_event_exclude(event_id: str) -> FlaskResponse:
+    return _set_event_excluded(event_id, True)
 
 
 @screenspace_bp.route("/api/events/<event_id>/include", methods=["PUT"])
 def api_event_include(event_id: str) -> FlaskResponse:
-    """Set an event as included."""
-    with _manifest_lock:
-        for e in _manifest.get("events", []):
-            if e["id"] == event_id:
-                e["excluded"] = False
-                _bump_events_version()
-                _do_persist(drain_events=False)
-                return ok()
-    return err("Event not found", 404)
+    return _set_event_excluded(event_id, False)
 
 
 @screenspace_bp.route("/api/events/bulk-exclude", methods=["PUT"])
 def api_events_bulk_exclude() -> FlaskResponse:
-    """Bulk-exclude events by ID list."""
-    data = request.get_json(silent=True) or {}
-    ids = set(data.get("ids", []))
-    if not ids:
-        return err("ids list required")
-    with _manifest_lock:
-        count = 0
-        for e in _manifest.get("events", []):
-            if e["id"] in ids:
-                e["excluded"] = True
-                count += 1
-        if count:
-            _bump_events_version()
-        _do_persist(drain_events=False)
-    return ok(updated=count)
+    return _bulk_set_excluded(True)
 
 
 @screenspace_bp.route("/api/events/bulk-include", methods=["PUT"])
 def api_events_bulk_include() -> FlaskResponse:
-    """Bulk-include events by ID list."""
-    data = request.get_json(silent=True) or {}
-    ids = set(data.get("ids", []))
-    if not ids:
-        return err("ids list required")
-    with _manifest_lock:
-        count = 0
-        for e in _manifest.get("events", []):
-            if e["id"] in ids:
-                e["excluded"] = False
-                count += 1
-        if count:
-            _bump_events_version()
-        _do_persist(drain_events=False)
-    return ok(updated=count)
+    return _bulk_set_excluded(False)
 
 
 # ---- Helpers ----

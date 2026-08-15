@@ -44,7 +44,6 @@ Mutations hold ``_manifest_lock`` and persist via :func:`_persist_locked`.
 from __future__ import annotations
 
 import copy
-import json
 import math
 import os
 import threading
@@ -53,7 +52,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, request, send_file
+from flask import Blueprint, request, send_file
 
 import config
 import files
@@ -61,7 +60,15 @@ import pipeline
 import remux_server
 import utils
 import video
-from server_utils import MediaCache, err, ok, parse_clip_window
+from server_utils import (
+    MediaCache,
+    clip_media_response,
+    err,
+    err_no_video,
+    find_by_id,
+    ok,
+    remove_by_id,
+)
 import itertools
 
 # ---- Module state (initialized by _init_composer_state) ----
@@ -100,10 +107,6 @@ remux_server.register_remux_routes(composer_bp, lambda: _sheet_context)
 # ---- Manifest I/O ----
 
 
-def _manifest_path() -> Path:
-    return Path(utils.get_effective_output_dir()) / config.COMPOSER_MANIFEST_FILENAME
-
-
 def _empty_manifest() -> dict[str, Any]:
     return {
         "cuts": [],
@@ -117,17 +120,10 @@ def _empty_manifest() -> dict[str, Any]:
 
 
 def _load_manifest() -> dict[str, Any]:
-    path = _manifest_path()
-    if path.is_file():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-        except (OSError, json.JSONDecodeError):
-            utils.warning_print(
-                f"Could not read {path.name}; starting with an empty composer manifest."
-            )
-    return _empty_manifest()
+    data = utils.load_json_manifest(
+        config.COMPOSER_MANIFEST_FILENAME, warn_label="the composer manifest"
+    )
+    return data if isinstance(data, dict) else _empty_manifest()
 
 
 def _persist_locked() -> None:
@@ -268,9 +264,7 @@ def api_cut_create() -> Any:
 def api_cut_update(cut_id: str) -> Any:
     data = request.get_json(silent=True) or {}
     with _manifest_lock:
-        cut = next(
-            (c for c in _manifest.get("cuts", []) if c.get("id") == cut_id), None
-        )
+        cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
             return err(f"No cut {cut_id}", 404)
         start = cut["start"]
@@ -294,11 +288,8 @@ def api_cut_update(cut_id: str) -> Any:
 @composer_bp.route("/api/cuts/<cut_id>", methods=["DELETE"])
 def api_cut_delete(cut_id: str) -> Any:
     with _manifest_lock:
-        cuts = _manifest.get("cuts", [])
-        remaining = [c for c in cuts if c.get("id") != cut_id]
-        if len(remaining) == len(cuts):
+        if remove_by_id(_manifest.get("cuts", []), cut_id) is None:
             return err(f"No cut {cut_id}", 404)
-        _manifest["cuts"] = remaining
         _persist_locked()
     return ok()
 
@@ -529,10 +520,7 @@ def api_annotation_create() -> Any:
 def api_annotation_update(ann_id: str) -> Any:
     data = request.get_json(silent=True) or {}
     with _manifest_lock:
-        ann = next(
-            (a for a in _manifest.get("annotations", []) if a.get("id") == ann_id),
-            None,
-        )
+        ann = find_by_id(_manifest.get("annotations", []), ann_id)
         if ann is None:
             return err(f"No annotation {ann_id}", 404)
         if data.get("span") is not None:
@@ -554,11 +542,8 @@ def api_annotation_update(ann_id: str) -> Any:
 @composer_bp.route("/api/annotations/<ann_id>", methods=["DELETE"])
 def api_annotation_delete(ann_id: str) -> Any:
     with _manifest_lock:
-        annotations = _manifest.get("annotations", [])
-        remaining = [a for a in annotations if a.get("id") != ann_id]
-        if len(remaining) == len(annotations):
+        if remove_by_id(_manifest.get("annotations", []), ann_id) is None:
             return err(f"No annotation {ann_id}", 404)
-        _manifest["annotations"] = remaining
         _persist_locked()
     return ok()
 
@@ -850,15 +835,15 @@ MAX_OVERLAY_WINDOWS = 20
 
 def _find_participant_parts(participant: str) -> list[dict[str, Any]] | None:
     """Ordered ``{name, path, duration, offset}`` parts, or None."""
-    for p in files.resolve_participant_videos(_sheet_context):
-        if p["id"] == participant and p.get("has_video"):
-            parts = _participant_parts(p["video_paths"])
-            if parts is None:
-                return None
-            for part, vp in zip(parts, p["video_paths"]):
-                part["path"] = str(vp)
-            return parts
-    return None
+    p = files.find_participant_record(_sheet_context, participant)
+    if p is None or not p.get("has_video"):
+        return None
+    parts = _participant_parts(p["video_paths"])
+    if parts is None:
+        return None
+    for part, vp in zip(parts, p["video_paths"]):
+        part["path"] = str(vp)
+    return parts
 
 
 def _part_for_time(parts: list[dict[str, Any]], t: float) -> dict[str, Any]:
@@ -895,64 +880,6 @@ def _resolve_scrub_source(
     return part["path"], local_start, clamped
 
 
-def _scrub_media_response(participant: str, cache: MediaCache, kind: str) -> Any:
-    """Shared guts of the sprite / audio scrub routes (parse → resolve → cache)."""
-    window = parse_clip_window()
-    if window is None:
-        return err("Invalid time range")
-    start_sec, duration = window
-    if kind == "audio":
-        duration = min(duration, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
-
-    resolved = _resolve_scrub_source(participant, start_sec, duration)
-    if resolved is None:
-        return err("Source video not found", 404)
-    video_path, local_start, duration = resolved
-
-    try:
-        mtime = os.stat(video_path).st_mtime
-    except OSError:
-        mtime = 0.0
-
-    if kind == "sprite":
-        cols = config.STUDIO_SCRUBBER_SPRITE_COLS
-        rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
-        cache_key: tuple = (
-            video_path,
-            round(local_start, 3),
-            round(duration, 3),
-            cols,
-            rows,
-            mtime,
-        )
-        media_bytes = cache.get_or_compute(
-            cache_key,
-            # seek_frames: per-frame fast seeks keep the cost O(frames), not
-            # O(span) — timeline tiles can cover minutes of source video.
-            lambda: video.extract_sprite_sheet_bytes(
-                video_path, local_start, duration, cols, rows, seek_frames=True
-            ),
-        )
-        mimetype = "image/jpeg"
-    else:
-        cache_key = (video_path, round(local_start, 3), round(duration, 3), mtime)
-        media_bytes = cache.get_or_compute(
-            cache_key,
-            lambda: video.extract_audio_segment_bytes(
-                video_path, local_start, duration
-            ),
-        )
-        mimetype = "audio/wav"
-
-    if media_bytes is None:
-        return err(f"{kind.capitalize()} extraction failed", 404)
-    return Response(
-        media_bytes,
-        mimetype=mimetype,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
-
-
 @composer_bp.route("/api/sprite/<participant>")
 def api_sprite(participant: str) -> Any:
     """Tiled JPEG sprite sheet for one thumbnail-strip tile.
@@ -961,7 +888,21 @@ def api_sprite(participant: str) -> Any:
     slot-seconds ladder), not per marker span, so zooming in refines the strip
     with additional frames instead of stretching the same ones.
     """
-    return _scrub_media_response(participant, _sprite_cache, "sprite")
+    cols = config.STUDIO_SCRUBBER_SPRITE_COLS
+    rows = config.STUDIO_SCRUBBER_SPRITE_ROWS
+    return clip_media_response(
+        cache=_sprite_cache,
+        resolve=lambda start, dur: _resolve_scrub_source(participant, start, dur),
+        # seek_frames: per-frame fast seeks keep the cost O(frames), not
+        # O(span) — timeline tiles can cover minutes of source video.
+        produce=lambda path, local_start, dur: video.extract_sprite_sheet_bytes(
+            path, local_start, dur, cols, rows, seek_frames=True
+        ),
+        mimetype="image/jpeg",
+        kind_label="Sprite",
+        key_extras=(cols, rows),
+        invalid_message="Invalid time range",
+    )
 
 
 @composer_bp.route("/api/audio/<participant>")
@@ -971,7 +912,16 @@ def api_audio(participant: str) -> Any:
     Capped at ``config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS`` — markers can span
     minutes, and the WAV is decoded whole in the browser's WebAudio context.
     """
-    return _scrub_media_response(participant, _audio_cache, "audio")
+    return clip_media_response(
+        cache=_audio_cache,
+        resolve=lambda start, dur: _resolve_scrub_source(
+            participant, start, min(dur, config.COMPOSER_SCRUB_MAX_AUDIO_SECONDS)
+        ),
+        produce=video.extract_audio_segment_bytes,
+        mimetype="audio/wav",
+        kind_label="Audio",
+        invalid_message="Invalid time range",
+    )
 
 
 @composer_bp.route("/api/audio-track/<participant>/<int:idx>")
@@ -979,7 +929,7 @@ def api_audio_track(participant: str, idx: int) -> Any:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     parts = _find_participant_parts(participant)
     if not parts:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     out = video.extract_audio_track(parts[0]["path"], idx)
     if out is None:
         return err("Could not extract audio track", 500)

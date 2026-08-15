@@ -38,6 +38,40 @@ _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
 # Max keyframe gap (seconds) per file; None means "unknown / too sparse to
 # confirm" and callers must treat that as "do not enable keyframe-only decode".
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
+
+
+def _ffmpeg_cmd(*args: str) -> list[str]:
+    """Standard ffmpeg argv prefix (``-y -loglevel ...``) plus *args.
+
+    A function rather than a constant: ``config.FFMPEG_LOGLEVEL`` must be read
+    at call time, not import time.
+    """
+    return ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL, *args]
+
+
+# Argv tail shared by the thumbnail/sprite grabbers: one JPEG frame on stdout.
+_MJPEG_PIPE_TAIL: tuple[str, ...] = (
+    "-f",
+    "image2pipe",
+    "-vcodec",
+    "mjpeg",
+    "-q:v",
+    "5",
+    "pipe:1",
+)
+
+
+def _ffmpeg_bytes(cmd: list[str], *, timeout: float) -> bytes | None:
+    """Run an ffmpeg argv, returning stdout bytes; None on any failure."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or not result.stdout:
+        return None
+    return result.stdout
+
+
 # Container seekability per file; None means "shape not determined" (not an
 # MP4, truncated, unreadable) and callers must stay silent rather than warn.
 _container_seekability_cache: dict[tuple[str, int], dict[str, Any] | None] = {}
@@ -737,18 +771,14 @@ def build_ffmpeg_cut_command(
     Returns:
         argv list for subprocess (e.g. ['ffmpeg', '-y', ...])
     """
-    base = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    base = _ffmpeg_cmd(
         "-ss",
         start_pos,
         "-i",
         input_file,
         "-t",
         str(duration_seconds),
-    ]
+    )
     if not reencode:
         if audio_normalize:
             # loudnorm: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range)
@@ -854,11 +884,7 @@ def mux_subtitles(
         )
         return False
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = _ffmpeg_cmd(
         "-i",
         input_video,
         "-i",
@@ -886,7 +912,7 @@ def mux_subtitles(
         "-disposition:s:0",
         "default" if set_default else "0",
         output_video,
-    ]
+    )
 
     utils.verbose_print(f"Muxing subtitles into {Path(output_video).name} ({codec}).")
     if config.DEBUGGING:
@@ -1096,11 +1122,7 @@ def extract_screenshot(
         )
         return False
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = _ffmpeg_cmd(
         "-ss",
         timestamp,
         "-i",
@@ -1110,7 +1132,7 @@ def extract_screenshot(
         "-q:v",
         config.FFMPEG_SCREENSHOT_QUALITY,
         output_file,
-    ]
+    )
     utils.debug_print(f"ffmpeg screenshot command: {' '.join(ffmpeg_command)}")
 
     ffmpeg_result = run_ffmpeg_process(
@@ -1155,11 +1177,7 @@ def extract_thumbnail_bytes(
         return None
 
     pre_seek, post_seek = accurate_seek_args(max(0.0, start_seconds))
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    cmd = _ffmpeg_cmd(
         *pre_seek,
         "-i",
         input_file,
@@ -1168,23 +1186,9 @@ def extract_thumbnail_bytes(
         "1",
         "-vf",
         f"scale={width}:-1",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "5",
-        "pipe:1",
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return None
-
-    if result.returncode != 0 or not result.stdout:
-        return None
-    return result.stdout
+        *_MJPEG_PIPE_TAIL,
+    )
+    return _ffmpeg_bytes(cmd, timeout=15)
 
 
 def extract_sprite_sheet_bytes(
@@ -1227,11 +1231,7 @@ def extract_sprite_sheet_bytes(
 
     frame_count = max(1, cols * rows)
     duration = max(0.1, duration_seconds)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    cmd = _ffmpeg_cmd(
         "-ss",
         str(max(0.0, start_seconds)),
         "-t",
@@ -1242,23 +1242,9 @@ def extract_sprite_sheet_bytes(
         "1",
         "-vf",
         f"fps={frame_count}/{duration},scale={frame_width}:-1,tile={cols}x{rows}",
-        "-f",
-        "image2pipe",
-        "-vcodec",
-        "mjpeg",
-        "-q:v",
-        "5",
-        "pipe:1",
-    ]
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return None
-
-    if result.returncode != 0 or not result.stdout:
-        return None
-    return result.stdout
+        *_MJPEG_PIPE_TAIL,
+    )
+    return _ffmpeg_bytes(cmd, timeout=20)
 
 
 def _extract_sprite_sheet_seek(
@@ -1285,11 +1271,7 @@ def _extract_sprite_sheet_seek(
     times = [start + (i + 0.5) * step for i in range(frame_count)]
 
     def grab(ts: float) -> bytes | None:
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        cmd = _ffmpeg_cmd(
             "-ss",
             str(ts),
             "-i",
@@ -1298,21 +1280,9 @@ def _extract_sprite_sheet_seek(
             "1",
             "-vf",
             f"scale={frame_width}:-1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "-q:v",
-            "5",
-            "pipe:1",
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, timeout=15, check=False)
-        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-            return None
-        if result.returncode != 0 or not result.stdout:
-            return None
-        return result.stdout
+            *_MJPEG_PIPE_TAIL,
+        )
+        return _ffmpeg_bytes(cmd, timeout=15)
 
     workers = min(8, os.cpu_count() or 4, frame_count)
     if frame_count >= 2:
@@ -1382,11 +1352,7 @@ def extract_audio_segment_bytes(
     duration = max(0.05, duration_seconds)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     os.close(tmp_fd)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    cmd = _ffmpeg_cmd(
         "-ss",
         str(max(0.0, start_seconds)),
         "-t",
@@ -1403,7 +1369,7 @@ def extract_audio_segment_bytes(
         "-f",
         "wav",
         tmp_path,
-    ]
+    )
 
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
@@ -1494,11 +1460,7 @@ def extract_gif(
     is_webm = out_lower.endswith(".webm")
     is_webp = out_lower.endswith(".webp")
 
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-loglevel",
-        config.FFMPEG_LOGLEVEL,
+    ffmpeg_command = _ffmpeg_cmd(
         "-ss",
         timestamp,
         "-t",
@@ -1507,7 +1469,7 @@ def extract_gif(
         input_file,
         "-vf",
         f"fps={config.GIF_FPS},scale={config.GIF_SCALE_WIDTH}:-1:flags=lanczos",
-    ]
+    )
     if is_webm:
         # Silent VP9 loop; the loop is controlled by the <video loop> attribute
         # in the viewer, not by the container. -an strips audio.
@@ -2310,11 +2272,7 @@ def remux_to_faststart(
         # hidden name alone would not keep the scratch file out of the
         # participant list. -f mp4 supplies the format the name no longer does.
         tmp = src.parent / f".{src.stem}.remux.{os.getpid()}.{threading.get_ident()}"
-        command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        command = _ffmpeg_cmd(
             "-i",
             str(src),
             # Every stream: these recordings routinely carry two audio tracks
@@ -2328,7 +2286,7 @@ def remux_to_faststart(
             "-f",
             "mp4",
             str(tmp),
-        ]
+        )
         try:
             result = _run_ffmpeg_with_progress(
                 command,
@@ -2634,11 +2592,7 @@ def compress_to_size(
 
     try:
         null_output = "/dev/null" if os.name != "nt" else "NUL"
-        pass1_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        pass1_command = _ffmpeg_cmd(
             "-i",
             filepath,
             "-c:v",
@@ -2653,7 +2607,7 @@ def compress_to_size(
             "-f",
             "null",
             null_output,
-        ]
+        )
 
         utils.debug_print(f"Pass 1 command: {' '.join(pass1_command)}")
         # Split the progress bar 50/50 between the two passes so the UI shows a
@@ -2684,11 +2638,7 @@ def compress_to_size(
             )
             return False
 
-        pass2_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        pass2_command = _ffmpeg_cmd(
             "-i",
             filepath,
             "-c:v",
@@ -2704,7 +2654,7 @@ def compress_to_size(
             "-b:a",
             f"{config.AUDIO_BITRATE_KBPS}k",
             compressed_temp_path,
-        ]
+        )
 
         utils.debug_print(f"Pass 2 command: {' '.join(pass2_command)}")
         pass2_progress = (
@@ -2967,7 +2917,7 @@ def _concatenate_filter_complex(
     )
 
     def build_command(encoder: str) -> list[str]:
-        ffmpeg_command = ["ffmpeg", "-y", "-loglevel", config.FFMPEG_LOGLEVEL]
+        ffmpeg_command = _ffmpeg_cmd()
         for path in clip_paths:
             ffmpeg_command.extend(["-i", str(Path(path).resolve())])
         ffmpeg_command.extend(["-filter_complex", filter_str])
@@ -3025,11 +2975,7 @@ def _concatenate_demuxer(
     """Concatenate clips using concat demuxer (fast path for matching properties)."""
     with _concat_list_file(clip_paths) as concat_list_file:
         try:
-            ffmpeg_command = [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                config.FFMPEG_LOGLEVEL,
+            ffmpeg_command = _ffmpeg_cmd(
                 "-f",
                 "concat",
                 "-safe",
@@ -3039,7 +2985,7 @@ def _concatenate_demuxer(
                 "-c",
                 "copy",
                 output_file,
-            ]
+            )
             utils.debug_print(f"ffmpeg concat command: {' '.join(ffmpeg_command)}")
 
             ffmpeg_result = run_ffmpeg_process(
@@ -3058,11 +3004,7 @@ def _concatenate_demuxer(
                 )
 
                 def build_reencode(encoder: str) -> list[str]:
-                    return [
-                        "ffmpeg",
-                        "-y",
-                        "-loglevel",
-                        config.FFMPEG_LOGLEVEL,
+                    return _ffmpeg_cmd(
                         "-f",
                         "concat",
                         "-safe",
@@ -3073,7 +3015,7 @@ def _concatenate_demuxer(
                         "-c:a",
                         "aac",
                         output_file,
-                    ]
+                    )
 
                 ffmpeg_result = run_ffmpeg_encode(
                     build_reencode,
@@ -3128,11 +3070,7 @@ def concat_copy(
     """
     with _concat_list_file(clip_paths) as concat_list_file:
         try:
-            ffmpeg_command = [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                config.FFMPEG_LOGLEVEL,
+            ffmpeg_command = _ffmpeg_cmd(
                 "-f",
                 "concat",
                 "-safe",
@@ -3142,7 +3080,7 @@ def concat_copy(
                 "-c",
                 "copy",
                 output_file,
-            ]
+            )
             utils.debug_print(f"ffmpeg concat-copy command: {' '.join(ffmpeg_command)}")
             ffmpeg_result = run_ffmpeg_process(
                 ffmpeg_command,
@@ -3184,11 +3122,7 @@ def _batch_extract_screenshots(
         # i then still maps to timestamps[i] because the grid is evenly spaced.
         start_offset = timestamps[0] if timestamps else 0
         seek_args = ["-ss", str(start_offset)] if start_offset > 0 else []
-        ffmpeg_command = [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            config.FFMPEG_LOGLEVEL,
+        ffmpeg_command = _ffmpeg_cmd(
             *seek_args,
             "-i",
             input_file,
@@ -3198,7 +3132,7 @@ def _batch_extract_screenshots(
             config.FFMPEG_SCREENSHOT_QUALITY,
             "-f",
             "image2",
-        ]
+        )
         if ext.lower() == ".webp":
             ffmpeg_command += ["-c:v", "libwebp", "-quality", str(config.WEBP_QUALITY)]
         ffmpeg_command.append(os.path.join(tmpdir, f"frame_%04d{ext}"))

@@ -41,6 +41,7 @@ API endpoints (all under /transcripts/):
 import atexit
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -62,7 +63,13 @@ import thinking_agents
 import transcripts
 import utils
 import video
-from server_utils import err, make_debounced_persist, ok
+from server_utils import (
+    err,
+    err_no_video,
+    make_debounced_persist,
+    make_participant_cache,
+    ok,
+)
 
 FlaskResponse = Response | tuple[Response, int]
 
@@ -246,40 +253,14 @@ remux_server.register_remux_routes(
 # ---- Participants ----
 
 
-def _refresh_participants() -> None:
-    """Rebuild ``_participants`` when the input directory changed since the last build.
-
-    Keyed on the input dir's ``st_mtime_ns`` (which advances on add/remove/rename),
-    mirroring ``utils.discover_participant_videos``' own memo — the steady-state
-    cost is one ``stat()``. This is what lets a video dropped into ``-i`` mid-session
-    show up without a server restart.
-
-    No-op until :func:`_init_transcripts_state` has configured the source. The
-    rebuild rebinds ``_participants`` (atomic under the GIL), so a concurrent
-    reader sees either the old list or the new one, never a torn one.
-    """
-    global _participants
-
-    source = _participant_source
-    if source is None:
-        return
-    input_dir = str(Path(utils.get_effective_input_dir()))
-    try:
-        mtime: int | None = Path(input_dir).stat().st_mtime_ns
-    except OSError:
-        mtime = None
-    if source["dir"] == input_dir and source["mtime"] == mtime:
-        return
-    with _participants_lock:
-        # A racing request may have rebuilt, or a sheet swap may have replaced the
-        # source entirely, while we waited on the lock.
-        if _participant_source is not source:
-            return
-        if source["dir"] == input_dir and source["mtime"] == mtime:
-            return
-        _participants = files.resolve_participant_videos(source["sheet_context"])
-        source["dir"] = input_dir
-        source["mtime"] = mtime
+# The refresh/find pair over this module's _participants globals; the factory
+# reads them as module attributes so _init_transcripts_state and tests that
+# monkeypatch them keep working. See server_utils.make_participant_cache.
+_refresh_participants, _find_participant_record = make_participant_cache(
+    sys.modules[__name__],
+    input_dir_getter=utils.get_effective_input_dir,
+    resolve=files.resolve_participant_videos,
+)
 
 
 @transcripts_bp.route("/api/participants")
@@ -558,11 +539,8 @@ def api_vtt(participant: str) -> FlaskResponse:
 
 def _video_paths_for_participant(participant: str) -> list[str]:
     """Return the ordered source video path(s) for *participant*, or [] if unknown."""
-    _refresh_participants()
-    for p in _participants:
-        if p["id"] == participant:
-            return list(p["video_paths"])
-    return []
+    record = _find_participant_record(participant)
+    return list(record["video_paths"]) if record else []
 
 
 @transcripts_bp.route("/api/audio-info/<participant>")
@@ -579,7 +557,7 @@ def api_audio_info(participant: str) -> FlaskResponse:
     """
     video_paths = _video_paths_for_participant(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     props = video.probe_video_properties(video_paths[0])
     if props is None:
         return err("Could not probe video file", 500)
@@ -596,7 +574,7 @@ def api_audio_track(participant: str, idx: int) -> FlaskResponse:
     """Stream one demuxed audio track for the browser's per-track volume mixer."""
     video_paths = _video_paths_for_participant(participant)
     if not video_paths:
-        return err(f"No video for participant {participant}", 404)
+        return err_no_video(participant)
     out = video.extract_audio_track(video_paths[0], idx)
     if out is None:
         return err("Could not extract audio track", 500)
