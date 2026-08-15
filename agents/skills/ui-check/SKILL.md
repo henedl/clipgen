@@ -87,6 +87,11 @@ on a `pageerror` or a throwing snippet, so it composes in a shell chain.
 Do not loop `shot.py` over all six pages — it boots its own server per invocation.
 That is what the suite is for.
 
+For performance questions ("is this render slow?", "does that poller pause when
+hidden?") don't eyeball — `shot.py --perf` captures CDP metrics, timing entries and
+the page's profiling spans as grep-able `perf | ` lines, and `--trace` writes a
+Perfetto-compatible Chrome trace. Workflow: [/profile](../profile/SKILL.md).
+
 ### States and themes
 
 The six-page smoke renders each page's boot state, in dark, and clicks nothing.
