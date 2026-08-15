@@ -1671,24 +1671,20 @@
         renderTimeline();
       });
     }
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        // Saved/reset settings apply live on this page: re-sync the mirrored
-        // config flag and the footer hint that advertises it.
-        function syncComposerSettings(settings) {
-          (settings || []).forEach(function (s) {
-            if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
-              CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
-            }
-          });
-          updateTimelineHint();
+    // Saved/reset settings apply live on this page: re-sync the mirrored
+    // config flag and the footer hint that advertises it.
+    function syncComposerSettings(settings) {
+      (settings || []).forEach(function (s) {
+        if (s.name === "COMPOSER_DOUBLE_CLICK_CUTS") {
+          CLIPGEN_CONFIG.composerDoubleClickCuts = !!s.value;
         }
-        window.openSettingsModal({
-          initialTab: "Composer",
-          onSave: function (_applied, settings) { syncComposerSettings(settings); },
-          onReset: function (_scope, settings) { syncComposerSettings(settings); },
-        });
+      });
+      updateTimelineHint();
+    }
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
+        initialTab: "Composer",
+        onApply: function (_applied, settings) { syncComposerSettings(settings); },
       });
     }
 

@@ -2943,30 +2943,19 @@
   }
 
   function initTranscriptSettings() {
-    var btn = qs("#settingsBtn");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      openSettingsModal({
-        initialTab: "Transcription",
-        onSave: function (applied, settings) {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          _onTranscribeModelMaybeChanged(
-            (applied && applied.TRANSCRIBE_MODEL) !== undefined
-              ? applied.TRANSCRIBE_MODEL
-              : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-          );
-          _applySettingsSnapshot(applied, settings);
-        },
-        onReset: function (scope, settings) {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          _onTranscribeModelMaybeChanged(
-            _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
-          );
-          _applySettingsSnapshot(null, settings);
-        },
-      });
+    if (!window.wireSettingsButton) return;
+    window.wireSettingsButton({
+      initialTab: "Transcription",
+      onApply: function (applied, settings) {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        _onTranscribeModelMaybeChanged(
+          applied && applied.TRANSCRIBE_MODEL !== undefined
+            ? applied.TRANSCRIBE_MODEL
+            : _settingValueFromRecords(settings, "TRANSCRIBE_MODEL")
+        );
+        _applySettingsSnapshot(applied, settings);
+      },
     });
   }
 

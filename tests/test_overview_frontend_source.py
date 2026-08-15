@@ -74,7 +74,9 @@ def test_hub_wires_shared_chrome_buttons():
     the buttons; each surface wires them — a missed call means dead chrome)."""
     hub = (_WEB / "overview.js").read_text(encoding="utf-8")
     assert "initThemeToggle()" in hub
-    assert "openSettingsModal" in hub
+    # Settings wiring goes through settings-modal.js's shared helper, which
+    # owns the #settingsBtn lookup.
+    assert "wireSettingsButton" in hub
 
 
 def test_hub_reads_metadata_cluster_setting_from_sheet_payload():

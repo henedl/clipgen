@@ -349,13 +349,10 @@
     // TopNav renders #themeToggle / #settingsBtn synchronously before this
     // hub loads; wire them here as the other surfaces do (utils.js owns the
     // theme logic, settings-modal.js the shared modal).
-    initThemeToggle();
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        window.openSettingsModal({});
-      });
+    if (typeof initThemeToggle === "function") {
+      initThemeToggle();
     }
+    if (window.wireSettingsButton) window.wireSettingsButton({});
 
     var refreshBtn = qs("#ovRefresh");
     if (refreshBtn) {

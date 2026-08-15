@@ -5027,21 +5027,13 @@
     // Settings
     fetchScreenspaceSettings();
     var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn) {
-      settingsBtn.addEventListener("click", function () {
-        if (typeof window.openSettingsModal === "function") {
-          window.openSettingsModal({
-            initialTab: "Screenspace",
-            onSave: function (applied, settings) {
-              applyScreenspaceSettingsSnapshot(applied, settings);
-              renderResults(); // reflect a histogram-toggle change immediately
-            },
-            onReset: function (scope, settings) {
-              applyScreenspaceSettingsSnapshot(null, settings);
-              renderResults();
-            },
-          });
-        }
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
+        initialTab: "Screenspace",
+        onApply: function (applied, settings) {
+          applyScreenspaceSettingsSnapshot(applied, settings);
+          renderResults(); // reflect a histogram-toggle change immediately
+        },
       });
     }
 

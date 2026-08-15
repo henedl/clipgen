@@ -3373,22 +3373,18 @@
     qs("#titlecardDuration").addEventListener("change", persistTitlecardSettings);
 
     qs("#studioRefresh").addEventListener("click", refreshActiveTab);
-    qs("#settingsBtn").addEventListener("click", function () {
-      openSettingsModal({
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
         initialTab: "General",
-        version: state.sheetData ? state.sheetData.version : "",
-        onSave: function (_applied, full) {
-          state.settingsData = full;
-          syncInlineControls();
-          _syncMarkCategoriesFromSettings(full);
-        },
-        onReset: function (_scope, full) {
+        // Click-time function: the sheet version loads after boot.
+        version: function () { return state.sheetData ? state.sheetData.version : ""; },
+        onApply: function (_applied, full) {
           state.settingsData = full;
           syncInlineControls();
           _syncMarkCategoriesFromSettings(full);
         },
       });
-    });
+    }
 
     qs("#logBtn").addEventListener("click", openLog);
     qs("#logClose").addEventListener("click", closeLog);

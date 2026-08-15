@@ -1128,12 +1128,7 @@
     if (typeof initThemeToggle === "function") {
       initThemeToggle();
     }
-    var settingsBtn = qs("#settingsBtn");
-    if (settingsBtn && typeof window.openSettingsModal === "function") {
-      settingsBtn.addEventListener("click", function () {
-        window.openSettingsModal({});
-      });
-    }
+    if (window.wireSettingsButton) window.wireSettingsButton({});
 
     // Blueprint switcher toolbar.
     var sel = qs("#wfBlueprintSelect");
