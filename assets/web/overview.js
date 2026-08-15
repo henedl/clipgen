@@ -252,6 +252,15 @@
     }
   }
 
+  var TAB_KEYS = ["convergence", "metadata", "reports"];
+
+  // Call a tab satellite's lifecycle hook (e.g. OV.reportsActivate) if the
+  // satellite published it.
+  function tabHook(tab, phase) {
+    var fn = OV[tab + phase];
+    if (fn) fn();
+  }
+
   function syncTab(animate) {
     var panels = {
       convergence: qs("#convergencePanel"),
@@ -263,9 +272,7 @@
       if (panels[key]) panels[key].classList.add("hidden");
     }
 
-    if (OV.convergenceDeactivate) OV.convergenceDeactivate();
-    if (OV.metadataDeactivate) OV.metadataDeactivate();
-    if (OV.reportsDeactivate) OV.reportsDeactivate();
+    TAB_KEYS.forEach(function (tab) { tabHook(tab, "Deactivate"); });
 
     // Drop any paint the outgoing tab asserted; the incoming one re-asserts it
     // from its own activate path.
@@ -273,9 +280,7 @@
 
     var activePanel = panels[state.activeTab];
     if (activePanel) activePanel.classList.remove("hidden");
-    if (state.activeTab === "convergence" && OV.convergenceActivate) OV.convergenceActivate();
-    if (state.activeTab === "metadata" && OV.metadataActivate) OV.metadataActivate();
-    if (state.activeTab === "reports" && OV.reportsActivate) OV.reportsActivate();
+    tabHook(state.activeTab, "Activate");
 
     if (activePanel && animate) {
       activePanel.classList.add("tab-slide-enter");

@@ -671,19 +671,19 @@
 
   function startReportPoll(pid, g) {
     stopReportPoll();
-    rpState.reportPoll = setInterval(function () {
+    rpState.reportPoll = createPoller(function () {
       if (!rpState.active || g !== rpState.gen) {
         stopReportPoll();
         return;
       }
-      if (document.hidden) return;
       fetchReport(pid, g);
-    }, REPORT_POLL_MS);
+    }, REPORT_POLL_MS, { runImmediately: false });
+    rpState.reportPoll.start();
   }
 
   function stopReportPoll() {
     if (rpState.reportPoll) {
-      clearInterval(rpState.reportPoll);
+      rpState.reportPoll.stop();
       rpState.reportPoll = null;
     }
   }
@@ -1004,12 +1004,11 @@
   function startTaskPoll() {
     rpState.taskIdleTicks = 0;
     if (rpState.taskPoll) return;
-    rpState.taskPoll = setInterval(function () {
+    rpState.taskPoll = createPoller(function () {
       if (!rpState.active) {
         stopTaskPoll();
         return;
       }
-      if (document.hidden) return;
       apiGet("../transcripts/api/participants")
         .then(function (data) {
           if (!rpState.active) return;
@@ -1024,12 +1023,13 @@
           }
         })
         .catch(function () {});
-    }, TASK_POLL_MS);
+    }, TASK_POLL_MS, { runImmediately: false });
+    rpState.taskPoll.start();
   }
 
   function stopTaskPoll() {
     if (rpState.taskPoll) {
-      clearInterval(rpState.taskPoll);
+      rpState.taskPoll.stop();
       rpState.taskPoll = null;
     }
   }
