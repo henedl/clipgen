@@ -51,9 +51,19 @@ def test_shot_parses_sheet_input_output():
 
 
 def test_redirect_config_honors_dir_overrides(monkeypatch, tmp_path):
+    import start_settings
+    import utils
+
     session = _load_ui("_ui_session")
     monkeypatch.setattr(config, "INPUT_DIR", "orig-in")
     monkeypatch.setattr(config, "OUTPUT_DIR", "orig-out")
+    # redirect_config rebinds these with plain assignment (its callers are
+    # standalone scripts that exit afterwards). Pre-register the originals so
+    # monkeypatch restores them — without this, the leaked _settings_path
+    # lambda fails test_start_settings' path tests when they run later.
+    monkeypatch.setattr(config, "VERBOSITY", config.VERBOSITY)
+    monkeypatch.setattr(utils, "NO_INPUT_MODE", utils.NO_INPUT_MODE)
+    monkeypatch.setattr(start_settings, "_settings_path", start_settings._settings_path)
     session.redirect_config(input_dir=tmp_path / "in", output_dir=tmp_path / "out")
     assert config.INPUT_DIR == str(tmp_path / "in")
     assert config.OUTPUT_DIR == str(tmp_path / "out")
