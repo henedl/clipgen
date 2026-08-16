@@ -188,10 +188,18 @@ jobs:
             echo "::error::cv2 ships bundled dylibs — the no-FFmpeg self-built wheel was not used."
             exit 1
           fi
-          if find dist/clipgen.app -type f \
-            \( -name "libav*.dylib" -o -name "libsw*.dylib" \
+          # Exact FFmpeg family names, not a libav*/libsw* glob: Pillow ships
+          # libavif (the BSD AV1 *image* codec, no FFmpeg relation), which a
+          # glob would flag — it did, on this guard's first green-wheel run.
+          offenders="$(find dist/clipgen.app -type f \
+            \( -name "libavcodec*.dylib" -o -name "libavformat*.dylib" \
+               -o -name "libavutil*.dylib" -o -name "libavdevice*.dylib" \
+               -o -name "libavfilter*.dylib" -o -name "libswscale*.dylib" \
+               -o -name "libswresample*.dylib" -o -name "libpostproc*.dylib" \
                -o -name "libx264*.dylib" -o -name "libx265*.dylib" \) \
-            ! -path "*/bin/*" | grep -q .; then
+            ! -path "*/bin/*")"
+          if [ -n "$offenders" ]; then
+            printf '%s\n' "$offenders"
             echo "::error::FFmpeg/x264/x265 shared libraries found outside bin/;"
             echo "::error::the macOS app is conveyed as MIT and must not link GPL code."
             exit 1

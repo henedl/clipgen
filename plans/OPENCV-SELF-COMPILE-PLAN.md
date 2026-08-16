@@ -101,8 +101,11 @@ while the bundle ships Python 3.12; retag with `wheel tags` if that ever matters
      `uv sync --locked` once and uses `uv run --no-sync` for every later invocation
      (fetch_binaries, pyinstaller); the assert runs via `.venv/bin/python` directly.
 - [x] **Inverted license guard** ("Verify no in-process FFmpeg libraries"): fails on any
-   `cv2/.dylibs`/`__dot__dylibs` in the .app, or any `libav*`/`libsw*`/`libx264*`/`libx265*`
-   dylib outside `bin/` (the PyAV-absence guard rides along unchanged).
+   `cv2/.dylibs`/`__dot__dylibs` in the .app, or any FFmpeg-family dylib
+   (libavcodec/format/util/device/filter, libswscale/swresample/postproc, libx264/x265)
+   outside `bin/`, printing the offenders. The names are enumerated, not a `libav*` glob —
+   Pillow ships `libavif` (the BSD AV1 *image* codec, no FFmpeg relation), and the glob
+   flagged it on the guard's first run against a good bundle. PyAV-absence guard unchanged.
 - [x] **License text**: the `GPL-3.0-OR-LATER (FFmpeg bundled inside opencv-python-headless)`
    section of `build/THIRD-PARTY-LICENSES` was replaced by
    `LGPL-2.1 (FFmpeg DLL bundled in the Windows opencv-python-headless wheel)` with the full
