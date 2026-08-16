@@ -1014,7 +1014,7 @@ def test_combined_server_forces_non_interactive(monkeypatch):
         return [b"ok"]
 
     monkeypatch.setattr(utils, "NO_INPUT_MODE", False)
-    monkeypatch.setattr(utils, "preload_av_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
     monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", lambda **kwargs: _fake_app)
 

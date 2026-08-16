@@ -64,35 +64,25 @@ def suppress_native_stderr():
         os.close(saved_fd)
 
 
-_av_libs_preloaded = False
+_vision_libs_preloaded = False
 
 
-def preload_av_libs_quietly(on_phase: Callable[[str], None] | None = None) -> None:
-    """Import ``av`` and ``cv2`` once, early, with native stderr silenced.
+def preload_vision_libs_quietly(on_phase: Callable[[str], None] | None = None) -> None:
+    """Import ``cv2`` once, early, with native stderr silenced.
 
-    Both wheels bundle their own FFmpeg ``libavdevice`` (an AVFoundation
-    capture-device library clipgen never uses). On macOS, whichever loads
-    *second* makes the ObjC runtime print a "Class AVFFrameReceiver is
-    implemented in both ..." duplicate-class warning. Pre-loading both here
-    under :func:`suppress_native_stderr` means later lazy ``import cv2`` /
-    ``import av`` calls find them already resident (no second dlopen, no
-    warning). Idempotent; either import missing is a no-op.
-
-    *on_phase* is called with ``"av"`` / ``"cv2"`` before each import — each
-    can take ~10s of disk I/O on a cold machine, and the server's boot page
-    narrates which one it is waiting on.
+    The wheel's dylibs can emit native noise on load, and the import can take
+    ~10s of disk I/O on a cold machine — pre-loading here under
+    :func:`suppress_native_stderr` means later lazy ``import cv2`` calls find
+    it already resident, and the server's boot page can narrate the wait
+    (*on_phase* is called with ``"cv2"`` before the import). Idempotent; a
+    missing install is a no-op. This used to preload PyAV too, whose bundled
+    ``libavdevice`` duplicated cv2's and tripped a macOS duplicate-ObjC-class
+    warning — PyAV is no longer a dependency (see transcripts._ensure_av_stub).
     """
-    global _av_libs_preloaded
-    if _av_libs_preloaded:
+    global _vision_libs_preloaded
+    if _vision_libs_preloaded:
         return
-    _av_libs_preloaded = True
-    if on_phase is not None:
-        on_phase("av")
-    with suppress_native_stderr():
-        try:
-            import av  # noqa: F401
-        except ImportError:
-            pass
+    _vision_libs_preloaded = True
     if on_phase is not None:
         on_phase("cv2")
     with suppress_native_stderr():

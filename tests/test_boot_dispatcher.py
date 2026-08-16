@@ -119,7 +119,7 @@ def test_serve_combined_app_raises_on_build_failure(monkeypatch):
     def _exit_build(**kwargs: Any) -> Any:
         raise SystemExit(1)
 
-    monkeypatch.setattr(utils, "preload_av_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
     monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _exit_build)
 
@@ -136,7 +136,7 @@ def test_serve_combined_app_returns_before_build_completes(monkeypatch):
         release.wait(timeout=10)
         return _fake_app
 
-    monkeypatch.setattr(utils, "preload_av_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
     monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
     monkeypatch.setattr(server, "build_combined_app", _slow_build)
 

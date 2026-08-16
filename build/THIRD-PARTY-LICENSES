@@ -31,8 +31,6 @@ omegaconf                   2.3.1      BSD-3-Clause
 antlr4-python3-runtime      4.9.3      BSD-3-Clause
 NumPy                       2.4.3      BSD-3-Clause
 SciPy                       1.17.1     BSD-3-Clause
-PyAV (av)                   17.0.0     BSD-3-Clause
-  FFmpeg (bundled in av)      8.0        LGPL-3.0-or-later
 pywebview                   6.2.1      BSD-3-Clause
 ImageHash                   4.3.2      BSD-2-Clause
 scikit-image                0.26.0     BSD-3-Clause (+ BSD-2-Clause, MIT)
@@ -270,7 +268,7 @@ BSD-3-CLAUSE LICENSE
 
 The following components are licensed under the BSD 3-Clause License:
   Flask, Werkzeug, Jinja2, MarkupSafe, NumPy, SciPy, scikit-image,
-  PyAV, pywebview, omegaconf, antlr4-python3-runtime
+  pywebview, omegaconf, antlr4-python3-runtime
 
 ---
 
@@ -511,43 +509,6 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
----
-
-PyAV (av)
-Copyright (c) 2017 Mike Boers and PyAV contributors
-License: BSD-3-Clause
-
-The PyAV Python bindings are BSD-3-Clause. The wheel additionally bundles its
-own FFmpeg shared libraries, which are LGPL-3.0-or-later — see the
-LGPL-3.0-OR-LATER section below. These are distinct from both the cv2-bundled
-FFmpeg and the standalone ffmpeg/ffprobe executables.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-3. Neither the name of the copyright holder nor the names of its contributors
-   may be used to endorse or promote products derived from this software
-   without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
@@ -873,39 +834,6 @@ Copyright notices:
 
 
 ===============================================================================
-LGPL-3.0-OR-LATER (FFmpeg bundled inside PyAV)
-===============================================================================
-
-PyAV (the `av` package) bundles its own FFmpeg shared libraries inside
-av/.dylibs/ (av.libs/ on Linux).  These are built without --enable-gpl:
-avcodec_license() reports "LGPL version 3 or later", so they are
-LGPL-3.0-or-later.
-
-The bundled FFmpeg libraries are:
-  libavcodec, libavformat, libavfilter, libavutil, libavdevice,
-  libswresample, libswscale
-
-libx264 and libx265 are also present in that directory as transitive dynamic
-dependencies, but they are not compiled into FFmpeg -- were they enabled, the
-build would require --enable-gpl and avcodec_license() would report GPL.
-
-clipgen does not import `av` directly for media work.  faster-whisper does:
-faster_whisper/audio.py decodes the audio stream of a recording through PyAV
-before handing samples to Whisper.  These libraries are dynamically linked and
-unmodified, so the LGPL is satisfied by this notice plus the source pointers
-below; recipients may replace the libraries with their own build.
-
-Source code for FFmpeg is available at: https://ffmpeg.org/download.html
-Source code for the PyAV build (including its FFmpeg build configuration) is
-available at: https://github.com/PyAV-Org/PyAV
-
-The full text of the GNU Lesser General Public License version 3 is the GNU
-General Public License version 3 (reproduced in the GPL-3.0-OR-LATER section
-below) as supplemented by the additional permissions in the LGPL v3, available
-at: https://www.gnu.org/licenses/lgpl-3.0.html
-
-
-===============================================================================
 GPL-3.0-OR-LATER (FFmpeg bundled inside opencv-python-headless)
 ===============================================================================
 
@@ -988,9 +916,9 @@ third-party libraries compiled into these static builds are published by each
 provider at the URLs above.
 
 These executables are distinct from the FFmpeg *shared libraries* that arrive
-inside opencv-python-headless and PyAV (two sections back): those are linked
-into cv2.abi3.so and av respectively and loaded in-process. The executables
-here are separate GPL programs, pinned and verified by clipgen's own build.
+inside opencv-python-headless (the previous section): those are linked into
+cv2.abi3.so and loaded in-process. The executables here are separate GPL
+programs, pinned and verified by clipgen's own build.
 
 The full text of the GNU General Public License version 3 follows.
 

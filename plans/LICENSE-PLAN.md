@@ -59,18 +59,24 @@ short of rebuilding OpenCV — and state the position accurately:
    clipgen's files is relicensed), published at github.com/henedl/clipgen
 3. Provide source pointers for FFmpeg, x264, x265, and the opencv-python build
 4. Guard against silent drift: `build-binaries.yml` asserts the `libavcodec license:` string of
-   both the cv2- and PyAV-bundled FFmpeg on every macOS build, so a wheel bump that changes
-   either one fails CI instead of leaving a false notice in the artifact
+   the cv2-bundled FFmpeg on every macOS build, so a wheel bump that changes it fails CI instead
+   of leaving a false notice in the artifact (it also asserts PyAV stays *out* of the bundle,
+   since its notice sections were removed — see below)
 
-### PyAV and FFmpeg (decided 2026-08-15)
+### PyAV and FFmpeg (decided 2026-08-15; superseded 2026-08-16)
 
-PyAV (`av`, a hard dependency of faster-whisper) bundles a *third* FFmpeg in `av/.dylibs/`. Its
-`avcodec_license()` reports **LGPL version 3 or later** — here the "x264/x265 present but not
-linked" reading is actually correct, since enabling them would have required `--enable-gpl`.
+PyAV (`av`, a hard dependency of faster-whisper) bundled a *third* FFmpeg in `av/.dylibs/`. Its
+`avcodec_license()` reported **LGPL version 3 or later** — here the "x264/x265 present but not
+linked" reading was actually correct, since enabling them would have required `--enable-gpl`.
+The 2026-08-15 decision was to attribute it under a new LGPL-3.0-or-later section.
 
-**Decision:** attribute it under a new LGPL-3.0-or-later section. Dynamic linking of unmodified
-LGPL libraries is satisfied by notice + source pointers + the recipient's ability to relink, so
-no further obligation attaches. It is a documentation item, not a compliance problem.
+**Superseded:** PyAV is no longer shipped at all. faster-whisper only calls `av` to decode
+path inputs; `transcripts.py` now feeds `transcribe()` ndarrays decoded by the pinned ffmpeg
+(`video.decode_audio_pcm`) and stubs the module-scope `import av`
+(`transcripts._ensure_av_stub`), so the dependency is overridden out in `pyproject.toml`
+(~45 MB mac / ~69 MB Windows). The PyAV BSD entry and the whole LGPL-3.0-or-later section were
+removed from `build/THIRD-PARTY-LICENSES`, and `build-binaries.yml` now fails if `av` dylibs
+reappear in the bundle unattributed.
 
 ### Bundled ffmpeg/ffprobe executables (decided 2026-08-03)
 
@@ -121,18 +127,14 @@ of re-deriving it.
   - Does anything else in `cv2/` regress with FFmpeg off (`imgcodecs` keeps its own `libavif`)?
   - Is it moot by the time it is picked up, if #1260 lands first?
 
-- **Take PyAV off the decode path** (note only — a consistency change, not a licensing fix).
-  `source/transcripts.py` passes a **path** to `WhisperModel.transcribe()`, so PyAV's FFmpeg
-  demuxes and decodes every recording we transcribe — a third FFmpeg doing real work on user
-  media, none of it pinned or verified by our build. `transcribe()` also accepts an
-  `np.ndarray`, so decoding with the pinned ffmpeg (`-f f32le -ac 1 -ar 16000 -`) would route all
-  media through the one binary we control, and would delete the non-default-audio-track
-  workaround in `transcribe_video()` (which exists only because faster-whisper always reads the
-  container's first audio stream — `-map 0:a:N` solves it directly). Caveats: no bundle-size win
-  (`av` still ships and is still imported — `faster_whisper/__init__.py` imports it
-  transitively at module load, so it cannot be excluded), we would own the 16 kHz mono float32
-  resampling, and it materializes the whole audio array (~230 MB/hour, matching what
-  faster-whisper's own `decode_audio` already does).
+- [x] **Take PyAV off the decode path** — Done 2026-08-16, and it went further than this note
+  anticipated: the "cannot be excluded" caveat was wrong. `faster_whisper/audio.py` imports `av`
+  at module scope but only *calls* it inside `decode_audio()`, so an empty stub module
+  (`transcripts._ensure_av_stub`) satisfies the import and `av` is overridden out of the
+  dependency tree entirely (a ~45 MB mac / ~69 MB Windows bundle-size win on top of the
+  consistency one). `video.decode_audio_pcm` decodes with the pinned ffmpeg
+  (`-map 0:a:N -ac 1 -ar 16000 -f f32le`), which also deleted the non-default-audio-track
+  demux workaround in `transcribe_video()`.
 
 - **Full transitive-dependency attribution sweep.** Step 5 covered direct dependencies only. The
   bundle contains a long tail of unlisted transitives (onnxruntime, tokenizers, huggingface-hub,

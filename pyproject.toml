@@ -10,7 +10,6 @@ dependencies = [
     "flask>=3.0.0",
     "werkzeug>=3.0.0",
     "faster-whisper>=1.2.0",
-    "av>=11.0.0",
     "opencv-python-headless>=4.8.0",
     "numpy>=1.26.0",
     "Pillow>=10.0.0",
@@ -64,7 +63,15 @@ required-version = ">=0.11.0"
 # opencv-python-headless, which provides every cv2 API rapidocr uses.
 # Without this override uv would install both wheels into the same cv2/
 # tree, where they clobber each other file-by-file.
-override-dependencies = ["opencv-python ; sys_platform == 'never'"]
+override-dependencies = [
+    "opencv-python ; sys_platform == 'never'",
+    # faster-whisper declares av (PyAV) but only calls it inside decode_audio(),
+    # which clipgen never reaches: transcripts.py feeds transcribe() ndarrays
+    # decoded by the ffmpeg CLI and stubs the module-scope `import av`
+    # (transcripts._ensure_av_stub). Overriding it out drops PyAV's bundled
+    # second FFmpeg (~45 MB of wheel dylibs on macOS, ~69 MB on Windows).
+    "av ; sys_platform == 'never'",
+]
 
 [tool.ty.environment]
 # ty auto-detects a module root only when it is literally named `src`

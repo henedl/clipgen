@@ -92,6 +92,13 @@ excludes = [
     "pytest", "_pytest", "py", "pluggy", "iniconfig",
     # Other unused transitive dependencies
     "matplotlib", "IPython", "notebook", "jupyter",
+    # PyAV. Overridden out of the dependency tree (pyproject.toml), so it is
+    # not in the build venv either — this entry documents that on purpose:
+    # faster_whisper imports av at module scope but never calls it on the
+    # ndarray input path clipgen uses, and transcripts._ensure_av_stub()
+    # satisfies the import at runtime. Its wheel would re-add a second ~40 MB
+    # FFmpeg beside the vendored ffmpeg/ffprobe binaries below.
+    "av",
 ]
 
 # Bundled ffmpeg/ffprobe: pinned static GPL builds, fetched by
@@ -166,7 +173,7 @@ pyz = PYZ(a.pure)
 _strip = sys.platform == "darwin"
 
 # One-dir, not one-file. One-file re-extracts the whole archive to a *new* temp
-# directory on every launch, so every large dylib (cv2, av, onnxruntime) loads cold —
+# directory on every launch, so every large dylib (cv2, onnxruntime) loads cold —
 # no OS page cache, and macOS re-validates each code signature from scratch.
 # Measured double-click to first HTTP response: 17.6 s one-file vs 1.1 s one-dir.
 # PyInstaller also deprecated one-file + windowed on macOS ("clashes with macOS's
