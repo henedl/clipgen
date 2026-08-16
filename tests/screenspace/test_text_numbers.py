@@ -23,6 +23,13 @@ def _reset_ocr_pool(monkeypatch):
     """
     monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 1)
     screenspace_ocr._ocr_pools.clear()
+    # scan_text/scan_numbers call utils.require_optional("easyocr") before the
+    # FakeReader is ever used; that import pulls torch (~1–10 s) and is exactly
+    # what this file exists to avoid. Production still fail-fasts; these tests
+    # patch the reader constructor.
+    import utils as _utils
+
+    monkeypatch.setattr(_utils, "require_optional", lambda *_a, **_k: None)
     yield
     screenspace_ocr._ocr_pools.clear()
 

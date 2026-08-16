@@ -1266,9 +1266,16 @@ class TestLoadModelCpuThreads:
                 seen["name"] = name
                 seen["kwargs"] = kwargs
 
-        import faster_whisper
+        import sys
+        import types
+        from typing import Any
 
-        monkeypatch.setattr(faster_whisper, "WhisperModel", FakeModel)
+        fake_fw: Any = types.ModuleType("faster_whisper")
+        fake_fw.WhisperModel = FakeModel
+        monkeypatch.setitem(sys.modules, "faster_whisper", fake_fw)
+        monkeypatch.setattr(
+            transcripts, "is_whisper_model_cached", lambda *_a, **_k: True
+        )
         monkeypatch.setattr(transcripts, "_cached_model", None)
         monkeypatch.setattr(transcripts, "_cached_model_name", None)
         monkeypatch.setattr(transcripts, "_cached_model_key", None)
