@@ -28,7 +28,7 @@ Pick one kind and write it in the right place; do not mix kinds in one file.
 | **Ratchet** | `test_frontend_satellite_wiring.py`, `test_packaging.py`, `test_shared_constants.py` | yes, must stay fast |
 | **Domain** | `test_utils_timestamps.py` | yes |
 | **API** | `test_studio_api.py` route + JSON under mocks | yes |
-| **I/O** | real `process_clips` cut of a 2s `testsrc` in `test_pipeline_io.py` | yes, max three, `skipif` no ffmpeg |
+| **I/O** | real `process_clips` cut of a 2s `testsrc` in `test_pipeline_io.py` | yes, max four, `skipif` no ffmpeg |
 | **Journey** | Studio generate → artifact appears | no, `tests/ui/` only |
 
 Teaching copies: domain → `tests/test_utils_timestamps.py`; API → a *small* test in
