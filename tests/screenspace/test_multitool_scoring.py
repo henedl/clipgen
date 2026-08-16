@@ -311,7 +311,7 @@ class TestScanBoundaries:
         monkeypatch.setattr(
             screenspace_scans,
             "compute_phash",
-            lambda f: _FakeHash(int(f.reshape(-1)[0])),
+            lambda f, gray=None: _FakeHash(int(f.reshape(-1)[0])),
         )
 
         def fake_scan(video_path, interval_seconds, callback, **kwargs):
@@ -602,7 +602,9 @@ class TestScanBoundariesSceneHybrid:
             lambda a, b: 1.0 if a["tag"] == b["tag"] else 0.0,
         )
         monkeypatch.setattr(
-            screenspace_scans, "compute_phash", lambda f: _FakeHash(int(f[0, 1, 0]))
+            screenspace_scans,
+            "compute_phash",
+            lambda f, gray=None: _FakeHash(int(f[0, 1, 0])),
         )
 
         def fake_scan(video_path, interval_seconds, callback, **kwargs):

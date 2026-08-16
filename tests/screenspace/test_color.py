@@ -1,9 +1,11 @@
 """Tests for region extraction and colour primitives."""
 
+import cv2
 import numpy as np
 import pytest
 
 import screenspace
+import screenspace_primitives
 from _ss_helpers import _gray_with_red_patch
 
 
@@ -189,3 +191,117 @@ class TestColorPresent:
         matched, coverage = screenspace.color_present(region, self.target, self.tol)
         assert not matched
         assert coverage == 0.0
+
+
+def _float32_match_mask(region_pixels, target_color, tolerance):
+    """The per-pixel float32 test ``color_present`` used before the band rewrite.
+
+    Kept verbatim as the oracle: the integer-band path is a speedup, so it must
+    agree *exactly*, not approximately.
+    """
+    hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
+    h = hsv[..., 0].astype(np.float32)
+    s = hsv[..., 1].astype(np.float32)
+    v = hsv[..., 2].astype(np.float32)
+    hue_diff = np.abs(h - float(target_color["h"]))
+    hue_dist = np.minimum(hue_diff, 180.0 - hue_diff)
+    return (
+        (hue_dist <= tolerance["h"])
+        & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
+        & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
+    )
+
+
+def _reference_color_present(
+    region_pixels, target_color, tolerance, min_coverage=0.0, mask=None
+):
+    """``color_present`` semantics on top of the float32 oracle mask."""
+    if region_pixels.size == 0:
+        return False, 0.0
+    match = _float32_match_mask(region_pixels, target_color, tolerance)
+    if mask is not None and not np.any(mask):
+        mask = None
+    denom = match.size
+    if mask is not None:
+        match &= mask > 0
+        denom = int(np.count_nonzero(mask))
+    count = int(np.count_nonzero(match))
+    coverage = count / denom if denom else 0.0
+    matched = count > 0 if min_coverage <= 0 else coverage >= min_coverage
+    return matched, float(coverage)
+
+
+class TestColorPresentBands:
+    """The uint8 ``cv2.inRange`` bands must reproduce the float32 test exactly."""
+
+    @pytest.mark.parametrize("hue", [0.0, 5.0, 90.0, 175.5, 179.0])
+    @pytest.mark.parametrize("tol_hue", [0.0, 10.0, 89.0, 90.0, 95.0])
+    @pytest.mark.parametrize("sat_val", [0.0, 7.5, 128.0, 255.0])
+    @pytest.mark.parametrize("tol_sat_val", [0.0, 0.5, 60.0, 255.0])
+    def test_matches_float32_oracle(self, hue, tol_hue, sat_val, tol_sat_val):
+        region = np.random.RandomState(11).randint(0, 256, (24, 32, 3), dtype=np.uint8)
+        target = {"h": hue, "s": sat_val, "v": sat_val}
+        tol = {"h": tol_hue, "s": tol_sat_val, "v": tol_sat_val}
+        assert screenspace.color_present(
+            region, target, tol
+        ) == _reference_color_present(region, target, tol)
+
+    def test_matches_oracle_with_mask_and_min_coverage(self):
+        region = np.random.RandomState(5).randint(0, 256, (40, 40, 3), dtype=np.uint8)
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[5:20, 5:20] = 255
+        target = {"h": 90.0, "s": 128.0, "v": 128.0}
+        tol = {"h": 20.0, "s": 80.0, "v": 80.0}
+        for min_coverage in (0.0, 0.05, 0.9):
+            assert screenspace.color_present(
+                region, target, tol, min_coverage, mask
+            ) == _reference_color_present(region, target, tol, min_coverage, mask)
+
+    def test_empty_mask_falls_back_to_full_rect(self):
+        region = _gray_with_red_patch(10)
+        empty = np.zeros(region.shape[:2], dtype=np.uint8)
+        target = {"h": 0.0, "s": 255.0, "v": 139.0}
+        tol = {"h": 10.0, "s": 60.0, "v": 60.0}
+        assert screenspace.color_present(
+            region, target, tol, 0.0, empty
+        ) == screenspace.color_present(region, target, tol)
+
+    def test_uniform_frames_agree_with_oracle(self):
+        target = {"h": 60.0, "s": 200.0, "v": 200.0}
+        tol = {"h": 15.0, "s": 40.0, "v": 40.0}
+        for fill in (0, 128, 255):
+            region = np.full((16, 16, 3), fill, dtype=np.uint8)
+            assert screenspace.color_present(
+                region, target, tol
+            ) == _reference_color_present(region, target, tol)
+
+    def test_impossible_tolerance_yields_no_bands(self):
+        # Nothing can match a saturation 300 apart from any uint8 value.
+        assert (
+            screenspace_primitives._hsv_match_bands(90.0, 300.0, 128.0, 10.0, 5.0, 60.0)
+            == ()
+        )
+        region = np.random.RandomState(2).randint(0, 256, (8, 8, 3), dtype=np.uint8)
+        matched, coverage = screenspace.color_present(
+            region,
+            {"h": 90.0, "s": 300.0, "v": 128.0},
+            {"h": 10.0, "s": 5.0, "v": 60.0},
+        )
+        assert not matched
+        assert coverage == 0.0
+
+    def test_hue_wraparound_splits_into_two_bands(self):
+        bands = screenspace_primitives._hsv_match_bands(
+            2.0, 128.0, 128.0, 5.0, 255.0, 255.0
+        )
+        assert len(bands) == 2
+        hue_ranges = sorted((lower[0], upper[0]) for lower, upper in bands)
+        assert hue_ranges[0][0] == 0
+        assert hue_ranges[-1][1] == 255
+
+    def test_wide_hue_tolerance_is_a_single_band(self):
+        bands = screenspace_primitives._hsv_match_bands(
+            90.0, 128.0, 128.0, 90.0, 255.0, 255.0
+        )
+        assert len(bands) == 1
+        assert bands[0][0][0] == 0 and bands[0][1][0] == 255

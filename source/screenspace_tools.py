@@ -713,6 +713,7 @@ class TemplateTool(AnalysisTool):
             threshold=threshold,
             mask=scaled_mask,
             prepared=prepared,
+            corr=corr,
         )
         # Shaped region: the match still runs full-frame (template ignores the
         # rect for rect regions too), but the polygon acts as a detection

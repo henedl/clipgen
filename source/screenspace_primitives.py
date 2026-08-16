@@ -472,6 +472,45 @@ def color_matches(
     return matched, conf
 
 
+def _channel_runs(flags: np.ndarray) -> tuple[tuple[int, int], ...]:
+    """Contiguous ``(lo, hi)`` index runs of a 256-entry boolean table."""
+    idx = np.flatnonzero(flags)
+    if idx.size == 0:
+        return ()
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    starts = np.concatenate(([idx[0]], idx[breaks + 1]))
+    ends = np.concatenate((idx[breaks], [idx[-1]]))
+    return tuple(zip(starts.tolist(), ends.tolist()))
+
+
+@functools.cache
+def _hsv_match_bands(
+    h: float, s: float, v: float, tol_h: float, tol_s: float, tol_v: float
+) -> tuple[tuple[tuple[int, int, int], tuple[int, int, int]], ...]:
+    """``cv2.inRange`` (lower, upper) HSV bands equivalent to the per-pixel test.
+
+    Each of the three per-channel predicates depends only on that channel's
+    ``uint8`` value, so evaluating the *same float32 expressions* over all 256
+    possible values yields exact membership tables — the bands below are those
+    tables, not an approximation of them. Hue wraparound splits into two bands;
+    everything else is one. Empty result means no pixel value can match.
+
+    Cached per (target, tolerance): constant for a whole scan, and bounded by
+    the number of distinct color configurations a user has set up.
+    """
+    vals = np.arange(256, dtype=np.float32)
+    hue_diff = np.abs(vals - h)
+    hue_ok = np.minimum(hue_diff, 180.0 - hue_diff) <= tol_h
+    sat_ok = np.abs(vals - s) <= tol_s
+    val_ok = np.abs(vals - v) <= tol_v
+    return tuple(
+        ((h_lo, s_lo, v_lo), (h_hi, s_hi, v_hi))
+        for h_lo, h_hi in _channel_runs(hue_ok)
+        for s_lo, s_hi in _channel_runs(sat_ok)
+        for v_lo, v_hi in _channel_runs(val_ok)
+    )
+
+
 def color_present(
     region_pixels: np.ndarray,
     target_color: dict[str, float],
@@ -496,15 +535,24 @@ def color_present(
     if region_pixels.size == 0:
         return False, 0.0
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    h = hsv[..., 0].astype(np.float32)
-    s = hsv[..., 1].astype(np.float32)
-    v = hsv[..., 2].astype(np.float32)
-    hue_diff = np.abs(h - float(target_color["h"]))
-    hue_dist = np.minimum(hue_diff, 180.0 - hue_diff)
+    # Integer band tests on the uint8 HSV rather than three full-size float32
+    # casts and comparisons: identical mask (see _hsv_match_bands), ~12x faster,
+    # and no ~25 MB of per-frame temporaries at 1080p — this path deliberately
+    # runs at full resolution, so it is the hottest per-pixel routine here.
+    bands = _hsv_match_bands(
+        float(target_color["h"]),
+        float(target_color["s"]),
+        float(target_color["v"]),
+        float(tolerance["h"]),
+        float(tolerance["s"]),
+        float(tolerance["v"]),
+    )
+    hits: np.ndarray | None = None
+    for lower, upper in bands:
+        band = cv2.inRange(hsv, np.array(lower, np.uint8), np.array(upper, np.uint8))
+        hits = band if hits is None else cv2.bitwise_or(hits, band)
     match = (
-        (hue_dist <= tolerance["h"])
-        & (np.abs(s - float(target_color["s"])) <= tolerance["s"])
-        & (np.abs(v - float(target_color["v"])) <= tolerance["v"])
+        hits.astype(bool) if hits is not None else np.zeros(hsv.shape[:2], dtype=bool)
     )
     # Shaped regions: only pixels inside the polygon count, in both the match
     # numerator and the coverage denominator. A mask emptied by extreme downscale
@@ -670,8 +718,9 @@ def compute_phash(
     Mirrors ``imagehash.phash`` (grayscale → 32×32 → 2D DCT → top-left 8×8 →
     median threshold) natively in cv2, skipping the per-frame BGR→RGB +
     ``PIL.Image`` round-trip that dominates this hot scan-callback path.
-    Callers that already hold the unblurred grayscale (scan_similarity's
-    static-skip check) pass it as *gray* to skip the second conversion.
+    Callers that already hold the unblurred grayscale (every scan whose
+    static-skip check converts the frame) pass it as *gray* to skip the
+    second conversion.
     """
     import imagehash
 
@@ -788,9 +837,16 @@ def _match_template_prepared(
     prepared: _PreparedTemplate,
     threshold: float,
     nms_overlap: float,
+    corr: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
-    """Match a frame against an already-prepared template payload."""
-    result = _template_correlation_map(frame, prepared)
+    """Match a frame against an already-prepared template payload.
+
+    Callers that already computed this frame's correlation map (to read its
+    threshold-independent peak) pass it as *corr* — the map is the single most
+    expensive op in the tool and recomputing it here doubled the cost of every
+    passing frame.
+    """
+    result = _template_correlation_map(frame, prepared) if corr is None else corr
     if result is None:
         return []
     tmpl_gray, _gray_mask, _degenerate = prepared
@@ -851,6 +907,7 @@ def match_template(
     mask: np.ndarray | None = None,
     *,
     prepared: _PreparedTemplate | None = None,
+    corr: np.ndarray | None = None,
 ) -> list[dict[str, Any]]:
     """Find all locations where template appears in frame.
 
@@ -861,6 +918,8 @@ def match_template(
 
     Across many frames with one template, build *prepared* once via
     :func:`_prepare_template` to skip the per-call blur and grayscale conversion.
+    A caller that already holds this frame's correlation map (from
+    :func:`_template_correlation_map`) passes it as *corr* to skip recomputing it.
 
     Returns:
         ``{x, y, w, h, score}`` dicts for each match above *threshold*.
@@ -872,7 +931,7 @@ def match_template(
 
     if prepared is None:
         prepared = _prepare_template(template, mask)
-    return _match_template_prepared(frame, prepared, threshold, nms_overlap)
+    return _match_template_prepared(frame, prepared, threshold, nms_overlap, corr)
 
 
 def flow_downscale(
@@ -1138,18 +1197,57 @@ def _merge_timestamp_spans(
 # per-frame map feeds the same grid/heatmap pipeline as flow/change.
 
 
+@functools.cache
+def _dft_friendly(shape: tuple[int, int]) -> bool:
+    """Whether ``cv2.dft`` is the faster transform for this frame shape.
+
+    cv2's DFT is fastest on sizes that factor into 2/3/5 and is markedly
+    *slower* than numpy on awkward ones — measured on this project's benchmark
+    frames: 0.163 ms vs 0.400 ms at 144x256, but 4.021 ms vs 1.254 ms at
+    151x257. The attention working dim pins only the longest axis to 256; the
+    other follows the source aspect ratio and can land on a prime, so the fast
+    path is gated rather than unconditional.
+    """
+    return all(cv2.getOptimalDFTSize(n) == n for n in shape)
+
+
 def compute_spectral_residual(gray: np.ndarray) -> np.ndarray:
     """Spectral-residual saliency (Hou & Zhang 2007), float32 in [0, 1].
 
     The log-amplitude spectrum minus its local average isolates the
     "unexpected" frequency content; recombining it with the original phase
     highlights the spatial locations responsible for it.
+
+    Two transforms, same math: on DFT-friendly shapes cv2 runs it in float32
+    (the numpy branch promotes to complex128 and allocates four more full-size
+    complex temporaries), recovering the phase term as ``z/|z|`` from the
+    magnitude already in hand rather than through ``angle`` + a complex ``exp``.
+    Agreement between the branches is ~1e-6 and is asserted in the tests.
     """
-    fft = np.fft.fft2(gray.astype(np.float32))
-    log_amp = np.log1p(np.abs(fft)).astype(np.float32)
-    phase = np.angle(fft)
-    residual = log_amp - cv2.blur(log_amp, (3, 3))
-    sal = np.abs(np.fft.ifft2(np.exp(residual) * np.exp(1j * phase))) ** 2
+    f32 = gray.astype(np.float32)
+    if _dft_friendly(f32.shape[:2]):
+        spectrum = cv2.dft(f32, flags=cv2.DFT_COMPLEX_OUTPUT)
+        real, imag = spectrum[:, :, 0], spectrum[:, :, 1]
+        mag = cv2.magnitude(real, imag)
+        log_amp = np.log1p(mag)
+        residual = log_amp - cv2.blur(log_amp, (3, 3))
+        scale = np.exp(residual)
+        unit = np.divide(scale, mag, out=np.zeros_like(scale), where=mag > 0)
+        out_real = real * unit
+        out_imag = imag * unit
+        # A zero coefficient (uniform frame) has no direction; the numpy branch
+        # reads angle(0) as 0, i.e. a unit vector of 1+0j. Match that.
+        flat = mag <= 0
+        np.copyto(out_real, scale, where=flat)
+        np.copyto(out_imag, np.float32(0.0), where=flat)
+        inverse = cv2.idft(cv2.merge([out_real, out_imag]), flags=cv2.DFT_SCALE)
+        sal = inverse[:, :, 0] ** 2 + inverse[:, :, 1] ** 2
+    else:
+        fft = np.fft.fft2(f32)
+        log_amp = np.log1p(np.abs(fft)).astype(np.float32)
+        phase = np.angle(fft)
+        residual = log_amp - cv2.blur(log_amp, (3, 3))
+        sal = np.abs(np.fft.ifft2(np.exp(residual) * np.exp(1j * phase))) ** 2
     sal = cv2.GaussianBlur(sal.astype(np.float32), (9, 9), 2.5)
     peak = float(sal.max())
     return sal / peak if peak > 0 else sal
@@ -1160,12 +1258,32 @@ def compute_color_contrast(bgr: np.ndarray) -> np.ndarray:
 
     Sum over L/a/b of |channel − wide Gaussian blur of channel|: bright/colored
     elements that differ from their surround score high regardless of hue.
+
+    The surround is deliberately computed at **half scale**. Its sigma is
+    ``max_dim / 8``, which on a float32 input asks OpenCV for a ~8σ+1 tap
+    kernel — wider than the image itself at the attention working dim, and 66%
+    of the whole attention callback. Halving the resolution costs 5x less
+    (3.22 ms → 0.61 ms per frame) and moves the normalized map by at most
+    0.012; a blur that broad is smooth enough that the downscale loses nothing
+    it was measuring. Blurring the interleaved 3-channel Lab in one call is the
+    obvious alternative and was measured *slower* (3.66 ms) — the kernel width
+    is the cost, not the call count.
     """
     lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    sigma = max(3.0, max(lab.shape[:2]) / 8.0)
-    contrast = np.zeros(lab.shape[:2], dtype=np.float32)
-    for ch in cv2.split(lab):
-        contrast += np.abs(ch - cv2.GaussianBlur(ch, (0, 0), sigma))
+    height, width = lab.shape[:2]
+    sigma = max(3.0, max(height, width) / 8.0)
+    small = cv2.resize(
+        lab,
+        (max(1, width // 2), max(1, height // 2)),
+        interpolation=cv2.INTER_AREA,
+    )
+    surround = cv2.resize(
+        cv2.GaussianBlur(small, (0, 0), sigma / 2.0),
+        (width, height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    diff = cv2.absdiff(lab, surround)
+    contrast = diff[:, :, 0] + diff[:, :, 1] + diff[:, :, 2]
     peak = float(contrast.max())
     return contrast / peak if peak > 0 else contrast
 
