@@ -30,7 +30,8 @@ probes — the label `_parallel_probe` was measured without). `media_cache.*` an
 `sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`
 (Google via `_call_with_api_retry`; local `.xlsx` is `sheets.excel_load`),
 `pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`,
-`heatmap.gif` / `heatmap.rolling`, `ollama.generate`, `titlecard.wrap` plus
+`heatmap.gif` / `heatmap.rolling` / `heatmap.gifs` (pair wall — see below),
+`ollama.generate`, `titlecard.wrap` plus
 `titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
 fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
 `workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
@@ -218,7 +219,9 @@ paint metrics are only indicative; add `--full-chromium` when paint fidelity mat
   that is all `reencode` is the concat-demuxer missing its copy-safe gate.
 - `heatmap.gif` / `heatmap.rolling` is post-scan work, not `scan.callback`. A
   drop in callback with an unchanged heatmap total means the CV win did not
-  touch GIF encode.
+  touch GIF encode. `heatmap.gifs` is the pair wall (same ratio as
+  `pipeline.clip ÷ pipeline.pool_wall`): near 2.0 means the cumulative and
+  rolling encodes overlapped; near 1.0 means they ran back-to-back.
 - `ocr.pool_wait` is idle time blocked on a busy EasyOCR Reader — raise
   `SCREENSPACE_OCR_POOL_SIZE` only when this is large *and* `peak_rss` leaves
   headroom, since each Reader holds its own model copy.

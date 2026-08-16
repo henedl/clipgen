@@ -558,6 +558,31 @@ def test_heatmap_gif_records(monkeypatch, tmp_path):
     assert "heatmap.gif" in profiling.snapshot()
 
 
+def test_heatmap_gifs_pair_wall_records(monkeypatch, tmp_path):
+    """Rolling heatmap writes record the pair wall so overlap is visible."""
+    import screenspace
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    results = [
+        {
+            "timestamp": float(i),
+            "matches": [{"x": 10, "y": 10, "w": 20, "h": 20, "score": 0.9}],
+        }
+        for i in range(4)
+    ]
+    worker = screenspace.ScreenspaceWorker()
+    attachments = worker._write_heatmap_gifs(
+        "t_pair", results, 64, 64, "template", rolling=True
+    )
+    assert "heatmap_gif" in attachments
+    assert "heatmap_rolling_gif" in attachments
+    snap = profiling.snapshot()
+    assert "heatmap.gifs" in snap
+    assert "heatmap.gif" in snap
+    assert "heatmap.rolling" in snap
+
+
 def test_ollama_generate_records_even_on_connection_error(monkeypatch):
     import urllib.error
     import urllib.request
