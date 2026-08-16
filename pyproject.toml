@@ -10,7 +10,11 @@ dependencies = [
     "flask>=3.0.0",
     "werkzeug>=3.0.0",
     "faster-whisper>=1.2.0",
-    "opencv-python-headless>=4.8.0",
+    # 4.14.0.94 floor: the oldest 4.x that publishes an sdist, which the macOS
+    # CI leg builds with -DWITH_FFMPEG=OFF to keep GPL FFmpeg out of the DMG
+    # (plans/OPENCV-SELF-COMPILE-PLAN.md). <5 keeps CascadeClassifier and the
+    # 4.x API this codebase is tested against.
+    "opencv-python-headless>=4.14.0.94,<5",
     "numpy>=1.26.0",
     "Pillow>=10.0.0",
     "imagehash>=4.3.0",
