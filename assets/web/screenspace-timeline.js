@@ -324,6 +324,10 @@
   }
 
   function renderTimeline() {
+    return clipgenPerf.span("screenspace.renderTimeline", renderTimelineImpl);
+  }
+
+  function renderTimelineImpl() {
     var canvas = qs("#timelineCanvas");
     var ctx = canvas.getContext("2d");
     var w = canvas.width;

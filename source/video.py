@@ -35,6 +35,17 @@ _video_properties_cache: dict[tuple[str, int], dict[str, Any]] = {}
 _keyframe_gap_cache: dict[tuple[str, int], float | None] = {}
 
 
+def _ffprobe_check_output(cmd: list[str]) -> str:
+    """Run an ffprobe argv and return stdout text.
+
+    Split from ``ffmpeg.run`` so a profile report can tell probe I/O from
+    encode/extract work. ``_parallel_probe`` was a measured win with no
+    label to re-prove it; this is that label.
+    """
+    with profiling.span("ffprobe.run"):
+        return subprocess.check_output(cmd, encoding="utf-8")
+
+
 def _ffmpeg_cmd(*args: str) -> list[str]:
     """Standard ffmpeg argv prefix (``-y -loglevel ...``) plus *args.
 
@@ -1525,9 +1536,7 @@ def _probe_duration_seconds_ffprobe_format(filepath: str) -> int | None:
     utils.debug_print(f"probe_command is {' '.join(probe_command)}")
 
     try:
-        duration_seconds = float(
-            subprocess.check_output(probe_command, encoding="utf-8")
-        )
+        duration_seconds = float(_ffprobe_check_output(probe_command))
         return round(duration_seconds)
     except FileNotFoundError:
         utils.error_print(
@@ -1747,7 +1756,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         filepath,
     ]
     try:
-        raw = subprocess.check_output(probe_command, encoding="utf-8")
+        raw = _ffprobe_check_output(probe_command)
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return None
 
@@ -2047,7 +2056,7 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     ]
     result: float | None = None
     try:
-        raw = subprocess.check_output(probe_command, encoding="utf-8")
+        raw = _ffprobe_check_output(probe_command)
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         _keyframe_gap_cache[key] = None
         return None

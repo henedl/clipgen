@@ -17,25 +17,39 @@ changes what work runs.
 profile | scan.callback                  1.339s  n=962  avg=1.4ms
 ```
 
-Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.callback`
-(the per-frame split for every Screenspace tool, plus a per-scan summary line),
-`ffmpeg.run` / `ffmpeg.bytes` (every subprocess), `media_cache.*` and
+Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.callback.<tool>`
+(the per-frame split for every Screenspace tool, plus a per-scan summary line
+`profile | scan <tool> <file>:`). `scan.callback` without a suffix is only the
+no-kind fallback; each `scan_*` / multitool pass sets the tool name so a
+workflow of mixed detectors does not lump analysis into one bucket. Callback
+flushes pass `peak=` (largest single frame). `ffmpeg.run` / `ffmpeg.bytes`
+(every encode/extract subprocess) and `ffprobe.run` (duration / props / keyframe
+probes — the label `_parallel_probe` was measured without). `media_cache.*` and
 `video.*_cache.*` (hit/miss counters), `worker.progress_lock_wait`, `route <rule>`
 (per-route totals; polls aggregate instead of spamming), `stream <rule>` and
-`sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`,
-`pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`.
+`sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`
+(Google via `_call_with_api_retry`; local `.xlsx` is `sheets.excel_load`),
+`pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`,
+`heatmap.gif` / `heatmap.rolling`, `ollama.generate`, `titlecard.wrap` plus
+`titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
+fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
+`workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
+ratio as the clip pools).
 Frontend (via `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick,
 `studio.renderGrid`, `transcripts.renderSegments`/`renderPartialSegments`,
-`screenspace.renderResults`/`renderChunk`, and a `longtask` observer for main-thread
-stalls >50 ms. To add a span, follow the hooks' pattern: accumulate into locals and
-flush once per scan/tick — **never** call `profiling.add`/`performance.mark` per frame.
+`screenspace.renderResults`/`renderChunk`/`renderTimeline`, `composer.renderTimeline`,
+`viewer.renderList`, `workflows.renderAllNodes`, `gallery.renderGrid`,
+`overview.renderMetadata`/`renderConvergence`, and a `longtask` observer for
+main-thread stalls >50 ms. To add a span, follow the hooks' pattern: accumulate
+into locals and flush once per scan/tick — **never** call `profiling.add` /
+`performance.mark` per frame.
 
 Two report tokens are easy to misread:
 
 - **`max=`** is the largest single occurrence. It is absent on labels fed only by
   batched flushes, because a batch's `seconds` is a sum with no per-item max. A
   flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
-  `scan.callback` and `transcribe.decode` do.
+  `scan.callback.<tool>` and `transcribe.decode` do.
 - **`peak_rss`** is process-global, monotonic and POSIX-only (omitted on Windows;
   no psutil dependency). `?reset=1` does not and cannot clear it. `RUSAGE_SELF`
   excludes ffmpeg subprocesses — for clipgen the memory that hurts (Whisper
@@ -185,14 +199,26 @@ paint metrics are only indicative; add `--full-chromium` when paint fidelity mat
   "exactly one API call"; anything higher is the redundant-fetch regression
   [PERFORMANCE.md](../../PERFORMANCE.md) opens with, and AGENTS.md warns
   rate-limiting surfaces as silently skipped timestamps rather than an error. A
-  large `sheets.backoff_sleep` means throttling, not a slow sheet. Excel routes
-  through the same helper, so a local `.xlsx` emits `sheets.*` too — the family
-  means "sheet reads", not "network".
+  large `sheets.backoff_sleep` means throttling, not a slow sheet. A local
+  `.xlsx` emits `sheets.excel_load` for the openpyxl read; the adapter's
+  in-memory `get_all_values` is unlabelled (it is not an API call).
 - `pipeline.clip ÷ pipeline.pool_wall` is **effective parallelism**, the number
   `CLIP_PARALLEL_WORKERS` is otherwise tuned blind against (`ffmpeg.run` times
   each encode but knows nothing about overlap). Both labels are shared by all five
   clip pools — CLI, reel regeneration, and Studio's three — because the knob is
   global. A ratio near 1.0 with several clips queued means the pool is serializing.
+- `workflows.batch_child ÷ workflows.batch_wall` is the same ratio for
+  `WORKFLOWS_BATCH_WORKERS`. `workflows.node <type>` splits a graph so a slow
+  Transcribe node is not mistaken for canvas overhead (`workflows.renderAllNodes`).
+- `ffprobe.run` is probe I/O (duration / props / keyframe gap). It is *not*
+  folded into `ffmpeg.run` — a reel-validation storm is a probe problem, and
+  `_parallel_probe` cannot be proven if the label does not exist.
+- `titlecard.copy` vs `titlecard.reencode` counts (not durations) tell you which
+  wrap path ran; `titlecard.wrap` is the wall including card encodes. A generate
+  that is all `reencode` is the concat-demuxer missing its copy-safe gate.
+- `heatmap.gif` / `heatmap.rolling` is post-scan work, not `scan.callback`. A
+  drop in callback with an unchanged heatmap total means the CV win did not
+  touch GIF encode.
 - `ocr.pool_wait` is idle time blocked on a busy EasyOCR Reader — raise
   `SCREENSPACE_OCR_POOL_SIZE` only when this is large *and* `peak_rss` leaves
   headroom, since each Reader holds its own model copy.

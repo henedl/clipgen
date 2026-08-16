@@ -736,6 +736,10 @@
   // --- Rendering ---
 
   function render() {
+    return clipgenPerf.span("overview.renderConvergence", renderImpl);
+  }
+
+  function renderImpl() {
     renderTimeline();
     if (cvState.selection && cvState.selection.zone) {
       // Re-render the inline detail panel after the swim-lane rebuild.

@@ -1468,6 +1468,10 @@
   }
 
   function renderList() {
+    return clipgenPerf.span("viewer.renderList", renderListImpl);
+  }
+
+  function renderListImpl() {
     var list = qs("#artifactList");
     if (!list) return;
     list.innerHTML = "";

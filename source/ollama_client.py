@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+import profiling
 import start_settings
 import utils
 
@@ -658,6 +659,7 @@ def _shutdown_response_socket(resp: Any) -> None:
             pass
 
 
+@profiling.timed("ollama.generate")
 def _do_generate(
     body: dict[str, Any],
     cancel_event: threading.Event | None = None,

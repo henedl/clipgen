@@ -160,6 +160,7 @@ def scan_multitool(
             fps=vid_fps,
             duration=vid_duration,
             fast_opts=fast_opts,
+            profile_kind="multitool",
         )
 
         # A user cancel/pause stops the decode early; skip the join+emit and let
@@ -247,6 +248,7 @@ def scan_multitool(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="multitool",
     )
 
     if on_progress:

@@ -30,6 +30,7 @@ from typing import Any
 from flask import Blueprint, Response, request
 
 import config
+import profiling
 import utils
 import workflows
 from server_utils import err, find_by_id, make_sse_channel, ok, remove_by_id
@@ -895,30 +896,32 @@ def _run_batch(batch_id: str, blueprint: dict[str, Any]) -> None:
     )
 
     workers = max(1, min(4, int(config.WORKFLOWS_BATCH_WORKERS or 1)))
-    if workers == 1 or len(plan) <= 1:
-        for run_id, participant in plan:
-            _run_batch_child(
-                run_id, participant, batch_id, blueprint, seed_results, cancel_event
-            )
-    else:
-        with ThreadPoolExecutor(
-            max_workers=min(workers, len(plan)),
-            thread_name_prefix=f"workflow-{batch_id}",
-        ) as pool:
-            futures = [
-                pool.submit(
-                    _run_batch_child,
-                    run_id,
-                    participant,
-                    batch_id,
-                    blueprint,
-                    seed_results,
-                    cancel_event,
+    _child = profiling.timed("workflows.batch_child")(_run_batch_child)
+    with profiling.span("workflows.batch_wall"):
+        if workers == 1 or len(plan) <= 1:
+            for run_id, participant in plan:
+                _child(
+                    run_id, participant, batch_id, blueprint, seed_results, cancel_event
                 )
-                for run_id, participant in plan
-            ]
-            for future in futures:
-                future.result()  # child bodies swallow their own errors
+        else:
+            with ThreadPoolExecutor(
+                max_workers=min(workers, len(plan)),
+                thread_name_prefix=f"workflow-{batch_id}",
+            ) as pool:
+                futures = [
+                    pool.submit(
+                        _child,
+                        run_id,
+                        participant,
+                        batch_id,
+                        blueprint,
+                        seed_results,
+                        cancel_event,
+                    )
+                    for run_id, participant in plan
+                ]
+                for future in futures:
+                    future.result()  # child bodies swallow their own errors
 
     with _batches_lock:
         _batches.pop(batch_id, None)

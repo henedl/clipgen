@@ -628,6 +628,12 @@
   // --- Rendering ---
 
   function renderAll(cache) {
+    return clipgenPerf.span("overview.renderMetadata", function () {
+      renderAllImpl(cache);
+    });
+  }
+
+  function renderAllImpl(cache) {
     var panel = qs("#metadataPanel");
     if (!panel) return;
     panel.innerHTML = "";

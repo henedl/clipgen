@@ -550,6 +550,10 @@
   // Rebuild every card from state.nodes (one DocumentFragment append) and toggle
   // the canvas empty-state. Called on load, drop, delete, and selection change.
   function renderAllNodes() {
+    return clipgenPerf.span("workflows.renderAllNodes", renderAllNodesImpl);
+  }
+
+  function renderAllNodesImpl() {
     var world = qs("#wfWorld");
     if (!world) return;
     // Clear the cards but keep the nested wire <svg> (it lives in #wfWorld so it
