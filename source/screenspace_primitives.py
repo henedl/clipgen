@@ -1086,7 +1086,8 @@ def compute_scene_fingerprint(
 
     bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    # 3D histogram flattened
+    # 3D histogram, pre-flattened to 1D float32 so compare_scene_fingerprints
+    # can pass it directly to cv2.compareHist without a per-comparison copy.
     hist = cv2.calcHist(
         [hsv],
         [0, 1, 2],
@@ -1095,6 +1096,7 @@ def compute_scene_fingerprint(
         [0, 180, 0, 256, 0, 256],
     )
     cv2.normalize(hist, hist)
+    hist_flat = hist.ravel().astype(np.float32)
 
     # Edge density
     gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
@@ -1110,17 +1112,22 @@ def compute_scene_fingerprint(
             else 0.0
         )
 
-    # Color stats per channel
+    # Color stats: [mean_ch0, std_ch0, mean_ch1, std_ch1, mean_ch2, std_ch2].
+    # Vectorized to avoid per-channel float64 copies.
     inside = mask > 0 if mask is not None else None
-    color_stats: list[float] = []
-    for ch in range(3):
-        channel = region_pixels[:, :, ch].astype(np.float64)
-        if inside is not None:
-            channel = channel[inside]
-        color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
+    if inside is not None:
+        pixels_f = region_pixels[inside].astype(np.float64)
+        means = pixels_f.mean(axis=0)
+        stds = pixels_f.std(axis=0)
+    else:
+        means = region_pixels.mean(axis=(0, 1), dtype=np.float64)
+        stds = region_pixels.std(axis=(0, 1), dtype=np.float64)
+    color_stats = np.empty(6, dtype=np.float64)
+    color_stats[0::2] = means
+    color_stats[1::2] = stds
 
     return {
-        "histogram": hist,
+        "histogram": hist_flat,
         "edge_density": edge_density,
         "color_stats": color_stats,
     }
@@ -1134,12 +1141,11 @@ def compare_scene_fingerprints(
 
     Returns similarity score 0.0–1.0.
     """
-    # Histogram correlation: range [-1, 1] → [0, 1]
-    # Flatten 3D histograms to 1D — cv2.compareHist returns incorrect
-    # results for multidimensional arrays.
+    # Histogram correlation: range [-1, 1] → [0, 1].
+    # Histograms are pre-flattened to 1D float32 by compute_scene_fingerprint.
     hist_corr = cv2.compareHist(
-        fp_a["histogram"].flatten().astype(np.float32),
-        fp_b["histogram"].flatten().astype(np.float32),
+        fp_a["histogram"],
+        fp_b["histogram"],
         cv2.HISTCMP_CORREL,
     )
     hist_sim = (hist_corr + 1.0) / 2.0
@@ -1147,9 +1153,10 @@ def compare_scene_fingerprints(
     # Edge density similarity
     edge_sim = 1.0 - abs(fp_a["edge_density"] - fp_b["edge_density"])
 
-    # Color stats similarity (normalized Euclidean distance)
-    stats_a = np.array(fp_a["color_stats"], dtype=np.float64)
-    stats_b = np.array(fp_b["color_stats"], dtype=np.float64)
+    # Color stats similarity (normalized Euclidean distance).
+    # color_stats is a float64 ndarray from compute_scene_fingerprint.
+    stats_a = fp_a["color_stats"]
+    stats_b = fp_b["color_stats"]
     max_dist = np.sqrt(len(stats_a)) * 255.0  # theoretical max
     dist = float(np.linalg.norm(stats_a - stats_b))
     color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
