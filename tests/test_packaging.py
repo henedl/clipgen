@@ -244,7 +244,6 @@ def test_license_notice_is_tracked_and_bundled() -> None:
     for heading in (
         "GPL-3.0-OR-LATER (bundled ffmpeg and ffprobe executables)",
         "GPL-3.0-OR-LATER (FFmpeg bundled inside opencv-python-headless)",
-        "LGPL-3.0-OR-LATER (FFmpeg bundled inside PyAV)",
         "MOZILLA PUBLIC LICENSE 2.0",
     ):
         assert heading in text, f"THIRD-PARTY-LICENSES lost its {heading!r} section"

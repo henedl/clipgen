@@ -402,6 +402,13 @@ def whisper_probe(monkeypatch, tmp_path):
         "probe_video_properties",
         lambda _p: {"audio_codec": "aac", "audio_tracks": [{"index": 0}]},
     )
+    import numpy as np
+
+    monkeypatch.setattr(
+        video_mod,
+        "decode_audio_pcm",
+        lambda _path, _idx=0: np.zeros(16000, dtype=np.float32),
+    )
     src = tmp_path / "study_P01.mp4"
     src.write_bytes(b"stub")
 
@@ -440,7 +447,10 @@ def test_transcribe_flushes_on_cancel(whisper_probe):
 
     def cancelled():
         state["n"] += 1
-        return state["n"] > 3
+        # Four pre-loop checks (before/after model load, after PCM decode,
+        # after prepare) — trip on the first between-segments check so the
+        # cancel lands mid-loop, where the finally-flush is what's under test.
+        return state["n"] > 4
 
     with pytest.raises(transcripts._TranscriptionCancelled):
         whisper_probe(_fake_model(segs, per_segment_delay=0.01), cancel_flag=cancelled)

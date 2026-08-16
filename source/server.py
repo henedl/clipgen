@@ -4286,7 +4286,6 @@ class LiveServer:
 # console so a terminal launch narrates the cold start too.
 _BOOT_MESSAGES = {
     "starting": "Starting clipgen…",
-    "video_libs": "Loading video engine…",
     "vision_libs": "Loading computer-vision libraries…",
     "workspace": "Preparing workspace…",
     "interface": "Building the interface…",
@@ -4497,12 +4496,10 @@ def serve_combined_app(
     def build() -> None:
         try:
             # Preload first, under the stderr suppressor, before the blueprint
-            # imports below pull cv2 themselves (and before faster-whisper pulls
-            # av) — see preload_av_libs_quietly for why order matters.
-            utils.preload_av_libs_quietly(
-                on_phase=lambda lib: set_phase(
-                    "video_libs" if lib == "av" else "vision_libs"
-                )
+            # imports below pull cv2 themselves — see preload_vision_libs_quietly
+            # for why order matters.
+            utils.preload_vision_libs_quietly(
+                on_phase=lambda lib: set_phase("vision_libs")
             )
             set_phase("workspace")
             # Reclaim orphaned scratch files (atomic-write .tmp siblings, reel

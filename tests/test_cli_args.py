@@ -694,9 +694,8 @@ def test_licenses_flag_prints_the_notice_and_exits(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "THIRD-PARTY SOFTWARE NOTICES AND LICENSES" in out
     # Attribution for the copyleft components is the whole point of the file;
-    # a notice that lost its GPL/LGPL sections would still pass a length check.
+    # a notice that lost its GPL sections would still pass a length check.
     assert "GNU GENERAL PUBLIC LICENSE" in out
-    assert "LGPL-3.0-OR-LATER" in out
 
 
 def test_licenses_flag_fails_loudly_when_the_notice_is_missing(

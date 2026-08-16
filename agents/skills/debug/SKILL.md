@@ -22,7 +22,7 @@
 
 8. **DBus errors in logs** — harmless. They come from Chrome attempting DBus connections in headless environments. Ignore them.
 
-9. **`objc[...] Class AVFFrameReceiver/AVFAudioReceiver is implemented in both ...` on macOS** — harmless. Both `opencv-python-headless` (cv2, Screenspace) and `av` (PyAV, pulled in by `faster-whisper` for Transcripts) bundle their own FFmpeg `libavdevice`, an AVFoundation capture-device library clipgen never uses; the ObjC runtime warns when both load in one process. `start_combined_server()` pre-loads both via `utils.preload_av_libs_quietly()` with native stderr silenced, so the combined web server stays quiet. A rare pure-CLI run that loads both libs may still print it — it's benign.
+9. **`objc[...] Class AVFFrameReceiver/AVFAudioReceiver is implemented in both ...` on macOS** — should no longer occur. It needed two FFmpeg `libavdevice` copies in one process, and PyAV (the second copy, formerly pulled in by `faster-whisper`) is no longer a dependency — transcription feeds whisper ffmpeg-decoded PCM instead (`transcripts._ensure_av_stub`). If it reappears, something reintroduced `av`; the warning itself is benign. `start_combined_server()` still pre-loads cv2 via `utils.preload_vision_libs_quietly()` with native stderr silenced.
 
 ## Development / debugging
 

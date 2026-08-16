@@ -272,6 +272,11 @@ def test_normalize_track_language_covers_every_whisper_language():
     """The table exists to serve transcription output, so a Whisper code that
     silently degrades to "und" is the exact bug this function was added to fix.
     Skips rather than fails where faster-whisper is not installed."""
+    import transcripts
+
+    # av is deliberately not installed (pyproject override); without the stub
+    # the package import fails and importorskip would silently drop this test.
+    transcripts._ensure_av_stub()
     pytest = __import__("pytest")
     tokenizer = pytest.importorskip("faster_whisper.tokenizer")
     unmapped = [

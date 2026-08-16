@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 import config
@@ -13,6 +14,10 @@ from transcripts import TranscriptResult, TranscriptSegment
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
+
+# One second of silence in the exact shape video.decode_audio_pcm hands the
+# model: 16 kHz mono float32.
+_FAKE_AUDIO = np.zeros(16000, dtype=np.float32)
 
 
 def _sample_result(source="study_P01.mp4") -> TranscriptResult:
@@ -310,6 +315,8 @@ class TestBuildTranscribeKwargs:
 
 class TestTranscribeVideoWhisperKwargs:
     def test_transcribe_passes_kwargs_to_model(self, monkeypatch):
+        import video as video_mod
+
         captured: dict = {}
 
         class FakeSeg:
@@ -321,13 +328,16 @@ class TestTranscribeVideoWhisperKwargs:
             language = "en"
 
         class FakeModel:
-            def transcribe(self, path: str, **kwargs):
+            def transcribe(self, audio, **kwargs):
                 captured.update(kwargs)
                 return iter([FakeSeg()]), FakeInfo()
 
         monkeypatch.setattr(config, "DEBUGGING", False)
         monkeypatch.setattr(
             transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
         )
         monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", True)
         monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
@@ -395,8 +405,8 @@ def _multitrack_probe(*labels):
 
 
 class TestTranscribeVideoAudioTrack:
-    """faster-whisper always decodes stream 0, so a non-default track has to be
-    demuxed first. These pin which path actually reaches the model."""
+    """The selected stream is decoded to PCM by video.decode_audio_pcm
+    (``-map 0:a:N``). These pin which stream actually reaches the model."""
 
     def _install_model(self, monkeypatch):
         captured: dict = {}
@@ -410,8 +420,8 @@ class TestTranscribeVideoAudioTrack:
             language = "en"
 
         class FakeModel:
-            def transcribe(self, path: str, **_kwargs):
-                captured["path"] = path
+            def transcribe(self, audio, **_kwargs):
+                captured["audio"] = audio
                 return iter([FakeSeg()]), FakeInfo()
 
         monkeypatch.setattr(config, "DEBUGGING", False)
@@ -420,78 +430,77 @@ class TestTranscribeVideoAudioTrack:
         )
         return captured
 
-    def test_track_zero_passes_the_video_path_and_never_extracts(self, monkeypatch):
+    @staticmethod
+    def _install_decode(monkeypatch):
+        import video as video_mod
+
+        calls: list = []
+        monkeypatch.setattr(
+            video_mod,
+            "decode_audio_pcm",
+            lambda path, idx=0: calls.append((path, idx)) or _FAKE_AUDIO,
+        )
+        return calls
+
+    def test_track_zero_decodes_stream_zero(self, monkeypatch):
         import video as video_mod
 
         captured = self._install_model(monkeypatch)
+        calls = self._install_decode(monkeypatch)
         monkeypatch.setattr(
             video_mod, "probe_video_properties", _multitrack_probe("Mic", "System")
-        )
-        monkeypatch.setattr(
-            video_mod,
-            "extract_audio_track",
-            lambda *_a: pytest.fail("track 0 must not be extracted"),
         )
 
         result = transcripts.transcribe_video("/fake/video.mp4", audio_index=0)
         assert result is not None
-        assert captured["path"] == "/fake/video.mp4"
-        # The extracted .m4a is a cache artifact; source_file stays the video.
+        assert calls == [("/fake/video.mp4", 0)]
+        assert captured["audio"] is _FAKE_AUDIO
+        # The PCM array is transient; source_file stays the video.
         assert result["source_file"] == "/fake/video.mp4"
 
-    def test_nonzero_track_transcribes_the_extracted_audio(self, monkeypatch, tmp_path):
+    def test_nonzero_track_decodes_that_stream(self, monkeypatch):
         import video as video_mod
 
         captured = self._install_model(monkeypatch)
-        extracted = tmp_path / "track1.m4a"
-        extracted.write_bytes(b"x")
-        calls: list = []
+        calls = self._install_decode(monkeypatch)
         monkeypatch.setattr(
             video_mod, "probe_video_properties", _multitrack_probe("System", "Mic")
-        )
-        monkeypatch.setattr(
-            video_mod,
-            "extract_audio_track",
-            lambda path, idx: calls.append((path, idx)) or extracted,
         )
 
         result = transcripts.transcribe_video("/fake/video.mp4", audio_index=1)
         assert result is not None
         assert calls == [("/fake/video.mp4", 1)]
-        assert captured["path"] == str(extracted)
+        assert captured["audio"] is _FAKE_AUDIO
         assert result["source_file"] == "/fake/video.mp4"
 
-    def test_auto_detects_the_speech_track(self, monkeypatch, tmp_path):
+    def test_auto_detects_the_speech_track(self, monkeypatch):
         import video as video_mod
 
         captured = self._install_model(monkeypatch)
-        extracted = tmp_path / "track1.m4a"
-        extracted.write_bytes(b"x")
+        calls = self._install_decode(monkeypatch)
         monkeypatch.setattr(
             video_mod,
             "probe_video_properties",
             _multitrack_probe("System Audio", "Participant Mic"),
         )
-        monkeypatch.setattr(
-            video_mod, "extract_audio_track", lambda _path, _idx: extracted
-        )
 
         result = transcripts.transcribe_video("/fake/video.mp4")
         assert result is not None
-        assert captured["path"] == str(extracted)
+        assert calls == [("/fake/video.mp4", 1)]
+        assert captured["audio"] is _FAKE_AUDIO
 
-    def test_failed_extraction_fails_loudly(self, monkeypatch, capsys):
-        """Never fall back to track 0 — that transcribes the wrong audio."""
+    def test_failed_decode_fails_loudly(self, monkeypatch, capsys):
+        """Never fall back to another track — that transcribes the wrong audio."""
         import video as video_mod
 
         self._install_model(monkeypatch)
         monkeypatch.setattr(
             video_mod, "probe_video_properties", _multitrack_probe("System", "Mic")
         )
-        monkeypatch.setattr(video_mod, "extract_audio_track", lambda _path, _idx: None)
+        monkeypatch.setattr(video_mod, "decode_audio_pcm", lambda _path, _idx=0: None)
 
         assert transcripts.transcribe_video("/fake/video.mp4", audio_index=1) is None
-        assert "Could not extract audio track 2" in capsys.readouterr().out
+        assert "Could not decode audio track 2" in capsys.readouterr().out
 
     def test_out_of_range_track_returns_none_without_loading_model(
         self, monkeypatch, capsys
@@ -1019,6 +1028,9 @@ class TestTranscriptWorker:
             lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
         )
         monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+        )
+        monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}
         )
 
@@ -1454,6 +1466,8 @@ class TestIsWhisperModelCached:
         import inspect
         import re
 
+        # av is deliberately not installed; the package import needs the stub.
+        transcripts._ensure_av_stub()
         import faster_whisper.utils as fwu
 
         for m in transcripts.WHISPER_MODELS:
@@ -1465,6 +1479,30 @@ class TestIsWhisperModelCached:
         assert match, "download_model no longer builds a literal allow_patterns"
         theirs = set(re.findall(r'"([^"]+)"', match.group(1)))
         assert theirs == set(transcripts._WHISPER_ALLOW_PATTERNS)
+
+
+def test_faster_whisper_imports_with_av_stub_only():
+    """The PyAV-free import contract, pinned from both ends.
+
+    PyAV is overridden out of the dependency tree (pyproject.toml): its wheel
+    bundles a second ~40 MB FFmpeg, and faster-whisper only calls ``av`` to
+    decode *path* inputs while clipgen always passes ffmpeg-decoded ndarrays.
+    Two ways this can silently rot, both caught here: the real ``av``
+    distribution reappearing (reinstating it must be a deliberate change —
+    it drags licensing sections of build/THIRD-PARTY-LICENSES and the
+    clipgen.spec exclude back with it), and a faster-whisper upgrade that
+    starts *executing* ``av`` at import time, which the empty stub module
+    cannot satisfy.
+    """
+    import importlib.metadata
+
+    with pytest.raises(importlib.metadata.PackageNotFoundError):
+        importlib.metadata.distribution("av")
+
+    transcripts._ensure_av_stub()
+    import faster_whisper
+
+    assert hasattr(faster_whisper, "WhisperModel")
 
 
 class TestConfirmModelDownload:
@@ -1517,6 +1555,7 @@ class TestConfirmModelDownload:
         monkeypatch.setattr(utils, "read_user_input", lambda _p: "n")
         monkeypatch.setattr(transcripts, "_cached_model", None)
         monkeypatch.setattr(transcripts, "_cached_model_name", None)
+        transcripts._ensure_av_stub()  # av is deliberately not installed
         import faster_whisper
 
         monkeypatch.setattr(

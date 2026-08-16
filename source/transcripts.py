@@ -45,6 +45,7 @@ import re
 import sys
 import threading
 import time
+import types
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -267,6 +268,21 @@ def _confirm_model_download(model_name: str) -> bool:
     return False
 
 
+def _ensure_av_stub() -> None:
+    """Make ``import faster_whisper`` work without PyAV installed.
+
+    ``faster_whisper/audio.py`` does ``import av`` at module scope but only
+    *calls* it inside ``decode_audio()``, which clipgen never reaches: every
+    ``transcribe()`` call gets a 16 kHz float32 ndarray decoded by the ffmpeg
+    CLI (``video.decode_audio_pcm``). PyAV is overridden out of the dependency
+    tree in ``pyproject.toml`` because its wheel bundles a second ~40 MB FFmpeg
+    clipgen has no use for, so an empty module satisfies the import. Guarded by
+    a smoke test in tests/test_transcripts.py so a faster-whisper bump that
+    starts *using* ``av`` at import time fails loudly there, not here.
+    """
+    sys.modules.setdefault("av", types.ModuleType("av"))
+
+
 def _resolve_transcribe_device() -> str:
     """Return the device string to hand ``WhisperModel``.
 
@@ -326,6 +342,7 @@ def _load_model(model_name: str | None = None) -> Any:
         profiling.count("transcribe.model_cache.miss")
 
         try:
+            _ensure_av_stub()
             from faster_whisper import WhisperModel
         except ImportError:
             utils.error_print(
@@ -573,30 +590,28 @@ def transcribe_video(
 
     lang = language or config.TRANSCRIBE_LANGUAGE
 
-    # faster-whisper's decoder always reads the container's first audio stream —
-    # there is no index parameter — so a non-default track has to be demuxed to
-    # its own file first. Track 0 keeps the raw video path (byte-identical to the
-    # pre-track-picker behaviour); the extraction is the same cached, locked one
-    # the browser's per-track volume mixer uses.
-    audio_source = str(video_path)
-    if idx > 0:
-        extracted = video_mod.extract_audio_track(video_path, idx)
-        if extracted is None:
-            # Never fall back to track 0 — that would silently transcribe the
-            # wrong audio, which reads as "clipgen is broken", not "it failed".
-            utils.warning_print(
-                f"Could not extract audio track {idx + 1} from "
-                f"{Path(video_path).name} — skipping transcription."
-            )
-            return None
-        audio_source = str(extracted)
+    # Decode the selected stream to PCM ourselves (ffmpeg CLI, ``-map 0:a:N``)
+    # instead of handing faster-whisper the path: its own decoder is PyAV,
+    # which is deliberately not installed (see _ensure_av_stub), and it can
+    # only read the container's first audio stream anyway.
+    audio_source = video_mod.decode_audio_pcm(str(video_path), idx)
+    if audio_source is None:
+        # Never fall back to another track — that would silently transcribe the
+        # wrong audio, which reads as "clipgen is broken", not "it failed".
+        utils.warning_print(
+            f"Could not decode audio track {idx + 1} from "
+            f"{Path(video_path).name} — skipping transcription."
+        )
+        return None
+    if _is_cancelled():
+        raise _TranscriptionCancelled
 
     try:
         transcribe_kwargs = _build_transcribe_kwargs(
             language=lang, initial_prompt=prompt
         )
-        # Not a free call: faster-whisper loads the audio, extracts features and
-        # runs VAD + language detection *eagerly* here, then hands back a lazy
+        # Not a free call: faster-whisper extracts features and runs VAD +
+        # language detection *eagerly* here, then hands back a lazy
         # generator. That is why info.duration_after_vad is already populated
         # below. Without this span the TRANSCRIBE_VAD_* knobs — the ones
         # PERFORMANCE.md calls "the big win" — are the one thing the transcribe

@@ -15,7 +15,10 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 import config
 import files
@@ -1999,6 +2002,66 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
             _prune_stale_audio_tracks(cache_dir, digest, mtime_ns)
             return out_path
         return None
+
+
+def decode_audio_pcm(filepath: str, audio_index: int = 0) -> "np.ndarray | None":
+    """Decode one audio stream to 16 kHz mono float32 PCM for transcription.
+
+    Whisper consumes exactly this shape as an ndarray, which keeps PyAV out of
+    the dependency tree: faster-whisper only calls ``av`` to decode *path*
+    inputs, and ``-map 0:a:<index>`` selects the stream directly, so a
+    non-default track no longer needs a demux-to-temp-file round trip either.
+    Returns a writable ``np.ndarray`` (float32), or ``None`` on any failure —
+    including an empty stream, since zero samples would only fail later and
+    less legibly inside the model. ~4 MB per audio-minute; the transient
+    bytes→array copy briefly doubles that, matching what faster-whisper's own
+    ``decode_audio`` peaked at.
+    """
+    if config.DEBUGGING:
+        return None
+    import numpy as np  # deferred: keep video.py cheap for non-transcribe CLI paths
+
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-v",
+        "error",
+        "-i",
+        filepath,
+        "-map",
+        f"0:a:{audio_index}",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-f",
+        "f32le",
+        "pipe:1",
+    ]
+    try:
+        with profiling.span("transcribe.decode_audio"):
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                # Audio-only decode runs far faster than realtime, but it does
+                # scale with session length — bound it loosely so a wedged
+                # ffmpeg can't pin a transcription worker forever.
+                timeout=900,
+            )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        utils.verbose_print(f"PCM decode failed for {filepath}: {exc}")
+        return None
+    if result.returncode != 0 or not result.stdout:
+        stderr_tail = result.stderr.decode("utf-8", "replace").strip()[-300:]
+        utils.verbose_print(
+            f"PCM decode failed for {filepath} "
+            f"(exit {result.returncode}): {stderr_tail or 'no output'}"
+        )
+        return None
+    # bytearray copy: frombuffer over immutable bytes yields a read-only array,
+    # and the model must be free to operate on a writable waveform.
+    return np.frombuffer(bytearray(result.stdout), dtype=np.float32)
 
 
 def _delete_quietly(path: Path) -> None:
