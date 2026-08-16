@@ -157,6 +157,28 @@ uv run clipgen.py --ss-task change P01 --ss-threshold 0.05 --ss-interval 0.1 \
     -i /tmp/ssbench -o /tmp/ssbench/out --profile 2>&1 | grep "profile |"
 ```
 
+`--ss-threshold` (and the tool's other required flags) is load-bearing: without
+it `change` / `similarity` / `inactivity` / `flow` / `template` refuse to
+build a task, and the report is just `ffprobe.run` — which looks like a
+fast-filter skip. Compare tools with unique `-o` dirs so a cached manifest
+does not hide the callback:
+
+```bash
+# 15s 1280x720 testsrc, --ss-interval 0.1. Grep scan.callback.<tool>.
+uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
+    --ss-tolerance 20,30,30 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-color --profile
+uv run clipgen.py --ss-task similarity P01 --ss-reference-timestamp 1 \
+    --ss-threshold 0.5 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-sim --profile
+uv run clipgen.py --ss-task inactivity P01 --ss-threshold 10 --ss-interval 0.1 \
+    -i /tmp/ssbench -o /tmp/ssbench/cb-inact --profile
+uv run clipgen.py --ss-task scene P01 --ss-scene-ref menu:1 --ss-interval 0.1 \
+    -i /tmp/ssbench -o /tmp/ssbench/cb-scene --profile
+uv run clipgen.py --ss-task flow P01 --ss-threshold 2 --ss-interval 0.1 \
+    -i /tmp/ssbench -o /tmp/ssbench/cb-flow --profile
+uv run clipgen.py --ss-task template P01 --ss-reference-timestamp 1 \
+    --ss-threshold 0.7 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-tmpl --profile
+```
+
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
 (404 without the flag; `?reset=1` snapshots then clears, bracketing a window).
 
@@ -167,11 +189,31 @@ ui extra), then
 CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio --perf --wait 5000
 ```
 
-prints `perf | ` lines (CDP layout/script/heap metrics, navigation/resource timing,
-the clipgenPerf measures) plus one `perf-json:` line for parsing; the server's
-`profile | ` route report follows at exit. `--trace /tmp/page.trace.json` writes a
-Chrome trace for Perfetto — the "open DevTools" of last resort. The headless shell's
-paint metrics are only indicative; add `--full-chromium` when paint fidelity matters.
+The UI fixture is 6 rows × 2 participants — `studio.renderGrid` will be a few
+milliseconds and tell you nothing. Point `--sheet` / `--output` at the
+benchmark inputs from Step 2:
+
+```bash
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio \
+    --perf --sheet /tmp/gridbench.xlsx --wait 2000 \
+    --eval "return document.querySelectorAll('#sheetGrid tbody tr').length"
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
+    --perf --output /tmp/tsbench --wait 2000 \
+    --eval "return document.querySelectorAll('.segment-row').length"
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py screenspace \
+    --perf --input /tmp/ssbench --output /tmp/ssbench/out --wait 2000
+```
+
+Sanity-check the `--eval` counts before trusting `perf | studio.renderGrid`
+(200 rows) or `transcripts.renderSegments` (2400 rows). A drifted sheet
+layout yields a silently small grid, not an error.
+
+Each `--perf` run prints `perf | ` lines (CDP layout/script/heap metrics,
+navigation/resource timing, the clipgenPerf measures) plus one `perf-json:`
+line for parsing; the server's `profile | ` route report follows at exit.
+`--trace /tmp/page.trace.json` writes a Chrome trace for Perfetto — the
+"open DevTools" of last resort. The headless shell's paint metrics are only
+indicative; add `--full-chromium` when paint fidelity matters.
 
 ## Step 4 — Interpret
 

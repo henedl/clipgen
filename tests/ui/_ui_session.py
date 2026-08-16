@@ -108,15 +108,46 @@ def new_context(
     return context
 
 
-def redirect_config(settings_dir: Path | None = None) -> None:
+def _open_sheet(path: Path) -> tuple[Any, str]:
+    """Open a caller-supplied workbook with the same contract as the fixture.
+
+    A drifted layout yields a silently small grid rather than an error on the
+    page, so fail here the same way ``_ui_fixtures.open_workbook`` does.
+    """
+    import excel_io
+    import spreadsheet
+
+    workbook = excel_io.open_excel_workbook(str(path))
+    if workbook is None:
+        return None, f"could not open --sheet {path}"
+    if spreadsheet.build_sheet_context(workbook) is None:
+        return None, (
+            f"--sheet {path} does not satisfy spreadsheet.build_sheet_context "
+            "(ID on row 2, Observation/Category on row 5 — see "
+            "agents/skills/profile/SKILL.md Step 2)"
+        )
+    return workbook, ""
+
+
+def redirect_config(
+    settings_dir: Path | None = None,
+    *,
+    input_dir: Path | None = None,
+    output_dir: Path | None = None,
+) -> None:
     """Point config at the throwaway fixture tree (one-shot processes only).
 
     Plain assignment, no ``MonkeyPatch``: callers of :func:`ui_session` are
     standalone scripts that exit afterwards. ``conftest.py`` needs the restoring
     version and keeps its own.
+
+    *input_dir* / *output_dir* override the miniature fixture so ``shot.py
+    --perf`` can point at a real-sized project (the 200×12 gridbench sheet,
+    a synthesized 2400-segment transcripts manifest). Unset, they keep the
+    generated UI-check tree.
     """
-    config.INPUT_DIR = str(_ui_fixtures.INPUT_DIR)
-    config.OUTPUT_DIR = str(_ui_fixtures.OUTPUT_DIR)
+    config.INPUT_DIR = str(input_dir or _ui_fixtures.INPUT_DIR)
+    config.OUTPUT_DIR = str(output_dir or _ui_fixtures.OUTPUT_DIR)
     # Sheet-loading chatter would bury the screenshot path and the --eval result.
     config.VERBOSITY = config.QUIET
     # build_combined_app records a project session, which would otherwise prepend
@@ -137,6 +168,9 @@ def ui_session(
     viewport: dict[str, int] | None = None,
     theme: str = "dark",
     full_chromium: bool = False,
+    input_dir: Path | None = None,
+    output_dir: Path | None = None,
+    sheet: Path | None = None,
 ) -> Iterator[Session]:
     """Boot fixtures, server and browser once; yield a context to drive.
 
@@ -147,17 +181,32 @@ def ui_session(
     ``full_chromium=True`` prefers the full Chromium build over the headless
     shell (see ``_ui_browser.resolve_chromium``) for paint-sensitive perf runs.
 
+    *sheet* / *input_dir* / *output_dir* swap the miniature fixture for a
+    caller-built project. ``--sheet`` skips the ffmpeg testsrc encode (the
+    gridbench recipe has no videos); ``--output`` alone keeps the fixture
+    workbook so a synthesized transcripts/screenspace manifest can sit next
+    to it. The UI-check settings dir is always used, so a bench run cannot
+    prepend itself onto the maintainer's "Recently opened" rail.
+
     Teardown order matters and is enforced by the nesting below: the browser
     closes before the socket does, which is what keeps the server's
     connection-thread join from hanging (see ``_ui_server``).
     """
-    _ui_fixtures.ensure_inputs()
+    if sheet is None:
+        _ui_fixtures.ensure_inputs()
+    _ui_fixtures.ensure_run_dirs()
     chromium_path = _ui_browser.resolve_chromium(prefer_full=full_chromium)
     playwright_factory = _ui_browser.sync_playwright()
-    _ui_fixtures.ensure_run_dirs()
-    redirect_config()
+    if sheet is not None and input_dir is None:
+        input_dir = sheet.parent
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    redirect_config(input_dir=input_dir, output_dir=output_dir)
 
-    workbook, reason = _ui_fixtures.open_workbook()
+    if sheet is None:
+        workbook, reason = _ui_fixtures.open_workbook()
+    else:
+        workbook, reason = _open_sheet(sheet)
     if reason:
         raise _ui_fixtures.UiUnavailable(reason)
 

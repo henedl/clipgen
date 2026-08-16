@@ -17,6 +17,8 @@ computed styles, count rendered nodes, dump ``state``, call
     uv run --extra ui python tests/ui/shot.py overview --eval-file /tmp/probe.js --wait 2000
     uv run --extra ui python tests/ui/shot.py studio --perf --wait 5000
     uv run --extra ui python tests/ui/shot.py studio --perf --trace /tmp/studio.trace.json
+    uv run --extra ui python tests/ui/shot.py studio --perf --sheet /tmp/gridbench.xlsx
+    uv run --extra ui python tests/ui/shot.py transcripts --perf --output /tmp/tsbench
 
 ``--perf`` is the DevTools half of the profiling story (backend half:
 ``--profile`` / agents/skills/profile/SKILL.md). It turns on server-side
@@ -122,6 +124,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Prefer the full Chromium build over the headless shell (paint/"
         "compositor metrics on the shell are only indicative).",
+    )
+    parser.add_argument(
+        "--sheet",
+        type=Path,
+        help="Workbook to load instead of the 6-row UI fixture. Use the "
+        "gridbench recipe in agents/skills/profile/SKILL.md — the fixture "
+        "is too small for studio.renderGrid to mean anything.",
+    )
+    parser.add_argument(
+        "--input",
+        dest="input_dir",
+        type=Path,
+        help="Override config.INPUT_DIR (source videos). Defaults to the "
+        "fixture input dir, or --sheet's parent.",
+    )
+    parser.add_argument(
+        "--output",
+        dest="output_dir",
+        type=Path,
+        help="Override config.OUTPUT_DIR (manifests). Point this at a "
+        "synthesized transcripts_manifest.json or a --ss-task output dir "
+        "to measure transcripts.renderSegments / screenspace.renderResults "
+        "on a real-sized list.",
     )
     return parser.parse_args(argv)
 
@@ -246,7 +271,12 @@ def main(argv: list[str] | None = None) -> int:
     state_problem: str = ""
     try:
         with _ui_session.ui_session(
-            viewport=viewport, theme=args.theme, full_chromium=args.full_chromium
+            viewport=viewport,
+            theme=args.theme,
+            full_chromium=args.full_chromium,
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            sheet=args.sheet,
         ) as session:
             page = session.context.new_page()
             _ui_pages.wire_listeners(page, log)
