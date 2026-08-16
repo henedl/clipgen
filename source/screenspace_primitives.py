@@ -989,19 +989,28 @@ def compute_optical_flow(
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
     )
-    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
+    dx, dy = flow[..., 0], flow[..., 1]
     inside = mask > 0 if mask is not None else None
+
+    if return_grid:
+        mag, ang = cv2.cartToPolar(dx, dy, angleInDegrees=True)
+    else:
+        mag = cv2.magnitude(dx, dy)
+
     mean_mag = (
         float(np.mean(mag[inside])) if inside is not None else float(np.mean(mag))
     )
 
-    # Dominant angle: weighted mean by magnitude
+    # Dominant angle via the Cartesian identity: the magnitude-weighted
+    # circular mean atan2(sum(mag*sin(a)), sum(mag*cos(a))) simplifies to
+    # atan2(sum(dy), sum(dx)) because mag*sin(a) = dy and mag*cos(a) = dx.
     if mean_mag > 0:
-        # Use circular mean to avoid wraparound issues
-        rad = np.deg2rad(ang)
-        weights = mag if inside is None else mag * inside
-        sin_sum = float(np.sum(weights * np.sin(rad)))
-        cos_sum = float(np.sum(weights * np.cos(rad)))
+        if inside is not None:
+            sin_sum = float(np.sum(dy[inside]))
+            cos_sum = float(np.sum(dx[inside]))
+        else:
+            sin_sum = float(np.sum(dy))
+            cos_sum = float(np.sum(dx))
         dominant_angle = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
     else:
         dominant_angle = 0.0
@@ -1013,7 +1022,7 @@ def compute_optical_flow(
 
     if return_grid:
         grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
-        min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+        min_mag_thresh = config.SCREENSPACE_FLOW_GRID_MIN_MAG
         gh, gw = mag.shape[:2]
         step_y = max(1, gh // grid_size)
         step_x = max(1, gw // grid_size)
@@ -1028,7 +1037,7 @@ def compute_optical_flow(
                 ):
                     continue
                 cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
-                if cell_mag < min_mag:
+                if cell_mag < min_mag_thresh:
                     continue
                 cell_ang = float(np.mean(ang[gy : gy + step_y, gx : gx + step_x]))
                 grid.append(
