@@ -1383,38 +1383,81 @@ class TestIsWhisperModelCached:
         monkeypatch.setattr(config, "DEBUGGING", True)
         assert transcripts.is_whisper_model_cached("large-v3") is True
 
-    def test_true_when_download_model_resolves(self, monkeypatch):
+    def test_true_when_snapshot_resolves(self, monkeypatch):
         monkeypatch.setattr(config, "DEBUGGING", False)
-        import faster_whisper.utils as fwu
+        import huggingface_hub
 
-        monkeypatch.setattr(fwu, "download_model", lambda *a, **k: "/cache/path")
+        monkeypatch.setattr(
+            huggingface_hub, "snapshot_download", lambda *a, **k: "/cache/path"
+        )
         assert transcripts.is_whisper_model_cached("base") is True
 
-    def test_false_when_download_model_raises(self, monkeypatch):
+    def test_false_when_snapshot_raises(self, monkeypatch):
         monkeypatch.setattr(config, "DEBUGGING", False)
-        import faster_whisper.utils as fwu
+        import huggingface_hub
 
         def _boom(*a, **k):
             raise FileNotFoundError("not in cache")
 
-        monkeypatch.setattr(fwu, "download_model", _boom)
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", _boom)
         assert transcripts.is_whisper_model_cached("large-v3") is False
 
-    def test_passes_local_files_only_and_name(self, monkeypatch):
+    def test_passes_local_files_only_and_repo_id(self, monkeypatch):
         monkeypatch.setattr(config, "DEBUGGING", False)
-        import faster_whisper.utils as fwu
+        import huggingface_hub
 
         seen: dict = {}
 
-        def _capture(name, **kwargs):
-            seen["name"] = name
+        def _capture(repo_id, **kwargs):
+            seen["repo_id"] = repo_id
             seen["local_files_only"] = kwargs.get("local_files_only")
             return "/cache/path"
 
-        monkeypatch.setattr(fwu, "download_model", _capture)
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", _capture)
         transcripts.is_whisper_model_cached("medium")
-        assert seen["name"] == "medium"
+        assert seen["repo_id"] == "Systran/faster-whisper-medium"
         assert seen["local_files_only"] is True
+
+    def test_full_repo_id_is_passed_through(self, monkeypatch):
+        """download_model's rule: anything with a '/' is already a repo id."""
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        import huggingface_hub
+
+        seen: dict = {}
+
+        def _capture(repo_id, **kwargs):
+            seen["repo_id"] = repo_id
+            return "/cache/path"
+
+        monkeypatch.setattr(huggingface_hub, "snapshot_download", _capture)
+        transcripts.is_whisper_model_cached("mobiuslabs/faster-whisper-large-v3-turbo")
+        assert seen["repo_id"] == "mobiuslabs/faster-whisper-large-v3-turbo"
+
+    def test_mirror_stays_pinned_to_faster_whisper(self):
+        """The hf-direct check must keep matching faster_whisper's own logic.
+
+        is_whisper_model_cached deliberately avoids importing faster_whisper
+        (~600 ms package import on the /api/models request path) and mirrors
+        download_model instead: repo id from the Systran prefix, cache probe
+        via snapshot_download with the same allow_patterns. This test pays the
+        import once to pin both halves of that mirror, so a faster-whisper
+        upgrade that remaps a curated model or fetches different files fails
+        here instead of silently mis-gating downloads.
+        """
+        import inspect
+        import re
+
+        import faster_whisper.utils as fwu
+
+        for m in transcripts.WHISPER_MODELS:
+            assert fwu._MODELS.get(m["name"]) == (
+                transcripts._WHISPER_REPO_PREFIX + m["name"]
+            ), f"faster_whisper remapped '{m['name']}'"
+        source = inspect.getsource(fwu.download_model)
+        match = re.search(r"allow_patterns = \[(.*?)\]", source, re.DOTALL)
+        assert match, "download_model no longer builds a literal allow_patterns"
+        theirs = set(re.findall(r'"([^"]+)"', match.group(1)))
+        assert theirs == set(transcripts._WHISPER_ALLOW_PATTERNS)
 
 
 class TestConfirmModelDownload:

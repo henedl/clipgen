@@ -721,11 +721,25 @@ def compute_phash(
     Callers that already hold the unblurred grayscale (every scan whose
     static-skip check converts the frame) pass it as *gray* to skip the
     second conversion.
+
+    cv2's INTER_AREA has a fast path only when both scale ratios are integer;
+    1280×720 → 32×32 (fx=40, fy=22.5) takes the generic path at ~3 ms/frame.
+    When one axis divides evenly by 32, an integer-ratio pass over that axis
+    (fast path) followed by a second pass on the resulting 32-px strip is ~14×
+    faster. The intermediate uint8 rounding shifts hash distances by ≤2/64
+    bits on real frames — hashes are only ever compared against hashes from
+    the same scan run (never persisted), and every within-run comparison sees
+    a fixed region size, so both sides always take the same branch.
     """
     import imagehash
 
     if gray is None:
         gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    if w > 32 and w % 32 == 0:
+        gray = cv2.resize(gray, (32, h), interpolation=cv2.INTER_AREA)
+    elif h > 32 and h % 32 == 0:
+        gray = cv2.resize(gray, (w, 32), interpolation=cv2.INTER_AREA)
     small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
     dct = cv2.dct(small)
     dctlowfreq = dct[:8, :8]

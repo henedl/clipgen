@@ -1379,26 +1379,19 @@ def test_extract_frame_at_timestamp_debug_mode(monkeypatch):
 # ---- accurate_seek_args ----
 
 
-def test_accurate_seek_args_zero_returns_empty_lists():
-    pre, post = video.accurate_seek_args(0.0)
-    assert pre == []
-    assert post == []
+def test_accurate_seek_args_zero_returns_empty_list():
+    assert video.accurate_seek_args(0.0) == []
 
 
-def test_accurate_seek_args_within_preseek_window_skips_pre():
-    """For ts within the preseek window, the entire seek goes after -i."""
-    ts = video.FFMPEG_PRESEEK_SECONDS / 2
-    pre, post = video.accurate_seek_args(ts)
-    assert pre == []
-    assert post == ["-ss", str(ts)]
+def test_accurate_seek_args_is_a_single_pre_input_seek():
+    """One pre-input -ss, exact float preserved — no two-stage split.
 
-
-def test_accurate_seek_args_splits_for_far_target():
-    """For ts beyond the preseek window, we get a fast pre + small post."""
-    ts = video.FFMPEG_PRESEEK_SECONDS + 12.345
-    pre, post = video.accurate_seek_args(ts)
-    assert pre == ["-ss", str(ts - video.FFMPEG_PRESEEK_SECONDS)]
-    assert post == ["-ss", str(video.FFMPEG_PRESEEK_SECONDS)]
+    Pre-input -ss is frame-accurate on every decoded output (ffmpeg
+    decodes-and-discards from the prior keyframe); the old split decoded
+    ~2 s of extra frames per extraction for a bit-identical result.
+    """
+    assert video.accurate_seek_args(12.345) == ["-ss", "12.345"]
+    assert video.accurate_seek_args(0.5) == ["-ss", "0.5"]
 
 
 # ---- two-stage seek wiring in extract_frame_at_timestamp ----
@@ -1412,8 +1405,13 @@ def _captured_run(captured: dict):
     return _run
 
 
-def test_extract_frame_at_timestamp_uses_two_stage_seek(monkeypatch):
-    """Far targets get -ss before -i AND -ss after -i (frame-accurate)."""
+def test_extract_frame_at_timestamp_seeks_before_input_only(monkeypatch):
+    """The seek is one pre-input -ss; no post-input -ss survives.
+
+    A post-input -ss on top of a pre-input one is the obsolete two-stage
+    idiom — it decodes ~2 s of frames per extraction that ffmpeg then
+    discards, for a bit-identical result.
+    """
     monkeypatch.setattr(
         video,
         "probe_video_properties",
@@ -1425,27 +1423,8 @@ def test_extract_frame_at_timestamp_uses_two_stage_seek(monkeypatch):
     video.extract_frame_at_timestamp("/fake.mp4", 12.5)
     cmd = captured["cmd"]
     i_idx = cmd.index("-i")
-    pre = cmd[:i_idx]
-    post = cmd[i_idx + 2 :]
-    assert "-ss" in pre, "expected fast pre-input seek"
-    assert "-ss" in post, "expected accurate post-input seek"
-
-
-def test_extract_frame_at_timestamp_post_only_seek_for_near_target(monkeypatch):
-    """For ts inside the preseek window, only post-input -ss is emitted."""
-    monkeypatch.setattr(
-        video,
-        "probe_video_properties",
-        lambda _: {"width": 320, "height": 240, "fps": 30.0, "duration": 60.0},
-    )
-    captured: dict = {}
-    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
-
-    video.extract_frame_at_timestamp("/fake.mp4", 0.5)
-    cmd = captured["cmd"]
-    i_idx = cmd.index("-i")
-    assert "-ss" not in cmd[:i_idx]
-    assert "-ss" in cmd[i_idx + 2 :]
+    assert cmd[:i_idx][-2:] == ["-ss", "12.5"], "expected pre-input seek"
+    assert "-ss" not in cmd[i_idx + 2 :], "post-input seek is the obsolete split"
 
 
 # ---- two-stage seek + float ts in extract_thumbnail_bytes ----
@@ -1461,13 +1440,9 @@ def test_extract_thumbnail_bytes_preserves_float_timestamp(monkeypatch, tmp_path
     video.extract_thumbnail_bytes(str(fake), 12.75, width=200)
     cmd = captured["cmd"]
     seek_values = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-ss"]
-    assert seek_values, "expected at least one -ss flag"
-    assert any("12.75" in str(v) or "10.75" in str(v) for v in seek_values), (
-        f"float seconds should appear in either pre- or post-seek (got {seek_values})"
-    )
-    # And no integer-truncated whole-second-only command.
-    i_idx = cmd.index("-i")
-    assert "-ss" in cmd[i_idx + 2 :]
+    # One pre-input seek carrying the exact float — no int() truncation.
+    assert seek_values == ["12.75"]
+    assert cmd.index("-ss") < cmd.index("-i")
 
 
 # ---- card-scrubber media helpers (sprite sheet + audio segment) ----

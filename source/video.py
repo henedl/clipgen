@@ -25,12 +25,6 @@ import itertools
 
 INVALID_END_TIMESTAMP = None
 
-# Two-stage seek: pre-seek fast (key-frame-aligned) to
-# `target - FFMPEG_PRESEEK_SECONDS`, then seek the rest accurately after `-i`.
-# Keeps long-video performance while landing on the exact frame asked for rather
-# than the nearest preceding key-frame.
-FFMPEG_PRESEEK_SECONDS = 2.0
-
 # Caches are keyed on (resolved_path, mtime_ns) so a re-encoded or replaced
 # source file naturally yields a fresh entry instead of stale data. Mirrors
 # the pattern in viewer.py and pipeline.py.
@@ -164,20 +158,23 @@ def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
     return str(path.resolve()), st.st_mtime_ns
 
 
-def accurate_seek_args(timestamp_seconds: float) -> tuple[list[str], list[str]]:
-    """Return ``(pre_input_args, post_input_args)`` for a frame-accurate seek.
+def accurate_seek_args(timestamp_seconds: float) -> list[str]:
+    """Return the pre-input ``-ss`` args for a frame-accurate seek.
 
-    Splits a seek into a fast pre-input ``-ss`` near the target plus a small
-    accurate post-input ``-ss`` for the residual. Callers splice the lists
-    around ``-i <video>``. For ``timestamp <= FFMPEG_PRESEEK_SECONDS`` the
-    pre-input list is empty and the full seek is post-input.
+    A single pre-input ``-ss`` is frame-accurate whenever the output is
+    decoded (rawvideo/MJPEG — every caller here): ffmpeg seeks the demuxer to
+    the nearest keyframe at or before the target, then decodes and discards
+    up to the exact frame internally. The old two-stage idiom (pre-input
+    ``-ss`` to ``target - 2s`` plus a post-input ``-ss 2``) predates that
+    behavior and decoded ~2 s of extra frames per call for a bit-identical
+    result — measured 135 → 90 ms per frame extraction on 1440p/GOP-2s, with
+    identical output on every timestamp × GOP profile tried
+    (``test_single_seek_matches_two_stage_seek_exactly`` keeps ffmpeg honest).
+    Never valid for stream copy, which cannot decode-and-discard.
     """
     if timestamp_seconds <= 0:
-        return [], []
-    if timestamp_seconds <= FFMPEG_PRESEEK_SECONDS:
-        return [], ["-ss", str(timestamp_seconds)]
-    pre = timestamp_seconds - FFMPEG_PRESEEK_SECONDS
-    return ["-ss", str(pre)], ["-ss", str(FFMPEG_PRESEEK_SECONDS)]
+        return []
+    return ["-ss", str(timestamp_seconds)]
 
 
 def _ffmpeg_install_guidance_lines() -> list[str]:
@@ -1168,11 +1165,10 @@ def extract_thumbnail_bytes(
 ) -> bytes | None:
     """Extract a small JPEG thumbnail frame from a video at *start_seconds*.
 
-    Uses two-stage seeking (fast pre-input ``-ss`` near the target, then a
-    small accurate ``-ss`` after ``-i``) so the returned thumbnail matches
-    the requested timestamp instead of snapping to the nearest preceding
-    key-frame. Returns raw JPEG bytes on success or ``None`` on any
-    failure.
+    Frame-accurate: the pre-input ``-ss`` decodes-and-discards from the
+    nearest prior keyframe (see :func:`accurate_seek_args`), so the returned
+    thumbnail matches the requested timestamp instead of snapping to the
+    keyframe. Returns raw JPEG bytes on success or ``None`` on any failure.
     """
     if config.DEBUGGING:
         config.debug_ic(input_file, start_seconds, width)
@@ -1181,12 +1177,10 @@ def extract_thumbnail_bytes(
     if not Path(input_file).is_file():
         return None
 
-    pre_seek, post_seek = accurate_seek_args(max(0.0, start_seconds))
     cmd = _ffmpeg_cmd(
-        *pre_seek,
+        *accurate_seek_args(max(0.0, start_seconds)),
         "-i",
         input_file,
-        *post_seek,
         "-vframes",
         "1",
         "-vf",
@@ -2406,9 +2400,9 @@ def extract_frame_at_timestamp(
 ) -> Any | None:
     """Extract a single video frame at the given timestamp via ffmpeg.
 
-    Uses two-stage seeking (fast pre-input ``-ss`` near the target, then a
-    small accurate ``-ss`` after ``-i``) so the returned frame is the one
-    at ``timestamp_seconds`` rather than the nearest preceding key-frame.
+    Frame-accurate: the pre-input ``-ss`` decodes-and-discards from the
+    nearest prior keyframe (see :func:`accurate_seek_args`), so the returned
+    frame is the one at ``timestamp_seconds`` rather than the keyframe.
     Returns a BGR numpy array (H x W x 3) or None if extraction fails.
     Requires ffprobe to determine resolution and ffmpeg to decode the frame.
     """
@@ -2422,13 +2416,11 @@ def extract_frame_at_timestamp(
         return None
 
     width, height = props["width"], props["height"]
-    pre_seek, post_seek = accurate_seek_args(max(0.0, timestamp_seconds))
     cmd = [
         "ffmpeg",
-        *pre_seek,
+        *accurate_seek_args(max(0.0, timestamp_seconds)),
         "-i",
         video_path,
-        *post_seek,
         "-frames:v",
         "1",
         "-pix_fmt",

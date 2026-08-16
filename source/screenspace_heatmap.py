@@ -20,11 +20,29 @@ if TYPE_CHECKING:
     from PIL import Image
 
 
+def _normalize_blur(accumulator: np.ndarray, max_val: float) -> np.ndarray:
+    """Normalize by *max_val* and blur → uint8 intensity (JET palette indexes)."""
+    normalized = (accumulator / max_val * 255).astype(np.uint8)
+    return cv2.GaussianBlur(normalized, (15, 15), 0)
+
+
 def _colorize_accumulator(accumulator: np.ndarray, max_val: float) -> np.ndarray:
     """Normalize by *max_val*, blur, and apply the JET colormap → BGR uint8."""
-    normalized = (accumulator / max_val * 255).astype(np.uint8)
-    normalized = cv2.GaussianBlur(normalized, (15, 15), 0)
-    return cv2.applyColorMap(normalized, cv2.COLORMAP_JET)
+    return cv2.applyColorMap(_normalize_blur(accumulator, max_val), cv2.COLORMAP_JET)
+
+
+# 256-entry JET palette as RGB bytes for PIL "P"-mode GIF frames, built once
+# from the same cv2 colormap the PNG path applies (index i is exactly
+# applyColorMap's color for gray value i).
+_JET_PALETTE: bytes | None = None
+
+
+def _jet_palette() -> bytes:
+    global _JET_PALETTE
+    if _JET_PALETTE is None:
+        ramp = np.arange(256, dtype=np.uint8).reshape(1, 256)
+        _JET_PALETTE = cv2.applyColorMap(ramp, cv2.COLORMAP_JET)[0, :, ::-1].tobytes()
+    return _JET_PALETTE
 
 
 def _write_png(output_path: str, image: np.ndarray) -> bool:
@@ -180,8 +198,15 @@ def _accumulate_heatmap_result(
     accumulator: np.ndarray,
     result: dict[str, Any],
     heatmap_type: str,
+    mask_out: np.ndarray | None = None,
 ) -> None:
-    """Add a single result's contribution to a heatmap accumulator."""
+    """Add a single result's contribution to a heatmap accumulator.
+
+    *mask_out* (uint8, accumulator-shaped) additionally records which pixels
+    the grid branch drew — the geometry, not the values, so a ``mag`` of 0
+    still marks its pixels. The rolling-GIF bucket layers replay overwrites
+    through it (see :func:`generate_rolling_heatmap_gif`).
+    """
     acc_h, acc_w = accumulator.shape[:2]
     if heatmap_type == "template":
         for m in result.get("matches", []):
@@ -195,6 +220,8 @@ def _accumulate_heatmap_result(
             cy = int(cell["y"] * (acc_h - 1))
             radius = max(1, acc_w // 16)
             cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+            if mask_out is not None:
+                cv2.circle(mask_out, (cx, cy), radius, 1, -1)
 
 
 def _heatmap_frame_image(
@@ -209,14 +236,26 @@ def _heatmap_frame_image(
     Grid-based heatmaps (flow, change, attention) accumulate at a fixed
     resolution and are resized to the requested frame size; template
     accumulates frame-native.
+
+    Frames are built in palette ("P") mode: the JET colormap maps the 256
+    normalized intensity values onto exactly 256 colors, so the blurred
+    intensity image *is* the palette index image. Handing PIL RGB frames
+    instead made the GIF encoder re-derive a 256-color palette per frame
+    (quantizing ~1M pixels each) — the dominant cost of heatmap GIF
+    generation: a 24-frame 1280×720 attention GIF drops 1.59 s → 0.66 s
+    (rolling 1.87 s → 0.98 s), file size roughly unchanged. Grid types now
+    interpolate in intensity space rather than between mapped colors;
+    decoded output differs from the old quantized frames by ≤ ~5% per
+    channel, comparable to the quantizer's own error.
     """
     from PIL import Image
 
-    colored = _colorize_accumulator(accumulator, global_max)
+    idx = _normalize_blur(accumulator, global_max)
     if heatmap_type in _GRID_KEYS:
-        colored = cv2.resize(colored, (width, height), interpolation=cv2.INTER_LINEAR)
-    rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
-    return Image.fromarray(rgb)
+        idx = cv2.resize(idx, (width, height), interpolation=cv2.INTER_LINEAR)
+    frame = Image.fromarray(idx, mode="P")
+    frame.putpalette(_jet_palette())
+    return frame
 
 
 def _frame_bucket_bounds(
@@ -407,14 +446,50 @@ def generate_rolling_heatmap_gif(
     if heatmap_type in _GRID_KEYS:
         acc_h = acc_w = 256
 
-    def _accumulate_window(frame_idx: int) -> np.ndarray:
-        acc = np.zeros((acc_h, acc_w), dtype=np.float32)
-        win_start = max(0, frame_idx - window_frames + 1)
-        for bucket in range(win_start, frame_idx + 1):
+    if heatmap_type in _GRID_KEYS:
+        # Grid draws *set* pixels (cv2.circle, last draw wins), so a window is
+        # reproducible from per-bucket layers: overwrite each bucket's drawn
+        # pixels in bucket order — bit-identical to replaying the results (the
+        # mask records drawn geometry, values carry each bucket's own overlap
+        # resolution). Building every bucket once instead of rebuilding each
+        # window from raw results twice (max pass + colorize pass) cuts the
+        # Python-level circle draws ~12x: 596 → 145 ms of accumulate on a
+        # 600-result attention scan. Layers are 256×256, so all 24 together
+        # are ~3 MB — nothing like the full-res frames the two-pass shape
+        # exists to avoid holding.
+        layers: list[tuple[np.ndarray, np.ndarray]] = []
+        for bucket in range(num_frames):
+            vals = np.zeros((acc_h, acc_w), dtype=np.float32)
+            mask = np.zeros((acc_h, acc_w), dtype=np.uint8)
             start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
             for r_idx in range(start_idx, end_idx):
-                _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
-        return acc
+                _accumulate_heatmap_result(
+                    vals, results[r_idx], heatmap_type, mask_out=mask
+                )
+            layers.append((vals, mask.astype(bool)))
+
+        def _accumulate_window(frame_idx: int) -> np.ndarray:
+            acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+            for bucket in range(max(0, frame_idx - window_frames + 1), frame_idx + 1):
+                vals, mask = layers[bucket]
+                acc[mask] = vals[mask]
+            return acc
+
+    else:
+        # Template accumulates additively (`+=`), where bucket-layer sums would
+        # reorder float additions and drift off the replayed result — and its
+        # accumulator is frame-native, so 24 resident layers would be the
+        # memory problem the rebuild shape avoids. Keep rebuilding from results.
+        def _accumulate_window(frame_idx: int) -> np.ndarray:
+            acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+            win_start = max(0, frame_idx - window_frames + 1)
+            for bucket in range(win_start, frame_idx + 1):
+                start_idx, end_idx = _frame_bucket_bounds(
+                    bucket, len(results), num_frames
+                )
+                for r_idx in range(start_idx, end_idx):
+                    _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
+            return acc
 
     # Pass 1: build each window once to find the shared ceiling, discarding each
     # array immediately so only one window is ever resident.

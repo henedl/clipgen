@@ -157,13 +157,31 @@ def is_transcription_model_loaded() -> bool:
     )
 
 
+# What faster_whisper.utils.download_model does for a bare size name, mirrored
+# here so the cache check can call huggingface_hub directly: importing
+# faster_whisper costs ~600 ms (it pulls ctranslate2/tokenizers/av at package
+# import), which used to land on the first /api/models request of every server
+# session. huggingface_hub imports in ~1 ms. The repo prefix and allow_patterns
+# are pinned against faster_whisper.utils in tests/test_transcripts.py.
+_WHISPER_REPO_PREFIX = "Systran/faster-whisper-"
+_WHISPER_ALLOW_PATTERNS = [
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.*",
+]
+
+
 def is_whisper_model_cached(model_name: str | None = None) -> bool:
     """Return True if *model_name* is already downloaded to the local HF cache.
 
     Used to gate silent downloads: a non-cached model requires explicit user
-    confirmation before transcription pulls it (40 MB-2.9 GB). Resolves the
-    cache path via faster-whisper's ``download_model(local_files_only=True)``,
-    which only inspects the cache — it does **not** load model weights.
+    confirmation before transcription pulls it (40 MB-2.9 GB). Mirrors
+    faster-whisper's ``download_model(local_files_only=True)`` — the same
+    ``snapshot_download`` call on the same repo id and file patterns — without
+    importing faster_whisper itself; it only inspects the cache and does
+    **not** load model weights.
     """
     if config.DEBUGGING:
         return True
@@ -171,11 +189,17 @@ def is_whisper_model_cached(model_name: str | None = None) -> bool:
     if _cached_model is not None and _cached_model_name == model_name:
         return True
     try:
-        from faster_whisper.utils import download_model
+        from huggingface_hub import snapshot_download
     except ImportError:
         return False
+    # download_model's rule: anything with a "/" is already a full repo id.
+    repo_id = model_name if "/" in model_name else _WHISPER_REPO_PREFIX + model_name
     try:
-        download_model(model_name, local_files_only=True)
+        snapshot_download(
+            repo_id,
+            local_files_only=True,
+            allow_patterns=_WHISPER_ALLOW_PATTERNS,
+        )
         return True
     except Exception:
         # huggingface_hub raises (LocalEntryNotFoundError/FileNotFoundError)

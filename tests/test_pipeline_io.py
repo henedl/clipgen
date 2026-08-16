@@ -1,12 +1,14 @@
 """Real-ffmpeg I/O tests: the pipeline must write usable media, not just argv.
 
 Everything else in the default suite mocks ``run_ffmpeg`` and asserts arguments;
-these three prove the end of the pipe — a cut clip a player can open, a readable
-screenshot, and a reel that is the sum of its parts (or, on a failed part, no
-reel at all — the silent-short-reel class, locked here on the *real* concat path;
-the mock-only version lives in ``test_clip_pipeline.py``).
+these prove the end of the pipe — a cut clip a player can open, a readable
+screenshot, a reel that is the sum of its parts (or, on a failed part, no reel
+at all — the silent-short-reel class, locked here on the *real* concat path;
+the mock-only version lives in ``test_clip_pipeline.py``), and the
+frame-accuracy of the single pre-input seek (an assumption about ffmpeg itself,
+unmockable by construction).
 
-Deliberately capped at three (see ``agents/skills/test/SKILL.md``): titlecards
+Deliberately capped at four (see ``agents/skills/test/SKILL.md``): titlecards
 (machine-dependent ``drawtext``), OCR, Whisper, remux (already covered by
 ``test_container_seekability.py``), and padding/format/worker combinatorics all
 stay mocked elsewhere.
@@ -142,3 +144,37 @@ def test_reel_concatenates_both_windows_or_writes_nothing(
     assert reel_path.is_file() and reel_path.stat().st_size > 0
     duration = video.get_file_duration(str(reel_path))
     assert duration is not None and 2 <= duration <= 3
+
+
+@requires_ffmpeg
+def test_single_seek_matches_two_stage_seek_exactly(tmp_path):
+    """The single pre-input -ss must decode the exact frame the old split did.
+
+    accurate_seek_args emits one pre-input -ss and relies on ffmpeg
+    decoding-and-discarding from the prior keyframe when the output is
+    re-encoded. That is a claim about ffmpeg's behavior, not clipgen's, so it
+    can only be locked against the real binary: every extracted frame must be
+    bit-identical to the obsolete two-stage form (pre-input -ss to target-2s
+    plus post-input -ss 2) it replaced. Needs its own 5 s fixture (not the
+    shared 2 s source) so the timestamps straddle the old 2 s split threshold
+    — both branches of the old idiom — as well as keyframe boundaries.
+    """
+    path = str(tmp_path / "seek.mp4")
+    command = ["ffmpeg", "-y", "-v", "error"]
+    command += ["-f", "lavfi", "-i", "testsrc=duration=5:size=160x120:rate=15"]
+    command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "15", "-f", "mp4", path]
+    subprocess.run(command, check=True, capture_output=True)
+
+    def raw_frame(pre: list[str], post: list[str]) -> bytes:
+        cmd = ["ffmpeg", *pre, "-i", path, *post, "-frames:v", "1"]
+        cmd += ["-pix_fmt", "bgr24", "-f", "rawvideo", "-loglevel", "error", "pipe:1"]
+        return subprocess.run(cmd, capture_output=True, check=True).stdout
+
+    for ts in (0.4, 1.75, 3.0, 4.6):
+        old = raw_frame(
+            ["-ss", str(ts - 2.0)] if ts > 2.0 else [],
+            ["-ss", "2.0"] if ts > 2.0 else ["-ss", str(ts)],
+        )
+        new = raw_frame(video.accurate_seek_args(ts), [])
+        assert len(new) > 0
+        assert new == old, f"frame at t={ts} drifted off the two-stage result"
