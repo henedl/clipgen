@@ -25,6 +25,7 @@ htmlcov/
 # PyInstaller artifacts
 build/*
 !build/clipgen.spec
+!build/clipgen.iss
 !build/THIRD-PARTY-LICENSES
 !build/VERSION
 !build/clipgen.icns

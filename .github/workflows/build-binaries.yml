@@ -17,15 +17,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # release_glob is per-leg on purpose: each OS produces exactly one
-          # shippable file, so a shared two-pattern list could never be checked
-          # with fail_on_unmatched_files (see the publish step).
+          # release_glob is per-leg on purpose: each leg lists exactly the
+          # files it produces, so fail_on_unmatched_files (see the publish
+          # step) holds every pattern to account. A shared cross-platform list
+          # would fail whichever leg didn't produce the other OS's file.
           - os: macos-latest
             artifact_name: clipgen-macos
             release_glob: dist/*.dmg
           - os: windows-latest
             artifact_name: clipgen-windows
-            release_glob: dist/*.zip
+            release_glob: |
+              dist/*.zip
+              dist/*-setup.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -127,8 +130,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $ff = "dist/clipgen/_internal/bin/ffmpeg.exe"
-          & dist/clipgen/_internal/bin/ffprobe.exe -version | Select-Object -First 1
+          $ff = "dist/clipgen/lib/bin/ffmpeg.exe"
+          & dist/clipgen/lib/bin/ffprobe.exe -version | Select-Object -First 1
           $encoders = & $ff -hide_banner -encoders
           foreach ($name in "libx264", "libwebp", "libvpx-vp9") {
             if (-not ($encoders | Select-String -Quiet " $name ")) {
@@ -142,7 +145,7 @@ jobs:
           # faster-whisper's Silero VAD model must ship, or every default
           # (VAD-on) transcription dies with NO_SUCHFILE. Match *.onnx, not the
           # current filename, so an upstream rename doesn't require a CI edit.
-          $vad = Get-ChildItem -Recurse dist/clipgen/_internal/faster_whisper -Filter *.onnx -ErrorAction SilentlyContinue
+          $vad = Get-ChildItem -Recurse dist/clipgen/lib/faster_whisper -Filter *.onnx -ErrorAction SilentlyContinue
           if (-not $vad) {
             throw "bundle lacks the faster_whisper VAD .onnx asset"
           }
@@ -255,7 +258,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          # One-dir emits dist/clipgen/ (clipgen.exe + _internal/). Ship one file.
+          # One-dir emits dist/clipgen/ (clipgen.exe + lib/). Ship one file.
           $ErrorActionPreference = 'Stop'
           # A GPL ffmpeg now ships inside the folder, so the license text must
           # travel with it (the DMG has carried it since the LGPL-via-cv2 days).
@@ -263,12 +266,19 @@ jobs:
           Set-Content -Path dist/clipgen/INSTALL.txt -Value @"
           clipgen for Windows
 
-          Unzip this folder anywhere and run clipgen.exe. Nothing else to
-          install: ffmpeg and ffprobe, which clipgen uses to cut and inspect
-          video, are bundled (in _internal/bin/). They are GPL-licensed free
-          software, run as separate programs - see THIRD-PARTY-LICENSES in this
-          folder for the license text and where to get their source code, or
-          run: clipgen.exe --licenses
+          Two ways to get clipgen onto a machine:
+
+          * clipgen-<version>-setup.exe - recommended. Installs for the current
+            user (no admin rights needed) into %LOCALAPPDATA%\Programs\clipgen,
+            adds a Start Menu shortcut, and registers an uninstaller.
+          * This zip - portable. Unzip the folder anywhere (a USB stick works)
+            and run clipgen.exe. Keep clipgen.exe and lib\ together.
+
+          Nothing else to install: ffmpeg and ffprobe, which clipgen uses to
+          cut and inspect video, are bundled (in lib\bin\). They are
+          GPL-licensed free software, run as separate programs - see
+          THIRD-PARTY-LICENSES in this folder for the license text and where to
+          get their source code, or run: clipgen.exe --licenses
 
           clipgen's own source code is MIT-licensed and lives at
           https://github.com/henedl/clipgen.
@@ -281,6 +291,45 @@ jobs:
           if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME } else { $ver = 'dev' }
           Compress-Archive -Path dist/clipgen -DestinationPath "dist/clipgen-$ver-windows.zip" -Force
           Get-ChildItem dist/*.zip
+
+      - name: Build installer (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Inno Setup 6 is preinstalled on the windows-latest runner image
+          # (see actions/runner-images); choco is only a fallback should a
+          # future image drop it.
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME } else { $ver = 'dev' }
+          & $iscc /DAppVer=$ver build\clipgen.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC exited with $LASTEXITCODE" }
+          if (-not (Test-Path "dist/clipgen-$ver-setup.exe")) { throw "installer not found in dist/" }
+          Get-ChildItem dist/*-setup.exe
+
+      - name: Smoke-install the installer (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # A clean ISCC exit proves the script compiled, not that the result
+          # installs or that the installed exe launches. Install silently, then
+          # reuse the --help smoke from above (the bootloader loads
+          # python312.dll before argv, so this catches a broken payload too).
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $env:GITHUB_REF_NAME } else { $ver = 'dev' }
+          # Start-Process -Wait is required: setup.exe is a GUI-subsystem
+          # binary, so invoking it with `&` returns immediately and
+          # $LASTEXITCODE would be stale.
+          $p = Start-Process -FilePath "dist/clipgen-$ver-setup.exe" `
+            -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited with $($p.ExitCode)" }
+          $exe = "$env:LOCALAPPDATA\Programs\clipgen\clipgen.exe"
+          $out = & $exe --help
+          if ($LASTEXITCODE -ne 0) { throw "installed clipgen.exe --help exited with $LASTEXITCODE" }
+          $out | Select-Object -First 5
 
       # Only the upload steps below consume this, and they are non-tag-only, so
       # the short sha is the whole answer — a tag branch here would be dead.
@@ -311,7 +360,11 @@ jobs:
           name: ${{ matrix.artifact_name }}-${{ steps.suffix.outputs.suffix }}
           # The .zip, not the raw folder: upload-artifact re-zips its payload and
           # drops Unix permissions, and a loose folder is not a Release asset.
-          path: dist/*.zip
+          # The installer rides along; its own existence is asserted in the
+          # build-installer step (if-no-files-found only guards a total miss).
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
           if-no-files-found: error
 
       - name: Publish to GitHub Releases (tags only)

@@ -18,7 +18,7 @@ uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
 Takes ~90 s. Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows: `clipgen.exe` +
-`_internal/`). The build is **one-dir** — see "Why one-dir" below before changing that.
+`lib/`). The build is **one-dir** — see "Why one-dir" below before changing that.
 
 The fetch step downloads the pinned static GPL ffmpeg/ffprobe builds (SHA256-verified, see the
 `PINS` block in `build/fetch_binaries.py` for provenance) into the gitignored `build/vendor/`.
@@ -144,11 +144,11 @@ The tell is build time — a bundle missing all first-party code finishes in ~15
 `get_runtime_working_dir()` keys off it:
 
 - **one-file**: an unrelated temp dir (`/var/folders/.../\_MEI123456`)
-- **one-dir (Windows/Linux)**: `dist/clipgen/_internal` — a *child* of the executable's directory
+- **one-dir (Windows/Linux)**: `dist/clipgen/lib` — a *child* of the executable's directory
 - **one-dir (macOS .app)**: `Contents/Frameworks` — sibling of `Contents/MacOS`, with symlinks
   into `Contents/Resources`
 
-So on Windows one-dir the exe lives *inside* `clipgen/` next to `_internal/`, and "next to the
+So on Windows one-dir the exe lives *inside* `clipgen/` next to `lib/`, and "next to the
 app" is one level **up**. On macOS it is the folder containing the `.app` — never inside
 `Contents/MacOS`, which is invisible in Finder and part of the code signature.
 
@@ -202,11 +202,20 @@ stay the **first statement** of the launcher's `__main__` block, before any clip
   the `.dmg` / `.zip`. It costs nothing in size — the outer zip is a wash or a small win — but on a
   tag it would be a redundant ~800 MB copy of what the Release already carries, so the upload steps
   are gated on `github.ref_type != 'tag'`. Dev (`workflow_dispatch`) builds keep their artifacts.
-- **`fail_on_unmatched_files: true` needs a per-leg glob.** Each matrix leg produces exactly one
-  shippable file, so the publish step takes `matrix.release_glob` (`dist/*.dmg` / `dist/*.zip`); a
-  shared two-pattern list would fail whichever leg didn't produce the other platform's file. This
-  is the only guard on a tag that packaging produced anything, since the `if-no-files-found: error`
-  uploads are skipped there.
+- **`fail_on_unmatched_files: true` needs a per-leg glob.** Each matrix leg lists exactly the
+  files it produces in `matrix.release_glob` (`dist/*.dmg` on macOS; `dist/*.zip` plus
+  `dist/*-setup.exe` on Windows), so every pattern is held to account; a shared cross-platform
+  list would fail whichever leg didn't produce the other platform's file. This is the only guard
+  on a tag that packaging produced anything, since the `if-no-files-found: error` uploads are
+  skipped there.
+- **The Windows installer is a wrapper, not a rebuild.** `build/clipgen.iss` (Inno Setup) packages
+  `dist/clipgen/*` after the zip step into `dist/clipgen-<ver>-setup.exe` — per-user
+  (`PrivilegesRequired=lowest`, `{localappdata}\Programs\clipgen`, no UAC), Start Menu shortcut,
+  uninstaller. The version is injected via `ISCC /DAppVer=...` (never hardcoded in the .iss); the
+  `AppId` GUID must never change or upgrades stop replacing the previous install. ISCC is
+  preinstalled on the windows-latest image; CI compiles, then silent-installs
+  (`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`) and runs the installed exe's `--help` as the smoke.
+  The portable zip keeps shipping alongside it — two artifacts, one build.
 - **Never publish `dist/clipgen` as a file.** Under one-dir it is a *directory*. The old raw-binary
   step was removed for exactly this reason — it would have silently published the wrong thing
   rather than failing.

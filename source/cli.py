@@ -899,7 +899,7 @@ def get_runtime_working_dir() -> str:
       and invalidate the signature.
     * a one-dir build (Windows/Linux) — the folder containing the payload
       directory. One-dir puts ``clipgen.exe`` *inside* ``clipgen/`` alongside
-      ``_internal/``; the folder the user actually dragged somewhere is its
+      ``lib/``; the folder the user actually dragged somewhere is its
       parent, so that is where they will drop ``credentials.json``.
     * anything else — the executable's own directory.
     """
@@ -912,7 +912,7 @@ def get_runtime_working_dir() -> str:
         bundle = exe_dir.parent.parent
         if bundle.suffix == ".app":
             return str(bundle.parent)
-    # .../clipgen/clipgen.exe with the payload in .../clipgen/_internal/ → .../
+    # .../clipgen/clipgen.exe with the payload in .../clipgen/lib/ → .../
     # Under one-dir, _MEIPASS is that payload directory — a *child* of the
     # executable's own directory. One-file's _MEIPASS is an unrelated temp dir, so
     # it never matches. (macOS puts the payload in Contents/Frameworks, not a child

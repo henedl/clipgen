@@ -182,6 +182,12 @@ coll = COLLECT(
     upx=False,
     upx_exclude=["ffmpeg*", "ffprobe*"],  # see EXE above
     name="clipgen",
+    # "lib" instead of PyInstaller's default "_internal": friendlier in Explorer,
+    # and safe — runtime code never hardcodes the name (cli.get_runtime_working_dir
+    # and utils.get_bundled_assets_root both derive from sys._MEIPASS). macOS is
+    # unaffected: BUNDLE reorganizes COLLECT output into Contents/Frameworks and
+    # Contents/Resources regardless of this name.
+    contents_directory="lib",
 )
 
 if sys.platform == "darwin":
