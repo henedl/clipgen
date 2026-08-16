@@ -805,6 +805,46 @@ class TestScoreOcrReadings:
         assert detail["number_found"] == 1234.0  # 3.5 and -12 rejected outright
 
 
+class TestFuzzyMatchRatio:
+    def test_search_inside_whole_line_reading_is_full_match(self):
+        # PP-OCR's detector returns whole chat lines; a single-word search must
+        # match a line containing it (plain two-string ratio scored ~0.4 here
+        # and silently killed every chatbox search — the WoW regression).
+        readings = [(None, "Your Stamina increases by 1.", 0.98)]
+        params = {"search_string": "Stamina", "fuzzy_threshold": 0.75}
+        passed, detail = screenspace._score_text_readings(readings, params)
+        assert passed is True
+        assert detail["fuzzy_ratio"] == 1.0
+        assert detail["text_found"] == "Your Stamina increases by 1."
+
+    def test_windowed_match_tolerates_misreads(self):
+        # "Derense" for "Defense" — one glyph off inside a long line still
+        # clears a moderate threshold via the best same-length window.
+        readings = [(None, "Your skill in Derense has increased to 18.", 0.97)]
+        params = {"search_string": "Defense", "fuzzy_threshold": 0.75}
+        passed, detail = screenspace._score_text_readings(readings, params)
+        assert passed is True
+        assert detail["fuzzy_ratio"] >= 0.8
+
+    def test_search_longer_than_reading_uses_plain_ratio(self):
+        readings = [(None, "Save", 0.9)]
+        params = {"search_string": "Save changes now?", "fuzzy_threshold": 0.9}
+        passed, detail = screenspace._score_text_readings(readings, params)
+        assert passed is False
+        assert detail["fuzzy_ratio"] < 0.5
+
+    def test_empty_search_never_matches_via_windowing(self):
+        # An empty needle must not degenerate into ratio("", "") == 1.0.
+        assert screenspace_ocr._fuzzy_match_ratio("", "anything") == 0.0
+
+    def test_unrelated_text_still_scores_low(self):
+        readings = [(None, "You loot 2 Copper", 0.99)]
+        params = {"search_string": "Ironforge", "fuzzy_threshold": 0.75}
+        passed, detail = screenspace._score_text_readings(readings, params)
+        assert passed is False
+        assert detail["fuzzy_ratio"] < 0.6
+
+
 class TestReadingsFromResult:
     def test_empty_result_maps_to_no_readings(self):
         empty = SimpleNamespace(boxes=None, txts=None, scores=None)
