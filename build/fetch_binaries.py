@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Fetch the pinned ffmpeg/ffprobe static builds for the desktop bundle.
+"""Fetch the pinned ffmpeg/ffprobe builds and OCR models for the desktop bundle.
 
 Run with `uv run build/fetch_binaries.py` (stdlib-only on purpose: CI runs it
 before the project venv matters, and it must never pull dependencies). It
 downloads the pinned archives for the host platform, verifies each archive's
 SHA256 against PINS below, extracts ffmpeg + ffprobe into
 build/vendor/<platform>/bin/, and verifies the extracted binaries' SHA256 too.
-The extracted-file hashes double as the idempotency check: when the binaries
-are already present and hash-clean the script exits without downloading.
-clipgen.spec refuses to build if these files are missing.
+It also fetches the pinned RapidOCR recognition models (OCR_MODEL_PINS,
+platform-independent) into build/vendor/ocr/ so the frozen bundle never
+downloads a model at runtime. The extracted-file hashes double as the
+idempotency check: when the files are already present and hash-clean the
+script exits without downloading. clipgen.spec refuses to build if any of
+these files are missing.
 
 Provenance (THIRD-PARTY-LICENSES cites this block):
   macos-arm64: Martin Riedl's FFmpeg build server, https://ffmpeg.martin-riedl.de
@@ -78,6 +81,33 @@ PINS: dict[str, list[dict]] = {
         },
     ],
 }
+
+# RapidOCR PP-OCR recognition models (Apache-2.0), vendored so the frozen
+# bundle never downloads at runtime. Detection/orientation models ship inside
+# the rapidocr wheel; only the non-default recognition models are fetched here.
+# ONNX rec models embed their character dict in the model metadata, so one
+# .onnx per script family is the whole artifact. URLs and SHA256 come from the
+# pinned rapidocr wheel's default_models.yaml (onnxruntime section) —
+# re-derive both on any rapidocr version bump. Target names match
+# screenspace_ocr._vendored_rec_model. Japan has no PP-OCRv5 ONNX model
+# upstream, hence v4 there.
+OCR_MODEL_PINS: list[dict] = [
+    {
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/latin_PP-OCRv5_rec_mobile.onnx",
+        "sha256": "b20bd37c168a570f583afbc8cd7925603890efbcdc000a59e22c269d160b5f5a",
+        "target": "latin_rec.onnx",
+    },
+    {
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv4/rec/japan_PP-OCRv4_rec_mobile.onnx",
+        "sha256": "e1075a67dba758ecfc7ebc78a10ae61c95ac8fb66a9c86fab5541e33f085cb7a",
+        "target": "japan_rec.onnx",
+    },
+    {
+        "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx",
+        "sha256": "cd6e2ea50f6943ca7271eb8c56a877a5a90720b7047fe9c41a2e541a25773c9b",
+        "target": "korean_rec.onnx",
+    },
+]
 
 _CHUNK = 1024 * 1024
 
@@ -172,27 +202,48 @@ def extract_members(
             print(f"fetch_binaries: extracted {target}")
 
 
+def fetch_ocr_models() -> None:
+    """Fetch the pinned RapidOCR recognition models into build/vendor/ocr/."""
+    vendor_ocr = Path(__file__).resolve().parent / "vendor" / "ocr"
+    stale = [
+        pin
+        for pin in OCR_MODEL_PINS
+        if not (vendor_ocr / pin["target"]).is_file()
+        or file_sha256(vendor_ocr / pin["target"]) != pin["sha256"]
+    ]
+    if not stale:
+        print(f"fetch_binaries: {vendor_ocr} is up to date, nothing to do.")
+        return
+    vendor_ocr.mkdir(parents=True, exist_ok=True)
+    for pin in stale:
+        # download_archive streams + hashes plain files just as well as zips,
+        # and deletes on mismatch, so a failure leaves nothing half-written.
+        download_archive(pin["url"], pin["sha256"], vendor_ocr / pin["target"])
+    print(f"fetch_binaries: done — {vendor_ocr} is ready.")
+
+
 def main() -> None:
     plat = host_platform()
     archives = PINS[plat]
     vendor_bin = Path(__file__).resolve().parent / "vendor" / plat / "bin"
     if vendor_up_to_date(vendor_bin, archives):
         print(f"fetch_binaries: {vendor_bin} is up to date, nothing to do.")
-        return
-    vendor_bin.mkdir(parents=True, exist_ok=True)
-    for archive in archives:
-        # Temp file next to the targets so the rename-free write stays on one
-        # filesystem, and a hash failure leaves nothing half-extracted behind.
-        with tempfile.NamedTemporaryFile(
-            dir=vendor_bin, suffix=".zip", delete=False
-        ) as tmp:
-            archive_path = Path(tmp.name)
-        try:
-            download_archive(archive["url"], archive["sha256"], archive_path)
-            extract_members(archive_path, archive["members"], vendor_bin)
-        finally:
-            archive_path.unlink(missing_ok=True)
-    print(f"fetch_binaries: done — {vendor_bin} is ready.")
+    else:
+        vendor_bin.mkdir(parents=True, exist_ok=True)
+        for archive in archives:
+            # Temp file next to the targets so the rename-free write stays on
+            # one filesystem, and a hash failure leaves nothing half-extracted.
+            with tempfile.NamedTemporaryFile(
+                dir=vendor_bin, suffix=".zip", delete=False
+            ) as tmp:
+                archive_path = Path(tmp.name)
+            try:
+                download_archive(archive["url"], archive["sha256"], archive_path)
+                extract_members(archive_path, archive["members"], vendor_bin)
+            finally:
+                archive_path.unlink(missing_ok=True)
+        print(f"fetch_binaries: done — {vendor_bin} is ready.")
+    fetch_ocr_models()
 
 
 if __name__ == "__main__":

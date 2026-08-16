@@ -57,16 +57,16 @@ jobs:
       - name: Install dependencies
         run: |
           uv venv
-          uv pip install . --torch-backend cpu
+          uv pip install .
           uv pip install pyinstaller==6.19.0
 
-      - name: Cache pinned ffmpeg binaries
+      - name: Cache pinned vendor files (ffmpeg + OCR models)
         uses: actions/cache@v6
         with:
           path: build/vendor
           key: ffmpeg-vendor-${{ runner.os }}-${{ hashFiles('build/fetch_binaries.py') }}
 
-      - name: Fetch pinned ffmpeg binaries
+      - name: Fetch pinned vendor files (ffmpeg + OCR models)
         # Idempotent: a cache hit makes this a hash-check no-op. The spec
         # refuses to build without these files.
         run: uv run build/fetch_binaries.py
@@ -96,6 +96,12 @@ jobs:
           # current filename, so an upstream rename doesn't require a CI edit.
           find dist/clipgen.app -path "*faster_whisper/assets/*.onnx" | grep -q . \
             || { echo "::error::bundle lacks the faster_whisper VAD .onnx asset"; exit 1; }
+          # OCR must work offline: rapidocr's default models (from the wheel)
+          # and the vendored non-default recognition models must both ship.
+          find dist/clipgen.app -path "*rapidocr*" -name "*.onnx" | grep -q . \
+            || { echo "::error::bundle lacks rapidocr's default models"; exit 1; }
+          find dist/clipgen.app -path "*ocr_models/latin_rec.onnx" | grep -q . \
+            || { echo "::error::bundle lacks the vendored OCR rec models"; exit 1; }
 
       - name: Verify bundled FFmpeg library licenses (macOS)
         if: matrix.os == 'macos-latest'
@@ -153,6 +159,15 @@ jobs:
           $vad = Get-ChildItem -Recurse dist/clipgen/lib/faster_whisper -Filter *.onnx -ErrorAction SilentlyContinue
           if (-not $vad) {
             throw "bundle lacks the faster_whisper VAD .onnx asset"
+          }
+          # OCR must work offline: rapidocr's default models (from the wheel)
+          # and the vendored non-default recognition models must both ship.
+          $ocr = Get-ChildItem -Recurse dist/clipgen/lib/rapidocr -Filter *.onnx -ErrorAction SilentlyContinue
+          if (-not $ocr) {
+            throw "bundle lacks rapidocr's default models"
+          }
+          if (-not (Test-Path "dist/clipgen/lib/ocr_models/latin_rec.onnx")) {
+            throw "bundle lacks the vendored OCR rec models"
           }
 
       - name: Smoke-launch the frozen exe (Windows)

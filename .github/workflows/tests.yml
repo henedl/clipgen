@@ -58,14 +58,14 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Install dependencies (CPU-only torch)
-        # pytest-cov and pytest-xdist are installed CI-only, the same pattern as
-        # --torch-backend cpu (see AGENTS.md): kept out of pyproject.toml and
-        # uv.lock so end-user installs and local `uv run` stay unaffected.
-        # (pytest-randomly lives in the dev extra so local runs shuffle too.)
+      - name: Install dependencies
+        # pytest-cov and pytest-xdist are installed CI-only: kept out of
+        # pyproject.toml and uv.lock so end-user installs and local `uv run`
+        # stay unaffected. (pytest-randomly lives in the dev extra so local
+        # runs shuffle too.)
         run: |
           uv venv
-          uv pip install ".[dev]" pytest-cov pytest-xdist --torch-backend cpu
+          uv pip install ".[dev]" pytest-cov pytest-xdist
 
       - name: Run tests with coverage gate
         # Always run the full suite. It finishes in well under a minute, and a
@@ -121,10 +121,10 @@ jobs:
           python-version: "3.12"
           enable-cache: true
 
-      - name: Install dependencies (CPU-only torch)
+      - name: Install dependencies
         run: |
           uv venv
-          uv pip install ".[dev]" --torch-backend cpu
+          uv pip install ".[dev]"
 
       - name: Type check
         run: uvx ty@0.0.63 check
