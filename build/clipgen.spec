@@ -172,6 +172,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=("clipgen.icns" if sys.platform == "darwin" else "clipgen.ico"),
+    # "lib" instead of PyInstaller's default "_internal": friendlier in
+    # Explorer, and safe — runtime code never hardcodes the name (both
+    # cli.get_runtime_working_dir and utils.get_bundled_assets_root derive
+    # from sys._MEIPASS). An EXE kwarg, not COLLECT: the bootloader bakes the
+    # payload dir name into the executable. macOS is unaffected — BUNDLE
+    # reorganizes everything into Contents/Frameworks + Contents/Resources.
+    contents_directory="lib",
 )
 
 coll = COLLECT(
@@ -182,12 +189,6 @@ coll = COLLECT(
     upx=False,
     upx_exclude=["ffmpeg*", "ffprobe*"],  # see EXE above
     name="clipgen",
-    # "lib" instead of PyInstaller's default "_internal": friendlier in Explorer,
-    # and safe — runtime code never hardcodes the name (cli.get_runtime_working_dir
-    # and utils.get_bundled_assets_root both derive from sys._MEIPASS). macOS is
-    # unaffected: BUNDLE reorganizes COLLECT output into Contents/Frameworks and
-    # Contents/Resources regardless of this name.
-    contents_directory="lib",
 )
 
 if sys.platform == "darwin":
