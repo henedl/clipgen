@@ -198,8 +198,15 @@ def _accumulate_heatmap_result(
     accumulator: np.ndarray,
     result: dict[str, Any],
     heatmap_type: str,
+    mask_out: np.ndarray | None = None,
 ) -> None:
-    """Add a single result's contribution to a heatmap accumulator."""
+    """Add a single result's contribution to a heatmap accumulator.
+
+    *mask_out* (uint8, accumulator-shaped) additionally records which pixels
+    the grid branch drew — the geometry, not the values, so a ``mag`` of 0
+    still marks its pixels. The rolling-GIF bucket layers replay overwrites
+    through it (see :func:`generate_rolling_heatmap_gif`).
+    """
     acc_h, acc_w = accumulator.shape[:2]
     if heatmap_type == "template":
         for m in result.get("matches", []):
@@ -213,6 +220,8 @@ def _accumulate_heatmap_result(
             cy = int(cell["y"] * (acc_h - 1))
             radius = max(1, acc_w // 16)
             cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+            if mask_out is not None:
+                cv2.circle(mask_out, (cx, cy), radius, 1, -1)
 
 
 def _heatmap_frame_image(
@@ -437,14 +446,50 @@ def generate_rolling_heatmap_gif(
     if heatmap_type in _GRID_KEYS:
         acc_h = acc_w = 256
 
-    def _accumulate_window(frame_idx: int) -> np.ndarray:
-        acc = np.zeros((acc_h, acc_w), dtype=np.float32)
-        win_start = max(0, frame_idx - window_frames + 1)
-        for bucket in range(win_start, frame_idx + 1):
+    if heatmap_type in _GRID_KEYS:
+        # Grid draws *set* pixels (cv2.circle, last draw wins), so a window is
+        # reproducible from per-bucket layers: overwrite each bucket's drawn
+        # pixels in bucket order — bit-identical to replaying the results (the
+        # mask records drawn geometry, values carry each bucket's own overlap
+        # resolution). Building every bucket once instead of rebuilding each
+        # window from raw results twice (max pass + colorize pass) cuts the
+        # Python-level circle draws ~12x: 596 → 145 ms of accumulate on a
+        # 600-result attention scan. Layers are 256×256, so all 24 together
+        # are ~3 MB — nothing like the full-res frames the two-pass shape
+        # exists to avoid holding.
+        layers: list[tuple[np.ndarray, np.ndarray]] = []
+        for bucket in range(num_frames):
+            vals = np.zeros((acc_h, acc_w), dtype=np.float32)
+            mask = np.zeros((acc_h, acc_w), dtype=np.uint8)
             start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
             for r_idx in range(start_idx, end_idx):
-                _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
-        return acc
+                _accumulate_heatmap_result(
+                    vals, results[r_idx], heatmap_type, mask_out=mask
+                )
+            layers.append((vals, mask.astype(bool)))
+
+        def _accumulate_window(frame_idx: int) -> np.ndarray:
+            acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+            for bucket in range(max(0, frame_idx - window_frames + 1), frame_idx + 1):
+                vals, mask = layers[bucket]
+                acc[mask] = vals[mask]
+            return acc
+
+    else:
+        # Template accumulates additively (`+=`), where bucket-layer sums would
+        # reorder float additions and drift off the replayed result — and its
+        # accumulator is frame-native, so 24 resident layers would be the
+        # memory problem the rebuild shape avoids. Keep rebuilding from results.
+        def _accumulate_window(frame_idx: int) -> np.ndarray:
+            acc = np.zeros((acc_h, acc_w), dtype=np.float32)
+            win_start = max(0, frame_idx - window_frames + 1)
+            for bucket in range(win_start, frame_idx + 1):
+                start_idx, end_idx = _frame_bucket_bounds(
+                    bucket, len(results), num_frames
+                )
+                for r_idx in range(start_idx, end_idx):
+                    _accumulate_heatmap_result(acc, results[r_idx], heatmap_type)
+            return acc
 
     # Pass 1: build each window once to find the shared ceiling, discarding each
     # array immediately so only one window is ever resident.

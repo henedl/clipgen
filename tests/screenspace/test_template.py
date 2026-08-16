@@ -322,6 +322,58 @@ class TestGenerateRollingHeatmapGif:
         assert (tmp_path / "rolling_large.gif").stat().st_size > 0
 
 
+class TestRollingWindowLayerCompose:
+    def test_layered_windows_match_replayed_windows_bit_identically(self):
+        """The bucket-layer compose must equal replaying raw results exactly.
+
+        generate_rolling_heatmap_gif builds grid windows by overwriting each
+        bucket's drawn pixels in order instead of re-running every cv2.circle.
+        That is only valid because grid draws *set* values (last wins); this
+        replays both constructions for every window and requires array
+        equality — including cells whose mag is 0.0, which the mask must
+        still treat as drawn.
+        """
+        rng = np.random.default_rng(6)
+        results = []
+        for i in range(60):
+            cells = [
+                {
+                    "x": float(rng.random()),
+                    "y": float(rng.random()),
+                    "mag": float(rng.random()) if i % 7 else 0.0,
+                }
+                for _ in range(12)
+            ]
+            results.append({"timestamp": float(i), "saliency_grid": cells})
+
+        num_frames, window_frames, acc = 24, 6, 256
+
+        def bounds(i):
+            return screenspace_heatmap._frame_bucket_bounds(i, len(results), num_frames)
+
+        layers = []
+        for b in range(num_frames):
+            vals = np.zeros((acc, acc), dtype=np.float32)
+            mask = np.zeros((acc, acc), dtype=np.uint8)
+            for r in range(*bounds(b)):
+                screenspace_heatmap._accumulate_heatmap_result(
+                    vals, results[r], "attention", mask_out=mask
+                )
+            layers.append((vals, mask.astype(bool)))
+
+        for i in range(num_frames):
+            replayed = np.zeros((acc, acc), dtype=np.float32)
+            composed = np.zeros((acc, acc), dtype=np.float32)
+            for b in range(max(0, i - window_frames + 1), i + 1):
+                for r in range(*bounds(b)):
+                    screenspace_heatmap._accumulate_heatmap_result(
+                        replayed, results[r], "attention"
+                    )
+                vals, mask = layers[b]
+                composed[mask] = vals[mask]
+            assert np.array_equal(replayed, composed), f"window {i} drifted"
+
+
 class TestHeatmapGifPalette:
     def test_gif_frames_use_the_jet_palette_verbatim(self, tmp_path):
         """Every decoded GIF pixel must be an exact JET colormap color.
