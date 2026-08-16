@@ -99,6 +99,7 @@ from server_utils import (
     mtime_or_zero,
     ok,
     parse_number_arg,
+    profiled_stream,
 )
 from datetime import UTC
 
@@ -1679,7 +1680,7 @@ def api_generate() -> FlaskResponse:
             _release_busy("generate")
 
     return Response(
-        stream_with_busy_release(),
+        profiled_stream(stream_with_busy_release()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -1860,7 +1861,7 @@ def api_reel() -> FlaskResponse:
                 _release_busy("reel")
 
     return Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -2729,7 +2730,7 @@ def api_generate_intake() -> FlaskResponse:
             _mark_intake_active(False)
 
     return Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -2963,7 +2964,7 @@ def api_reel_direct() -> FlaskResponse:
         yield from _stream_reel_job(work, on_cleanup=cleanup)
 
     return Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )

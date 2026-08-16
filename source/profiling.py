@@ -9,6 +9,8 @@ Hot loops (per-frame scan callbacks) must NOT call into this module per
 iteration: hoist ``if config.PROFILING:`` before the loop, accumulate into
 locals, and flush once per scan via ``add()``. ``span()`` is for coarse work
 only — one ffmpeg subprocess, one cache compute, one HTTP request.
+``stream_span()`` is the equivalent for a streaming response body, which
+``span()`` cannot reach (see its docstring).
 
 Output is one grep-able line per label with a fixed ``profile | `` prefix,
 printed when the process exits (``enable()`` registers an atexit hook) and
@@ -24,7 +26,7 @@ import atexit
 import functools
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
@@ -99,6 +101,36 @@ def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         return wrapper
 
     return decorate
+
+
+def stream_span(label: str, body: Iterable[str]) -> Generator[str, None, None]:
+    """Yield through *body*, recording total generation time under *label*.
+
+    Streaming responses are invisible to the ``after_request`` timing that
+    produces ``route <rule>``: Flask runs that hook in ``finalize_request``, on
+    the ``Response`` *object*, before the WSGI server iterates the body. So a
+    streamed endpoint records only the time to *construct* its generator —
+    measured, a body taking 0.6 s reports 0.0 s. Every ndjson/SSE route in
+    clipgen was therefore reporting ~0 ms, including the four longest
+    operations in the product (``/studio/api/generate``, ``/api/reel``,
+    ``/api/generate-intake``, ``/api/reel-direct``).
+
+    Deliberately a separate ``stream`` label family rather than folding into
+    ``route``: a drain's duration is dominated by server-side job execution,
+    not request handling, and an 8-minute reel build sorted next to a 40 ms
+    route total would only move the confusion.
+
+    The ``finally`` also covers a client disconnect mid-stream (``GeneratorExit``),
+    so an abandoned generation still records what it spent.
+    """
+    if not config.PROFILING:
+        yield from body
+        return
+    start = time.perf_counter()
+    try:
+        yield from body
+    finally:
+        add(label, time.perf_counter() - start)
 
 
 def snapshot() -> dict[str, dict[str, float]]:

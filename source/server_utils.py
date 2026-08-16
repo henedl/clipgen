@@ -407,6 +407,29 @@ def make_participant_cache(
     return refresh, find
 
 
+def _profiled_rule(prefix: str) -> str:
+    """``"<prefix> <url_rule>"`` for the request in flight; call inside the view.
+
+    Must be resolved eagerly, not from inside a streaming generator: the request
+    context is gone by the time the WSGI server iterates the body (that is the
+    whole reason ``after_request`` cannot time these — see
+    ``profiling.stream_span``).
+    """
+    rule = request.url_rule.rule if request.url_rule is not None else "?"
+    return f"{prefix} {rule}"
+
+
+def profiled_stream(body: Any) -> Any:
+    """Wrap a streaming response body so its wall time lands under ``stream <rule>``.
+
+    Passthrough when profiling is off. See ``profiling.stream_span`` for why
+    ``route <rule>`` cannot measure these.
+    """
+    if not config.PROFILING:
+        return body
+    return profiling.stream_span(_profiled_rule("stream"), body)
+
+
 def make_sse_channel(
     *, maxsize: int = 64, keepalive_seconds: float = 15.0
 ) -> tuple[
@@ -453,6 +476,12 @@ def make_sse_channel(
                         pass
 
     def stream(payload: Callable[[], str], key: Any = None) -> Response:
+        # Count only, never a duration: an EventSource's lifetime measures how
+        # long a tab stayed open, and it auto-reconnects, so a "duration" would
+        # shrink the more broken the stream is. The open count is the number
+        # that actually diagnoses a flapping client.
+        if config.PROFILING:
+            profiling.count(_profiled_rule("sse.open"))
         client_q: queue.Queue[str] = queue.Queue(maxsize=maxsize)
         entry = (key, client_q)
         with lock:

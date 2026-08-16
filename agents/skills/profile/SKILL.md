@@ -21,7 +21,8 @@ Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.call
 (the per-frame split for every Screenspace tool, plus a per-scan summary line),
 `ffmpeg.run` / `ffmpeg.bytes` (every subprocess), `media_cache.*` and
 `video.*_cache.*` (hit/miss counters), `worker.progress_lock_wait`, `route <rule>`
-(per-route totals; polls aggregate instead of spamming). Frontend (via
+(per-route totals; polls aggregate instead of spamming), `stream <rule>` and
+`sse.open <rule>` (streaming responses — see below). Frontend (via
 `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick, `studio.renderGrid`,
 `screenspace.renderResults`/`renderChunk`, and a `longtask` observer for main-thread
 stalls >50 ms. To add a span, follow the hooks' pattern: accumulate into locals and
@@ -77,6 +78,17 @@ paint metrics are only indicative; add `--full-chromium` when paint fidelity mat
 - `*_cache.miss` climbing on repeat requests → a cache key or invalidation bug.
 - `route <rule>` totals expose which endpoints actually cost; `poll.*` tick counts
   expose pollers that fail to pause when hidden (a twice-recurring bug class).
+- **`route` never includes a streamed body — read `stream <rule>` for those.**
+  Flask's `after_request` runs on the `Response` object before the WSGI server
+  iterates the generator, so `route /studio/api/generate` reports the time to
+  *build* the generator (~0.1 ms) no matter how long the clips take. Verified on
+  a real one-clip run: `route` 0.000 s vs `stream` 0.077 s, with `ffmpeg.run`
+  0.023 s nested inside. The two are separate families on purpose — a drain's
+  cost is server-side job execution, not request handling. Persistent SSE
+  channels get `sse.open <rule>` as a **count only**: an `EventSource`'s lifetime
+  measures how long a tab stayed open, and it auto-reconnects, so a duration
+  would shrink the more broken the stream is. The bounded summary-token stream is
+  the exception and *is* timed, because it ends when the run ends.
 - `longtasks` / `cdp.LayoutCount` → render work; check DocumentFragment batching and
   rAF-throttling per [CODE-REVIEW.md](../../CODE-REVIEW.md).
 

@@ -7,6 +7,8 @@ accumulation when on), the report line shape agents grep for, and the
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 import config
@@ -181,3 +183,76 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
     resp = client.get("/api/profile")
     body = resp.get_json()
     assert "scan.callback" not in body["profile"]
+
+
+# ---------- streaming responses -----------------------------------------------
+#
+# Flask's after_request hook runs on the Response *object*, before the WSGI
+# server iterates the body, so `route <rule>` records generator construction
+# only. These pin the fix: the body's own wall time lands under `stream <rule>`.
+
+
+@pytest.fixture
+def stream_app(monkeypatch):
+    pytest.importorskip("flask")
+    from flask import Flask, Response
+
+    import server_utils
+
+    app = Flask(__name__)
+
+    @app.route("/slow")
+    def slow():
+        def body():
+            time.sleep(0.05)
+            yield "a"
+            time.sleep(0.05)
+            yield "b"
+
+        return Response(
+            server_utils.profiled_stream(body()), mimetype="application/x-ndjson"
+        )
+
+    return app
+
+
+def test_route_label_alone_misses_streamed_body(stream_app, monkeypatch):
+    """The defect itself: the route hook sees ~0 for a body that takes 0.1s."""
+    import server
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    stream_app.before_request(server._profile_request_start)
+    stream_app.after_request(server._profile_request_end)
+
+    resp = stream_app.test_client().get("/slow")
+    route_only = profiling.snapshot().get("route /slow", {}).get("seconds", 0.0)
+    assert route_only < 0.02, f"route hook unexpectedly saw the body ({route_only}s)"
+
+    assert resp.data == b"ab"  # drains the generator
+    snap = profiling.snapshot()
+    assert snap["stream /slow"]["seconds"] >= 0.09
+    assert snap["stream /slow"]["count"] == 1
+    profiling.reset()
+
+
+def test_stream_span_is_passthrough_when_off(stream_app, monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", False)
+    resp = stream_app.test_client().get("/slow")
+    assert resp.data == b"ab"
+    assert profiling.snapshot() == {}
+
+
+def test_stream_span_records_on_client_disconnect(monkeypatch):
+    """An abandoned generation still reports what it spent (GeneratorExit)."""
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    def body():
+        for _ in range(100):
+            time.sleep(0.01)
+            yield "x"
+
+    gen = profiling.stream_span("stream /abandoned", body())
+    next(gen)
+    gen.close()  # what the WSGI server does when the client drops
+    assert profiling.snapshot()["stream /abandoned"]["seconds"] > 0
+    profiling.reset()
