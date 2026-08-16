@@ -2,6 +2,8 @@
 
 Patterns to apply from the start when writing new features, so dedicated optimization passes are not needed later.
 
+To *measure* rather than reason — opt-in instrumentation on both the Python and browser side, plus the workflow for proving a fix with numbers — see [agents/skills/profile/SKILL.md](skills/profile/SKILL.md).
+
 ## Avoid redundant I/O and API calls
 
 - **Never re-fetch what you already have.** If a function needs data that a caller already holds (e.g. `SheetContext`, parsed manifest), accept it as an optional parameter rather than re-reading from disk or network. `generate_list()` now takes `ctx: Optional[SheetContext]`; follow this pattern for any function that calls `build_sheet_context`, `get_all_values`, or reads a manifest file.

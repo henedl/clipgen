@@ -9,6 +9,7 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 - [ui-check](ui-check/SKILL.md) — headless page smoke, screenshots, and in-page probing
 - [test](test/SKILL.md) — run the test suite
 - [test-perf](test-perf/SKILL.md) — verify new tests are not slow, and fix the ones that are
+- [profile](profile/SKILL.md) — enable the instrumentation, capture numbers, prove a perf fix
 - [bump](bump/SKILL.md) — increment patch version
 - [new-mode](new-mode/SKILL.md) — checklist for adding a CLI mode or flag
 - [new-screenspace-tool](new-screenspace-tool/SKILL.md) — checklist for adding a Screenspace tool

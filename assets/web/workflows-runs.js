@@ -95,7 +95,7 @@
           .catch(function () {});
       },
       POLL_INTERVAL,
-      { runImmediately: true },
+      { runImmediately: true, label: "workflows.run" },
     );
     _poller.start();
   }
@@ -152,7 +152,7 @@
           .catch(function () {});
       },
       POLL_INTERVAL,
-      { runImmediately: true },
+      { runImmediately: true, label: "workflows.batch" },
     );
     _batchPoller.start();
   }
@@ -1209,7 +1209,7 @@
 
   function startDiscover() {
     if (_discoverPoller) return;
-    _discoverPoller = createPoller(discoverTick, 5000);
+    _discoverPoller = createPoller(discoverTick, 5000, { label: "workflows.discover" });
     _discoverPoller.start();
   }
 

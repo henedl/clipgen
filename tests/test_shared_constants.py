@@ -149,6 +149,10 @@ def test_clipgen_config_defaults_match_python():
     # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
     # ffmpeg will refuse to write (or hiding one it would have written).
     assert js_config["subtitleContainers"] == py_config["subtitleContainers"]
+    # Profiling defaults off on both sides; live launches overlay --profile's
+    # True via clipgenApplyConfig, and exports strip the key entirely.
+    assert js_config["profiling"] is False
+    assert py_config["profiling"] == config.PROFILING
 
 
 def test_get_frontend_config_shape():
@@ -183,6 +187,7 @@ def test_get_frontend_config_shape():
         "mediaContainerWarning",
         "subtitleContainers",
         "hotkeyOverrides",
+        "profiling",
     }
     assert isinstance(cfg["defaultDuration"], int)
     assert cfg["defaultDuration"] == config.DEFAULT_DURATION_SECONDS
@@ -275,6 +280,7 @@ def test_exported_viewer_payloads_include_config():
     import viewer
 
     assert "hotkeyOverrides" not in viewer._export_config()
+    assert "profiling" not in viewer._export_config()
 
 
 def _parse_js_string_array(name: str) -> list[str]:

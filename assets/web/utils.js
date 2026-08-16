@@ -76,6 +76,7 @@ var CLIPGEN_CONFIG = {
     alwaysDefault: [".m4v", ".mov", ".mp4"],
   },
   hotkeyOverrides: {},
+  profiling: false,
 };
 
 var clipgenApplyConfig = function (payload) {
@@ -152,7 +153,130 @@ var clipgenApplyConfig = function (payload) {
       window.ClipgenHotkeys.applyOverrides(payload.hotkeyOverrides);
     }
   }
+  if (typeof payload.profiling === "boolean") {
+    CLIPGEN_CONFIG.profiling = payload.profiling;
+    if (payload.profiling && window.clipgenPerf) {
+      window.clipgenPerf.observe();
+    }
+  }
 };
+
+// ---- Performance instrumentation (opt-in, mirrors the server's --profile) ----
+//
+// Thin User Timing wrappers plus a plain-data accumulator at
+// window.__clipgenPerf, read by agents through `tests/ui/shot.py --perf`.
+// Everything is a no-op while CLIPGEN_CONFIG.profiling is false (the default;
+// the flag arrives via clipgenApplyConfig from a --profile server launch).
+// span()/begin()/end() also emit performance.mark/measure so named spans show
+// up in DevTools/Perfetto traces. See agents/skills/profile/SKILL.md.
+var clipgenPerf = (function () {
+  var acc = {
+    measures: {},
+    longtasks: { count: 0, totalMs: 0, maxMs: 0 },
+  };
+  window.__clipgenPerf = acc;
+  var observer = null;
+
+  function record(label, ms) {
+    var m = acc.measures[label];
+    if (!m) { m = acc.measures[label] = { totalMs: 0, n: 0, maxMs: 0 }; }
+    m.totalMs += ms;
+    m.n += 1;
+    if (ms > m.maxMs) m.maxMs = ms;
+  }
+
+  function begin(label) {
+    if (!CLIPGEN_CONFIG.profiling) return;
+    try { performance.mark("cg:" + label + ":start"); } catch (_) {}
+  }
+
+  function end(label) {
+    if (!CLIPGEN_CONFIG.profiling) return;
+    try {
+      var entry = performance.measure("cg:" + label, "cg:" + label + ":start");
+      record(label, entry.duration);
+      performance.clearMarks("cg:" + label + ":start");
+      performance.clearMeasures("cg:" + label);
+    } catch (_) {} // begin() never ran for this label
+  }
+
+  // Time a synchronous function; returns its result.
+  function span(label, fn) {
+    if (!CLIPGEN_CONFIG.profiling) return fn();
+    begin(label);
+    try {
+      return fn();
+    } finally {
+      end(label);
+    }
+  }
+
+  // Wrap fn so each invocation records wall time under label — including, for
+  // promise-returning fns, the async tail (network + handlers). Used by
+  // createPoller: n counts ticks (exposing pollers that never pause), totalMs
+  // is the per-tick wall cost.
+  function wrap(label, fn) {
+    return function () {
+      if (!CLIPGEN_CONFIG.profiling) return fn.apply(this, arguments);
+      var t0 = performance.now();
+      var result;
+      try {
+        result = fn.apply(this, arguments);
+      } catch (e) {
+        record(label, performance.now() - t0);
+        throw e;
+      }
+      if (result && typeof result.then === "function") {
+        var settle = function () { record(label, performance.now() - t0); };
+        result.then(settle, settle);
+      } else {
+        record(label, performance.now() - t0);
+      }
+      return result;
+    };
+  }
+
+  // Longtask observer: main-thread stalls >50ms, the browser's own signal.
+  // Feature-detected; unsupported builds degrade to measures-only.
+  function observe() {
+    if (observer || !CLIPGEN_CONFIG.profiling) return;
+    if (typeof PerformanceObserver === "undefined") return;
+    try {
+      observer = new PerformanceObserver(function (list) {
+        var entries = list.getEntries();
+        for (var i = 0; i < entries.length; i++) {
+          var d = entries[i].duration;
+          acc.longtasks.count += 1;
+          acc.longtasks.totalMs += d;
+          if (d > acc.longtasks.maxMs) acc.longtasks.maxMs = d;
+        }
+      });
+      observer.observe({ entryTypes: ["longtask"] });
+      window.addEventListener("pagehide", function () {
+        if (observer) { observer.disconnect(); observer = null; }
+      });
+    } catch (_) {
+      observer = null;
+    }
+  }
+
+  // Plain-data deep copy: Playwright's JS→Python serializer drops prototype
+  // getters, so consumers must never be handed live PerformanceEntry objects.
+  function snapshot() {
+    return JSON.parse(JSON.stringify(acc));
+  }
+
+  return {
+    begin: begin,
+    end: end,
+    span: span,
+    wrap: wrap,
+    record: record,
+    observe: observe,
+    snapshot: snapshot,
+  };
+})();
+window.clipgenPerf = clipgenPerf;
 
 // ---- DOM helpers ----
 
@@ -1129,6 +1253,9 @@ var POLL_INTERVAL = 3000;
 //   maxIntervalMs   (=intervalMs) — above intervalMs, enables idle backoff (see
 //                             below).
 //   backoffAfter    (3)     — consecutive quiet ticks before backing off.
+//   label           (none)  — profiling label; when set and profiling is on,
+//                             each tick records wall time (incl. async tail)
+//                             under "poll.<label>" via clipgenPerf.wrap.
 //
 // Backoff mode self-reschedules with setTimeout rather than setInterval, and
 // treats fn's resolved value as an "active this tick" signal: truthy resets to
@@ -1139,6 +1266,9 @@ var POLL_INTERVAL = 3000;
 // that settles once the refresh lands (so a caller can drive a spinner on it).
 var createPoller = function (fn, intervalMs, opts) {
   opts = opts || {};
+  if (opts.label) {
+    fn = clipgenPerf.wrap("poll." + opts.label, fn);
+  }
   var pauseWhenHidden = opts.pauseWhenHidden !== false;
   var runImmediately = opts.runImmediately !== false;
   var maxIntervalMs = opts.maxIntervalMs != null ? opts.maxIntervalMs : intervalMs;

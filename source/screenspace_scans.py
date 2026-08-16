@@ -21,9 +21,10 @@ import utils
 import video
 from screenspace_primitives import (
     _ConsecutiveBuffer,
-    _frame_diff_mask,
+    _frame_diff_mask_gray,
     _frame_is_static,
     _is_static_skip,
+    blur_gray,
     _match_template_prepared,
     _merge_timestamp_spans,
     _prepare_template,
@@ -37,6 +38,7 @@ from screenspace_primitives import (
     compute_scene_fingerprint,
     face_detection_available,
     filter_matches_by_region_mask,
+    flow_downscale,
     region_masker,
     saliency_grid_from_map,
     saliency_peak,
@@ -162,7 +164,10 @@ def scan_changes(
     vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    prev_pixels: list[np.ndarray | None] = [None]
+    # Carry the blur_gray output forward: frame N's blur+grayscale is reused as
+    # step N+1's "previous" side instead of being recomputed (also retains a
+    # 1-channel array rather than the full BGR frame).
+    prev_gray: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
     # change_grid feeds only the Change heatmap; skip the per-frame downsample
     # entirely when heatmaps are disabled (the data would just be discarded).
@@ -175,8 +180,9 @@ def scan_changes(
     def _cb(ts: float, pixels: np.ndarray) -> bool | None:
         if cancel_flag and cancel_flag():
             return False
-        if prev_pixels[0] is not None:
-            mask = _frame_diff_mask(prev_pixels[0], pixels, noise_threshold)
+        gray = blur_gray(pixels)
+        if prev_gray[0] is not None:
+            mask = _frame_diff_mask_gray(prev_gray[0], gray, noise_threshold)
             region_mask = mask_for(pixels)
             if region_mask is not None:
                 # Shaped region: only changes inside the polygon count, and the
@@ -215,7 +221,7 @@ def scan_changes(
                         on_result(emitted)
             else:
                 buf.reset()
-        prev_pixels[0] = pixels
+        prev_gray[0] = gray
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None
@@ -302,7 +308,7 @@ def scan_similarity(
             return None
         prev_skip_gray[0] = gray
 
-        frame_phash = compute_phash(pixels)
+        frame_phash = compute_phash(pixels, gray=gray)
         if ref_phash - frame_phash <= phash_threshold:
             # Always resize candidate to match reference dimensions for SSIM
             ph, pw = pixels.shape[:2]
@@ -874,6 +880,12 @@ def scan_flow(
 
     results: list[dict[str, Any]] = []
     prev_gray: list[np.ndarray | None] = [None]
+    # The <=256px flow downscale of prev_gray, carried forward so each frame is
+    # resized once, not twice (as curr at step N, as prev at step N+1). None
+    # when the previous frame's downscale wasn't computed (first frame, or a
+    # static-skipped frame — matching the old behavior where a skipped frame's
+    # resize also happened lazily at its first use as prev).
+    prev_small: list[np.ndarray | None] = [None]
     buf = _ConsecutiveBuffer(require_consecutive)
     mask_for = region_masker(region)
 
@@ -887,12 +899,18 @@ def scan_flow(
         if _frame_is_static(prev_gray[0], curr_gray):
             buf.reset()
             prev_gray[0] = curr_gray
+            prev_small[0] = None
             if on_progress and total_range > 0:
                 on_progress((ts - start_seconds) / total_range)
             return None
+        small_curr: np.ndarray | None = None
         if prev_gray[0] is not None:
+            small_prev = prev_small[0]
+            if small_prev is None:
+                small_prev, _ = flow_downscale(prev_gray[0])
+            small_curr, small_mask = flow_downscale(curr_gray, mask_for(pixels))
             flow_result = compute_optical_flow(
-                prev_gray[0], curr_gray, return_grid=True, mask=mask_for(pixels)
+                small_prev, small_curr, return_grid=True, mask=small_mask
             )
             if flow_result["magnitude"] >= magnitude_threshold:
                 rd: dict[str, Any] = {
@@ -916,6 +934,7 @@ def scan_flow(
             else:
                 buf.reset()
         prev_gray[0] = curr_gray
+        prev_small[0] = small_curr
         if on_progress and total_range > 0:
             on_progress((ts - start_seconds) / total_range)
         return None

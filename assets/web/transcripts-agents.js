@@ -158,7 +158,7 @@
           _stopAgentPoll(desc);
           desc.onEmpty(pid);
         });
-      }, desc.interval, { runImmediately: false });
+      }, desc.interval, { runImmediately: false, label: "transcripts.agent." + desc.key });
       desc._poller.start();
     };
   }

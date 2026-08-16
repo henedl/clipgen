@@ -19,6 +19,7 @@ from typing import Any
 
 import config
 import files
+import profiling
 import utils
 import itertools
 
@@ -64,7 +65,10 @@ _MJPEG_PIPE_TAIL: tuple[str, ...] = (
 def _ffmpeg_bytes(cmd: list[str], *, timeout: float) -> bytes | None:
     """Run an ffmpeg argv, returning stdout bytes; None on any failure."""
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout, check=False)
+        with profiling.span("ffmpeg.bytes"):
+            result = subprocess.run(
+                cmd, capture_output=True, timeout=timeout, check=False
+            )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0 or not result.stdout:
@@ -472,6 +476,7 @@ def _warn_vp9_unavailable_once(output_file: str) -> None:
     )
 
 
+@profiling.timed("ffmpeg.run")
 def run_ffmpeg_process(
     ffmpeg_command: list[str],
     *,
@@ -1580,9 +1585,13 @@ def get_file_duration(filepath: str) -> int | None:
         return None
     cached_dur = _file_duration_cache.get(key)
     if cached_dur is not None:
+        if config.PROFILING:
+            profiling.count("video.duration_cache.hit")
         # -1 is a sentinel recording a prior probe that couldn't determine the
         # duration, so repeat calls skip re-running the full probe chain.
         return cached_dur if cached_dur >= 0 else None
+    if config.PROFILING:
+        profiling.count("video.duration_cache.miss")
 
     cached_props = _video_properties_cache.get(key)
     if cached_props is not None:
@@ -1720,7 +1729,11 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
     if key is None:
         return None
     if key in _video_properties_cache:
+        if config.PROFILING:
+            profiling.count("video.props_cache.hit")
         return _video_properties_cache[key]
+    if config.PROFILING:
+        profiling.count("video.props_cache.miss")
 
     probe_command = [
         "ffprobe",
@@ -2017,7 +2030,11 @@ def probe_max_keyframe_gap(filepath: str) -> float | None:
     if key is None:
         return None
     if key in _keyframe_gap_cache:
+        if config.PROFILING:
+            profiling.count("video.keyframe_cache.hit")
         return _keyframe_gap_cache[key]
+    if config.PROFILING:
+        profiling.count("video.keyframe_cache.miss")
 
     window = config.SCREENSPACE_KEYFRAME_PROBE_SECONDS
     probe_command = [
@@ -2126,7 +2143,11 @@ def probe_container_seekability(filepath: str) -> dict[str, Any] | None:
     if key is None:
         return None
     if key in _container_seekability_cache:
+        if config.PROFILING:
+            profiling.count("video.seekability_cache.hit")
         return _container_seekability_cache[key]
+    if config.PROFILING:
+        profiling.count("video.seekability_cache.miss")
 
     result = _walk_mp4_for_seekability(filepath)
     _container_seekability_cache[key] = result

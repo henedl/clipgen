@@ -1122,6 +1122,7 @@ def get_frontend_config() -> dict[str, Any]:
         "mediaContainerWarning": config.MEDIA_CONTAINER_WARNING,
         "subtitleContainers": _subtitle_container_config(),
         "hotkeyOverrides": dict(config.HOTKEY_OVERRIDES),
+        "profiling": config.PROFILING,
     }
 
 

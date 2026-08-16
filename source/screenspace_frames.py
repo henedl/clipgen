@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     import imagehash
 
 import config
+import profiling
 import utils
 import video
 from screenspace_primitives import ScanCallback, compute_phash
@@ -345,6 +347,14 @@ def _scan_via_ffmpeg_pipe(
             # at a bounded oversample that phash-skip largely absorbs.
             select_interval = max(0.0, interval_seconds - max_gap)
 
+    # Profiling accumulates into locals and flushes once after the loop, so the
+    # off-path per-frame cost is a single boolean check (see profiling.py).
+    _prof = config.PROFILING
+    _decode_s = _filter_s = _cb_s = 0.0
+    _n_frames = _n_skipped = 0
+    _t_last = time.perf_counter() if _prof else 0.0
+    _t_dec = _t_cb = 0.0
+
     try:
         for ts, frame in _ffmpeg_pipe_frames(
             video_path,
@@ -358,9 +368,16 @@ def _scan_via_ffmpeg_pipe(
             cv_scale=cv_scale,
             skip_non_keyframes=skip_non_keyframes,
         ):
+            if _prof:
+                _t_dec = time.perf_counter()
+                _decode_s += _t_dec - _t_last
             if _phash_skip:
                 fh = compute_phash(frame)
                 if _prev_phash[0] is not None and fh - _prev_phash[0] <= _phash_thresh:
+                    if _prof:
+                        _t_last = time.perf_counter()
+                        _filter_s += _t_last - _t_dec
+                        _n_skipped += 1
                     continue
                 _prev_phash[0] = fh
                 if _max_dim > 0:
@@ -373,10 +390,30 @@ def _scan_via_ffmpeg_pipe(
                             interpolation=cv2.INTER_AREA,
                         )
 
+            if _prof:
+                _t_cb = time.perf_counter()
+                _filter_s += _t_cb - _t_dec
             result = callback(ts, frame)
+            if _prof:
+                _t_last = time.perf_counter()
+                _cb_s += _t_last - _t_cb
+                _n_frames += 1
             if result is False:
                 break
 
+        if _prof:
+            _seen = _n_frames + _n_skipped
+            profiling.add("scan.decode_wait", _decode_s, _seen)
+            profiling.add("scan.fast_filter", _filter_s, _seen)
+            profiling.add("scan.callback", _cb_s, _n_frames)
+            profiling.scan_summary(
+                Path(video_path).name,
+                [
+                    ("decode_wait", _decode_s, _seen),
+                    ("fast_filter", _filter_s, _seen),
+                    ("callback", _cb_s, _n_frames),
+                ],
+            )
         return True  # ffmpeg pipe succeeded (even if video had 0 frames)
     except Exception as exc:
         utils.warning_print(f"ffmpeg pipe scan failed: {exc}")
