@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
 
 import config
+import profiling
 import utils
 
 if TYPE_CHECKING:
@@ -26,13 +27,26 @@ def _is_transient_api_error(exc: gspread.exceptions.APIError) -> bool:
 
 
 def _call_with_api_retry(fn: Callable[[], _T], operation: str) -> _T:
-    """Call *fn*, retrying on transient Google API errors with exponential backoff."""
+    """Call *fn*, retrying on transient Google API errors with exponential backoff.
+
+    Profiled as ``sheets.<operation>``. PERFORMANCE.md's first rule is that these
+    calls are precious and rate-limited, and AGENTS.md warns that hitting the
+    limit "can appear as bugs (e.g. silently skipping timestamps)" — the *count*
+    is the invariant worth watching, not the duration. It is what makes
+    ``build_sheet_context``'s "makes exactly one API call" docstring claim
+    self-reporting rather than prose.
+
+    Backoff sleep is recorded under its own label so waiting is never confused
+    with working: a slow ``sheets.*`` total plus a large ``sheets.backoff_sleep``
+    means throttling, not a slow sheet.
+    """
     import gspread
 
     max_retries = config.GOOGLE_API_MAX_RETRIES
     for attempt in range(max_retries + 1):
         try:
-            return fn()
+            with profiling.span(f"sheets.{operation}"):
+                return fn()
         except gspread.exceptions.APIError as e:
             if not _is_transient_api_error(e) or attempt == max_retries:
                 raise
@@ -42,6 +56,8 @@ def _call_with_api_retry(fn: Callable[[], _T], operation: str) -> _T:
                 f"(attempt {attempt + 1}/{max_retries + 1}): {e}. "
                 f"Retrying in {delay}s..."
             )
+            profiling.count("sheets.retry")
+            profiling.add("sheets.backoff_sleep", float(delay))
             time.sleep(delay)
     raise RuntimeError(f"Google API {operation} failed after retries")
 
@@ -65,8 +81,11 @@ def get_worksheet(
     """
     import gspread
 
-    # Get all worksheet titles from the spreadsheet
-    worksheet_titles = [ws.title for ws in spreadsheet.worksheets()]
+    # Both round-trips below bypass _call_with_api_retry, so they are profiled
+    # here directly. A Sheets counter that silently omits some calls
+    # under-reports, which is worse than not having one.
+    with profiling.span("sheets.worksheets"):
+        worksheet_titles = [ws.title for ws in spreadsheet.worksheets()]
 
     utils.debug_print(f"Available worksheets: {worksheet_titles}")
 
@@ -75,7 +94,8 @@ def get_worksheet(
         # Empty spreadsheet - shouldn't happen but handle it.
         raise gspread.WorksheetNotFound("Spreadsheet contains no worksheets")
     utils.standard_print(f"Using worksheet: {chosen}")
-    return spreadsheet.worksheet(chosen)
+    with profiling.span("sheets.worksheet"):
+        return spreadsheet.worksheet(chosen)
 
 
 def get_all_spreadsheet_meta(connection: gspread.Client) -> list[dict[str, str]]:

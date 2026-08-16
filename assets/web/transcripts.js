@@ -960,7 +960,15 @@
 
   // ---- Segment rendering ----
 
+  // Spanned to close PERFORMANCE-PLAN-3 §8c, which gates virtualizing this list
+  // on "profiling shows >2000-segment sessions hurting". Same shape as
+  // studio.renderGrid; the CSS content-visibility and scroll-preservation
+  // halves already landed.
   function renderSegments() {
+    return clipgenPerf.span("transcripts.renderSegments", renderSegmentsImpl);
+  }
+
+  function renderSegmentsImpl() {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
     state.editingTextEl = null;
@@ -1276,7 +1284,15 @@
     });
   }
 
+  // The streaming counterpart: fires per poll tick during transcription, so it
+  // is the one that would show up as jank while a long session decodes.
   function renderPartialSegments(segments, progress) {
+    return clipgenPerf.span("transcripts.renderPartialSegments", function () {
+      return renderPartialSegmentsImpl(segments, progress);
+    });
+  }
+
+  function renderPartialSegmentsImpl(segments, progress) {
     var container = qs("#segmentList");
     var empty = qs("#transcriptEmpty");
     var pid = state.streamingParticipant || state.selectedParticipant;

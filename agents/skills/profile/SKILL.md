@@ -22,11 +22,26 @@ Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.call
 `ffmpeg.run` / `ffmpeg.bytes` (every subprocess), `media_cache.*` and
 `video.*_cache.*` (hit/miss counters), `worker.progress_lock_wait`, `route <rule>`
 (per-route totals; polls aggregate instead of spamming), `stream <rule>` and
-`sse.open <rule>` (streaming responses — see below). Frontend (via
-`CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick, `studio.renderGrid`,
+`sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`,
+`pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`.
+Frontend (via `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick,
+`studio.renderGrid`, `transcripts.renderSegments`/`renderPartialSegments`,
 `screenspace.renderResults`/`renderChunk`, and a `longtask` observer for main-thread
 stalls >50 ms. To add a span, follow the hooks' pattern: accumulate into locals and
 flush once per scan/tick — **never** call `profiling.add`/`performance.mark` per frame.
+
+Two report tokens are easy to misread:
+
+- **`max=`** is the largest single occurrence. It is absent on labels fed only by
+  batched flushes, because a batch's `seconds` is a sum with no per-item max. A
+  flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
+  `scan.callback` and `transcribe.decode` do.
+- **`peak_rss`** is process-global, monotonic and POSIX-only (omitted on Windows;
+  no psutil dependency). `?reset=1` does not and cannot clear it. `RUSAGE_SELF`
+  excludes ffmpeg subprocesses — for clipgen the memory that hurts (Whisper
+  weights, EasyOCR Readers, decoded frames) is all in-process. It also appears on
+  `/api/profile` as `peak_rss_mb`, since the knobs it exists for
+  (`SCREENSPACE_OCR_POOL_SIZE`, `WORKFLOWS_BATCH_WORKERS`) are live-server knobs.
 
 ## Step 2 — Build a benchmark input
 
@@ -38,6 +53,83 @@ motion defeats phash-skip so every frame reaches the callback), named
 mkdir -p /tmp/ssbench
 ffmpeg -y -f lavfi -i "testsrc=duration=120:size=1280x720:rate=30" \
     -pix_fmt yuv420p -c:v libx264 -g 30 /tmp/ssbench/bench_P01.mp4
+```
+
+Add `-f lavfi -i "sine=frequency=220:duration=120" -c:a aac -shortest` when you
+need a Whisper input — the video-only file above has no audio stream and
+transcription refuses it before any `transcribe.*` label is recorded.
+
+**The UI fixture is not a benchmark.** `tests/ui/_ui_fixtures.py` builds 6 rows ×
+2 participants, so `shot.py studio --perf` reports a `studio.renderGrid` of a few
+milliseconds and tells you nothing about the 200×12 case
+[PERFORMANCE-PLAN-2](../../../plans/archive/PERFORMANCE-PLAN-2.md) §4.1 named.
+For grid / Sheets work, generate a real one — geometry mirrors
+`_ui_fixtures._make_workbook`, which is the authoritative layout (`ID` at F2 with
+participant columns to its right *on row 2*, `Observation`/`Category` on row 5,
+data from row 6):
+
+```python
+# /tmp/gridbench.xlsx — 200 rows x 12 participants
+import openpyxl
+
+wb = openpyxl.Workbook()
+ws = wb.active
+ws.title = "Observations"
+ws["A1"] = "gridbench"
+ws["F2"] = "ID"
+for i in range(12):
+    ws.cell(2, 7 + i, f"P{i + 1:02d}")
+for col, h in enumerate(
+    ("Count", "Reported", "Severity", "Category", "Observation", "Summary"), 1
+):
+    ws.cell(5, col, h)
+sevs = ("Critical", "Serious", "Moderate", "Minor")
+for r in range(200):
+    ws.cell(6 + r, 3, sevs[r % 4])  # renderGrid paints .sev-* classes, so an
+    ws.cell(6 + r, 4, "Onboarding")  # empty Severity column under-measures it
+    ws.cell(6 + r, 5, f"Observation {r}")
+    for i in range(12):
+        ws.cell(6 + r, 7 + i, "0:01-0:04" if i % 3 == 0 else "")
+wb.save("/tmp/gridbench.xlsx")
+```
+
+Sanity-check it before trusting any number — a drifted layout yields a silently
+small grid, not an error:
+
+```bash
+uv run python -c "import sys; sys.path.insert(0,'source'); import excel_io, spreadsheet; \
+  print(spreadsheet.build_sheet_context(excel_io.open_excel_workbook('/tmp/gridbench.xlsx')) is not None)"
+```
+
+For `transcripts.renderSegments` ([PERFORMANCE-PLAN-3](../../../plans/archive/PERFORMANCE-PLAN-3.md)
+§8c gates virtualization on ">2000-segment sessions"), **synthesize the manifest**
+— 2000 real Whisper segments is hours of audio:
+
+```python
+import json, pathlib
+
+segs = [
+    {
+        "id": f"P01:{i}",
+        "start": i * 3.0,
+        "end": i * 3.0 + 2.8,
+        "text": f"Synthetic segment {i} for render benchmarking.",
+    }
+    for i in range(2400)
+]
+out = pathlib.Path("/tmp/tsbench/transcripts_manifest.json")
+out.parent.mkdir(parents=True, exist_ok=True)
+out.write_text(
+    json.dumps(
+        {
+            "source_transcripts": {
+                "P01": {"segments": segs, "language": "en", "model": "synthetic"}
+            },
+            "corrections": [],
+            "marks": {},
+        }
+    )
+)
 ```
 
 ## Step 3 — Capture a baseline
@@ -76,6 +168,34 @@ paint metrics are only indicative; add `--full-chromium` when paint fidelity mat
   again at step N+1 (`blur_gray`, `flow_downscale` carries), or the same conversion
   twice in one frame (`compute_phash(gray=)`).
 - `*_cache.miss` climbing on repeat requests → a cache key or invalidation bug.
+- **Whisper** prints a per-run `profile | whisper <file>:` line —
+  `prepare` / `decode` / `callback` plus `audio` / `file` / `vad` / `xrt`.
+  `prepare` is *not* overhead: faster-whisper loads audio, extracts features and
+  runs VAD + language detection eagerly inside `model.transcribe()` before
+  yielding anything, so that is where the `TRANSCRIBE_VAD_*` cost lands. **The
+  realtime factor divides audio by `prepare + decode`, never decode alone** —
+  measured on a 30 s file, enabling VAD moved `prepare` 0.185 s → 0.641 s while
+  `decode` collapsed 1.138 s → 0.000 s, so a decode-only ratio reports *infinity*
+  and would endorse the knob no matter what it did. `audio` << `file` means a
+  truncated or cancelled run; `vad/file` is the VAD win. A cold HF cache puts the
+  model download inside `transcribe.model_load`, so a first run is orders of
+  magnitude larger and is not a regression.
+- `sheets.*` — the **count** is the invariant, the duration is only the symptom.
+  `sheets.get_all_values n=1` per sheet load is `build_sheet_context`'s documented
+  "exactly one API call"; anything higher is the redundant-fetch regression
+  [PERFORMANCE.md](../../PERFORMANCE.md) opens with, and AGENTS.md warns
+  rate-limiting surfaces as silently skipped timestamps rather than an error. A
+  large `sheets.backoff_sleep` means throttling, not a slow sheet. Excel routes
+  through the same helper, so a local `.xlsx` emits `sheets.*` too — the family
+  means "sheet reads", not "network".
+- `pipeline.clip ÷ pipeline.pool_wall` is **effective parallelism**, the number
+  `CLIP_PARALLEL_WORKERS` is otherwise tuned blind against (`ffmpeg.run` times
+  each encode but knows nothing about overlap). Both labels are shared by all five
+  clip pools — CLI, reel regeneration, and Studio's three — because the knob is
+  global. A ratio near 1.0 with several clips queued means the pool is serializing.
+- `ocr.pool_wait` is idle time blocked on a busy EasyOCR Reader — raise
+  `SCREENSPACE_OCR_POOL_SIZE` only when this is large *and* `peak_rss` leaves
+  headroom, since each Reader holds its own model copy.
 - `route <rule>` totals expose which endpoints actually cost; `poll.*` tick counts
   expose pollers that fail to pause when hidden (a twice-recurring bug class).
 - **`route` never includes a streamed body — read `stream <rule>` for those.**

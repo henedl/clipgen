@@ -45,6 +45,7 @@ from typing import Any, NamedTuple
 
 import config
 import google_api
+import profiling
 import utils
 from utils import ClipRecord, ReelInput
 
@@ -209,7 +210,11 @@ def build_sheet_context(sheet: Any) -> SheetContext | None:
 
     study_name = sheet_data[0][0]
     if study_name == "":
-        study_name = sheet.spreadsheet.title
+        # A second API round-trip, taken only when A1 is blank — so the
+        # "exactly one API call" claim above holds for the common case but not
+        # this one. Counted rather than hidden.
+        with profiling.span("sheets.spreadsheet_title"):
+            study_name = sheet.spreadsheet.title
     utils.standard_print(f"\nBeginning work on {study_name}.")
     study_name = utils.normalize_study_name(study_name)
 

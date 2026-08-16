@@ -19,6 +19,7 @@ import config
 import files
 import titlecards
 import transcripts
+import profiling
 import utils
 import video
 import viewer
@@ -719,7 +720,17 @@ def _parallel_map_ordered(
     (e.g. to advance a progress bar). Returns the future->index map so callers
     that need post-cancel draining (see ``_run_clip_pipeline``) can use it.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    # pipeline.clip (summed item time) over pipeline.pool_wall (elapsed) is
+    # effective parallelism — the number CLIP_PARALLEL_WORKERS is tuned against.
+    # ffmpeg.run times each encode but knows nothing about overlap, so it cannot
+    # tell a saturated pool from a serialized one. Both labels are shared by
+    # every clip pool (here, _regenerate_reel, and Studio's three) because the
+    # knob is global; the ratio is meaningful in aggregate.
+    worker_fn = profiling.timed("pipeline.clip")(worker_fn)
+    with (
+        profiling.span("pipeline.pool_wall"),
+        concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+    ):
         future_to_idx = {
             pool.submit(worker_fn, item): idx for idx, item in enumerate(items)
         }
@@ -2101,10 +2112,15 @@ def _regenerate_reel(
 
     workers = _resolve_clip_workers()
     cut_results: dict[int, tuple[str, bool]] = {}
+    # Second, separate pool from _parallel_map_ordered; same two labels (see there).
+    _cut_timed = profiling.timed("pipeline.clip")(_cut_segment)
     if parallel and len(tasks) >= 2 and workers >= 2:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        with (
+            profiling.span("pipeline.pool_wall"),
+            concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+        ):
             for future in concurrent.futures.as_completed(
-                [pool.submit(_cut_segment, t) for t in tasks]
+                [pool.submit(_cut_timed, t) for t in tasks]
             ):
                 idx, out_name, ok = future.result()
                 cut_results[idx] = (out_name, ok)
