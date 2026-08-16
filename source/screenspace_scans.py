@@ -125,6 +125,7 @@ def scan_color(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="color",
     )
 
     if on_progress:
@@ -236,6 +237,7 @@ def scan_changes(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="change",
     )
 
     if on_progress:
@@ -339,6 +341,7 @@ def scan_similarity(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="similarity",
     )
 
     if on_progress:
@@ -441,6 +444,7 @@ def scan_text(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="text",
     )
 
     if on_progress:
@@ -551,6 +555,7 @@ def scan_numbers(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="numbers",
     )
 
     if on_progress:
@@ -842,6 +847,7 @@ def scan_template(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="template",
     )
 
     if on_progress:
@@ -949,6 +955,7 @@ def scan_flow(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="flow",
     )
 
     if on_progress:
@@ -1053,6 +1060,7 @@ def scan_scene(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="scene",
     )
 
     if on_progress:
@@ -1173,6 +1181,7 @@ def scan_inactivity(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=fast_opts,
+        profile_kind="inactivity",
     )
 
     # Flush final span if video ended during an inactive period
@@ -1497,6 +1506,7 @@ def scan_boundaries(
             fps=vid_fps,
             duration=vid_duration,
             fast_opts=boundary_opts,
+            profile_kind="boundary",
         )
         if on_progress:
             on_progress(1.0)
@@ -1596,6 +1606,7 @@ def scan_boundaries(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=boundary_opts,
+        profile_kind="boundary",
     )
 
     final = _consolidate_boundary_periods(
@@ -1788,6 +1799,7 @@ def scan_attention(
         fps=vid_fps,
         duration=vid_duration,
         fast_opts=attention_opts,
+        profile_kind="attention",
     )
     if on_progress:
         on_progress(1.0)

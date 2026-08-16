@@ -100,6 +100,10 @@
   // ---- Grid ----
 
   function renderGrid() {
+    return clipgenPerf.span("gallery.renderGrid", renderGridImpl);
+  }
+
+  function renderGridImpl() {
     var grid = qs("#galleryGrid");
     if (!grid) return;
 

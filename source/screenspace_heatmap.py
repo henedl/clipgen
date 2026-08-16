@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 import config
+import profiling
 import utils
 
 if TYPE_CHECKING:
@@ -365,6 +366,7 @@ def build_gif_sprite_bytes(gif_path: str, cols: int) -> bytes | None:
     return buf.getvalue()
 
 
+@profiling.timed("heatmap.gif")
 def generate_heatmap_gif(
     results: list[dict[str, Any]],
     width: int,
@@ -417,6 +419,7 @@ def generate_heatmap_gif(
     return _save_animation(frames, output_path, frame_duration_ms)
 
 
+@profiling.timed("heatmap.rolling")
 def generate_rolling_heatmap_gif(
     results: list[dict[str, Any]],
     width: int,

@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import profiling
 import utils
 from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
 
@@ -675,6 +676,10 @@ class WorkflowRunner:
 
     def run(self) -> None:
         """Execute the DAG in topological order. Safe to call once, on a thread."""
+        with profiling.span("workflows.run"):
+            self._run()
+
+    def _run(self) -> None:
         self.status = RUN_STATUS_RUNNING
         self.started_at = _now_iso()
         self._notify(force=True)
@@ -778,7 +783,8 @@ class WorkflowRunner:
 
             self.ctx.on_progress = self._make_progress(node_id)
             try:
-                result = executor(self.ctx, inputs, params)
+                with profiling.span(f"workflows.node {node['type']}"):
+                    result = executor(self.ctx, inputs, params)
                 result = result if isinstance(result, dict) else {}
                 # A reserved ``__note__`` key lets an executor flag a non-fatal
                 # degraded outcome (e.g. Ollama unavailable, nothing wired) that

@@ -17,25 +17,40 @@ changes what work runs.
 profile | scan.callback                  1.339s  n=962  avg=1.4ms
 ```
 
-Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.callback`
-(the per-frame split for every Screenspace tool, plus a per-scan summary line),
-`ffmpeg.run` / `ffmpeg.bytes` (every subprocess), `media_cache.*` and
+Label glossary — backend: `scan.decode_wait` / `scan.fast_filter` / `scan.callback.<tool>`
+(the per-frame split for every Screenspace tool, plus a per-scan summary line
+`profile | scan <tool> <file>:`). `scan.callback` without a suffix is only the
+no-kind fallback; each `scan_*` / multitool pass sets the tool name so a
+workflow of mixed detectors does not lump analysis into one bucket. Callback
+flushes pass `peak=` (largest single frame). `ffmpeg.run` / `ffmpeg.bytes`
+(every encode/extract subprocess) and `ffprobe.run` (duration / props / keyframe
+probes — the label `_parallel_probe` was measured without). `media_cache.*` and
 `video.*_cache.*` (hit/miss counters), `worker.progress_lock_wait`, `route <rule>`
 (per-route totals; polls aggregate instead of spamming), `stream <rule>` and
-`sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`,
-`pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`.
+`sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`
+(Google via `_call_with_api_retry`; local `.xlsx` is `sheets.excel_load`),
+`pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`,
+`heatmap.gif` / `heatmap.rolling` / `heatmap.gifs` (pair wall — see below),
+`ollama.generate`, `titlecard.wrap` plus
+`titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
+fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
+`workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
+ratio as the clip pools).
 Frontend (via `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick,
 `studio.renderGrid`, `transcripts.renderSegments`/`renderPartialSegments`,
-`screenspace.renderResults`/`renderChunk`, and a `longtask` observer for main-thread
-stalls >50 ms. To add a span, follow the hooks' pattern: accumulate into locals and
-flush once per scan/tick — **never** call `profiling.add`/`performance.mark` per frame.
+`screenspace.renderResults`/`renderChunk`/`renderTimeline`, `composer.renderTimeline`,
+`viewer.renderList`, `workflows.renderAllNodes`, `gallery.renderGrid`,
+`overview.renderMetadata`/`renderConvergence`, and a `longtask` observer for
+main-thread stalls >50 ms. To add a span, follow the hooks' pattern: accumulate
+into locals and flush once per scan/tick — **never** call `profiling.add` /
+`performance.mark` per frame.
 
 Two report tokens are easy to misread:
 
 - **`max=`** is the largest single occurrence. It is absent on labels fed only by
   batched flushes, because a batch's `seconds` is a sum with no per-item max. A
   flusher that tracked its own maximum passes `add(..., peak=)` to populate it —
-  `scan.callback` and `transcribe.decode` do.
+  `scan.callback.<tool>` and `transcribe.decode` do.
 - **`peak_rss`** is process-global, monotonic and POSIX-only (omitted on Windows;
   no psutil dependency). `?reset=1` does not and cannot clear it. `RUSAGE_SELF`
   excludes ffmpeg subprocesses — for clipgen the memory that hurts (Whisper
@@ -142,6 +157,28 @@ uv run clipgen.py --ss-task change P01 --ss-threshold 0.05 --ss-interval 0.1 \
     -i /tmp/ssbench -o /tmp/ssbench/out --profile 2>&1 | grep "profile |"
 ```
 
+`--ss-threshold` (and the tool's other required flags) is load-bearing: without
+it `change` / `similarity` / `inactivity` / `flow` / `template` refuse to
+build a task, and the report is just `ffprobe.run` — which looks like a
+fast-filter skip. Compare tools with unique `-o` dirs so a cached manifest
+does not hide the callback:
+
+```bash
+# 15s 1280x720 testsrc, --ss-interval 0.1. Grep scan.callback.<tool>.
+uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
+    --ss-tolerance 20,30,30 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-color --profile
+uv run clipgen.py --ss-task similarity P01 --ss-reference-timestamp 1 \
+    --ss-threshold 0.5 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-sim --profile
+uv run clipgen.py --ss-task inactivity P01 --ss-threshold 10 --ss-interval 0.1 \
+    -i /tmp/ssbench -o /tmp/ssbench/cb-inact --profile
+uv run clipgen.py --ss-task scene P01 --ss-scene-ref menu:1 --ss-interval 0.1 \
+    -i /tmp/ssbench -o /tmp/ssbench/cb-scene --profile
+uv run clipgen.py --ss-task flow P01 --ss-threshold 2 --ss-interval 0.1 \
+    -i /tmp/ssbench -o /tmp/ssbench/cb-flow --profile
+uv run clipgen.py --ss-task template P01 --ss-reference-timestamp 1 \
+    --ss-threshold 0.7 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-tmpl --profile
+```
+
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
 (404 without the flag; `?reset=1` snapshots then clears, bracketing a window).
 
@@ -152,11 +189,31 @@ ui extra), then
 CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio --perf --wait 5000
 ```
 
-prints `perf | ` lines (CDP layout/script/heap metrics, navigation/resource timing,
-the clipgenPerf measures) plus one `perf-json:` line for parsing; the server's
-`profile | ` route report follows at exit. `--trace /tmp/page.trace.json` writes a
-Chrome trace for Perfetto — the "open DevTools" of last resort. The headless shell's
-paint metrics are only indicative; add `--full-chromium` when paint fidelity matters.
+The UI fixture is 6 rows × 2 participants — `studio.renderGrid` will be a few
+milliseconds and tell you nothing. Point `--sheet` / `--output` at the
+benchmark inputs from Step 2:
+
+```bash
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py studio \
+    --perf --sheet /tmp/gridbench.xlsx --wait 2000 \
+    --eval "return document.querySelectorAll('#sheetGrid tbody tr').length"
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py transcripts \
+    --perf --output /tmp/tsbench --wait 2000 \
+    --eval "return document.querySelectorAll('.segment-row').length"
+CLIPGEN_UI_CHECK=1 uv run --extra ui python tests/ui/shot.py screenspace \
+    --perf --input /tmp/ssbench --output /tmp/ssbench/out --wait 2000
+```
+
+Sanity-check the `--eval` counts before trusting `perf | studio.renderGrid`
+(200 rows) or `transcripts.renderSegments` (2400 rows). A drifted sheet
+layout yields a silently small grid, not an error.
+
+Each `--perf` run prints `perf | ` lines (CDP layout/script/heap metrics,
+navigation/resource timing, the clipgenPerf measures) plus one `perf-json:`
+line for parsing; the server's `profile | ` route report follows at exit.
+`--trace /tmp/page.trace.json` writes a Chrome trace for Perfetto — the
+"open DevTools" of last resort. The headless shell's paint metrics are only
+indicative; add `--full-chromium` when paint fidelity matters.
 
 ## Step 4 — Interpret
 
@@ -185,14 +242,28 @@ paint metrics are only indicative; add `--full-chromium` when paint fidelity mat
   "exactly one API call"; anything higher is the redundant-fetch regression
   [PERFORMANCE.md](../../PERFORMANCE.md) opens with, and AGENTS.md warns
   rate-limiting surfaces as silently skipped timestamps rather than an error. A
-  large `sheets.backoff_sleep` means throttling, not a slow sheet. Excel routes
-  through the same helper, so a local `.xlsx` emits `sheets.*` too — the family
-  means "sheet reads", not "network".
+  large `sheets.backoff_sleep` means throttling, not a slow sheet. A local
+  `.xlsx` emits `sheets.excel_load` for the openpyxl read; the adapter's
+  in-memory `get_all_values` is unlabelled (it is not an API call).
 - `pipeline.clip ÷ pipeline.pool_wall` is **effective parallelism**, the number
   `CLIP_PARALLEL_WORKERS` is otherwise tuned blind against (`ffmpeg.run` times
   each encode but knows nothing about overlap). Both labels are shared by all five
   clip pools — CLI, reel regeneration, and Studio's three — because the knob is
   global. A ratio near 1.0 with several clips queued means the pool is serializing.
+- `workflows.batch_child ÷ workflows.batch_wall` is the same ratio for
+  `WORKFLOWS_BATCH_WORKERS`. `workflows.node <type>` splits a graph so a slow
+  Transcribe node is not mistaken for canvas overhead (`workflows.renderAllNodes`).
+- `ffprobe.run` is probe I/O (duration / props / keyframe gap). It is *not*
+  folded into `ffmpeg.run` — a reel-validation storm is a probe problem, and
+  `_parallel_probe` cannot be proven if the label does not exist.
+- `titlecard.copy` vs `titlecard.reencode` counts (not durations) tell you which
+  wrap path ran; `titlecard.wrap` is the wall including card encodes. A generate
+  that is all `reencode` is the concat-demuxer missing its copy-safe gate.
+- `heatmap.gif` / `heatmap.rolling` is post-scan work, not `scan.callback`. A
+  drop in callback with an unchanged heatmap total means the CV win did not
+  touch GIF encode. `heatmap.gifs` is the pair wall (same ratio as
+  `pipeline.clip ÷ pipeline.pool_wall`): near 2.0 means the cumulative and
+  rolling encodes overlapped; near 1.0 means they ran back-to-back.
 - `ocr.pool_wait` is idle time blocked on a busy EasyOCR Reader — raise
   `SCREENSPACE_OCR_POOL_SIZE` only when this is large *and* `peak_rss` leaves
   headroom, since each Reader holds its own model copy.

@@ -40,6 +40,7 @@ def scan_video_frames(
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
     cv_scale: float | None = None,
+    profile_kind: str = "",
 ) -> None:
     """Iterate through video at interval, extract region, call callback.
 
@@ -51,6 +52,10 @@ def scan_video_frames(
     *fast_opts* enables fast-scan optimizations:
     - ``phash_skip``: skip frames whose perceptual hash is unchanged
     - ``max_region_dim``: downscale extracted region to this max dimension
+
+    *profile_kind* names the tool (``change``, ``flow``, …) so a multi-tool
+    process attributes ``scan.callback.<kind>`` instead of lumping every
+    analysis into one ``scan.callback`` bucket. Decode/filter stay shared.
     """
     full_frame = region is None
     # Reject zero-dimension regions early: ffmpeg's crop would emit empty frames,
@@ -75,6 +80,7 @@ def scan_video_frames(
         fast_opts=fast_opts,
         full_frame=full_frame,
         cv_scale=cv_scale,
+        profile_kind=profile_kind,
     ):
         # Raise, don't warn: a scan that examined zero frames must not return an
         # empty result list, which reads as "the detector found nothing".
@@ -95,6 +101,7 @@ def scan_video_full_frames(
     duration: float = 0.0,
     fast_opts: dict[str, Any] | None = None,
     cv_scale: float | None = None,
+    profile_kind: str = "",
 ) -> None:
     """Like :func:`scan_video_frames` but passes the full frame (no region crop)."""
     scan_video_frames(
@@ -108,6 +115,7 @@ def scan_video_full_frames(
         duration=duration,
         fast_opts=fast_opts,
         cv_scale=cv_scale,
+        profile_kind=profile_kind,
     )
 
 
@@ -289,6 +297,7 @@ def _scan_via_ffmpeg_pipe(
     fast_opts: dict[str, Any] | None = None,
     full_frame: bool = False,
     cv_scale: float = 1.0,
+    profile_kind: str = "",
 ) -> bool:
     """Try to scan frames via ffmpeg pipe, calling *callback* for each.
 
@@ -351,6 +360,7 @@ def _scan_via_ffmpeg_pipe(
     # off-path per-frame cost is a single boolean check (see profiling.py).
     _prof = config.PROFILING
     _decode_s = _filter_s = _cb_s = 0.0
+    _cb_max = 0.0
     _n_frames = _n_skipped = 0
     _t_last = time.perf_counter() if _prof else 0.0
     _t_dec = _t_cb = 0.0
@@ -396,16 +406,21 @@ def _scan_via_ffmpeg_pipe(
             result = callback(ts, frame)
             if _prof:
                 _t_last = time.perf_counter()
-                _cb_s += _t_last - _t_cb
+                _cb_dt = _t_last - _t_cb
+                _cb_s += _cb_dt
+                _cb_max = max(_cb_max, _cb_dt)
                 _n_frames += 1
             if result is False:
                 break
 
         if _prof:
             _seen = _n_frames + _n_skipped
+            cb_label = (
+                f"scan.callback.{profile_kind}" if profile_kind else "scan.callback"
+            )
             profiling.add("scan.decode_wait", _decode_s, _seen)
             profiling.add("scan.fast_filter", _filter_s, _seen)
-            profiling.add("scan.callback", _cb_s, _n_frames)
+            profiling.add(cb_label, _cb_s, _n_frames, peak=_cb_max)
             profiling.scan_summary(
                 Path(video_path).name,
                 [
@@ -413,6 +428,7 @@ def _scan_via_ffmpeg_pipe(
                     ("fast_filter", _filter_s, _seen),
                     ("callback", _cb_s, _n_frames),
                 ],
+                kind=f"scan {profile_kind}" if profile_kind else "scan",
             )
         return True  # ffmpeg pipe succeeded (even if video had 0 frames)
     except Exception as exc:

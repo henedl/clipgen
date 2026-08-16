@@ -12,6 +12,7 @@ from typing import Any, NamedTuple
 import openpyxl
 from openpyxl.utils.exceptions import InvalidFileException
 
+import profiling
 import utils
 
 
@@ -161,11 +162,12 @@ def open_excel_workbook(
         utils.error_print(f"Excel file not found: {path}")
         return None
     try:
-        wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
-        ws = _get_worksheet_from_workbook(wb, worksheet_name)
-        adapter = ExcelSheetAdapter(ws, path)
-        wb.close()
-        return adapter
+        with profiling.span("sheets.excel_load"):
+            wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
+            ws = _get_worksheet_from_workbook(wb, worksheet_name)
+            adapter = ExcelSheetAdapter(ws, path)
+            wb.close()
+            return adapter
     except (
         KeyError,
         ValueError,

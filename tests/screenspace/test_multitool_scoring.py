@@ -723,6 +723,7 @@ class TestScanMultitool:
             fps=0.0,
             duration=0.0,
             fast_opts=None,
+            profile_kind="",
         ):
             frame = np.zeros((10, 10, 3), dtype=np.uint8)
             callback(1.0, frame)
@@ -832,6 +833,7 @@ class TestScanMultitool:
             fps=0.0,
             duration=0.0,
             fast_opts=None,
+            profile_kind="",
         ):
             frame = np.zeros((10, 10, 3), dtype=np.uint8)
             for ts in frames_ts:

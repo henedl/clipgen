@@ -130,14 +130,16 @@ class TestPhashTwoStepResize:
     scan_boundaries and the fast-filter dedupe actually consume.
     """
 
-    # One size per branch: w % 32 == 0 (landscape video), h % 32 == 0
-    # (portrait video), and neither (odd region → one-step path, exact match).
-    SIZES = ((720, 1280), (1920, 1080), (567, 1001))
+    # One size per branch: w % 32 == 0 (landscape), h % 32 == 0 (portrait),
+    # and neither (odd region → one-step path, exact match). Dimensions are
+    # large enough to exercise INTER_AREA, small enough that 8 frames stay
+    # off the suite's critical path (full 720p/1080p × 24 frames was ~1.7 s).
+    SIZES = ((240, 640), (640, 240), (45, 61))
 
     def test_distances_track_one_step_oracle(self):
         rng = np.random.default_rng(7)
         for h, w in self.SIZES:
-            frames = [_structured_frame(rng, h, w, t) for t in range(24)]
+            frames = [_structured_frame(rng, h, w, t) for t in range(8)]
             noisy = [
                 np.clip(
                     f.astype(np.int16) + rng.integers(-2, 3, f.shape), 0, 255

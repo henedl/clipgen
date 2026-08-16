@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import config
+import profiling
 import utils
 import video
 from utils import ClipRecord
@@ -554,6 +555,7 @@ def _build_wrap_filter_and_inputs(
     return (input_args, ";".join(filter_parts), map_args)
 
 
+@profiling.timed("titlecard.wrap")
 def wrap_clip_with_cards(
     clip: ClipRecord,
     clip_path: str,
@@ -687,6 +689,7 @@ def wrap_clip_with_cards(
             ):
                 os.replace(output_temp_path, clip_path)
                 output_temp_path = None
+                profiling.count("titlecard.copy")
                 return (True, True)
             # Copy concat failed — discard the temp output and fall through to the
             # re-encode path (which rebuilds video-only cards).
@@ -772,6 +775,7 @@ def wrap_clip_with_cards(
 
         os.replace(output_temp_path, clip_path)
         output_temp_path = None
+        profiling.count("titlecard.reencode")
         return (True, True)
     finally:
         # Titlecards are per-clip temps; endcards are managed by _endcard_cache.

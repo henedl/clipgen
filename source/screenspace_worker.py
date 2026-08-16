@@ -546,24 +546,47 @@ class ScreenspaceWorker:
         """
         out_dir = Path(utils.get_effective_output_dir())
         attachments: dict[str, Any] = {}
-        gif = generate_heatmap_gif(
-            results,
-            width,
-            height,
-            str(out_dir / f"heatmap_{task_id}.gif"),
-            heatmap_type=heatmap_type,
-        )
-        attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
-        if rolling:
-            roll = generate_rolling_heatmap_gif(
-                results,
-                width,
-                height,
-                str(out_dir / f"heatmap_rolling_{task_id}.gif"),
-                heatmap_type=heatmap_type,
-                window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
-            )
-            attachments.update(_heatmap_gif_attachments(roll, "heatmap_rolling_gif"))
+        gif_path = str(out_dir / f"heatmap_{task_id}.gif")
+        with profiling.span("heatmap.gifs"):
+            if rolling:
+                # Cumulative and rolling share no mutable state and are the two
+                # largest post-scan costs (measured 0.66 s + 0.65 s sequential on a
+                # 122-frame 720p attention GIF). Overlap them; OpenCV releases the
+                # GIL on the resize/colormap work and PIL's encode is per-file.
+                roll_path = str(out_dir / f"heatmap_rolling_{task_id}.gif")
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    gif_f = pool.submit(
+                        generate_heatmap_gif,
+                        results,
+                        width,
+                        height,
+                        gif_path,
+                        heatmap_type=heatmap_type,
+                    )
+                    roll_f = pool.submit(
+                        generate_rolling_heatmap_gif,
+                        results,
+                        width,
+                        height,
+                        roll_path,
+                        heatmap_type=heatmap_type,
+                        window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
+                    )
+                    gif = gif_f.result()
+                    roll = roll_f.result()
+                attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
+                attachments.update(
+                    _heatmap_gif_attachments(roll, "heatmap_rolling_gif")
+                )
+            else:
+                gif = generate_heatmap_gif(
+                    results,
+                    width,
+                    height,
+                    gif_path,
+                    heatmap_type=heatmap_type,
+                )
+                attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
         return attachments
 
     def _generate_heatmap(

@@ -404,6 +404,27 @@ def resolve_region_request(
     raise ValueError("region_ref.source must be 'active', 'stash', or 'full_frame'")
 
 
+def _area_resize(img: np.ndarray, new_w: int, new_h: int) -> np.ndarray:
+    """INTER_AREA resize that hits cv2's integer-ratio fast path when it can.
+
+    cv2.INTER_AREA only has a fast path when *both* scale ratios are integer.
+    1280×720 → 64×64 (fx=20, fy=11.25) or 32×32 (fx=40, fy=22.5) takes the
+    generic path at several milliseconds per frame. When one axis divides
+    evenly by the target, that axis is reduced first (fast) and the remaining
+    strip takes a tiny second pass. Odd sizes keep the one-step path.
+    """
+    h, w = img.shape[:2]
+    if w == new_w and h == new_h:
+        return img
+    if w > new_w and w % new_w == 0:
+        img = cv2.resize(img, (new_w, h), interpolation=cv2.INTER_AREA)
+    elif h > new_h and h % new_h == 0:
+        img = cv2.resize(img, (w, new_h), interpolation=cv2.INTER_AREA)
+    if img.shape[1] != new_w or img.shape[0] != new_h:
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return img
+
+
 def average_color_hsv(
     region_pixels: np.ndarray, mask: np.ndarray | None = None
 ) -> dict[str, float]:
@@ -424,9 +445,7 @@ def average_color_hsv(
     h, w = region_pixels.shape[:2]
     if h > 64 or w > 64:
         new_w, new_h = min(w, 64), min(h, 64)
-        region_pixels = cv2.resize(
-            region_pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
-        )
+        region_pixels = _area_resize(region_pixels, new_w, new_h)
         if mask is not None:
             mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
@@ -735,12 +754,7 @@ def compute_phash(
 
     if gray is None:
         gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
-    h, w = gray.shape[:2]
-    if w > 32 and w % 32 == 0:
-        gray = cv2.resize(gray, (32, h), interpolation=cv2.INTER_AREA)
-    elif h > 32 and h % 32 == 0:
-        gray = cv2.resize(gray, (w, 32), interpolation=cv2.INTER_AREA)
-    small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+    small = _area_resize(gray, 32, 32).astype(np.float32)
     dct = cv2.dct(small)
     dctlowfreq = dct[:8, :8]
     diff = dctlowfreq > np.median(dctlowfreq)

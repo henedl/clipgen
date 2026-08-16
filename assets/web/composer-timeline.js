@@ -260,6 +260,10 @@
   }
 
   function renderTimeline() {
+    return clipgenPerf.span("composer.renderTimeline", renderTimelineImpl);
+  }
+
+  function renderTimelineImpl() {
     var canvas = canvasEl();
     if (!canvas.width || !canvas.height) return;
     var ctx = canvas.getContext("2d");

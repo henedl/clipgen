@@ -470,3 +470,131 @@ def test_transcribe_records_nothing_when_profiling_off(whisper_probe, monkeypatc
     monkeypatch.setattr(config, "PROFILING", False)
     whisper_probe(_fake_model([_FakeSeg(0.0, 1.0, "x")]))
     assert profiling.snapshot() == {}
+
+
+# ---------- expanded hooks (ffprobe / scan kind / excel / heatmap / ollama) --
+
+
+def test_scan_callback_label_uses_profile_kind(monkeypatch):
+    """A named tool must not dump analysis time into the un-suffixed bucket."""
+    import numpy as np
+    import screenspace_frames as sf
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    def fake_pipe(*_a, **_k):
+        yield (0.0, frame)
+        yield (0.1, frame)
+
+    monkeypatch.setattr(sf, "_ffmpeg_pipe_frames", fake_pipe)
+    monkeypatch.setattr(
+        sf.video,
+        "probe_video_properties",
+        lambda _p: {"width": 8, "height": 8, "video_codec": "h264"},
+    )
+    monkeypatch.setattr(sf.shutil, "which", lambda _x: "/bin/ffmpeg")
+
+    def _cb(_ts, _pixels):
+        time.sleep(0.01)
+
+    sf.scan_video_frames(
+        "/x.mp4",
+        {"x": 0, "y": 0, "w": 8, "h": 8},
+        0.1,
+        _cb,
+        fps=30,
+        duration=1,
+        profile_kind="change",
+    )
+    snap = profiling.snapshot()
+    assert "scan.callback.change" in snap
+    assert "scan.callback" not in snap
+    assert snap["scan.callback.change"]["count"] == 2
+    assert snap["scan.callback.change"]["max"] >= 0.01
+
+
+def test_ffprobe_run_records_on_properties_probe(monkeypatch, tmp_path):
+    import video as video_mod
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    video_mod._video_properties_cache.clear()
+    src = tmp_path / "probe.mp4"
+    src.write_bytes(b"stub")
+    payload = (
+        '{"streams":[{"codec_type":"video","width":1280,"height":720,'
+        '"codec_name":"h264","r_frame_rate":"30/1","nb_frames":"30"}],'
+        '"format":{"duration":"1.0"}}'
+    )
+    monkeypatch.setattr(video_mod.subprocess, "check_output", lambda *_a, **_k: payload)
+    assert video_mod.probe_video_properties(str(src)) is not None
+    assert profiling.snapshot()["ffprobe.run"]["count"] == 1
+
+
+def test_excel_load_records(monkeypatch, tmp_path):
+    import excel_io
+    import openpyxl
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    path = tmp_path / "sheet.xlsx"
+    openpyxl.Workbook().save(path)
+    assert excel_io.open_excel_workbook(str(path)) is not None
+    assert "sheets.excel_load" in profiling.snapshot()
+
+
+def test_heatmap_gif_records(monkeypatch, tmp_path):
+    import screenspace_heatmap as hm
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    results = [
+        {
+            "timestamp": float(i),
+            "matches": [{"x": 10, "y": 10, "w": 20, "h": 20, "score": 0.9}],
+        }
+        for i in range(4)
+    ]
+    out = str(tmp_path / "heat.gif")
+    assert hm.generate_heatmap_gif(results, 64, 64, out) is not None
+    assert "heatmap.gif" in profiling.snapshot()
+
+
+def test_heatmap_gifs_pair_wall_records(monkeypatch, tmp_path):
+    """Rolling heatmap writes record the pair wall so overlap is visible."""
+    import screenspace
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    results = [
+        {
+            "timestamp": float(i),
+            "matches": [{"x": 10, "y": 10, "w": 20, "h": 20, "score": 0.9}],
+        }
+        for i in range(4)
+    ]
+    worker = screenspace.ScreenspaceWorker()
+    attachments = worker._write_heatmap_gifs(
+        "t_pair", results, 64, 64, "template", rolling=True
+    )
+    assert "heatmap_gif" in attachments
+    assert "heatmap_rolling_gif" in attachments
+    snap = profiling.snapshot()
+    assert "heatmap.gifs" in snap
+    assert "heatmap.gif" in snap
+    assert "heatmap.rolling" in snap
+
+
+def test_ollama_generate_records_even_on_connection_error(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    import ollama_client
+
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    def _boom(*_a, **_k):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _boom)
+    with pytest.raises(urllib.error.URLError):
+        ollama_client._do_generate({"model": "x", "prompt": "y"})
+    assert "ollama.generate" in profiling.snapshot()
