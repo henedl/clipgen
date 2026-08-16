@@ -105,7 +105,7 @@ frozen build is slow, the cause is the packaging shape, not the code.
 ## Why one-dir
 
 One-file re-extracts the whole archive to a *new* temp directory on every launch, so every large
-dylib (cv2, av, torch) loads cold — no OS page cache, and macOS re-validates every code signature
+dylib (cv2, av, onnxruntime) loads cold — no OS page cache, and macOS re-validates every code signature
 from scratch. That is the entire 16× difference. One-file is also deprecated in combination with
 windowed mode on macOS and **becomes a hard error in PyInstaller v7.0**.
 
@@ -163,17 +163,16 @@ bundle on both platforms. When a new dependency reads bundled data files at runt
 `collect_data_files(...)` line *and* a build-time guard in the same commit; a missing data
 file is invisible to the build and to every source-tree test.
 
-## A CPU-only build does not make every dependency CPU-only
+## The bundle ships no CUDA runtime — mind libraries with their own GPU detection
 
-CI installs with `--torch-backend cpu`, so no `nvidia-*` wheel is present and none is
-collected — the bundle has no CUDA runtime. That is enough for anything that asks *torch*
-whether a GPU exists: EasyOCR gates on `torch.cuda.is_available()`, gets `False`, warns, and
-runs on CPU.
+Nothing in the dependency tree pulls a CUDA runtime (torch left with the RapidOCR switch),
+so no `nvidia-*` wheel is present and none is collected. OCR runs on CPU through the
+bundled onnxruntime.
 
-**CTranslate2 does not ask torch.** Its wheels carry their own CUDA support and their own
-device detection, so faster-whisper's default `device="auto"` selected CUDA on any machine
-with an NVIDIA GPU and then died at the first inference with `Library cublas64_12.dll is not
-found or cannot be loaded` — minutes in, after the model had downloaded and loaded. Hence
+**CTranslate2 does its own device detection.** Its wheels carry their own CUDA support, so
+faster-whisper's default `device="auto"` selected CUDA on any machine with an NVIDIA GPU
+and then died at the first inference with `Library cublas64_12.dll is not found or cannot
+be loaded` — minutes in, after the model had downloaded and loaded. Hence
 `transcripts._resolve_transcribe_device()`, which resolves "auto" to CPU when frozen.
 
 When adding a dependency that can use a GPU, check *what it asks*: a library with its own
