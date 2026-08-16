@@ -322,6 +322,51 @@ class TestGenerateRollingHeatmapGif:
         assert (tmp_path / "rolling_large.gif").stat().st_size > 0
 
 
+class TestHeatmapGifPalette:
+    def test_gif_frames_use_the_jet_palette_verbatim(self, tmp_path):
+        """Every decoded GIF pixel must be an exact JET colormap color.
+
+        _heatmap_frame_image hands the encoder palette-native "P" frames
+        (blurred intensity image + the 256-entry JET palette), so no
+        quantizer ever runs. If RGB frames sneak back in, PIL re-derives a
+        per-frame palette — the dominant cost of GIF generation — and this
+        exactness breaks.
+        """
+        import cv2
+        from PIL import Image
+
+        rng = np.random.default_rng(5)
+        results = [
+            {
+                "timestamp": float(i),
+                "change_grid": [
+                    {
+                        "x": float(rng.random()),
+                        "y": float(rng.random()),
+                        "mag": float(rng.random()),
+                    }
+                    for _ in range(10)
+                ],
+            }
+            for i in range(8)
+        ]
+        out = str(tmp_path / "palette.gif")
+        info = screenspace.generate_heatmap_gif(
+            results, 200, 150, out, heatmap_type="change"
+        )
+        assert info is not None
+        ramp = np.arange(256, dtype=np.uint8).reshape(1, 256)
+        jet = {
+            tuple(int(v) for v in c)
+            for c in cv2.applyColorMap(ramp, cv2.COLORMAP_JET)[0, :, ::-1]
+        }
+        with Image.open(out) as gif:
+            gif.seek(int(getattr(gif, "n_frames", 1)) - 1)
+            pixels = np.asarray(gif.convert("RGB")).reshape(-1, 3)
+        colors = {tuple(int(v) for v in c) for c in np.unique(pixels, axis=0)}
+        assert colors <= jet
+
+
 class TestHeatmapSprite:
     """The sprite sheet the browser hover-scrubs in place of the unseekable GIF.
 
