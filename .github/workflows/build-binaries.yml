@@ -179,9 +179,12 @@ jobs:
           set -euo pipefail
           # Same guard as the Windows leg: proves the frozen interpreter loads.
           # Captured rather than piped into `head`, which would close the pipe
-          # early and SIGPIPE the binary under `pipefail`.
+          # early and SIGPIPE the binary under `pipefail`. The excerpt uses
+          # sed -n (reads all input) instead of head for the same reason:
+          # head's early exit SIGPIPEs printf, and pipefail turns that into a
+          # step failure — racy, so it passes or fails by output-size luck.
           out=$(./dist/clipgen.app/Contents/MacOS/clipgen --help)
-          printf '%s\n' "$out" | head -5
+          printf '%s\n' "$out" | sed -n '1,5p'
 
       - name: Ad-hoc codesign the .app bundle (macOS)
         if: matrix.os == 'macos-latest'
