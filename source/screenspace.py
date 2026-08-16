@@ -5,7 +5,7 @@ Thirteen analysis tools (passed as 'type' when creating a task):
   color       – frames where a region's average HSV color matches a target within tolerance
   change      – frames where pixel diff ratio exceeds SCREENSPACE_CHANGE_RATIO_THRESHOLD
   similarity  – frames matching a reference capture via SSIM (SCREENSPACE_SSIM_THRESHOLD)
-  text        – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires EasyOCR
+  text        – OCR fuzzy search for a query string (SCREENSPACE_OCR_FUZZY_THRESHOLD); requires RapidOCR
   numbers     – OCR numeric comparison with a relational condition (eq/gt/lt/gte/lte/range)
   timelapse   – sped-up video of a region over a time range
   template    – find a reference image/template anywhere in the full frame via cv2.matchTemplate
@@ -76,7 +76,9 @@ from screenspace_primitives import (
     ssim_diff_map,
 )
 from screenspace_ocr import (
+    _OCR_LANG_TO_MODEL,
     _preprocess_for_ocr,
+    _resolve_ocr_model,
     _score_numbers_readings,
     _score_text_readings,
     run_calibration_ocr,

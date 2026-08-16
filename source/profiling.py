@@ -185,7 +185,7 @@ def peak_rss_mb() -> float | None:
     ``SCREENSPACE_OCR_POOL_SIZE`` without pretending to attribute memory to
     labels — so ``?reset=1`` does not and cannot reset it. ``RUSAGE_SELF``
     excludes ffmpeg subprocesses; for clipgen the memory that hurts (Whisper
-    weights, EasyOCR Readers, decoded frames) is all in-process.
+    weights, OCR engines, decoded frames) is all in-process.
     """
     try:
         import resource  # POSIX only

@@ -1081,6 +1081,42 @@ def test_create_ocr_task_accepts_zero_confidence_threshold(client, monkeypatch):
     assert params["ocr_confidence_threshold"] == 0.0
 
 
+@pytest.mark.parametrize("value", [["ch_sim"], [], "en", ["en", 3]])
+def test_create_ocr_task_rejects_invalid_languages(client, monkeypatch, value):
+    """The language set is closed (each code maps onto a bundled recognition
+    model), so an unknown code is refused at task creation instead of dying
+    mid-scan in the engine."""
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"search_string": "score", "languages": value},
+        },
+    )
+    assert resp.status_code == 400
+    assert "languages" in resp.get_json()["error"]
+
+
+def test_create_ocr_task_accepts_known_language(client, monkeypatch):
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"search_string": "score", "languages": ["de"]},
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["task"]["parameters"]["languages"] == ["de"]
+
+
 @pytest.mark.parametrize("task_type", ["template", "flow", "scene"])
 def test_create_task_new_types_accepted(client, task_type):
     """New phase-4 types pass type validation (fail at video, not type)."""
@@ -3248,8 +3284,8 @@ def test_calibrate_text_ocr_cache_rescores_threshold(calib_client, monkeypatch):
     monkeypatch.setattr(video, "extract_frame_at_timestamp", lambda p, ts: frame)
     calls = []
 
-    def fake_ocr(frame_arg, region, tool_type, params):
-        calls.append((tool_type, params.get("fuzzy_threshold")))
+    def fake_ocr(frame_arg, region, params):
+        calls.append(params.get("fuzzy_threshold"))
         return [(None, "hellx", 0.9)]
 
     monkeypatch.setattr(screenspace, "run_calibration_ocr", fake_ocr)
@@ -3271,7 +3307,7 @@ def test_calibrate_text_ocr_cache_rescores_threshold(calib_client, monkeypatch):
     second = calib_client.post("/screenspace/api/calibrate", json=body)
     assert second.status_code == 200
     assert second.get_json()["pins"][0]["passed"] is False
-    assert calls == [("text", 0.7)]
+    assert calls == [0.7]
 
 
 def test_sanitize_floats_handles_numpy_scalars():

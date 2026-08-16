@@ -4575,7 +4575,7 @@ def stop_combined_app(live: LiveServer) -> None:
         return
 
     # Imported lazily for the same reason build_combined_app does: keeping cv2
-    # and torch off the import path of callers that never serve Screenspace.
+    # and onnxruntime off the import path of callers that never serve Screenspace.
     import screenspace_server
     import transcripts_server
     import workflows_server

@@ -243,16 +243,11 @@ SCREENSPACE_MORPH_KERNEL: int = 3  # image preprocessing tuning for change detec
 SCREENSPACE_OCR_FUZZY_THRESHOLD: float = (
     0.75  # min fuzzy match score for Text/Numbers tool matches
 )
-SCREENSPACE_OCR_MIN_CONFIDENCE: float = (
-    0.6  # min EasyOCR per-detection confidence for Text/Numbers; gates noisy OCR
-)
+SCREENSPACE_OCR_MIN_CONFIDENCE: float = 0.6  # min OCR per-detection confidence for Text/Numbers; gates noisy OCR. Calibrated on easyocr; pending re-check against RapidOCR's score distribution
 SCREENSPACE_OCR_MIN_HEIGHT: int = (
     60  # target px height for upscaling small ROIs in opt-in OCR preprocessing
 )
-SCREENSPACE_OCR_GPU: bool | str = (
-    True  # EasyOCR device: True = CUDA-if-available else CPU (preserves EasyOCR's default); False = force CPU; or a device string ("cuda:0", "mps")
-)
-SCREENSPACE_OCR_POOL_SIZE: int = 0  # max concurrent EasyOCR Readers per language set (0 = auto = SCREENSPACE_PARALLEL_WORKERS). Each Reader holds its own model copy, so raising this multiplies OCR RAM/VRAM
+SCREENSPACE_OCR_POOL_SIZE: int = 0  # max concurrent RapidOCR engines per recognition model (0 = auto = SCREENSPACE_PARALLEL_WORKERS). Each engine holds its own ONNX sessions, so raising this multiplies OCR RAM
 SCREENSPACE_MASK_FALLBACK_TOOLS: tuple[str, ...] = (
     "similarity",
     "inactivity",
@@ -728,7 +723,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "SCREENSPACE_CV_RESOLUTION_SCALE": "Scale extracted region frames before CV analysis. Higher (e.g. 2.0) gives the models more signal on noisy/compressed video at the cost of speed and memory; lower speeds up scans on large footage. 1.0 = unchanged.",
     "SCREENSPACE_FAST_SCAN_SKIP_NONKEY": "Fast scans decode only keyframes on H.264/HEVC when the source's keyframe interval is short enough that no samples are lost (auto-probed per video), giving large decode savings. Turn off to always full-decode. Only affects fast scans; the precise scan path is never changed.",
     "SCREENSPACE_STATIC_FRAME_SKIP_THRESHOLD": "Skip frames whose average pixel difference from the previous sampled frame is below this value (Similarity/Text/Numbers/Scene scans). Lower = process more frames (catch subtle changes); higher = skip more aggressively on noisy footage. Default 2.0.",
-    "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum EasyOCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
+    "SCREENSPACE_OCR_MIN_CONFIDENCE": "Default minimum OCR per-detection confidence for Text/Numbers tasks. Raise to suppress noisy OCR misreads; lower if real hits are being dropped. Per-task slider overrides this default.",
     "SCREENSPACE_RESTORE_MARKERS_ON_EDIT": "When editing a task, restore the In/Out timeline markers to the range it was originally run with. Disable to keep your current markers in place when iterating across different parts of the timeline.",
     "SCREENSPACE_SHOW_CONFIDENCE_HISTOGRAM": "Show a confidence-distribution histogram above the Results list (for tools that have confidence scores). Lets you see where detections cluster before moving the certainty cutoff. Off by default.",
     "SCREENSPACE_GROUPED_TOOL_NAV": "Group the analysis tools into category dropdowns (Difference, Detection, Classification, Attention, Utility) with a standalone Multitool chip, instead of a flat row of tool tabs. Easier to scan when picking a tool. On by default; turn off for the classic flat tab row.",

@@ -16,7 +16,11 @@ dependencies = [
     "Pillow>=10.0.0",
     "imagehash>=4.3.0",
     "scikit-image>=0.22.0",
-    "easyocr>=1.7.0",
+    "rapidocr>=3.9,<4",
+    # Direct, not just transitive via faster-whisper: rapidocr runs its ONNX
+    # models on whatever onnxruntime is installed (the engine is decoupled
+    # from the package), so the Screenspace OCR tools depend on it directly.
+    "onnxruntime>=1.24",
     "pywebview>=6.2.1",
 ]
 
@@ -56,6 +60,11 @@ py-modules = [
 
 [tool.uv]
 required-version = ">=0.11.0"
+# rapidocr declares non-headless opencv-python; clipgen ships
+# opencv-python-headless, which provides every cv2 API rapidocr uses.
+# Without this override uv would install both wheels into the same cv2/
+# tree, where they clobber each other file-by-file.
+override-dependencies = ["opencv-python ; sys_platform == 'never'"]
 
 [tool.ty.environment]
 # ty auto-detects a module root only when it is literally named `src`
