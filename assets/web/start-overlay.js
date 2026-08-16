@@ -9,8 +9,10 @@
  *     that entry's title (there is no server-side "current project name")
  *   • the rail's Recently-opened list: RAIL_RECENTS_VISIBLE rows plus a
  *     fold-out that overlays the brand block behind a blurred scrim
+ *   • the right column's three top-level tabs: Open (name + folders +
+ *     spreadsheet + the confirm footer), About (tool tiles + about rows),
+ *     Recent updates (changelog)
  *   • folder + spreadsheet picker (Google / Excel / No spreadsheet)
- *   • Extras tabs: tools / changelog / about
  *   • persistence via the existing /api/start-settings endpoint
  *
  * Public API on window.ClipgenStartOverlay:
@@ -68,9 +70,8 @@
     googlePollDeadline: 0,
     confirmInFlight: false,
     activeTab: "google",    // 'google' | 'excel' | 'mindnode' | 'none'
-    extrasTab: "tools",     // 'tools' | 'updates' | 'about'
+    startTab: "open",       // right column: 'open' | 'about' | 'updates'
     changelogLoaded: false,
-    aboutLoaded: false,
     googleSheets: [],
     // Last unauthenticated /api/spreadsheets/google payload: the credentials
     // filename, searched paths and setup link behind the "Don't have
@@ -252,11 +253,11 @@
     els.sourcePreviewSummary = root.querySelector('[data-role="source-preview-summary"]');
     els.sourcePreviewList = root.querySelector('[data-role="source-preview-list"]');
 
-    els.extrasTabs = root.querySelectorAll(".extras-tabs__tab");
-    els.extrasPanels = {
-      tools: root.querySelector('[data-extras-panel="tools"]'),
-      updates: root.querySelector('[data-extras-panel="updates"]'),
-      about: root.querySelector('[data-extras-panel="about"]'),
+    els.startTabs = root.querySelectorAll(".start-tab");
+    els.startPanels = {
+      open: root.querySelector('[data-start-panel="open"]'),
+      about: root.querySelector('[data-start-panel="about"]'),
+      updates: root.querySelector('[data-start-panel="updates"]'),
     };
     els.updatesBadge = root.querySelector('[data-role="updates-badge"]');
     els.changelogList = root.querySelector('[data-role="changelog-list"]');
@@ -278,9 +279,9 @@
       on(tab, "click", function () { setTab(tab.getAttribute("data-tab")); });
     });
 
-    // Extras tab strip
-    Array.prototype.forEach.call(els.extrasTabs, function (tab) {
-      on(tab, "click", function () { setExtrasTab(tab.getAttribute("data-extras-tab")); });
+    // Right column's top-level tab strip
+    Array.prototype.forEach.call(els.startTabs, function (tab) {
+      on(tab, "click", function () { setStartTab(tab.getAttribute("data-start-tab")); });
     });
 
     on(els.projectName, "input", function () {
@@ -421,6 +422,9 @@
     if (window.ClipgenHotkeys) {
       var isOpen = function () { return state.open; };
       ClipgenHotkeys.register([
+        { id: "start.tabOpen",      inModal: true, when: isOpen, handler: function () { setStartTab("open"); } },
+        { id: "start.tabAbout",     inModal: true, when: isOpen, handler: function () { setStartTab("about"); } },
+        { id: "start.tabUpdates",   inModal: true, when: isOpen, handler: function () { setStartTab("updates"); } },
         { id: "start.tabGoogle",    inModal: true, when: isOpen, handler: function () { setTab("google"); } },
         { id: "start.tabExcel",     inModal: true, when: isOpen, handler: function () { setTab("excel"); } },
         { id: "start.tabMindnode",  inModal: true, when: isOpen, handler: function () { setTab("mindnode"); } },
@@ -639,22 +643,46 @@
     applyFieldStates();
   }
 
-  function setExtrasTab(name) {
-    state.extrasTab = name;
-    Array.prototype.forEach.call(els.extrasTabs, function (tab) {
-      var active = tab.getAttribute("data-extras-tab") === name;
+  function setStartTab(name) {
+    // Only a real switch animates: re-selecting the active tab shouldn't
+    // replay, and the reset to "open" on every overlay open would otherwise
+    // fight the section cascade in runIntro().
+    var changed = state.startTab !== name;
+    state.startTab = name;
+    Array.prototype.forEach.call(els.startTabs, function (tab) {
+      var active = tab.getAttribute("data-start-tab") === name;
       tab.classList.toggle("is-active", active);
       tab.setAttribute("aria-selected", active ? "true" : "false");
     });
-    setHidden(els.extrasPanels.tools, name !== "tools");
-    setHidden(els.extrasPanels.updates, name !== "updates");
-    setHidden(els.extrasPanels.about, name !== "about");
+    setHidden(els.startPanels.open, name !== "open");
+    setHidden(els.startPanels.about, name !== "about");
+    setHidden(els.startPanels.updates, name !== "updates");
+    if (changed) playTabEnter(els.startPanels[name]);
     if (name === "updates" && !state.changelogLoaded) {
       loadChangelog();
     }
-    if (name === "about" && !state.aboutLoaded) {
+    // Re-rendered on every activation rather than latched: it reads
+    // state.statusData, which /api/status may not have filled in yet the first
+    // time the tab is opened — a latch would freeze the panel on v0.0.0.
+    if (name === "about") {
       renderAbout();
     }
+  }
+
+  // One-shot enter animation on the panel being revealed. The class has to come
+  // off again or the animation won't replay on the next switch.
+  function playTabEnter(panel) {
+    if (!panel) return;
+    var scroll = panel.querySelector(".start-tabpanel__scroll");
+    if (!scroll) return;
+    panel.classList.remove("is-entering");
+    void panel.offsetWidth; // force reflow so the animation restarts
+    panel.classList.add("is-entering");
+    var done = function () {
+      panel.classList.remove("is-entering");
+      scroll.removeEventListener("animationend", done);
+    };
+    scroll.addEventListener("animationend", done);
   }
 
   function setSelection(sel) {
@@ -1753,7 +1781,6 @@
 
   function renderAbout() {
     if (!els.aboutGrid) return;
-    state.aboutLoaded = true;
     var s = state.statusData || {};
     els.aboutGrid.innerHTML = "";
 
@@ -2007,6 +2034,8 @@
         restoreFocus: true
       });
     }
+    // Always land on the workspace form, wherever the user left the tabs.
+    setStartTab("open");
     runIntro();
     refresh();
   }
@@ -2105,6 +2134,9 @@
       .then(loadExcelFiles)
       .then(loadMindnodeFiles)
       .then(applyCurrentSessionPrefill)
+      // Reads CHANGELOG.md off disk, so it is cheap enough to do up front —
+      // and the Recent updates count badge only exists if we do.
+      .then(loadChangelog)
       .catch(function (err) {
         console.error("Start overlay refresh failed", err);
       });

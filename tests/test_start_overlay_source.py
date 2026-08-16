@@ -1,4 +1,4 @@
-"""Source-level wiring assertions for the Start overlay's spreadsheet panels.
+"""Source-level wiring assertions for the Start overlay's right column.
 
 The two Refresh buttons and their failure handling are invisible to the Python
 tests: the markup, the ``?refresh=true`` query the Google one sends (the only
@@ -6,6 +6,10 @@ user-facing escape hatch from ``server._cached_spreadsheet_meta``'s 5-minute
 TTL), the fact that both buttons live *outside* the status node that several
 code paths rewrite, and the recovery each loader owes its panel when a fetch
 fails mid-load.
+
+The column's three top-level tabs (Open / About / Recent updates) are the same
+kind of blind spot: which panel a block of markup landed in is pure DOM order,
+and the classes JS toggles need matching CSS to do anything at all.
 """
 
 from __future__ import annotations
@@ -19,6 +23,62 @@ def _button(html: str, role: str) -> str:
     match = re.search(rf"<button[^>]*data-role=\"{role}\"[^>]*>", html)
     assert match, f"no <button data-role={role!r}> in start-overlay.html"
     return match.group(0)
+
+
+def test_right_column_is_tabbed():
+    html = read("start-overlay.html")
+    assert re.findall(r'data-start-tab="(\w+)"', html) == ["open", "about", "updates"]
+    assert re.findall(r'data-start-panel="(\w+)"', html) == ["open", "about", "updates"]
+    # Only the default tab's panel is visible on mount.
+    for panel, hidden in (("open", False), ("about", True), ("updates", True)):
+        tag = re.search(rf'<section[^>]*data-start-panel="{panel}"[^>]*>', html)
+        assert tag, f"no panel for the {panel} tab"
+        assert ("hidden" in tag.group(0)) is hidden
+
+
+def test_confirm_footer_lives_in_the_open_panel():
+    """The action button is per-tab: it may not float over About/Updates."""
+    html = read("start-overlay.html")
+    footer = html.index('class="start-footer')
+    assert html.index('data-start-panel="open"') < footer
+    assert footer < html.index('data-start-panel="about"')
+
+
+def test_about_tab_carries_the_tool_tiles_then_the_about_rows():
+    html = read("start-overlay.html")
+    about = html.index('data-start-panel="about"')
+    updates = html.index('data-start-panel="updates"')
+    tiles = html.index('class="tool-tiles"')
+    rows = html.index('data-role="about-grid"')
+    assert about < tiles < rows < updates
+    assert html.index('data-role="changelog-list"') > updates
+
+
+def test_tab_classes_toggled_by_js_have_css():
+    """.is-active / .is-entering / [hidden] do nothing without these rules."""
+    css = read("start-overlay.css")
+    for rule in (
+        ".start-tabs",
+        ".start-tab.is-active",
+        ".start-tab__badge",
+        ".start-tabpanel[hidden]",
+        ".start-tabpanel__scroll",
+        ".start-tabpanel.is-entering",
+    ):
+        assert rule in css, f"{rule} toggled/used in the overlay but absent from CSS"
+    # The panel scroller owns scrolling now; a nested 180px window would clip
+    # the changelog and about rows inside it.
+    body = css[css.index(".start-overlay .changelog {") :][:400]
+    assert "max-height" not in body
+
+
+def test_overlay_always_opens_on_the_open_tab():
+    src = strip_comments(read("start-overlay.js"))
+    body = src[src.index("function open()") :]
+    body = body[: body.index("\n  function ")]
+    assert 'setStartTab("open")' in body, (
+        "a launcher left on About would open with no way to confirm"
+    )
 
 
 def test_both_panels_ship_a_refresh_button():
