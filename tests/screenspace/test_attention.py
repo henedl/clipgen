@@ -19,14 +19,18 @@ def _bright_patch_frame(w=160, h=120, px=120, py=80, size=20):
 
 
 class TestSpectralResidual:
-    def test_shape_range_and_determinism(self):
+    def test_shape_range_and_repeatability(self):
         gray = np.random.RandomState(3).randint(0, 255, (90, 120), dtype=np.uint8)
         sal_a = screenspace.compute_spectral_residual(gray)
         sal_b = screenspace.compute_spectral_residual(gray.copy())
         assert sal_a.shape == gray.shape
         assert sal_a.dtype == np.float32
         assert float(sal_a.min()) >= 0.0 and float(sal_a.max()) <= 1.0
-        assert np.array_equal(sal_a, sal_b)
+        # Repeatable to float32 noise rather than bit-identical: cv2.dft is not
+        # bit-reproducible across calls on every OpenCV build (see
+        # compute_spectral_residual). Anything that actually broke the transform
+        # would move the map by orders of magnitude more than this.
+        assert np.allclose(sal_a, sal_b, rtol=0, atol=1e-6)
 
     def test_flat_frame_does_not_crash(self):
         gray = np.full((60, 80), 128, dtype=np.uint8)
@@ -179,7 +183,13 @@ class TestChannels:
         with_face_on, _ = screenspace.compute_saliency_map(
             frame, None, center_bias=0.0, include_face=True
         )
-        assert np.array_equal(with_face_off, with_face_on)
+        # Closeness, not bit-equality: cv2.dft is not bit-reproducible call to
+        # call on every OpenCV build (Linux CI produced 1-ulp differences at
+        # float32 where macOS produced none), and the two maps here are two
+        # independent computations of the same math. The regression this guards
+        # -- a zeros-only face channel joining the denominator -- scales the
+        # whole map by 3/4, so it sits ~7 orders of magnitude above this bound.
+        assert np.allclose(with_face_off, with_face_on, rtol=0, atol=1e-6)
 
 
 class TestSaliencyMap:

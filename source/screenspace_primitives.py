@@ -1223,6 +1223,15 @@ def compute_spectral_residual(gray: np.ndarray) -> np.ndarray:
     complex temporaries), recovering the phase term as ``z/|z|`` from the
     magnitude already in hand rather than through ``angle`` + a complex ``exp``.
     Agreement between the branches is ~1e-6 and is asserted in the tests.
+
+    **This function is repeatable, not bit-reproducible.** ``cv2.dft`` returns
+    results differing by ~1 ulp between two identical calls on some OpenCV
+    builds — reproducibly so on Linux CI, never observed on macOS — so tests
+    over the cv2 branch (and over anything downstream of it, such as
+    :func:`compute_saliency_map`) must assert closeness, not ``array_equal``.
+    Irrelevant downstream: the attention scan thresholds peak *distances* at
+    0.15, and the half-scale surround in :func:`compute_color_contrast` already
+    moves the composed map ~6 orders of magnitude more than this.
     """
     f32 = gray.astype(np.float32)
     if _dft_friendly(f32.shape[:2]):
