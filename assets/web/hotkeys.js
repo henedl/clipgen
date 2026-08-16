@@ -173,6 +173,9 @@
     { id: "gallery.prev", section: "gallery", group: "", label: "Previous image", combos: ["ArrowLeft"] },
     { id: "gallery.next", section: "gallery", group: "", label: "Next image", combos: ["ArrowRight"] },
 
+    { id: "start.tabOpen",      section: "start", group: "Panel",       label: "Show Open tab",           combos: ["1"] },
+    { id: "start.tabAbout",     section: "start", group: "Panel",       label: "Show About tab",          combos: ["2"] },
+    { id: "start.tabUpdates",   section: "start", group: "Panel",       label: "Show Recent updates tab", combos: ["3"] },
     { id: "start.tabGoogle",    section: "start", group: "Spreadsheet", label: "Use Google Sheets",     combos: ["G"] },
     { id: "start.tabExcel",     section: "start", group: "Spreadsheet", label: "Use Excel file",        combos: ["E"] },
     { id: "start.tabMindnode",  section: "start", group: "Spreadsheet", label: "Use MindNode mind map", combos: ["M"] },

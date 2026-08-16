@@ -44,217 +44,249 @@
 
     <main class="start-main">
 
-      <section class="start-section cascade-in" data-cascade="0">
-        <div class="path-field" data-role="name-field">
-          <label for="startProjectName">
-            <span>Project name</span>
-            <span class="hint">optional</span>
-          </label>
-          <div class="path-input path-input--bare">
-            <div class="path-input__field">
-              <span class="path-input__icon so-icon so-icon--sm" data-icon="tag"></span>
-              <input type="text" id="startProjectName" class="path-input__input" autocomplete="off" spellcheck="false" maxlength="60" placeholder="e.g. Coffee machine usability study">
-            </div>
-          </div>
-        </div>
-      </section>
+      <nav class="start-tabs cascade-in" data-cascade="0" role="tablist" aria-label="Start">
+        <button type="button" class="start-tab is-active" data-start-tab="open" role="tab" aria-selected="true" data-hotkey="start.tabOpen">
+          <span class="so-icon so-icon--sm" data-icon="folder-open" aria-hidden="true"></span>
+          <span>Open</span>
+        </button>
+        <button type="button" class="start-tab" data-start-tab="about" role="tab" aria-selected="false" data-hotkey="start.tabAbout">
+          <span class="so-icon so-icon--sm" data-icon="information-circle" aria-hidden="true"></span>
+          <span>About</span>
+        </button>
+        <button type="button" class="start-tab" data-start-tab="updates" role="tab" aria-selected="false" data-hotkey="start.tabUpdates">
+          <span class="so-icon so-icon--sm" data-icon="megaphone" aria-hidden="true"></span>
+          <span>Recent updates</span>
+          <span class="start-tab__badge" data-role="updates-badge" hidden></span>
+        </button>
+      </nav>
 
-      <section class="start-section cascade-in" data-cascade="1">
-        <div class="eyebrow">Folders</div>
+      <div class="start-tabbody">
 
-        <div class="path-field" data-role="input-field">
-          <label for="startInputDir">
-            <span>Input folder</span>
-            <span class="hint">source videos</span>
-          </label>
-          <div class="path-input">
-            <div class="path-input__field">
-              <span class="path-input__icon so-icon so-icon--sm" data-icon="folder"></span>
-              <input type="text" id="startInputDir" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/folder">
-            </div>
-            <button type="button" class="path-input__btn path-input__btn--icon" data-role="input-recents-toggle" aria-label="Recent input folders" data-tooltip="Recent input folders">
-              <span class="so-icon so-icon--sm" data-icon="clock"></span>
-            </button>
-            <button type="button" class="path-input__btn path-input__btn--browse" data-role="input-browse" data-hotkey="start.browseInput">Browse…</button>
-          </div>
-          <div class="recent-pop cg-menu hidden" data-role="input-recents-list" role="menu"></div>
-        </div>
-
-        <div class="path-field" data-role="output-field">
-          <label for="startOutputDir">
-            <span>Output folder</span>
-            <span class="hint">clips, exports, transcripts</span>
-          </label>
-          <div class="path-input">
-            <div class="path-input__field">
-              <span class="path-input__icon so-icon so-icon--sm" data-icon="folder"></span>
-              <input type="text" id="startOutputDir" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/folder">
-            </div>
-            <button type="button" class="path-input__btn path-input__btn--icon" data-role="output-recents-toggle" aria-label="Recent output folders" data-tooltip="Recent output folders">
-              <span class="so-icon so-icon--sm" data-icon="clock"></span>
-            </button>
-            <button type="button" class="path-input__btn path-input__btn--browse" data-role="output-browse" data-hotkey="start.browseOutput">Browse…</button>
-          </div>
-          <div class="recent-pop cg-menu hidden" data-role="output-recents-list" role="menu"></div>
-        </div>
-      </section>
-
-      <section class="start-section cascade-in" data-cascade="2">
-        <div class="eyebrow">Spreadsheet</div>
-        <div class="sheet-card">
-          <div class="sheet-card__tabs" role="tablist">
-            <!-- Intentional inline SVG (icon convention exception): brand/file-type glyphs (Google Sheets, Excel)
-                 have no Heroicon equivalent; a generic mask-image icon would lose the recognizable mark. -->
-            <button type="button" class="sheet-card__tab is-active" data-tab="google" role="tab" aria-selected="true" data-hotkey="start.tabGoogle">
-              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                <path fill="currentColor" d="M8 6.5v2.4h3.4c-.15.85-.6 1.57-1.27 2.05v1.7h2.05c1.2-1.1 1.9-2.73 1.9-4.65 0-.45-.04-.88-.12-1.3l-5.95-.2zM4.45 8c0-.5.08-.97.23-1.4L2.6 5.05A6 6 0 0 0 8 14a5.7 5.7 0 0 0 3.95-1.45L9.9 10.85c-.55.37-1.25.6-2.04.6-1.55 0-2.86-1.05-3.33-2.45z M2.6 5.05L4.68 6.6c.47-1.4 1.78-2.45 3.32-2.45.85 0 1.62.3 2.22.85l1.8-1.8A5.95 5.95 0 0 0 2.6 5.05z"/>
-              </svg>
-              <span>Google Sheets</span>
-            </button>
-            <button type="button" class="sheet-card__tab" data-tab="excel" role="tab" aria-selected="false" data-hotkey="start.tabExcel">
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
-                <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-                <path d="M2 6.5h12M5.5 2.5v11M9.5 2.5v11" stroke="currentColor" stroke-width="1.2"/>
-              </svg>
-              <span>Excel file</span>
-            </button>
-            <button type="button" class="sheet-card__tab" data-tab="mindnode" role="tab" aria-selected="false" data-hotkey="start.tabMindnode">
-              <span class="so-icon so-icon--sm" data-icon="share" aria-hidden="true"></span>
-              <span>Mind map</span>
-            </button>
-            <button type="button" class="sheet-card__tab" data-tab="none" role="tab" aria-selected="false" data-hotkey="start.tabNone">
-              <span>No spreadsheet</span>
-            </button>
-          </div>
-
-          <div class="sheet-card__body">
-            <div data-tabpanel="google" class="sheet-panel">
-              <!-- The button is a sibling of, never a child of, [data-role="google-status"]:
-                   three code paths rewrite that node's text/innerHTML and would eat it. -->
-              <div class="sheet-panel__status-row">
-                <div class="sheet-panel__status" data-role="google-status">Checking authentication…</div>
-                <button type="button" class="sheet-panel__refresh" data-role="google-refresh" data-tooltip="Refresh from Google Drive" aria-label="Refresh from Google Drive" hidden>
-                  <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
-                </button>
-              </div>
-              <div class="sheet-picker" data-role="google-picker" hidden>
-                <button type="button" class="sheet-picker__trigger" data-role="google-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
-                  <span class="sheet-picker__label" data-role="google-picker-label">Select a Google Sheet…</span>
-                  <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
-                </button>
-                <div class="sheet-picker__menu cg-menu hidden" data-role="google-picker-menu" role="listbox"></div>
-              </div>
-              <div class="sheet-panel__paste">
-                <label for="startGooglePaste">Or paste a spreadsheet URL or name</label>
+        <section class="start-tabpanel" data-start-panel="open" role="tabpanel">
+          <div class="start-tabpanel__scroll">
+            <section class="start-section cascade-in" data-cascade="1">
+              <div class="path-field" data-role="name-field">
+                <label for="startProjectName">
+                  <span>Project name</span>
+                  <span class="hint">optional</span>
+                </label>
                 <div class="path-input path-input--bare">
                   <div class="path-input__field">
-                    <span class="path-input__icon so-icon so-icon--sm" data-icon="link"></span>
-                    <input type="text" id="startGooglePaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…  or  My Study">
+                    <span class="path-input__icon so-icon so-icon--sm" data-icon="tag"></span>
+                    <input type="text" id="startProjectName" class="path-input__input" autocomplete="off" spellcheck="false" maxlength="60" placeholder="e.g. Coffee machine usability study">
                   </div>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div data-tabpanel="excel" class="sheet-panel" hidden>
-              <div class="sheet-panel__status-row">
-                <div class="sheet-panel__status" data-role="excel-status">Scanning input folder…</div>
-                <button type="button" class="sheet-panel__refresh" data-role="excel-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
-                  <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
-                </button>
-              </div>
-              <div class="sheet-picker" data-role="excel-picker">
-                <button type="button" class="sheet-picker__trigger" data-role="excel-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
-                  <span class="sheet-picker__label" data-role="excel-picker-label">Select an Excel file…</span>
-                  <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
-                </button>
-                <div class="sheet-picker__menu cg-menu hidden" data-role="excel-picker-menu" role="listbox"></div>
-              </div>
-              <div class="sheet-panel__paste">
-                <label for="startExcelPaste">Or paste a full path to an .xlsx file</label>
-                <div class="path-input path-input--bare">
+            <section class="start-section cascade-in" data-cascade="2">
+              <div class="eyebrow">Folders</div>
+
+              <div class="path-field" data-role="input-field">
+                <label for="startInputDir">
+                  <span>Input folder</span>
+                  <span class="hint">source videos</span>
+                </label>
+                <div class="path-input">
                   <div class="path-input__field">
-                    <span class="path-input__icon so-icon so-icon--sm" data-icon="document"></span>
-                    <input type="text" id="startExcelPaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/study.xlsx">
+                    <span class="path-input__icon so-icon so-icon--sm" data-icon="folder"></span>
+                    <input type="text" id="startInputDir" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/folder">
+                  </div>
+                  <button type="button" class="path-input__btn path-input__btn--icon" data-role="input-recents-toggle" aria-label="Recent input folders" data-tooltip="Recent input folders">
+                    <span class="so-icon so-icon--sm" data-icon="clock"></span>
+                  </button>
+                  <button type="button" class="path-input__btn path-input__btn--browse" data-role="input-browse" data-hotkey="start.browseInput">Browse…</button>
+                </div>
+                <div class="recent-pop cg-menu hidden" data-role="input-recents-list" role="menu"></div>
+              </div>
+
+              <div class="path-field" data-role="output-field">
+                <label for="startOutputDir">
+                  <span>Output folder</span>
+                  <span class="hint">clips, exports, transcripts</span>
+                </label>
+                <div class="path-input">
+                  <div class="path-input__field">
+                    <span class="path-input__icon so-icon so-icon--sm" data-icon="folder"></span>
+                    <input type="text" id="startOutputDir" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/folder">
+                  </div>
+                  <button type="button" class="path-input__btn path-input__btn--icon" data-role="output-recents-toggle" aria-label="Recent output folders" data-tooltip="Recent output folders">
+                    <span class="so-icon so-icon--sm" data-icon="clock"></span>
+                  </button>
+                  <button type="button" class="path-input__btn path-input__btn--browse" data-role="output-browse" data-hotkey="start.browseOutput">Browse…</button>
+                </div>
+                <div class="recent-pop cg-menu hidden" data-role="output-recents-list" role="menu"></div>
+              </div>
+            </section>
+
+            <section class="start-section cascade-in" data-cascade="3">
+              <div class="eyebrow">Spreadsheet</div>
+              <div class="sheet-card">
+                <div class="sheet-card__tabs" role="tablist">
+                  <!-- Intentional inline SVG (icon convention exception): brand/file-type glyphs (Google Sheets, Excel)
+                       have no Heroicon equivalent; a generic mask-image icon would lose the recognizable mark. -->
+                  <button type="button" class="sheet-card__tab is-active" data-tab="google" role="tab" aria-selected="true" data-hotkey="start.tabGoogle">
+                    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                      <path fill="currentColor" d="M8 6.5v2.4h3.4c-.15.85-.6 1.57-1.27 2.05v1.7h2.05c1.2-1.1 1.9-2.73 1.9-4.65 0-.45-.04-.88-.12-1.3l-5.95-.2zM4.45 8c0-.5.08-.97.23-1.4L2.6 5.05A6 6 0 0 0 8 14a5.7 5.7 0 0 0 3.95-1.45L9.9 10.85c-.55.37-1.25.6-2.04.6-1.55 0-2.86-1.05-3.33-2.45z M2.6 5.05L4.68 6.6c.47-1.4 1.78-2.45 3.32-2.45.85 0 1.62.3 2.22.85l1.8-1.8A5.95 5.95 0 0 0 2.6 5.05z"/>
+                    </svg>
+                    <span>Google Sheets</span>
+                  </button>
+                  <button type="button" class="sheet-card__tab" data-tab="excel" role="tab" aria-selected="false" data-hotkey="start.tabExcel">
+                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+                      <rect x="2" y="2.5" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+                      <path d="M2 6.5h12M5.5 2.5v11M9.5 2.5v11" stroke="currentColor" stroke-width="1.2"/>
+                    </svg>
+                    <span>Excel file</span>
+                  </button>
+                  <button type="button" class="sheet-card__tab" data-tab="mindnode" role="tab" aria-selected="false" data-hotkey="start.tabMindnode">
+                    <span class="so-icon so-icon--sm" data-icon="share" aria-hidden="true"></span>
+                    <span>Mind map</span>
+                  </button>
+                  <button type="button" class="sheet-card__tab" data-tab="none" role="tab" aria-selected="false" data-hotkey="start.tabNone">
+                    <span>No spreadsheet</span>
+                  </button>
+                </div>
+
+                <div class="sheet-card__body">
+                  <div data-tabpanel="google" class="sheet-panel">
+                    <!-- The button is a sibling of, never a child of, [data-role="google-status"]:
+                         three code paths rewrite that node's text/innerHTML and would eat it. -->
+                    <div class="sheet-panel__status-row">
+                      <div class="sheet-panel__status" data-role="google-status">Checking authentication…</div>
+                      <button type="button" class="sheet-panel__refresh" data-role="google-refresh" data-tooltip="Refresh from Google Drive" aria-label="Refresh from Google Drive" hidden>
+                        <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
+                      </button>
+                    </div>
+                    <div class="sheet-picker" data-role="google-picker" hidden>
+                      <button type="button" class="sheet-picker__trigger" data-role="google-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="sheet-picker__label" data-role="google-picker-label">Select a Google Sheet…</span>
+                        <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+                      </button>
+                      <div class="sheet-picker__menu cg-menu hidden" data-role="google-picker-menu" role="listbox"></div>
+                    </div>
+                    <div class="sheet-panel__paste">
+                      <label for="startGooglePaste">Or paste a spreadsheet URL or name</label>
+                      <div class="path-input path-input--bare">
+                        <div class="path-input__field">
+                          <span class="path-input__icon so-icon so-icon--sm" data-icon="link"></span>
+                          <input type="text" id="startGooglePaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="https://docs.google.com/spreadsheets/d/…  or  My Study">
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div data-tabpanel="excel" class="sheet-panel" hidden>
+                    <div class="sheet-panel__status-row">
+                      <div class="sheet-panel__status" data-role="excel-status">Scanning input folder…</div>
+                      <button type="button" class="sheet-panel__refresh" data-role="excel-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
+                        <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
+                      </button>
+                    </div>
+                    <div class="sheet-picker" data-role="excel-picker">
+                      <button type="button" class="sheet-picker__trigger" data-role="excel-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="sheet-picker__label" data-role="excel-picker-label">Select an Excel file…</span>
+                        <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+                      </button>
+                      <div class="sheet-picker__menu cg-menu hidden" data-role="excel-picker-menu" role="listbox"></div>
+                    </div>
+                    <div class="sheet-panel__paste">
+                      <label for="startExcelPaste">Or paste a full path to an .xlsx file</label>
+                      <div class="path-input path-input--bare">
+                        <div class="path-input__field">
+                          <span class="path-input__icon so-icon so-icon--sm" data-icon="document"></span>
+                          <input type="text" id="startExcelPaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/study.xlsx">
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div data-tabpanel="mindnode" class="sheet-panel" hidden>
+                    <div class="sheet-panel__status-row">
+                      <div class="sheet-panel__status" data-role="mindnode-status">Scanning input folder…</div>
+                      <button type="button" class="sheet-panel__refresh" data-role="mindnode-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
+                        <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
+                      </button>
+                    </div>
+                    <div class="sheet-picker" data-role="mindnode-picker">
+                      <button type="button" class="sheet-picker__trigger" data-role="mindnode-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="sheet-picker__label" data-role="mindnode-picker-label">Select a MindNode document…</span>
+                        <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+                      </button>
+                      <div class="sheet-picker__menu cg-menu hidden" data-role="mindnode-picker-menu" role="listbox"></div>
+                    </div>
+                    <div class="sheet-panel__paste">
+                      <label for="startMindnodePaste">Or paste a full path to a .mindnode document</label>
+                      <div class="path-input path-input--bare">
+                        <div class="path-input__field">
+                          <span class="path-input__icon so-icon so-icon--sm" data-icon="document"></span>
+                          <input type="text" id="startMindnodePaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/study.mindnode">
+                        </div>
+                      </div>
+                    </div>
+                    <div class="mindnode-preview" data-role="mindnode-preview" hidden>
+                      <img class="mindnode-preview__thumb" data-role="mindnode-preview-thumb" alt="" hidden>
+                      <div class="mindnode-preview__summary" data-role="mindnode-preview-summary"></div>
+                    </div>
+                  </div>
+
+                  <div data-tabpanel="none" class="sheet-panel sheet-panel--none" hidden>
+                    You can still use <strong>Screenspace</strong>, <strong>Transcripts</strong>, <strong>Composer</strong> and <strong>Workflows</strong>. They work directly on the source videos and need no spreadsheet.
+                  </div>
+
+                  <div class="sheet-panel__worksheet" data-role="worksheet-section" hidden>
+                    <label class="sheet-panel__worksheet-label">Worksheet</label>
+                    <div class="sheet-panel__worksheet-loading" data-role="worksheet-loading" hidden>
+                      <span class="so-spinner" aria-hidden="true"></span>
+                      <span>Checking worksheets…</span>
+                    </div>
+                    <div class="sheet-picker" data-role="worksheet-picker">
+                      <button type="button" class="sheet-picker__trigger" data-role="worksheet-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+                        <span class="sheet-picker__label" data-role="worksheet-picker-label">Select a worksheet…</span>
+                        <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
+                      </button>
+                      <div class="sheet-picker__menu cg-menu hidden" data-role="worksheet-picker-menu" role="listbox"></div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div data-tabpanel="mindnode" class="sheet-panel" hidden>
-              <div class="sheet-panel__status-row">
-                <div class="sheet-panel__status" data-role="mindnode-status">Scanning input folder…</div>
-                <button type="button" class="sheet-panel__refresh" data-role="mindnode-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
-                  <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
-                </button>
-              </div>
-              <div class="sheet-picker" data-role="mindnode-picker">
-                <button type="button" class="sheet-picker__trigger" data-role="mindnode-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
-                  <span class="sheet-picker__label" data-role="mindnode-picker-label">Select a MindNode document…</span>
-                  <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
-                </button>
-                <div class="sheet-picker__menu cg-menu hidden" data-role="mindnode-picker-menu" role="listbox"></div>
-              </div>
-              <div class="sheet-panel__paste">
-                <label for="startMindnodePaste">Or paste a full path to a .mindnode document</label>
-                <div class="path-input path-input--bare">
-                  <div class="path-input__field">
-                    <span class="path-input__icon so-icon so-icon--sm" data-icon="document"></span>
-                    <input type="text" id="startMindnodePaste" class="path-input__input" autocomplete="off" spellcheck="false" placeholder="/path/to/study.mindnode">
-                  </div>
+              <!-- Which source videos the chosen sheet will look for, and whether they
+                   are already in the input folder. Filled by loadSourcePreview(). -->
+              <div class="source-preview" data-role="source-preview" hidden>
+                <div class="source-preview__head">
+                  <span class="so-spinner" data-role="source-preview-spinner" aria-hidden="true" hidden></span>
+                  <span class="so-icon so-icon--sm" data-role="source-preview-icon" data-icon="film"></span>
+                  <span class="source-preview__summary" data-role="source-preview-summary"></span>
                 </div>
+                <div class="source-preview__list" data-role="source-preview-list"></div>
               </div>
-              <div class="mindnode-preview" data-role="mindnode-preview" hidden>
-                <img class="mindnode-preview__thumb" data-role="mindnode-preview-thumb" alt="" hidden>
-                <div class="mindnode-preview__summary" data-role="mindnode-preview-summary"></div>
-              </div>
-            </div>
+            </section>
 
-            <div data-tabpanel="none" class="sheet-panel sheet-panel--none" hidden>
-              You can still use <strong>Screenspace</strong>, <strong>Transcripts</strong>, <strong>Composer</strong> and <strong>Workflows</strong>. They work directly on the source videos and need no spreadsheet.
-            </div>
-
-            <div class="sheet-panel__worksheet" data-role="worksheet-section" hidden>
-              <label class="sheet-panel__worksheet-label">Worksheet</label>
-              <div class="sheet-panel__worksheet-loading" data-role="worksheet-loading" hidden>
-                <span class="so-spinner" aria-hidden="true"></span>
-                <span>Checking worksheets…</span>
-              </div>
-              <div class="sheet-picker" data-role="worksheet-picker">
-                <button type="button" class="sheet-picker__trigger" data-role="worksheet-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
-                  <span class="sheet-picker__label" data-role="worksheet-picker-label">Select a worksheet…</span>
-                  <span class="sheet-picker__caret so-icon so-icon--sm" data-icon="chevron-down" aria-hidden="true"></span>
-                </button>
-                <div class="sheet-picker__menu cg-menu hidden" data-role="worksheet-picker-menu" role="listbox"></div>
-              </div>
-            </div>
           </div>
-        </div>
 
-        <!-- Which source videos the chosen sheet will look for, and whether they
-             are already in the input folder. Filled by loadSourcePreview(). -->
-        <div class="source-preview" data-role="source-preview" hidden>
-          <div class="source-preview__head">
-            <span class="so-spinner" data-role="source-preview-spinner" aria-hidden="true" hidden></span>
-            <span class="so-icon so-icon--sm" data-role="source-preview-icon" data-icon="film"></span>
-            <span class="source-preview__summary" data-role="source-preview-summary"></span>
-          </div>
-          <div class="source-preview__list" data-role="source-preview-list"></div>
-        </div>
-      </section>
-
-      <section class="start-section cascade-in" data-cascade="3">
-        <div class="extras-tabs">
-          <div class="extras-tabs__strip" role="tablist">
-            <button type="button" class="extras-tabs__tab is-active" data-extras-tab="tools" role="tab" aria-selected="true">What you can do</button>
-            <button type="button" class="extras-tabs__tab" data-extras-tab="updates" role="tab" aria-selected="false">
-              <span>Recent updates</span>
-              <span class="extras-tabs__badge" data-role="updates-badge" hidden></span>
+          <footer class="start-footer cascade-in" data-cascade="4">
+            <div class="start-footer-checks">
+              <label class="persist-check">
+                <input type="checkbox" id="startPersistEnabled" checked>
+                <span>Remember my choices across launches</span>
+              </label>
+              <!-- Desktop launches only; loadStartSettings() unhides it. -->
+              <label class="persist-check" id="startRememberWindowRow" hidden>
+                <input type="checkbox" id="startRememberWindow" checked>
+                <span>Remember the window size and position</span>
+              </label>
+            </div>
+            <button type="button" class="so-btn so-btn--primary so-btn--lg" data-role="confirm" data-hotkey="start.confirm">
+              <span>Open workspace</span>
+              <span class="so-icon so-icon--sm" data-icon="arrow-right"></span>
             </button>
-            <button type="button" class="extras-tabs__tab" data-extras-tab="about" role="tab" aria-selected="false">About</button>
-          </div>
+          </footer>
+        </section>
 
-          <div class="extras-tabs__body">
-            <div data-extras-panel="tools">
+        <section class="start-tabpanel" data-start-panel="about" role="tabpanel" hidden>
+          <div class="start-tabpanel__scroll">
+            <section class="start-section">
+              <div class="eyebrow">What you can do</div>
               <!-- Intentional inline SVG (icon convention exception): the three tool-tile artworks below are
                    animated decorative illustrations (timeline / analysis boxes / waveform), not icons. -->
               <div class="tool-tiles">
@@ -431,36 +463,22 @@
                 </div>
 
               </div>
-            </div>
+            </section>
 
-            <div data-extras-panel="updates" hidden>
-              <ul class="changelog" data-role="changelog-list"></ul>
-            </div>
-
-            <div data-extras-panel="about" hidden>
+            <section class="start-section">
+              <div class="eyebrow">About clipgen</div>
               <div class="about" data-role="about-grid"></div>
-            </div>
+            </section>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <footer class="start-footer cascade-in" data-cascade="4">
-        <div class="start-footer-checks">
-          <label class="persist-check">
-            <input type="checkbox" id="startPersistEnabled" checked>
-            <span>Remember my choices across launches</span>
-          </label>
-          <!-- Desktop launches only; loadStartSettings() unhides it. -->
-          <label class="persist-check" id="startRememberWindowRow" hidden>
-            <input type="checkbox" id="startRememberWindow" checked>
-            <span>Remember the window size and position</span>
-          </label>
-        </div>
-        <button type="button" class="so-btn so-btn--primary so-btn--lg" data-role="confirm" data-hotkey="start.confirm">
-          <span>Open workspace</span>
-          <span class="so-icon so-icon--sm" data-icon="arrow-right"></span>
-        </button>
-      </footer>
+        <section class="start-tabpanel" data-start-panel="updates" role="tabpanel" hidden>
+          <div class="start-tabpanel__scroll">
+            <ul class="changelog" data-role="changelog-list"></ul>
+          </div>
+        </section>
+
+      </div>
 
     </main>
   </div>
