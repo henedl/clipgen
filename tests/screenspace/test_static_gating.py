@@ -114,9 +114,12 @@ class TestInactivityStaticGate:
         calls = [0]
         real_phash = screenspace_primitives.compute_phash
 
-        def counting_phash(px):
+        def counting_phash(px, gray=None):
             calls[0] += 1
-            return real_phash(px)
+            # The scan's static-gate gray is handed straight to compute_phash;
+            # a caller that stopped passing it would silently reconvert.
+            assert gray is not None
+            return real_phash(px, gray=gray)
 
         _feed_region(monkeypatch, seq)
         monkeypatch.setattr(screenspace_scans, "compute_phash", counting_phash)
@@ -149,9 +152,12 @@ class TestBoundariesStaticGate:
         calls = [0]
         real_phash = screenspace_primitives.compute_phash
 
-        def counting_phash(px):
+        def counting_phash(px, gray=None):
             calls[0] += 1
-            return real_phash(px)
+            # The scan's static-gate gray is handed straight to compute_phash;
+            # a caller that stopped passing it would silently reconvert.
+            assert gray is not None
+            return real_phash(px, gray=gray)
 
         _feed_full(monkeypatch, seq)
         monkeypatch.setattr(screenspace_scans, "compute_phash", counting_phash)

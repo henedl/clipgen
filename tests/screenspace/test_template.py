@@ -6,7 +6,9 @@ import config
 import screenspace
 import screenspace_frames
 import screenspace_heatmap
+import screenspace_primitives
 import screenspace_scans
+import screenspace_tools
 from _ss_helpers import _make_icon, _make_icon_frame
 
 
@@ -47,6 +49,45 @@ class TestMatchTemplate:
         template = frame[30:60, 80:140].copy()
         results = screenspace.match_template(frame, template, threshold=0.9, mask=None)
         assert len(results) >= 1
+
+
+class TestCorrelationMapReuse:
+    """The correlation map is the most expensive op here; compute it once."""
+
+    @staticmethod
+    def _frame_and_template():
+        rng = np.random.RandomState(42)
+        frame = rng.randint(0, 255, (100, 200, 3), dtype=np.uint8)
+        return frame, frame[30:60, 80:140].copy()
+
+    def test_supplied_corr_gives_the_same_matches(self):
+        frame, template = self._frame_and_template()
+        prepared = screenspace_primitives._prepare_template(template, None)
+        corr = screenspace_primitives._template_correlation_map(frame, prepared)
+        assert screenspace.match_template(
+            frame, template, threshold=0.9, prepared=prepared, corr=corr
+        ) == screenspace.match_template(frame, template, threshold=0.9)
+
+    def test_tool_check_frame_computes_the_map_once(self, monkeypatch):
+        frame, template = self._frame_and_template()
+        calls = []
+        real = screenspace_primitives._template_correlation_map
+
+        def counting(frame_arg, prepared):
+            calls.append(1)
+            return real(frame_arg, prepared)
+
+        monkeypatch.setattr(
+            screenspace_primitives, "_template_correlation_map", counting
+        )
+        monkeypatch.setattr(screenspace_tools, "_template_correlation_map", counting)
+        params = {"template_image": template, "threshold": 0.9}
+        matched, details = screenspace_tools.TemplateTool().check_frame(
+            frame, None, {"x": 0, "y": 0, "w": 200, "h": 100}, params
+        )
+        assert matched
+        assert details["match_count"] >= 1
+        assert len(calls) == 1
 
 
 class TestPrepareTemplateMask:

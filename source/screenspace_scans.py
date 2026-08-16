@@ -1148,7 +1148,7 @@ def scan_inactivity(
             return None
         prev_skip_gray[0] = curr_gray
 
-        curr_hash = compute_phash(pixels)
+        curr_hash = compute_phash(pixels, gray=curr_gray)
 
         if prev_hash[0] is not None:
             dist = int(curr_hash - prev_hash[0])
@@ -1459,7 +1459,7 @@ def scan_boundaries(
                     on_progress((ts - start_seconds) / total_range)
                 return None
             prev_skip_gray[0] = curr_gray
-            curr_hash = compute_phash(pixels)
+            curr_hash = compute_phash(pixels, gray=curr_gray)
             if prev_hash[0] is not None:
                 dist = int(curr_hash - prev_hash[0])
                 within_gap = (
