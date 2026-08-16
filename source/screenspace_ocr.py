@@ -5,6 +5,7 @@ import math
 import queue
 import re
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -13,6 +14,7 @@ import cv2
 import numpy as np
 
 import config
+import profiling
 from screenspace_primitives import extract_region, point_in_mask_points
 
 
@@ -75,10 +77,17 @@ def _checkout_ocr_reader(languages: list[str]) -> Iterator[Any]:
     """
     key = tuple(sorted(languages))
     pool = _get_ocr_pool(languages)
+    # The one number that settles SCREENSPACE_OCR_POOL_SIZE, which is otherwise
+    # tuned on reasoning alone: time spent blocked here is OCR concurrency the
+    # pool is refusing. Direct analogue of worker.progress_lock_wait, and one
+    # add() per OCR call rather than per frame, so the hot-loop rule holds.
+    _t0 = time.perf_counter() if config.PROFILING else 0.0
     reader = pool.get()
+    if _t0:
+        profiling.add("ocr.pool_wait", time.perf_counter() - _t0)
     try:
         if reader is None:
-            with _ocr_build_lock:
+            with _ocr_build_lock, profiling.span("ocr.reader_build"):
                 reader = _build_ocr_reader(list(key))
         yield reader
     finally:

@@ -26,6 +26,7 @@ import config
 import files
 import google_api
 import interactive
+import profiling
 import spreadsheet
 import utils
 import video
@@ -162,7 +163,12 @@ def _open_worksheet(
     import gspread
 
     try:
-        return google_api.get_worksheet(open_callable(), preferred_name=worksheet_name)
+        # open_by_url / open are network round-trips that bypass
+        # google_api._call_with_api_retry, so they are counted here. This is the
+        # single site for the by-URL, by-index and by-name callers.
+        with profiling.span("sheets.open"):
+            ss = open_callable()
+        return google_api.get_worksheet(ss, preferred_name=worksheet_name)
     except (
         gspread.SpreadsheetNotFound,
         gspread.exceptions.APIError,
@@ -269,16 +275,21 @@ def list_worksheet_titles(
     import gspread
 
     try:
+        # Same accounting as _open_worksheet: both branches and the worksheets()
+        # listing are round-trips outside _call_with_api_retry.
         if id_or_path.startswith(config.COMMAND_HTTP_PREFIX):
-            ss = gspread_client.open_by_url(id_or_path)
+            with profiling.span("sheets.open"):
+                ss = gspread_client.open_by_url(id_or_path)
         else:
             if doc_list is None:
                 doc_list = google_api.get_all_spreadsheets(gspread_client)
             chosen_index = google_api.find_spreadsheet_by_name(id_or_path, doc_list)
             if chosen_index < 0:
                 return [], ""
-            ss = gspread_client.open(doc_list[chosen_index].strip())
-        titles = [ws.title for ws in ss.worksheets()]
+            with profiling.span("sheets.open"):
+                ss = gspread_client.open(doc_list[chosen_index].strip())
+        with profiling.span("sheets.worksheets"):
+            titles = [ws.title for ws in ss.worksheets()]
     except (
         gspread.SpreadsheetNotFound,
         gspread.exceptions.APIError,

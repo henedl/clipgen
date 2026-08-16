@@ -99,6 +99,7 @@ from server_utils import (
     mtime_or_zero,
     ok,
     parse_number_arg,
+    profiled_stream,
 )
 from datetime import UTC
 
@@ -1149,10 +1150,15 @@ def _generate_intake_clips(
         ]
 
     results: list[dict[str, Any]] = [{} for _ in items]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    # See pipeline._parallel_map_ordered for what this label pair buys.
+    _worker = profiling.timed("pipeline.clip")(_process_intake_item)
+    with (
+        profiling.span("pipeline.pool_wall"),
+        concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+    ):
         future_to_idx = {
             pool.submit(
-                _process_intake_item,
+                _worker,
                 item,
                 output_format,
                 study,
@@ -1599,10 +1605,17 @@ def api_generate() -> FlaskResponse:
 
         if to_generate:
             workers = pipeline._resolve_clip_workers()
+            # Same pipeline.clip / pipeline.pool_wall pair as
+            # pipeline._parallel_map_ordered — CLIP_PARALLEL_WORKERS drives this
+            # pool too, so CLI-only coverage would leave half the knob dark.
+            _worker = profiling.timed("pipeline.clip")(_generate_and_persist)
             if workers >= 2 and len(to_generate) >= 2:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                with (
+                    profiling.span("pipeline.pool_wall"),
+                    concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+                ):
                     future_to_cell: dict[concurrent.futures.Future, tuple[Any, str]] = {
-                        pool.submit(_generate_and_persist, clip): (clip, cell_str)
+                        pool.submit(_worker, clip): (clip, cell_str)
                         for clip, cell_str in to_generate
                     }
                     for future in concurrent.futures.as_completed(future_to_cell):
@@ -1679,7 +1692,7 @@ def api_generate() -> FlaskResponse:
             _release_busy("generate")
 
     return Response(
-        stream_with_busy_release(),
+        profiled_stream(stream_with_busy_release()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -1860,7 +1873,7 @@ def api_reel() -> FlaskResponse:
                 _release_busy("reel")
 
     return Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -2673,11 +2686,18 @@ def api_generate_intake() -> FlaskResponse:
         _reset_intake_job_state(len(items))
         try:
             workers = pipeline._resolve_clip_workers()
+            # Same pipeline.clip / pipeline.pool_wall pair as
+            # pipeline._parallel_map_ordered — CLIP_PARALLEL_WORKERS drives this
+            # pool too, so CLI-only coverage would leave half the knob dark.
+            _worker = profiling.timed("pipeline.clip")(_process_intake_item)
             if workers >= 2 and len(items) >= 2:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                with (
+                    profiling.span("pipeline.pool_wall"),
+                    concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool,
+                ):
                     future_to_idx = {
                         pool.submit(
-                            _process_intake_item,
+                            _worker,
                             item,
                             output_format,
                             study,
@@ -2729,7 +2749,7 @@ def api_generate_intake() -> FlaskResponse:
             _mark_intake_active(False)
 
     return Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -2963,7 +2983,7 @@ def api_reel_direct() -> FlaskResponse:
         yield from _stream_reel_job(work, on_cleanup=cleanup)
 
     return Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -3528,7 +3548,12 @@ def build_combined_app(
         snap = profiling.snapshot()
         if request.args.get("reset") == "1":
             profiling.reset()
-        return ok(profile=snap)
+        # peak_rss rides alongside the label map rather than inside it: it is not
+        # a label (no seconds/count), it is monotonic, and ?reset=1 cannot clear
+        # it. The knobs it exists for (SCREENSPACE_OCR_POOL_SIZE,
+        # WORKFLOWS_BATCH_WORKERS) are live-server knobs, so it has to be
+        # reachable here and not only from the atexit report.
+        return ok(profile=snap, peak_rss_mb=profiling.peak_rss_mb())
 
     @combined.route("/api/status")
     def status() -> Response:

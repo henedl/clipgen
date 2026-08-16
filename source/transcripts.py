@@ -44,6 +44,7 @@ import queue
 import re
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -51,6 +52,7 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 import config
+import profiling
 import utils
 
 # ---------------------------------------------------------------------------
@@ -281,11 +283,23 @@ def _load_model(model_name: str | None = None) -> Any:
     model_name = model_name or config.TRANSCRIBE_MODEL
     load_key = _model_load_key(model_name)
     if _cached_model is not None and _cached_model_key == load_key:
+        profiling.count("transcribe.model_cache.hit")
         return _cached_model
 
+    # Timed separately from the load itself: n here is the number of callers
+    # that missed the fast path, so a model_lock_wait n=14 across a 14-file
+    # batch means the cache is being thrashed by a settings change — which is
+    # exactly what _model_load_key exists to surface.
+    _t_lock = time.perf_counter() if config.PROFILING else 0.0
     with _model_load_lock:
+        if _t_lock:
+            profiling.add("transcribe.model_lock_wait", time.perf_counter() - _t_lock)
         if _cached_model is not None and _cached_model_key == load_key:
+            # Another thread finished the load while we waited. Still a hit —
+            # counting only the pre-lock check would report this as a miss.
+            profiling.count("transcribe.model_cache.hit")
             return _cached_model
+        profiling.count("transcribe.model_cache.miss")
 
         try:
             from faster_whisper import WhisperModel
@@ -322,7 +336,15 @@ def _load_model(model_name: str | None = None) -> Any:
             }
             if threads > 0:
                 load_kwargs["cpu_threads"] = threads
-            return WhisperModel(model_name, **load_kwargs)
+            # Scoped to the construction only — deliberately inside _do_load
+            # rather than around the run_with_spinner call below, so it excludes
+            # _confirm_model_download, which can block on interactive input. A
+            # span that includes a human deciding whether to fetch 3 GB is not a
+            # measurement. On a cold HF cache this *does* include the download,
+            # so a first run is orders of magnitude larger and is not a
+            # regression.
+            with profiling.span("transcribe.model_load"):
+                return WhisperModel(model_name, **load_kwargs)
 
         global _model_loading
         _model_loading = True
@@ -389,6 +411,56 @@ def _resolve_audio_index(video_path: str, requested: int | None) -> int:
     props = video_mod.probe_video_properties(video_path)
     tracks = (props or {}).get("audio_tracks") or []
     return video_mod.pick_speech_audio_track(tracks)
+
+
+def _flush_transcribe_profile(
+    name: str,
+    *,
+    prepare_s: float,
+    decode_s: float,
+    decode_max: float,
+    n_segments: int,
+    callback_s: float,
+    callback_max: float,
+    n_callbacks: int,
+    audio_s: float,
+    info: Any,
+) -> None:
+    """Flush one transcription's accumulated timings plus a per-run summary line.
+
+    The realtime factor is computed against ``prepare + decode``, never decode
+    alone. VAD shrinks decode and hides its own cost in prepare, so a
+    decode-only ratio *improves* whenever VAD is enabled — it would endorse
+    ``TRANSCRIBE_VAD_FILTER`` no matter what the setting actually did.
+
+    The numerator is the last segment's ``end``, not ``info.duration``, because
+    it stays correct on the cancelled path: a run stopped ten minutes into an
+    hour-long file reports a true 10-min/wall ratio, where ``info.duration``
+    would report a wildly optimistic 60-min/wall one. ``file=`` is printed
+    alongside so a truncated run is visible (``audio`` << ``file``), and
+    ``vad=`` gives the VAD win directly as ``vad/file``.
+    """
+    profiling.add("transcribe.decode", decode_s, n_segments, peak=decode_max)
+    profiling.add("transcribe.callback", callback_s, n_callbacks, peak=callback_max)
+
+    file_s = float(getattr(info, "duration", 0.0) or 0.0)
+    vad_s = float(getattr(info, "duration_after_vad", 0.0) or 0.0)
+    extra = f"audio={audio_s:.1f}s  file={file_s:.1f}s"
+    if vad_s:
+        extra += f"  vad={vad_s:.1f}s"
+    wall = prepare_s + decode_s
+    if wall > 0 and audio_s > 0:
+        extra += f"  xrt={audio_s / wall:.1f}x"
+    profiling.scan_summary(
+        name,
+        [
+            ("prepare", prepare_s, 1),
+            ("decode", decode_s, n_segments),
+            ("callback", callback_s, n_callbacks),
+        ],
+        kind="whisper",
+        extra=extra,
+    )
 
 
 def transcribe_video(
@@ -499,19 +571,72 @@ def transcribe_video(
         transcribe_kwargs = _build_transcribe_kwargs(
             language=lang, initial_prompt=prompt
         )
-        segments_iter, info = model.transcribe(audio_source, **transcribe_kwargs)
+        # Not a free call: faster-whisper loads the audio, extracts features and
+        # runs VAD + language detection *eagerly* here, then hands back a lazy
+        # generator. That is why info.duration_after_vad is already populated
+        # below. Without this span the TRANSCRIBE_VAD_* knobs — the ones
+        # PERFORMANCE.md calls "the big win" — are the one thing the transcribe
+        # labels cannot see, because their cost is here and not in the pull.
+        with profiling.span("transcribe.prepare"):
+            _t_prepare = time.perf_counter()
+            segments_iter, info = model.transcribe(audio_source, **transcribe_kwargs)
+            _prepare_s = time.perf_counter() - _t_prepare
         if _is_cancelled():
             raise _TranscriptionCancelled
         segments: list[TranscriptSegment] = []
-        for seg in segments_iter:
-            if _is_cancelled():
-                raise _TranscriptionCancelled
-            text = seg.text.strip()
-            if not text:
-                continue
-            segments.append(TranscriptSegment(start=seg.start, end=seg.end, text=text))
-            if on_segment is not None:
-                on_segment(seg.end, segments[-1])
+        # Profiling accumulates into locals and flushes once after the loop, so
+        # the off-path per-segment cost is a single boolean check (see
+        # profiling.py). The flush lives in a finally because a cancelled
+        # 20-minute run is exactly the one whose numbers you want.
+        _prof = config.PROFILING
+        _dec_s = _cb_s = _dec_max = _cb_max = 0.0
+        _n_seg = _n_cb = 0
+        _audio_s = 0.0
+        _t_last = time.perf_counter() if _prof else 0.0
+        try:
+            for seg in segments_iter:
+                if _prof:
+                    _t_pull = time.perf_counter()
+                    _dt = _t_pull - _t_last
+                    _dec_s += _dt
+                    _dec_max = max(_dec_max, _dt)
+                    _n_seg += 1
+                    _audio_s = seg.end  # decode watermark, incl. empty segments
+                if _is_cancelled():
+                    raise _TranscriptionCancelled
+                text = seg.text.strip()
+                # Inverted from `if not text: continue` so the re-stamp below is
+                # never skipped — an empty segment would otherwise charge its
+                # (tiny) processing to the *next* pull.
+                if text:
+                    segments.append(
+                        TranscriptSegment(start=seg.start, end=seg.end, text=text)
+                    )
+                    if on_segment is not None:
+                        if _prof:
+                            _t_cb = time.perf_counter()
+                        on_segment(seg.end, segments[-1])
+                        if _prof:
+                            _dt = time.perf_counter() - _t_cb
+                            _cb_s += _dt
+                            _cb_max = max(_cb_max, _dt)
+                            _n_cb += 1
+                if _prof:
+                    _t_last = time.perf_counter()
+        finally:
+            if _prof:
+                _flush_transcribe_profile(
+                    Path(video_path).name,
+                    prepare_s=_prepare_s,
+                    decode_s=_dec_s,
+                    decode_max=_dec_max,
+                    n_segments=_n_seg,
+                    callback_s=_cb_s,
+                    callback_max=_cb_max,
+                    n_callbacks=_n_cb,
+                    audio_s=_audio_s,
+                    info=info,
+                )
         detected_lang = (
             info.language if hasattr(info, "language") else (lang or "unknown")
         )

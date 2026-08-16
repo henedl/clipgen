@@ -69,6 +69,7 @@ from server_utils import (
     make_debounced_persist,
     make_participant_cache,
     ok,
+    profiled_stream,
 )
 
 FlaskResponse = Response | tuple[Response, int]
@@ -795,7 +796,7 @@ def api_embed_subtitles() -> FlaskResponse:
             _release_embed_slot(embed_token)
 
     response = Response(
-        stream(),
+        profiled_stream(stream()),
         mimetype="application/x-ndjson",
         headers={"X-Accel-Buffering": "no"},
     )
@@ -998,7 +999,11 @@ def api_summary_stream(participant: str) -> FlaskResponse:
             time.sleep(_SUMMARY_STREAM_TICK)
 
     return Response(
-        stream_with_context(_events()),
+        # Timed, unlike the persistent channels in make_sse_channel: this stream
+        # is bounded — it returns on `done` when the run finishes — so its wall
+        # time is the client-observed generation time, not how long a tab stayed
+        # open.
+        profiled_stream(stream_with_context(_events())),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -7,6 +7,8 @@ accumulation when on), the report line shape agents grep for, and the
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 import config
@@ -39,8 +41,9 @@ def test_add_and_count_accumulate_when_on(monkeypatch):
     profiling.add("work", 0.25)
     profiling.count("hits", 3)
     snap = profiling.snapshot()
-    assert snap["work"] == {"seconds": 0.75, "count": 3}
-    assert snap["hits"] == {"seconds": 0.0, "count": 3}
+    # The n=2 batch contributes no peak (a sum has no per-item max); the n=1 add does.
+    assert snap["work"] == {"seconds": 0.75, "count": 3, "max": 0.25}
+    assert snap["hits"] == {"seconds": 0.0, "count": 3, "max": 0.0}
 
 
 def test_span_times_the_block(monkeypatch):
@@ -122,6 +125,9 @@ def test_report_line_shape(monkeypatch, capsys):
     assert "avg=" in lines[0]
     assert "n=42" in lines[1]
     assert "avg=" not in lines[1]  # pure counters carry no average
+    # Neither fixture supplied a peak=, so no max token is invented for either.
+    assert "max=" not in lines[0]
+    assert "max=" not in lines[1]
 
 
 def test_report_silent_when_empty(capsys):
@@ -172,7 +178,13 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["ok"] is True
-    assert body["profile"]["scan.callback"] == {"seconds": 1.5, "count": 10}
+    assert body["profile"]["scan.callback"] == {
+        "seconds": 1.5,
+        "count": 10,
+        "max": 0.0,
+    }
+    # Monotonic and process-global, so it rides beside the label map, not in it.
+    assert "peak_rss_mb" in body
     # Request itself was timed by the route hook.
     assert any(label.startswith("route ") for label in profiling.snapshot())
 
@@ -181,3 +193,280 @@ def test_api_profile_snapshot_and_reset(client, monkeypatch):
     resp = client.get("/api/profile")
     body = resp.get_json()
     assert "scan.callback" not in body["profile"]
+
+
+# ---------- streaming responses -----------------------------------------------
+#
+# Flask's after_request hook runs on the Response *object*, before the WSGI
+# server iterates the body, so `route <rule>` records generator construction
+# only. These pin the fix: the body's own wall time lands under `stream <rule>`.
+
+
+@pytest.fixture
+def stream_app(monkeypatch):
+    pytest.importorskip("flask")
+    from flask import Flask, Response
+
+    import server_utils
+
+    app = Flask(__name__)
+
+    @app.route("/slow")
+    def slow():
+        def body():
+            time.sleep(0.05)
+            yield "a"
+            time.sleep(0.05)
+            yield "b"
+
+        return Response(
+            server_utils.profiled_stream(body()), mimetype="application/x-ndjson"
+        )
+
+    return app
+
+
+def test_route_label_alone_misses_streamed_body(stream_app, monkeypatch):
+    """The defect itself: the route hook sees ~0 for a body that takes 0.1s."""
+    import server
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    stream_app.before_request(server._profile_request_start)
+    stream_app.after_request(server._profile_request_end)
+
+    resp = stream_app.test_client().get("/slow")
+    route_only = profiling.snapshot().get("route /slow", {}).get("seconds", 0.0)
+    assert route_only < 0.02, f"route hook unexpectedly saw the body ({route_only}s)"
+
+    assert resp.data == b"ab"  # drains the generator
+    snap = profiling.snapshot()
+    assert snap["stream /slow"]["seconds"] >= 0.09
+    assert snap["stream /slow"]["count"] == 1
+    profiling.reset()
+
+
+def test_stream_span_is_passthrough_when_off(stream_app, monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", False)
+    resp = stream_app.test_client().get("/slow")
+    assert resp.data == b"ab"
+    assert profiling.snapshot() == {}
+
+
+def test_stream_span_records_on_client_disconnect(monkeypatch):
+    """An abandoned generation still reports what it spent (GeneratorExit)."""
+    monkeypatch.setattr(config, "PROFILING", True)
+
+    def body():
+        for _ in range(100):
+            time.sleep(0.01)
+            yield "x"
+
+    gen = profiling.stream_span("stream /abandoned", body())
+    next(gen)
+    gen.close()  # what the WSGI server does when the client drops
+    assert profiling.snapshot()["stream /abandoned"]["seconds"] > 0
+    profiling.reset()
+
+
+# ---------- max / tail -------------------------------------------------------
+
+
+def test_max_tracks_largest_single_add(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("x", 0.2)
+    profiling.add("x", 0.9)
+    profiling.add("x", 0.4)
+    assert profiling.snapshot()["x"]["max"] == 0.9
+
+
+def test_batched_add_leaves_max_alone(monkeypatch):
+    """A batched flush's `seconds` is a sum, so it has no per-item max to report."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("scan.callback", 5.0, 100)
+    assert profiling.snapshot()["scan.callback"]["max"] == 0.0
+
+
+def test_batched_add_honors_explicit_peak(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("scan.callback", 5.0, 100, peak=0.3)
+    profiling.add("scan.callback", 4.0, 80, peak=0.1)  # smaller: must not lower it
+    assert profiling.snapshot()["scan.callback"]["max"] == 0.3
+
+
+def test_report_shows_max_when_supplied(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("transcribe.decode", 12.0, 400, peak=0.85)
+    profiling.report()
+    line = capsys.readouterr().out.splitlines()[0]
+    assert "max=850.0ms" in line
+
+
+def test_snapshot_sort_ignores_max(monkeypatch):
+    """Max must never reorder the report — seconds-desc is the contract."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("small_but_spiky", 0.1, 1)
+    profiling.add("big", 5.0, 100, peak=0.01)
+    assert list(profiling.snapshot()) == ["big", "small_but_spiky"]
+
+
+# ---------- peak RSS ---------------------------------------------------------
+
+
+def test_peak_rss_is_plausible():
+    peak = profiling.peak_rss_mb()
+    if peak is None:  # non-POSIX
+        return
+    # A Python process running pytest is comfortably inside these bounds; the
+    # point is to catch the macOS-bytes / Linux-kilobytes unit mixup, which is
+    # off by 1024x in one direction or the other.
+    assert 5.0 < peak < 20000.0, f"peak_rss_mb looks unit-scaled wrong: {peak}"
+
+
+def test_report_appends_peak_rss(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.add("x", 1.0)
+    profiling.report()
+    lines = capsys.readouterr().out.splitlines()
+    assert all(line.startswith("profile | ") for line in lines)
+    if profiling.peak_rss_mb() is not None:
+        assert lines[-1].startswith("profile | peak_rss")
+        assert lines[-1].rstrip().endswith("MB")
+
+
+def test_report_silent_when_empty_including_rss(capsys):
+    """No labels means no output at all — peak_rss must not break that contract."""
+    profiling.report()
+    assert capsys.readouterr().out == ""
+
+
+def test_scan_summary_kind_and_extra(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.scan_summary(
+        "study_P01.mp4",
+        [("decode", 240.1, 412)],
+        kind="whisper",
+        extra="audio=3598.4s  xrt=15.0x",
+    )
+    out = capsys.readouterr().out
+    assert out.startswith("profile | whisper study_P01.mp4: ")
+    assert "decode=240.100s/n=412" in out
+    assert "xrt=15.0x" in out
+
+
+# ---------- profiling hooks --------------------------------------------------
+#
+# The split exists because faster-whisper runs audio load, feature extraction,
+# VAD and language detection *eagerly* inside model.transcribe(), then returns a
+# lazy generator. Measured on a 30 s file with the tiny model: enabling VAD moved
+# prepare 0.185s -> 0.641s while decode collapsed 1.138s -> 0.000s. An xRT
+# computed on decode alone therefore reports *infinity* with VAD on, endorsing
+# the knob no matter what it did; on prepare+decode it correctly reports the
+# real 2x win. These pin that.
+
+
+class _FakeSeg:
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+
+
+class _FakeInfo:
+    language = "en"
+    duration = 30.0
+    duration_after_vad = 12.0
+
+
+def _fake_model(segs, *, prepare_delay=0.0, per_segment_delay=0.0):
+    class _M:
+        def transcribe(self, _source, **_kwargs):
+            time.sleep(prepare_delay)
+
+            def gen():
+                for s in segs:
+                    time.sleep(per_segment_delay)
+                    yield s
+
+            return gen(), _FakeInfo()
+
+    return _M()
+
+
+@pytest.fixture
+def whisper_probe(monkeypatch, tmp_path):
+    """A real-shaped transcribe_video call with the model and probes stubbed out."""
+    import transcripts
+    import video as video_mod
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(
+        video_mod,
+        "probe_video_properties",
+        lambda _p: {"audio_codec": "aac", "audio_tracks": [{"index": 0}]},
+    )
+    src = tmp_path / "study_P01.mp4"
+    src.write_bytes(b"stub")
+
+    def run(model, **kwargs):
+        monkeypatch.setattr(transcripts, "_load_model", lambda *a, **k: model)
+        return transcripts.transcribe_video(str(src), **kwargs)
+
+    return run
+
+
+def test_transcribe_splits_prepare_decode_and_callback(whisper_probe):
+    segs = [_FakeSeg(0.0, 5.0, "one"), _FakeSeg(5.0, 11.0, "two")]
+    calls = []
+    whisper_probe(
+        _fake_model(segs, prepare_delay=0.05, per_segment_delay=0.03),
+        on_segment=lambda end, seg: (time.sleep(0.02), calls.append(seg)),
+    )
+    snap = profiling.snapshot()
+    assert len(calls) == 2
+    # Eager setup is attributed to prepare, not to the first generator pull.
+    assert snap["transcribe.prepare"]["seconds"] >= 0.04
+    assert snap["transcribe.decode"]["count"] == 2
+    assert snap["transcribe.decode"]["seconds"] >= 0.05
+    # The callback is charged to callback, never folded into decode.
+    assert snap["transcribe.callback"]["count"] == 2
+    assert snap["transcribe.callback"]["seconds"] >= 0.03
+    assert snap["transcribe.decode"]["max"] > 0  # batched flush still carries a peak
+
+
+def test_transcribe_flushes_on_cancel(whisper_probe):
+    """A cancelled long run is exactly the one whose numbers you want."""
+    import transcripts
+
+    segs = [_FakeSeg(i, i + 1.0, f"s{i}") for i in range(10)]
+    state = {"n": 0}
+
+    def cancelled():
+        state["n"] += 1
+        return state["n"] > 3
+
+    with pytest.raises(transcripts._TranscriptionCancelled):
+        whisper_probe(_fake_model(segs, per_segment_delay=0.01), cancel_flag=cancelled)
+    snap = profiling.snapshot()
+    assert snap["transcribe.decode"]["count"] >= 1
+    assert snap["transcribe.decode"]["seconds"] > 0
+
+
+def test_whisper_summary_uses_full_wall_for_xrt(whisper_probe, capsys):
+    """xRT must divide audio by prepare+decode; decode alone goes to infinity with VAD."""
+    segs = [_FakeSeg(0.0, 20.0, "hello")]
+    whisper_probe(_fake_model(segs, prepare_delay=0.10, per_segment_delay=0.0))
+    line = next(
+        ln
+        for ln in capsys.readouterr().out.splitlines()
+        if ln.startswith("profile | whisper ")
+    )
+    assert "prepare=" in line and "decode=" in line
+    assert "audio=20.0s" in line and "file=30.0s" in line and "vad=12.0s" in line
+    xrt = float(line.split("xrt=")[1].rstrip("x"))
+    # 20s of audio over >=0.10s of prepare-dominated wall. Decode was ~0, so a
+    # decode-only ratio would be astronomically higher than this bound.
+    assert xrt < 205, f"xrt {xrt} looks computed on decode alone, not prepare+decode"
+
+
+def test_transcribe_records_nothing_when_profiling_off(whisper_probe, monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", False)
+    whisper_probe(_fake_model([_FakeSeg(0.0, 1.0, "x")]))
+    assert profiling.snapshot() == {}
