@@ -95,6 +95,11 @@ while the bundle ships Python 3.12; retag with `wheel tags` if that ever matters
    - `uv pip install --force-reinstall --no-deps <wheel>`, then assert `FFMPEG` is absent from
      `cv2.getBuildInformation()` and no `cv2/.dylibs` exists in site-packages — before
      PyInstaller runs, so a bad cached wheel fails fast.
+   - **Gotcha (caught by that assert on the first CI run):** a plain `uv run` re-syncs the
+     project env against `uv.lock` before running, which reinstalls the *official* GPL wheel
+     from PyPI over the force-reinstalled one. The workflow therefore installs with
+     `uv sync --locked` once and uses `uv run --no-sync` for every later invocation
+     (fetch_binaries, pyinstaller); the assert runs via `.venv/bin/python` directly.
 - [x] **Inverted license guard** ("Verify no in-process FFmpeg libraries"): fails on any
    `cv2/.dylibs`/`__dot__dylibs` in the .app, or any `libav*`/`libsw*`/`libx264*`/`libx265*`
    dylib outside `bin/` (the PyAV-absence guard rides along unchanged).

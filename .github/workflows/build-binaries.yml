@@ -55,9 +55,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+        # uv sync --locked (not `uv pip install .`) so the env exactly matches
+        # uv.lock, and every later `uv run` in this workflow passes --no-sync.
+        # A plain `uv run` re-syncs the project env against the lock first,
+        # which would silently replace the force-reinstalled no-FFmpeg cv2
+        # wheel (below) with the official GPL-tainted one from PyPI — the
+        # pre-PyInstaller assert caught exactly that on the first CI run.
         run: |
-          uv venv
-          uv pip install .
+          uv sync --locked
           uv pip install pyinstaller==6.19.0
 
       # The official opencv-python-headless macOS arm64 wheels bundle a
@@ -108,8 +113,10 @@ jobs:
           set -euo pipefail
           uv pip install --force-reinstall --no-deps build/opencv-wheel/opencv_python_headless-*.whl
           # Fail here, before PyInstaller, if the wheel somehow carries FFmpeg
-          # (e.g. a cached wheel built before a flag change).
-          uv run python -c "import cv2; bi = cv2.getBuildInformation(); \
+          # (e.g. a cached wheel built before a flag change). Deliberately
+          # .venv/bin/python, not `uv run python`: a syncing uv run would
+          # reinstall the official wheel from the lock and defeat this step.
+          .venv/bin/python -c "import cv2; bi = cv2.getBuildInformation(); \
             assert 'FFMPEG' not in bi, 'self-built cv2 unexpectedly enables FFMPEG'; \
             print('cv2', cv2.__version__, '- no FFmpeg')"
           if find .venv -type d -name ".dylibs" -path "*cv2*" | grep -q .; then
@@ -124,11 +131,14 @@ jobs:
 
       - name: Fetch pinned vendor files (ffmpeg + OCR models)
         # Idempotent: a cache hit makes this a hash-check no-op. The spec
-        # refuses to build without these files.
-        run: uv run build/fetch_binaries.py
+        # refuses to build without these files. --no-sync: see Install
+        # dependencies.
+        run: uv run --no-sync build/fetch_binaries.py
 
       - name: Build executable
-        run: uv run pyinstaller --clean --noconfirm build/clipgen.spec
+        # --no-sync: a syncing uv run would swap the no-FFmpeg cv2 back to the
+        # official GPL wheel right before bundling (see Install dependencies).
+        run: uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 
       - name: Verify bundled ffmpeg features (macOS)
         if: matrix.os == 'macos-latest'
