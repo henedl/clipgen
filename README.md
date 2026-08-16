@@ -8,7 +8,7 @@ It is built for UX researchers — especially games user researchers running pla
 
 ### Desktop app
 
-Download the macOS `.dmg` or Windows `.zip` from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`. ffmpeg is included (GPL builds — see `THIRD-PARTY-LICENSES` in the download); there is nothing else to install.
+Download the macOS `.dmg`, or on Windows the `-setup.exe` installer (recommended — per-user install with a Start Menu shortcut and uninstaller, no admin rights needed) or the portable `.zip`, from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`. ffmpeg is included (GPL builds — see `THIRD-PARTY-LICENSES` in the download); there is nothing else to install.
 
 The macOS build is unsigned, so Gatekeeper blocks the first launch: right-click the app and choose **Open** once, or run `xattr -dr com.apple.quarantine clipgen.app`. Double-clicking the app opens clipgen in its own desktop window; the same binary is the full CLI when given arguments.
 
@@ -83,7 +83,7 @@ uv run build/fetch_binaries.py      # pinned ffmpeg/ffprobe for the bundle (SHA2
 pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
-Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows — keep `clipgen.exe` and `_internal/` together, with `credentials.json` beside the folder).
+Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows — keep `clipgen.exe` and `lib/` together, with `credentials.json` beside the folder).
 
 ## AI disclosure
 

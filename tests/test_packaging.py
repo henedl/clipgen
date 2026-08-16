@@ -172,6 +172,46 @@ def test_build_workflow_smoke_launches_both_bundles() -> None:
     )
 
 
+def test_windows_contents_dir_is_lib_everywhere() -> None:
+    """COLLECT renames PyInstaller's ``_internal`` to ``lib``. Runtime code is
+    name-agnostic (everything derives from ``sys._MEIPASS``), but the workflow's
+    Windows verification steps address the folder literally — a stale path there
+    fails CI at build time, and stale docs mislead users."""
+    spec_text = (_ROOT / "build" / "clipgen.spec").read_text(encoding="utf-8")
+    assert 'contents_directory="lib"' in spec_text
+    workflow = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "_internal" not in workflow, (
+        "the workflow still addresses PyInstaller's default contents dir"
+    )
+    assert "dist/clipgen/lib/bin/ffmpeg.exe" in workflow
+
+
+def test_installer_script_is_tracked_and_wired() -> None:
+    """``build/*`` is gitignored with an allowlist, so a missing ``!`` entry
+    means the .iss exists locally but never commits; and the installer must be
+    versioned from CI and land in the release/artifact globs."""
+    gitignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "!build/clipgen.iss" in gitignore.splitlines()
+
+    iss = (_ROOT / "build" / "clipgen.iss").read_text(encoding="utf-8")
+    assert "AppVersion={#AppVer}" in iss, (
+        "the version must come from ISCC /DAppVer, never hardcoded in the .iss"
+    )
+    assert "PrivilegesRequired=lowest" in iss, (
+        "the installer is per-user by design; no UAC prompt"
+    )
+
+    workflow = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "clipgen.iss" in workflow, "CI must compile the installer"
+    assert workflow.count("dist/*-setup.exe") >= 2, (
+        "the installer must be in both the artifact path and the release glob"
+    )
+
+
 def test_gitignore_allowlists_the_fetch_script() -> None:
     """``build/*`` is gitignored with a ``!`` allowlist; without its entry the
     fetch script exists locally but never lands in a commit."""

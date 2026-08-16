@@ -130,9 +130,10 @@ Modern packaging with clean install/uninstall and auto-update.
 
 ## Status
 
-- [ ] A — rename the contents directory
-- [ ] B — Inno Setup installer in `build-binaries.yml`
-- [ ] E1 — unbundle easyocr/torch behind a first-use download
-- [ ] E2 — evaluate an ONNX OCR backend to drop torch entirely
+- [x] A — rename the contents directory (`contents_directory="lib"` in the spec)
+- [x] B — Inno Setup installer in `build-binaries.yml` (`build/clipgen.iss`; zip still ships)
+- [ ] E2 — replace easyocr with RapidOCR (onnxruntime) and drop torch entirely
+- ~~E1~~ — scrapped in favor of going straight to E2; with torch gone there is nothing to unbundle
 - ~~C~~ — rejected, see above
 - ~~D~~ — rejected, see above
+- ~~F~~ — scrapped (maintainer decision); revisit only if signing ever happens

@@ -930,17 +930,15 @@ def test_frozen_onefile_temp_meipass_is_ignored(monkeypatch):
 
 
 def test_frozen_onedir_resolves_beside_the_payload_folder(monkeypatch):
-    """One-dir puts the exe inside clipgen/ next to _internal/.
+    """One-dir puts the exe inside clipgen/ next to lib/.
 
     "Next to the application" is then the folder *containing* clipgen/, which is
     what the user dragged out of the archive and where they will drop
-    credentials.json — not the folder holding _internal.
+    credentials.json — not the folder holding lib.
     """
     monkeypatch.setattr("sys.frozen", True, raising=False)
     monkeypatch.setattr("sys.executable", "/Users/me/Apps/clipgen/clipgen.exe")
-    monkeypatch.setattr(
-        "sys._MEIPASS", "/Users/me/Apps/clipgen/_internal", raising=False
-    )
+    monkeypatch.setattr("sys._MEIPASS", "/Users/me/Apps/clipgen/lib", raising=False)
     assert cli.get_runtime_working_dir() == "/Users/me/Apps"
 
 

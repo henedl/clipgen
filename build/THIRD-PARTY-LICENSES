@@ -970,7 +970,7 @@ GPL-3.0-OR-LATER (bundled ffmpeg and ffprobe executables)
 ===============================================================================
 
 clipgen ships standalone ffmpeg and ffprobe executables under <bundle>/bin/
-(Contents/Frameworks/bin/ inside the macOS app, _internal/bin/ inside the
+(Contents/Frameworks/bin/ inside the macOS app, lib/bin/ inside the
 Windows folder). They are full-featured static builds compiled with
 --enable-gpl and --enable-version3, which makes the executables
 GPL-3.0-or-later. clipgen invokes them strictly as separate subprocesses
