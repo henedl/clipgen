@@ -181,12 +181,19 @@ class TestCheckFrameForTool:
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
+        from types import SimpleNamespace
 
+        # Callable RapidOCR engine stub emitting one "5" reading at conf 0.2.
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: (
+                lambda _px: SimpleNamespace(
+                    boxes=[[(0, 0), (10, 0), (10, 10), (0, 10)]],
+                    txts=("5",),
+                    scores=(0.2,),
+                )
+            ),
         )
 
         passed, result = screenspace.check_frame_for_tool(
@@ -1514,9 +1521,7 @@ class TestMultitoolMemoization:
         assert got0 == ref0
         assert got1 == ref1
 
-    def test_ocr_memoized_for_identical_steps_but_not_text_vs_numbers(
-        self, monkeypatch
-    ):
+    def test_ocr_memoized_across_text_and_numbers_steps(self, monkeypatch):
         import screenspace_tools
 
         calls = {"n": 0}
@@ -1525,7 +1530,6 @@ class TestMultitoolMemoization:
             pixels,
             *,
             languages=None,
-            allowlist=None,
             preprocess=False,
             mask_points=None,
         ):
@@ -1544,12 +1548,14 @@ class TestMultitoolMemoization:
         screenspace.check_frame_for_tool(frame, None, region, "text", text, cache, None)
         assert calls["n"] == 1
 
-        # Numbers keys differently (digit allowlist) -> intentionally NOT shared.
+        # Numbers on the same region now shares the memo: the engine has no
+        # per-tool recognition mode, and integers_only/operators are applied at
+        # scoring time. (Under EasyOCR the digit allowlist forced a re-run.)
         numbers = {"type": "numbers", "operator": "gt", "target_value": 0}
         screenspace.check_frame_for_tool(
             frame, None, region, "numbers", numbers, cache, None
         )
-        assert calls["n"] == 2
+        assert calls["n"] == 1
 
 
 # ---------------------------------------------------------------------------

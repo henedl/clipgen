@@ -132,7 +132,10 @@ Modern packaging with clean install/uninstall and auto-update.
 
 - [x] A — rename the contents directory (`contents_directory="lib"` in the spec)
 - [x] B — Inno Setup installer in `build-binaries.yml` (`build/clipgen.iss`; zip still ships)
-- [ ] E2 — replace easyocr with RapidOCR (onnxruntime) and drop torch entirely
+- [x] E2 — replaced easyocr with RapidOCR (`rapidocr` on the bundled onnxruntime); torch is
+      out of the dependency graph entirely. The 7-language dropdown survives: en/zh use the
+      wheel's bundled models, latin/japan/korean recognition models are vendored at build
+      time (`build/fetch_binaries.py OCR_MODEL_PINS`) so the bundle stays offline
 - ~~E1~~ — scrapped in favor of going straight to E2; with torch gone there is nothing to unbundle
 - ~~C~~ — rejected, see above
 - ~~D~~ — rejected, see above

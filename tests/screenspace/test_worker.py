@@ -229,8 +229,8 @@ class TestScreenspaceWorker:
         finally:
             worker.stop()
 
-    def test_text_task_easyocr_importable(self):
-        import easyocr  # noqa: F401
+    def test_text_task_rapidocr_importable(self):
+        import rapidocr  # noqa: F401
 
     def test_reorder(self):
         worker = screenspace.ScreenspaceWorker()

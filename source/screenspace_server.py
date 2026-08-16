@@ -652,14 +652,17 @@ def _make_pin_ocr_reader(
 ) -> "Callable[[str, dict[str, Any], dict[str, Any]], list[Any]]":
     """Build the cached OCR reader passed to the score functions for one pin.
 
-    Memoizes raw EasyOCR readings per (video, mtime, ts, region, tool, langs,
-    preprocess, integers_only) so changing only the fuzzy/confidence threshold
-    re-scores from cached readings without re-running OCR.
+    Memoizes raw OCR readings per (video, mtime, ts, region, langs, preprocess)
+    so changing only the fuzzy/confidence threshold re-scores from cached
+    readings without re-running OCR. Text and numbers pins on the same region
+    share readings — integers_only and the numeric operators are applied at
+    scoring time, which is exactly what this cache exists for.
     """
 
     def _reader(
         tool_type: str, region_coords: dict[str, Any], params: dict[str, Any]
     ) -> list[Any]:
+        del tool_type  # readings are tool-independent; scoring applies the tool
         langs = tuple(params.get("languages") or ["en"])
         key = (
             video_path,
@@ -674,19 +677,15 @@ def _make_pin_ocr_reader(
                 # must not share cached readings.
                 screenspace.mask_points_key(region_coords.get("mask_points")),
             ),
-            tool_type,
             langs,
             bool(params.get("ocr_preprocess", False)),
-            bool(params.get("integers_only", False)),
         )
         with _pin_ocr_cache_lock:
             cached = _pin_ocr_cache.get(key)
             if cached is not None:
                 _pin_ocr_cache.move_to_end(key)
                 return cached
-        readings = screenspace.run_calibration_ocr(
-            frame, region_coords, tool_type, params
-        )
+        readings = screenspace.run_calibration_ocr(frame, region_coords, params)
         with _pin_ocr_cache_lock:
             _pin_ocr_cache[key] = readings
             while len(_pin_ocr_cache) > _PIN_OCR_CACHE_MAX:
@@ -2656,6 +2655,20 @@ def _coerce_template_controls(params: dict[str, Any], *, context: str = "") -> N
 
 def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
     """Validate optional OCR controls shared by Text and Numbers tools."""
+    langs = params.get("languages")
+    if langs is not None:
+        # Closed set: each code maps onto a bundled recognition model
+        # (screenspace_ocr._OCR_LANG_TO_MODEL). Unvalidated strings used to
+        # reach the engine and die mid-scan; refuse at task creation instead.
+        valid = tuple(screenspace._OCR_LANG_TO_MODEL)
+        if (
+            not isinstance(langs, list)
+            or not langs
+            or any(lang not in valid for lang in langs)
+        ):
+            raise ValueError(
+                f"{context}languages must be a non-empty list drawn from {valid}"
+            )
     if "ocr_confidence_threshold" not in params:
         return
     threshold = _coerce_float(

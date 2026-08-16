@@ -1,6 +1,7 @@
 """Tests for OCR text/number scanning and confidence scoring."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -15,18 +16,18 @@ import screenspace_scans
 
 @pytest.fixture(autouse=True)
 def _reset_ocr_pool(monkeypatch):
-    """Isolate the process-wide OCR reader pool between tests.
+    """Isolate the process-wide OCR engine pool between tests.
 
-    Readers are cached in ``screenspace_ocr._ocr_pools``; pin the pool to a
-    single slot so each test builds exactly one (patched) fake Reader, and clear
+    Engines are cached in ``screenspace_ocr._ocr_pools``; pin the pool to a
+    single slot so each test builds exactly one (patched) fake engine, and clear
     it so a fake from a prior test never leaks in.
     """
     monkeypatch.setattr(config, "SCREENSPACE_OCR_POOL_SIZE", 1)
     screenspace_ocr._ocr_pools.clear()
-    # scan_text/scan_numbers call utils.require_optional("easyocr") before the
-    # FakeReader is ever used; that import pulls torch (~1–10 s) and is exactly
-    # what this file exists to avoid. Production still fail-fasts; these tests
-    # patch the reader constructor.
+    # scan_text/scan_numbers call utils.require_optional("rapidocr") before the
+    # fake engine is ever used; stub it so this file stays runnable in an
+    # environment without the OCR stack. Production still fail-fasts; these
+    # tests patch the engine constructor.
     import utils as _utils
 
     monkeypatch.setattr(_utils, "require_optional", lambda *_a, **_k: None)
@@ -34,13 +35,34 @@ def _reset_ocr_pool(monkeypatch):
     screenspace_ocr._ocr_pools.clear()
 
 
-class _FakeReader:
-    """Default OCR reader stub: detects nothing. Lets tests exercise scan
-    plumbing without loading the real EasyOCR model. Tests needing specific
-    detections define their own local _FakeReader."""
+# The bbox every fake detection carries; scorers ignore it, the mask filter
+# consumes it as four (x, y) points.
+_BOX = [(0, 0), (10, 0), (10, 10), (0, 10)]
 
-    def readtext(self, _pixels, **_kwargs):
-        return []
+
+class _FakeEngine:
+    """RapidOCR engine stub: a callable returning a RapidOCROutput-shaped result.
+
+    Built from ``(bbox, text, conf)`` reading tuples (empty by default — detects
+    nothing) so tests state detections in the same shape the adapter emits.
+    ``on_call`` lets input-inspecting tests capture the pixels handed to the
+    engine.
+    """
+
+    def __init__(self, readings=(), on_call=None):
+        self._readings = list(readings)
+        self._on_call = on_call
+
+    def __call__(self, pixels):
+        if self._on_call is not None:
+            self._on_call(pixels)
+        if not self._readings:
+            return SimpleNamespace(boxes=None, txts=None, scores=None)
+        return SimpleNamespace(
+            boxes=[r[0] for r in self._readings],
+            txts=tuple(r[1] for r in self._readings),
+            scores=tuple(r[2] for r in self._readings),
+        )
 
 
 class TestOcrPreprocess:
@@ -83,13 +105,10 @@ class TestOcrPreprocess:
         frame = np.full((20, 120, 3), 128, dtype=np.uint8)
         seen: dict[str, int] = {}
 
-        class _FakeReader:
-            def readtext(self, pixels, **_kwargs):
-                seen["h"] = pixels.shape[0]
-                return []
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _l: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine(on_call=lambda px: seen.update(h=px.shape[0])),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -113,13 +132,10 @@ class TestOcrPreprocess:
         frame = np.full((20, 120, 3), 128, dtype=np.uint8)
         seen: dict[str, int] = {}
 
-        class _FakeReader:
-            def readtext(self, pixels, **_kwargs):
-                seen["h"] = pixels.shape[0]
-                return []
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _l: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine(on_call=lambda px: seen.update(h=px.shape[0])),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -144,12 +160,10 @@ class TestScanText:
         """OCR readings below ocr_confidence_threshold should not match."""
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.2)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine([(_BOX, "hello", 0.2)]),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -182,13 +196,10 @@ class TestScanText:
         """ocr_normalize="digits" folds l→1 so "l00" matches a search for "100"."""
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                # Misread: the glyphs of "100" came back as "l00".
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "l00", 0.9)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine([(_BOX, "l00", 0.9)]),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -222,13 +233,10 @@ class TestScanText:
         """ocr_normalize="letters" folds 5→s so "5top" matches a search for "stop"."""
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                # Misread: the glyphs of "stop" came back as "5top".
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5top", 0.9)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine([(_BOX, "5top", 0.9)]),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -264,13 +272,10 @@ class TestScanText:
         """The two fold directions differ: i→1 is digits-only (no 1→i inverse)."""
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                # Want "in"; OCR rendered the i as a 1.
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "1n", 0.9)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine([(_BOX, "1n", 0.9)]),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -313,12 +318,10 @@ class TestScanText:
         # Distinct fills so the static-frame-skip never fires between frames.
         frames = [np.full((20, 60, 3), v, dtype=np.uint8) for v in (40, 90, 140)]
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine([(_BOX, "hello", 0.9)]),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -361,13 +364,13 @@ class TestScanText:
 
         reads = {"n": 0}
 
-        class _FakeReader:
-            def readtext(self_inner, _pixels, **_kwargs):
-                reads["n"] += 1
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "hello", 0.9)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine(
+                [(_BOX, "hello", 0.9)],
+                on_call=lambda _px: reads.update(n=reads["n"] + 1),
+            ),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -482,11 +485,11 @@ class TestScanNumbers:
             )
 
     def test_valid_operators_accepted(self, monkeypatch):
-        # scan_numbers builds the OCR reader before opening the video, so a
-        # missing-video test would otherwise download/load the real EasyOCR
-        # model. Stub it out to stay fast and offline.
+        # scan_numbers builds the OCR engine before opening the video, so a
+        # missing-video test would otherwise construct the real RapidOCR
+        # engine. Stub it out to stay fast and offline.
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _m: _FakeEngine()
         )
         for op in ("eq", "gt", "lt", "gte", "lte", "range"):
             # Should not raise ValueError -- returns [] because video doesn't exist
@@ -503,7 +506,7 @@ class TestScanNumbers:
     def test_dispatch_routes_numbers(self, monkeypatch):
         # Same reason as test_valid_operators_accepted: avoid loading real OCR.
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr, "_build_ocr_reader", lambda _m: _FakeEngine()
         )
         worker = screenspace.ScreenspaceWorker()
         task = screenspace.create_task(
@@ -536,13 +539,10 @@ class TestScanNumbers:
         """OCR readings below ocr_confidence_threshold should not match."""
         frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
-        class _FakeReader:
-            def readtext(self, _pixels, **_kwargs):
-                # Number "5" detected at confidence 0.2 — well below 0.5 cutoff.
-                return [([(0, 0), (10, 0), (10, 10), (0, 10)], "5", 0.2)]
-
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine([(_BOX, "5", 0.2)]),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -604,19 +604,20 @@ class TestScanNumbers:
                 ocr_confidence_threshold=threshold,
             )
 
-    def test_allowlist_passed(self, monkeypatch):
-        """Digit allowlist is forwarded to EasyOCR for English, omitted otherwise."""
-        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
-        seen: dict[str, object] = {}
+    def test_integers_only_rejects_decimals_and_signs(self, monkeypatch):
+        """integers_only post-filters extracted values: no decimals, no signs.
 
-        class _FakeReader:
-            def readtext(self, _pixels, **kwargs):
-                seen.clear()
-                seen.update(kwargs)
-                return []
+        (Replaces the old English-only EasyOCR recognition allowlist — the
+        filter now applies to every language.)
+        """
+        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
 
         monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
+            screenspace_ocr,
+            "_build_ocr_reader",
+            lambda _m: _FakeEngine(
+                [(_BOX, "3.5", 0.9), (_BOX, "-12", 0.9), (_BOX, "1,234", 0.9)]
+            ),
         )
         monkeypatch.setattr(
             screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
@@ -629,67 +630,41 @@ class TestScanNumbers:
 
         region = {"x": 0, "y": 0, "w": 60, "h": 20}
 
-        # Default languages → ["en"]: allowlist forwarded.
-        screenspace.scan_numbers("/fake.mp4", region, operator="gt", target_value=0)
-        assert seen.get("allowlist") == "0123456789.,-"
-
-        # Non-English combo: allowlist omitted (some combos reject it).
-        screenspace.scan_numbers(
-            "/fake.mp4",
-            region,
-            operator="gt",
-            target_value=0,
-            languages=["en", "ch_sim"],
-        )
-        assert "allowlist" not in seen
-
-    def test_integers_only_narrows_allowlist(self, monkeypatch):
-        """integers_only drops .,- from the English allowlist; off keeps them."""
-        frame = np.full((20, 60, 3), 128, dtype=np.uint8)
-        seen: dict[str, object] = {}
-
-        class _FakeReader:
-            def readtext(self, _pixels, **kwargs):
-                seen.clear()
-                seen.update(kwargs)
-                return []
-
-        monkeypatch.setattr(
-            screenspace_ocr, "_build_ocr_reader", lambda _langs: _FakeReader()
-        )
-        monkeypatch.setattr(
-            screenspace_frames, "_probe_video_meta", lambda p: (30.0, 1.0)
-        )
-
-        def fake_scan(video_path, region, interval, callback, **kwargs):
-            callback(0.0, frame)
-
-        monkeypatch.setattr(screenspace_scans, "scan_video_frames", fake_scan)
-
-        region = {"x": 0, "y": 0, "w": 60, "h": 20}
-
-        # integers_only=True (default English): digits-only allowlist.
-        screenspace.scan_numbers(
-            "/fake.mp4", region, operator="gt", target_value=0, integers_only=True
-        )
-        assert seen.get("allowlist") == "0123456789"
-
-        # integers_only=False: separators/sign retained.
-        screenspace.scan_numbers(
-            "/fake.mp4", region, operator="gt", target_value=0, integers_only=False
-        )
-        assert seen.get("allowlist") == "0123456789.,-"
-
-        # Non-English combo: allowlist omitted regardless of integers_only.
-        screenspace.scan_numbers(
+        # integers_only=True: "3.5" and "-12" are rejected outright; the
+        # comma-separated "1,234" is a whole number and survives.
+        results = screenspace.scan_numbers(
             "/fake.mp4",
             region,
             operator="gt",
             target_value=0,
             integers_only=True,
-            languages=["en", "ch_sim"],
+            ocr_confidence_threshold=0.5,
         )
-        assert "allowlist" not in seen
+        assert len(results) == 1
+        assert results[0]["number_found"] == 1234.0
+
+        # integers_only=False: the decimal reading matches too (best-satisfying
+        # reading wins; all confidences are equal so any is acceptable).
+        loose = screenspace.scan_numbers(
+            "/fake.mp4",
+            region,
+            operator="gt",
+            target_value=0,
+            ocr_confidence_threshold=0.5,
+        )
+        assert len(loose) == 1
+
+        # The filter is language-independent now.
+        non_english = screenspace.scan_numbers(
+            "/fake.mp4",
+            region,
+            operator="lt",
+            target_value=0,
+            integers_only=True,
+            languages=["ja"],
+            ocr_confidence_threshold=0.5,
+        )
+        assert non_english == []  # only "-12" satisfies lt 0, and it's rejected
 
 
 # ---------------------------------------------------------------------------
@@ -816,3 +791,66 @@ class TestScoreOcrReadings:
         assert passed is False
         assert detail["confidence"] == 0.4
         assert detail["number_found"] == 99.0
+
+    def test_numbers_integers_only_is_a_scoring_filter(self):
+        readings = [(None, "3.5", 0.9), (None, "-12", 0.9), (None, "1,234", 0.8)]
+        params = {
+            "operator": "gt",
+            "target_value": 0,
+            "ocr_confidence_threshold": 0.5,
+            "integers_only": True,
+        }
+        passed, detail = screenspace._score_numbers_readings(readings, params)
+        assert passed is True
+        assert detail["number_found"] == 1234.0  # 3.5 and -12 rejected outright
+
+
+class TestReadingsFromResult:
+    def test_empty_result_maps_to_no_readings(self):
+        empty = SimpleNamespace(boxes=None, txts=None, scores=None)
+        assert screenspace_ocr._readings_from_result(empty) == []
+        assert screenspace_ocr._readings_from_result(object()) == []
+
+    def test_ndarray_boxes_become_plain_float_points(self):
+        # RapidOCR emits boxes as a (N, 4, 2) ndarray; readings cross the
+        # server's pin OCR cache boundary, so nothing numpy may survive.
+        result = SimpleNamespace(
+            boxes=np.array([[[0, 0], [10, 0], [10, 10], [0, 10]]], dtype=np.float32),
+            txts=("hello",),
+            scores=(0.9,),
+        )
+        readings = screenspace_ocr._readings_from_result(result)
+        assert readings == [
+            ([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)], "hello", 0.9)
+        ]
+        bbox, text, conf = readings[0]
+        assert all(isinstance(v, float) for point in bbox for v in point)
+        assert isinstance(text, str) and isinstance(conf, float)
+
+    def test_missing_scores_default_to_zero(self):
+        result = SimpleNamespace(boxes=[_BOX], txts=("hi",), scores=None)
+        readings = screenspace_ocr._readings_from_result(result)
+        assert readings[0][2] == 0.0
+
+
+class TestResolveOcrModel:
+    def test_language_table(self):
+        assert screenspace._resolve_ocr_model(None) == "default"
+        assert screenspace._resolve_ocr_model(["en"]) == "default"
+        assert screenspace._resolve_ocr_model(["zh"]) == "default"
+        for lang in ("es", "fr", "de"):
+            assert screenspace._resolve_ocr_model([lang]) == "latin"
+        assert screenspace._resolve_ocr_model(["ja"]) == "japan"
+        assert screenspace._resolve_ocr_model(["ko"]) == "korean"
+
+    def test_english_plus_latin_resolves_to_latin(self):
+        # The latin model covers English glyphs, so the mix is servable.
+        assert screenspace._resolve_ocr_model(["en", "de"]) == "latin"
+
+    def test_incompatible_mix_raises(self):
+        with pytest.raises(ValueError, match="incompatible"):
+            screenspace._resolve_ocr_model(["ja", "ko"])
+
+    def test_unknown_language_raises(self):
+        with pytest.raises(ValueError, match="Unsupported"):
+            screenspace._resolve_ocr_model(["ch_sim"])

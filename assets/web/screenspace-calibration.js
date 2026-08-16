@@ -669,7 +669,7 @@
     // brief "Evaluating…" only on the first load so debounced re-evals (which
     // keep the prior dots visible) don't flicker the status line.
     if (needsOcr && !state.calibrationOcrWarmed) {
-      _calStatus("Loading OCR model… (first run only)", "loading");
+      _calStatus("Preparing OCR… (first run only)", "loading");
     } else if (!state.calibrationResult) {
       _calStatus("Evaluating…", "loading");
     }

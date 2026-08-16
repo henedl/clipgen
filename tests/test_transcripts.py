@@ -1354,9 +1354,9 @@ class TestLoadModelCpuThreads:
 
 
 class TestResolveTranscribeDevice:
-    """The frozen bundle ships no CUDA runtime (CI builds ``--torch-backend
-    cpu``), so an auto-selected GPU can only fail at first inference with
-    ``Library cublas64_12.dll is not found or cannot be loaded``."""
+    """The frozen bundle ships no CUDA runtime, so an auto-selected GPU can
+    only fail at first inference with ``Library cublas64_12.dll is not found
+    or cannot be loaded``."""
 
     def test_auto_is_cpu_when_frozen(self, monkeypatch):
         monkeypatch.setattr(config, "TRANSCRIBE_DEVICE", "auto")

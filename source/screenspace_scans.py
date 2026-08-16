@@ -46,7 +46,6 @@ from screenspace_primitives import (
 from screenspace_ocr import (
     _VALID_OPERATORS,
     _effective_ocr_confidence_threshold,
-    _numbers_ocr_allowlist,
     _ocr_region_readings,
     _score_numbers_readings,
     _score_text_readings,
@@ -369,9 +368,9 @@ def scan_text(
     on_result: Callable[[dict[str, Any]], None] | None = None,
     fast_opts: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan for text appearances in a region using EasyOCR.
+    """Scan for text appearances in a region using RapidOCR.
 
-    EasyOCR is lazy-imported. Raises ``ImportError`` with install
+    RapidOCR is lazy-imported. Raises ``ImportError`` with install
     instructions if missing.
     """
     if fuzzy_threshold <= 0:
@@ -379,7 +378,7 @@ def scan_text(
     ocr_confidence_threshold = _effective_ocr_confidence_threshold(
         ocr_confidence_threshold
     )
-    utils.require_optional("easyocr", "text scan")
+    utils.require_optional("rapidocr", "text scan")
     if languages is None:
         languages = ["en"]
 
@@ -475,7 +474,7 @@ def scan_numbers(
 ) -> list[dict[str, Any]]:
     """Scan for numeric values in a region and apply a comparison.
 
-    Uses EasyOCR to detect text, parses numbers from it, and returns
+    Uses RapidOCR to detect text, parses numbers from it, and returns
     timestamps where the detected number satisfies the comparison.
     """
     if operator not in _VALID_OPERATORS:
@@ -486,7 +485,7 @@ def scan_numbers(
     ocr_confidence_threshold = _effective_ocr_confidence_threshold(
         ocr_confidence_threshold
     )
-    utils.require_optional("easyocr", "numbers scan")
+    utils.require_optional("rapidocr", "numbers scan")
     if languages is None:
         languages = ["en"]
 
@@ -503,9 +502,10 @@ def scan_numbers(
         "range_min": range_min,
         "range_max": range_max,
         "ocr_confidence_threshold": ocr_confidence_threshold,
+        # Post-filter in _score_numbers_readings (the engine has no
+        # recognition allowlist): decimals and signed values are rejected.
+        "integers_only": integers_only,
     }
-    # Hoisted out of the per-frame callback: constrain English OCR to digits.
-    numbers_allowlist = _numbers_ocr_allowlist(languages, integers_only)
     buf = _ConsecutiveBuffer(require_consecutive)
     mask_points = region.get("mask_points")
 
@@ -527,7 +527,6 @@ def scan_numbers(
         readings = _ocr_region_readings(
             pixels,
             languages=languages,
-            allowlist=numbers_allowlist,
             preprocess=ocr_preprocess,
             mask_points=mask_points,
         )

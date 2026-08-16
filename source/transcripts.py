@@ -273,8 +273,8 @@ def _resolve_transcribe_device() -> str:
     faster-whisper defaults to ``device="auto"``, which makes CTranslate2 pick
     CUDA whenever it can see an NVIDIA device — and CTranslate2 ships its own
     CUDA support independent of torch, needing a matching cuBLAS/cuDNN beside
-    it. The desktop bundle has neither: CI builds with ``--torch-backend cpu``,
-    so no ``nvidia-*`` wheel is installed and none is collected. On any machine
+    it. The desktop bundle has neither: nothing in the dependency tree pulls a
+    CUDA runtime, so no ``nvidia-*`` wheel is installed or collected. On any machine
     with an NVIDIA GPU the frozen app therefore selected CUDA and then died at
     the first inference with ``Library cublas64_12.dll is not found or cannot
     be loaded`` — long after the model had finished downloading and loading.

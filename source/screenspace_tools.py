@@ -41,7 +41,6 @@ from screenspace_primitives import (
     saliency_kwargs_from_params,
 )
 from screenspace_ocr import (
-    _numbers_ocr_allowlist,
     _ocr_region_readings,
     _score_numbers_readings,
     _score_text_readings,
@@ -212,24 +211,23 @@ def _cached_ocr(
     region: dict[str, Any],
     *,
     languages: list[str],
-    allowlist: str | None,
     preprocess: bool,
 ) -> list[Any]:
     """OCR readings for the region crop, memoized on *cache*.
 
-    Keyed by ``(region, languages, allowlist, preprocess)`` so only *identical*
-    OCR calls dedup (e.g. two Text steps on one region). Text (no allowlist) and
-    Numbers (digit allowlist) key differently and are intentionally not shared.
+    Keyed by ``(region, languages, preprocess)`` so identical OCR calls dedup.
+    Text and Numbers steps on one region deliberately share readings: the
+    engine has no per-tool recognition mode, and every tool difference
+    (fuzzy match, numeric operators, integers_only) is applied at scoring time.
     """
     langs = tuple(languages)
-    key = _region_key("ocr", region) + (langs, allowlist, preprocess)
+    key = _region_key("ocr", region) + (langs, preprocess)
     return _memo(
         cache,
         key,
         lambda: _ocr_region_readings(
             _cached_crop(cache, frame, region),
             languages=list(langs),
-            allowlist=allowlist,
             preprocess=preprocess,
             mask_points=region.get("mask_points"),
         ),
@@ -309,7 +307,7 @@ def score_frame_for_tool(
     regions and unknown / non-scorable tools (timelapse, multitool) return
     ``not_evaluable``.
 
-    ``ocr_reader`` (text/numbers only) supplies cached EasyOCR readings keyed per
+    ``ocr_reader`` (text/numbers only) supplies cached OCR readings keyed per
     pin so fuzzy/confidence changes re-score without re-running OCR; when absent
     the tool runs OCR live through its ``check_frame``.
     """
@@ -627,7 +625,6 @@ class TextTool(AnalysisTool):
             frame,
             region,
             languages=params.get("languages") or ["en"],
-            allowlist=None,
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_text_readings(readings, params)
@@ -653,15 +650,11 @@ class NumbersTool(AnalysisTool):
     def check_frame(
         self, frame, prev_frame, region, params, cache=None, prev_cache=None
     ):
-        languages = params.get("languages") or ["en"]
         readings = _cached_ocr(
             cache,
             frame,
             region,
-            languages=languages,
-            allowlist=_numbers_ocr_allowlist(
-                languages, params.get("integers_only", False)
-            ),
+            languages=params.get("languages") or ["en"],
             preprocess=params.get("ocr_preprocess", False),
         )
         return _score_numbers_readings(readings, params)

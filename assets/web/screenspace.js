@@ -945,8 +945,8 @@
       "Min OCR conf.":    "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
       "Min OCR":          "Drop OCR readings below this confidence before parsing numbers (raise to suppress noisy misreads)",
       "Enhance ROI":      "Upscale small/low-contrast crops and apply CLAHE before OCR (slower; helps tiny HUD numbers)",
-      "Integers only":    "Restrict OCR to digits only (drop . , -) so a separator glyph can't survive as a digit and inflate the value. For whole-number HUD targets. English only.",
-      "Integers":         "Restrict OCR to digits only (drop . , -) so a separator glyph can't survive as a digit and inflate the value. For whole-number HUD targets. English only.",
+      "Integers only":    "Accept only whole-number readings: any extracted value carrying a decimal point or sign is rejected. For whole-number HUD targets.",
+      "Integers":         "Accept only whole-number readings: any extracted value carrying a decimal point or sign is rejected. For whole-number HUD targets.",
       "Consecutive":      "Require this many consecutive sampled frames to match before an event fires (suppresses single-frame flicker; reports the run's median time)",
     },
     timelapse: {

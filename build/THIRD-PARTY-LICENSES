@@ -16,6 +16,9 @@ icecream                    2.1.10     MIT
 rich                        14.3.3     MIT
 faster-whisper              1.2.1      MIT
 CTranslate2                 4.7.1      MIT
+onnxruntime                 1.24.4     MIT
+colorlog                    6.12.0     MIT
+six                         1.17.0     MIT
 pyobjc-core                 12.2.1     MIT (macOS only)
 pyobjc-framework-Cocoa      12.2.1     MIT (macOS only)
 opencv-python-headless      4.13.0     MIT (bindings) + Apache 2.0 (OpenCV)
@@ -24,7 +27,8 @@ Flask                       3.1.3      BSD-3-Clause
 Werkzeug                    3.1.6      BSD-3-Clause
 Jinja2                      3.1.6      BSD-3-Clause
 MarkupSafe                  3.0.3      BSD-3-Clause
-PyTorch                     2.11.0     BSD-3-Clause
+omegaconf                   2.3.1      BSD-3-Clause
+antlr4-python3-runtime      4.9.3      BSD-3-Clause
 NumPy                       2.4.3      BSD-3-Clause
 SciPy                       1.17.1     BSD-3-Clause
 PyAV (av)                   17.0.0     BSD-3-Clause
@@ -33,10 +37,10 @@ pywebview                   6.2.1      BSD-3-Clause
 ImageHash                   4.3.2      BSD-2-Clause
 scikit-image                0.26.0     BSD-3-Clause (+ BSD-2-Clause, MIT)
 Pillow                      12.1.1     HPND (MIT-CMU)
-EasyOCR                     1.7.2      Apache-2.0
+RapidOCR                    3.9.2      Apache-2.0
+  PP-OCR models (bundled)     v4/v5      Apache-2.0
 google-auth                 2.49.1     Apache-2.0
 google-auth-oauthlib        1.3.0      Apache-2.0
-python-bidi                 0.6.7      LGPL-3.0-or-later
 certifi                     2026.2.25  MPL-2.0
 tqdm                        4.67.3     MPL-2.0 AND MIT
 
@@ -47,8 +51,8 @@ MIT LICENSE
 
 The following components are licensed under the MIT License:
   gspread, openpyxl, icecream, rich, faster-whisper, CTranslate2,
-  opencv-python-headless (Python bindings), pyobjc-core,
-  pyobjc-framework-Cocoa
+  onnxruntime, colorlog, six, opencv-python-headless (Python bindings),
+  pyobjc-core, pyobjc-framework-Cocoa
 
 ---
 
@@ -190,6 +194,27 @@ SOFTWARE.
 
 ---
 
+onnxruntime
+Copyright (c) Microsoft Corporation
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+colorlog
+Copyright (c) 2012 Sam Clements
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
+six
+Copyright (c) 2010-2024 Benjamin Peterson
+
+Licensed under the MIT License (same text as reproduced for gspread above).
+
+---
+
 opencv-python-headless (Python bindings)
 Copyright (c) Olli-Pekka Heinisuo
 
@@ -244,8 +269,8 @@ BSD-3-CLAUSE LICENSE
 ===============================================================================
 
 The following components are licensed under the BSD 3-Clause License:
-  Flask, Werkzeug, Jinja2, MarkupSafe, PyTorch, NumPy, SciPy, scikit-image,
-  PyAV, pywebview
+  Flask, Werkzeug, Jinja2, MarkupSafe, NumPy, SciPy, scikit-image,
+  PyAV, pywebview, omegaconf, antlr4-python3-runtime
 
 ---
 
@@ -374,58 +399,6 @@ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
 LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
----
-
-PyTorch
-Copyright (c) 2016-     Facebook, Inc            (Adam Paszke)
-Copyright (c) 2014-     Facebook, Inc            (Soumith Chintala)
-Copyright (c) 2011-2014 Idiap Research Institute (Ronan Collobert)
-Copyright (c) 2012-2014 Deepmind Technologies    (Koray Kavukcuoglu)
-Copyright (c) 2011-2012 NEC Laboratories America (Koray Kavukcuoglu)
-Copyright (c) 2011-2013 NYU                      (Clement Farabet)
-Copyright (c) 2006-2010 NEC Laboratories America (Ronan Collobert, Leon Bottou, Iain Melvin, Jason Weston)
-Copyright (c) 2006      Idiap Research Institute (Samy Bengio)
-Copyright (c) 2001-2004 Idiap Research Institute (Ronan Collobert, Samy Bengio, Johnny Mariethoz)
-
-From Caffe2:
-Copyright (c) 2016-present, Facebook Inc. All rights reserved.
-All contributions by Google: Copyright (c) 2015 Google Inc.
-All contributions by Yangqing Jia: Copyright (c) 2015 Yangqing Jia
-All contributions by Kakao Brain: Copyright 2019-2020 Kakao Brain
-All contributions by Cruise LLC: Copyright (c) 2022 Cruise LLC.
-All contributions by Tri Dao: Copyright (c) 2024 Tri Dao.
-All contributions by Arm: Copyright (c) 2021, 2023-2025 Arm Limited and/or its affiliates
-All other contributions: Copyright(c) 2015, 2016 the respective contributors
-
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright
-   notice, this list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright
-   notice, this list of conditions and the following disclaimer in the
-   documentation and/or other materials provided with the distribution.
-
-3. Neither the names of Facebook, Deepmind Technologies, NYU, NEC Laboratories
-   America and IDIAP Research Institute nor the names of its contributors may be
-   used to endorse or promote products derived from this software without
-   specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
@@ -677,16 +650,40 @@ Pillow bundles additional components under BSD-2-Clause (AOM, DAV1D),
 MIT (Brotli), and BSD-like (bzip2, FreeType) licenses. See the Pillow
 LICENSE file for full details.
 
+---
+
+omegaconf
+Copyright (c) 2018, Omry Yadan
+All rights reserved.
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
+---
+
+antlr4-python3-runtime
+Copyright (c) 2012-2022 The ANTLR Project. All rights reserved.
+
+Licensed under the BSD 3-Clause License (same conditions text as reproduced
+for Flask above; substitute the copyright holder's name in clause 3).
+
 
 ===============================================================================
 APACHE LICENSE, VERSION 2.0
 ===============================================================================
 
 The following components are licensed under the Apache License, Version 2.0:
-  EasyOCR, google-auth, google-auth-oauthlib, OpenCV (the C++ library)
+  RapidOCR, the bundled PP-OCR ONNX models, google-auth, google-auth-oauthlib,
+  OpenCV (the C++ library)
 
 Copyright notices:
-  EasyOCR: Copyright (c) 2020 Jaided AI
+  RapidOCR: Copyright (c) RapidAI (https://github.com/RapidAI/RapidOCR)
+  PP-OCR models: Copyright (c) PaddlePaddle Authors (converted to ONNX by
+          RapidAI; the default detection/classification/recognition models
+          ship inside the rapidocr wheel, and the latin/japan/korean
+          recognition models are fetched at build time from the pinned,
+          SHA256-verified URLs in build/fetch_binaries.py OCR_MODEL_PINS)
+  google-auth: Copyright Google LLC
   google-auth: Copyright Google LLC
   google-auth-oauthlib: Copyright Google LLC
   OpenCV: Copyright (C) 2000-2024, Intel Corporation, all rights reserved.
@@ -876,7 +873,7 @@ Copyright notices:
 
 
 ===============================================================================
-LGPL-3.0-OR-LATER (FFmpeg bundled inside PyAV, and python-bidi)
+LGPL-3.0-OR-LATER (FFmpeg bundled inside PyAV)
 ===============================================================================
 
 PyAV (the `av` package) bundles its own FFmpeg shared libraries inside
@@ -898,14 +895,9 @@ before handing samples to Whisper.  These libraries are dynamically linked and
 unmodified, so the LGPL is satisfied by this notice plus the source pointers
 below; recipients may replace the libraries with their own build.
 
-python-bidi (0.6.7), a transitive dependency of EasyOCR used for bidirectional
-text reordering, is likewise LGPL and dynamically loaded in-process.
-
 Source code for FFmpeg is available at: https://ffmpeg.org/download.html
 Source code for the PyAV build (including its FFmpeg build configuration) is
 available at: https://github.com/PyAV-Org/PyAV
-Source code for python-bidi is available at:
-  https://github.com/MeirKriheli/python-bidi
 
 The full text of the GNU Lesser General Public License version 3 is the GNU
 General Public License version 3 (reproduced in the GPL-3.0-OR-LATER section
@@ -985,8 +977,8 @@ this provenance):
   macOS arm64:  FFmpeg 8.1.2 release, build 1783011502_8.1.2 from Martin
                 Riedl's FFmpeg build server. Binaries, checksums, and the full
                 build configuration: https://ffmpeg.martin-riedl.de
-  Windows x64:  FFmpeg 8.1 release branch (n8.1.2-34-g9b6c8969e0) from BtbN
-                FFmpeg-Builds, release tag autobuild-2026-08-02-13-17.
+  Windows x64:  FFmpeg 8.1 release branch (n8.1.2-44-g7c533d0f86) from BtbN
+                FFmpeg-Builds, release tag autobuild-2026-08-16-13-00.
                 Binaries, checksums, and build scripts:
                 https://github.com/BtbN/FFmpeg-Builds
 
@@ -1688,7 +1680,7 @@ The following components are licensed under the Mozilla Public License 2.0:
               The Mozilla CA certificate bundle, pulled in by requests via
               huggingface-hub; used when downloading Whisper models.
   tqdm      (4.67.3)     MPL-2.0 AND MIT
-              Progress bars, pulled in by huggingface-hub and EasyOCR.
+              Progress bars, pulled in by huggingface-hub and RapidOCR.
 
 MPL-2.0 is a file-level copyleft: it attaches to the covered files themselves,
 not to the larger work, and it explicitly permits distribution of the covered

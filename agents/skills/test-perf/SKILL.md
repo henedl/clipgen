@@ -28,7 +28,7 @@ uv run --extra dev --with pytest-xdist pytest -c tests/pytest.ini -p no:randomly
 Reference points as of `6f13f26d`, for judging whether a number is anomalous: ~2400 tests,
 **~20 s serial**, **~6.4 s at `-n 4`**, ~34 s for the CI step. The runners are ~4× slower
 than a dev Mac, so multiply local `-n 4` by ~4 to predict CI. The slowest legitimate test is
-~1 s and it runs real EasyOCR. These drift with every PR — re-measure rather than trusting
+~1 s and it runs real OCR. These drift with every PR — re-measure rather than trusting
 them; what matters is the *shape* (nothing should stand out from the tail).
 
 ## Step 2 — Budget
@@ -38,7 +38,7 @@ them; what matters is the *shape* (nothing should stand out from the tail).
 | Pure logic, parsing, dict/JSON shaping | < 20 ms |
 | Flask route via `client`, manifest round-trip | < 100 ms |
 | Scans `assets/web` or `source/` source text | < 100 ms, and **one** pass (see C) |
-| Spawns real ffmpeg / EasyOCR / an HTTP stub server | up to ~1 s, needs to be genuinely necessary |
+| Spawns real ffmpeg / OCR / an HTTP stub server | up to ~1 s, needs to be genuinely necessary |
 | Anything else over 0.3 s | Justify it in a comment or fix it |
 
 A new test that lands in `--durations=20` at all deserves a second look.

@@ -26,6 +26,11 @@ hiddenimports += collect_submodules("rich")
 # desktop.py imports webview lazily, so PyInstaller's static analysis never sees
 # the platform backend modules (WKWebView via pyobjc, WebView2 via clr).
 hiddenimports += collect_submodules("webview")
+# rapidocr's public API is a lazy __getattr__ table (importlib.import_module
+# with computed names), invisible to static analysis. collect_submodules skips
+# the optional engines whose deps we don't ship (torch/paddle/openvino) with a
+# warning; the onnxruntime engine imports cleanly and is what clipgen uses.
+hiddenimports += collect_submodules("rapidocr")
 if sys.platform == "darwin":
     # desktop_chrome.py reaches these through importlib.import_module (a literal
     # `import AppKit` is an unresolved-import error on the Linux typecheck CI),
@@ -49,6 +54,30 @@ if not any(src.endswith(".onnx") for src, _dest in _fw_datas):
         "would break at runtime. Inspect the installed package and update this spec."
     )
 datas += _fw_datas
+# rapidocr resolves its yaml configs and bundled default (ch/en) det/cls/rec
+# models via package-relative paths; no PyInstaller contrib hook exists for it.
+# Guarded like faster-whisper above: a wheel that stops shipping models would
+# otherwise freeze an app whose OCR downloads at runtime or dies.
+_rapidocr_datas = collect_data_files("rapidocr")
+if not any(src.endswith(".onnx") for src, _dest in _rapidocr_datas):
+    raise SystemExit(
+        "clipgen.spec: collect_data_files('rapidocr') found no bundled .onnx "
+        "models. rapidocr moved or stopped shipping its default models; frozen "
+        "OCR would break at runtime. Inspect the installed package."
+    )
+datas += _rapidocr_datas
+# Vendored non-default recognition models (fetch_binaries.py OCR_MODEL_PINS),
+# guarded like ffmpeg below: a build that skipped the fetch must fail here.
+# "ocr_models" matches screenspace_ocr._vendored_rec_model's frozen lookup.
+_ocr_vendor = Path(SPECPATH) / "vendor" / "ocr"  # noqa: F821
+_ocr_models = ["latin_rec.onnx", "japan_rec.onnx", "korean_rec.onnx"]
+_missing_models = [n for n in _ocr_models if not (_ocr_vendor / n).is_file()]
+if _missing_models:
+    raise SystemExit(
+        f"clipgen.spec: vendored OCR models missing from {_ocr_vendor}: "
+        f"{sorted(_missing_models)}. Run `uv run build/fetch_binaries.py` first."
+    )
+datas += [(str(_ocr_vendor / n), "ocr_models") for n in _ocr_models]
 datas += [("../assets", "assets")]
 datas += [("VERSION", ".")]
 datas += [("../CHANGELOG.md", ".")]
@@ -61,8 +90,6 @@ datas += [("THIRD-PARTY-LICENSES", ".")]
 excludes = [
     # Test frameworks — not needed in production binary
     "pytest", "_pytest", "py", "pluggy", "iniconfig",
-    # Torch submodules clipgen never uses
-    "tensorboard", "torch.distributed",
     # Other unused transitive dependencies
     "matplotlib", "IPython", "notebook", "jupyter",
 ]
@@ -139,7 +166,7 @@ pyz = PYZ(a.pure)
 _strip = sys.platform == "darwin"
 
 # One-dir, not one-file. One-file re-extracts the whole archive to a *new* temp
-# directory on every launch, so every large dylib (cv2, av, torch) loads cold —
+# directory on every launch, so every large dylib (cv2, av, onnxruntime) loads cold —
 # no OS page cache, and macOS re-validates each code signature from scratch.
 # Measured double-click to first HTTP response: 17.6 s one-file vs 1.1 s one-dir.
 # PyInstaller also deprecated one-file + windowed on macOS ("clashes with macOS's
