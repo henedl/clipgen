@@ -977,8 +977,8 @@ this provenance):
   macOS arm64:  FFmpeg 8.1.2 release, build 1783011502_8.1.2 from Martin
                 Riedl's FFmpeg build server. Binaries, checksums, and the full
                 build configuration: https://ffmpeg.martin-riedl.de
-  Windows x64:  FFmpeg 8.1 release branch (n8.1.2-34-g9b6c8969e0) from BtbN
-                FFmpeg-Builds, release tag autobuild-2026-08-02-13-17.
+  Windows x64:  FFmpeg 8.1 release branch (n8.1.2-44-g7c533d0f86) from BtbN
+                FFmpeg-Builds, release tag autobuild-2026-08-16-13-00.
                 Binaries, checksums, and build scripts:
                 https://github.com/BtbN/FFmpeg-Builds
 

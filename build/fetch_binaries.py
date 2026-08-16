@@ -19,11 +19,17 @@ Provenance (THIRD-PARTY-LICENSES cites this block):
     (--enable-gpl --enable-version3, with libx264/libvpx/libwebp/libfreetype;
     VideoToolbox enabled by default on macOS). Permanent per-build URLs.
   windows-x64: BtbN FFmpeg-Builds, https://github.com/BtbN/FFmpeg-Builds
-    Release tag autobuild-2026-08-02-13-17 (immutable dated tag — never pin
-    "latest", its assets are replaced daily), asset
-    ffmpeg-n8.1.2-34-g9b6c8969e0-win64-gpl-8.1.zip — FFmpeg 8.1 release
+    Release tag autobuild-2026-08-16-13-00 (a dated tag — never pin "latest",
+    its assets are replaced daily), asset
+    ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip — FFmpeg 8.1 release
     branch, GPLv3 build. Archive hash cross-checked against the release's
     published checksums.sha256.
+    CAUTION: BtbN prunes dated autobuild tags after roughly two weeks, so
+    this pin has a shelf life. CI usually survives on the build/vendor cache,
+    but any change to this file rotates the cache key and forces a real
+    download — so refresh this pin (tag, asset name, all three hashes)
+    whenever you touch this file, and expect a 404 here if the pin has
+    lapsed.
 
 Updating the pins: pick a new build/tag on the provider, update the archive
 URL + sha256 (from the provider's published .sha256 / checksums.sha256 files),
@@ -66,16 +72,16 @@ PINS: dict[str, list[dict]] = {
     ],
     "windows-x64": [
         {
-            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-02-13-17/ffmpeg-n8.1.2-34-g9b6c8969e0-win64-gpl-8.1.zip",
-            "sha256": "5815b40b78161636bfc93fe7105242eb9a8fc3233dd8c15b28344b36f58f7548",
+            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-16-13-00/ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip",
+            "sha256": "d2425b12dc746a2b044148c6100440d4065876ac4ed6e3eb13a68437b7719796",
             "members": {
-                "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-gpl-8.1/bin/ffmpeg.exe": {
+                "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffmpeg.exe": {
                     "target": "ffmpeg.exe",
-                    "sha256": "db1b69fbea94a89aa334bbab2d2ccbf2bf6ce277f30c46c494a71a7103586805",
+                    "sha256": "361c161fa536922d32badacad5f32fbd8561f945bd6e0bf4cb1f1017deb03541",
                 },
-                "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-gpl-8.1/bin/ffprobe.exe": {
+                "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffprobe.exe": {
                     "target": "ffprobe.exe",
-                    "sha256": "b58d07c477fd50054b6cecf448ecf2313c2f76fef89b8aeecbe8020522c07a54",
+                    "sha256": "9fe11967029cff5562e7b0c2e74987690bea1b8b877fcadd6c9939a334fc9fb3",
                 },
             },
         },
