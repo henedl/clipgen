@@ -989,19 +989,28 @@ def compute_optical_flow(
     flow = cv2.calcOpticalFlowFarneback(
         prev_gray, curr_gray, flow_out, pyr_scale, 3, 15, 3, 5, 1.2, 0
     )
-    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1], angleInDegrees=True)
+    dx, dy = flow[..., 0], flow[..., 1]
     inside = mask > 0 if mask is not None else None
+
+    if return_grid:
+        mag, ang = cv2.cartToPolar(dx, dy, angleInDegrees=True)
+    else:
+        mag = cv2.magnitude(dx, dy)
+
     mean_mag = (
         float(np.mean(mag[inside])) if inside is not None else float(np.mean(mag))
     )
 
-    # Dominant angle: weighted mean by magnitude
+    # Dominant angle via the Cartesian identity: the magnitude-weighted
+    # circular mean atan2(sum(mag*sin(a)), sum(mag*cos(a))) simplifies to
+    # atan2(sum(dy), sum(dx)) because mag*sin(a) = dy and mag*cos(a) = dx.
     if mean_mag > 0:
-        # Use circular mean to avoid wraparound issues
-        rad = np.deg2rad(ang)
-        weights = mag if inside is None else mag * inside
-        sin_sum = float(np.sum(weights * np.sin(rad)))
-        cos_sum = float(np.sum(weights * np.cos(rad)))
+        if inside is not None:
+            sin_sum = float(np.sum(dy[inside]))
+            cos_sum = float(np.sum(dx[inside]))
+        else:
+            sin_sum = float(np.sum(dy))
+            cos_sum = float(np.sum(dx))
         dominant_angle = float(np.rad2deg(np.arctan2(sin_sum, cos_sum))) % 360.0
     else:
         dominant_angle = 0.0
@@ -1013,7 +1022,7 @@ def compute_optical_flow(
 
     if return_grid:
         grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
-        min_mag = config.SCREENSPACE_FLOW_GRID_MIN_MAG
+        min_mag_thresh = config.SCREENSPACE_FLOW_GRID_MIN_MAG
         gh, gw = mag.shape[:2]
         step_y = max(1, gh // grid_size)
         step_x = max(1, gw // grid_size)
@@ -1028,7 +1037,7 @@ def compute_optical_flow(
                 ):
                     continue
                 cell_mag = float(np.mean(mag[gy : gy + step_y, gx : gx + step_x]))
-                if cell_mag < min_mag:
+                if cell_mag < min_mag_thresh:
                     continue
                 cell_ang = float(np.mean(ang[gy : gy + step_y, gx : gx + step_x]))
                 grid.append(
@@ -1077,7 +1086,8 @@ def compute_scene_fingerprint(
 
     bins = config.SCREENSPACE_SCENE_HISTOGRAM_BINS
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
-    # 3D histogram flattened
+    # 3D histogram, pre-flattened to 1D float32 so compare_scene_fingerprints
+    # can pass it directly to cv2.compareHist without a per-comparison copy.
     hist = cv2.calcHist(
         [hsv],
         [0, 1, 2],
@@ -1086,6 +1096,7 @@ def compute_scene_fingerprint(
         [0, 180, 0, 256, 0, 256],
     )
     cv2.normalize(hist, hist)
+    hist_flat = hist.ravel().astype(np.float32)
 
     # Edge density
     gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
@@ -1101,17 +1112,22 @@ def compute_scene_fingerprint(
             else 0.0
         )
 
-    # Color stats per channel
+    # Color stats: [mean_ch0, std_ch0, mean_ch1, std_ch1, mean_ch2, std_ch2].
+    # Vectorized to avoid per-channel float64 copies.
     inside = mask > 0 if mask is not None else None
-    color_stats: list[float] = []
-    for ch in range(3):
-        channel = region_pixels[:, :, ch].astype(np.float64)
-        if inside is not None:
-            channel = channel[inside]
-        color_stats.extend([float(np.mean(channel)), float(np.std(channel))])
+    if inside is not None:
+        pixels_f = region_pixels[inside].astype(np.float64)
+        means = pixels_f.mean(axis=0)
+        stds = pixels_f.std(axis=0)
+    else:
+        means = region_pixels.mean(axis=(0, 1), dtype=np.float64)
+        stds = region_pixels.std(axis=(0, 1), dtype=np.float64)
+    color_stats = np.empty(6, dtype=np.float64)
+    color_stats[0::2] = means
+    color_stats[1::2] = stds
 
     return {
-        "histogram": hist,
+        "histogram": hist_flat,
         "edge_density": edge_density,
         "color_stats": color_stats,
     }
@@ -1125,12 +1141,11 @@ def compare_scene_fingerprints(
 
     Returns similarity score 0.0–1.0.
     """
-    # Histogram correlation: range [-1, 1] → [0, 1]
-    # Flatten 3D histograms to 1D — cv2.compareHist returns incorrect
-    # results for multidimensional arrays.
+    # Histogram correlation: range [-1, 1] → [0, 1].
+    # Histograms are pre-flattened to 1D float32 by compute_scene_fingerprint.
     hist_corr = cv2.compareHist(
-        fp_a["histogram"].flatten().astype(np.float32),
-        fp_b["histogram"].flatten().astype(np.float32),
+        fp_a["histogram"],
+        fp_b["histogram"],
         cv2.HISTCMP_CORREL,
     )
     hist_sim = (hist_corr + 1.0) / 2.0
@@ -1138,9 +1153,10 @@ def compare_scene_fingerprints(
     # Edge density similarity
     edge_sim = 1.0 - abs(fp_a["edge_density"] - fp_b["edge_density"])
 
-    # Color stats similarity (normalized Euclidean distance)
-    stats_a = np.array(fp_a["color_stats"], dtype=np.float64)
-    stats_b = np.array(fp_b["color_stats"], dtype=np.float64)
+    # Color stats similarity (normalized Euclidean distance).
+    # color_stats is a float64 ndarray from compute_scene_fingerprint.
+    stats_a = fp_a["color_stats"]
+    stats_b = fp_b["color_stats"]
     max_dist = np.sqrt(len(stats_a)) * 255.0  # theoretical max
     dist = float(np.linalg.norm(stats_a - stats_b))
     color_sim = 1.0 - (dist / max_dist) if max_dist > 0 else 1.0
@@ -1485,20 +1501,17 @@ def saliency_grid_from_map(
     peak = float(cells.max())
     if peak <= 0:
         return []
-    grid: list[dict[str, float]] = []
-    for gy in range(grid_n):
-        for gx in range(grid_n):
-            mag = float(cells[gy, gx]) / peak
-            if mag < min_mag:
-                continue
-            grid.append(
-                {
-                    "x": round((gx + 0.5) / grid_n, 3),
-                    "y": round((gy + 0.5) / grid_n, 3),
-                    "mag": round(mag, 3),
-                }
-            )
-    return grid
+    normed = cells / peak
+    ys, xs = np.nonzero(normed >= min_mag)
+    inv_n = 1.0 / grid_n
+    return [
+        {
+            "x": round((int(x) + 0.5) * inv_n, 3),
+            "y": round((int(y) + 0.5) * inv_n, 3),
+            "mag": round(float(normed[y, x]), 3),
+        }
+        for y, x in zip(ys, xs)
+    ]
 
 
 def saliency_peak(sal: np.ndarray) -> tuple[float, float, float]:
