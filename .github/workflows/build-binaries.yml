@@ -112,7 +112,12 @@ jobs:
           # skips the GPL-stripping step). When they fix it this check fails,
           # which is the point: update the notice rather than let it go stale.
           check_license() {
-            lib="$(find dist/clipgen.app -type f -path "*$1*" -name "libavcodec*.dylib" | head -1)"
+            # BUNDLE renames dot-directories (cv2/.dylibs -> cv2/__dot__dylibs)
+            # and leaves symlinks elsewhere, so match both spellings and only
+            # real files.
+            lib="$(find dist/clipgen.app -type f \
+              \( -path "*$1/.dylibs/*" -o -path "*$1/__dot__dylibs/*" \) \
+              -name "libavcodec*.dylib" | head -1)"
             test -n "$lib" || { echo "::error::no libavcodec found under $1"; exit 1; }
             got="$(strings -a "$lib" | grep -m1 -o "libavcodec license: .*" || true)"
             if [ "$got" != "libavcodec license: $2" ]; then
@@ -122,8 +127,8 @@ jobs:
             fi
             echo "$1 → $got"
           }
-          check_license "cv2/.dylibs" "GPL version 3 or later"
-          check_license "av/.dylibs"  "LGPL version 3 or later"
+          check_license "cv2" "GPL version 3 or later"
+          check_license "av"  "LGPL version 3 or later"
 
       - name: Verify bundled ffmpeg features (Windows)
         if: matrix.os == 'windows-latest'
