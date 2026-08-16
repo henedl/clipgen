@@ -1485,20 +1485,17 @@ def saliency_grid_from_map(
     peak = float(cells.max())
     if peak <= 0:
         return []
-    grid: list[dict[str, float]] = []
-    for gy in range(grid_n):
-        for gx in range(grid_n):
-            mag = float(cells[gy, gx]) / peak
-            if mag < min_mag:
-                continue
-            grid.append(
-                {
-                    "x": round((gx + 0.5) / grid_n, 3),
-                    "y": round((gy + 0.5) / grid_n, 3),
-                    "mag": round(mag, 3),
-                }
-            )
-    return grid
+    normed = cells / peak
+    ys, xs = np.nonzero(normed >= min_mag)
+    inv_n = 1.0 / grid_n
+    return [
+        {
+            "x": round((int(x) + 0.5) * inv_n, 3),
+            "y": round((int(y) + 0.5) * inv_n, 3),
+            "mag": round(float(normed[y, x]), 3),
+        }
+        for y, x in zip(ys, xs)
+    ]
 
 
 def saliency_peak(sal: np.ndarray) -> tuple[float, float, float]:
