@@ -92,6 +92,12 @@ def _build_ocr_reader(model: str) -> Any:
 
     params: dict[str, Any] = {
         "Global.log_level": "error",
+        # RapidOCR silently drops readings scoring below Global.text_score
+        # (default 0.5) before clipgen ever sees them — a pre-filter EasyOCR
+        # never had, and one the user-facing confidence slider cannot reach
+        # (lowering the slider below 0.5 would change nothing). Near-zero here
+        # makes clipgen's own ocr_confidence_threshold the single gate.
+        "Global.text_score": 0.05,
         # Each pooled engine owns a private onnxruntime session; cap intra-op
         # threads so pool_size × threads cannot oversubscribe the CPU.
         "EngineConfig.onnxruntime.intra_op_num_threads": max(
@@ -332,6 +338,33 @@ def _ocr_region_readings(
     return readings
 
 
+def _fuzzy_match_ratio(needle: str, haystack: str) -> float:
+    """Best fuzzy ratio of *needle* against *haystack* or any span of it.
+
+    PP-OCR's detector returns whole lines as single readings (a WoW chat line,
+    a full sentence), where EasyOCR segmented into word-group boxes. Scoring
+    the search string against the entire reading punishes exactly the case the
+    tool exists for — a short target inside a longer line scores ~0.6 even on
+    a perfect read — so a reading longer than the search is scored by its
+    best same-length window instead ("does this text appear", not "is this
+    text the whole reading"). The plain two-string ratio still applies when
+    the search is at least as long as the reading.
+    """
+    if not needle or len(needle) >= len(haystack):
+        return difflib.SequenceMatcher(None, needle, haystack).ratio()
+    if needle in haystack:
+        return 1.0
+    # SequenceMatcher caches its second sequence, so the constant needle goes
+    # there and each window is set_seq1 (ratio() is symmetric).
+    matcher = difflib.SequenceMatcher(None, "", needle)
+    best = 0.0
+    for i in range(len(haystack) - len(needle) + 1):
+        matcher.set_seq1(haystack[i : i + len(needle)])
+        ratio = matcher.ratio()
+        best = max(best, ratio)
+    return best
+
+
 def _score_text_readings(
     readings: list[Any], params: dict[str, Any]
 ) -> tuple[bool, dict[str, Any]]:
@@ -339,7 +372,8 @@ def _score_text_readings(
 
     ``fuzzy_ratio`` is the calibration scalar; ``text_found``/``confidence`` carry
     the best-matching reading for the strip tooltip. ``passed`` is the fuzzy
-    match at the current threshold.
+    match at the current threshold. Matching is substring-aware — see
+    :func:`_fuzzy_match_ratio`.
     """
     search_string = params.get("search_string", "")
     fuzzy_threshold = params.get(
@@ -359,7 +393,7 @@ def _score_text_readings(
         if conf < ocr_min_conf:
             continue
         ocr_cmp = _normalize_ocr_text(text, ocr_normalize)
-        ratio = difflib.SequenceMatcher(None, search_cmp, ocr_cmp).ratio()
+        ratio = _fuzzy_match_ratio(search_cmp, ocr_cmp)
         if ratio > best_ratio:
             best_ratio = ratio
             best_text = text
