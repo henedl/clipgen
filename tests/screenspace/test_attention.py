@@ -188,7 +188,8 @@ class TestChannels:
         # float32 where macOS produced none), and the two maps here are two
         # independent computations of the same math. The regression this guards
         # -- a zeros-only face channel joining the denominator -- scales the
-        # whole map by 3/4, so it sits ~7 orders of magnitude above this bound.
+        # whole map by 3/4: measured at 1.25e-1, five orders of magnitude above
+        # this bound, against an observed wobble of 6.0e-8.
         assert np.allclose(with_face_off, with_face_on, rtol=0, atol=1e-6)
 
 
