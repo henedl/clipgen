@@ -1,5 +1,6 @@
 import os
 from argparse import Namespace
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -939,6 +940,34 @@ def test_frozen_onedir_resolves_beside_the_payload_folder(monkeypatch):
     monkeypatch.setattr("sys.executable", "/Users/me/Apps/clipgen/clipgen.exe")
     monkeypatch.setattr("sys._MEIPASS", "/Users/me/Apps/clipgen/lib", raising=False)
     assert cli.get_runtime_working_dir() == "/Users/me/Apps"
+
+
+def test_frozen_onedir_installer_keeps_cwd_in_app_dir(monkeypatch):
+    """Inno installs the one-dir layout under .../Programs/clipgen, not a zip."""
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr(
+        "sys.executable",
+        "/Users/me/AppData/Local/Programs/clipgen/clipgen.exe",
+    )
+    monkeypatch.setattr(
+        "sys._MEIPASS",
+        "/Users/me/AppData/Local/Programs/clipgen/lib",
+        raising=False,
+    )
+    assert cli.get_runtime_working_dir() == ("/Users/me/AppData/Local/Programs/clipgen")
+
+
+def test_frozen_onedir_uninstaller_marker_keeps_cwd_in_app_dir(monkeypatch, tmp_path):
+    app = tmp_path / "clipgen"
+    lib = app / "lib"
+    lib.mkdir(parents=True)
+    (app / "unins000.exe").write_bytes(b"")
+    exe = app / "clipgen.exe"
+    exe.write_bytes(b"")
+    monkeypatch.setattr("sys.frozen", True, raising=False)
+    monkeypatch.setattr("sys.executable", str(exe))
+    monkeypatch.setattr("sys._MEIPASS", str(lib), raising=False)
+    assert Path(cli.get_runtime_working_dir()) == app.resolve()
 
 
 def test_frozen_macos_app_wins_over_onedir_branch(monkeypatch):
