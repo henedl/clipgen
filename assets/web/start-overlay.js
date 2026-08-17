@@ -1175,6 +1175,9 @@
     return apiGet("/api/status").then(function (s) {
       state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
+      // setStartTab("about") renders from statusData; if About is already
+      // visible when this lands, the panel would otherwise stay on v0.0.0.
+      if (state.startTab === "about") renderAbout();
       return s;
     });
   }
