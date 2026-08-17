@@ -13,9 +13,8 @@ import sys
 import tempfile
 import threading
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from collections.abc import Iterable
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
