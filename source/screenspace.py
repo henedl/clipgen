@@ -37,6 +37,7 @@ from screenspace_primitives import (
     FULL_FRAME_REGION,
     FULL_FRAME_REGION_NAME,
     ScanCallback,
+    PHash,
     _ConsecutiveBuffer,
     _merge_timestamp_spans,
     _morph_kernel,
@@ -74,6 +75,7 @@ from screenspace_primitives import (
     saliency_kwargs_from_params,
     saliency_peak,
     ssim_diff_map,
+    structural_similarity,
 )
 from screenspace_ocr import (
     _OCR_LANG_TO_MODEL,
