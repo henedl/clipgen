@@ -128,6 +128,13 @@ def test_spec_guards_and_upx_excludes_the_vendored_tools() -> None:
     )
 
 
+def test_spec_advertises_macos_14_minimum() -> None:
+    """Wheels in the lockfile are macosx_14_0; 11.0 was a false Gatekeeper floor."""
+    spec_text = (_ROOT / "build" / "clipgen.spec").read_text(encoding="utf-8")
+    assert '"LSMinimumSystemVersion": "14.0"' in spec_text
+    assert '"LSMinimumSystemVersion": "11.0"' not in spec_text
+
+
 def test_spec_never_strips_or_packs_on_windows() -> None:
     """``strip``/``upx`` must stay macOS-only, or Windows ships a dead exe.
 
