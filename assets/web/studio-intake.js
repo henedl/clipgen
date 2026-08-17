@@ -25,6 +25,7 @@
     findIntakeInQueue = STUDIO.findIntakeInQueue,
     findOverlappingData = STUDIO.findOverlappingData,
     intakeAddItem = STUDIO.intakeAddItem,
+    intakeAddItems = STUDIO.intakeAddItems,
     intakeToggleItem = STUDIO.intakeToggleItem,
     renderArtifactQueue = STUDIO.renderArtifactQueue,
     renderReelQueue = STUDIO.renderReelQueue,
@@ -755,13 +756,19 @@
     var addAllBtn = qs(cfg.addAllBtnSel);
     if (addAllBtn) {
       addAllBtn.addEventListener("click", function () {
-        cfg.filtered().forEach(function (c) { cfg.addToArtifacts(c); });
+        var clusters = cfg.filtered();
+        var items = [];
+        for (var i = 0; i < clusters.length; i++) items.push(cfg.clusterToItem(clusters[i]));
+        intakeAddItems(state.artifactQueue, items, renderArtifactQueue);
       });
     }
     var reelAllBtn = qs(cfg.reelAllBtnSel);
     if (reelAllBtn) {
       reelAllBtn.addEventListener("click", function () {
-        cfg.filtered().forEach(function (c) { cfg.addToReel(c); });
+        var clusters = cfg.filtered();
+        var items = [];
+        for (var i = 0; i < clusters.length; i++) items.push(cfg.clusterToItem(clusters[i]));
+        intakeAddItems(state.reelQueue, items, renderReelQueue);
       });
     }
     var thresholdInput = qs(cfg.thresholdSel);
