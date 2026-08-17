@@ -151,6 +151,14 @@ def test_load_status_rerenders_about_when_that_tab_is_showing():
     assert "renderAbout()" in body
 
 
+def test_restore_project_switches_to_the_open_tab():
+    """Rail recents stay visible on About; a click must reveal the Open form."""
+    src = strip_comments(read("start-overlay.js"))
+    body = src[src.index("function restoreProject") :]
+    body = body[: body.index("\n  function ")]
+    assert 'setStartTab("open")' in body
+
+
 def test_both_panels_ship_a_refresh_button():
     html = read("start-overlay.html")
     for role in ("google-refresh", "excel-refresh"):
