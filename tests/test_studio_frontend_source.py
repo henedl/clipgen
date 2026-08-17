@@ -262,3 +262,39 @@ def test_intake_queued_state_covers_every_panel():
     # Scoped per panel: every card also carries the shared .intake-queue-card,
     # so an unscoped query would index one panel's cards against another's list.
     assert "panel.cardsSel" in sweep and "panel.cardSel" in sweep
+
+
+def test_intake_add_all_batches_queue_render() -> None:
+    """Add-all used to call addToArtifacts per cluster, and each call rendered
+    the whole queue. 400 intake cards was a ~1s longtask and ~30k listeners."""
+    src = _studio_js()
+    assert "function intakeAddItems(queue, items, renderFn)" in src
+    start = src.index("function initIntakePanel(")
+    body = src[start : src.index("\n  function ", start + 1)]
+    assert "intakeAddItems(state.artifactQueue, items, renderArtifactQueue)" in body
+    assert "intakeAddItems(state.reelQueue, items, renderReelQueue)" in body
+    assert "cfg.filtered().forEach" not in body
+
+
+def test_queue_cards_do_not_bind_per_card_listeners() -> None:
+    """Artifact/reel cards used to attach dragstart, remove-click, and hover
+    on every card. Delegation lives on bindQueueList; render just stamps idx."""
+    src = _studio_js()
+    start = src.index("function buildQueueCard(")
+    end = src.index("function renderQueue(", start)
+    body = src[start:end]
+    # The only per-card listener left is the rare Composer-trim badge.
+    assert body.count("addEventListener") == 1
+    assert "intake-trim-badge" in body
+    assert "data-queue-idx" in body
+    assert "function bindQueueList(cfg)" in src
+    impl = src[
+        src.index("function renderQueueImpl(") : src.index(
+            "function renderArtifactQueue("
+        )
+    ]
+    assert "document.createDocumentFragment" in impl
+    bind_start = src.index("function bindQueueList(")
+    bind = src[bind_start : src.index("\n  function ", bind_start + 1)]
+    assert "queue-card-remove" in bind
+    assert "dragstart" in bind

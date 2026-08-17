@@ -37,10 +37,11 @@ fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
 `workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
 ratio as the clip pools).
 Frontend (via `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick,
-`studio.renderGrid`, `transcripts.renderSegments`/`renderPartialSegments`,
+`studio.renderGrid`/`renderIntakeCards`/`renderQueue`, `transcripts.renderSegments`/`renderPartialSegments`,
 `screenspace.renderResults`/`renderChunk`/`renderTimeline`, `composer.renderTimeline`,
 `viewer.renderList`, `workflows.renderAllNodes`, `gallery.renderGrid`,
-`overview.renderMetadata`/`renderConvergence`, and a `longtask` observer for
+`overview.renderMetadata`/`computeMetadata`/`renderConvergence`/`computeConvergence`,
+and a `longtask` observer for
 main-thread stalls >50 ms. To add a span, follow the hooks' pattern: accumulate
 into locals and flush once per scan/tick — **never** call `profiling.add` /
 `performance.mark` per frame.

@@ -217,12 +217,23 @@
 
   // Idempotent add (used by "Add all" and drag-drop) vs. toggle (used by single
   // card click) — same split as addToQueue vs. toggleArtifactCell for cells.
-  function intakeAddItem(queue, item, renderFn) {
+  // Batch form renders once; calling add-all as N× intakeAddItem rebuilt the
+  // whole queue on every push (400 cards → ~1s longtask, tens of thousands of
+  // detached listeners).
+  function intakeAddItems(queue, items, renderFn) {
     var locked = queue === state.artifactQueue ? isArtifactQueueLocked() : isReelQueueLocked();
     if (locked) return;
-    if (findIntakeInQueue(queue, item) >= 0) return;
-    queue.push(item);
-    renderFn();
+    var added = false;
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i] || findIntakeInQueue(queue, items[i]) >= 0) continue;
+      queue.push(items[i]);
+      added = true;
+    }
+    if (added) renderFn();
+  }
+
+  function intakeAddItem(queue, item, renderFn) {
+    intakeAddItems(queue, [item], renderFn);
   }
 
   function intakeToggleItem(queue, item, renderFn) {
@@ -2416,7 +2427,7 @@
       }
     }
     if (added) {
-      renderFn();
+      if (renderFn) renderFn();
       if (info.row) updateSingleCellClass(info.participant, info.row);
     }
   }
@@ -2831,7 +2842,8 @@
       if (isArtifactQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
-          addToQueue(state.artifactQueue, info.items[i], renderArtifactQueue);
+          addToQueue(state.artifactQueue, info.items[i], null);
+        renderArtifactQueue();
         return;
       }
       if (isIntakeSource(info.source)) {
@@ -2848,7 +2860,8 @@
       if (isReelQueueLocked()) return;
       if (info.source === "reel-stash" || info.source === "artifact-stash") {
         for (var i = 0; i < info.items.length; i++)
-          addToQueue(state.reelQueue, info.items[i], renderReelQueue);
+          addToQueue(state.reelQueue, info.items[i], null);
+        renderReelQueue();
         return;
       }
       if (isIntakeSource(info.source)) {
@@ -3040,38 +3053,13 @@
       "queue-card" + (cfg.isReel ? " reel-card" : "") + (isIntake ? " queue-card-intake" : ""),
     );
     if (cfg.isReel) card.setAttribute("data-reel-idx", idx);
+    card.setAttribute("data-queue-idx", idx);
     card.setAttribute("data-participant", item.participant);
     card.setAttribute("data-row", isIntake ? "" : item.row);
     if (isIntake) card.setAttribute("data-source", item.source);
     if (!isIntake && item.severity) card.setAttribute("data-severity", item.severity);
     card.setAttribute("data-seg-idx", segIdx);
     if (!ctx.locked) card.setAttribute("draggable", "true");
-
-    if (cfg.attachDragstart && !ctx.locked) {
-      card.addEventListener("dragstart", function (ev) {
-        var data = {
-          participant: item.participant,
-          desc: item.desc,
-          start: item.start,
-          end: item.end,
-          source: isIntake ? item.source : "artifact",
-        };
-        if (!isIntake) {
-          data.row = item.row;
-          data.timestamp = item.timestamp;
-          data.severity = item.severity;
-          data.segIdx = item.segIdx;
-          data.segTotal = item.segTotal;
-        } else {
-          data.event_type = item.event_type;
-          data.event_ids = item.event_ids;
-          data.mark_ids = item.mark_ids;
-        }
-        ev.dataTransfer.setData("application/json", JSON.stringify(data));
-        ev.dataTransfer.effectAllowed = "copyMove";
-        setCardDragImage(ev, this);
-      });
-    }
 
     var thumb = buildQueueCardThumb(card, {
       participant: item.participant,
@@ -3118,38 +3106,18 @@
     var removeBtn = el("button", "queue-card-remove");
     removeBtn.innerHTML = iconHTML("x-mark");
     removeBtn.title = "Remove";
-    if (!ctx.locked) {
-      removeBtn.addEventListener("click", function (ev) {
-        ev.stopPropagation();
-        var card = this.closest(".queue-card");
-        var commit = function () {
-          // Resolve by identity, not the captured idx: while the exit animation
-          // plays, an earlier card's removal can re-render and shift indices.
-          var q = state[cfg.queueKey];
-          var ix = q.indexOf(item);
-          if (ix < 0) return;
-          var removed = q.splice(ix, 1)[0];
-          if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
-          ctx.render();
-          if (removed.row) updateSingleCellClass(removed.participant, removed.row);
-        };
-        if (card && window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
-        else commit();
-      });
-    }
     card.appendChild(removeBtn);
-
-    if (!isIntake) {
-      card.addEventListener("mouseenter", function () {
-        highlightGridHeaders(item.participant, item.row);
-      });
-      card.addEventListener("mouseleave", clearGridHighlights);
-    }
 
     return card;
   }
 
   function renderQueue(cfg) {
+    return clipgenPerf.span("studio.renderQueue", function () {
+      renderQueueImpl(cfg);
+    });
+  }
+
+  function renderQueueImpl(cfg) {
     clearGridHighlights();
     var list = qs(cfg.listSel);
     var q = state[cfg.queueKey];
@@ -3171,10 +3139,12 @@
       renderQueue(cfg);
     };
     var totalDur = 0;
+    var frag = document.createDocumentFragment();
     for (var i = 0; i < n; i++) {
       totalDur += q[i].end - q[i].start;
-      list.appendChild(buildQueueCard(q[i], i, cfg, { locked: locked, render: render }));
+      frag.appendChild(buildQueueCard(q[i], i, cfg, { locked: locked, render: render }));
     }
+    list.appendChild(frag);
     if (cfg.durationSel) qs(cfg.durationSel).textContent = formatDuration(totalDur);
     applyCardStates(list);
     attachQueueScrubbers(list);
@@ -3187,6 +3157,85 @@
 
   function renderReelQueue() {
     renderQueue(REEL_QUEUE);
+  }
+
+  // One listener set per queue list, not per card. Must run once at boot —
+  // never from renderQueue (CODE-REVIEW.md listener-cleanup rule).
+  function bindQueueList(cfg) {
+    var list = qs(cfg.listSel);
+    if (!list) return;
+
+    if (cfg.attachDragstart) {
+      list.addEventListener("dragstart", function (ev) {
+        if (cfg.isLocked()) {
+          ev.preventDefault();
+          return;
+        }
+        var card = ev.target.closest(".queue-card");
+        if (!card || !list.contains(card)) return;
+        var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
+        var item = state[cfg.queueKey][idx];
+        if (!item) return;
+        var isIntake = isIntakeSource(item.source);
+        var data = {
+          participant: item.participant,
+          desc: item.desc,
+          start: item.start,
+          end: item.end,
+          source: isIntake ? item.source : "artifact",
+        };
+        if (!isIntake) {
+          data.row = item.row;
+          data.timestamp = item.timestamp;
+          data.severity = item.severity;
+          data.segIdx = item.segIdx;
+          data.segTotal = item.segTotal;
+        } else {
+          data.event_type = item.event_type;
+          data.event_ids = item.event_ids;
+          data.mark_ids = item.mark_ids;
+        }
+        ev.dataTransfer.setData("application/json", JSON.stringify(data));
+        ev.dataTransfer.effectAllowed = "copyMove";
+        setCardDragImage(ev, card);
+      });
+    }
+
+    list.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".queue-card-remove");
+      if (!btn || !list.contains(btn)) return;
+      if (cfg.isLocked()) return;
+      ev.stopPropagation();
+      var card = btn.closest(".queue-card");
+      if (!card) return;
+      var idx = parseInt(card.getAttribute("data-queue-idx"), 10);
+      var item = state[cfg.queueKey][idx];
+      if (!item) return;
+      var commit = function () {
+        // Resolve by identity, not the captured idx: while the exit animation
+        // plays, an earlier card's removal can re-render and shift indices.
+        var q = state[cfg.queueKey];
+        var ix = q.indexOf(item);
+        if (ix < 0) return;
+        var removed = q.splice(ix, 1)[0];
+        if (removed.row) delete state.cellResults[cellKey(removed.participant, removed.row)];
+        renderQueue(cfg);
+        if (removed.row) updateSingleCellClass(removed.participant, removed.row);
+      };
+      if (window.ClipgenMotion) ClipgenMotion.animateOut(card, "delete").then(commit);
+      else commit();
+    });
+
+    list.addEventListener("mouseover", function (ev) {
+      var card = ev.target.closest(".queue-card");
+      if (!card || !list.contains(card)) return;
+      if (card.classList.contains("queue-card-intake") || !card.getAttribute("data-row")) {
+        clearGridHighlights();
+        return;
+      }
+      highlightGridHeaders(card.getAttribute("data-participant"), parseInt(card.getAttribute("data-row"), 10));
+    });
+    list.addEventListener("mouseleave", clearGridHighlights);
   }
 
   // ---- Stashes (carved into studio-stash.js) ----
@@ -3245,8 +3294,9 @@
 
     qs("#addToReelBtn").addEventListener("click", function () {
       for (var i = 0; i < state.artifactQueue.length; i++) {
-        addToQueue(state.reelQueue, state.artifactQueue[i], renderReelQueue);
+        addToQueue(state.reelQueue, state.artifactQueue[i], null);
       }
+      renderReelQueue();
     });
 
     qs("#clearReelBtn").addEventListener("click", clearReel);
@@ -4776,6 +4826,8 @@
     initWheelScroll();
     bindDragGate();
     bindReelReorder();
+    bindQueueList(ARTIFACT_QUEUE);
+    bindQueueList(REEL_QUEUE);
     bindButtons();
     updateArtifactActions();
     updateReelActions();
@@ -4836,6 +4888,7 @@
   STUDIO.findIntakeInQueue = findIntakeInQueue;
   STUDIO.findOverlappingData = findOverlappingData;
   STUDIO.intakeAddItem = intakeAddItem;
+  STUDIO.intakeAddItems = intakeAddItems;
   STUDIO.intakeToggleItem = intakeToggleItem;
   STUDIO.isIntakeSource = isIntakeSource;
   STUDIO.isArtifactQueueLocked = isArtifactQueueLocked;

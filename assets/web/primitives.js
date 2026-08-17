@@ -155,6 +155,7 @@
       (events || []).forEach(function (e) {
         if (e && typeof e.count === "number" && e.count > max) max = e.count;
       });
+      var frag = document.createDocumentFragment();
       (events || []).forEach(function (e, idx) {
         if (!e || typeof e.t !== "number") return;
         var bar = document.createElement("div");
@@ -180,22 +181,45 @@
           ? "color-mix(in oklch, " + e.color + " " + Math.round(alpha * 100) + "%, transparent)"
           : fmtHue(hue, 0.7, 0.16, alpha);
         bar.dataset.idx = idx;
-        if (typeof opts.onBarMouseEnter === "function") {
-          bar.addEventListener("mouseenter", function () { opts.onBarMouseEnter(idx); });
-        }
-        if (typeof opts.onBarMouseLeave === "function") {
-          bar.addEventListener("mouseleave", function () { opts.onBarMouseLeave(idx); });
-        }
-        if (typeof opts.onBarClick === "function") {
-          bar.addEventListener("click", function (ev) { opts.onBarClick(idx, ev); });
-        }
-        track.appendChild(bar);
+        frag.appendChild(bar);
       });
+      track.appendChild(frag);
       if (marker != null) {
         var mk = document.createElement("div");
         mk.className = "density-timeline-marker";
         mk.style.left = "calc(" + (marker * 100) + "% - 1px)";
         track.appendChild(mk);
+      }
+    }
+
+    // Same shape as createSwimLane: three listeners on the track, not three
+    // per bar. mouseenter doesn't bubble, so hover uses mouseover/out.
+    function bindDelegates() {
+      if (typeof opts.onBarMouseEnter === "function" || typeof opts.onBarMouseLeave === "function") {
+        track.addEventListener("mouseover", function (ev) {
+          var bar = ev.target.closest(".density-timeline-bar");
+          if (!bar || !track.contains(bar)) return;
+          if (ev.relatedTarget && bar.contains(ev.relatedTarget)) return;
+          var idx = parseInt(bar.dataset.idx, 10);
+          if (isNaN(idx) || typeof opts.onBarMouseEnter !== "function") return;
+          opts.onBarMouseEnter(idx);
+        });
+        track.addEventListener("mouseout", function (ev) {
+          var bar = ev.target.closest(".density-timeline-bar");
+          if (!bar || !track.contains(bar)) return;
+          if (ev.relatedTarget && bar.contains(ev.relatedTarget)) return;
+          if (typeof opts.onBarMouseLeave !== "function") return;
+          opts.onBarMouseLeave();
+        });
+      }
+      if (typeof opts.onBarClick === "function") {
+        track.addEventListener("click", function (ev) {
+          var bar = ev.target.closest(".density-timeline-bar");
+          if (!bar || !track.contains(bar)) return;
+          var idx = parseInt(bar.dataset.idx, 10);
+          if (isNaN(idx)) return;
+          opts.onBarClick(idx, ev);
+        });
       }
     }
 
@@ -222,6 +246,7 @@
       }
     };
 
+    bindDelegates();
     renderTicks(opts.durationSec, opts.tickCount);
     renderBars(opts.events, opts.marker);
     return wrap;
@@ -344,6 +369,8 @@
       var existing = wrap.querySelectorAll(".cg-swim-cluster-band, .cg-swim-cluster-connector");
       for (var i = 0; i < existing.length; i++) existing[i].remove();
       state.clusterEls = [];
+      var axisFrag = document.createDocumentFragment();
+      var laneFrag = document.createDocumentFragment();
       state.clusters.forEach(function (cl, idx) {
         var hue = cl.hue != null ? cl.hue : 220;
         var leftPct = cl.t0 * 100;
@@ -355,7 +382,7 @@
         axisBand.style.width = widthPct + "%";
         axisBand.style.setProperty("--cg-cluster-hue", hue);
         axisBand.dataset.clusterIdx = idx;
-        axis.appendChild(axisBand);
+        axisFrag.appendChild(axisBand);
 
         var laneBand = document.createElement("div");
         laneBand.className = "cg-swim-cluster-band cg-swim-cluster-lanes";
@@ -363,20 +390,18 @@
         laneBand.style.width = widthPct + "%";
         laneBand.style.setProperty("--cg-cluster-hue", hue);
         laneBand.dataset.clusterIdx = idx;
-        lanes.appendChild(laneBand);
+        laneFrag.appendChild(laneBand);
 
         var connector = document.createElement("div");
         connector.className = "cg-swim-cluster-connector";
         connector.style.left = (((cl.t0 + cl.t1) / 2) * 100) + "%";
         connector.style.setProperty("--cg-cluster-hue", hue);
-        lanes.appendChild(connector);
+        laneFrag.appendChild(connector);
 
-        if (typeof opts.onClusterClick === "function") {
-          axisBand.addEventListener("click", function (ev) { opts.onClusterClick(idx, cl, ev); });
-          laneBand.addEventListener("click", function (ev) { opts.onClusterClick(idx, cl, ev); });
-        }
         state.clusterEls.push({ axis: axisBand, lane: laneBand, connector: connector });
       });
+      axis.appendChild(axisFrag);
+      lanes.appendChild(laneFrag);
     }
 
     function renderLaneSeparators() {
@@ -404,13 +429,20 @@
     function renderEvents() {
       var existing = lanes.querySelectorAll(".cg-swim-event");
       for (var i = 0; i < existing.length; i++) existing[i].remove();
-      state.eventEls = [];
+      // Sparse, indexed by events[] so getEventsForParticipant / setHovered
+      // address by event idx rather than packed render order.
+      state.eventEls = new Array(state.events.length);
       var subH = effectiveSubRowH();
       var sCount = state.sources.length;
       var defaultSource = state.sources[0];
+      var pIndex = {};
+      for (var pi = 0; pi < state.participants.length; pi++) {
+        pIndex[state.participants[pi]] = pi;
+      }
+      var frag = document.createDocumentFragment();
       state.events.forEach(function (e, idx) {
-        var pIdx = state.participants.indexOf(e.p);
-        if (pIdx < 0) return;
+        var pIdx = pIndex[e.p];
+        if (pIdx == null) return;
         var sIdx = state.sources.indexOf(e.source || defaultSource);
         if (sIdx < 0) sIdx = 0;
         var hue = resolveHue(e.label, e.hue);
@@ -445,16 +477,52 @@
         marker.dataset.idx = idx;
         marker.dataset.participant = e.p;
         marker.dataset.sourceIdx = sIdx;
-        if (typeof opts.onEventHover === "function") {
-          marker.addEventListener("mouseenter", function () { opts.onEventHover(idx, e, true); });
-          marker.addEventListener("mouseleave", function () { opts.onEventHover(idx, e, false); });
-        }
-        if (typeof opts.onEventClick === "function") {
-          marker.addEventListener("click", function (ev) { opts.onEventClick(idx, e, ev); });
-        }
-        lanes.appendChild(marker);
-        state.eventEls.push(marker);
+        frag.appendChild(marker);
+        state.eventEls[idx] = marker;
       });
+      lanes.appendChild(frag);
+    }
+
+    // Hover/click on thousands of markers via three listeners on the wrap, not
+    // three per marker. mouseenter doesn't bubble, so hover uses mouseover/out
+    // with a relatedTarget guard. Bound once — renderEvents only replaces nodes.
+    function bindDelegates() {
+      if (typeof opts.onEventHover === "function") {
+        lanes.addEventListener("mouseover", function (ev) {
+          var marker = ev.target.closest(".cg-swim-event");
+          if (!marker || !lanes.contains(marker)) return;
+          if (ev.relatedTarget && marker.contains(ev.relatedTarget)) return;
+          var idx = parseInt(marker.dataset.idx, 10);
+          if (isNaN(idx) || !state.events[idx]) return;
+          opts.onEventHover(idx, state.events[idx], true, marker);
+        });
+        lanes.addEventListener("mouseout", function (ev) {
+          var marker = ev.target.closest(".cg-swim-event");
+          if (!marker || !lanes.contains(marker)) return;
+          if (ev.relatedTarget && marker.contains(ev.relatedTarget)) return;
+          var idx = parseInt(marker.dataset.idx, 10);
+          if (isNaN(idx) || !state.events[idx]) return;
+          opts.onEventHover(idx, state.events[idx], false, marker);
+        });
+      }
+      if (typeof opts.onEventClick === "function" || typeof opts.onClusterClick === "function") {
+        wrap.addEventListener("click", function (ev) {
+          var marker = ev.target.closest(".cg-swim-event");
+          if (marker && wrap.contains(marker) && typeof opts.onEventClick === "function") {
+            var midx = parseInt(marker.dataset.idx, 10);
+            if (!isNaN(midx) && state.events[midx]) {
+              opts.onEventClick(midx, state.events[midx], ev, marker);
+            }
+            return;
+          }
+          if (typeof opts.onClusterClick !== "function") return;
+          var band = ev.target.closest(".cg-swim-cluster-band");
+          if (!band || !wrap.contains(band)) return;
+          var cidx = parseInt(band.dataset.clusterIdx, 10);
+          if (isNaN(cidx) || !state.clusters[cidx]) return;
+          opts.onClusterClick(cidx, state.clusters[cidx], ev);
+        });
+      }
     }
 
     function renderLabels() {
@@ -492,6 +560,7 @@
 
     wrap.setHovered = function (idx) {
       state.eventEls.forEach(function (el, i) {
+        if (!el) return;
         if (idx == null || idx === -1) {
           el.classList.remove("is-hover", "is-dim");
         } else if (i === idx) {
@@ -531,7 +600,7 @@
     wrap.getEventsForParticipant = function (pid) {
       var out = [];
       for (var i = 0; i < state.events.length; i++) {
-        if (state.events[i].p === pid) out.push(state.eventEls[i]);
+        if (state.events[i].p === pid && state.eventEls[i]) out.push(state.eventEls[i]);
       }
       return out;
     };
@@ -539,7 +608,8 @@
       var out = [];
       for (var i = 0; i < state.events.length; i++) {
         if (state.events[i].p === pid &&
-            state.sources.indexOf(state.events[i].source) === sourceIdx) {
+            state.sources.indexOf(state.events[i].source) === sourceIdx &&
+            state.eventEls[i]) {
           out.push(state.eventEls[i]);
         }
       }
@@ -551,6 +621,7 @@
       return w / d;
     };
 
+    bindDelegates();
     renderAll();
     return wrap;
   }

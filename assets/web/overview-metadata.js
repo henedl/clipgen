@@ -1944,9 +1944,11 @@
   // --- Core lifecycle ---
 
   function refresh() {
-    mdState.cache = computeAllStats(mdState.filterParticipants);
-    // Stamp _searchId onto cache entries before rendering so tagged rows carry it.
-    buildSearchIndex(mdState.cache);
+    clipgenPerf.span("overview.computeMetadata", function () {
+      mdState.cache = computeAllStats(mdState.filterParticipants);
+      // Stamp _searchId onto cache entries before rendering so tagged rows carry it.
+      buildSearchIndex(mdState.cache);
+    });
     renderAll(mdState.cache);
     takeSnapshot();
     // takeSnapshot just moved us to the current version, so this clears any
