@@ -1405,6 +1405,10 @@
 
   function restoreProject(project) {
     if (!project) return;
+    // The left rail is visible on every top-level tab. Filling Open-pane
+    // fields while About/Updates is showing reads as a dead click; switch
+    // first so the restored values are actually on screen.
+    setStartTab("open");
     // Picking a recent project is an explicit authoring act — confirming after
     // it should write that project's name, not fall back to "leave alone".
     state.projectNameAuthored = true;
