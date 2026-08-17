@@ -55,10 +55,73 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+        # uv sync --locked (not `uv pip install .`) so the env exactly matches
+        # uv.lock, and every later `uv run` in this workflow passes --no-sync.
+        # A plain `uv run` re-syncs the project env against the lock first,
+        # which would silently replace the force-reinstalled no-FFmpeg cv2
+        # wheel (below) with the official GPL-tainted one from PyPI — the
+        # pre-PyInstaller assert caught exactly that on the first CI run.
         run: |
-          uv venv
-          uv pip install .
+          uv sync --locked
           uv pip install pyinstaller==6.19.0
+
+      # The official opencv-python-headless macOS arm64 wheels bundle a
+      # GPL-3-configured Homebrew FFmpeg (upstream bug opencv/opencv-python#1260,
+      # open as of 2026-08-16), which would force the whole DMG to be conveyed
+      # GPL-3.0-or-later. The dylibs cannot be stripped post-hoc, so the macOS
+      # leg rebuilds the same version from its published sdist with FFmpeg off:
+      # zero bundled dylibs (Apple system frameworks only), all image codecs
+      # static in-tree, and −76 MB unpacked. clipgen never uses cv2's video I/O.
+      # Research + local repro recipe: plans/OPENCV-SELF-COMPILE-PLAN.md.
+      - name: Restore no-FFmpeg OpenCV wheel (macOS)
+        if: matrix.os == 'macos-latest'
+        id: opencv-wheel
+        uses: actions/cache@v6
+        with:
+          path: build/opencv-wheel
+          # Bump the trailing -v1 to force a rebuild without a version change.
+          key: opencv-noffmpeg-4.14.0.94-cp312-macos13-arm64-v1
+
+      - name: Build OpenCV without FFmpeg (macOS, cache miss)
+        if: matrix.os == 'macos-latest' && steps.opencv-wheel.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # ~2 min on 12 cores locally; expect ~10 min on the 3-vCPU runner.
+          # The sdist's PEP 517 backend fetches cmake itself; no brew needed.
+          curl -fsSL -o /tmp/opencv-sdist.tar.gz \
+            "https://files.pythonhosted.org/packages/67/8a/51ff1c6287be0b6cd3070cf095875da4ff7d6eda38507e6ada5608786a78/opencv_python_headless-4.14.0.94.tar.gz"
+          echo "4afa2ea1214453648be88259f035712454faa9039b686de7753569ba8eec1577  /tmp/opencv-sdist.tar.gz" \
+            | shasum -a 256 -c
+          tar -xzf /tmp/opencv-sdist.tar.gz -C /tmp
+          mkdir -p build/opencv-wheel
+          # MACOSX_DEPLOYMENT_TARGET matches the official wheel's macosx_13_0
+          # floor. The CXXFLAGS -isystem works around CommandLineTools installs
+          # that ship no toolchain libc++ headers (harmless under full Xcode,
+          # where the SDK copy matches the toolchain).
+          env ENABLE_HEADLESS=1 \
+              CMAKE_ARGS="-DWITH_FFMPEG=OFF -DPYTHON3_LIMITED_API=ON" \
+              MACOSX_DEPLOYMENT_TARGET=13.0 \
+              CMAKE_BUILD_PARALLEL_LEVEL="$(sysctl -n hw.ncpu)" \
+              CXXFLAGS="-isystem $(xcrun --show-sdk-path)/usr/include/c++/v1" \
+            uv build --wheel --python 3.12 \
+              --out-dir build/opencv-wheel /tmp/opencv_python_headless-4.14.0.94
+          ls -la build/opencv-wheel
+
+      - name: Install the no-FFmpeg OpenCV wheel (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          uv pip install --force-reinstall --no-deps build/opencv-wheel/opencv_python_headless-*.whl
+          # Fail here, before PyInstaller, if the wheel somehow carries FFmpeg
+          # (e.g. a cached wheel built before a flag change). Deliberately
+          # .venv/bin/python, not `uv run python`: a syncing uv run would
+          # reinstall the official wheel from the lock and defeat this step.
+          .venv/bin/python -c "import cv2; bi = cv2.getBuildInformation(); \
+            assert 'FFMPEG' not in bi, 'self-built cv2 unexpectedly enables FFMPEG'; \
+            print('cv2', cv2.__version__, '- no FFmpeg')"
+          if find .venv -type d -name ".dylibs" -path "*cv2*" | grep -q .; then
+            echo "::error::self-built cv2 wheel still bundles dylibs"; exit 1
+          fi
 
       - name: Cache pinned vendor files (ffmpeg + OCR models)
         uses: actions/cache@v6
@@ -68,11 +131,14 @@ jobs:
 
       - name: Fetch pinned vendor files (ffmpeg + OCR models)
         # Idempotent: a cache hit makes this a hash-check no-op. The spec
-        # refuses to build without these files.
-        run: uv run build/fetch_binaries.py
+        # refuses to build without these files. --no-sync: see Install
+        # dependencies.
+        run: uv run --no-sync build/fetch_binaries.py
 
       - name: Build executable
-        run: uv run pyinstaller --clean --noconfirm build/clipgen.spec
+        # --no-sync: a syncing uv run would swap the no-FFmpeg cv2 back to the
+        # official GPL wheel right before bundling (see Install dependencies).
+        run: uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 
       - name: Verify bundled ffmpeg features (macOS)
         if: matrix.os == 'macos-latest'
@@ -103,37 +169,42 @@ jobs:
           find dist/clipgen.app -path "*ocr_models/latin_rec.onnx" | grep -q . \
             || { echo "::error::bundle lacks the vendored OCR rec models"; exit 1; }
 
-      - name: Verify bundled FFmpeg library licenses (macOS)
+      - name: Verify no in-process FFmpeg libraries (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           set -euo pipefail
-          # cv2 bundles its own FFmpeg shared libraries, and
-          # THIRD-PARTY-LICENSES states their license explicitly. Those
-          # strings come from the wheel's build config, so a wheel bump can
-          # silently change them and leave us shipping a false notice — which
-          # is a distribution problem, not a runtime one, so nothing else here
-          # would catch it. Assert the recorded state instead.
-          #
-          # cv2's GPLv3 is upstream bug opencv/opencv-python#1260 (macOS arm64
-          # skips the GPL-stripping step). When they fix it this check fails,
-          # which is the point: update the notice rather than let it go stale.
-          check_license() {
-            # BUNDLE renames dot-directories (cv2/.dylibs -> cv2/__dot__dylibs)
-            # and leaves symlinks elsewhere, so match both spellings and only
-            # real files.
-            lib="$(find dist/clipgen.app -type f \
-              \( -path "*$1/.dylibs/*" -o -path "*$1/__dot__dylibs/*" \) \
-              -name "libavcodec*.dylib" | head -1)"
-            test -n "$lib" || { echo "::error::no libavcodec found under $1"; exit 1; }
-            got="$(strings -a "$lib" | grep -m1 -o "libavcodec license: .*" || true)"
-            if [ "$got" != "libavcodec license: $2" ]; then
-              echo "::error::$1 FFmpeg license changed: expected '$2', got '${got:-<none>}'."
-              echo "::error::Update the FFmpeg sections of build/THIRD-PARTY-LICENSES to match."
-              exit 1
-            fi
-            echo "$1 → $got"
-          }
-          check_license "cv2" "GPL version 3 or later"
+          # cv2 is self-built with -DWITH_FFMPEG=OFF (wheel step above), so the
+          # only GPL FFmpeg allowed in the bundle is the pinned ffmpeg/ffprobe
+          # executables under bin/ — separate programs, mere aggregation, and
+          # THIRD-PARTY-LICENSES says exactly that. Any FFmpeg *library* in the
+          # bundle would be loaded in-process and silently turn the DMG's
+          # licensing text false, so fail the build instead. This also catches
+          # the official GPL-tainted wheel (opencv/opencv-python#1260) leaking
+          # back in via a dependency-resolution change.
+          # BUNDLE renames dot-directories (cv2/.dylibs -> cv2/__dot__dylibs),
+          # so match both spellings.
+          if find dist/clipgen.app \( -type d -o -type l \) \
+            \( -name ".dylibs" -o -name "__dot__dylibs" \) -path "*cv2*" | grep -q .; then
+            echo "::error::cv2 ships bundled dylibs — the no-FFmpeg self-built wheel was not used."
+            exit 1
+          fi
+          # Exact FFmpeg family names, not a libav*/libsw* glob: Pillow ships
+          # libavif (the BSD AV1 *image* codec, no FFmpeg relation), which a
+          # glob would flag — it did, on this guard's first green-wheel run.
+          offenders="$(find dist/clipgen.app -type f \
+            \( -name "libavcodec*.dylib" -o -name "libavformat*.dylib" \
+               -o -name "libavutil*.dylib" -o -name "libavdevice*.dylib" \
+               -o -name "libavfilter*.dylib" -o -name "libswscale*.dylib" \
+               -o -name "libswresample*.dylib" -o -name "libpostproc*.dylib" \
+               -o -name "libx264*.dylib" -o -name "libx265*.dylib" \) \
+            ! -path "*/bin/*")"
+          if [ -n "$offenders" ]; then
+            printf '%s\n' "$offenders"
+            echo "::error::FFmpeg/x264/x265 shared libraries found outside bin/;"
+            echo "::error::the macOS app is conveyed as MIT and must not link GPL code."
+            exit 1
+          fi
+          echo "no in-process FFmpeg libraries in the bundle"
           # PyAV was overridden out of the dependency tree (its wheel carried a
           # third FFmpeg; transcription feeds whisper ffmpeg-decoded ndarrays
           # instead). Its LGPL notice section is gone from THIRD-PARTY-LICENSES,
@@ -239,13 +310,12 @@ jobs:
 
           LICENSING
 
-          clipgen's own source code is MIT-licensed and lives at
-          https://github.com/henedl/clipgen. This macOS app bundles GPL-3.0-or-later
-          software (the ffmpeg/ffprobe executables, and the FFmpeg libraries that
-          ship inside OpenCV), so the app as distributed is conveyed to you under
-          the GNU General Public License version 3 or later. See the
-          THIRD-PARTY-LICENSES file next to this one for the full notices and for
-          where to get the corresponding source code. You can also print it with:
+          clipgen is MIT-licensed and lives at https://github.com/henedl/clipgen.
+          The bundled ffmpeg and ffprobe executables are GPL-3.0-or-later free
+          software that clipgen runs strictly as separate programs, so they do
+          not change the license of the app itself. See the THIRD-PARTY-LICENSES
+          file next to this one for the full notices and for where to get the
+          corresponding source code. You can also print it with:
 
               /Applications/clipgen.app/Contents/MacOS/clipgen --licenses
 

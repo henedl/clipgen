@@ -6,7 +6,16 @@ clipgen bundles 20+ third-party libraries into a PyInstaller binary. All license
 
 ## Architectural decisions
 
-### OpenCV and FFmpeg (decided 2026-04-04, **corrected 2026-08-15**)
+### OpenCV and FFmpeg (decided 2026-04-04, corrected 2026-08-15; **superseded 2026-08-16**)
+
+> **Superseded:** the macOS build now compiles `opencv-python-headless` 4.14.0.94 from its
+> published sdist with `-DWITH_FFMPEG=OFF` (research: [OPENCV-SELF-COMPILE-PLAN.md](OPENCV-SELF-COMPILE-PLAN.md)),
+> so the DMG carries **no** FFmpeg libraries inside cv2 and is conveyed MIT again, with GPL
+> applying only to the aggregated ffmpeg/ffprobe executables. The GPL-FFmpeg-inside-opencv
+> section of `build/THIRD-PARTY-LICENSES` was replaced by an LGPL-2.1 section covering the
+> Windows wheel's `opencv_videoio_ffmpeg` DLL, and the CI guard inverted: it now fails if any
+> `cv2/.dylibs` or FFmpeg/x264/x265 dylib appears in the bundle outside `bin/`. The analysis
+> below is kept for the record of *why* the official arm64 wheel cannot be shipped.
 
 > **The original decision rested on a false premise.** It claimed opencv-python builds FFmpeg as
 > LGPL-2.1 "without `--enable-gpl`", with `libx264`/`libx265` present but "not compiled into
@@ -111,21 +120,24 @@ The desktop builds ship pinned full-GPL static ffmpeg/ffprobe executables under 
 None of these are scheduled. They are recorded so the next session inherits the evidence instead
 of re-deriving it.
 
-- **Track upstream opencv-python#1260.** The cheapest resolution: when a release lands whose
-  macOS arm64 wheel reports LGPL, pin to it and revert the GPL sections of
-  `build/THIRD-PARTY-LICENSES`. The CI license guard will fail on that build, which is the
-  intended signal. No ETA — the issue was acknowledged 2026-08-14 and is unfixed.
+- **Track upstream opencv-python#1260.** No longer load-bearing: the macOS build compiles its
+  own FFmpeg-free cv2 regardless. If upstream fixes the wheel, the only optional simplification
+  is deleting the wheel-build CI steps and going back to the official wheel — the inverted
+  license guard stays valid either way (it would then verify the fixed wheel). Weigh that
+  against the self-built wheel's other wins (−76 MB unpacked, no 93-dylib brew chain).
 
-- **Self-compiled OpenCV (needs research before anyone commits to it).**
-  `CMAKE_ARGS="-DWITH_FFMPEG=OFF" ENABLE_HEADLESS=1` against the published sdist is the *only*
-  route that actually removes the GPL dylibs, since they cannot be deleted post-hoc (see the
-  three reasons above). It would also drop ~29 MB of the 120 MB `cv2/` tree, all of it dead
-  weight — clipgen never calls cv2's video I/O. Open questions:
-  - Does the sdist build clean on macOS arm64? The route is documented by upstream but far less
-    exercised than the git-clone path.
-  - What does a 20 min–2 h OpenCV compile do to the macOS build job's wall-clock and caching?
-  - Does anything else in `cv2/` regress with FFmpeg off (`imgcodecs` keeps its own `libavif`)?
-  - Is it moot by the time it is picked up, if #1260 lands first?
+- [x] **Self-compiled OpenCV — researched, de-risked, and implemented 2026-08-16**, see
+  [OPENCV-SELF-COMPILE-PLAN.md](OPENCV-SELF-COMPILE-PLAN.md) for the full evidence. Every open
+  question answered empirically on macOS arm64: the sdist builds clean in **122 s** locally
+  (~8–15 min on a standard CI runner, cacheable); requires a pin bump to 4.14.0.94 (4.13.x
+  published no sdists); the result has **zero** bundled dylibs (Apple frameworks only, codecs
+  static in-tree — the win is −76 MB unpacked, not the ~29 MB guessed here) and passes the full
+  clipgen test suite (3302 tests). The macOS CI leg now builds and caches the wheel;
+  see the superseded-decision note above for what changed where.
+
+- **Remove cv2 entirely (reimplement its used surface)** — investigated 2026-08-16, feasible
+  with no new dependencies but ~8× the effort of the self-compile; recorded as an optional
+  future work package in [DROP-OPENCV-PLAN.md](DROP-OPENCV-PLAN.md).
 
 - [x] **Take PyAV off the decode path** — Done 2026-08-16, and it went further than this note
   anticipated: the "cannot be excluded" caveat was wrong. `faster_whisper/audio.py` imports `av`

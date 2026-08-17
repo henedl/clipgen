@@ -243,10 +243,17 @@ def test_license_notice_is_tracked_and_bundled() -> None:
     # accidentally-regenerated notice would still look plausible without them.
     for heading in (
         "GPL-3.0-OR-LATER (bundled ffmpeg and ffprobe executables)",
-        "GPL-3.0-OR-LATER (FFmpeg bundled inside opencv-python-headless)",
+        "LGPL-2.1 (FFmpeg DLL bundled in the Windows opencv-python-headless wheel)",
         "MOZILLA PUBLIC LICENSE 2.0",
     ):
         assert heading in text, f"THIRD-PARTY-LICENSES lost its {heading!r} section"
+    # The macOS cv2 is self-built with -DWITH_FFMPEG=OFF precisely so the DMG
+    # carries no in-process GPL code (plans/OPENCV-SELF-COMPILE-PLAN.md); a
+    # revived GPL-FFmpeg-inside-opencv section would mean that regressed.
+    assert "FFmpeg bundled inside opencv-python-headless" not in text, (
+        "THIRD-PARTY-LICENSES regrew the GPL-FFmpeg-inside-cv2 section; the "
+        "macOS build compiles cv2 without FFmpeg and the DMG is conveyed MIT"
+    )
 
 
 def test_license_notice_sections_are_well_formed() -> None:
