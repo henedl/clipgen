@@ -115,6 +115,27 @@ The desktop builds ship pinned full-GPL static ffmpeg/ffprobe executables under 
   all. This added an LGPL-3.0-or-later section and an MPL-2.0 section, and fixed two malformed
   section rules that would break any future section-aware parsing of the file.
 
+- [x] **6. In-app attribution (Start overlay → About tab)**: Done. The About tab now ends with a
+  "Third-party software" list generated from the notice file's own SUMMARY table, so the UI cannot
+  drift from what ships. `source/licenses.py` parses the table (`load_components()`), `/api/licenses`
+  serves it, and `renderAttribution()` in `start-overlay.js` groups consecutive rows by license
+  family. `--licenses` is untouched and still prints the full ~100 KB text.
+
+  **The table is now a machine-read interface, not just prose.** Three shapes are load-bearing and
+  must survive any future hand-edit: the fixed-width columns (parsed by splitting on runs of 2+
+  spaces), the 2-space-indented sub-rows (`FFmpeg DLL (in cv2)`, `PP-OCR models`), and the wrapped
+  license cell that continues on the next line. `tests/test_licenses.py` asserts all three against
+  the real file.
+
+  Closing the gap also required attributing three components that shipped in every bundle but
+  appeared nowhere in the notice: **Heroicons** (2.2.0, MIT, © Tailwind Labs — the 316 SVGs in
+  `assets/icons/`, previously credited only in `README.md`, which is not in the artifact),
+  **Octicons** (19.32.0, MIT, © GitHub Inc.) and **Silero VAD** (v6, MIT, © Silero Team — bundled
+  inside the faster-whisper wheel and collected by `clipgen.spec`). The two web fonts already had a
+  full SIL OFL section but no SUMMARY row, so they were invisible to the new list; they have rows
+  now. `assets/icons/README.md` was added to record the Heroicons provenance, including the caveat
+  that the vendored files are re-exports whose geometry — not markup — matches upstream 2.2.0.
+
 ## Open items / future candidates
 
 None of these are scheduled. They are recorded so the next session inherits the evidence instead
@@ -148,7 +169,12 @@ of re-deriving it.
   (`-map 0:a:N -ac 1 -ar 16000 -f f32le`), which also deleted the non-default-audio-track
   demux workaround in `transcribe_video()`.
 
-- **Full transitive-dependency attribution sweep.** Step 5 covered direct dependencies only. The
-  bundle contains a long tail of unlisted transitives (onnxruntime, tokenizers, huggingface-hub,
-  cryptography, click/itsdangerous/blinker, sympy, networkx, shapely, pyclipper, …). Most are
-  permissive, so this is a completeness task rather than a risk one.
+- **Full transitive-dependency attribution sweep.** Step 5 covered direct dependencies only, and
+  step 6 added the bundled *assets* (icons, fonts, VAD model) rather than any new transitives. The
+  bundle still contains a long tail of unlisted ones (tokenizers, huggingface-hub, cryptography,
+  click/itsdangerous/blinker, sympy, shapely, pyclipper, …). Most are permissive, so this is a
+  completeness task rather than a risk one. Note the list above is stale in two places: onnxruntime
+  *is* attributed now, and networkx left with scikit-image.
+
+  This is more visible than it was: anything missing from the SUMMARY table is now also missing
+  from the About tab, so the sweep would show up directly in the UI.

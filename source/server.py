@@ -4094,6 +4094,15 @@ def build_combined_app(
 
         return ok(entries=changelog.load_entries())
 
+    @combined.route("/api/licenses")
+    def api_licenses() -> Response:
+        # The SUMMARY table only — the Start overlay's About tab lists what is
+        # bundled and links out for the full texts. `--licenses` still prints
+        # the whole ~100 KB notice.
+        import licenses
+
+        return ok(components=licenses.load_components())
+
     @combined.route("/api/start-settings", methods=["GET"])
     def api_start_settings_get() -> Response:
         import start_settings

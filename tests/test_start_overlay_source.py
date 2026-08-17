@@ -50,8 +50,37 @@ def test_about_tab_carries_the_tool_tiles_then_the_about_rows():
     updates = html.index('data-start-panel="updates"')
     tiles = html.index('class="tool-tiles"')
     rows = html.index('data-role="about-grid"')
-    assert about < tiles < rows < updates
+    # Attribution closes the tab, below clipgen's own license.
+    attribution = html.index('data-role="attribution-list"')
+    assert about < tiles < rows < attribution < updates
     assert html.index('data-role="changelog-list"') > updates
+
+
+def test_attribution_link_opens_externally():
+    """desktop.py's shim keys on target="_blank" to route clicks through
+    open_external; without it a native-window user navigates the app to GitHub
+    with no back button."""
+    html = read("start-overlay.html")
+    link = html[html.index('class="about__link attribution__more"') :][:400]
+    assert 'target="_blank"' in link
+    assert 'rel="noopener noreferrer"' in link
+    assert "THIRD-PARTY-LICENSES" in link
+
+
+def test_attribution_classes_built_by_js_have_css():
+    """renderAttribution() builds these; without CSS the list renders unstyled."""
+    css = read("start-overlay.css")
+    for rule in (
+        ".attribution__intro",
+        ".attribution__group",
+        ".attribution__row",
+        ".attribution__row--nested",
+        ".attribution__name",
+        ".attribution__version",
+        ".attribution__license",
+        ".attribution__more",
+    ):
+        assert rule in css, f"{rule} built by start-overlay.js but absent from CSS"
 
 
 def test_tab_classes_toggled_by_js_have_css():

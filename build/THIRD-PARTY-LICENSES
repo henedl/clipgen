@@ -19,6 +19,9 @@ CTranslate2                 4.7.1      MIT
 onnxruntime                 1.24.4     MIT
 colorlog                    6.12.0     MIT
 six                         1.17.0     MIT
+Silero VAD                  v6         MIT
+Heroicons                   2.2.0      MIT
+Octicons                    19.32.0    MIT
 pyobjc-core                 12.2.1     MIT (macOS only)
 pyobjc-framework-Cocoa      12.2.1     MIT (macOS only)
 opencv-python-headless      4.14.0     MIT (bindings) + Apache 2.0 (OpenCV)
@@ -39,6 +42,8 @@ google-auth                 2.49.1     Apache-2.0
 google-auth-oauthlib        1.3.0      Apache-2.0
 certifi                     2026.2.25  MPL-2.0
 tqdm                        4.67.3     MPL-2.0 AND MIT
+Inter (web font)            —          SIL OFL 1.1
+JetBrains Mono (web font)   —          SIL OFL 1.1
 
 
 ===============================================================================
@@ -48,7 +53,7 @@ MIT LICENSE
 The following components are licensed under the MIT License:
   gspread, openpyxl, icecream, rich, faster-whisper, CTranslate2,
   onnxruntime, colorlog, six, opencv-python-headless (Python bindings),
-  pyobjc-core, pyobjc-framework-Cocoa
+  pyobjc-core, pyobjc-framework-Cocoa, Silero VAD, Heroicons, Octicons
 
 ---
 
@@ -240,6 +245,94 @@ Copyright (c) Ronald Oussoren and contributors
 Bundled in the macOS build only. clipgen reaches AppKit through these to hide
 the native title bar and re-center the window's traffic lights (see
 source/desktop_chrome.py).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Silero VAD
+Copyright (c) 2020-present Silero Team
+
+The voice activity detection model (assets/silero_vad_v6.onnx) bundled inside
+the faster-whisper wheel and collected into the build by build/clipgen.spec.
+clipgen uses it to skip silence before Whisper decoding (TRANSCRIBE_VAD_FILTER).
+
+Source: https://github.com/snakers4/silero-vad
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Heroicons
+Copyright (c) Tailwind Labs, Inc.
+
+The 316 SVG files in assets/icons/, from the 16x16 "solid" (micro) set of
+Heroicons 2.2.0. Re-exported to flat paths, so the geometry matches upstream
+while the markup does not. Used as CSS mask-image sources throughout the web
+interface. Provenance: assets/icons/README.md
+
+Source: https://github.com/tailwindlabs/heroicons
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Octicons
+Copyright (c) GitHub Inc.
+
+The 380 16px SVG files in assets/icons/octicon/, vendored verbatim from
+@primer/octicons 19.32.0. Used as CSS mask-image sources alongside the
+Heroicons. Provenance: assets/icons/octicon/README.md
+
+Source: https://github.com/primer/octicons
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

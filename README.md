@@ -67,11 +67,13 @@ uv run clipgen.py --composer -i ./videos -o ./out
 
 Icons are [Heroicons](https://heroicons.com) and GitHub's [Octicons](https://primer.style/octicons/), both MIT-licensed.
 
-clipgen's own source is MIT. The desktop builds bundle third-party software under MIT, BSD, Apache-2.0, HPND, MPL-2.0, LGPL, and GPL terms — notably the pinned ffmpeg/ffprobe executables, which are GPL-3.0-or-later. Full notices are in [build/THIRD-PARTY-LICENSES](build/THIRD-PARTY-LICENSES), which ships inside every release and prints via:
+clipgen's own source is MIT. The desktop builds bundle third-party software under MIT, BSD, Apache-2.0, HPND, MPL-2.0, LGPL, SIL OFL, and GPL terms — notably the pinned ffmpeg/ffprobe executables, which are GPL-3.0-or-later. Full notices are in [build/THIRD-PARTY-LICENSES](build/THIRD-PARTY-LICENSES), which ships inside every release and prints via:
 
 ```shell
 uv run clipgen.py --licenses
 ```
+
+The Start overlay's **About** tab lists the same components in-app, generated from that file rather than restated, so the two cannot drift apart.
 
 ## Building from source
 
