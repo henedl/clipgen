@@ -62,7 +62,13 @@ def _resolve_ocr_model(languages: list[str] | None) -> str:
         raise ValueError(f"Unsupported OCR language(s): {unknown}")
     models = {_OCR_LANG_TO_MODEL[lang] for lang in langs}
     if models == {_OCR_MODEL_DEFAULT, "latin"}:
-        return "latin"  # the latin model covers English glyphs too
+        # latin covers English glyphs, not the Chinese half of the default rec
+        # model. ["en", "de"] can share latin; ["zh", "de"] cannot.
+        default_langs = [
+            lang for lang in langs if _OCR_LANG_TO_MODEL[lang] == _OCR_MODEL_DEFAULT
+        ]
+        if default_langs and all(lang == "en" for lang in default_langs):
+            return "latin"
     if len(models) == 1:
         return next(iter(models))
     raise ValueError(f"OCR languages {langs} need incompatible recognition models")

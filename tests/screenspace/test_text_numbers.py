@@ -887,6 +887,11 @@ class TestResolveOcrModel:
         # The latin model covers English glyphs, so the mix is servable.
         assert screenspace._resolve_ocr_model(["en", "de"]) == "latin"
 
+    def test_chinese_plus_latin_is_incompatible(self):
+        # default covers Chinese+English; latin does not cover Chinese.
+        with pytest.raises(ValueError, match="incompatible"):
+            screenspace._resolve_ocr_model(["zh", "de"])
+
     def test_incompatible_mix_raises(self):
         with pytest.raises(ValueError, match="incompatible"):
             screenspace._resolve_ocr_model(["ja", "ko"])
