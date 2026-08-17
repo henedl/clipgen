@@ -33,3 +33,11 @@ def test_source_does_not_import_dropped_dependencies() -> None:
         "dropped dependencies imported again (see module docstring): "
         + "; ".join(offenders)
     )
+
+
+def test_windows_installer_deletes_dropped_packages_on_upgrade() -> None:
+    """Inno overlays {app}; without InstallDelete, old trees survive upgrades."""
+    iss = (ROOT / "build" / "clipgen.iss").read_text(encoding="utf-8")
+    assert "[InstallDelete]" in iss
+    for name in DROPPED:
+        assert f"{{app}}\\lib\\{name}*" in iss, name
