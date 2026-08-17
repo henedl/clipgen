@@ -1768,7 +1768,7 @@
           var onMeta = function () {
             video.removeEventListener("loadedmetadata", onMeta);
             video.currentTime = 0.001;
-            video.play();
+            window.ClipgenVideoControls.safePlay(video);
           };
           video.addEventListener("loadedmetadata", onMeta);
           return;
@@ -1830,12 +1830,9 @@
     updateVideoButtons();
 
     applyPlaybackRate();
-    var playPromise = video.play();
-    if (playPromise && playPromise.then) {
-      playPromise.catch(function () {
-        pauseVideo();
-      });
-    }
+    // Rejection here means playback never started (autoplay policy, or a
+    // pause/seek landing first), so the button state must fall back.
+    window.ClipgenVideoControls.safePlay(video, pauseVideo);
   }
 
   function pauseVideo() {
