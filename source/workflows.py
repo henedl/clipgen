@@ -264,6 +264,18 @@ def _exec_transcribe(
     # ("audio_track_contains"), not an index.
 
     result: Any = None
+    if not paths:
+        return {
+            "transcript": {
+                "segments": [],
+                "language": lang or "",
+                "source_file": "",
+                "model": "",
+                "source": src,
+            },
+            "segments": {"segments": [], "source": src},
+            "__note__": "No video wired",
+        }
     if len(paths) >= 2:
         timeline = video.build_source_timeline(paths)
         if timeline is not None:
@@ -273,7 +285,7 @@ def _exec_transcribe(
                 language=lang,
                 cancel_flag=ctx.cancel_flag,
             )
-    elif paths:
+    else:
         result = transcripts.transcribe_video(
             paths[0],
             model_name=model_name,
@@ -282,12 +294,9 @@ def _exec_transcribe(
         )
 
     if result is None:
-        result = {
-            "segments": [],
-            "language": lang or "",
-            "source_file": paths[0] if paths else "",
-            "model": "",
-        }
+        # Decode/model failure used to become a successful empty transcript, so
+        # Find-word and summaries ran on silence with no error on the node.
+        raise RuntimeError("Could not transcribe the wired video")
     transcript_val = dict(result)
     transcript_val["source"] = src
     return {
