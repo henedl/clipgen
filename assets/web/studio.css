@@ -1240,9 +1240,24 @@ body.dragging #sheetMain {
   text-align: center;
 }
 
+/* The empty element studio.js hands to setDragImage() to blank out the native
+ * drag preview. Raw px rather than spacing tokens on purpose: this is an
+ * offscreen sentinel, not layout (same reasoning as setCardDragImage's inline
+ * -9999px). It must keep a rendered box — WebKit snapshots the element, and a
+ * display:none / visibility:hidden node has no renderer to snapshot, which
+ * yields a null drag image and stops the drag session from starting at all. */
+.drag-image-blank {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
 /* Cell drag ghost — fixed-position cascade preview while dragging timestamp
- * cells from the sheet. studio.js replaces the native drag image with a
- * transparent 1×1 GIF, so this overlay is the only visual. The wrapper
+ * cells from the sheet. studio.js replaces the native drag image with a blank
+ * 1×1 element, so this overlay is the only visual. The wrapper
  * translates to follow the cursor (RAF-coalesced); cards stack down-right
  * inside, with --i=0 on top so it sits at the cursor and the rest peek out. */
 .cell-drag-ghost {

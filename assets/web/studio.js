@@ -386,16 +386,30 @@
     });
   }
 
-  // Transparent 1×1 image used to suppress the browser's default drag preview
-  // when we want a custom DOM-based ghost (see bindDragFromGrid). Cached so
-  // the same Image instance is reused across drags.
-  var _TRANSPARENT_DRAG_IMAGE = null;
-  function getTransparentDragImage() {
-    if (_TRANSPARENT_DRAG_IMAGE) return _TRANSPARENT_DRAG_IMAGE;
-    var img = new Image(1, 1);
-    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    _TRANSPARENT_DRAG_IMAGE = img;
-    return img;
+  // Blank 1×1 element handed to setDragImage() to suppress the browser's own
+  // drag preview when we want a custom DOM-based ghost (see bindDragFromGrid).
+  //
+  // Two constraints, both WebKit-specific and both load-bearing:
+  //   - It must be an *element*, not an `Image`. This used to be a 1×1
+  //     transparent GIF built as `new Image()` inside the dragstart handler.
+  //     Image loading is asynchronous even for a data URI, so the <img> had no
+  //     decoded bitmap yet at setDragImage() time; Chromium shrugs and drags
+  //     anyway, WebKit produces a null drag image and never starts the drag
+  //     session at all. That cost the *first* cell drag of every page load in
+  //     Safari and the desktop app — dragstart fired, dragend followed
+  //     immediately, no dragover, so no ghost and no drop. Elements are
+  //     rasterized synchronously (as setCardDragImage above already relies on).
+  //   - It must stay in the document with a real rendered box. `display: none`
+  //     / `visibility: hidden` leave no renderer to snapshot, which lands back
+  //     on the same null drag image; .drag-image-blank hides it offscreen-left.
+  //
+  // Created once at bind time rather than lazily on first drag, so there is no
+  // first-use path left to get wrong. 1×1 and pointer-events: none, so it needs
+  // no teardown.
+  function createBlankDragImage() {
+    var blank = el("div", "drag-image-blank");
+    document.body.appendChild(blank);
+    return blank;
   }
 
   // Single capture-phase gate: while a drag is in flight, `body.dragging` is
@@ -2726,6 +2740,7 @@
     var rafPending = 0;
     var cursorX = 0;
     var cursorY = 0;
+    var blankDragImage = createBlankDragImage();
 
     grid.addEventListener("pointerdown", function (ev) {
       var td = ev.target.closest(".ts-cell");
@@ -2749,7 +2764,7 @@
       ev.dataTransfer.effectAllowed = "copy";
 
       // Suppress the browser's snapshot — we render a custom cascade overlay.
-      try { ev.dataTransfer.setDragImage(getTransparentDragImage(), 0, 0); } catch (_) {}
+      try { ev.dataTransfer.setDragImage(blankDragImage, 0, 0); } catch (_) {}
 
       pendingDrag = {
         info: info,
