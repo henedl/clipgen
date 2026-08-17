@@ -391,13 +391,26 @@
     var sorted = events.slice().sort(function (a, b) { return a.start - b.start; });
 
     var qualifying = [];
+    var left = 0;
     for (var i = 0; i < sorted.length; i++) {
       var center = sorted[i].start;
+      var windowStart = center - windowSec;
+      var windowEnd = center + windowSec;
+      // Events are sorted by start, so the left edge of the ±W window only
+      // moves forward. Advance past intervals that ended before windowStart;
+      // a long-lived interval (started early, still overlapping) holds left.
+      while (
+        left < sorted.length &&
+        sorted[left].start < windowStart &&
+        sorted[left].end < windowStart
+      ) {
+        left++;
+      }
       var seen = {};
-      for (var j = 0; j < sorted.length; j++) {
-        if (sorted[j].start > center + windowSec) break;
-        if (sorted[j].end < center - windowSec && sorted[j].start < center - windowSec) continue;
-        if (sorted[j].start <= center + windowSec && sorted[j].end >= center - windowSec) {
+      for (var j = left; j < sorted.length; j++) {
+        if (sorted[j].start > windowEnd) break;
+        if (sorted[j].end < windowStart && sorted[j].start < windowStart) continue;
+        if (sorted[j].start <= windowEnd && sorted[j].end >= windowStart) {
           seen[sorted[j].participant] = true;
         }
       }
@@ -502,9 +515,11 @@
     // at first activation would go stale and misplace sheet events on the timeline.
     cvState.baselines = getState().convergenceBaselines || {};
     clearSelection();
-    collectAllEvents();
-    populateEventTypeChips();
-    applyFilters();
+    clipgenPerf.span("overview.computeConvergence", function () {
+      collectAllEvents();
+      populateEventTypeChips();
+      applyFilters();
+    });
     render();
     // collectAllEvents just refreshed _snapshot to the current version, so
     // checkStaleness will clear the paint on the subheader Refresh button.
@@ -808,14 +823,13 @@
       clusters: swimClusters,
       durationSec: duration,
       subRowH: SUB_ROW_H,
-      onEventHover: function (idx, ev, hover) {
+      onEventHover: function (idx, ev, hover, marker) {
         clearTimeout(_cvHoverDebounce);
         if (!hover) { cvHideFramePreview(); return; }
         var origEv = ev._ref;
         if (!origEv) return;
         _cvHoverDebounce = setTimeout(function () {
-          var marker = swimLane.querySelectorAll(".cg-swim-event")[idx];
-          if (marker) cvShowFramePreview(marker, origEv);
+          if (marker && marker.isConnected) cvShowFramePreview(marker, origEv);
         }, 60);
       },
       onEventClick: function (idx, ev, mouseEv) {

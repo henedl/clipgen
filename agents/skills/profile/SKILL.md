@@ -40,7 +40,8 @@ Frontend (via `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick,
 `studio.renderGrid`, `transcripts.renderSegments`/`renderPartialSegments`,
 `screenspace.renderResults`/`renderChunk`/`renderTimeline`, `composer.renderTimeline`,
 `viewer.renderList`, `workflows.renderAllNodes`, `gallery.renderGrid`,
-`overview.renderMetadata`/`renderConvergence`, and a `longtask` observer for
+`overview.renderMetadata`/`computeMetadata`/`renderConvergence`/`computeConvergence`,
+and a `longtask` observer for
 main-thread stalls >50 ms. To add a span, follow the hooks' pattern: accumulate
 into locals and flush once per scan/tick — **never** call `profiling.add` /
 `performance.mark` per frame.
