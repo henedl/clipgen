@@ -174,9 +174,18 @@ def _participant_duration(participant: str) -> float | None:
 def api_participants() -> Any:
     """Participants with source videos, plus part timelines for stitched seeks."""
     participants: list[dict[str, Any]] = []
-    for p in files.resolve_participant_videos(_sheet_context):
-        if not p.get("has_video"):
-            continue
+    resolved = [
+        p
+        for p in files.resolve_participant_videos(_sheet_context)
+        if p.get("has_video")
+    ]
+    # Every entry below probes its parts for durations and its first part for
+    # resolution/fps. Serialized that is one ffprobe subprocess after another and
+    # the page cannot render until the last one returns — measured 1.06 s for a
+    # 24-participant study on local SSD, all of it ffprobe. Probe the whole set up
+    # front so the loop reads the caches instead.
+    video.prewarm_probes(vp for p in resolved for vp in p["video_paths"])
+    for p in resolved:
         parts = _participant_parts(p["video_paths"])
         # Resolution + fps for the subheader readout, probed from the first part —
         # stitched parts share one source setup. probe_video_properties returns None

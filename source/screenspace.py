@@ -113,13 +113,17 @@ from screenspace_scans import (
     scan_text,
 )
 from screenspace_heatmap import (
+    GIF_FRAMES,
+    GridLayers,
     build_gif_sprite_bytes,
+    build_grid_layers,
     generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
     generate_heatmap_gif,
     generate_rolling_heatmap_gif,
     generate_template_heatmap,
+    grid_layer_count,
     sprite_grid,
 )
 from screenspace_tools import (

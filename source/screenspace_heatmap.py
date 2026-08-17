@@ -77,6 +77,22 @@ _GRID_KEYS: dict[str, str] = {
     "attention": "saliency_grid",
 }
 
+# Accumulator edge for grid types. Fixed (not frame-native), which is what makes
+# holding one layer per GIF bucket cheap enough to share — see build_grid_layers.
+_GRID_ACC_SIZE = 256
+
+# Temporal buckets per animated GIF. Public because a caller prebuilding layers
+# must bucket them exactly as the generators do, or they are rejected as stale.
+GIF_FRAMES = 24
+
+# One GIF bucket's drawn values plus the mask of pixels it drew.
+GridLayers = list[tuple[np.ndarray, np.ndarray]]
+
+
+def grid_layer_count(results: list[dict[str, Any]]) -> int:
+    """Bucket count the GIF generators will use for *results*."""
+    return min(GIF_FRAMES, len(results))
+
 
 def generate_template_heatmap(
     results: list[dict[str, Any]],
@@ -106,25 +122,36 @@ def generate_template_heatmap(
     return output_path
 
 
+def _grid_accumulator(
+    results: list[dict[str, Any]],
+    heatmap_type: str,
+    layers: "GridLayers | None",
+) -> np.ndarray:
+    """Full-replay accumulator for a grid heatmap PNG, reusing *layers* if given."""
+    if layers:
+        return _fold_grid_layers(layers, len(layers) - 1)
+    accumulator = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
+    for r in results:
+        _accumulate_heatmap_result(accumulator, r, heatmap_type)
+    return accumulator
+
+
 def generate_flow_heatmap(
     results: list[dict[str, Any]],
     region_width: int,
     region_height: int,
     output_path: str,
+    layers: GridLayers | None = None,
 ) -> str | None:
     """Generate a heatmap PNG from accumulated optical flow magnitudes.
 
     Uses ``flow_grid`` data from each result to paint per-cell motion
     intensity across all frames.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering
+    every result; folding it is equivalent to the replay below and skips it.
     """
-    acc_size = 256
-    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
-    for r in results:
-        for cell in r.get("flow_grid", []):
-            cx = int(cell["x"] * (acc_size - 1))
-            cy = int(cell["y"] * (acc_size - 1))
-            radius = max(1, acc_size // 16)
-            cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
+    accumulator = _grid_accumulator(results, "flow", layers)
 
     if accumulator.max() == 0:
         return None
@@ -143,16 +170,17 @@ def generate_change_heatmap(
     region_width: int,
     region_height: int,
     output_path: str,
+    layers: GridLayers | None = None,
 ) -> str | None:
     """Generate a heatmap PNG from accumulated per-frame change-mask grids.
 
     Uses ``change_grid`` data (downsampled change masks) from each result to
     paint where pixels changed most often across all detected change frames.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering
+    every result; folding it is equivalent to the replay below and skips it.
     """
-    acc_size = 256
-    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(accumulator, r, "change")
+    accumulator = _grid_accumulator(results, "change", layers)
 
     if accumulator.max() == 0:
         return None
@@ -171,17 +199,18 @@ def generate_attention_heatmap(
     frame_width: int,
     frame_height: int,
     output_path: str,
+    layers: GridLayers | None = None,
 ) -> str | None:
     """Generate a heatmap PNG from accumulated per-frame saliency grids.
 
     Uses ``saliency_grid`` data (downsampled saliency maps, one per sampled
     frame) so heat reflects predicted attention dwell across the whole scan —
     the eye-tracking-style deliverable. Full-frame: sized to the video frame.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering
+    every result; folding it is equivalent to the replay below and skips it.
     """
-    acc_size = 256
-    accumulator = np.zeros((acc_size, acc_size), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(accumulator, r, "attention")
+    accumulator = _grid_accumulator(results, "attention", layers)
 
     if accumulator.max() == 0:
         return None
@@ -223,6 +252,54 @@ def _accumulate_heatmap_result(
             cv2.circle(accumulator, (cx, cy), radius, float(cell["mag"]), -1)
             if mask_out is not None:
                 cv2.circle(mask_out, (cx, cy), radius, 1, -1)
+
+
+def build_grid_layers(
+    results: list[dict[str, Any]],
+    heatmap_type: str,
+    num_frames: int,
+) -> GridLayers | None:
+    """Draw each temporal bucket's grid cells once, as ``(values, mask)`` layers.
+
+    Grid types (flow/change/attention) draw with ``cv2.circle``, which *sets*
+    rather than accumulates — so a bucket's layer plus the mask of pixels it
+    drew reproduces any replay of that bucket exactly (see
+    :func:`generate_rolling_heatmap_gif`, which has always relied on this).
+
+    The three artifacts a grid scan produces — the PNG, the cumulative GIF and
+    the rolling GIF — all replayed the same results independently, four full
+    passes of per-cell Python-level circle draws in total. Measured on a 962-
+    result 16×16-grid attention scan those passes are ~0.26 s *each*, and the
+    two GIF generators run concurrently, so they also spent that time fighting
+    over the GIL: overlapping them measured **slower** than running them back to
+    back (0.82×). Building the buckets once up front leaves only numpy folds and
+    PIL's encoder in the threads, which does parallelize (measured 1.45×).
+
+    Returns ``None`` for non-grid types (template accumulates additively and
+    frame-native; see :func:`generate_rolling_heatmap_gif`).
+    """
+    if heatmap_type not in _GRID_KEYS:
+        return None
+    layers: GridLayers = []
+    for bucket in range(max(1, num_frames)):
+        vals = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
+        mask = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.uint8)
+        start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
+        for r_idx in range(start_idx, end_idx):
+            _accumulate_heatmap_result(
+                vals, results[r_idx], heatmap_type, mask_out=mask
+            )
+        layers.append((vals, mask.astype(bool)))
+    return layers
+
+
+def _fold_grid_layers(layers: GridLayers, upto: int) -> np.ndarray:
+    """Replay buckets ``0..upto`` onto one accumulator (last draw wins per pixel)."""
+    acc = np.zeros((_GRID_ACC_SIZE, _GRID_ACC_SIZE), dtype=np.float32)
+    for bucket in range(upto + 1):
+        vals, mask = layers[bucket]
+        acc[mask] = vals[mask]
+    return acc
 
 
 def _heatmap_frame_image(
@@ -373,14 +450,19 @@ def generate_heatmap_gif(
     height: int,
     output_path: str,
     heatmap_type: str = "template",
-    num_frames: int = 24,
+    num_frames: int = GIF_FRAMES,
     frame_duration_ms: int = 120,
+    layers: GridLayers | None = None,
 ) -> dict[str, Any] | None:
     """Generate an animated GIF showing heatmap accumulation over time.
 
     Divides *results* into *num_frames* temporal buckets, progressively
     accumulates heatmap data, and writes frames as an animated GIF. Returns the
     :func:`_save_animation` descriptor, or ``None`` when there is nothing to draw.
+
+    *layers* is an optional prebuilt :func:`build_grid_layers` result covering the
+    same buckets, which replaces both replays below with numpy folds. Grid types
+    only; ignored for template.
     """
     if not results:
         return None
@@ -391,14 +473,21 @@ def generate_heatmap_gif(
 
     acc_h, acc_w = height, width
     if heatmap_type in _GRID_KEYS:
-        acc_h = acc_w = 256
+        acc_h = acc_w = _GRID_ACC_SIZE
+    if heatmap_type not in _GRID_KEYS or (
+        layers is not None and len(layers) != num_frames
+    ):
+        layers = None
 
     # Pass 1: find the shared ceiling. Accumulation is monotonic, so the final
     # state already carries the global max — no per-frame snapshots needed.
-    accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
-    for r in results:
-        _accumulate_heatmap_result(accumulator, r, heatmap_type)
-    global_max = float(accumulator.max())
+    if layers is not None:
+        global_max = float(_fold_grid_layers(layers, num_frames - 1).max())
+    else:
+        accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
+        for r in results:
+            _accumulate_heatmap_result(accumulator, r, heatmap_type)
+        global_max = float(accumulator.max())
     if global_max == 0:
         return None
 
@@ -409,9 +498,15 @@ def generate_heatmap_gif(
     accumulator = np.zeros((acc_h, acc_w), dtype=np.float32)
     frames: list[Image.Image] = []
     for frame_idx in range(num_frames):
-        start_idx, end_idx = _frame_bucket_bounds(frame_idx, len(results), num_frames)
-        for r_idx in range(start_idx, end_idx):
-            _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
+        if layers is not None:
+            vals, mask = layers[frame_idx]
+            accumulator[mask] = vals[mask]
+        else:
+            start_idx, end_idx = _frame_bucket_bounds(
+                frame_idx, len(results), num_frames
+            )
+            for r_idx in range(start_idx, end_idx):
+                _accumulate_heatmap_result(accumulator, results[r_idx], heatmap_type)
         frames.append(
             _heatmap_frame_image(accumulator, global_max, heatmap_type, width, height)
         )
@@ -426,9 +521,10 @@ def generate_rolling_heatmap_gif(
     height: int,
     output_path: str,
     heatmap_type: str = "template",
-    num_frames: int = 24,
+    num_frames: int = GIF_FRAMES,
     window_frames: int = 6,
     frame_duration_ms: int = 120,
+    layers: GridLayers | None = None,
 ) -> dict[str, Any] | None:
     """Generate an animated GIF showing a sliding-window heatmap over time.
 
@@ -447,7 +543,7 @@ def generate_rolling_heatmap_gif(
     window_frames = max(1, window_frames)
     acc_h, acc_w = height, width
     if heatmap_type in _GRID_KEYS:
-        acc_h = acc_w = 256
+        acc_h = acc_w = _GRID_ACC_SIZE
 
     if heatmap_type in _GRID_KEYS:
         # Grid draws *set* pixels (cv2.circle, last draw wins), so a window is
@@ -459,22 +555,17 @@ def generate_rolling_heatmap_gif(
         # Python-level circle draws ~12x: 596 → 145 ms of accumulate on a
         # 600-result attention scan. Layers are 256×256, so all 24 together
         # are ~3 MB — nothing like the full-res frames the two-pass shape
-        # exists to avoid holding.
-        layers: list[tuple[np.ndarray, np.ndarray]] = []
-        for bucket in range(num_frames):
-            vals = np.zeros((acc_h, acc_w), dtype=np.float32)
-            mask = np.zeros((acc_h, acc_w), dtype=np.uint8)
-            start_idx, end_idx = _frame_bucket_bounds(bucket, len(results), num_frames)
-            for r_idx in range(start_idx, end_idx):
-                _accumulate_heatmap_result(
-                    vals, results[r_idx], heatmap_type, mask_out=mask
-                )
-            layers.append((vals, mask.astype(bool)))
+        # exists to avoid holding. The caller can hand the same layers to the
+        # cumulative GIF and the PNG (build_grid_layers), dropping the build
+        # here too.
+        if layers is None or len(layers) != num_frames:
+            layers = build_grid_layers(results, heatmap_type, num_frames) or []
+        bucket_layers = layers
 
         def _accumulate_window(frame_idx: int) -> np.ndarray:
             acc = np.zeros((acc_h, acc_w), dtype=np.float32)
             for bucket in range(max(0, frame_idx - window_frames + 1), frame_idx + 1):
-                vals, mask = layers[bucket]
+                vals, mask = bucket_layers[bucket]
                 acc[mask] = vals[mask]
             return acc
 
