@@ -2669,6 +2669,12 @@ def _coerce_ocr_controls(params: dict[str, Any], *, context: str = "") -> None:
             raise ValueError(
                 f"{context}languages must be a non-empty list drawn from {valid}"
             )
+        # Known codes can still need two rec models (ja+ko). Refuse here so
+        # the task never queues and fails mid-scan.
+        try:
+            screenspace._resolve_ocr_model([str(lang) for lang in langs])
+        except ValueError as exc:
+            raise ValueError(f"{context}{exc}") from exc
     if "ocr_confidence_threshold" not in params:
         return
     threshold = _coerce_float(

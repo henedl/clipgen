@@ -1117,6 +1117,23 @@ def test_create_ocr_task_accepts_known_language(client, monkeypatch):
     assert resp.get_json()["task"]["parameters"]["languages"] == ["de"]
 
 
+def test_create_ocr_task_rejects_incompatible_languages(client, monkeypatch):
+    """Each code can be known while the pair still needs two rec models."""
+    _create_region(client, "r")
+    _enable_video_task_setup(monkeypatch, "P01")
+    resp = client.post(
+        "/screenspace/api/tasks",
+        json={
+            "type": "text",
+            "participant": "P01",
+            "region": "r",
+            "parameters": {"search_string": "score", "languages": ["ja", "ko"]},
+        },
+    )
+    assert resp.status_code == 400
+    assert "incompatible" in resp.get_json()["error"]
+
+
 @pytest.mark.parametrize("task_type", ["template", "flow", "scene"])
 def test_create_task_new_types_accepted(client, task_type):
     """New phase-4 types pass type validation (fail at video, not type)."""
