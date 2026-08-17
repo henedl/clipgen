@@ -386,16 +386,30 @@
     });
   }
 
-  // Transparent 1×1 image used to suppress the browser's default drag preview
-  // when we want a custom DOM-based ghost (see bindDragFromGrid). Cached so
-  // the same Image instance is reused across drags.
-  var _TRANSPARENT_DRAG_IMAGE = null;
-  function getTransparentDragImage() {
-    if (_TRANSPARENT_DRAG_IMAGE) return _TRANSPARENT_DRAG_IMAGE;
-    var img = new Image(1, 1);
-    img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    _TRANSPARENT_DRAG_IMAGE = img;
-    return img;
+  // Blank 1×1 element handed to setDragImage() to suppress the browser's own
+  // drag preview when we want a custom DOM-based ghost (see bindDragFromGrid).
+  //
+  // Two constraints, both WebKit-specific and both load-bearing:
+  //   - It must be an *element*, not an `Image`. This used to be a 1×1
+  //     transparent GIF built as `new Image()` inside the dragstart handler.
+  //     Image loading is asynchronous even for a data URI, so the <img> had no
+  //     decoded bitmap yet at setDragImage() time; Chromium shrugs and drags
+  //     anyway, WebKit produces a null drag image and never starts the drag
+  //     session at all. That cost the *first* cell drag of every page load in
+  //     Safari and the desktop app — dragstart fired, dragend followed
+  //     immediately, no dragover, so no ghost and no drop. Elements are
+  //     rasterized synchronously (as setCardDragImage above already relies on).
+  //   - It must stay in the document with a real rendered box. `display: none`
+  //     / `visibility: hidden` leave no renderer to snapshot, which lands back
+  //     on the same null drag image; .drag-image-blank hides it offscreen-left.
+  //
+  // Created once at bind time rather than lazily on first drag, so there is no
+  // first-use path left to get wrong. 1×1 and pointer-events: none, so it needs
+  // no teardown.
+  function createBlankDragImage() {
+    var blank = el("div", "drag-image-blank");
+    document.body.appendChild(blank);
+    return blank;
   }
 
   // Single capture-phase gate: while a drag is in flight, `body.dragging` is
@@ -2616,6 +2630,23 @@
   var _CELL_GHOST_OFFSET_X = 14;
   var _CELL_GHOST_OFFSET_Y = 10;
 
+  // How long dragover may go quiet before we call the drag released.
+  //
+  // Neither engine dispatches mouseup during a drag session, and WebKit posts
+  // dragend ~560ms after the button comes up (measured twice in Safari: 557ms
+  // and 561ms — a snap-back animation the page never sees). dragend was
+  // therefore the first thing telling us an abandoned drag had ended, so the
+  // ghost sat frozen at the cursor for that whole half-second before it even
+  // began to fade.
+  //
+  // dragover is the way out: it free-runs while the drag is live and stops
+  // dead at release. Measured over one Safari drag with a deliberate 2s
+  // hold-still: 475 events, median gap 1ms, worst gap 52ms. This threshold is
+  // ~2.3x that worst gap. Overshooting it is cheap — the ghost just fades
+  // early and the next dragover rebuilds it (ensureGhostBuilt keeps
+  // pendingDrag alive for exactly that reason).
+  var _CELL_RELEASE_WATCHDOG_MS = 120;
+
   // Build the shared .queue-card-thumb (img + duration overlay), append it to
   // `card`, and return it so callers can layer their own badges on top.
   //   observe    lazy IntersectionObserver via ssObserveThumb, else eager img.src
@@ -2726,6 +2757,8 @@
     var rafPending = 0;
     var cursorX = 0;
     var cursorY = 0;
+    var releaseTimer = 0;      // dragover-gone deadline, see the constant above
+    var blankDragImage = createBlankDragImage();
 
     grid.addEventListener("pointerdown", function (ev) {
       var td = ev.target.closest(".ts-cell");
@@ -2749,7 +2782,7 @@
       ev.dataTransfer.effectAllowed = "copy";
 
       // Suppress the browser's snapshot — we render a custom cascade overlay.
-      try { ev.dataTransfer.setDragImage(getTransparentDragImage(), 0, 0); } catch (_) {}
+      try { ev.dataTransfer.setDragImage(blankDragImage, 0, 0); } catch (_) {}
 
       pendingDrag = {
         info: info,
@@ -2775,7 +2808,9 @@
       var info = pendingDrag.info;
       var segments = expandCellToSegments(info);
       ghost = buildCellDragGhost(info, segments);
-      pendingDrag = null;
+      // pendingDrag deliberately outlives the mount: it is what lets a
+      // release-watchdog misfire re-mount on the next dragover. The `ghost`
+      // check above is what keeps this from rebuilding every frame.
       positionGhost();
       // Flip on the .in class one frame later so the entrance transition runs.
       requestAnimationFrame(function () {
@@ -2787,6 +2822,10 @@
       if (!pendingDrag && !ghost) return;
       cursorX = ev.clientX;
       cursorY = ev.clientY;
+      // Every dragover pushes the release deadline back; the drag is over as
+      // soon as they stop arriving.
+      clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(hideGhost, _CELL_RELEASE_WATCHDOG_MS);
       ensureGhostBuilt();
       if (!ghost || rafPending) return;
       rafPending = requestAnimationFrame(function () {
@@ -2795,32 +2834,44 @@
       });
     }
 
-    function cleanup() {
-      pendingDrag = null;
+    // Fade the overlay out and drop the node. Leaves pendingDrag alone, so a
+    // watchdog misfire mid-drag self-heals on the next dragover instead of
+    // killing the ghost for the rest of the drag.
+    function hideGhost() {
       if (rafPending) {
         cancelAnimationFrame(rafPending);
         rafPending = 0;
       }
-      if (ghost) {
-        var node = ghost;
-        ghost = null;
-        node.classList.remove("in");
-        node.classList.add("out");
-        setTimeout(function () {
-          if (node.parentNode) node.parentNode.removeChild(node);
-        }, 140);
-      }
+      if (!ghost) return;
+      var node = ghost;
+      ghost = null;
+      node.classList.remove("in");
+      node.classList.add("out");
+      setTimeout(function () {
+        if (node.parentNode) node.parentNode.removeChild(node);
+      }, 140);
+    }
+
+    function cleanup() {
+      clearTimeout(releaseTimer);
+      releaseTimer = 0;
+      pendingDrag = null;
+      hideGhost();
       pointerOrigin = null;
     }
 
     document.addEventListener("dragover", onDragOver, true);
+    // drop lands ~1ms after release, so a completed drag needs nothing else.
+    // An abandoned one is covered by the dragover watchdog long before dragend
+    // shows up; dragend stays as the authoritative end-of-drag reset.
+    //
+    // There used to be a `mouseup` listener here, on the theory that it fires
+    // immediately on release and so beats the delayed dragend. It does not:
+    // neither Chromium nor WebKit dispatches mouse events during a drag
+    // session, and instrumented real drags on both recorded no mouseup at all.
+    // It was inert for as long as it existed. Don't add it back.
     document.addEventListener("dragend", cleanup, true);
     document.addEventListener("drop", cleanup, true);
-    // mouseup fires immediately on release regardless of drop target. dragend
-    // is delayed up to ~1s by the browser's snap-back animation when a drop
-    // is rejected (e.g. dropped on the sheet, not on a queue), so without
-    // this the ghost lingers visibly. cleanup() is idempotent.
-    document.addEventListener("mouseup", cleanup, true);
     window.addEventListener("blur", cleanup);
     document.addEventListener("visibilitychange", function () {
       if (document.hidden) cleanup();
