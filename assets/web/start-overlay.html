@@ -152,7 +152,7 @@
                     <!-- The button is a sibling of, never a child of, [data-role="google-status"]:
                          three code paths rewrite that node's text/innerHTML and would eat it. -->
                     <div class="sheet-panel__status-row">
-                      <div class="sheet-panel__status" data-role="google-status">Checking authentication…</div>
+                      <div class="sheet-panel__status" data-role="google-status"><span class="cg-shimmer">Checking authentication…</span></div>
                       <button type="button" class="sheet-panel__refresh" data-role="google-refresh" data-tooltip="Refresh from Google Drive" aria-label="Refresh from Google Drive" hidden>
                         <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
                       </button>
@@ -177,7 +177,7 @@
 
                   <div data-tabpanel="excel" class="sheet-panel" hidden>
                     <div class="sheet-panel__status-row">
-                      <div class="sheet-panel__status" data-role="excel-status">Scanning input folder…</div>
+                      <div class="sheet-panel__status" data-role="excel-status"><span class="cg-shimmer">Scanning input folder…</span></div>
                       <button type="button" class="sheet-panel__refresh" data-role="excel-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
                         <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
                       </button>
@@ -202,7 +202,7 @@
 
                   <div data-tabpanel="mindnode" class="sheet-panel" hidden>
                     <div class="sheet-panel__status-row">
-                      <div class="sheet-panel__status" data-role="mindnode-status">Scanning input folder…</div>
+                      <div class="sheet-panel__status" data-role="mindnode-status"><span class="cg-shimmer">Scanning input folder…</span></div>
                       <button type="button" class="sheet-panel__refresh" data-role="mindnode-refresh" data-tooltip="Re-scan the input folder" aria-label="Re-scan the input folder">
                         <span class="so-icon so-icon--sm" data-icon="arrow-path" aria-hidden="true"></span>
                       </button>
@@ -246,7 +246,7 @@
                     <label class="sheet-panel__worksheet-label">Worksheet</label>
                     <div class="sheet-panel__worksheet-loading" data-role="worksheet-loading" hidden>
                       <span class="so-spinner" aria-hidden="true"></span>
-                      <span>Checking worksheets…</span>
+                      <span class="cg-shimmer">Checking worksheets…</span>
                     </div>
                     <div class="sheet-picker" data-role="worksheet-picker">
                       <button type="button" class="sheet-picker__trigger" data-role="worksheet-picker-trigger" aria-haspopup="listbox" aria-expanded="false">

@@ -934,7 +934,13 @@
       // so taskStatusText reads that. The running/paused text is refreshed in
       // place by tickTaskProgress on each push rather than rebuilding the card.
       if (task.status === "failed" && task.error) card.title = task.error;
-      var statusSpan = el("span", "task-card-status", taskStatusText(task));
+      // Only a running task shimmers — paused/completed/failed are resting states,
+      // and a status transition rebuilds the card, so this never needs clearing.
+      var statusSpan = el(
+        "span",
+        "task-card-status" + (task.status === "running" ? " cg-shimmer" : ""),
+        taskStatusText(task)
+      );
       statusSpan.dataset.taskStatus = task.id;
       if (task.status === "failed" && task.error) {
         // The status text truncates with ellipsis; let users read the whole

@@ -205,6 +205,14 @@
     _statusEl = status;
   }
 
+  // Footer status line. `working` marks the in-flight messages ("Saving…",
+  // "Uploading…") so they shimmer; every terminal message writes flat.
+  function _setStatus(text, working) {
+    if (!_statusEl) return;
+    _statusEl.classList.toggle("cg-shimmer", working === true);
+    _statusEl.textContent = text;
+  }
+
   function _open() {
     _buildDom();
     var v = _opts && _opts.version;
@@ -268,7 +276,10 @@
   }
 
   function _load() {
-    _panelsEl.textContent = "Loading settings\u2026";
+    // Inner span, not the container: .cg-shimmer's transparent fill and
+    // inline-block would follow onto the real settings UI rendered here later.
+    _panelsEl.textContent = "";
+    _panelsEl.appendChild(el("span", "cg-shimmer", "Loading settings\u2026"));
     // Dismiss any stale color popover and refetch the card list each time the
     // modal opens so externally added or removed uploads show up.
     if (window.ClipgenColorPicker) window.ClipgenColorPicker.close();
@@ -326,7 +337,7 @@
       var s = _settings[i];
       payload[s.name] = s.value;
     }
-    if (_statusEl) _statusEl.textContent = "Saving\u2026";
+    _setStatus("Saving\u2026", true);
 
     // Manual fetch (not apiPut) so a server-supplied data.error on a non-2xx
     // response still reaches the status line; capture r.ok alongside the body.
@@ -344,15 +355,11 @@
       .then(function (res) {
         var data = res.body;
         if (!res.ok || !data || !data.ok) {
-          if (_statusEl) {
-            _statusEl.textContent = data && data.error ? "Save failed: " + data.error : "Save failed";
-          }
+          _setStatus(data && data.error ? "Save failed: " + data.error : "Save failed");
           return;
         }
-        if (_statusEl) {
-          _statusEl.textContent = "Saved";
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-        }
+        _setStatus("Saved");
+        setTimeout(function () { _setStatus(""); }, 2000);
         // The save succeeded server-side. Run the post-save hook in isolation
         // so a UI-refresh error can't bubble into the catch below and mislabel
         // a persisted save as "Save failed".
@@ -367,7 +374,7 @@
         }
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Save failed";
+        _setStatus("Save failed");
       });
   }
 
@@ -375,17 +382,15 @@
     apiPut(_getApiRoot() + "/settings", { reset: "tab:" + tabName })
       .then(function (data) {
         if (!data.ok) {
-          if (_statusEl) _statusEl.textContent = "Reset failed";
+          _setStatus("Reset failed");
           return;
         }
-        if (_statusEl) {
-          _statusEl.textContent = "Reset " + tabName;
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-        }
+        _setStatus("Reset " + tabName);
+        setTimeout(function () { _setStatus(""); }, 2000);
         _reloadAfterReset(tabName);
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Reset failed";
+        _setStatus("Reset failed");
       });
   }
 
@@ -393,17 +398,15 @@
     apiPut(_getApiRoot() + "/settings", { reset: "all" })
       .then(function (data) {
         if (!data.ok) {
-          if (_statusEl) _statusEl.textContent = "Reset failed";
+          _setStatus("Reset failed");
           return;
         }
-        if (_statusEl) {
-          _statusEl.textContent = "Reset to defaults";
-          setTimeout(function () { if (_statusEl) _statusEl.textContent = ""; }, 2000);
-        }
+        _setStatus("Reset to defaults");
+        setTimeout(function () { _setStatus(""); }, 2000);
         _reloadAfterReset("all");
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Reset failed";
+        _setStatus("Reset failed");
       });
   }
 
@@ -1057,7 +1060,7 @@
   function _renderCardPicker(container, settingName, kind) {
     container.innerHTML = "";
     var grid = el("div", "settings-card-picker");
-    grid.appendChild(el("div", "card-tile card-tile--loading", "Loading…"));
+    grid.appendChild(el("div", "card-tile card-tile--loading cg-shimmer", "Loading…"));
     container.appendChild(grid);
 
     _fetchCards(false).then(function (data) {
@@ -1079,7 +1082,7 @@
   }
 
   function _uploadCard(file, settingName) {
-    if (_statusEl) _statusEl.textContent = "Uploading…";
+    _setStatus("Uploading…", true);
     var form = new FormData();
     form.append("file", file);
     // Manual fetch (not apiPost) — it is a FormData upload and a server-supplied
@@ -1094,12 +1097,10 @@
       .then(function (res) {
         var data = res.body;
         if (!res.ok || !data || !data.ok) {
-          if (_statusEl) {
-            _statusEl.textContent = data && data.error ? data.error : "Upload failed";
-          }
+          _setStatus(data && data.error ? data.error : "Upload failed");
           return;
         }
-        if (_statusEl) _statusEl.textContent = "Uploaded";
+        _setStatus("Uploaded");
         // Auto-select the new image for the picker that triggered the upload.
         var s = _findSetting(settingName);
         if (s && data.item) {
@@ -1110,12 +1111,12 @@
         _refreshAllCardPickers();
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Upload failed";
+        _setStatus("Upload failed");
       });
   }
 
   function _deleteCard(name) {
-    if (_statusEl) _statusEl.textContent = "Deleting…";
+    _setStatus("Deleting…", true);
     // Manual fetch (not apiDelete) so a server-supplied data.error on a non-2xx
     // still surfaces in the status line; capture r.ok alongside the body.
     fetch(_getApiRoot() + "/titlecards/image/" + encodeURIComponent(name), {
@@ -1130,12 +1131,10 @@
       .then(function (res) {
         var data = res.body;
         if (!res.ok || !data || !data.ok) {
-          if (_statusEl) {
-            _statusEl.textContent = data && data.error ? data.error : "Delete failed";
-          }
+          _setStatus(data && data.error ? data.error : "Delete failed");
           return;
         }
-        if (_statusEl) _statusEl.textContent = "Deleted";
+        _setStatus("Deleted");
         // The server resets any selection that pointed at the deleted file;
         // mirror that into the in-memory settings so the UI stays in sync.
         if (data.reset) {
@@ -1150,7 +1149,7 @@
         _refreshAllCardPickers();
       })
       .catch(function () {
-        if (_statusEl) _statusEl.textContent = "Delete failed";
+        _setStatus("Delete failed");
       });
   }
 

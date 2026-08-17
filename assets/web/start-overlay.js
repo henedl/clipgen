@@ -151,6 +151,17 @@
       });
   }
 
+  // Sweeping "still working" status text. The carrier gets its own hugging span:
+  // .sheet-panel__status is a stretched flex column that also hosts CTA rows, and
+  // .cg-shimmer's transparent text fill inherits onto anything inside it. Every
+  // result/error write below is a plain textContent, which replaces the span and
+  // ends the sweep on its own.
+  function setStatusShimmer(node, text) {
+    if (!node) return;
+    node.innerHTML = "";
+    node.appendChild(el("span", "cg-shimmer", text));
+  }
+
   function setHidden(node, hidden) {
     if (!node) return;
     if (hidden) node.setAttribute("hidden", "");
@@ -896,7 +907,7 @@
     els.sourcePreview.classList.remove("is-error");
     setHidden(els.sourcePreviewSpinner, false);
     setHidden(els.sourcePreviewIcon, true);
-    els.sourcePreviewSummary.textContent = "Checking source videos…";
+    setStatusShimmer(els.sourcePreviewSummary, "Checking source videos…");
     setHidden(els.sourcePreview, false);
   }
 
@@ -1555,7 +1566,7 @@
   // 5-minute cache — the Refresh button's path.
   function loadGoogleSheets(force) {
     if (!els.googleStatus) return Promise.resolve();
-    els.googleStatus.textContent = "Checking authentication…";
+    setStatusShimmer(els.googleStatus, "Checking authentication…");
     setHidden(els.googlePicker, true);
     var url = "/api/spreadsheets/google" + (force ? "?refresh=true" : "");
     return apiGet(url).then(function (g) {
@@ -1675,7 +1686,7 @@
   }
 
   function connectGoogle() {
-    els.googleStatus.textContent = "Starting Google sign-in…";
+    setStatusShimmer(els.googleStatus, "Starting Google sign-in…");
     apiPost("/api/spreadsheets/google/auth", {})
       .then(function () { pollGoogleAuth(); })
       .catch(function (err) {
@@ -1770,7 +1781,7 @@
   // every call, so the Refresh button just re-runs this.
   function loadExcelFiles() {
     if (!els.excelStatus) return Promise.resolve();
-    els.excelStatus.textContent = "Scanning input folder…";
+    setStatusShimmer(els.excelStatus, "Scanning input folder…");
     return apiGet("/api/spreadsheets/excel").then(function (r) {
       state.excelFiles = r.files || [];
       els.excelStatus.textContent = state.excelFiles.length
@@ -1829,7 +1840,7 @@
   // loadExcelFiles: the route re-globs on every call and Refresh just re-runs it.
   function loadMindnodeFiles() {
     if (!els.mindnodeStatus) return Promise.resolve();
-    els.mindnodeStatus.textContent = "Scanning input folder…";
+    setStatusShimmer(els.mindnodeStatus, "Scanning input folder…");
     return apiGet("/api/spreadsheets/mindnode").then(function (r) {
       state.mindnodeFiles = r.files || [];
       els.mindnodeStatus.textContent = state.mindnodeFiles.length

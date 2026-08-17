@@ -57,7 +57,11 @@
 
     root.appendChild(iconSpan(state.mode));
 
-    var text = el("span", "media-banner-text", state.text);
+    var text = el(
+      "span",
+      "media-banner-text" + (state.mode === "running" ? " cg-shimmer" : ""),
+      state.text
+    );
     if (state.tooltip) text.setAttribute("data-tooltip", state.tooltip);
     root.appendChild(text);
 

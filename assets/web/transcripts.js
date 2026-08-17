@@ -888,6 +888,10 @@
     if (!empty) return;
     var main = empty.querySelector("p");
     var hint = empty.querySelector(".empty-hint");
+    // The three waiting lines shimmer; "No transcript available" is a resting
+    // state, not an in-flight one, so it stays flat.
+    var waiting = !!(task && (task.status === "running" || task.status === "queued"));
+    main.classList.toggle("cg-shimmer", waiting);
     if (task && task.status === "running" && task.phase === "loading_model") {
       main.textContent = "Loading transcription model…";
       hint.textContent = "The first transcription after a restart takes a few extra seconds";
@@ -1247,7 +1251,7 @@
   function _streamingIndicatorHtml(progress) {
     return '<div class="streaming-indicator">' +
       '<span class="streaming-dot"></span>' +
-      '<span class="streaming-text">' + _streamingTextStr(progress) + '</span>' +
+      '<span class="streaming-text cg-shimmer">' + _streamingTextStr(progress) + '</span>' +
       '</div>';
   }
 
@@ -2608,9 +2612,17 @@
       var altBtn = qs("#modelInstallAlt");
       var hintEl = qs("#modelInstallHint");
 
+      // The progress line shimmers only while the install/check is actually
+      // moving; pass working=false for anything terminal (failed, installed,
+      // "close and retry") so a stalled dialog stops claiming to be busy.
+      function setProgressText(text, working) {
+        progressText.classList.toggle("cg-shimmer", working !== false);
+        progressText.textContent = text;
+      }
+
       progress.classList.add("hidden");
       barFill.style.width = "0%";
-      progressText.textContent = "";
+      setProgressText("", false);
       hintEl.classList.add("hidden");
       hintEl.textContent = "";
       cancelBtn.disabled = false;
@@ -2692,7 +2704,7 @@
         confirmBtn.disabled = true;
         altBtn.disabled = true;
         progress.classList.remove("hidden");
-        progressText.textContent = opts.state === "stopped" ? "Starting…" : "Checking…";
+        setProgressText(opts.state === "stopped" ? "Starting…" : "Checking…");
         var step = opts.state === "stopped"
           ? apiPost("api/models/ollama/start", {}).catch(function () { return null; })
           : Promise.resolve(null);
@@ -2702,7 +2714,7 @@
         // buttons dead.
         function stillUnavailable(text) {
           if (cancelled) return;
-          progressText.textContent = text;
+          setProgressText(text, false);
           confirmBtn.disabled = false;
           altBtn.disabled = false;
           cancelBtn.textContent = "Close";
@@ -2745,19 +2757,19 @@
         altBtn.classList.add("hidden");
         hintEl.classList.add("hidden");
         progress.classList.remove("hidden");
-        progressText.textContent = "Starting download…";
+        setProgressText("Starting download…");
         installOllamaRuntime(function (st) {
           if (st.total > 0) {
             var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
             barFill.style.width = pct + "%";
-            progressText.textContent = (st.status || "Downloading") + ": " + pct + "%";
+            setProgressText((st.status || "Downloading") + ": " + pct + "%");
           } else {
-            progressText.textContent = st.status || "Working…";
+            setProgressText(st.status || "Working…");
           }
         }, function () { return cancelled; }).then(function (installed) {
           if (cancelled) return;
           if (!installed) {
-            progressText.textContent = "Installation failed. Retry, or install Ollama yourself:";
+            setProgressText("Installation failed. Retry, or install Ollama yourself:", false);
             if (opts.hint && opts.hint.length) {
               hintEl.textContent = opts.hint.join("\n");
               hintEl.classList.remove("hidden");
@@ -2774,7 +2786,7 @@
             cancelBtn.textContent = "Close";
             return;
           }
-          progressText.textContent = "Installed. Starting Ollama…";
+          setProgressText("Installed. Starting Ollama…");
           apiPost("api/models/ollama/start", {}).catch(function () { return null; })
             .then(function () {
               _trModelsCache = null;
@@ -2787,11 +2799,11 @@
                 close(true);
                 return;
               }
-              progressText.textContent = "Installed, but Ollama isn't answering yet. Close and retry the action.";
+              setProgressText("Installed, but Ollama isn't answering yet. Close and retry the action.", false);
               cancelBtn.textContent = "Close";
             }).catch(function () {
               if (cancelled) return;
-              progressText.textContent = "Installed, but couldn't confirm Ollama is running. Close and retry the action.";
+              setProgressText("Installed, but couldn't confirm Ollama is running. Close and retry the action.", false);
               cancelBtn.textContent = "Close";
             });
         });
@@ -2808,14 +2820,14 @@
         // enabled so the user can dismiss while it runs.
         confirmBtn.classList.add("hidden");
         progress.classList.remove("hidden");
-        progressText.textContent = "Starting…";
+        setProgressText("Starting…");
         installOllamaModel(opts.model, function (st) {
           if (st.total > 0) {
             var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
             barFill.style.width = pct + "%";
-            progressText.textContent = (st.status || "Downloading") + ": " + pct + "%";
+            setProgressText((st.status || "Downloading") + ": " + pct + "%");
           } else {
-            progressText.textContent = st.status || "Working…";
+            setProgressText(st.status || "Working…");
           }
         }, function () { return cancelled; }).then(function (ok) {
           if (cancelled) return; // dialog dismissed mid-pull — no toast, no re-close
@@ -2827,7 +2839,7 @@
           } else {
             // Leave the dialog open so the user can read the failure and
             // dismiss it; Cancel now resolves false.
-            progressText.textContent = "Installation failed. Check that Ollama is running.";
+            setProgressText("Installation failed. Check that Ollama is running.", false);
             cancelBtn.textContent = "Close";
           }
         });
@@ -3013,6 +3025,7 @@
     var confirmBtn = qs("#clipMarksConfirm");
     if (!summaryEl || !confirmBtn) return;
     if (_clipMarksRun) return; // progress block owns the copy while a run streams
+    summaryEl.classList.remove("cg-shimmer"); // the "Loading marks…" fetch landed
     var marks = _clipMarksScopedMarks();
     if (!marks.length) {
       var pid = state.selectedParticipant;
@@ -3080,6 +3093,7 @@
     _renderClipMarksProgress();
     // A run in flight owns the dialog's copy; only refresh the pickers when idle.
     if (_clipMarksRun) return;
+    qs("#clipMarksSummary").classList.add("cg-shimmer");
     qs("#clipMarksSummary").textContent = "Loading marks…";
     qs("#clipMarksConfirm").disabled = true;
     apiGet("api/marks")
@@ -3091,6 +3105,7 @@
         renderClipMarksSummary();
       })
       .catch(function () {
+        qs("#clipMarksSummary").classList.remove("cg-shimmer");
         qs("#clipMarksSummary").textContent = "Could not load marks.";
       });
   }

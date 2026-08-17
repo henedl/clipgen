@@ -115,7 +115,7 @@ def test_old_css_stash_landing_removed():
 # tokens.css that every page references by name, parameterized by a custom
 # property where the values differed. Redefining either per page is how five
 # near-identical opacity breathes accumulated in the first place.
-_HOISTED_LOOPS = ("spin", "cg-pulse")
+_HOISTED_LOOPS = ("spin", "cg-pulse", "cg-shimmer-sweep")
 _RETIRED_LOOPS = (
     "studio-tab-pulse",
     "status-pulse",
@@ -147,6 +147,34 @@ def test_retired_pulse_keyframes_are_gone():
                 f"{path.name} still references the retired {name}; "
                 "use the shared cg-pulse / spin from tokens.css instead"
             )
+
+
+def test_shimmer_is_parameterized_and_opts_out_of_reduced_motion():
+    # The sweep is a continuous loop like the two above, so it lives in
+    # tokens.css and is themed through --shimmer-base/--shimmer-peak rather than
+    # per-page greys. It also *replaces* the text colour, so losing the
+    # reduced-motion branch would leave those users staring at a moving band
+    # they asked not to see — and, worse, no fallback fill at all.
+    tokens = (_WEB / "tokens.css").read_text(encoding="utf-8")
+    assert "var(--shimmer-base)" in tokens and "var(--shimmer-peak)" in tokens
+    for block in ("  --shimmer-base:", "  --shimmer-peak:"):
+        assert tokens.count(block) == 2, (
+            f"{block.strip()} must be declared in both the dark :root and the "
+            'html[data-theme="light"] block'
+        )
+    reduced = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{\s*\n"
+        r"(?:\s*/\*.*?\*/\s*\n)?"
+        r"\s*\.cg-shimmer \{(.*?)\}",
+        tokens,
+        re.DOTALL,
+    )
+    assert reduced, "tokens.css needs a prefers-reduced-motion opt-out for .cg-shimmer"
+    body = reduced.group(1)
+    assert "animation: none" in body
+    assert "-webkit-text-fill-color:" in body, (
+        "the opt-out must restore a visible fill, not just stop the animation"
+    )
 
 
 def test_pulse_trough_is_parameterized():

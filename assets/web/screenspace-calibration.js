@@ -614,10 +614,10 @@
   function _calStatus(msg, kind) {
     var statusEl = qs("#calibrationStatus");
     if (!statusEl) return;
-    statusEl.classList.remove("cal-status--loading", "cal-status--error");
+    statusEl.classList.remove("cal-status--loading", "cal-status--error", "cg-shimmer");
     if (!msg) { statusEl.textContent = ""; statusEl.classList.add("hidden"); return; }
     statusEl.textContent = msg;
-    if (kind === "loading") statusEl.classList.add("cal-status--loading");
+    if (kind === "loading") statusEl.classList.add("cal-status--loading", "cg-shimmer");
     else if (kind === "error") statusEl.classList.add("cal-status--error");
     statusEl.classList.remove("hidden");
   }

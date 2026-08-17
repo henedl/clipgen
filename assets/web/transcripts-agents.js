@@ -338,7 +338,9 @@
     // clock / Cancel wiring below, which is built once here.
     content.innerHTML =
       '<div class="summary-stream" id="summaryStream"></div>' +
-      '<p class="summary-generating">Generating summary\u2026' +
+      // The shimmer goes on its own span: .cg-shimmer's transparent text fill
+      // inherits, so on the <p> it would erase the clock and the Cancel label.
+      '<p class="summary-generating"><span class="cg-shimmer">Generating summary\u2026</span>' +
       '<span class="agent-elapsed" id="summaryElapsed"></span>' +
       '<button type="button" class="agent-cancel-btn" id="summaryCancel">Cancel</button></p>';
     qs("#summaryEmpty").classList.add("hidden");
@@ -610,7 +612,12 @@
 
     var p = document.createElement("p");
     p.className = "citations-status";
-    p.textContent = "Finding sources\u2026";
+    // Own span so the shimmer's transparent fill doesn't inherit onto the
+    // elapsed clock and the Cancel button appended below.
+    var label = document.createElement("span");
+    label.className = "cg-shimmer";
+    label.textContent = "Finding sources\u2026";
+    p.appendChild(label);
     var sp = document.createElement("span");
     sp.className = "agent-elapsed";
     sp.id = "citationsElapsed";
@@ -919,7 +926,13 @@
     var rerun = qs("#frictionRerun");
     var cancel = qs("#frictionCancel");
     if (state.frictionGenerating) {
-      statusEl.textContent = "Analyzing friction…";
+      // Own span for the shimmer — its transparent fill inherits, so on
+      // statusEl it would also blank the elapsed clock appended below.
+      statusEl.textContent = "";
+      var label = document.createElement("span");
+      label.className = "cg-shimmer";
+      label.textContent = "Analyzing friction…";
+      statusEl.appendChild(label);
       var sp = document.createElement("span");
       sp.className = "agent-elapsed";
       sp.id = "frictionElapsed";
@@ -1733,7 +1746,11 @@
     if (next) next.disabled = moments.length === 0;
     if (moments.length === 0) {
       state.frictionMomentIndex = -1;
-      strip.appendChild(el("span", "friction-jump-empty", _frictionJumpEmptyText()));
+      strip.appendChild(el(
+        "span",
+        "friction-jump-empty" + (state.frictionGenerating ? " cg-shimmer" : ""),
+        _frictionJumpEmptyText()
+      ));
       return;
     }
     // A filter change can shrink the list out from under the current selection.
