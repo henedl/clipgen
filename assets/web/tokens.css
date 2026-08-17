@@ -23,6 +23,7 @@
  *             --icon-size-* (12-24px) | --bp-tablet (JS-read only, see below)
  * SURFACES:   --bg, --bg-elevated, --bg-input, --bg-hover, --bg-active
  * TEXT:       --fg, --fg-muted, --fg-faint, --fg-dim | --font-sans, --font-mono
+ *             --shimmer-base/-peak — the .cg-shimmer sweep on in-flight labels
  * ACCENT:     --accent, --accent-hover, --accent-fg
  * BORDERS:    --border, --border-strong, --hairline
  * CELL DATA:  --cell-data* — cyan-tinted timestamp chips, plus per-severity bg/fg
@@ -93,6 +94,9 @@
   --fg-muted:         rgba(255, 255, 255, 0.62);
   --fg-faint:         rgba(255, 255, 255, 0.42);
   --fg-dim:           rgba(255, 255, 255, 0.28);
+  /* Rest and highlight ends of the .cg-shimmer sweep (see below) */
+  --shimmer-base:     rgba(255, 255, 255, 0.38);
+  --shimmer-peak:     rgba(255, 255, 255, 0.68);
 
   /* Accent */
   --accent:           #2D6BFF;
@@ -321,6 +325,9 @@ html[data-theme="light"],
   --fg-muted:         rgba(20, 21, 26, 0.68);
   --fg-faint:         rgba(20, 21, 26, 0.48);
   --fg-dim:           rgba(20, 21, 26, 0.32);
+  /* Mirrored on the light theme: the sweep runs dark-on-paper instead. */
+  --shimmer-base:     rgba(20, 21, 26, 0.45);
+  --shimmer-peak:     rgba(20, 21, 26, 0.85);
 
   /* Accent (same hue, slightly different hover for light bg) */
   --accent:           #2D6BFF;
@@ -461,6 +468,61 @@ html[data-theme="light"] .cg-logo {
 @keyframes cg-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: var(--pulse-trough, 0.35); }
+}
+/* Sweeping highlight for in-flight status text ("Transcribing… 42%"). Like
+ * `spin` and `cg-pulse` above, it lives here once and pages reference it by
+ * class rather than redefining the paint. The gradient tile is 2x the element
+ * width and travels one whole tile per cycle, so the band crosses the glyphs in
+ * the first half and the line rests at --shimmer-base for the second. The
+ * asymmetric ramps (18/50/67) are what make it read as motion rather than a
+ * symmetric pulse: the steep edge leads, the soft ramp trails behind it.
+ *
+ * One rule for applying it: the transparent fill *inherits*, so the class must go
+ * on an element holding nothing but the label text — on a container it also
+ * erases the elapsed clock and the Cancel button inside. Sizing is handled below
+ * and needs no care at the call site. Only in-flight text shimmers; clear the
+ * class when the same element flips to a result, an error or an idle message.
+ * Override --shimmer-duration on the element for a calmer or busier cycle. */
+.cg-shimmer {
+  display: inline-block;
+  /* A flex/grid item is blockified (the inline-block above is ignored) and, in a
+   * column container, stretched to the full track — which drags the sweep out
+   * across empty space instead of the glyphs. A definite cross size opts out of
+   * that stretch without touching alignment, and still wraps at the container
+   * width, so the class hugs its text wherever it lands. */
+  width: fit-content;
+  --shimmer-duration: 1s;
+  background-image: linear-gradient(90deg,
+    var(--shimmer-base) 0%,
+    var(--shimmer-base) 18%,
+    var(--shimmer-peak) 50%,
+    var(--shimmer-base) 67%,
+    var(--shimmer-base) 100%);
+  background-size: 200% 100%;
+  background-repeat: repeat;      /* required — the tile is narrower than the sweep */
+  -webkit-background-clip: text;  /* still needed in WebKit/WKWebView */
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: cg-shimmer-sweep var(--shimmer-duration) linear infinite;
+}
+@keyframes cg-shimmer-sweep {
+  /* A percentage background-position resolves against (elementWidth - imageWidth),
+   * which is negative here, so -200% moves the tile RIGHT by two element widths —
+   * exactly one tile, hence a seamless loop with no jump at the wrap. */
+  from { background-position:    0% 0; }
+  to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Falls back to --fg-muted rather than --shimmer-base: base is dimmer than
+   * what these labels used before the shimmer, and a reduced-motion preference
+   * should not also cost contrast. */
+  .cg-shimmer {
+    animation: none;
+    background-image: none;
+    color: var(--fg-muted);
+    -webkit-text-fill-color: var(--fg-muted);
+  }
 }
 /* Cross-reference badge icon (mask-image from assets/icons/) */
 .xref-badge-icon {

@@ -1131,6 +1131,7 @@
     // Skeleton frame + a textual "Loading…" in the subheader make the switch
     // legibly in-progress; both are replaced once video info resolves (or on the
     // error path below).
+    qs("#videoInfo").classList.add("cg-shimmer");
     qs("#videoInfo").textContent = "Loading…";
     qs("#frameEmpty").classList.remove("hidden");
     setInfoParticipant(pid);
@@ -1147,7 +1148,7 @@
     apiGet("api/video/info/" + encodeURIComponent(pid))
       .then(function (data) {
         if (participantRequestVersion !== _participantRequestVersion || pid !== state.selectedParticipant) return;
-        if (!data.ok) { qs("#videoInfo").textContent = ""; return; }
+        if (!data.ok) { qs("#videoInfo").classList.remove("cg-shimmer"); qs("#videoInfo").textContent = ""; return; }
         state.videoInfo = data.info;
         // Duration is only known now, so a restored marker can't be range-checked
         // until this point.
@@ -1168,6 +1169,7 @@
         if (data.info.duration) parts.push(formatDuration(data.info.duration));
         if (data.info.width && data.info.height) parts.push(data.info.width + "x" + data.info.height);
         if (data.info.fps) parts.push(Math.round(data.info.fps) + "fps");
+        qs("#videoInfo").classList.remove("cg-shimmer");
         qs("#videoInfo").textContent = parts.join(" \u00b7 ");
         renderTimeline();
         updatePinButtons();
@@ -1179,6 +1181,7 @@
         // Clear the "Loading…" placeholder for the still-current participant so
         // it doesn't hang after a failed fetch.
         if (participantRequestVersion === _participantRequestVersion && pid === state.selectedParticipant) {
+          qs("#videoInfo").classList.remove("cg-shimmer");
           qs("#videoInfo").textContent = "";
         }
         showToast("Failed to load video info");

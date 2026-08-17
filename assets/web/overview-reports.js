@@ -297,8 +297,12 @@
     row.appendChild(el("span", "rp-source-dot is-" + kind));
     row.appendChild(el("span", "rp-source-label", labelText));
     var statusEl = el("span", "rp-source-status");
-    if (typeof status === "string") statusEl.textContent = status;
-    else statusEl.appendChild(status);
+    // Only a busy row is in flight, and the shimmer goes on an inner span:
+    // statusEl also carries element children on other rows, and .cg-shimmer's
+    // transparent text fill inherits onto anything inside it.
+    if (typeof status !== "string") statusEl.appendChild(status);
+    else if (kind === "busy") statusEl.appendChild(el("span", "cg-shimmer", status));
+    else statusEl.textContent = status;
     row.appendChild(statusEl);
     if (actionEl) {
       var act = el("span", "rp-source-action");
@@ -495,6 +499,7 @@
   function renderReportArea() {
     if (!dom.actions) return;
     dom.actions.innerHTML = "";
+    dom.meta.classList.remove("cg-shimmer");
     dom.meta.textContent = "";
     var pid = rpState.selected;
     var r = rec();
@@ -506,6 +511,7 @@
 
     if (rpState.reportGenerating) {
       dom.actions.appendChild(P.createBtn({ label: "Stop", icon: "stop", size: "sm", onClick: stopReport }));
+      dom.meta.classList.add("cg-shimmer");
       dom.meta.textContent = "Generating…";
       renderReportBodyPartial();
       return;
@@ -531,6 +537,7 @@
     }
 
     var hint;
+    var loading = false;
     if (!canGenerate) {
       hint = "Needs a transcript summary first — trigger the missing steps above.";
     } else if (gate) {
@@ -539,9 +546,10 @@
       hint = "No report yet. Generate one from the sources above.";
     } else {
       hint = "Loading…";
+      loading = true;
     }
     dom.body.innerHTML = "";
-    dom.body.appendChild(el("p", "rp-report-hint", hint));
+    dom.body.appendChild(el("p", "rp-report-hint" + (loading ? " cg-shimmer" : ""), hint));
   }
 
   // ---- Notices (transcribe download gate, trigger failures) ----
@@ -816,6 +824,7 @@
 
   function renderClipsProgress() {
     if (!rpState.clipsGenerating || !dom.clipsMeta) return;
+    dom.clipsMeta.classList.add("cg-shimmer");
     dom.clipsMeta.textContent = rpState.clipsDone + "/" + rpState.clipsTotal + " cells";
     if (dom.clipsGenBtn) {
       var frac = rpState.clipsTotal ? rpState.clipsDone / rpState.clipsTotal : 0;
@@ -883,6 +892,7 @@
         );
         dom.clipsActions.appendChild(genBtn);
       }
+      dom.clipsMeta.classList.remove("cg-shimmer");
       dom.clipsMeta.textContent = rpState.clips.length
         ? clipgenPluralUnit(rpState.clips.length, "clip", "clips")
         : (rpState.clipsLoaded ? "no clips yet" : "");

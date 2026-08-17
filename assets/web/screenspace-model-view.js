@@ -432,6 +432,9 @@
     var meta = qs("#modelViewMeta");
     var img = qs("#modelViewImage");
     if (!meta || !img) return;
+    // Clear the in-flight shimmer up front so every path below — including the
+    // early returns — starts flat; the fetch branch re-adds it.
+    meta.classList.remove("cg-shimmer");
 
     if (!state.selectedParticipant) {
       meta.textContent = "Select a participant to preview.";
@@ -493,10 +496,12 @@
     var url = "api/preview/" + encodeURIComponent(state.selectedParticipant)
       + "/" + ts + "?" + qsParts.join("&");
 
+    meta.classList.add("cg-shimmer");
     meta.textContent = "Loading preview…";
 
     function applyPreviewError() {
       if (gen !== _modelViewGen) return;
+      meta.classList.remove("cg-shimmer");
       meta.textContent = "Preview unavailable.";
       img.removeAttribute("src");
     }
@@ -510,6 +515,7 @@
       var u = URL.createObjectURL(blob);
       img._modelViewObjectUrl = u;
       img.src = u;
+      meta.classList.remove("cg-shimmer");
       var metaText = MODEL_VIEW_META[tool] || "";
       if (!hasRegion) {
         metaText = (metaText ? metaText + " " : "") + "(Full frame — no region selected.)";
@@ -588,6 +594,7 @@
         img._modelViewObjectUrl = null;
       }
       img.src = tmp.src;
+      meta.classList.remove("cg-shimmer");
       meta.textContent = MODEL_VIEW_META[tool] || "";
       _refetchOverlayLayer();
     };

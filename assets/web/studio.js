@@ -1131,7 +1131,7 @@
     buildSkeletonGrid(qs("#sheetLoading .skeleton-grid"), 9, 4);
     var loading = qs("#sheetLoading");
     if (loading && !loading.querySelector(".sheet-loading-caption")) {
-      var cap = el("div", "sheet-loading-caption", "Loading sheet…");
+      var cap = el("div", "sheet-loading-caption cg-shimmer", "Loading sheet…");
       cap.setAttribute("aria-live", "polite");
       loading.insertBefore(cap, loading.firstChild);
     }
@@ -3650,6 +3650,9 @@
       return;
     }
     el.classList.remove("hidden");
+    // Shimmer only while the run is live: the counter lingers after a job ends
+    // so the user can read the final tally, and a resting tally shouldn't move.
+    el.classList.toggle("cg-shimmer", state.artifactGenerating);
     var parts = [];
     if (hasCount) parts.push(_genLastDone + " / " + _genLastTotal + " cells");
     if (state.artifactGenerating) {
@@ -4204,6 +4207,7 @@
 
   function showOverlay(message) {
     qs("#statusSpinner").style.display = "";
+    qs("#statusTitle").classList.add("cg-shimmer");
     qs("#statusTitle").textContent = message;
     qs("#statusMessage").textContent = "";
     qs("#statusMessage").className = "";
@@ -4215,6 +4219,7 @@
 
   function showResult(successMsg, errorMsg, filePath) {
     qs("#statusSpinner").style.display = "none";
+    qs("#statusTitle").classList.remove("cg-shimmer"); // Error / Done are resting states
     if (errorMsg) {
       qs("#statusTitle").textContent = "Error";
       qs("#statusMessage").textContent = errorMsg;
@@ -4257,7 +4262,8 @@
     if (_buildStatusCancelCleanup) _buildStatusCancelCleanup();
     qs("#buildStatusSpinner").style.display = "";
     qs("#buildStatusMessage").textContent = message;
-    qs("#buildStatusMessage").className = "build-status-msg";
+    // showBuildResult() rewrites className, so the shimmer clears itself.
+    qs("#buildStatusMessage").className = "build-status-msg cg-shimmer";
     // Elapsed clock — idempotent start so a multi-message build keeps one clock.
     _buildEtaTracker.start();
     _studioEtaTicker.ensure();

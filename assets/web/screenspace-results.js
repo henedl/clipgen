@@ -727,7 +727,8 @@
     // results from the previous task are still in state.selectedTaskResults.
     if (state.resultsLoading || !results || !task) {
       var emptyMsg = state.resultsLoading ? "Loading results…" : "Click a task to view results.";
-      container.innerHTML = '<div class="panel-empty">' + emptyMsg + "</div>";
+      var emptyCls = "panel-empty" + (state.resultsLoading ? " cg-shimmer" : "");
+      container.innerHTML = '<div class="' + emptyCls + '">' + emptyMsg + "</div>";
       countEl.textContent = "";
       actionsEl.classList.add("hidden");
       fastLabel.classList.add("hidden");

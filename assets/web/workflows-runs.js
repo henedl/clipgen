@@ -658,7 +658,7 @@
     }
     panel.dataset.loading = "1";
     panel.innerHTML = "";
-    panel.appendChild(el("div", "wf-result-line", "Loading…"));
+    panel.appendChild(el("div", "wf-result-line cg-shimmer", "Loading…"));
     apiGet(
       "api/runs/" +
         encodeURIComponent(run.id) +
@@ -841,7 +841,7 @@
     }
     // Live stream dropped for the active run — polling is covering the gap.
     if (_reconnecting && run.id === state.activeRunId && !isTerminal(run.status)) {
-      head.appendChild(el("span", "wf-run-reconnect", "Reconnecting…"));
+      head.appendChild(el("span", "wf-run-reconnect cg-shimmer", "Reconnecting…"));
     }
     var counts = statusCounts(run);
     var total = Object.keys(run.nodeStates || {}).length;
@@ -909,7 +909,7 @@
       batch.id === state.activeBatchId &&
       !isTerminal(batch.status)
     ) {
-      head.appendChild(el("span", "wf-run-reconnect", "Reconnecting…"));
+      head.appendChild(el("span", "wf-run-reconnect cg-shimmer", "Reconnecting…"));
     }
     var counts = batchCounts(batch);
     var total = (batch.children || []).length;

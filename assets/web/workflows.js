@@ -804,6 +804,7 @@
     var status = qs("#wfSaveStatus");
     if (!status) return;
     status.classList.toggle("wf-save-error", mode === "error");
+    status.classList.toggle("cg-shimmer", mode === "saving");
     status.textContent =
       mode === "saving"
         ? "Saving…"
@@ -922,6 +923,7 @@
     if (overlay) overlay.classList.toggle("hidden", state.ready);
     var msg = qs("#wfOverlayMsg");
     if (msg) {
+      msg.classList.toggle("cg-shimmer", mode !== "error");
       msg.textContent =
         mode === "error"
           ? "Couldn't load workflows. Check the server, then retry."
