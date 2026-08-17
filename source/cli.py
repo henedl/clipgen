@@ -899,8 +899,13 @@ def get_runtime_working_dir() -> str:
       and invalidate the signature.
     * a one-dir build (Windows/Linux) — the folder containing the payload
       directory. One-dir puts ``clipgen.exe`` *inside* ``clipgen/`` alongside
-      ``lib/``; the folder the user actually dragged somewhere is its
+      ``lib/``; the folder the user actually dragged out of the zip is its
       parent, so that is where they will drop ``credentials.json``.
+    * a one-dir *installer* copy — Inno Setup lands that same layout at
+      ``%LOCALAPPDATA%\\Programs\\clipgen``. Walking up one more level would
+      put cwd in ``Programs`` itself, so stay in ``{app}``. Detected by an
+      ``unins000.exe`` sibling (Inno's uninstaller) or a parent named
+      ``Programs``.
     * anything else — the executable's own directory.
     """
     if not getattr(sys, "frozen", False):
@@ -919,6 +924,13 @@ def get_runtime_working_dir() -> str:
     # of Contents/MacOS; the .app branch above handles it.)
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass and Path(meipass).resolve().parent == exe_dir:
+        # Portable zip: .../clipgen/{clipgen.exe, lib/} → cwd is .../
+        # Inno installer: %LOCALAPPDATA%/Programs/clipgen/{clipgen.exe, lib/}
+        # → stay in {app}, not in Programs.
+        if (exe_dir / "unins000.exe").is_file() or exe_dir.parent.name.lower() == (
+            "programs"
+        ):
+            return str(exe_dir)
         return str(exe_dir.parent)
     return str(exe_dir)
 
