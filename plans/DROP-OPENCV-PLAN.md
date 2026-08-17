@@ -7,6 +7,13 @@ self-compiled `WITH_FFMPEG=OFF` wheel — researched and de-risked the same day,
 of the bundle) for ~1/8 the effort but keeps cv2's remaining size, cold import, and CI guard
 burden.
 
+**2026-08-17 update: the premise below no longer holds.** The maintainer decided to keep cv2
+indefinitely, and scikit-image, scipy, PyWavelets, and imagehash have since been *removed* from
+the dependency tree (replaced by in-tree `screenspace_primitives.structural_similarity` and
+`PHash`, built on cv2; guarded by `tests/test_dropped_dependencies.py` and a build-binaries.yml
+bundle check). Executing this plan now would require re-adding scipy + scikit-image and reverting
+those guards, on top of the effort estimated below. Plan stays for the evidence, not as a route.
+
 ## Context
 
 The macOS arm64 `opencv-python-headless` wheel bundles GPL-3 ffmpeg dylibs

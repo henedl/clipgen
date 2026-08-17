@@ -293,7 +293,7 @@ class TestCheckFrameForTool:
 
 
 class _FakeHash:
-    """Stand-in for imagehash.ImageHash whose subtraction is a plain |Δ|.
+    """Stand-in for screenspace.PHash whose subtraction is a plain |Δ|.
 
     Lets the boundary scan tests drive exact phash distances by encoding the
     "scene id" in a frame's pixel value, isolating the threshold + debounce

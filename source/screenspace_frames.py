@@ -8,19 +8,16 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cv2
 import numpy as np
-
-if TYPE_CHECKING:
-    import imagehash
 
 import config
 import profiling
 import utils
 import video
-from screenspace_primitives import ScanCallback, compute_phash
+from screenspace_primitives import PHash, ScanCallback, compute_phash
 
 # Codecs where keyframe-only decode (`-skip_frame nokey`) pays off: long-GOP
 # inter-coded formats. Intra-only formats (every frame is a keyframe) gain
@@ -326,7 +323,7 @@ def _scan_via_ffmpeg_pipe(
     _phash_thresh = (fast_opts or {}).get(
         "phash_threshold", config.SCREENSPACE_FAST_SCAN_PHASH_THRESHOLD
     )
-    _prev_phash: list[imagehash.ImageHash | None] = [None]
+    _prev_phash: list[PHash | None] = [None]
 
     pipe_region = None if full_frame else region
     # Push max_dim downscaling into ffmpeg only when phash_skip is off; hashing

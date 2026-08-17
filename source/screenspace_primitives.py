@@ -10,7 +10,7 @@ import functools
 import math
 import statistics
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cv2
 
@@ -22,9 +22,6 @@ try:
 except ImportError:  # pragma: no cover - depends on the installed cv2 build
     pass
 import numpy as np
-
-if TYPE_CHECKING:
-    import imagehash
 
 import config
 
@@ -692,6 +689,43 @@ def _ssim_preprocess(
     return a_gray, b_gray
 
 
+def structural_similarity(
+    a_gray: np.ndarray, b_gray: np.ndarray
+) -> tuple[float, np.ndarray]:
+    """Wang et al. SSIM over two same-shaped 2-D uint8 grayscale arrays.
+
+    In-tree replacement for ``skimage.metrics.structural_similarity`` at its
+    default parameters, which is all this codebase ever used: 7×7 uniform
+    window, K1=0.01, K2=0.03, data_range=255, sample covariance (N/(N-1)),
+    scalar score = mean of the map with the 3-px filter border cropped.
+    Returns ``(score, ssim_map)``; the uncropped float64 map is a byproduct of
+    the score, so returning it costs nothing (``cv2.BORDER_REFLECT`` matches
+    scipy's ``reflect`` mode, keeping even its border pixels skimage-equal).
+    """
+    win = 7
+    if min(a_gray.shape) < win:
+        raise ValueError("image is smaller than the 7x7 SSIM window")
+    c1 = (0.01 * 255.0) ** 2
+    c2 = (0.03 * 255.0) ** 2
+    x = a_gray.astype(np.float64)
+    y = b_gray.astype(np.float64)
+
+    def _mean(img: np.ndarray) -> np.ndarray:
+        return cv2.boxFilter(img, -1, (win, win), borderType=cv2.BORDER_REFLECT)
+
+    ux, uy = _mean(x), _mean(y)
+    cov_norm = win * win / (win * win - 1.0)
+    vx = cov_norm * (_mean(x * x) - ux * ux)
+    vy = cov_norm * (_mean(y * y) - uy * uy)
+    vxy = cov_norm * (_mean(x * y) - ux * uy)
+    smap = ((2.0 * ux * uy + c1) * (2.0 * vxy + c2)) / (
+        (ux * ux + uy * uy + c1) * (vx + vy + c2)
+    )
+    pad = win // 2
+    score = float(smap[pad:-pad, pad:-pad].mean())
+    return score, smap
+
+
 def regions_are_similar(
     region_a: np.ndarray,
     region_b: np.ndarray,
@@ -705,9 +739,7 @@ def regions_are_similar(
     if threshold <= 0.0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
     a_gray, b_gray = _ssim_preprocess(region_a, region_b)
-    from skimage.metrics import structural_similarity as ssim
-
-    score = float(ssim(a_gray, b_gray))
+    score, _ = structural_similarity(a_gray, b_gray)
     return score >= threshold, score
 
 
@@ -716,27 +748,46 @@ def ssim_diff_map(
 ) -> tuple[float, np.ndarray]:
     """SSIM score plus the per-pixel structural-similarity map.
 
-    Runs ``structural_similarity(..., full=True)`` over the same <=256/blur/gray
-    preprocessing as ``regions_are_similar``. Preview-only (off the scan hot
-    path), so the extra full-map cost never touches per-frame scanning. Returns
+    Runs ``structural_similarity`` over the same <=256/blur/gray preprocessing
+    as ``regions_are_similar``. Preview-only (off the scan hot path). Returns
     ``(score, ssim_map)`` where ``ssim_map`` is float in roughly [-1, 1] at the
     preprocessed (<=256 px) resolution (higher = more similar).
     """
     a_gray, b_gray = _ssim_preprocess(region_a, region_b)
-    from skimage.metrics import structural_similarity as ssim
-
-    score, smap = ssim(a_gray, b_gray, full=True)
-    return float(score), np.asarray(smap, dtype=np.float32)
+    score, smap = structural_similarity(a_gray, b_gray)
+    return score, np.asarray(smap, dtype=np.float32)
 
 
-def compute_phash(
-    region_pixels: np.ndarray, gray: np.ndarray | None = None
-) -> "imagehash.ImageHash":
+class PHash:
+    """Perceptual-hash bit array (in-tree replacement for ``imagehash.ImageHash``).
+
+    Consumers use exactly three things: ``a - b`` (Hamming distance, the only
+    quantity the scans compare), ``==`` (test determinism checks), and ``.hash``
+    (the 2-D bool ndarray the inactivity preview renders as a bit grid).
+    Hashes live only for the duration of one scan run and are never persisted.
+    """
+
+    __slots__ = ("hash",)
+
+    def __init__(self, bits: np.ndarray) -> None:
+        self.hash = bits
+
+    def __sub__(self, other: "PHash") -> int:
+        return int(np.count_nonzero(self.hash != other.hash))
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, PHash):
+            return NotImplemented
+        return bool(np.array_equal(self.hash, other.hash))
+
+
+def compute_phash(region_pixels: np.ndarray, gray: np.ndarray | None = None) -> PHash:
     """Compute perceptual hash of a region for fast similarity scanning.
 
-    Mirrors ``imagehash.phash`` (grayscale → 32×32 → 2D DCT → top-left 8×8 →
-    median threshold) natively in cv2, skipping the per-frame BGR→RGB +
-    ``PIL.Image`` round-trip that dominates this hot scan-callback path.
+    Implements the standard phash recipe (grayscale → 32×32 → 2D DCT →
+    top-left 8×8 → median threshold, as in ``imagehash.phash``) natively in
+    cv2, skipping the per-frame BGR→RGB + ``PIL.Image`` round-trip that
+    dominated this hot scan-callback path.
     Callers that already hold the unblurred grayscale (every scan whose
     static-skip check converts the frame) pass it as *gray* to skip the
     second conversion.
@@ -750,15 +801,13 @@ def compute_phash(
     the same scan run (never persisted), and every within-run comparison sees
     a fixed region size, so both sides always take the same branch.
     """
-    import imagehash
-
     if gray is None:
         gray = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2GRAY)
     small = _area_resize(gray, 32, 32).astype(np.float32)
     dct = cv2.dct(small)
     dctlowfreq = dct[:8, :8]
     diff = dctlowfreq > np.median(dctlowfreq)
-    return imagehash.ImageHash(diff)
+    return PHash(diff)
 
 
 # Prepared template payload shared across frames in a scan: grayscale blurred

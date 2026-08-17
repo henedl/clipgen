@@ -213,6 +213,18 @@ jobs:
             echo "::error::PyAV is back in the bundle; restore its THIRD-PARTY-LICENSES sections."
             exit 1
           fi
+          # imagehash and scikit-image were replaced by in-tree code
+          # (screenspace_primitives.PHash / structural_similarity); scipy and
+          # pywt only ever rode in as their transitive dependencies. Their
+          # notice sections are gone from THIRD-PARTY-LICENSES, so any of them
+          # reappearing in the bundle would ship ~110 MB unattributed.
+          if find dist/clipgen.app -type d \
+            \( -name "imagehash" -o -name "skimage" -o -name "scipy" -o -name "pywt" \) \
+            | grep -q .; then
+            echo "::error::imagehash/skimage/scipy/pywt are back in the bundle;"
+            echo "::error::restore their THIRD-PARTY-LICENSES sections or drop the new import."
+            exit 1
+          fi
 
       - name: Verify bundled ffmpeg features (Windows)
         if: matrix.os == 'windows-latest'

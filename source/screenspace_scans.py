@@ -8,18 +8,16 @@ each other.
 
 import subprocess
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import cv2
 import numpy as np
-
-if TYPE_CHECKING:
-    import imagehash
 
 import config
 import utils
 import video
 from screenspace_primitives import (
+    PHash,
     _ConsecutiveBuffer,
     _frame_diff_mask_gray,
     _frame_is_static,
@@ -42,6 +40,7 @@ from screenspace_primitives import (
     region_masker,
     saliency_grid_from_map,
     saliency_peak,
+    structural_similarity,
 )
 from screenspace_ocr import (
     _VALID_OPERATORS,
@@ -263,8 +262,6 @@ def scan_similarity(
     Returns list of ``{timestamp, score}`` dicts, sorted by score
     descending.
     """
-    from skimage.metrics import structural_similarity as ssim
-
     if threshold <= 0:
         threshold = config.SCREENSPACE_SSIM_THRESHOLD
     if interval_seconds <= 0:
@@ -320,7 +317,7 @@ def scan_similarity(
             cand_gray = cv2.cvtColor(
                 cv2.GaussianBlur(cand, (bk, bk), 0), cv2.COLOR_BGR2GRAY
             )
-            score = float(ssim(ref_gray, cand_gray))
+            score, _ = structural_similarity(ref_gray, cand_gray)
             if score >= threshold:
                 rd = {"timestamp": ts, "score": round(score, 4)}
                 results.append(rd)
@@ -1102,7 +1099,7 @@ def scan_inactivity(
     vid_fps, vid_duration, end_seconds, total_range = window
 
     results: list[dict[str, Any]] = []
-    prev_hash: list[imagehash.ImageHash | None] = [None]
+    prev_hash: list[PHash | None] = [None]
     prev_skip_gray: list[np.ndarray | None] = [None]
     span_start: list[float | None] = [None]
     span_distances: list[list[int]] = [[]]
@@ -1446,7 +1443,7 @@ def scan_boundaries(
     boundary_opts.pop("phash_skip", None)
 
     results: list[dict[str, Any]] = []
-    prev_hash: list[imagehash.ImageHash | None] = [None]
+    prev_hash: list[PHash | None] = [None]
     last_boundary_ts: list[float | None] = [None]
     eps = config.SCREENSPACE_BOUNDARY_CONFIDENCE_EPSILON
 

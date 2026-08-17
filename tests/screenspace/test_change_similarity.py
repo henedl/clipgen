@@ -101,12 +101,11 @@ def _one_step_phash(gray):
     (the only quantity scans consume) must track this expression.
     """
     import cv2
-    import imagehash
 
     small = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
     dct = cv2.dct(small)
     dctlowfreq = dct[:8, :8]
-    return imagehash.ImageHash(dctlowfreq > np.median(dctlowfreq))
+    return screenspace.PHash(dctlowfreq > np.median(dctlowfreq))
 
 
 def _structured_frame(rng, h, w, t):

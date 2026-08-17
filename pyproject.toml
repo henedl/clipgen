@@ -17,8 +17,6 @@ dependencies = [
     "opencv-python-headless>=4.14.0.94,<5",
     "numpy>=1.26.0",
     "Pillow>=10.0.0",
-    "imagehash>=4.3.0",
-    "scikit-image>=0.22.0",
     "rapidocr>=3.9,<4",
     # Direct, not just transitive via faster-whisper: rapidocr runs its ONNX
     # models on whatever onnxruntime is installed (the engine is decoupled

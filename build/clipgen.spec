@@ -99,6 +99,11 @@ excludes = [
     # satisfies the import at runtime. Its wheel would re-add a second ~40 MB
     # FFmpeg beside the vendored ffmpeg/ffprobe binaries below.
     "av",
+    # Replaced by in-tree code (screenspace_primitives.PHash and
+    # structural_similarity) and removed from the dependency tree; these
+    # entries document that on purpose. scipy/pywt rode in only as their
+    # transitive dependencies (~110 MB unpacked, scipy alone 71 MB).
+    "imagehash", "skimage", "scipy", "pywt",
 ]
 
 # Bundled ffmpeg/ffprobe: pinned static GPL builds, fetched by

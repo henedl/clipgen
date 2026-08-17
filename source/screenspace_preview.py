@@ -970,7 +970,7 @@ def _preview_inactivity(
         return _placeholder("Select a region to preview")
 
     ph = screenspace_primitives.compute_phash(pixels)
-    # imagehash.ImageHash exposes .hash as a 2D bool ndarray (typically 8×8 for phash)
+    # PHash exposes .hash as a 2D bool ndarray (typically 8×8 for phash)
     bits = np.asarray(ph.hash, dtype=np.uint8) * 255
     # Upscale to a visible grid
     cell = 16
