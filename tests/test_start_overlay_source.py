@@ -142,6 +142,15 @@ def test_form_hotkeys_require_the_open_tab():
         assert "isOpenForm" not in entry, hid
 
 
+def test_load_status_rerenders_about_when_that_tab_is_showing():
+    """Opening About before /api/status resolves must not freeze v0.0.0."""
+    src = strip_comments(read("start-overlay.js"))
+    body = src[src.index("function loadStatus") :]
+    body = body[: body.index("\n  function ")]
+    assert 'startTab === "about"' in body
+    assert "renderAbout()" in body
+
+
 def test_both_panels_ship_a_refresh_button():
     html = read("start-overlay.html")
     for role in ("google-refresh", "excel-refresh"):
