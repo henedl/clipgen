@@ -289,7 +289,9 @@ def test_queue_cards_do_not_bind_per_card_listeners() -> None:
     assert "data-queue-idx" in body
     assert "function bindQueueList(cfg)" in src
     impl = src[
-        src.index("function renderQueueImpl(") : src.index("function renderArtifactQueue(")
+        src.index("function renderQueueImpl(") : src.index(
+            "function renderArtifactQueue("
+        )
     ]
     assert "document.createDocumentFragment" in impl
     bind_start = src.index("function bindQueueList(")
