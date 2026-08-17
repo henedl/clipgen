@@ -45,6 +45,20 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; time ISCC runs (the zip step copies them in first), so they install too.
 Source: "..\dist\clipgen\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 
+[InstallDelete]
+; Inno overlays {app} and does not remove files the new payload no longer
+; ships. Upgrades from before the RapidOCR / no-PyAV / in-tree-pHash work
+; would otherwise keep ~110 MB of imagehash/skimage/scipy plus easyocr/torch/av.
+Type: filesandordirs; Name: "{app}\lib\imagehash*"
+Type: filesandordirs; Name: "{app}\lib\skimage*"
+Type: filesandordirs; Name: "{app}\lib\scikit_image*"
+Type: filesandordirs; Name: "{app}\lib\scipy*"
+Type: filesandordirs; Name: "{app}\lib\pywt*"
+Type: filesandordirs; Name: "{app}\lib\PyWavelets*"
+Type: filesandordirs; Name: "{app}\lib\easyocr*"
+Type: filesandordirs; Name: "{app}\lib\torch*"
+Type: filesandordirs; Name: "{app}\lib\av*"
+
 [Icons]
 Name: "{autoprograms}\clipgen"; Filename: "{app}\clipgen.exe"
 Name: "{autodesktop}\clipgen"; Filename: "{app}\clipgen.exe"; Tasks: desktopicon
