@@ -242,7 +242,10 @@ if sys.platform == "darwin":
             "CFBundleShortVersionString": _version,
             "CFBundleVersion": _version,
             "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "11.0",
+            # onnxruntime and numpy ship macosx_14_0 wheels; the self-built
+            # OpenCV wheel is MACOSX_DEPLOYMENT_TARGET=13.0. Advertising 11
+            # let Gatekeeper install on 11–13, then import failed at launch.
+            "LSMinimumSystemVersion": "14.0",
             # macOS raises a "find devices on your local network?" prompt on
             # first launch because the app binds a TCP socket (the UI is served
             # over loopback to the embedded webview). Without this key the
