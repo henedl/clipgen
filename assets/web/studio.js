@@ -2810,10 +2810,7 @@
       });
     }
 
-    // `ev` is the event that ended the drag, when there was one — a `drop`
-    // means a queue accepted the cards, anything else means the drag was
-    // abandoned. The two want different exits (see below).
-    function cleanup(ev) {
+    function cleanup() {
       pendingDrag = null;
       if (rafPending) {
         cancelAnimationFrame(rafPending);
@@ -2822,24 +2819,11 @@
       if (ghost) {
         var node = ghost;
         ghost = null;
-        // On a completed drop, go instantly. The ghost stops tracking the
-        // cursor the moment the button is released, so any exit animation is
-        // a frozen duplicate card sitting at the cursor — measured at ~150ms
-        // (two frames at full opacity, then a 120ms fade) while the real card
-        // was already painted into the queue in the drop's own frame. That
-        // reads as lag, not as polish. The queue card appearing *is* the
-        // confirmation; there is nothing left for a fade to say.
-        if (ev && ev.type === "drop") {
+        node.classList.remove("in");
+        node.classList.add("out");
+        setTimeout(function () {
           if (node.parentNode) node.parentNode.removeChild(node);
-        } else {
-          // An abandoned drag has no such confirmation, so it keeps the short
-          // fade — there the animation is the only thing saying "discarded".
-          node.classList.remove("in");
-          node.classList.add("out");
-          setTimeout(function () {
-            if (node.parentNode) node.parentNode.removeChild(node);
-          }, 140);
-        }
+        }, 140);
       }
       pointerOrigin = null;
     }
