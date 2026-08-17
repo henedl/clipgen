@@ -442,7 +442,12 @@ def average_color_hsv(
     h, w = region_pixels.shape[:2]
     if h > 64 or w > 64:
         new_w, new_h = min(w, 64), min(h, 64)
-        region_pixels = _area_resize(region_pixels, new_w, new_h)
+        # One-step INTER_AREA: the two-pass integer-ratio split used by
+        # pHash rounds through an intermediate uint8 image and can shift
+        # the HSV mean enough to flip color_matches at default tolerances.
+        region_pixels = cv2.resize(
+            region_pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
+        )
         if mask is not None:
             mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
