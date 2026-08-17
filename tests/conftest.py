@@ -121,6 +121,24 @@ def _reset_gui_launch():
 
 
 @pytest.fixture(autouse=True)
+def _reset_filename_overrides():
+    """Restore ``config.FILENAME_OVERRIDES`` after every test.
+
+    ``server._seed_filename_overrides`` reassigns it whenever a spreadsheet or
+    mind map is opened, so a test that drives ``/api/spreadsheets/open`` would
+    otherwise leave one study's overrides pointing every later test's
+    participants at files that are not there.
+    """
+    import config
+
+    original = config.FILENAME_OVERRIDES
+    try:
+        yield
+    finally:
+        config.FILENAME_OVERRIDES = original
+
+
+@pytest.fixture(autouse=True)
 def _reset_desktop_chrome():
     """Restore ``utils.DESKTOP_CHROME`` after every test.
 

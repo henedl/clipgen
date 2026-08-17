@@ -79,6 +79,7 @@ def test_save_and_reload_roundtrip(settings_file):
         "recent_projects": [],
         "window": None,
         "remember_window": True,
+        "filename_overrides": {},
     }
     start_settings.save_start_settings(payload)
     assert settings_file.is_file()
@@ -276,3 +277,54 @@ def test_clear_window_geometry_works_with_persist_disabled(settings_file):
     start_settings.set_persist_enabled(False)
     start_settings.clear_window_geometry()
     assert start_settings.load_window_geometry() is None
+
+
+# ---- Filename overrides ----
+
+
+def test_filename_override_roundtrips(settings_file):
+    start_settings.set_filename_override(
+        "excel", "/study.xlsx", "Data", "P01", "morning.mp4 + afternoon.mp4"
+    )
+    assert start_settings.filename_overrides("excel", "/study.xlsx", "Data") == {
+        "P01": "morning.mp4 + afternoon.mp4"
+    }
+
+
+def test_filename_overrides_are_per_worksheet(settings_file):
+    """One workbook can hold several studies; P01 means a different person in each."""
+    start_settings.set_filename_override(
+        "excel", "/study.xlsx", "Wave1", "P01", "a.mp4"
+    )
+    start_settings.set_filename_override(
+        "excel", "/study.xlsx", "Wave2", "P01", "b.mp4"
+    )
+
+    assert start_settings.filename_overrides("excel", "/study.xlsx", "Wave1") == {
+        "P01": "a.mp4"
+    }
+    assert start_settings.filename_overrides("excel", "/study.xlsx", "Wave2") == {
+        "P01": "b.mp4"
+    }
+
+
+def test_clearing_a_filename_override_drops_the_source_entry(settings_file):
+    start_settings.set_filename_override(
+        "mindnode", "/map.mindnode", "", "P01", "a.mp4"
+    )
+    remaining = start_settings.set_filename_override(
+        "mindnode", "/map.mindnode", "", "P01", ""
+    )
+    assert remaining == {}
+    assert start_settings.filename_overrides("mindnode", "/map.mindnode", "") == {}
+    # Emptied sources are removed rather than left as {} husks.
+    assert start_settings.load_start_settings()["filename_overrides"] == {}
+
+
+def test_filename_overrides_are_independent_of_persist_enabled(settings_file):
+    """An override is configuration, not project history — see set_filename_override."""
+    start_settings.set_persist_enabled(False)
+    start_settings.set_filename_override("excel", "/study.xlsx", "Data", "P01", "a.mp4")
+    assert start_settings.filename_overrides("excel", "/study.xlsx", "Data") == {
+        "P01": "a.mp4"
+    }

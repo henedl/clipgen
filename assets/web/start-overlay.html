@@ -226,6 +226,15 @@
                     <div class="mindnode-preview" data-role="mindnode-preview" hidden>
                       <img class="mindnode-preview__thumb" data-role="mindnode-preview-thumb" alt="" hidden>
                       <div class="mindnode-preview__summary" data-role="mindnode-preview-summary"></div>
+                      <!-- The map's participants and the source videos they need,
+                           editable per line like the spreadsheet tabs'. -->
+                      <div class="source-preview source-preview--inline" data-role="mindnode-sources" hidden>
+                        <div class="source-preview__head">
+                          <span class="so-icon so-icon--sm" data-icon="film"></span>
+                          <span class="source-preview__summary" data-role="mindnode-sources-summary"></span>
+                        </div>
+                        <div class="source-preview__list" data-role="mindnode-sources-list"></div>
+                      </div>
                     </div>
                   </div>
 
@@ -260,6 +269,10 @@
                 </div>
                 <div class="source-preview__list" data-role="source-preview-list"></div>
               </div>
+              <!-- Suggestions for the per-row filename override: the videos in the
+                   input folder that no participant claims. Shared by both previews;
+                   only one of them is ever on screen. -->
+              <datalist id="startSourceFiles"></datalist>
             </section>
 
           </div>

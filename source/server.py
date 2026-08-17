@@ -509,15 +509,7 @@ def _resolve_participant_sources(participant: str) -> list[Path]:
     )
     if participant not in participants:
         return []
-    p_idx = participants.index(participant)
-    col_idx = ctx.id_cell.col + p_idx
-
-    override = None
-    if ctx.filename_row_idx is not None:
-        row_data = ctx.sheet_data[ctx.filename_row_idx]
-        if col_idx < len(row_data) and row_data[col_idx].strip():
-            override = row_data[col_idx].strip()
-
+    override = spreadsheet.participant_filename_overrides(ctx).get(participant)
     return files.resolve_source_video_paths(
         ctx.study_name, participant, override, utils.get_effective_input_dir()
     )
@@ -3322,6 +3314,77 @@ def _open_worksheet_for(
     return new_ws, label
 
 
+def _seed_filename_overrides(source: dict[str, str] | None) -> None:
+    """Point ``config.FILENAME_OVERRIDES`` at the source that is now open.
+
+    The user's per-participant filename overrides are stored per spreadsheet /
+    mind map in ``start.json``, but every consumer reads them off ``config`` —
+    a ``SheetContext`` carries no spreadsheet identity. So the identity is
+    resolved exactly here, whenever the open source changes (open, worksheet
+    swap, close, CLI launch). ``None`` clears the map, which is what a session
+    with no identifiable source must run with.
+    """
+    import start_settings
+
+    config.FILENAME_OVERRIDES = (
+        start_settings.filename_overrides(
+            source.get("type", ""),
+            source.get("id_or_path", ""),
+            source.get("worksheet", ""),
+        )
+        if source
+        else {}
+    )
+
+
+def _preview_source_rows(
+    study: str,
+    participants: list[str],
+    sheet_overrides: dict[str, str | None],
+    user_overrides: dict[str, str],
+    base_dir: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Build the Start overlay's source-video preview rows for one source.
+
+    One row per participant — the filenames clipgen will look for, whether they
+    are all on disk, the sheet's own ``Filename``-row value and the user's own
+    override (empty unless they set one here, which is what enables the row's
+    Restore button). The user's override wins, the same precedence
+    ``spreadsheet.participant_filename_overrides`` applies.
+
+    Also returns the video files in *base_dir* that no participant claims: the
+    datalist the override input offers, i.e. exactly the footage that is sitting
+    there unused while some participant reads as missing.
+    """
+    rows: list[dict[str, Any]] = []
+    claimed: set[str] = set()
+    for pid in participants:
+        sheet_value = sheet_overrides.get(pid) or ""
+        user_value = user_overrides.get(pid) or ""
+        override = user_value or sheet_value or None
+        paths = files.resolve_source_video_paths(study, pid, override, base_dir)
+        for path in paths:
+            claimed.add(path.name.lower())
+        rows.append(
+            {
+                "id": pid,
+                "filenames": [p.name for p in paths],
+                "found": all(p.is_file() for p in paths),
+                "override": bool(override),
+                "override_value": user_value,
+                "sheet_value": sheet_value,
+            }
+        )
+    unmatched: list[str] = []
+    try:
+        for path in sorted(base_dir.glob(f"*{config.FILEFORMAT}")):
+            if path.is_file() and path.name.lower() not in claimed:
+                unmatched.append(path.name)
+    except OSError:
+        pass  # unreadable folder: no suggestions is fine, an error here is not
+    return rows, unmatched
+
+
 def _mindnode_source() -> dict[str, str] | None:
     """The open mind map as a recent-projects source descriptor, if any."""
     if _mindnode_doc is None:
@@ -3360,6 +3423,7 @@ def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
         "label": label,
         "worksheet": "",
     }
+    _seed_filename_overrides(source)
     start_settings.record_recent_spreadsheet("mindnode", id_or_path, label, "")
     start_settings.record_project_session(
         str(utils.get_effective_input_dir()),
@@ -3455,6 +3519,8 @@ def _init_combined_state(
     # both of these itself.
     global _active_sheet_meta
     _active_sheet_meta = _derive_sheet_meta(worksheet)
+    # Before the sibling initialisers below, which resolve participants.
+    _seed_filename_overrides(_active_sheet_meta)
     if gspread_client is not None:
         _google_auth.client = gspread_client
     if _active_sheet_meta is not None:
@@ -3700,17 +3766,34 @@ def build_combined_app(
 
         Read-only counterpart to ``/api/spreadsheets/preview``: parses the
         bundle without touching module state so the Start overlay can show what
-        the map holds while the user is still choosing.
+        the map holds while the user is still choosing. Carries the same
+        editable ``sources`` rows and ``unmatched`` datalist as the spreadsheet
+        preview — a mind map has no Filename row, so an override set here is the
+        *only* way to point a participant at differently-named footage.
         """
         import mindnode
+        import start_settings
 
         path = (request.args.get("path") or "").strip()
+        input_dir = (request.args.get("input_dir") or "").strip()
         if not path:
             return err("Required: path")
         try:
             doc = mindnode.parse_document(path)
         except ValueError as exc:
             return err(str(exc), 400)
+        base_dir = (
+            Path(input_dir).expanduser()
+            if input_dir
+            else utils.get_effective_input_dir()
+        )
+        rows, unmatched = _preview_source_rows(
+            doc["study"],
+            list(doc["participants"]),
+            {},
+            start_settings.filename_overrides("mindnode", path, ""),
+            base_dir,
+        )
         return ok(
             study=doc["study"],
             roots=doc["roots"],
@@ -3720,6 +3803,8 @@ def build_combined_app(
             with_times=doc["with_times"],
             without_times=doc["without_times"],
             has_preview=(Path(path) / mindnode.PREVIEW_RELPATH).is_file(),
+            sources=rows,
+            unmatched=unmatched,
         )
 
     @combined.route("/api/spreadsheets/mindnode/thumb", methods=["GET"])
@@ -3833,9 +3918,11 @@ def build_combined_app(
         Query params: ``type`` ('google'|'excel'), ``id_or_path``, optional
         ``worksheet``, and optional ``input_dir`` (the Start overlay's *typed*
         folder, which is not yet the server's effective input dir). Returns
-        ``{study, participants: [{id, filenames, found, override}]}`` — the names
+        ``{study, worksheet, unmatched, participants: [{id, filenames, found,
+        override, override_value, sheet_value}]}`` — the names
         ``files.resolve_source_video_paths`` will look for, and whether they are
         on disk, so a naming mismatch surfaces before the workspace is opened.
+        Each row is editable: see ``/api/spreadsheets/preview/override``.
 
         Read-only: builds a throwaway :class:`SheetContext` and never calls
         ``_swap_worksheet``, so the active sheet is untouched.
@@ -3871,30 +3958,96 @@ def build_combined_app(
                 "columns."
             )
 
+        import start_settings
+
         participants = spreadsheet.get_participant_list(
             ctx.header_row, ctx.id_cell, ctx.num_participants
         )
-        overrides = spreadsheet.participant_filename_overrides(ctx)
+        # The sheet's own Filename row only: the user overrides belong to the
+        # *previewed* identity, which is usually not the open one, so they are
+        # read here rather than taken from config.FILENAME_OVERRIDES.
+        sheet_overrides = spreadsheet.participant_filename_overrides(ctx, {})
+        loaded_worksheet = getattr(ws, "title", "") or (worksheet or "")
+        user_overrides = start_settings.filename_overrides(
+            type_, id_or_path, loaded_worksheet
+        )
         base_dir = (
             Path(input_dir).expanduser()
             if input_dir
             else utils.get_effective_input_dir()
         )
-        rows: list[dict[str, Any]] = []
-        for pid in participants:
-            override = overrides.get(pid)
-            paths = files.resolve_source_video_paths(
-                ctx.study_name, pid, override, base_dir
-            )
-            rows.append(
-                {
-                    "id": pid,
-                    "filenames": [p.name for p in paths],
-                    "found": all(p.is_file() for p in paths),
-                    "override": bool(override),
-                }
-            )
-        return ok(study=ctx.study_name, participants=rows)
+        rows, unmatched = _preview_source_rows(
+            ctx.study_name, participants, sheet_overrides, user_overrides, base_dir
+        )
+        return ok(
+            study=ctx.study_name,
+            worksheet=loaded_worksheet,
+            participants=rows,
+            unmatched=unmatched,
+        )
+
+    @combined.route("/api/spreadsheets/preview/override", methods=["POST"])
+    def api_spreadsheets_preview_override() -> FlaskResponse:
+        """Set (or clear) one participant's source-video filename override.
+
+        Body: ``{type, id_or_path, worksheet, participant, filename, study,
+        sheet_value, input_dir}``. An empty *filename* clears the override and
+        the participant falls back to *sheet_value* (the sheet's Filename row)
+        or ``{study}_{participant}.mp4``.
+
+        Deliberately does not re-read the spreadsheet: the preview it belongs to
+        costs a ``get_all_values`` (rate-limited on Google) while re-resolving a
+        path is pure disk work, so *study* and *sheet_value* are echoed back
+        from the preview payload the client already holds. They only affect what
+        this route reports — the authoritative resolution happens against the
+        real sheet when the workspace opens.
+        """
+        import start_settings
+
+        data = request.get_json(silent=True) or {}
+        type_ = (data.get("type") or "").strip()
+        id_or_path = (data.get("id_or_path") or "").strip()
+        worksheet = (data.get("worksheet") or "").strip()
+        participant = (data.get("participant") or "").strip()
+        filename = (data.get("filename") or "").strip()
+        study = (data.get("study") or "").strip()
+        sheet_value = (data.get("sheet_value") or "").strip()
+        input_dir = (data.get("input_dir") or "").strip()
+        if type_ not in ("google", "excel", "mindnode") or not id_or_path:
+            return err("Required: type ('google'|'excel'|'mindnode') and id_or_path")
+        if not participant:
+            return err("Required: participant")
+
+        user_overrides = start_settings.set_filename_override(
+            type_, id_or_path, worksheet, participant, filename
+        )
+        # If this is the source the session already has open, the change has to
+        # take effect without reopening it.
+        active = _active_project_source
+        if (
+            active
+            and active.get("type") == type_
+            and active.get("id_or_path") == id_or_path
+            and (active.get("worksheet") or "") == worksheet
+        ):
+            config.FILENAME_OVERRIDES = dict(user_overrides)
+
+        base_dir = (
+            Path(input_dir).expanduser()
+            if input_dir
+            else utils.get_effective_input_dir()
+        )
+        # Only this participant's row is recomputed. The datalist the client
+        # holds may now list a file this row claims; a suggestion list that is
+        # one entry stale is not worth a second full preview read.
+        rows, _unmatched = _preview_source_rows(
+            study,
+            [participant],
+            {participant: sheet_value or None},
+            user_overrides,
+            base_dir,
+        )
+        return ok(row=rows[0])
 
     @combined.route("/api/spreadsheets/google/auth", methods=["POST"])
     def api_spreadsheets_google_auth() -> FlaskResponse:
@@ -3975,10 +4128,6 @@ def build_combined_app(
         if new_ws is None:
             return err("Could not open spreadsheet", 404)
 
-        _swap_worksheet(new_ws)
-        if _sheet_context is None:
-            return err("Could not parse the spreadsheet", 500)
-
         # Record the worksheet actually loaded (title after auto-pick fallback)
         # so recent-projects can restore the exact tab, not just the request.
         loaded_worksheet = getattr(new_ws, "title", "") or (worksheet or "")
@@ -3988,6 +4137,18 @@ def build_combined_app(
             "label": label,
             "worksheet": loaded_worksheet,
         }
+        # Before the swap: the blueprint re-inits it runs resolve participants,
+        # and they must already see this sheet's overrides. Restored with the
+        # rest of the state if the swap fails.
+        prev_overrides = config.FILENAME_OVERRIDES
+        _seed_filename_overrides(source)
+        try:
+            _swap_worksheet(new_ws)
+        except Exception:
+            config.FILENAME_OVERRIDES = prev_overrides
+            raise
+        if _sheet_context is None:
+            return err("Could not parse the spreadsheet", 500)
         start_settings.record_recent_spreadsheet(
             type_, id_or_path, label, loaded_worksheet
         )
@@ -4017,10 +4178,12 @@ def build_combined_app(
                 _mindnode_doc = None
             # Whatever is still open becomes the session's source again.
             _active_project_source = _active_sheet_meta
+            _seed_filename_overrides(_active_project_source)
             return ok(sheet_loaded=_worksheet is not None, mindnode_loaded=False)
         _swap_worksheet(None)
         _active_sheet_meta = None
         _active_project_source = _mindnode_source()
+        _seed_filename_overrides(_active_project_source)
         return ok(sheet_loaded=False, mindnode_loaded=_mindnode_doc is not None)
 
     @combined.route("/api/folder-picker", methods=["POST"])

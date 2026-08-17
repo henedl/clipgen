@@ -101,6 +101,10 @@
     previewCache: {},
     previewReqVer: 0,         // rejects stale preview fetches
     previewDirTimer: null,    // debounce for input-folder-driven refreshes
+    // Set while a preview row's filename is being edited inline. The overlay's
+    // Escape is owned by a capture-phase modal trap that no listener on the
+    // input can pre-empt, so onEscape consults this first.
+    cancelPreviewEdit: null,
     // Baseline = the (input, output, sheet selection, tab) snapshot at the
     // moment the overlay opened (or when a recent project was clicked).
     // Drives the .is-loaded / .is-dirty glow on the path-input and
@@ -241,6 +245,9 @@
     els.mindnodePreview = root.querySelector('[data-role="mindnode-preview"]');
     els.mindnodePreviewThumb = root.querySelector('[data-role="mindnode-preview-thumb"]');
     els.mindnodePreviewSummary = root.querySelector('[data-role="mindnode-preview-summary"]');
+    els.mindnodeSources = root.querySelector('[data-role="mindnode-sources"]');
+    els.mindnodeSourcesSummary = root.querySelector('[data-role="mindnode-sources-summary"]');
+    els.mindnodeSourcesList = root.querySelector('[data-role="mindnode-sources-list"]');
     els.worksheetSection = root.querySelector('[data-role="worksheet-section"]');
     els.worksheetLoading = root.querySelector('[data-role="worksheet-loading"]');
     els.worksheetPicker = root.querySelector('[data-role="worksheet-picker"]');
@@ -252,6 +259,7 @@
     els.sourcePreviewIcon = root.querySelector('[data-role="source-preview-icon"]');
     els.sourcePreviewSummary = root.querySelector('[data-role="source-preview-summary"]');
     els.sourcePreviewList = root.querySelector('[data-role="source-preview-list"]');
+    els.sourceFiles = root.querySelector("#startSourceFiles");
 
     els.startTabs = root.querySelectorAll(".start-tab");
     els.startPanels = {
@@ -317,7 +325,9 @@
       if (state.previewDirTimer) clearTimeout(state.previewDirTimer);
       state.previewDirTimer = setTimeout(function () {
         state.previewDirTimer = null;
-        if (state.selection) loadSourcePreview();
+        if (!state.selection) return;
+        if (state.selection.type === "mindnode") loadMindnodePreview(state.selection);
+        else loadSourcePreview();
       }, WORKSHEET_PASTE_DEBOUNCE_MS);
     });
     on(els.outputDir, "input", function () {
@@ -855,6 +865,9 @@
 
   function hideSourcePreview() {
     state.previewReqVer++;   // drop anything in flight
+    // An inline edit dies with the rows below; its cancel closure would
+    // otherwise outlive them and fire against a detached row.
+    state.cancelPreviewEdit = null;
     setHidden(els.sourcePreview, true);
     stopSourcePreviewLoading();
     // Drop the rows too: the next thing to show here belongs to a different
@@ -942,31 +955,186 @@
       return;
     }
 
-    var missing = 0;
-    rows.forEach(function (row) { if (!row.found) missing++; });
-    els.sourcePreviewSummary.textContent = missing === 0
-      ? "All " + rows.length + " source videos found in the input folder"
-      : (rows.length - missing) + " of " + rows.length +
-        " source videos found — " + missing + " missing";
+    renderPreviewRows(els.sourcePreviewList, els.sourcePreviewSummary, {
+      type: sel.type,
+      id_or_path: sel.id_or_path,
+      // The worksheet the server actually resolved (an auto-picked tab has no
+      // client-side name yet), because that is what an override is keyed on.
+      worksheet: data.worksheet || sel.worksheet || "",
+    }, data.study || "", rows, data.unmatched || []);
+    setHidden(els.sourcePreview, false);
+  }
 
+  // ---- Editable preview rows ----
+  //
+  // One line per expected source video, shared by the spreadsheet and mind-map
+  // previews. Each line can be pointed at a different file: clipgen cannot
+  // write a spreadsheet back, so before this the only fix for a naming mismatch
+  // was to leave the app and edit the sheet's Filename row (and a mind map has
+  // no such row at all). An override is stored per user against the source's
+  // identity and beats the sheet's own row; see start_settings.py.
+
+  function renderPreviewRows(listEl, summaryEl, source, study, rows, unmatched) {
+    if (!listEl) return;
+    listEl.innerHTML = "";
+    fillSourceDatalist(unmatched);
+    var ctx = { source: source, study: study, rows: rows, summaryEl: summaryEl };
     // Missing first: with the list capped to a few rows, the problem should not
-    // be the part you have to scroll for.
+    // be the part you have to scroll for. Only on a full render — a row that
+    // just got fixed stays put, rather than jumping away under the cursor.
     var ordered = rows.filter(function (r) { return !r.found; })
       .concat(rows.filter(function (r) { return r.found; }));
     var frag = document.createDocumentFragment();
-    ordered.forEach(function (row) {
-      var item = el("div", "source-preview__row" + (row.found ? "" : " is-missing"));
-      var icon = el("span", "so-icon so-icon--xs source-preview__status");
-      icon.setAttribute("data-icon", row.found ? "check-circle" : "exclamation-circle");
-      item.appendChild(icon);
-      item.appendChild(el("span", "source-preview__pid", row.id));
-      item.appendChild(el("span", "source-preview__name",
-                          (row.filenames || []).join("  +  ")));
-      frag.appendChild(item);
+    ordered.forEach(function (row) { frag.appendChild(buildPreviewRow(row, ctx)); });
+    listEl.appendChild(frag);
+    applyIcons(listEl);
+    updatePreviewSummary(summaryEl, rows);
+  }
+
+  function updatePreviewSummary(summaryEl, rows) {
+    if (!summaryEl) return;
+    var missing = 0;
+    rows.forEach(function (row) { if (!row.found) missing++; });
+    summaryEl.textContent = missing === 0
+      ? "All " + rows.length + " source videos found in the input folder"
+      : (rows.length - missing) + " of " + rows.length +
+        " source videos found — " + missing + " missing";
+  }
+
+  // The videos sitting in the input folder that no participant claims — i.e.
+  // exactly the files an override is likely to want. One datalist for both
+  // previews; only one of them is ever on screen.
+  function fillSourceDatalist(unmatched) {
+    if (!els.sourceFiles) return;
+    els.sourceFiles.innerHTML = "";
+    (unmatched || []).forEach(function (name) {
+      var option = document.createElement("option");
+      option.value = name;
+      els.sourceFiles.appendChild(option);
     });
-    els.sourcePreviewList.appendChild(frag);
-    applyIcons(els.sourcePreviewList);
-    setHidden(els.sourcePreview, false);
+  }
+
+  function previewIcon(name, cls) {
+    var icon = el("span", "so-icon so-icon--xs " + cls);
+    icon.setAttribute("data-icon", name);
+    return icon;
+  }
+
+  function buildPreviewRow(row, ctx) {
+    var item = el("div", "source-preview__row");
+    item.appendChild(previewIcon("check-circle", "source-preview__status"));
+    item.appendChild(el("span", "source-preview__pid", row.id));
+    item.appendChild(el("span", "source-preview__name"));
+
+    var edit = el("button", "source-preview__btn");
+    edit.type = "button";
+    edit.setAttribute("data-tooltip", "Use a different filename for this participant");
+    edit.appendChild(previewIcon("pencil-square", "source-preview__btn-icon"));
+    on(edit, "click", function () { beginPreviewEdit(item, row, ctx); });
+
+    var reset = el("button", "source-preview__btn source-preview__reset");
+    reset.type = "button";
+    reset.setAttribute("data-tooltip", "Restore the default filename");
+    reset.appendChild(previewIcon("arrow-uturn-left", "source-preview__btn-icon"));
+    on(reset, "click", function () { commitPreviewOverride(item, row, ctx, ""); });
+
+    item.appendChild(edit);
+    item.appendChild(reset);
+    paintPreviewRow(item, row);
+    return item;
+  }
+
+  // Repaint one row from its (mutated in place) data. Rows are patched rather
+  // than re-rendered so the list neither reorders nor loses scroll position
+  // while the user works down it.
+  function paintPreviewRow(item, row) {
+    item.classList.toggle("is-missing", !row.found);
+    item.classList.toggle("is-override", !!row.override_value);
+    var status = item.querySelector(".source-preview__status");
+    if (status) {
+      status.setAttribute("data-icon", row.found ? "check-circle" : "exclamation-circle");
+    }
+    var name = item.querySelector(".source-preview__name");
+    if (name) name.textContent = (row.filenames || []).join("  +  ");
+    var reset = item.querySelector(".source-preview__reset");
+    if (reset) reset.disabled = !row.override_value;
+    applyIcons(item);
+  }
+
+  function beginPreviewEdit(item, row, ctx) {
+    if (item.querySelector(".source-preview__input")) return;
+    var name = item.querySelector(".source-preview__name");
+    if (!name) return;
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "source-preview__input";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("list", "startSourceFiles");
+    input.placeholder = "filename.mp4";
+    // Prefill with what the row resolves to today, so a small correction is a
+    // small edit. Several files for one participant are separated by "+".
+    input.value = row.override_value || (row.filenames || []).join(" + ");
+    item.replaceChild(input, name);
+    input.focus();
+    input.select();
+
+    var done = false;
+    function finish(commit) {
+      if (done) return;
+      done = true;
+      state.cancelPreviewEdit = null;
+      var value = (input.value || "").trim();
+      item.replaceChild(name, input);
+      if (commit && value !== (row.override_value || "")) {
+        commitPreviewOverride(item, row, ctx, value);
+      } else {
+        paintPreviewRow(item, row);
+      }
+    }
+    // The overlay's Escape belongs to a capture-phase modal trap, so it can't
+    // be intercepted from here; open() consults this instead.
+    state.cancelPreviewEdit = function () { finish(false); };
+    on(input, "keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(true);
+      }
+    });
+    on(input, "blur", function () { finish(true); });
+  }
+
+  function commitPreviewOverride(item, row, ctx, value) {
+    item.classList.add("is-saving");
+    apiPost("/api/spreadsheets/preview/override", {
+      type: ctx.source.type,
+      id_or_path: ctx.source.id_or_path,
+      worksheet: ctx.source.worksheet || "",
+      participant: row.id,
+      filename: value,
+      study: ctx.study || "",
+      sheet_value: row.sheet_value || "",
+      input_dir: ((els.inputDir && els.inputDir.value) || "").trim(),
+    })
+      .then(function (r) {
+        var updated = r && r.row;
+        if (updated) {
+          // Mutated in place: these row objects are the ones inside
+          // state.previewCache, so the edit survives a re-render from cache.
+          row.filenames = updated.filenames;
+          row.found = updated.found;
+          row.override = updated.override;
+          row.override_value = updated.override_value;
+        }
+      })
+      .catch(function (err) {
+        console.error("Start overlay: could not save the filename override", err);
+      })
+      .then(function () {
+        item.classList.remove("is-saving");
+        paintPreviewRow(item, row);
+        updatePreviewSummary(ctx.summaryEl, ctx.rows);
+      });
   }
 
   // The Confirm ("Open workspace") button waits while worksheets are being
@@ -1702,7 +1870,10 @@
       setHidden(els.mindnodePreview, true);
       return;
     }
-    apiGet("/api/spreadsheets/mindnode/preview?path=" + encodeURIComponent(sel.id_or_path))
+    var inputDir = ((els.inputDir && els.inputDir.value) || "").trim();
+    apiGet("/api/spreadsheets/mindnode/preview?path=" +
+           encodeURIComponent(sel.id_or_path) +
+           "&input_dir=" + encodeURIComponent(inputDir))
       .then(function (r) {
         if (reqVer !== state.mindnodePreviewReqVer) return;   // stale fetch
         applyMindnodePreview(sel, r);
@@ -1736,6 +1907,18 @@
     } else {
       setHidden(els.mindnodePreviewThumb, true);
     }
+    // Same editable file list the spreadsheet tabs get. A mind map has no
+    // Filename row, so an override set here is the only way to point a
+    // participant at differently-named footage.
+    var sources = data.sources || [];
+    if (sources.length) {
+      renderPreviewRows(els.mindnodeSourcesList, els.mindnodeSourcesSummary, {
+        type: "mindnode",
+        id_or_path: sel.id_or_path,
+        worksheet: "",
+      }, data.study || "", sources, data.unmatched || []);
+    }
+    setHidden(els.mindnodeSources, !sources.length);
     setHidden(els.mindnodePreview, false);
   }
 
@@ -2021,8 +2204,13 @@
     // to the launch trigger on dismiss (else it stays stuck on the hidden panel).
     if (typeof openBlockingModal === "function") {
       openBlockingModal(root, {
-        // Escape peels the recents fold-out first, then dismisses the overlay.
+        // Escape cancels an inline filename edit first, then peels the recents
+        // fold-out, then dismisses the overlay.
         onEscape: function () {
+          if (state.cancelPreviewEdit) {
+            state.cancelPreviewEdit();
+            return;
+          }
           if (state.recentsExpanded) {
             setRecentsExpanded(false);
             return;

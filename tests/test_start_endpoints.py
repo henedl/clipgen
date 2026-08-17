@@ -464,14 +464,19 @@ def test_preview_reports_expected_filenames_and_disk_status(client, tmp_path):
             "filenames": ["study_P01.mp4"],
             "found": True,
             "override": False,
+            "override_value": "",
+            "sheet_value": "",
         },
         {
             "id": "P02",
             "filenames": ["study_P02.mp4"],
             "found": False,
             "override": False,
+            "override_value": "",
+            "sheet_value": "",
         },
     ]
+    assert body["unmatched"] == []
 
 
 def test_preview_honours_the_filename_row_override(client, tmp_path):
@@ -494,6 +499,129 @@ def test_preview_honours_the_filename_row_override(client, tmp_path):
     assert entry["filenames"] == ["morning.mp4", "afternoon.mp4"]
     assert entry["override"] is True
     assert entry["found"] is False  # afternoon.mp4 is missing
+
+
+def test_preview_lists_unclaimed_videos_for_the_override_datalist(client, tmp_path):
+    """Footage sitting unused in the folder is what an override is likely to want."""
+    wb_path = tmp_path / "in" / "preview.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    (tmp_path / "in" / "study_P01.mp4").write_bytes(b"")
+    (tmp_path / "in" / "session two.mp4").write_bytes(b"")
+
+    body = client.get(
+        "/api/spreadsheets/preview",
+        query_string={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+    # The claimed file is not offered; the orphan is.
+    assert body["unmatched"] == ["session two.mp4"]
+
+
+def test_preview_applies_a_stored_user_override(client, tmp_path):
+    """A saved override wins over the sheet's own Filename row."""
+    wb_path = tmp_path / "in" / "override.xlsx"
+    _write_preview_workbook(wb_path, ["P01"], filename_row={"P01": "morning.mp4"})
+    (tmp_path / "in" / "actually-this-one.mp4").write_bytes(b"")
+    start_settings.set_filename_override(
+        "excel", str(wb_path), "Data", "P01", "actually-this-one.mp4"
+    )
+
+    body = client.get(
+        "/api/spreadsheets/preview",
+        query_string={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+    entry = body["participants"][0]
+    assert entry["filenames"] == ["actually-this-one.mp4"]
+    assert entry["found"] is True
+    assert entry["override_value"] == "actually-this-one.mp4"
+    assert entry["sheet_value"] == "morning.mp4"  # what Restore falls back to
+
+
+def test_override_route_persists_and_recomputes_the_row(client, tmp_path):
+    (tmp_path / "in" / "recording 3.mp4").write_bytes(b"")
+
+    body = client.post(
+        "/api/spreadsheets/preview/override",
+        json={
+            "type": "excel",
+            "id_or_path": str(tmp_path / "in" / "study.xlsx"),
+            "worksheet": "Data",
+            "participant": "P01",
+            "filename": "recording 3.mp4",
+            "study": "study",
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+
+    assert body["ok"] is True
+    assert body["row"] == {
+        "id": "P01",
+        "filenames": ["recording 3.mp4"],
+        "found": True,
+        "override": True,
+        "override_value": "recording 3.mp4",
+        "sheet_value": "",
+    }
+    assert start_settings.filename_overrides(
+        "excel", str(tmp_path / "in" / "study.xlsx"), "Data"
+    ) == {"P01": "recording 3.mp4"}
+
+
+def test_override_route_clears_back_to_the_sheet_value(client, tmp_path):
+    wb = str(tmp_path / "in" / "study.xlsx")
+    start_settings.set_filename_override("excel", wb, "Data", "P01", "wrong.mp4")
+
+    body = client.post(
+        "/api/spreadsheets/preview/override",
+        json={
+            "type": "excel",
+            "id_or_path": wb,
+            "worksheet": "Data",
+            "participant": "P01",
+            "filename": "",
+            "study": "study",
+            "sheet_value": "morning.mp4",
+            "input_dir": str(tmp_path / "in"),
+        },
+    ).get_json()
+
+    assert body["row"]["filenames"] == ["morning.mp4"]
+    assert body["row"]["override_value"] == ""
+    assert start_settings.filename_overrides("excel", wb, "Data") == {}
+
+
+def test_override_route_rejects_a_missing_participant(client):
+    body = client.post(
+        "/api/spreadsheets/preview/override",
+        json={"type": "excel", "id_or_path": "/x.xlsx", "filename": "a.mp4"},
+    ).get_json()
+    assert body["ok"] is False
+
+
+def test_open_seeds_the_session_filename_overrides(client, tmp_path):
+    """Opening a sheet points the whole session at that sheet's overrides."""
+    wb_path = tmp_path / "in" / "open.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    start_settings.set_filename_override(
+        "excel", str(wb_path), "Data", "P01", "recording 3.mp4"
+    )
+
+    resp = client.post(
+        "/api/spreadsheets/open",
+        json={"type": "excel", "id_or_path": str(wb_path)},
+    )
+    assert resp.get_json()["ok"] is True
+    assert config.FILENAME_OVERRIDES == {"P01": "recording 3.mp4"}
+
+    client.post("/api/spreadsheets/close", json={})
+    assert config.FILENAME_OVERRIDES == {}
 
 
 def test_preview_does_not_swap_the_active_sheet(client, tmp_path):

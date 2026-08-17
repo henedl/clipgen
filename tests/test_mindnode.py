@@ -478,6 +478,9 @@ def mn_client(monkeypatch, tmp_path, make_bundle):
         "start_settings.record_recent_spreadsheet", lambda *a, **k: None
     )
     monkeypatch.setattr("start_settings.record_project_session", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "start_settings._settings_path", lambda: tmp_path / "start.json"
+    )
     app = server.build_combined_app(default_page="studio")
     with app.test_client() as client:
         yield client, bundle, server
@@ -505,6 +508,51 @@ def test_route_previews_without_opening(mn_client):
     assert body["categories"] == ["Q1"]
     # Read-only: previewing must not make it the session's document.
     assert server._mindnode_doc is None
+
+
+def test_route_preview_lists_the_source_videos_a_map_needs(mn_client, tmp_path):
+    """A map's participants get the same editable file rows the sheet tabs get."""
+    client, bundle, _ = mn_client
+    (tmp_path / "session two.mp4").write_bytes(b"")
+
+    body = client.get(
+        "/api/spreadsheets/mindnode/preview",
+        query_string={"path": str(bundle), "input_dir": str(tmp_path)},
+    ).get_json()
+
+    assert body["sources"] == [
+        {
+            "id": "P01",
+            "filenames": ["my_study_P01.mp4"],
+            "found": False,
+            "override": False,
+            "override_value": "",
+            "sheet_value": "",
+        }
+    ]
+    assert body["unmatched"] == ["session two.mp4"]
+
+
+def test_route_preview_applies_a_stored_override(mn_client, tmp_path):
+    """A mind map has no Filename row, so this is its only naming fix."""
+    import start_settings
+
+    client, bundle, _ = mn_client
+    (tmp_path / "session two.mp4").write_bytes(b"")
+    start_settings.set_filename_override(
+        "mindnode", str(bundle), "", "P01", "session two.mp4"
+    )
+
+    body = client.get(
+        "/api/spreadsheets/mindnode/preview",
+        query_string={"path": str(bundle), "input_dir": str(tmp_path)},
+    ).get_json()
+
+    entry = body["sources"][0]
+    assert entry["filenames"] == ["session two.mp4"]
+    assert entry["found"] is True
+    assert entry["override_value"] == "session two.mp4"
+    assert body["unmatched"] == []
 
 
 def test_route_preview_rejects_a_bad_path(mn_client):

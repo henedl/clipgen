@@ -2,10 +2,13 @@
 
 Stores last-used input/output directories and last-used spreadsheet so the
 frontend Start overlay can prefill its inputs across launches, plus the desktop
-window's last size and position. Two independent user-facing toggles gate the
-recording: ``persist_enabled`` for the project history and ``remember_window``
-for the window rect. When one is off its recording helpers short-circuit, but
-the flag itself is still written so the toggle survives sessions.
+window's last size and position, plus the per-source source-video filename
+overrides the Start overlay's preview rows edit. Two independent user-facing
+toggles gate the recording: ``persist_enabled`` for the project history and
+``remember_window`` for the window rect. When one is off its recording helpers
+short-circuit, but the flag itself is still written so the toggle survives
+sessions. Filename overrides are ungated by both — they are configuration, not
+history (see :func:`set_filename_override`).
 
 Settings file location:
 
@@ -79,6 +82,10 @@ def _defaults() -> dict[str, Any]:
         # and a window rect is not one of those choices. Someone who does not
         # want their recent paths kept can still want their window back.
         "remember_window": True,
+        # Per-source source-video filename overrides, set from the Start
+        # overlay's preview rows: {"<type>|<id_or_path>|<worksheet>": {pid: name}}.
+        # Also independent of persist_enabled — see set_filename_override.
+        "filename_overrides": {},
     }
 
 
@@ -241,6 +248,74 @@ def record_project_session(
             entry["name"] = name.strip()
         settings["recent_projects"] = _prepend_dedup(projects, entry, key=_project_key)
         save_start_settings(settings)
+
+
+def _override_key(type_: str, id_or_path: str, worksheet: str = "") -> str:
+    """Identity of the source a set of filename overrides belongs to.
+
+    The worksheet is part of the key on purpose: one workbook can hold several
+    studies, and a ``P01`` override for one of them must not leak into another.
+    Mind maps (``type_ == "mindnode"``) have no worksheet and key on the bundle
+    path alone.
+    """
+    return f"{type_}|{id_or_path}|{worksheet or ''}"
+
+
+def filename_overrides(
+    type_: str, id_or_path: str, worksheet: str = ""
+) -> dict[str, str]:
+    """Return ``{participant: filename}`` overrides for one spreadsheet/mind map.
+
+    These win over the spreadsheet's own ``Filename`` row; see
+    ``spreadsheet.participant_filename_overrides``.
+    """
+    if not type_ or not id_or_path:
+        return {}
+    stored = load_start_settings().get("filename_overrides")
+    if not isinstance(stored, dict):
+        return {}
+    entry = stored.get(_override_key(type_, id_or_path, worksheet))
+    if not isinstance(entry, dict):
+        return {}
+    return {str(k): str(v) for k, v in entry.items() if v}
+
+
+def set_filename_override(
+    type_: str, id_or_path: str, worksheet: str, participant: str, value: str
+) -> dict[str, str]:
+    """Set (or, with an empty *value*, clear) one participant's filename override.
+
+    Returns the source's full override map after the write, so a caller can
+    re-resolve without a second read.
+
+    Ungated by ``persist_enabled``: that toggle is about the project history the
+    Start overlay collects, while an override is functional configuration — it
+    decides which file a participant's clips are cut from. Dropping it on the
+    floor because recents are off would silently resurrect the naming mismatch
+    the user just fixed.
+    """
+    with _write_lock:
+        settings = load_start_settings()
+        if not type_ or not id_or_path or not participant:
+            return {}
+        stored = settings.get("filename_overrides")
+        if not isinstance(stored, dict):
+            stored = {}
+        key = _override_key(type_, id_or_path, worksheet)
+        entry = stored.get(key)
+        entry = dict(entry) if isinstance(entry, dict) else {}
+        cleaned = (value or "").strip()
+        if cleaned:
+            entry[participant] = cleaned
+        else:
+            entry.pop(participant, None)
+        if entry:
+            stored[key] = entry
+        else:
+            stored.pop(key, None)  # do not accrete empty source dicts
+        settings["filename_overrides"] = stored
+        save_start_settings(settings)
+        return entry
 
 
 def load_window_geometry() -> dict[str, int] | None:
