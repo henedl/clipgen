@@ -110,6 +110,38 @@ def test_overlay_always_opens_on_the_open_tab():
     )
 
 
+def _hotkey_register_block() -> str:
+    src = strip_comments(read("start-overlay.js"))
+    start = src.index("ClipgenHotkeys.register([")
+    return src[start : src.index("]);", start)]
+
+
+def _hotkey_entry(block: str, hid: str) -> str:
+    marker = f'id: "{hid}"'
+    i = block.index(marker)
+    nxt = block.find("{ id:", i + 1)
+    return block[i : nxt if nxt != -1 else len(block)]
+
+
+def test_form_hotkeys_require_the_open_tab():
+    """G/E/I/Cmd+Enter must not fire while About or Recent updates is showing."""
+    block = _hotkey_register_block()
+    for hid in (
+        "start.tabGoogle",
+        "start.tabExcel",
+        "start.tabMindnode",
+        "start.tabNone",
+        "start.browseInput",
+        "start.browseOutput",
+        "start.confirm",
+    ):
+        assert "isOpenForm" in _hotkey_entry(block, hid), hid
+    for hid in ("start.tabOpen", "start.tabAbout", "start.tabUpdates"):
+        entry = _hotkey_entry(block, hid)
+        assert "when: isOpen," in entry, hid
+        assert "isOpenForm" not in entry, hid
+
+
 def test_both_panels_ship_a_refresh_button():
     html = read("start-overlay.html")
     for role in ("google-refresh", "excel-refresh"):
