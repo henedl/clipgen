@@ -134,7 +134,7 @@
     var onMeta = function () {
       v.removeEventListener("loadedmetadata", onMeta);
       v.currentTime = localTime;
-      if (autoplay) v.play();
+      if (autoplay) window.ClipgenVideoControls.safePlay(v);
     };
     v.addEventListener("loadedmetadata", onMeta);
   }
@@ -574,7 +574,7 @@
     if (section) section.classList.toggle("video-collapsed", state.videoCollapsed);
 
     qs("#videoPlayBtn").addEventListener("click", function () {
-      if (video.paused) video.play();
+      if (video.paused) window.ClipgenVideoControls.safePlay(video);
       else video.pause();
     });
     // Hover the mute button for a glassy 0–200% volume popover (click still
@@ -953,7 +953,7 @@
         },
         handler: function () {
           var v = qs("#videoPlayer");
-          if (v.paused) v.play();
+          if (v.paused) window.ClipgenVideoControls.safePlay(v);
           else v.pause();
         },
       },
@@ -1099,7 +1099,7 @@
     function (t) { seekVideo(t); },
     function (video, t) {
       video.currentTime = t;
-      if (video.paused) video.play();
+      if (video.paused) window.ClipgenVideoControls.safePlay(video);
     }
   );
 

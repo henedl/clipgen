@@ -1849,7 +1849,11 @@
     }
     vid.muted = false;
     vid.controls = true;
-    vid.play();
+    // Exported viewers inline this file without video-controls.js, so the
+    // play() promise is handled here rather than via safePlay(). Clicking
+    // away from a preview interrupts the start and rejects it.
+    var playing = vid.play();
+    if (playing && playing.catch) playing.catch(function () {});
     if (_preview.overlay) _preview.overlay.classList.add("hidden");
     if (_preview.timeBadge) _preview.timeBadge.classList.add("hidden");
   }

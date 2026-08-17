@@ -7,6 +7,7 @@ import pytest
 import config
 import screenspace
 import screenspace_frames
+import screenspace_heatmap
 import screenspace_primitives
 import screenspace_scans
 
@@ -416,6 +417,30 @@ def _grid_results(n=8):
     ]
 
 
+def _varied_grid_results(n):
+    """Per-frame results whose grids overlap and *differ* frame to frame.
+
+    ``_grid_results`` repeats one grid, so every draw order produces the same
+    pixels — useless for proving that bucketed layers replay in the right order.
+    These cells move and change magnitude, so an out-of-order fold shows up.
+    """
+    rng = np.random.RandomState(11)
+    results = []
+    for i in range(n):
+        cells = [
+            {
+                "x": round(float((gx + 0.5) / 8), 3),
+                "y": round(float((gy + 0.5) / 8), 3),
+                "mag": round(float(rng.rand()), 3),
+            }
+            for gy in range(8)
+            for gx in range(8)
+            if rng.rand() > 0.3
+        ]
+        results.append({"timestamp": float(i), "saliency_grid": cells})
+    return results
+
+
 class TestAttentionHeatmap:
     def test_static_png_generated(self, tmp_path):
         out = str(tmp_path / "heatmap.png")
@@ -443,6 +468,94 @@ class TestAttentionHeatmap:
         )
         assert cum_info is not None and cum_info["path"] == cum
         assert roll_info is not None and roll_info["path"] == roll
+
+
+class TestSharedGridLayers:
+    """The prebuilt-layers fast path must be byte-identical to replaying results.
+
+    The worker draws each GIF bucket's grid cells once and hands the layers to
+    the PNG and both GIFs instead of letting all three replay the results
+    (measured 2.84 s → 1.23 s of post-scan work on a 962-result attention scan).
+    That is only sound because ``cv2.circle`` sets rather than accumulates, so
+    equality here is exact — a tolerance would hide exactly the drift this
+    guards.
+    """
+
+    def _artifacts(self, tmp_path, results, tag, layers):
+        import screenspace_heatmap
+
+        png = tmp_path / f"{tag}.png"
+        cum = tmp_path / f"{tag}_cum.gif"
+        roll = tmp_path / f"{tag}_roll.gif"
+        screenspace.generate_attention_heatmap(
+            results, 320, 240, str(png), layers=layers
+        )
+        screenspace_heatmap.generate_heatmap_gif(
+            results, 320, 240, str(cum), heatmap_type="attention", layers=layers
+        )
+        screenspace_heatmap.generate_rolling_heatmap_gif(
+            results,
+            320,
+            240,
+            str(roll),
+            heatmap_type="attention",
+            window_frames=3,
+            layers=layers,
+        )
+        return [p.read_bytes() if p.exists() else None for p in (png, cum, roll)]
+
+    @pytest.mark.parametrize("count", [1, 2, 8, 37])
+    def test_layers_path_is_byte_identical_to_replay(self, tmp_path, count):
+        results = _varied_grid_results(count)
+        layers = screenspace.build_grid_layers(
+            results, "attention", screenspace.grid_layer_count(results)
+        )
+        replayed = self._artifacts(tmp_path, results, "replay", None)
+        shared = self._artifacts(tmp_path, results, "shared", layers)
+        assert replayed[0] is not None  # the PNG always lands
+        assert shared == replayed
+
+    def test_layer_count_matches_gif_buckets(self):
+        assert (
+            screenspace.grid_layer_count(_grid_results(100)) == screenspace.GIF_FRAMES
+        )
+        assert screenspace.grid_layer_count(_grid_results(5)) == 5
+
+    def test_layers_tile_every_result(self):
+        """Folding all buckets equals a full replay — the PNG depends on it."""
+        results = _varied_grid_results(37)
+        layers = screenspace.build_grid_layers(
+            results, "attention", screenspace.grid_layer_count(results)
+        )
+        assert layers is not None
+        drawn = np.zeros((256, 256), dtype=bool)
+        for _vals, mask in layers:
+            drawn |= mask
+        replay = np.zeros((256, 256), dtype=np.float32)
+        for r in results:
+            screenspace_heatmap._accumulate_heatmap_result(replay, r, "attention")
+        assert np.array_equal(
+            screenspace_heatmap._fold_grid_layers(layers, len(layers) - 1), replay
+        )
+        assert drawn.any()
+
+    def test_non_grid_type_has_no_layers(self):
+        """Template accumulates additively and frame-native — never bucketed."""
+        assert screenspace.build_grid_layers([{"matches": []}], "template", 4) is None
+
+    def test_stale_layers_are_rejected_not_trusted(self, tmp_path):
+        """A layer set bucketed for a different result count must not be used."""
+        results = _varied_grid_results(24)
+        wrong = screenspace.build_grid_layers(results[:6], "attention", 6)
+        out = tmp_path / "cum.gif"
+        ref = tmp_path / "ref.gif"
+        screenspace_heatmap.generate_heatmap_gif(
+            results, 320, 240, str(out), heatmap_type="attention", layers=wrong
+        )
+        screenspace_heatmap.generate_heatmap_gif(
+            results, 320, 240, str(ref), heatmap_type="attention"
+        )
+        assert out.read_bytes() == ref.read_bytes()
 
 
 class TestAttentionEvents:

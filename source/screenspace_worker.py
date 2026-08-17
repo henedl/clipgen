@@ -21,6 +21,9 @@ import utils
 import video
 from screenspace_tools import TOOLS
 from screenspace_heatmap import (
+    GridLayers,
+    build_grid_layers,
+    grid_layer_count,
     generate_attention_heatmap,
     generate_change_heatmap,
     generate_flow_heatmap,
@@ -537,6 +540,7 @@ class ScreenspaceWorker:
         heatmap_type: str,
         *,
         rolling: bool,
+        layers: GridLayers | None = None,
     ) -> dict[str, Any]:
         """Write the cumulative (and optionally rolling-window) heatmap GIFs.
 
@@ -562,6 +566,7 @@ class ScreenspaceWorker:
                         height,
                         gif_path,
                         heatmap_type=heatmap_type,
+                        layers=layers,
                     )
                     roll_f = pool.submit(
                         generate_rolling_heatmap_gif,
@@ -571,6 +576,7 @@ class ScreenspaceWorker:
                         roll_path,
                         heatmap_type=heatmap_type,
                         window_frames=config.SCREENSPACE_HEATMAP_ROLLING_WINDOW,
+                        layers=layers,
                     )
                     gif = gif_f.result()
                     roll = roll_f.result()
@@ -585,6 +591,7 @@ class ScreenspaceWorker:
                     height,
                     gif_path,
                     heatmap_type=heatmap_type,
+                    layers=layers,
                 )
                 attachments.update(_heatmap_gif_attachments(gif, "heatmap_gif"))
         return attachments
@@ -617,6 +624,12 @@ class ScreenspaceWorker:
         heatmap_path = str(
             Path(utils.get_effective_output_dir()) / f"heatmap_{task_id}.png"
         )
+        # The PNG and both GIFs replay the same per-cell circle draws. For grid
+        # tools (flow/change/attention) that is the dominant post-scan cost and
+        # it anti-parallelizes inside the GIF pool, so draw the buckets once here
+        # and hand the layers to all three (see build_grid_layers).
+        with profiling.span("heatmap.grid_layers"):
+            layers = build_grid_layers(results, task_type, grid_layer_count(results))
         if task_type == "template":
             props = video.probe_video_properties(video_paths[0])
             fw = props.get("width", 1920) if props else 1920
@@ -638,13 +651,13 @@ class ScreenspaceWorker:
             fw = props.get("width", 1920) if props else 1920
             fh = props.get("height", 1080) if props else 1080
             hp = _published_name(
-                generate_attention_heatmap(results, fw, fh, heatmap_path)
+                generate_attention_heatmap(results, fw, fh, heatmap_path, layers=layers)
             )
             if hp:
                 attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
-                    task_id, results, fw, fh, "attention", rolling=True
+                    task_id, results, fw, fh, "attention", rolling=True, layers=layers
                 )
             )
         elif task_type in ("flow", "change"):
@@ -652,17 +665,25 @@ class ScreenspaceWorker:
             rh = region_coords.get("h", 256)
             if task_type == "flow":
                 hp = _published_name(
-                    generate_flow_heatmap(results, rw, rh, heatmap_path)
+                    generate_flow_heatmap(results, rw, rh, heatmap_path, layers=layers)
                 )
             else:
                 hp = _published_name(
-                    generate_change_heatmap(results, rw, rh, heatmap_path)
+                    generate_change_heatmap(
+                        results, rw, rh, heatmap_path, layers=layers
+                    )
                 )
             if hp:
                 attachments["heatmap"] = hp
             attachments.update(
                 self._write_heatmap_gifs(
-                    task_id, results, rw, rh, task_type, rolling=task_type == "change"
+                    task_id,
+                    results,
+                    rw,
+                    rh,
+                    task_type,
+                    rolling=task_type == "change",
+                    layers=layers,
                 )
             )
         return attachments

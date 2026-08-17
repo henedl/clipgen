@@ -30,7 +30,8 @@ probes — the label `_parallel_probe` was measured without). `media_cache.*` an
 `sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`
 (Google via `_call_with_api_retry`; local `.xlsx` is `sheets.excel_load`),
 `pipeline.clip` / `pipeline.pool_wall`, `ocr.pool_wait` / `ocr.reader_build`,
-`heatmap.gif` / `heatmap.rolling` / `heatmap.gifs` (pair wall — see below),
+`heatmap.gif` / `heatmap.rolling` / `heatmap.gifs` (pair wall) /
+`heatmap.grid_layers` (shared grid accumulation — see below),
 `ollama.generate`, `titlecard.wrap` plus
 `titlecard.copy` / `titlecard.reencode` counts (the concat-demuxer vs filter
 fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
@@ -265,6 +266,14 @@ indicative; add `--full-chromium` when paint fidelity matters.
   touch GIF encode. `heatmap.gifs` is the pair wall (same ratio as
   `pipeline.clip ÷ pipeline.pool_wall`): near 2.0 means the cumulative and
   rolling encodes overlapped; near 1.0 means they ran back-to-back.
+- `heatmap.grid_layers` is the per-cell circle drawing for a grid tool
+  (flow/change/attention), hoisted out of the GIF pair so the PNG and both GIFs
+  share one pass instead of replaying the results four times. It is *outside*
+  `heatmap.gifs`, so a grid tool's post-scan cost is `grid_layers + gifs` — read
+  them together or the total looks like it halved when the work only moved.
+  Expect the pair wall to sit near 2.0 once it is hoisted: what was left in the
+  threads (numpy folds + PIL's encoder) parallelizes, whereas the circle loop
+  it replaced measured **0.82×** — slower in two threads than in one.
 - `ocr.pool_wait` is idle time blocked on a busy OCR engine — raise
   `SCREENSPACE_OCR_POOL_SIZE` only when this is large *and* `peak_rss` leaves
   headroom, since each Reader holds its own model copy.

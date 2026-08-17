@@ -6,6 +6,7 @@
  * This module owns those shared bits.
  *
  * Public API on window.ClipgenVideoControls:
+ *   safePlay(videoEl, onRejected)     — play() whose promise is always handled.
  *   nextSpeed(speeds, current)        — next entry in the cycle (wraps around).
  *   applyPlaybackRate(videoEl, rate)  — set the playback rate without pitch
  *                                       preservation. The time-stretch filter is
@@ -19,6 +20,20 @@
  */
 (function () {
   "use strict";
+
+  // HTMLMediaElement.play() returns a promise that REJECTS whenever playback is
+  // interrupted before it starts — a pause() landing in the same tick, a new
+  // load(), a seek that swaps the source, or autoplay policy. Every one of those
+  // is normal here: seeking a clip and immediately pausing is a click away on
+  // Transcripts and Composer. Left unhandled the rejection surfaces as an
+  // uncaught page error ("The play() request was interrupted by a call to
+  // pause()"), which is noise in the console and a hard failure in /ui-check.
+  // Not every browser returns a promise, hence the duck-typing.
+  function safePlay(videoEl, onRejected) {
+    if (!videoEl) return;
+    var p = videoEl.play();
+    if (p && p.catch) p.catch(onRejected || function () {});
+  }
 
   function nextSpeed(speeds, current) {
     var idx = speeds.indexOf(current);
@@ -334,8 +349,7 @@
       forEachTrack(function (el) {
         if (el.readyState < 3) return; // HAVE_FUTURE_DATA — don't fight the buffer
         if (el.paused) {
-          var p = el.play();
-          if (p && p.catch) p.catch(function () {});
+          safePlay(el);
           return;
         }
         var delta = el.currentTime - video.currentTime; // + => audio ahead
@@ -538,6 +552,7 @@
   }
 
   window.ClipgenVideoControls = {
+    safePlay: safePlay,
     nextSpeed: nextSpeed,
     applyPlaybackRate: applyPlaybackRate,
     attachAudioPanel: attachAudioPanel,

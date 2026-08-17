@@ -138,7 +138,7 @@
       video.removeEventListener("loadedmetadata", onMeta);
       video.currentTime = localTime;
       applyPlaybackRate(); // load() reset the element to its default rate
-      if (resume) video.play();
+      if (resume) window.ClipgenVideoControls.safePlay(video);
     };
     video.addEventListener("loadedmetadata", onMeta);
   }
@@ -146,7 +146,7 @@
   function togglePlay() {
     var video = qs("#coVideo");
     if (!video || !video.src) return;
-    if (video.paused) video.play();
+    if (video.paused) window.ClipgenVideoControls.safePlay(video);
     else video.pause();
   }
 

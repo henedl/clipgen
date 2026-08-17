@@ -8,6 +8,7 @@ setup. Combined-app registration (topnav-visible ``/composer/`` + the
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -88,6 +89,48 @@ def test_participants_reports_parts_and_total(co_client):
     # to skip the badge rather than marking every participant.
     assert p["in_sheet"] is False
     assert body["has_sheet"] is False
+
+
+def test_participants_prewarms_probes_before_the_loop(co_client, monkeypatch):
+    """Every part is probed in one batch, not one ffprobe per participant.
+
+    The per-entry probes are cache reads; serialized cold they measured 1.06 s
+    for a 24-participant study and the page cannot render until the last one
+    returns. Asserting the prewarm *saw every part path* is the invariant —
+    timing it here would just measure the mock.
+    """
+    seen: list[list[str]] = []
+    monkeypatch.setattr(video, "prewarm_probes", lambda paths: seen.append(list(paths)))
+
+    body = co_client.get("/composer/api/participants").get_json()
+    (p,) = body["participants"]
+
+    assert len(seen) == 1, "prewarm must run once for the whole list, not per entry"
+    assert [Path(path).name for path in seen[0]] == [
+        part["name"] for part in p["parts"]
+    ]
+
+
+def test_prewarm_probes_dedupes_and_never_raises(monkeypatch):
+    """Prewarming is pure optimization: it dedupes, and a failure is not an error.
+
+    A path that cannot be probed simply stays uncached — the caller re-probes it
+    and handles ``None`` as it always did. Raising here would turn a slow page
+    into a broken one.
+    """
+    calls: list[str] = []
+
+    def boom(path):
+        calls.append(path)
+        raise OSError("unprobeable")
+
+    monkeypatch.setattr(video, "probe_video_properties", boom)
+    # One path is already as fast as it gets, so the pool is skipped entirely.
+    video.prewarm_probes(["/only.mp4"])
+    assert calls == []
+
+    video.prewarm_probes(["/a.mp4", "/a.mp4", "/b.mp4"])
+    assert sorted(calls) == ["/a.mp4", "/b.mp4"]
 
 
 def test_participants_reports_audio_tracks(co_client, monkeypatch):
