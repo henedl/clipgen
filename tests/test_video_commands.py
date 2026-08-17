@@ -350,7 +350,32 @@ def test_probe_video_properties_parses_output(monkeypatch, tmp_path):
         "fps": 0.0,
         "duration": 0.0,
         "nb_frames": 0,
+        "start_time": 0.0,
     }
+
+
+def test_probe_video_properties_parses_container_start_time(monkeypatch, tmp_path):
+    video._video_properties_cache.clear()
+    clip = tmp_path / "clip.ts"
+    clip.write_bytes(b"x")
+    fake_json = json.dumps(
+        {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "mpeg2video",
+                    "width": 160,
+                    "height": 120,
+                }
+            ],
+            "format": {"duration": "8.0", "start_time": "11.4"},
+        }
+    )
+    monkeypatch.setattr(video.subprocess, "check_output", lambda _cmd, **_kw: fake_json)
+    result = video.probe_video_properties(str(clip))
+    assert result is not None
+    assert result["start_time"] == 11.4
+    assert result["duration"] == 8.0
 
 
 def test_probe_video_properties_multiple_audio_tracks(monkeypatch, tmp_path):
@@ -1394,6 +1419,27 @@ def test_accurate_seek_args_is_a_single_pre_input_seek():
     assert video.accurate_seek_args(0.5) == ["-ss", "0.5"]
 
 
+def test_accurate_seek_pre_post_zero_start_is_single_pre_input():
+    assert video.accurate_seek_pre_post(12.345) == (["-ss", "12.345"], [])
+    assert video.accurate_seek_pre_post(0.0) == ([], [])
+    assert video.accurate_seek_pre_post(0.5, container_start=0.0) == (
+        ["-ss", "0.5"],
+        [],
+    )
+
+
+def test_accurate_seek_pre_post_nonzero_start_uses_two_stage():
+    """MPEG-TS start_time ≠ 0: post-input -ss counts decoded media."""
+    assert video.accurate_seek_pre_post(0.5, container_start=11.4) == (
+        [],
+        ["-ss", "0.5"],
+    )
+    assert video.accurate_seek_pre_post(3.7, container_start=11.4) == (
+        ["-ss", "1.7"],
+        ["-ss", "2.0"],
+    )
+
+
 # ---- two-stage seek wiring in extract_frame_at_timestamp ----
 
 
@@ -1425,6 +1471,29 @@ def test_extract_frame_at_timestamp_seeks_before_input_only(monkeypatch):
     i_idx = cmd.index("-i")
     assert cmd[:i_idx][-2:] == ["-ss", "12.5"], "expected pre-input seek"
     assert "-ss" not in cmd[i_idx + 2 :], "post-input seek is the obsolete split"
+
+
+def test_extract_frame_at_timestamp_two_stage_when_start_time_nonzero(monkeypatch):
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda _: {
+            "width": 320,
+            "height": 240,
+            "fps": 30.0,
+            "duration": 60.0,
+            "start_time": 11.4,
+        },
+    )
+    captured: dict = {}
+    monkeypatch.setattr(video.subprocess, "run", _captured_run(captured))
+
+    video.extract_frame_at_timestamp("/fake.ts", 0.5)
+    cmd = captured["cmd"]
+    i_idx = cmd.index("-i")
+    assert "-ss" not in cmd[:i_idx]
+    assert cmd[i_idx + 1 : i_idx + 3] == ["/fake.ts", "-ss"]
+    assert cmd[i_idx + 3] == "0.5"
 
 
 # ---- two-stage seek + float ts in extract_thumbnail_bytes ----

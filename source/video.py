@@ -173,22 +173,48 @@ def _resolved_path_and_mtime(filepath: str) -> tuple[str, int] | None:
 
 
 def accurate_seek_args(timestamp_seconds: float) -> list[str]:
-    """Return the pre-input ``-ss`` args for a frame-accurate seek.
+    """Return the pre-input ``-ss`` args for a frame-accurate seek on t=0 media.
 
-    A single pre-input ``-ss`` is frame-accurate whenever the output is
-    decoded (rawvideo/MJPEG — every caller here): ffmpeg seeks the demuxer to
-    the nearest keyframe at or before the target, then decodes and discards
-    up to the exact frame internally. The old two-stage idiom (pre-input
-    ``-ss`` to ``target - 2s`` plus a post-input ``-ss 2``) predates that
-    behavior and decoded ~2 s of extra frames per call for a bit-identical
-    result — measured 135 → 90 ms per frame extraction on 1440p/GOP-2s, with
-    identical output on every timestamp × GOP profile tried
-    (``test_single_seek_matches_two_stage_seek_exactly`` keeps ffmpeg honest).
+    A single pre-input ``-ss`` is frame-accurate on MP4/MOV (container
+    ``start_time`` 0) whenever the output is decoded (rawvideo/MJPEG — every
+    caller here): ffmpeg seeks the demuxer to the nearest keyframe at or before
+    the target, then decodes and discards up to the exact frame internally.
+    MPEG-TS and similar containers with a non-zero ``start_time`` need
+    :func:`accurate_seek_pre_post` instead — pre-input ``-ss`` is in stream
+    time there and lands on the wrong frame (or none).
     Never valid for stream copy, which cannot decode-and-discard.
     """
-    if timestamp_seconds <= 0:
-        return []
-    return ["-ss", str(timestamp_seconds)]
+    pre, _post = accurate_seek_pre_post(timestamp_seconds)
+    return pre
+
+
+def accurate_seek_pre_post(
+    timestamp_seconds: float, *, container_start: float = 0.0
+) -> tuple[list[str], list[str]]:
+    """Return ``(pre_input, post_input)`` ``-ss`` args for a decoded seek.
+
+    Zero ``container_start`` (typical MP4): one pre-input ``-ss``. Non-zero
+    (MPEG-TS): the old two-stage idiom — pre-input to ``target - 2s`` plus
+    post-input ``-ss 2``, or post-input only below 2s — which is frame-accurate
+    because post-input ``-ss`` counts decoded media, not stream timestamps.
+    """
+    ts = max(0.0, timestamp_seconds)
+    if container_start <= 1e-6:
+        return (["-ss", str(ts)] if ts > 0 else [], [])
+    if ts > 2.0:
+        return (["-ss", f"{ts - 2.0:.6g}"], ["-ss", "2.0"])
+    return ([], ["-ss", str(ts)] if ts > 0 else [])
+
+
+def _container_start_seconds(filepath: str) -> float:
+    """Format ``start_time`` from the properties cache, or 0 if unknown."""
+    props = probe_video_properties(filepath)
+    if not props:
+        return 0.0
+    try:
+        return max(0.0, float(props.get("start_time") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _ffmpeg_install_guidance_lines() -> list[str]:
@@ -1179,10 +1205,10 @@ def extract_thumbnail_bytes(
 ) -> bytes | None:
     """Extract a small JPEG thumbnail frame from a video at *start_seconds*.
 
-    Frame-accurate: the pre-input ``-ss`` decodes-and-discards from the
-    nearest prior keyframe (see :func:`accurate_seek_args`), so the returned
-    thumbnail matches the requested timestamp instead of snapping to the
-    keyframe. Returns raw JPEG bytes on success or ``None`` on any failure.
+    Frame-accurate: :func:`accurate_seek_pre_post` chooses a single pre-input
+    ``-ss`` on t=0 media, or the two-stage idiom when the container's
+    ``start_time`` is non-zero (MPEG-TS). Returns raw JPEG bytes on success
+    or ``None`` on any failure.
     """
     if config.DEBUGGING:
         config.debug_ic(input_file, start_seconds, width)
@@ -1191,10 +1217,15 @@ def extract_thumbnail_bytes(
     if not Path(input_file).is_file():
         return None
 
+    pre, post = accurate_seek_pre_post(
+        max(0.0, start_seconds),
+        container_start=_container_start_seconds(input_file),
+    )
     cmd = _ffmpeg_cmd(
-        *accurate_seek_args(max(0.0, start_seconds)),
+        *pre,
         "-i",
         input_file,
+        *post,
         "-vframes",
         "1",
         "-vf",
@@ -1763,6 +1794,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
             "fps": 30.0,
             "duration": 300.0,
             "nb_frames": 9000,
+            "start_time": 0.0,
         }
         # In DEBUGGING mode the file may not exist on disk; fall back to a
         # synthetic key so callers still get a cached result.
@@ -1793,7 +1825,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "-show_entries",
         "stream_tags=title,language,handler_name",
         "-show_entries",
-        "format=duration",
+        "format=duration,start_time",
         "-of",
         "json",
         filepath,
@@ -1892,11 +1924,18 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
 
     # Duration from format-level metadata (more reliable than stream-level)
     fmt_duration = 0.0
+    fmt_start = 0.0
     fmt = data.get("format", {})
     try:
         fmt_duration = float(fmt.get("duration", 0))
     except (ValueError, TypeError):
         pass
+    try:
+        raw_start = fmt.get("start_time")
+        if raw_start not in (None, "N/A", ""):
+            fmt_start = max(0.0, float(raw_start))
+    except (ValueError, TypeError):
+        fmt_start = 0.0
     # Fallback: compute from frame count and fps
     if fmt_duration <= 0 and nb_frames > 0 and fps > 0:
         fmt_duration = nb_frames / fps
@@ -1915,6 +1954,7 @@ def probe_video_properties(filepath: str) -> dict[str, Any] | None:
         "fps": fps,
         "duration": fmt_duration,
         "nb_frames": nb_frames,
+        "start_time": fmt_start,
     }
     _video_properties_cache[key] = result
     if fmt_duration > 0:
@@ -2512,10 +2552,10 @@ def extract_frame_at_timestamp(
 ) -> Any | None:
     """Extract a single video frame at the given timestamp via ffmpeg.
 
-    Frame-accurate: the pre-input ``-ss`` decodes-and-discards from the
-    nearest prior keyframe (see :func:`accurate_seek_args`), so the returned
-    frame is the one at ``timestamp_seconds`` rather than the keyframe.
-    Returns a BGR numpy array (H x W x 3) or None if extraction fails.
+    Frame-accurate: :func:`accurate_seek_pre_post` chooses a single pre-input
+    ``-ss`` on t=0 media, or the two-stage idiom when the container's
+    ``start_time`` is non-zero (MPEG-TS). Returns a BGR numpy array
+    (H x W x 3) or None if extraction fails.
     Requires ffprobe to determine resolution and ffmpeg to decode the frame.
     """
     if config.DEBUGGING:
@@ -2528,11 +2568,19 @@ def extract_frame_at_timestamp(
         return None
 
     width, height = props["width"], props["height"]
+    try:
+        container_start = max(0.0, float(props.get("start_time") or 0.0))
+    except (TypeError, ValueError):
+        container_start = 0.0
+    pre, post = accurate_seek_pre_post(
+        max(0.0, timestamp_seconds), container_start=container_start
+    )
     cmd = [
         "ffmpeg",
-        *accurate_seek_args(max(0.0, timestamp_seconds)),
+        *pre,
         "-i",
         video_path,
+        *post,
         "-frames:v",
         "1",
         "-pix_fmt",
