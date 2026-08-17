@@ -1079,6 +1079,12 @@
     input.focus();
     input.select();
 
+    // Compared against on commit, and deliberately not row.override_value: with
+    // no override the field is prefilled with the *resolved* default, so
+    // opening the editor and clicking away would otherwise pin that default as
+    // a user override — silently overriding whatever the sheet's Filename row
+    // says next week.
+    var initial = input.value;
     var done = false;
     function finish(commit) {
       if (done) return;
@@ -1086,7 +1092,7 @@
       state.cancelPreviewEdit = null;
       var value = (input.value || "").trim();
       item.replaceChild(name, input);
-      if (commit && value !== (row.override_value || "")) {
+      if (commit && value !== initial.trim()) {
         commitPreviewOverride(item, row, ctx, value);
       } else {
         paintPreviewRow(item, row);

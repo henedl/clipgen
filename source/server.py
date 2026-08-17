@@ -3314,6 +3314,27 @@ def _open_worksheet_for(
     return new_ws, label
 
 
+def _invalidate_participant_caches() -> None:
+    """Force the Transcripts / Screenspace participant caches to rebuild.
+
+    Both only rebuild when the input directory's ``st_mtime_ns`` moves (see
+    ``server_utils.make_participant_cache``). A filename override changes which
+    files the same directory resolves to without touching the directory at all,
+    so the mtime gate has to be poked by hand or those two pages keep serving
+    the previous paths. ``dir = ""`` is the same force-a-build sentinel their
+    initialisers use; it can never equal a real directory string.
+
+    Composer and Remux resolve per request and need nothing here.
+    """
+    import screenspace_server
+    import transcripts_server
+
+    for module in (screenspace_server, transcripts_server):
+        source = module._participant_source
+        if source is not None:
+            source["dir"] = ""
+
+
 def _seed_filename_overrides(source: dict[str, str] | None) -> None:
     """Point ``config.FILENAME_OVERRIDES`` at the source that is now open.
 
@@ -3321,12 +3342,12 @@ def _seed_filename_overrides(source: dict[str, str] | None) -> None:
     mind map in ``start.json``, but every consumer reads them off ``config`` —
     a ``SheetContext`` carries no spreadsheet identity. So the identity is
     resolved exactly here, whenever the open source changes (open, worksheet
-    swap, close, CLI launch). ``None`` clears the map, which is what a session
-    with no identifiable source must run with.
+    swap, close, override edit, CLI launch). ``None`` clears the map, which is
+    what a session with no identifiable source must run with.
     """
     import start_settings
 
-    config.FILENAME_OVERRIDES = (
+    overrides = (
         start_settings.filename_overrides(
             source.get("type", ""),
             source.get("id_or_path", ""),
@@ -3335,6 +3356,10 @@ def _seed_filename_overrides(source: dict[str, str] | None) -> None:
         if source
         else {}
     )
+    if overrides == config.FILENAME_OVERRIDES:
+        return  # a needless rebuild costs a seekability probe per participant
+    config.FILENAME_OVERRIDES = overrides
+    _invalidate_participant_caches()
 
 
 def _preview_source_rows(
@@ -4022,7 +4047,9 @@ def build_combined_app(
             type_, id_or_path, worksheet, participant, filename
         )
         # If this is the source the session already has open, the change has to
-        # take effect without reopening it.
+        # take effect without reopening it — including in the two blueprints
+        # that cache their participant list, hence re-seeding rather than
+        # assigning the map here.
         active = _active_project_source
         if (
             active
@@ -4030,7 +4057,7 @@ def build_combined_app(
             and active.get("id_or_path") == id_or_path
             and (active.get("worksheet") or "") == worksheet
         ):
-            config.FILENAME_OVERRIDES = dict(user_overrides)
+            _seed_filename_overrides(active)
 
         base_dir = (
             Path(input_dir).expanduser()

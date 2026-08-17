@@ -597,6 +597,42 @@ def test_override_route_clears_back_to_the_sheet_value(client, tmp_path):
     assert start_settings.filename_overrides("excel", wb, "Data") == {}
 
 
+def test_override_route_refreshes_the_cached_participant_lists(client, tmp_path):
+    """Transcripts/Screenspace cache on the input dir's mtime, which an override
+    does not move — the edit has to poke that gate or those pages keep serving
+    the previous file."""
+    import transcripts_server
+
+    in_dir = tmp_path / "in"
+    (in_dir / "study_P01.mp4").write_bytes(b"")
+    (in_dir / "recording 3.mp4").write_bytes(b"")
+    wb_path = in_dir / "cache.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+
+    client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(wb_path)}
+    )
+    transcripts_server._refresh_participants()
+    before = transcripts_server._participants[0]["video_paths"]
+    assert [Path(p).name for p in before] == ["study_P01.mp4"]
+
+    client.post(
+        "/api/spreadsheets/preview/override",
+        json={
+            "type": "excel",
+            "id_or_path": str(wb_path),
+            "worksheet": "Data",
+            "participant": "P01",
+            "filename": "recording 3.mp4",
+            "study": "study",
+            "input_dir": str(in_dir),
+        },
+    )
+    transcripts_server._refresh_participants()
+    after = transcripts_server._participants[0]["video_paths"]
+    assert [Path(p).name for p in after] == ["recording 3.mp4"]
+
+
 def test_override_route_rejects_a_missing_participant(client):
     body = client.post(
         "/api/spreadsheets/preview/override",
