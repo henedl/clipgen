@@ -1431,6 +1431,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
 
     skipped = 0
     transcribed = 0
+    overrides = spreadsheet.participant_filename_overrides(ctx)
 
     for pid in target_ids:
         if pid in source_transcripts:
@@ -1438,18 +1439,8 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
             skipped += 1
             continue
 
-        col_idx = spreadsheet.find_participant_column(ctx.header_row, ctx.id_cell, pid)
-        override = None
-        if (
-            col_idx is not None
-            and ctx.filename_row_idx is not None
-            and ctx.filename_row_idx < len(ctx.sheet_data)
-            and col_idx < len(ctx.sheet_data[ctx.filename_row_idx])
-        ):
-            override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip() or None
-
         source_paths = files.resolve_source_video_paths(
-            ctx.study_name, pid, override, utils.get_effective_input_dir()
+            ctx.study_name, pid, overrides.get(pid), utils.get_effective_input_dir()
         )
         missing = [p for p in source_paths if not p.is_file()]
         if missing:

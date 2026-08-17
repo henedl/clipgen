@@ -256,10 +256,14 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
       Discovery accepts any ``*_P<x>`` / ``*_G<x>`` name regardless of study
       prefix, so ``study_P13.mp4`` must NOT be re-resolved against the sheet's
       study name — that would invent a ``clipgen-test_P13.mp4`` that is not there.
+    - Every participant with a user filename override
+      (``config.FILENAME_OVERRIDES``) that neither of the above produced. An
+      override names a file discovery cannot pattern-match, so without this a
+      mind-map participant pointed at ``recording 3.mp4`` would stay invisible.
 
-    Sheet order first, then disk-only ids sorted; deduped by id, sheet winning.
-    ``sheet_context=None`` makes this a plain scan with every entry
-    ``in_sheet: False``.
+    Sheet order first, then disk-only ids sorted, then override-only ids sorted;
+    deduped by id, sheet winning. ``sheet_context=None`` makes this a plain scan
+    with every entry ``in_sheet: False``.
 
     The input directory is derived here rather than passed in — handing the sheet
     half a different directory than ``discover_participant_videos`` (which always
@@ -306,14 +310,45 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
     for found in utils.discover_participant_videos():  # already sorted by id
         if found["id"] in seen:
             continue
-        found_paths = list(found["video_paths"])  # copy — source is memoized
+        seen.add(found["id"])
+        user_override = config.FILENAME_OVERRIDES.get(found["id"])
+        if user_override:
+            # The user pointed this participant at a specific file; what
+            # discovery happened to match by name is not it.
+            paths = resolve_source_video_paths(
+                "", found["id"], user_override, input_dir
+            )
+            found_paths = [str(p) for p in paths]
+            has_video = paths[0].is_file()
+        else:
+            found_paths = list(found["video_paths"])  # copy — source is memoized
+            has_video = found["has_video"]
         entries.append(
             {
                 "id": found["id"],
                 "video_paths": found_paths,
-                "has_video": found["has_video"],
+                "has_video": has_video,
                 "in_sheet": False,
                 "browser_seekable": _browser_seekable(found_paths),
+            }
+        )
+    for pid in sorted(config.FILENAME_OVERRIDES):
+        if pid in seen:
+            continue
+        override = config.FILENAME_OVERRIDES[pid]
+        if not override:
+            continue
+        # study is irrelevant here: resolve_source_video_paths ignores it when
+        # an override is present.
+        paths = resolve_source_video_paths("", pid, override, input_dir)
+        path_strs = [str(p) for p in paths]
+        entries.append(
+            {
+                "id": pid,
+                "video_paths": path_strs,
+                "has_video": paths[0].is_file(),
+                "in_sheet": False,
+                "browser_seekable": _browser_seekable(path_strs),
             }
         )
     return entries

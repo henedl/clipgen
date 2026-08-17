@@ -111,6 +111,54 @@ def test_honours_filename_override(input_dir):
     assert found[0]["has_video"] is True
 
 
+def test_user_override_beats_the_sheet_filename_row(input_dir, monkeypatch):
+    """What the user set in the Start overlay wins over the sheet's own row."""
+    (input_dir / "morning.mp4").write_text("v")
+    (input_dir / "actually-this-one.mp4").write_text("v")
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P01": "actually-this-one.mp4"}, raising=False
+    )
+
+    found = files.resolve_participant_videos(
+        _ctx(["P01"], filename_row=["morning.mp4"])
+    )
+
+    assert _names(found[0]) == ["actually-this-one.mp4"]
+    assert found[0]["has_video"] is True
+
+
+def test_user_override_retargets_a_disk_only_participant(input_dir, monkeypatch):
+    """Discovery matched one file by name; the user pointed the id elsewhere."""
+    (input_dir / "study_P13.mp4").write_text("v")
+    (input_dir / "recording 3.mp4").write_text("v")
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P13": "recording 3.mp4"}, raising=False
+    )
+
+    found = files.resolve_participant_videos(_ctx(["P01"]))
+
+    assert [p["id"] for p in found] == ["P01", "P13"]
+    assert _names(found[1]) == ["recording 3.mp4"]
+    assert found[1]["has_video"] is True
+
+
+def test_user_override_surfaces_a_participant_nothing_else_found(
+    input_dir, monkeypatch
+):
+    """The mind-map case: no sheet column, and a name discovery cannot match."""
+    (input_dir / "recording 3.mp4").write_text("v")
+    monkeypatch.setattr(
+        config, "FILENAME_OVERRIDES", {"P03": "recording 3.mp4"}, raising=False
+    )
+
+    found = files.resolve_participant_videos(None)
+
+    assert [p["id"] for p in found] == ["P03"]
+    assert _names(found[0]) == ["recording 3.mp4"]
+    assert found[0]["has_video"] is True
+    assert found[0]["in_sheet"] is False
+
+
 def test_strict_sheet_resolution_does_not_borrow_another_study(input_dir):
     # Deliberate: a sheet participant whose expected file is missing stays
     # has_video False even though a same-id file from another study sits right

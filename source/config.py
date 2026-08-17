@@ -88,6 +88,13 @@ ID_HEADER: str = "ID"
 OBSERVATION_HEADER: str = "Observation"
 CATEGORY_HEADER: str = "Category"
 FILENAME_HEADER: str = "Filename"
+# Runtime state, not a user setting: the open source's per-participant filename
+# overrides ({participant: "clip.mp4"} or "a.mp4 + b.mp4"), seeded from
+# start.json when a spreadsheet/mind map is opened and empty when the session
+# has no identity to key them on. They win over the sheet's Filename row; this
+# is the seam that lets spreadsheet.py see them without knowing which file the
+# active SheetContext came from.
+FILENAME_OVERRIDES: dict[str, str] = {}
 SEVERITY_HEADER: str = (
     "Severity"  # optional column; when present adds severity metadata to clips
 )

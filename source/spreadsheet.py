@@ -523,30 +523,47 @@ def find_participant_column(
     return None
 
 
-def participant_filename_overrides(ctx: SheetContext) -> dict[str, str | None]:
-    """Map each participant id to its ``Filename`` row override (or None).
+def participant_filename_overrides(
+    ctx: SheetContext, user_overrides: dict[str, str] | None = None
+) -> dict[str, str | None]:
+    """Map each participant id to its source-video filename override (or None).
 
-    The Filename row (``ctx.filename_row_idx``) holds a per-column source-video
-    override; a cell may list several files plus-separated for a multi-video
-    participant (``morning.mp4 + afternoon.mp4``). Returns ``{}`` when there is no
-    Filename row. Used by the studio/transcripts/screenspace servers to resolve a
-    participant's source video(s) via ``files.resolve_source_video_paths``.
+    Two sources, in increasing precedence:
+
+    1. The sheet's Filename row (``ctx.filename_row_idx``) — a per-column
+       override; a cell may list several files plus-separated for a multi-video
+       participant (``morning.mp4 + afternoon.mp4``).
+    2. The user's own overrides, set from the Start overlay's preview rows and
+       persisted per user in ``start.json``. They win, because clipgen cannot
+       write the sheet back and this is the only fix a user has that does not
+       mean leaving the app. Defaults to ``config.FILENAME_OVERRIDES`` (the
+       *open* source's map); pass *user_overrides* explicitly to resolve against
+       some other source, as the Start overlay's preview route does.
+
+    Returns ``{}`` when there is neither. Used by the studio/transcripts/
+    screenspace servers to resolve a participant's source video(s) via
+    ``files.resolve_source_video_paths``.
     """
+    if user_overrides is None:
+        user_overrides = config.FILENAME_OVERRIDES
     overrides: dict[str, str | None] = {}
-    if ctx.filename_row_idx is None:
-        return overrides
     participants = get_participant_list(
         ctx.header_row, ctx.id_cell, ctx.num_participants
     )
-    row_data = (
-        ctx.sheet_data[ctx.filename_row_idx]
-        if ctx.filename_row_idx < len(ctx.sheet_data)
-        else []
-    )
-    for p_idx, pid in enumerate(participants):
-        col_idx = ctx.id_cell.col + p_idx
-        value = row_data[col_idx].strip() if col_idx < len(row_data) else ""
-        overrides[pid] = value or None
+    if ctx.filename_row_idx is not None:
+        row_data = (
+            ctx.sheet_data[ctx.filename_row_idx]
+            if ctx.filename_row_idx < len(ctx.sheet_data)
+            else []
+        )
+        for p_idx, pid in enumerate(participants):
+            col_idx = ctx.id_cell.col + p_idx
+            value = row_data[col_idx].strip() if col_idx < len(row_data) else ""
+            overrides[pid] = value or None
+    for pid in participants:
+        user_value = user_overrides.get(pid)
+        if user_value:
+            overrides[pid] = user_value
     return overrides
 
 
@@ -616,13 +633,20 @@ def _make_clip_record(
     }
     if timestamp_baseline:
         result["timestamp_baseline"] = timestamp_baseline
-    if ctx.filename_row_idx is not None:  # noqa: SIM102 - see baseline_row_idx above
-        if 0 <= ctx.filename_row_idx < len(ctx.sheet_data) and col_idx < len(
-            ctx.sheet_data[ctx.filename_row_idx]
-        ):
-            filename_override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip()
-            if filename_override:
-                result["source_filename"] = filename_override
+    # Same precedence as participant_filename_overrides: the user's Start-overlay
+    # override wins over the sheet's Filename row. Listing a participant against
+    # one file while cutting their clips from another is the "wrong output, no
+    # error" class, so both paths have to agree.
+    filename_override = config.FILENAME_OVERRIDES.get(participant, "")
+    if (
+        not filename_override
+        and ctx.filename_row_idx is not None
+        and 0 <= ctx.filename_row_idx < len(ctx.sheet_data)
+        and col_idx < len(ctx.sheet_data[ctx.filename_row_idx])
+    ):
+        filename_override = ctx.sheet_data[ctx.filename_row_idx][col_idx].strip()
+    if filename_override:
+        result["source_filename"] = filename_override
     return result
 
 
