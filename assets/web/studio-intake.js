@@ -450,18 +450,20 @@
   };
 
   function renderIntakeCards(cfg, items) {
+    return clipgenPerf.span("studio.renderIntakeCards", function () {
+      renderIntakeCardsImpl(cfg, items);
+    });
+  }
+
+  function renderIntakeCardsImpl(cfg, items) {
     var container = qs(cfg.cardsSel);
     container.innerHTML = "";
+    var frag = document.createDocumentFragment();
     items.forEach(function (c, idx) {
       var card = el("div", "queue-card intake-queue-card" + (cfg.cardClass ? " " + cfg.cardClass : ""));
       card.style.setProperty("--cg-card-hue", cfg.cardHue(c));
       card.dataset[cfg.idxAttr] = idx;
       card.setAttribute("draggable", "true");
-      card.addEventListener("dragstart", function (ev) {
-        ev.dataTransfer.setData("application/json", JSON.stringify(cfg.clusterToItem(c)));
-        ev.dataTransfer.effectAllowed = "copyMove";
-        setCardDragImage(ev, this);
-      });
 
       var thumb = buildQueueCardThumb(card, {
         participant: c.participant,
@@ -523,8 +525,9 @@
           .join("\n");
       }
 
-      container.appendChild(card);
+      frag.appendChild(card);
     });
+    container.appendChild(frag);
     attachQueueScrubbers(container);
     refreshIntakeCardStates();
     // Re-renders wipe the hub's keyboard-cursor outline; repaint it.
@@ -694,6 +697,16 @@
       if (!cluster) return;
       if (e.shiftKey) cfg.toggleReel(cluster);
       else cfg.toggleArtifacts(cluster);
+    });
+
+    cards.addEventListener("dragstart", function (ev) {
+      var card = ev.target.closest(cfg.cardSel);
+      if (!card) return;
+      var cluster = cfg.filtered()[parseInt(card.dataset[cfg.idxAttr], 10)];
+      if (!cluster) return;
+      ev.dataTransfer.setData("application/json", JSON.stringify(cfg.clusterToItem(cluster)));
+      ev.dataTransfer.effectAllowed = "copyMove";
+      setCardDragImage(ev, card);
     });
 
     // Right-click to dismiss

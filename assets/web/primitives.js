@@ -155,6 +155,7 @@
       (events || []).forEach(function (e) {
         if (e && typeof e.count === "number" && e.count > max) max = e.count;
       });
+      var frag = document.createDocumentFragment();
       (events || []).forEach(function (e, idx) {
         if (!e || typeof e.t !== "number") return;
         var bar = document.createElement("div");
@@ -180,22 +181,45 @@
           ? "color-mix(in oklch, " + e.color + " " + Math.round(alpha * 100) + "%, transparent)"
           : fmtHue(hue, 0.7, 0.16, alpha);
         bar.dataset.idx = idx;
-        if (typeof opts.onBarMouseEnter === "function") {
-          bar.addEventListener("mouseenter", function () { opts.onBarMouseEnter(idx); });
-        }
-        if (typeof opts.onBarMouseLeave === "function") {
-          bar.addEventListener("mouseleave", function () { opts.onBarMouseLeave(idx); });
-        }
-        if (typeof opts.onBarClick === "function") {
-          bar.addEventListener("click", function (ev) { opts.onBarClick(idx, ev); });
-        }
-        track.appendChild(bar);
+        frag.appendChild(bar);
       });
+      track.appendChild(frag);
       if (marker != null) {
         var mk = document.createElement("div");
         mk.className = "density-timeline-marker";
         mk.style.left = "calc(" + (marker * 100) + "% - 1px)";
         track.appendChild(mk);
+      }
+    }
+
+    // Same shape as createSwimLane: three listeners on the track, not three
+    // per bar. mouseenter doesn't bubble, so hover uses mouseover/out.
+    function bindDelegates() {
+      if (typeof opts.onBarMouseEnter === "function" || typeof opts.onBarMouseLeave === "function") {
+        track.addEventListener("mouseover", function (ev) {
+          var bar = ev.target.closest(".density-timeline-bar");
+          if (!bar || !track.contains(bar)) return;
+          if (ev.relatedTarget && bar.contains(ev.relatedTarget)) return;
+          var idx = parseInt(bar.dataset.idx, 10);
+          if (isNaN(idx) || typeof opts.onBarMouseEnter !== "function") return;
+          opts.onBarMouseEnter(idx);
+        });
+        track.addEventListener("mouseout", function (ev) {
+          var bar = ev.target.closest(".density-timeline-bar");
+          if (!bar || !track.contains(bar)) return;
+          if (ev.relatedTarget && bar.contains(ev.relatedTarget)) return;
+          if (typeof opts.onBarMouseLeave !== "function") return;
+          opts.onBarMouseLeave();
+        });
+      }
+      if (typeof opts.onBarClick === "function") {
+        track.addEventListener("click", function (ev) {
+          var bar = ev.target.closest(".density-timeline-bar");
+          if (!bar || !track.contains(bar)) return;
+          var idx = parseInt(bar.dataset.idx, 10);
+          if (isNaN(idx)) return;
+          opts.onBarClick(idx, ev);
+        });
       }
     }
 
@@ -222,6 +246,7 @@
       }
     };
 
+    bindDelegates();
     renderTicks(opts.durationSec, opts.tickCount);
     renderBars(opts.events, opts.marker);
     return wrap;

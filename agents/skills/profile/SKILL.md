@@ -37,7 +37,7 @@ fallback), `workflows.run` / `workflows.node <type>` / `workflows.batch_child` /
 `workflows.batch_wall` (`WORKFLOWS_BATCH_WORKERS` effective parallelism, same
 ratio as the clip pools).
 Frontend (via `CLIPGEN_CONFIG.profiling`): `poll.<page>.<name>` per poller tick,
-`studio.renderGrid`, `transcripts.renderSegments`/`renderPartialSegments`,
+`studio.renderGrid`/`renderIntakeCards`, `transcripts.renderSegments`/`renderPartialSegments`,
 `screenspace.renderResults`/`renderChunk`/`renderTimeline`, `composer.renderTimeline`,
 `viewer.renderList`, `workflows.renderAllNodes`, `gallery.renderGrid`,
 `overview.renderMetadata`/`computeMetadata`/`renderConvergence`/`computeConvergence`,
