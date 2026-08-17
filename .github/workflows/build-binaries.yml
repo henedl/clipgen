@@ -166,8 +166,10 @@ jobs:
           # and the vendored non-default recognition models must both ship.
           find dist/clipgen.app -path "*rapidocr*" -name "*.onnx" | grep -q . \
             || { echo "::error::bundle lacks rapidocr's default models"; exit 1; }
-          find dist/clipgen.app -path "*ocr_models/latin_rec.onnx" | grep -q . \
-            || { echo "::error::bundle lacks the vendored OCR rec models"; exit 1; }
+          for rec in latin_rec.onnx japan_rec.onnx korean_rec.onnx; do
+            find dist/clipgen.app -path "*ocr_models/$rec" | grep -q . \
+              || { echo "::error::bundle lacks the vendored OCR rec model $rec"; exit 1; }
+          done
 
       - name: Verify no in-process FFmpeg libraries (macOS)
         if: matrix.os == 'macos-latest'
@@ -256,8 +258,10 @@ jobs:
           if (-not $ocr) {
             throw "bundle lacks rapidocr's default models"
           }
-          if (-not (Test-Path "dist/clipgen/lib/ocr_models/latin_rec.onnx")) {
-            throw "bundle lacks the vendored OCR rec models"
+          foreach ($rec in @("latin_rec.onnx", "japan_rec.onnx", "korean_rec.onnx")) {
+            if (-not (Test-Path "dist/clipgen/lib/ocr_models/$rec")) {
+              throw "bundle lacks the vendored OCR rec model $rec"
+            }
           }
 
       - name: Smoke-launch the frozen exe (Windows)

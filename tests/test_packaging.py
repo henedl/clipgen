@@ -135,6 +135,15 @@ def test_spec_advertises_macos_14_minimum() -> None:
     assert '"LSMinimumSystemVersion": "11.0"' not in spec_text
 
 
+def test_ci_verifies_all_vendored_ocr_models() -> None:
+    """Post-build smoke must require japan/korean rec, not only latin."""
+    yml = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    for name in ("latin_rec.onnx", "japan_rec.onnx", "korean_rec.onnx"):
+        assert name in yml, name
+
+
 def test_spec_never_strips_or_packs_on_windows() -> None:
     """``strip``/``upx`` must stay macOS-only, or Windows ships a dead exe.
 
