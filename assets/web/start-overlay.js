@@ -72,6 +72,11 @@
     activeTab: "google",    // 'google' | 'excel' | 'mindnode' | 'none'
     startTab: "open",       // right column: 'open' | 'about' | 'updates'
     changelogLoaded: false,
+    // The notice file never changes at runtime, so the fetch is latched. The
+    // rows still live in state because renderAttribution() re-runs on every
+    // About activation alongside renderAbout().
+    licensesLoaded: false,
+    licenseComponents: [],
     googleSheets: [],
     // Last unauthenticated /api/spreadsheets/google payload: the credentials
     // filename, searched paths and setup link behind the "Don't have
@@ -262,6 +267,7 @@
     els.updatesBadge = root.querySelector('[data-role="updates-badge"]');
     els.changelogList = root.querySelector('[data-role="changelog-list"]');
     els.aboutGrid = root.querySelector('[data-role="about-grid"]');
+    els.attributionList = root.querySelector('[data-role="attribution-list"]');
 
     els.persist = root.querySelector("#startPersistEnabled");
     els.rememberWindow = root.querySelector("#startRememberWindow");
@@ -666,6 +672,8 @@
     // time the tab is opened — a latch would freeze the panel on v0.0.0.
     if (name === "about") {
       renderAbout();
+      renderAttribution();
+      if (!state.licensesLoaded) loadLicenses();
     }
   }
 
@@ -1739,6 +1747,20 @@
     setHidden(els.mindnodePreview, false);
   }
 
+  function loadLicenses() {
+    return apiGet("/api/licenses").then(function (r) {
+      state.licensesLoaded = true;
+      state.licenseComponents = (r && r.components) || [];
+      renderAttribution();
+    }).catch(function () {
+      // A checkout without build/THIRD-PARTY-LICENSES still shows the section
+      // heading and the link out; only the generated list stays empty.
+      state.licensesLoaded = true;
+      state.licenseComponents = [];
+      renderAttribution();
+    });
+  }
+
   function loadChangelog() {
     return apiGet("/api/changelog").then(function (r) {
       state.changelogLoaded = true;
@@ -1824,6 +1846,35 @@
     build(val);
     row.appendChild(val);
     els.aboutGrid.appendChild(row);
+  }
+
+  // Rows arrive in THIRD-PARTY-LICENSES order, which already clusters components
+  // by license, so a heading is opened whenever the group changes rather than by
+  // re-sorting. Nested rows (the cv2 FFmpeg DLL, the PP-OCR models) belong to the
+  // component above them and never open a group of their own.
+  function renderAttribution() {
+    if (!els.attributionList) return;
+    var rows = state.licenseComponents || [];
+    els.attributionList.innerHTML = "";
+    if (!rows.length) return;
+
+    var frag = document.createDocumentFragment();
+    var currentGroup = null;
+    rows.forEach(function (item) {
+      if (!item.nested && item.group && item.group !== currentGroup) {
+        currentGroup = item.group;
+        frag.appendChild(el("div", "attribution__group", currentGroup));
+      }
+      var row = el("div", "attribution__row");
+      if (item.nested) row.classList.add("attribution__row--nested");
+      row.appendChild(el("div", "attribution__name", item.component || ""));
+      row.appendChild(el("div", "attribution__version", item.version || ""));
+      // The full cell, not the group: "MIT (macOS only)" and the cv2 DLL's
+      // platform caveat are the part a reader actually needs.
+      row.appendChild(el("div", "attribution__license", item.license || ""));
+      frag.appendChild(row);
+    });
+    els.attributionList.appendChild(frag);
   }
 
   // ---- Open / dismiss flows ----
