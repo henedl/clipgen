@@ -437,17 +437,21 @@
     // inModal + `when` so they fire only while the launcher owns the keyboard.
     if (window.ClipgenHotkeys) {
       var isOpen = function () { return state.open; };
+      // Spreadsheet/folder/confirm shortcuts target the Open pane. Gating only
+      // on state.open left G/E/I/Cmd+Enter live on About and Recent updates,
+      // where they mutated a hidden form or confirmed the workspace.
+      var isOpenForm = function () { return state.open && state.startTab === "open"; };
       ClipgenHotkeys.register([
         { id: "start.tabOpen",      inModal: true, when: isOpen, handler: function () { setStartTab("open"); } },
         { id: "start.tabAbout",     inModal: true, when: isOpen, handler: function () { setStartTab("about"); } },
         { id: "start.tabUpdates",   inModal: true, when: isOpen, handler: function () { setStartTab("updates"); } },
-        { id: "start.tabGoogle",    inModal: true, when: isOpen, handler: function () { setTab("google"); } },
-        { id: "start.tabExcel",     inModal: true, when: isOpen, handler: function () { setTab("excel"); } },
-        { id: "start.tabMindnode",  inModal: true, when: isOpen, handler: function () { setTab("mindnode"); } },
-        { id: "start.tabNone",      inModal: true, when: isOpen, handler: function () { setTab("none"); } },
-        { id: "start.browseInput",  inModal: true, when: isOpen, handler: function () { browseFolder("input"); } },
-        { id: "start.browseOutput", inModal: true, when: isOpen, handler: function () { browseFolder("output"); } },
-        { id: "start.confirm",      inModal: true, allowInInput: true, when: isOpen, handler: function () { confirm(); } }
+        { id: "start.tabGoogle",    inModal: true, when: isOpenForm, handler: function () { setTab("google"); } },
+        { id: "start.tabExcel",     inModal: true, when: isOpenForm, handler: function () { setTab("excel"); } },
+        { id: "start.tabMindnode",  inModal: true, when: isOpenForm, handler: function () { setTab("mindnode"); } },
+        { id: "start.tabNone",      inModal: true, when: isOpenForm, handler: function () { setTab("none"); } },
+        { id: "start.browseInput",  inModal: true, when: isOpenForm, handler: function () { browseFolder("input"); } },
+        { id: "start.browseOutput", inModal: true, when: isOpenForm, handler: function () { browseFolder("output"); } },
+        { id: "start.confirm",      inModal: true, allowInInput: true, when: isOpenForm, handler: function () { confirm(); } }
       ]);
     }
   }
