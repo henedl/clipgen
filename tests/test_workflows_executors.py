@@ -111,6 +111,25 @@ def test_transcribe_returns_segments_and_carries_source(tmp_path, monkeypatch):
     assert out["segments"]["source"] is src
 
 
+def test_transcribe_notes_when_nothing_wired(tmp_path):
+    out = _run("transcribe", _ctx(tmp_path), {}, {})
+    assert out["transcript"]["segments"] == []
+    assert "wire" in out["__note__"].lower()
+
+
+def test_transcribe_raises_when_decode_fails(tmp_path, monkeypatch):
+    import transcripts
+
+    monkeypatch.setattr(transcripts, "transcribe_video", lambda *a, **k: None)
+    src = {"participant": "P01", "video_paths": [str(tmp_path / "study_P01.mp4")]}
+    try:
+        _run("transcribe", _ctx(tmp_path), {"video": src}, {})
+    except RuntimeError as exc:
+        assert "transcribe" in str(exc).lower()
+    else:
+        raise AssertionError("decode failure must fail the node, not return empty")
+
+
 # ---- Thinking (Ollama) ----
 
 
