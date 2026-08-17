@@ -125,12 +125,11 @@ class TestAverageColorHsv:
         assert result["s"] > 250
         assert result["v"] > 250
 
-    def test_area_resize_tracks_one_step_mean(self):
-        """The integer-ratio INTER_AREA split must not move the HSV mean.
+    def test_downsample_matches_one_step_mean(self):
+        """Color downsample must be a single INTER_AREA resize.
 
-        1280×720 → 64×64 is the full-frame color-scan downsample (fx=20,
-        fy=11.25). The two-step path is a speedup, so the mean — the only
-        quantity color_matches consumes — must track the one-step resize.
+        The two-pass integer-ratio split used by pHash shifts the HSV mean
+        enough to flip color_matches at default tolerances.
         """
         rng = np.random.default_rng(11)
         for h, w in ((720, 1280), (1280, 720), (45, 61)):
@@ -143,9 +142,9 @@ class TestAverageColorHsv:
                 one = frame
             hsv = cv2.cvtColor(one, cv2.COLOR_BGR2HSV)
             mean = hsv.mean(axis=(0, 1))
-            assert abs(got["h"] - float(mean[0])) <= 1.0, (h, w, got, mean)
-            assert abs(got["s"] - float(mean[1])) <= 1.0, (h, w, got, mean)
-            assert abs(got["v"] - float(mean[2])) <= 1.0, (h, w, got, mean)
+            assert abs(got["h"] - float(mean[0])) < 1e-6, (h, w, got, mean)
+            assert abs(got["s"] - float(mean[1])) < 1e-6, (h, w, got, mean)
+            assert abs(got["v"] - float(mean[2])) < 1e-6, (h, w, got, mean)
 
 
 class TestColorMatches:
