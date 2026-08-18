@@ -149,6 +149,22 @@ def test_deep_report_silent_when_nothing_ran(monkeypatch, capsys):
     assert "profile-deep" not in capsys.readouterr().out
 
 
+def test_deep_report_covers_timed_decorator(monkeypatch, capsys):
+    """@timed functions (often run in executor threads) get deep-profiled too."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.timed")
+
+    @profiling.timed("unit.timed")
+    def work():
+        return _deep_probe_workload()
+
+    work()
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.timed" in out
+    assert "_deep_probe_workload" in out
+
+
 def test_reset_clears_deep_profiles(monkeypatch, capsys):
     monkeypatch.setattr(config, "PROFILING", True)
     monkeypatch.setattr(config, "PROFILE_DEEP", "unit.deep")

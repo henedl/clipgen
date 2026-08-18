@@ -152,10 +152,18 @@ def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not config.PROFILING:
                 return fn(*args, **kwargs)
+            # Deep-profile here, not via span(): timed functions often run in
+            # executor threads (heatmap GIF pair), and the profiler must be
+            # enabled on the thread doing the work to see it.
+            deep = deep_profiler(label)
+            if deep is not None:
+                deep.enable()
             start = time.perf_counter()
             try:
                 return fn(*args, **kwargs)
             finally:
+                if deep is not None:
+                    deep.disable()
                 add(label, time.perf_counter() - start)
 
         return wrapper
