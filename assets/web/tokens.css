@@ -35,6 +35,7 @@
  * CATEGORIES: --cat-* — transcript mark categories
  * REGIONS:    --region-color-1..8 — cycled by Screenspace region index
  * SCROLLBAR:  --scrollbar-* — thumb/track/size for the global scrollbar rule
+ * FORM:       --select-caret — the <select> chevron, baked per theme (see below)
  * LAYOUT:     --layout-* | --sidebar-width-* | --bottom-panel-height
  *
  * Category hues for chip rings, dots and density bars are computed at runtime by
@@ -125,6 +126,20 @@
   --scrollbar-track: transparent;
   --scrollbar-thumb: rgba(255, 255, 255, 0.16);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+
+  /* Chevron for the global <select> rule further down (search "Native
+   * <select>"). Sits with the scrollbar tokens because it is the same kind of
+   * thing: UA-drawn furniture the product took over.
+   *
+   * A data URI rather than icons/chevron-down.svg because a <select> can carry
+   * neither a mask-image (it would clip its own option text) nor a ::after
+   * (WebKit renders no generated content on a select), so the caret has to be a
+   * background-image — and a background-image cannot be currentColor. Hence one
+   * baked value per theme. Geometry reproduces assets/icons/chevron-down.svg
+   * exactly: that file is this same polyline stroked at 1.5 with round caps and
+   * then outlined. Colour mirrors --fg-faint (what .sheet-picker__caret paints);
+   * keep the two in step. */
+  --select-caret: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-opacity='0.42' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4.22 6.22L8 8.94L10.72 6.22'/></svg>");
 
   /* Cell data (timestamp chips on Studio Sheet) */
   --cell-data:        #1d4d5a;
@@ -347,6 +362,9 @@ html[data-theme="light"],
    * --scrollbar-size / --scrollbar-track carry over from :root unchanged. */
   --scrollbar-thumb: rgba(20, 21, 26, 0.2);
   --scrollbar-thumb-hover: rgba(20, 21, 26, 0.34);
+
+  /* Same chevron, this theme's --fg-faint (rgba(20, 21, 26, 0.48)). */
+  --select-caret: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2314151a' stroke-opacity='0.48' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='M4.22 6.22L8 8.94L10.72 6.22'/></svg>");
 
   /* Cell data */
   --cell-data:        #b3e3ec;
@@ -1020,6 +1038,92 @@ audio.cg-audiotrack { display: none; }
 /* Windows-classic arrow buttons — an affordance nothing else in the UI has. */
 *::-webkit-scrollbar-button {
   display: none;
+}
+
+/* ---- Native <select> -------------------------------------------------------
+ *
+ * Every dropdown in the product, on every page and in the exported viewers
+ * (tokens.css is prepended into those by viewer.py). Global for the same reason
+ * the scrollbar rule above is: ~30 select sites across seven surfaces, most of
+ * them already carrying a page rule that painted a border, a background and a
+ * radius the UA then ignored — WebKit drops all three on a menulist select
+ * unless `appearance` is cleared, so on the target engine that styling was
+ * decoration nobody ever saw.
+ *
+ * Clearing `appearance` also removes the UA arrow AND the space it reserved, so
+ * the caret is ours to draw and ours to reserve room for. Two rules, split by
+ * what a page may override:
+ *   1. the look — plain `select`, so page CSS keeps winning on source order
+ *   2. the caret mechanics — deliberately out-specified; see its own comment
+ *
+ * Vertical metrics are padding-driven on purpose: WebKit ignores line-height on
+ * a <select> and centres the option text in the content box, so symmetric
+ * vertical padding (or a fixed height with padding-block: 0, which is what the
+ * denser page rules do) is the only shape both engines agree on. Do not add
+ * line-height here or to any select rule.
+ *
+ * The popover is left system-drawn. macOS paints select popups as a native menu
+ * in both WebKit and Chromium and ignores `option { }` there, so styling options
+ * would be a rule that silently means different things per platform. The dark
+ * popup comes from `color-scheme` at the top of this file instead. */
+select {
+  /* Caret geometry knobs. A 12px chevron 6px in from the border sits optically
+     level with the 8px text inset on the left. Override these on an element
+     rather than re-declaring padding-right, which rule 2 owns. */
+  --select-caret-size: var(--icon-size-xs);
+  --select-caret-inset: var(--space-1-5);
+  -webkit-appearance: none; /* still read by WKWebView on macOS 13/14 */
+  appearance: none;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-input);
+  color: var(--fg);
+  /* A <select> inherits neither family nor size — without these, any dropdown
+     without a page rule renders in the UA's system font at the UA's size. */
+  font-family: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+
+/* States. Out-specified for the same reason as rule 2 below: a page rule's
+   `border` SHORTHAND is (0,1,1) and loads later, so a bare `select:hover
+   { border-color }` would lose to the resting border on every styled select. */
+select:not([multiple]):hover {
+  border-color: var(--border-strong); /* matches .sheet-picker__trigger:hover */
+}
+select:not([multiple]):focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus); /* matches .topnav-qa-trigger:focus-visible */
+}
+select:not([multiple]):disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Caret mechanics, deliberately raised above class-level page rules.
+ *
+ * Around twenty page rules paint a select with the `background` SHORTHAND —
+ * which resets background-image to `none` — and the `padding` shorthand, which
+ * drops the gutter the caret sits in. All of them load after this file and win
+ * on source order, so a plain `select` rule would lose the caret on every styled
+ * dropdown in the product. Rather than sweep twenty rules and re-break on the
+ * twenty-first, this selector out-specifies them: (0,3,1) beats any
+ * `.foo select` (0,1,1) or `.foo-select` (0,1,0). ID-level rules still win; the
+ * four that existed were folded into this base instead.
+ *
+ * The :not()s earn their keep beyond specificity. A `multiple` / `size` select
+ * is a list box, where a corner caret would be a lie (there are none today —
+ * this is the guard for the first one). `.cg-select-nocaret` is the opt-out for
+ * a select too narrow to hold one: Studio's 3.5rem `ƒ` row-function column,
+ * which is icon-shaped and has deliberately never had an arrow. */
+select:not([multiple]):not([size]):not(.cg-select-nocaret) {
+  background-image: var(--select-caret);
+  background-repeat: no-repeat;
+  background-position: right var(--select-caret-inset) center;
+  background-size: var(--select-caret-size) var(--select-caret-size);
+  padding-right: calc(var(--select-caret-inset) * 2 + var(--select-caret-size));
 }
 
 /* Base button — shared across Studio / Screenspace / Transcripts. (Was copy-pasted

@@ -1569,7 +1569,9 @@
     var fnTh = el("th", "col-function");
     var fnWrap = el("div", "fn-header-wrap");
     var fnSelect = document.createElement("select");
-    fnSelect.className = "fn-select";
+    // cg-select-nocaret: .col-function is 3.5rem and holds this select plus
+    // .fn-clear, so the shared caret gutter would crowd out the glyph.
+    fnSelect.className = "fn-select cg-select-nocaret";
     fnSelect.title = "Row function";
     var defaultOpt = document.createElement("option");
     defaultOpt.value = "";

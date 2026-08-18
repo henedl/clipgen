@@ -173,15 +173,8 @@ body[data-frontend="workflows"] {
   flex: 1 1 auto;
 }
 
-#wfBlueprintSelect {
-  background: var(--bg-input);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-sm);
-  font-family: inherit;
-}
+/* #wfBlueprintSelect carries no rule of its own: the global `select` base in
+ * tokens.css is this switcher's look, declaration for declaration. */
 
 #wfBlueprintName {
   flex: 1;
@@ -369,9 +362,12 @@ body[data-frontend="workflows"] {
 
 /* Keyboard focus rings across the page's interactive controls (matches the
    #themeToggle pattern). Covers the natively-focusable toolbar/sidebar controls;
-   harmless on the few div-based ones should they gain tabindex later. */
+   harmless on the few div-based ones should they gain tabindex later.
+   Selects are absent on purpose — tokens.css gives them a --shadow-focus ring,
+   and an ID-level outline here would paint a second ring around the first.
+   .wf-param-input stays: it also matches text inputs, and on a <select> it is
+   (0,2,0), which loses to the shared (0,2,1) rule. */
 #wfToolbar button:focus-visible,
-#wfBlueprintSelect:focus-visible,
 #wfBlueprintName:focus-visible,
 .wf-palette-search:focus-visible,
 .wf-param-input:focus-visible,

@@ -55,15 +55,8 @@ body[data-frontend="composer"] {
   color: var(--fg-muted);
 }
 
-#coParticipantSelect {
-  background: var(--bg-input);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--text-sm);
-  font-family: inherit;
-}
+/* #coParticipantSelect carries no rule of its own: the global `select` base in
+ * tokens.css is this picker's look, declaration for declaration. */
 
 /* Duration · resolution · fps readout beside the picker — mirrors Screenspace's
  * .video-info (mono, dim, xs). */
