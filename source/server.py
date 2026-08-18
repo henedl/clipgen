@@ -416,7 +416,11 @@ def _record_reel_event(event: dict[str, Any]) -> None:
 
 
 def _reset_generate_job_state(total: int) -> None:
-    """Initialize the generate progress snapshot when /api/generate starts."""
+    """Initialize the generate progress snapshot when /api/generate starts.
+
+    *total* counts artifacts (one per timestamp segment), matching the Studio
+    queue's card count — not cells, and not yielded NDJSON lines.
+    """
     with _job_state_lock:
         _generate_job_state["total"] = max(0, int(total))
         _generate_job_state["done"] = 0
@@ -424,7 +428,11 @@ def _reset_generate_job_state(total: int) -> None:
 
 
 def _increment_generate_done(n: int = 1) -> None:
-    """Advance the generate-job 'done' counter by n (one per yielded line)."""
+    """Advance the generate-job 'done' counter by n artifacts.
+
+    One yielded line covers a whole cell, so callers pass that cell's segment
+    count rather than 1.
+    """
     with _job_state_lock:
         _generate_job_state["done"] += n
 
@@ -1411,6 +1419,10 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
     points on the duration badge). Setting ``clip["times"]`` here makes
     ``files.prepare_clip()`` take its pre-parsed fast path and skip the cell
     re-parse, so the edited durations win over the spreadsheet values.
+
+    Must run *before* the caller prepares the clips (``/api/generate`` and
+    ``/api/reel`` both prepare in the route so they can count segments), or the
+    sheet parse would land first and the overrides would be ignored.
     """
     if not overrides:
         return
@@ -1482,9 +1494,25 @@ def api_generate() -> FlaskResponse:
         _release_busy("generate")
         return err(str(e), 500)
 
+    # Parse timestamps up front so progress is counted in artifacts (one per
+    # segment) rather than cells — a cell holding "1:20-1:35 4:02-4:20" produces
+    # two files and two queue cards, and the readout must agree with both.
+    # prepare_clip is pure string work (~3 ms for 500 cells) and its pre-parsed
+    # fast path makes the pipeline's later call a no-op; /api/reel does the same.
+    # Per-clip guard keeps a malformed cell failing on its own line inside
+    # _generate_and_persist instead of 500-ing the whole request.
+    for clip in clips:
+        try:
+            files.prepare_clip(clip)
+        except Exception as exc:
+            utils.debug_print(f"prepare_clip failed during progress count: {exc}")
+    total_artifacts = sum(len(clip.get("times") or []) for clip in clips)
+
     def stream() -> Any:
         _generate_cancel_event.clear()
-        _reset_generate_job_state(len(cell_strings))
+        # Fall back to the cell count if nothing parsed, so the readout still
+        # shows a denominator instead of hiding itself.
+        _reset_generate_job_state(total_artifacts or len(cell_strings))
         cancel_flag = _generate_cancel_event.is_set
         clip_cells: set[str] = set()
         req_cards, req_dur = pipeline._resolve_titlecard_options(
@@ -1531,7 +1559,10 @@ def api_generate() -> FlaskResponse:
                 (fresh if matches else stale).append(a)
 
             if fresh:
-                _increment_generate_done()
+                # Advance by the cell's segment count, not len(fresh): a
+                # 3-segment cell with 2 cached artifacts still retires 3 queue
+                # cards on the client, and the two counters must stay in step.
+                _increment_generate_done(len(clip.get("times") or []))
                 yield (
                     json.dumps(
                         {
@@ -1616,7 +1647,7 @@ def api_generate() -> FlaskResponse:
                                 f.cancel()
                             break
                         clip, cell_str = future_to_cell[future]
-                        _increment_generate_done()
+                        _increment_generate_done(len(clip.get("times") or []))
                         try:
                             generated, artifacts = future.result()
                             yield (
@@ -1641,7 +1672,7 @@ def api_generate() -> FlaskResponse:
                 for clip, cell_str in to_generate:
                     if cancel_flag():
                         break
-                    _increment_generate_done()
+                    _increment_generate_done(len(clip.get("times") or []))
                     try:
                         generated, artifacts = _generate_and_persist(clip)
                         yield (
@@ -1663,7 +1694,8 @@ def api_generate() -> FlaskResponse:
 
         for cs in cell_strings:
             if cs not in clip_cells:
-                _increment_generate_done()
+                # No clip means no segments, so this ref contributed nothing to
+                # total_artifacts — advancing here would overshoot the total.
                 yield (
                     json.dumps({"cell": cs, "ok": False, "error": "No clip found"})
                     + "\n"

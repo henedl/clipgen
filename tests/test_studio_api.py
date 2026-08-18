@@ -3994,6 +3994,94 @@ def test_api_job_status_reflects_generate_progress(client, monkeypatch, tmp_path
     assert _poll_until(lambda: server._busy_slots["generate"] is False)
 
 
+def _setup_single_cell_generate(monkeypatch, tmp_path, cell_value, *, generated=1):
+    """Wire /api/generate down to one P01.5 cell holding *cell_value*."""
+    import types
+
+    monkeypatch.setattr(server, "_worksheet", object())
+    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    _set_artifacts(monkeypatch, [])
+    monkeypatch.setattr(server, "_save_manifest_quiet", lambda: None)
+
+    cell = types.SimpleNamespace(row=5, col=2, value=cell_value)
+    monkeypatch.setattr("spreadsheet.parse_cell_specifications", lambda t: [("P01", 5)])
+    monkeypatch.setattr(
+        "spreadsheet.generate_list",
+        lambda ws, mode, *, ctx=None, cell_specs, skip_prompts: [
+            {"participant": "P01", "cell": cell, "desc": "obs", "category": "nav"}
+        ],
+    )
+    monkeypatch.setattr("pipeline.process_clips", lambda *a, **kw: (generated, []))
+
+
+def test_api_generate_progress_counts_artifacts_not_cells(
+    client, monkeypatch, tmp_path
+):
+    """A multi-timestamp cell is one NDJSON line but several artifacts.
+
+    Studio's Artifacts badge counts queue cards — one per timestamp segment — so
+    the job-state total has to count segments too. Counting cells is what made
+    the panel read "(58)" next to "51 / 52 cells" for one Generate click.
+    """
+    _setup_single_cell_generate(
+        monkeypatch, tmp_path, "1:00-1:30 2:00-2:30", generated=2
+    )
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+    assert len(lines) == 1, "one cell still yields one line"
+    assert lines[0]["ok"] is True
+    # ...but the progress snapshot advances by both segments, in one step.
+    assert server._generate_job_state["total"] == 2
+    assert server._generate_job_state["done"] == 2
+
+
+def test_api_generate_progress_counts_trimmed_override_segments(
+    client, monkeypatch, tmp_path
+):
+    """Trimming in the queue replaces the cell's segments, and the count follows.
+
+    The frontend posts the complete remaining segment list whenever a cell was
+    edited or had cards removed, so the override — not the sheet value — decides
+    how many artifacts that cell contributes.
+    """
+    _setup_single_cell_generate(monkeypatch, tmp_path, "1:00", generated=2)
+
+    resp = client.post(
+        "/studio/api/generate",
+        json={
+            "cells": ["P01.5"],
+            "format": "clip",
+            "overrides": {"P01.5": [[10, 40], [60, 90]]},
+        },
+    )
+    assert resp.status_code == 200
+    assert server._generate_job_state["total"] == 2
+    assert server._generate_job_state["done"] == 2
+
+
+def test_api_generate_progress_skips_unmatched_refs(client, monkeypatch, tmp_path):
+    """A ref that resolves to no clip contributes 0 segments to both counters.
+
+    It still gets its own "No clip found" line, but advancing on that line would
+    push done past total and overfill the Generate button.
+    """
+    _setup_single_cell_generate(monkeypatch, tmp_path, "1:00", generated=1)
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["P01.5", "P09.99"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+    assert [line["cell"] for line in lines] == ["P01.5", "P09.99"]
+    assert lines[1]["error"] == "No clip found"
+    assert server._generate_job_state["total"] == 1
+    assert server._generate_job_state["done"] == 1
+
+
 def test_api_job_status_cancelling_flag(client, monkeypatch, tmp_path):
     """When cancel has been signaled but the worker hasn't yet exited, the
     status reflects in_progress=True + cancelling=True so the UI can show

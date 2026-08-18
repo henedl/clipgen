@@ -54,6 +54,25 @@ def test_studio_css_does_not_freeze_drop_targets_during_generation():
     assert "studio-generating" not in css
 
 
+def test_artifacts_toolbar_makes_room_for_the_progress_readout():
+    """The mid-run readout must not push Generate/Stash/Clear off the toolbar.
+
+    `.bs-toolbar` is a fixed-height flex row with no wrap, and the row only just
+    fits at rest — measured 868px of content in an 799px column once the
+    "N / M artifacts · elapsed" readout and its spinner appear.
+    """
+    css = STUDIO_CSS.read_text(encoding="utf-8")
+    assert "@container artifacts-toolbar (max-width: 920px)" in css
+    assert (
+        "#artifactsToolbar:has(#generateProgress:not(.hidden)) #artifactFormat" in css
+    )
+    assert (
+        "#artifactsToolbar:has(#generateProgress:not(.hidden)) #titlecardGroup" in css
+    )
+    # The rule keys off .hidden, which is what _paintGenerateProgress toggles.
+    assert 'el.classList.add("hidden")' in _studio_js()
+
+
 def test_studio_generate_uses_abort_controllers_for_both_branches():
     """Generate sheet + intake fetches must be cancellable via AbortController
     so the network connections are torn down promptly on cancel."""
@@ -134,6 +153,41 @@ def test_finish_branch_handles_zero_zero_case():
     should surface an error, not silently report '0 artifacts'."""
     src = _studio_js()
     assert "No artifacts were generated" in src
+
+
+def test_generate_progress_counts_artifacts_not_cells():
+    """The readout beside the Artifacts badge must count the same things it does.
+
+    The badge is queue-card count (one card per timestamp segment) while the
+    POST body is deduped cell refs, so a per-line ``++`` made the panel show two
+    totals for one Generate — "(58)" next to "51 / 52 cells".
+    """
+    src = _studio_js()
+    # Total is cards, not the deduped ref list, and the intake branch shares the
+    # unit so a mixed or intake-only run keeps one honest denominator.
+    assert "var sheetArtifactTotal = sheetItems.length;" in src
+    assert "updateGenerateProgress(0, sheetArtifactTotal + intakeTotal);" in src
+    assert "sheetCellTotal" not in src
+    assert "sheetCellsDone" not in src
+    # A line covering a multi-segment cell advances by that cell's card count.
+    assert "sheetArtifactsDone += cardsPerCell[data.cell] || 1;" in src
+    # Guard against the double-advance when a ref draws both a result line and
+    # a trailing "No clip found".
+    assert "if (!cellCounted[data.cell]) {" in src
+    # Readout noun matches the panel, and works for screenshots/GIFs too.
+    assert '_genLastTotal + " cells"' not in src
+    assert 'clipgenPluralUnit(_genLastTotal, "artifact", "artifacts")' in src
+
+
+def test_queue_count_badges_explain_the_cell_relationship():
+    """Both badge tooltips are rebuilt per render, from the live queue."""
+    src = _studio_js()
+    assert "function queueCountTooltip(q, noun, nounPlural)" in src
+    assert "queueCountTooltip(q, cfg.countNoun, cfg.countNounPlural)" in src
+    assert 'countNoun: "artifact"' in src
+    assert 'countNoun: "clip"' in src
+    # The stale static wording called artifact cards "Cells".
+    assert "Cells queued for generation" not in STUDIO_HTML.read_text(encoding="utf-8")
 
 
 def test_clear_card_status_selects_card_gen_badge():

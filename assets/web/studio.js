@@ -1424,9 +1424,10 @@
           ? Math.min(gen.started_at, intake.started_at)
           : gen.started_at || intake.started_at;
       _generateEtaTracker.start(genStartedAt ? genStartedAt * 1000 : undefined);
-      // The "N / M cells" readout counts sheet cells only (intake spans aren't
-      // cells); an intake-only run has no sheet count and shows elapsed alone.
-      updateGenerateProgress(gen.done || 0, gen.total || 0);
+      // Both sides count artifacts now (the sheet job in timestamp segments,
+      // the intake job one per span), so the two totals sum cleanly and an
+      // intake-only run keeps its readout instead of falling back to elapsed.
+      updateGenerateProgress(combinedDone, combinedTotal);
       _studioEtaTicker.ensure();
     } else if (state._jobStatusGenerateWasInProgress) {
       setArtifactGenerating(false);
@@ -3058,6 +3059,8 @@
     isReel: false,
     attachDragstart: true,
     durationSel: null,
+    countNoun: "artifact",
+    countNounPlural: "artifacts",
   };
   var REEL_QUEUE = {
     listSel: "#reelList",
@@ -3069,6 +3072,8 @@
     isReel: true,
     attachDragstart: false,
     durationSel: "#reelDuration",
+    countNoun: "clip",
+    countNounPlural: "clips",
   };
 
   // Composer-trim key for a queue item, or null. Sheet items key on
@@ -3168,12 +3173,36 @@
     });
   }
 
+  // Badge tooltip. The number is card count, but a card is one timestamp
+  // segment, so a handful of cells can stand behind many more cards — spell the
+  // relationship out rather than letting the badge look like it disagrees with
+  // the "N / M artifacts" readout beside it.
+  function queueCountTooltip(q, noun, nounPlural) {
+    var cellsSeen = {};
+    var cellCount = 0;
+    for (var i = 0; i < q.length; i++) {
+      if (isIntakeSource(q[i].source)) continue;
+      var key = q[i].participant + "." + q[i].row;
+      if (!cellsSeen[key]) { cellsSeen[key] = true; cellCount++; }
+    }
+    var phrase = clipgenPluralUnit(q.length, noun, nounPlural);
+    if (cellCount > 0 && cellCount !== q.length) {
+      return phrase + " from " + clipgenPluralUnit(cellCount, "cell", "cells");
+    }
+    return phrase + " queued";
+  }
+
   function renderQueueImpl(cfg) {
     clearGridHighlights();
     var list = qs(cfg.listSel);
     var q = state[cfg.queueKey];
     var n = q.length;
-    qs(cfg.countSel).textContent = "(" + n + ")";
+    var countEl = qs(cfg.countSel);
+    countEl.textContent = "(" + n + ")";
+    countEl.setAttribute(
+      "data-tooltip",
+      queueCountTooltip(q, cfg.countNoun, cfg.countNounPlural)
+    );
     list.innerHTML = "";
     saveQueues();
     refreshIntakeCardStates();
@@ -3642,8 +3671,8 @@
     var el = qs("#generateProgress");
     if (!el) return;
     var hasCount = _genLastTotal > 0;
-    // Intake-only jobs never populate the cell counter, so fall back to an
-    // elapsed-only readout while generating. Hide entirely once idle.
+    // A run with no countable work falls back to an elapsed-only readout while
+    // generating. Hide entirely once idle.
     if (!state.artifactGenerating && !hasCount) {
       el.classList.add("hidden");
       el.textContent = "";
@@ -3654,7 +3683,13 @@
     // so the user can read the final tally, and a resting tally shouldn't move.
     el.classList.toggle("cg-shimmer", state.artifactGenerating);
     var parts = [];
-    if (hasCount) parts.push(_genLastDone + " / " + _genLastTotal + " cells");
+    // Artifacts, not cells: this has to agree with the panel's card count badge
+    // sitting right next to it (a multi-timestamp cell is several artifacts).
+    if (hasCount) {
+      parts.push(
+        _genLastDone + " / " + clipgenPluralUnit(_genLastTotal, "artifact", "artifacts")
+      );
+    }
     if (state.artifactGenerating) {
       parts.push(formatDuration(_generateEtaTracker.update().elapsedSec));
     }
