@@ -148,7 +148,12 @@ def _get_ocr_pool(languages: list[str]) -> queue.Queue:
     with _ocr_pool_lock:
         pool = _ocr_pools.get(key)
         if pool is None:
-            pool = queue.Queue()
+            # LIFO, not FIFO: a sequential caller (one scan, one checkout per
+            # frame) must get the engine it just returned back. A FIFO pool
+            # rotates through the None placeholders and builds one engine per
+            # slot for a single-threaded workload — measured as
+            # ocr.reader_build n=2 and ~1.7 GB peak_rss on one text scan.
+            pool = queue.LifoQueue()
             for _ in range(_ocr_pool_size()):
                 pool.put(None)
             _ocr_pools[key] = pool
