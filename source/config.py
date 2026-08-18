@@ -58,6 +58,9 @@ DEBUGGING: bool = (
     False  # enables icecream output, skips ffmpeg execution, returns stub transcripts
 )
 PROFILING: bool = False  # opt-in perf instrumentation (--profile); never changes behavior, only measures
+PROFILE_DEEP: str = (
+    ""  # --profile-deep LABEL: cProfile spans whose label contains this substring
+)
 QUIET: int = 0
 STANDARD: int = 1
 VERBOSE: int = 2

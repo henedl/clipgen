@@ -23,7 +23,10 @@ window. See agents/skills/profile/SKILL.md.
 """
 
 import atexit
+import cProfile
 import functools
+import io
+import pstats
 import sys
 import threading
 import time
@@ -39,6 +42,14 @@ _LOCK = threading.Lock()
 _TOTALS: dict[str, list[float]] = {}
 _MAX_LABELS = 1024
 _REPORT_REGISTERED = False
+
+# Deep profiling (--profile-deep LABEL): cProfile attached to the spans whose
+# label contains config.PROFILE_DEEP. Keyed per (label, thread) because a
+# cProfile.Profile is not safe to enable from two threads at once (parallel
+# scans share a label); the report merges the per-thread profiles per label.
+_DEEP: dict[tuple[str, int], cProfile.Profile] = {}
+_MAX_DEEP = 16
+_DEEP_TOP = 15  # rows of pstats output per label
 
 
 def enable() -> None:
@@ -90,16 +101,46 @@ def count(label: str, n: int = 1) -> None:
     add(label, 0.0, n)
 
 
+def deep_profiler(label: str) -> cProfile.Profile | None:
+    """Per-(label, thread) cProfile when *label* matches ``config.PROFILE_DEEP``.
+
+    Returns ``None`` unless profiling is on **and** ``PROFILE_DEEP`` is a
+    non-empty substring of *label* — the common case is two string checks with
+    no lock. Callers bracket exactly the hot work with ``enable()``/
+    ``disable()``; the same object is handed back for repeated spans on one
+    thread, so stats accumulate across frames. The stopwatch totals recorded
+    while a deep profile is attached include cProfile's own overhead — use a
+    deep run to find function names, never to compare against a plain run.
+    """
+    target = config.PROFILE_DEEP
+    if not config.PROFILING or not target or target not in label:
+        return None
+    key = (label, threading.get_ident())
+    with _LOCK:
+        prof = _DEEP.get(key)
+        if prof is None:
+            if len(_DEEP) >= _MAX_DEEP:
+                return None
+            prof = cProfile.Profile()
+            _DEEP[key] = prof
+        return prof
+
+
 @contextmanager
 def span(label: str) -> Iterator[None]:
     """Time the enclosed block under *label*; passthrough when profiling is off."""
     if not config.PROFILING:
         yield
         return
+    deep = deep_profiler(label)
+    if deep is not None:
+        deep.enable()
     start = time.perf_counter()
     try:
         yield
     finally:
+        if deep is not None:
+            deep.disable()
         add(label, time.perf_counter() - start)
 
 
@@ -200,6 +241,30 @@ def reset() -> None:
     """Clear all accumulated totals (brackets a measurement window)."""
     with _LOCK:
         _TOTALS.clear()
+        _DEEP.clear()
+
+
+def _deep_report() -> None:
+    """Print one pstats block per deep-profiled label; silent when none ran."""
+    with _LOCK:
+        groups: dict[str, list[cProfile.Profile]] = {}
+        for (label, _tid), prof in _DEEP.items():
+            groups.setdefault(label, []).append(prof)
+    for label, profs in sorted(groups.items()):
+        out = io.StringIO()
+        try:
+            stats = pstats.Stats(profs[0], stream=out)
+            for extra in profs[1:]:
+                stats.add(extra)
+        except (TypeError, ValueError):
+            continue  # a profiler that never enabled has no stats to snapshot
+        if not getattr(stats, "total_calls", 0):
+            continue
+        stats.strip_dirs().sort_stats("tottime").print_stats(_DEEP_TOP)
+        print(f"profile-deep | {label}")  # bare print: see module docstring
+        for line in out.getvalue().splitlines():
+            if line.strip():
+                print(f"  {line}")
 
 
 def report() -> None:
@@ -220,6 +285,7 @@ def report() -> None:
         peak = peak_rss_mb()
         if peak is not None:
             print(f"profile | {'peak_rss':<32} {peak:8.1f}MB")
+    _deep_report()
 
 
 def scan_summary(

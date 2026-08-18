@@ -47,6 +47,19 @@ main-thread stalls >50 ms. To add a span, follow the hooks' pattern: accumulate
 into locals and flush once per scan/tick — **never** call `profiling.add` /
 `performance.mark` per frame.
 
+**Drilling into one label — `--profile-deep LABEL`.** The stopwatch names the
+hot bucket but not the functions inside it, and whole-process cProfile cannot
+see into worker threads (a scan's callback runs in `ScreenspaceWorker`, so
+`cProfile.run("cli.main()")` shows only lock waits). `--profile-deep
+scan.callback.template` (any substring of a label; implies `--profile`)
+attaches a per-thread cProfile to exactly the matching spans — every
+`profiling.span()` label plus the per-frame scan callback — and appends a
+`profile-deep | <label>` pstats block (top functions by tottime) to the exit
+report. Two rules: the stopwatch totals of a deep run include cProfile's own
+overhead, so never compare them against a plain run; and match narrowly —
+matching many labels at once (`--profile-deep scan`) profiles them all into
+separate blocks but slows everything that matches.
+
 Two report tokens are easy to misread:
 
 - **`max=`** is the largest single occurrence. It is absent on labels fed only by

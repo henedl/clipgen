@@ -100,6 +100,65 @@ def test_label_cap_drops_new_labels(monkeypatch):
     assert snap["a"]["seconds"] == 2.0
 
 
+# ---------- deep profiling ---------------------------------------------------
+
+
+def _deep_probe_workload():
+    """A named function the deep profile must be able to attribute time to."""
+    return sum(range(2000))
+
+
+def test_deep_profiler_none_when_unrequested(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "")
+    assert profiling.deep_profiler("scan.callback.template") is None
+
+
+def test_deep_profiler_none_when_profiling_off(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "scan.callback")
+    assert profiling.deep_profiler("scan.callback.template") is None
+
+
+def test_deep_profiler_matches_substring_and_reuses(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "callback")
+    prof = profiling.deep_profiler("scan.callback.template")
+    assert prof is not None
+    assert profiling.deep_profiler("scan.callback.template") is prof
+    assert profiling.deep_profiler("ffmpeg.run") is None
+
+
+def test_deep_report_names_the_hot_function(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.deep")
+    with profiling.span("unit.deep"):
+        _deep_probe_workload()
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.deep" in out
+    assert "_deep_probe_workload" in out
+
+
+def test_deep_report_silent_when_nothing_ran(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "")
+    with profiling.span("plain"):
+        pass
+    profiling.report()
+    assert "profile-deep" not in capsys.readouterr().out
+
+
+def test_reset_clears_deep_profiles(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.deep")
+    with profiling.span("unit.deep"):
+        _deep_probe_workload()
+    profiling.reset()
+    profiling.report()
+    assert "profile-deep" not in capsys.readouterr().out
+
+
 def test_enable_flips_config_and_registers_report_once(monkeypatch):
     registered = []
     monkeypatch.setattr(profiling.atexit, "register", registered.append)
