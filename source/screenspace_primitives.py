@@ -1562,6 +1562,38 @@ def saliency_kwargs_from_params(params: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+# grid_n -> rounded cell-center coordinates. Bounded by the handful of grid
+# sizes in use (config default plus explicit task params).
+_grid_center_cache: dict[int, list[float]] = {}
+
+
+def sparse_grid_cells(cells: np.ndarray, min_mag: float) -> list[dict[str, float]]:
+    """Threshold a small square cell grid to sparse ``{"x","y","mag"}`` dicts.
+
+    The shared tail of attention's saliency grid and change's ``change_grid``:
+    coordinates are cell centers normalized 0-1 (3 decimals), ``mag`` is the
+    cell value (3 decimals). Cell-center coordinates depend only on the grid
+    size but this runs per frame (~256 cells at the default grid), so the
+    rounded centers are memoized rather than re-rounded per cell per frame
+    (measured 740k round() calls, 0.13s, across one 962-frame attention scan).
+    Python round, not np.round, so emitted values stay bit-identical.
+    """
+    grid_n = int(cells.shape[0])
+    ys, xs = np.nonzero(cells >= min_mag)
+    if ys.size == 0:
+        return []
+    centers = _grid_center_cache.get(grid_n)
+    if centers is None:
+        inv_n = 1.0 / grid_n
+        centers = [round((i + 0.5) * inv_n, 3) for i in range(grid_n)]
+        _grid_center_cache[grid_n] = centers
+    mags = cells[ys, xs].tolist()
+    return [
+        {"x": centers[x], "y": centers[y], "mag": round(mag, 3)}
+        for y, x, mag in zip(ys.tolist(), xs.tolist(), mags)
+    ]
+
+
 def saliency_grid_from_map(
     sal: np.ndarray, grid_n: int, min_mag: float
 ) -> list[dict[str, float]]:
@@ -1577,17 +1609,7 @@ def saliency_grid_from_map(
     peak = float(cells.max())
     if peak <= 0:
         return []
-    normed = cells / peak
-    ys, xs = np.nonzero(normed >= min_mag)
-    inv_n = 1.0 / grid_n
-    return [
-        {
-            "x": round((int(x) + 0.5) * inv_n, 3),
-            "y": round((int(y) + 0.5) * inv_n, 3),
-            "mag": round(float(normed[y, x]), 3),
-        }
-        for y, x in zip(ys, xs)
-    ]
+    return sparse_grid_cells(cells / peak, min_mag)
 
 
 def saliency_peak(sal: np.ndarray) -> tuple[float, float, float]:
