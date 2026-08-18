@@ -58,7 +58,10 @@ attaches a per-thread cProfile to exactly the matching spans — every
 report. Two rules: the stopwatch totals of a deep run include cProfile's own
 overhead, so never compare them against a plain run; and match narrowly —
 matching many labels at once (`--profile-deep scan`) profiles them all into
-separate blocks but slows everything that matches.
+separate blocks but slows everything that matches. When a match hits both an
+outer span and work nested inside it on one thread (`heatmap.gifs` wraps an
+inline `heatmap.gif` encode), the outermost profiler wins and absorbs the
+nested work — cProfile cannot nest, and the run must never break over it.
 
 Two report tokens are easy to misread:
 

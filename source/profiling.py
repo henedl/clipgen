@@ -126,6 +126,23 @@ def deep_profiler(label: str) -> cProfile.Profile | None:
         return prof
 
 
+def deep_enable(prof: cProfile.Profile) -> bool:
+    """Enable *prof* on this thread; ``False`` if a profiler is already active.
+
+    A broad ``--profile-deep`` substring can match both an outer span and work
+    nested inside it on the same thread (``heatmap.gifs`` wraps an inline
+    ``heatmap.gif`` encode when there is no rolling pair). cProfile raises on
+    the second ``enable()``, and letting that propagate aborts the instrumented
+    work — profiling must never change what runs. Nested matches keep the
+    outermost profiler; the inner work is still attributed to it.
+    """
+    try:
+        prof.enable()
+        return True
+    except ValueError:
+        return False
+
+
 @contextmanager
 def span(label: str) -> Iterator[None]:
     """Time the enclosed block under *label*; passthrough when profiling is off."""
@@ -133,13 +150,12 @@ def span(label: str) -> Iterator[None]:
         yield
         return
     deep = deep_profiler(label)
-    if deep is not None:
-        deep.enable()
+    deep_on = deep is not None and deep_enable(deep)
     start = time.perf_counter()
     try:
         yield
     finally:
-        if deep is not None:
+        if deep_on and deep is not None:
             deep.disable()
         add(label, time.perf_counter() - start)
 
@@ -156,13 +172,12 @@ def timed(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
             # executor threads (heatmap GIF pair), and the profiler must be
             # enabled on the thread doing the work to see it.
             deep = deep_profiler(label)
-            if deep is not None:
-                deep.enable()
+            deep_on = deep is not None and deep_enable(deep)
             start = time.perf_counter()
             try:
                 return fn(*args, **kwargs)
             finally:
-                if deep is not None:
+                if deep_on and deep is not None:
                     deep.disable()
                 add(label, time.perf_counter() - start)
 

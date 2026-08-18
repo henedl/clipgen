@@ -149,6 +149,34 @@ def test_deep_report_silent_when_nothing_ran(monkeypatch, capsys):
     assert "profile-deep" not in capsys.readouterr().out
 
 
+def test_deep_nested_matching_spans_do_not_break_the_work(monkeypatch, capsys):
+    """A broad match hitting an outer span AND nested work must not raise.
+
+    cProfile raises on a second enable() in one thread; letting it propagate
+    aborts the instrumented work (a --profile-deep heatmap. run lost its GIFs
+    to exactly this). The outermost profiler keeps running and absorbs the
+    nested work.
+    """
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.nest")
+
+    ran = []
+
+    @profiling.timed("unit.nest.inner")
+    def inner():
+        ran.append(True)
+        return _deep_probe_workload()
+
+    with profiling.span("unit.nest.outer"):
+        inner()
+
+    assert ran == [True]
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.nest.outer" in out
+    assert "_deep_probe_workload" in out  # inner work attributed to the outer
+
+
 def test_deep_report_covers_timed_decorator(monkeypatch, capsys):
     """@timed functions (often run in executor threads) get deep-profiled too."""
     monkeypatch.setattr(config, "PROFILING", True)

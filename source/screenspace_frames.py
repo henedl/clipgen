@@ -402,10 +402,9 @@ def _scan_via_ffmpeg_pipe(
             if _prof:
                 _t_cb = time.perf_counter()
                 _filter_s += _t_cb - _t_dec
-            if _deep is not None:
-                _deep.enable()
+            _deep_on = _deep is not None and profiling.deep_enable(_deep)
             result = callback(ts, frame)
-            if _deep is not None:
+            if _deep_on and _deep is not None:
                 _deep.disable()
             if _prof:
                 _t_last = time.perf_counter()
