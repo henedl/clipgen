@@ -134,14 +134,8 @@ body {
   gap: var(--space-2);
 }
 
-#participantSelect {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-}
+/* #participantSelect carries no rule of its own: the global `select` base in
+ * tokens.css is this picker's look. */
 
 .video-info {
   font-size: var(--text-xs);
@@ -2021,13 +2015,13 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   cursor: not-allowed;
 }
 
+/* Tighter than the shared `select` base in tokens.css — it sits in the dense
+   overlay bar — so the caret is pulled in to match. */
 .model-view-overlay-layer {
+  --select-caret-inset: var(--space-1);
   font-size: var(--text-xs);
-  padding: 2px var(--space-1);
-  background: var(--color-bg);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  padding-block: 2px;
+  padding-inline-start: var(--space-1);
 }
 
 .model-view-overlay-layer.hidden {
@@ -2606,14 +2600,12 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
   padding: var(--space-1) 0;
 }
 
+/* min-width: 0 so a long step name can ellipsise instead of pushing the Add
+   button out of the row. Rest comes from the `select` base in tokens.css. */
 .multitool-add-row select {
   flex: 1;
+  min-width: 0;
   font-size: var(--text-xs);
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text);
 }
 
 .multitool-hint {
@@ -2630,11 +2622,6 @@ html[data-theme="light"] .ss-cat-chip.active[data-active-type="numbers"],
 
 .multitool-step-region-select {
   font-size: var(--text-xs);
-  padding: var(--space-1);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg);
-  color: var(--color-text);
   max-width: 10rem;
 }
 

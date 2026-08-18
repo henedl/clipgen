@@ -2027,13 +2027,9 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* Keeps the option rows a consistent width whatever the model/language names
+   are; everything else comes from the `select` base in tokens.css. */
 .pill-options select {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
   min-width: 110px;
 }
 

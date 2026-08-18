@@ -646,14 +646,13 @@ body {
   margin-bottom: var(--space-1);
 }
 
+/* Full-width and roomier than the shared `select` base in tokens.css — these are
+   sidebar filters, not toolbar controls. padding-block rather than the shorthand
+   so it doesn't clear the base's caret gutter. */
 #filters select {
   width: 100%;
-  padding: var(--space-2) var(--space-2);
-  background: var(--color-surface);
-  color: var(--color-text);
-  border: 1px solid var(--color-border);
+  padding-block: var(--space-2);
   border-radius: var(--radius);
-  font-size: var(--text-sm);
 }
 
 #filterType {

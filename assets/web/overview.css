@@ -110,12 +110,10 @@ body {
   flex-wrap: wrap;
 }
 
+/* Taller than the shared `select` base in tokens.css so it lines up with the
+   .area-controls .btn beside it. padding-block rather than the shorthand, which
+   would clear the base's caret gutter. Duplicated verbatim in studio.css, which
+   has its own .area-controls; keep the two in step. */
 .area-controls select {
-  padding: var(--space-2) var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: calc(var(--radius) - 2px);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--text-sm);
-  cursor: pointer;
+  padding-block: var(--space-2);
 }
