@@ -5,12 +5,19 @@
  * rotatable rect/ellipse shapes whose visibility span contains the playhead.
  * Owns the tool state machine (select / text / draw / rect / ellipse), pointer
  * capture for drawing, text placement, shape drag-create and corner/rotation
- * handles, the positioned text <input>, the color swatches + picker, and
- * screen↔normalized coordinate mapping (geometry is normalized 0..1 to the
- * frame so the browser preview matches the server's PIL burn-in at any
- * resolution; shape rotation is degrees clockwise, applied in pixel space).
- * Multi-select (shift-click + marquee), the stroke width/style menus, and
+ * handles, the positioned text <input>, and screen↔normalized coordinate
+ * mapping (geometry is normalized 0..1 to the frame so the browser preview
+ * matches the server's PIL burn-in at any resolution; shape rotation is degrees
+ * clockwise, applied in pixel space). Multi-select (shift-click + marquee) and
  * hold-Shift proportion locking live here too.
+ *
+ * It also builds the #coPalette rail's dynamic half: the two-slot color widget
+ * and the three style chips. The color model is Photoshop's — a primary and a
+ * secondary slot that X swaps, where the *primary* is always the live
+ * annotation color (state.annColor) and the secondary is just the other half of
+ * the pair. Nothing about the secondary reaches an annotation record, so the
+ * server's four-key style schema is untouched. The six presets live inside the
+ * shared ClipgenColorPicker popover rather than as rail swatches.
  *
  * CRUD + undo/redo + selection live in the hub (CO.createAnnotation /
  * deleteAnnotation / commitAnnotationField(Group) / selectAnnotation /
@@ -32,6 +39,10 @@
   // The menu labels each as Math.round(v * 1000) — a stable weight number.
   var STROKE_WIDTHS = [0.002, 0.004, 0.006, 0.010, 0.016];
   var STROKE_STYLES = ["solid", "dashed", "dotted"];
+  // Text size presets (fraction of frame height; 0.035 == the config default),
+  // labelled the same way. style.fontSize was always honored by the renderer
+  // and the server — this is the first control that sets it.
+  var FONT_SIZES = [0.022, 0.028, 0.035, 0.045, 0.060];
 
   var _hitBoxes = [];  // screen-space bboxes from the last render (topmost last)
   var _drawing = null; // {points: [[nx, ny], ...]} while a stroke is captured
@@ -232,6 +243,9 @@
     var w = canvas.width;
     var h = canvas.height;
     ctx.clearRect(0, 0, w, h);
+    // The hub re-renders after every selection change, which is the other
+    // input to the chip gate (see syncPaletteChips).
+    syncPaletteChips();
     _hitBoxes = [];
     // Hidden layer: nothing drawn, nothing hit-testable (select/erase find
     // nothing), but an in-flight stroke preview still renders below so the
@@ -471,7 +485,7 @@
     return { start: start, end: Math.max(end, start + 0.5) };
   }
 
-  // Style for a newly drawn shape/freehand — the current toolbar defaults.
+  // Style for a newly drawn shape/freehand — the current palette defaults.
   function newStyle() {
     return {
       color: state.annColor,
@@ -492,6 +506,36 @@
       btn.classList.toggle("active", btn.getAttribute("data-tool") === tool);
     });
     if (tool !== "text") hideTextInput();
+    syncPaletteChips();
+  }
+
+  // Enable each style chip only where it can act. Stroke chips are dead with
+  // the text tool and a text-only selection; the text-size chip is dead
+  // everywhere else. BOTH inputs move the gate, so this runs from
+  // setAnnotateTool AND renderAnnotations (which the hub re-runs after every
+  // selection change) — watching only the tool leaves the chip stuck after a
+  // click-select. The cached signature keeps the render path cheap.
+  var _chipGate = "";
+
+  function syncPaletteChips() {
+    var selected = CO.selectedAnnotations ? CO.selectedAnnotations() : [];
+    var hasText = selected.some(function (a) { return a.type === "text"; });
+    var hasStroke = selected.some(function (a) {
+      return a.type === "shape" || a.type === "freehand";
+    });
+    // With nothing selected the chips set the defaults for what the active
+    // tool is about to draw, so gate on the tool instead.
+    var textLive = selected.length ? hasText : state.annTool === "text";
+    var strokeLive = selected.length ? hasStroke : state.annTool !== "text";
+    var signature = (textLive ? "1" : "0") + (strokeLive ? "1" : "0");
+    if (signature === _chipGate) return;
+    _chipGate = signature;
+    ["#coStrokeWidthBtn", "#coStrokeStyleBtn"].forEach(function (sel) {
+      var btn = qs(sel);
+      if (btn) btn.disabled = !strokeLive;
+    });
+    var fontBtn = qs("#coFontSizeBtn");
+    if (fontBtn) fontBtn.disabled = !textLive;
   }
 
   // ---- Text input flow ----
@@ -526,12 +570,12 @@
       type: "text",
       span: defaultSpan(),
       geometry: { x: pos.x, y: pos.y, text: text },
-      style: { color: state.annColor },
+      style: { color: state.annColor, fontSize: state.annFontSize },
     });
     setAnnotateTool("select");
   }
 
-  // ---- Stroke width / style controls ----
+  // ---- Style chip controls (stroke width / stroke style / text size) ----
 
   // Scale a frame-fraction stroke width to a small on-chip pixel weight (1..5)
   // for the trigger + menu sample lines.
@@ -539,15 +583,24 @@
     return Math.max(1, Math.min(5, Math.round((frac * 1000) / 3)));
   }
 
+  // Same idea for text size: a frame-fraction font size becomes a legible
+  // on-chip "Aa" (8..20 px) that still ranks the presets visually.
+  function fontDisplayPx(frac) {
+    return Math.max(8, Math.min(20, Math.round(frac * 300)));
+  }
+
   // Apply a style patch to the current selection as one undo step. Stroke
-  // width/style only touch shapes + freehand; color applies to every type.
-  // Annotations already carrying the patched value are skipped (no no-op undo).
+  // width/style only touch shapes + freehand and fontSize only text; color
+  // applies to every type. Annotations already carrying the patched value are
+  // skipped (no no-op undo).
   function applyStyleToSelection(patch) {
     var strokeOnly =
       patch.strokeWidth !== undefined || patch.strokeStyle !== undefined;
+    var textOnly = patch.fontSize !== undefined;
     var edits = [];
     CO.selectedAnnotations().forEach(function (a) {
       if (strokeOnly && a.type !== "shape" && a.type !== "freehand") return;
+      if (textOnly && a.type !== "text") return;
       a.style = a.style || {};
       var changed = Object.keys(patch).some(function (k) {
         return a.style[k] !== patch[k];
@@ -560,48 +613,61 @@
     if (edits.length) CO.commitAnnotationFieldGroup("style", edits);
   }
 
-  // Minimal popover menu (no generic primitive exists): one row per option, each
-  // drawing a sample line. Click-outside / Escape closes; only one open at once.
-  var _strokeMenuCleanup = null;
+  // Minimal popover menu (no generic primitive exists) shared by the palette's
+  // three style chips: one row per option, each item painting its own sample
+  // (a rule for stroke, an "Aa" for text size) via item.render(cell). Opens to
+  // the RIGHT of its chip — the rail is docked at the left edge, so a menu
+  // dropped below would run off the bottom on a short stage. Click-outside /
+  // Escape closes; only one open at once.
+  var _paletteMenuCleanup = null;
 
-  function closeStrokeMenu() {
-    if (_strokeMenuCleanup) _strokeMenuCleanup();
+  function closePaletteMenu() {
+    if (_paletteMenuCleanup) _paletteMenuCleanup();
   }
 
-  function openStrokeMenu(anchor, items, current, onPick) {
-    closeStrokeMenu();
-    var menu = el("div", "co-stroke-menu");
+  function openPaletteMenu(anchor, items, current, onPick) {
+    closePaletteMenu();
+    var menu = el("div", "co-palette-menu");
     items.forEach(function (item) {
       var row = el("button",
-        "co-stroke-option" + (item.value === current ? " active" : ""));
+        "co-palette-option" + (item.value === current ? " active" : ""));
       row.type = "button";
       if (item.title) row.setAttribute("data-tooltip", item.title);
-      var line = el("span", "co-stroke-sample");
-      item.style(line);
-      row.appendChild(line);
+      var cell = el("span", item.sampleClass || "co-palette-sample");
+      item.render(cell);
+      row.appendChild(cell);
       if (item.label != null) {
-        var lbl = el("span", "co-stroke-label");
+        var lbl = el("span", "co-palette-label");
         lbl.textContent = item.label;
         row.appendChild(lbl);
       }
       row.addEventListener("click", function () {
-        closeStrokeMenu();
+        closePaletteMenu();
         onPick(item.value);
       });
       menu.appendChild(row);
     });
     document.body.appendChild(menu);
     var r = anchor.getBoundingClientRect();
-    menu.style.left = Math.round(r.left) + "px";
-    menu.style.top = Math.round(r.bottom + 4) + "px";
+    // Measure after mounting, then keep the menu inside the viewport: flip to
+    // the chip's left if it would overflow the right edge, and lift it if a
+    // tall preset list would run past the bottom.
+    var box = menu.getBoundingClientRect();
+    var left = r.right + 4;
+    if (left + box.width > window.innerWidth - 4) {
+      left = Math.max(4, r.left - box.width - 4);
+    }
+    var top = Math.min(r.top, Math.max(4, window.innerHeight - box.height - 4));
+    menu.style.left = Math.round(left) + "px";
+    menu.style.top = Math.round(top) + "px";
     anchor.setAttribute("aria-expanded", "true");
 
     function onDocDown(ev) {
       if (menu.contains(ev.target) || anchor.contains(ev.target)) return;
-      closeStrokeMenu();
+      closePaletteMenu();
     }
     function onKey(ev) {
-      if (ev.key === "Escape") { ev.stopPropagation(); closeStrokeMenu(); }
+      if (ev.key === "Escape") { ev.stopPropagation(); closePaletteMenu(); }
     }
     // Defer the outside-click listener so the opening click doesn't close it.
     // Track the timer so a close before it fires (fast reopen / immediate
@@ -610,13 +676,13 @@
       document.addEventListener("pointerdown", onDocDown, true);
     }, 0);
     document.addEventListener("keydown", onKey, true);
-    _strokeMenuCleanup = function () {
+    _paletteMenuCleanup = function () {
       clearTimeout(openTimer);
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
       if (menu.parentNode) menu.parentNode.removeChild(menu);
       anchor.setAttribute("aria-expanded", "false");
-      _strokeMenuCleanup = null;
+      _paletteMenuCleanup = null;
     };
   }
 
@@ -626,52 +692,100 @@
     var canvas = canvasEl();
     var video = qs("#coVideo");
 
-    // Color swatches + custom-color picker. A picked color that matches no
-    // preset leaves every preset inactive; the picker button always shows the
-    // current color.
-    var swatchHost = qs("#coAnnotateColors");
+    // ---- Two-color swatch pair ----
+    // Primary over secondary, a swap arrow and a reset-to-defaults chip in the
+    // free corners. Only the primary is the live annotation color; picking into
+    // the secondary slot parks a color for X to swap in later.
+    var pairHost = qs("#coSwatchPair");
+
+    var primaryBtn = el("button", "co-swatch-slot co-swatch-primary");
+    primaryBtn.type = "button";
+    var secondaryBtn = el("button", "co-swatch-slot co-swatch-secondary");
+    secondaryBtn.type = "button";
+
+    function paintSwatches() {
+      primaryBtn.style.setProperty("--co-swatch-color", state.annColor);
+      primaryBtn.setAttribute("aria-label", "Primary color " + state.annColor);
+      primaryBtn.setAttribute("data-tooltip", "Primary color " + state.annColor);
+      secondaryBtn.style.setProperty("--co-swatch-color", state.annColorSecondary);
+      secondaryBtn.setAttribute(
+        "aria-label", "Secondary color " + state.annColorSecondary);
+      secondaryBtn.setAttribute(
+        "data-tooltip", "Secondary color " + state.annColorSecondary);
+    }
 
     function applyAnnColor(color) {
       state.annColor = color;
-      qsa(".co-color-swatch").forEach(function (s) {
-        s.classList.toggle("active", s.getAttribute("data-color") === color);
-      });
-      var custom = qs(".co-color-custom");
-      if (custom) custom.style.setProperty("--co-swatch-color", color);
+      paintSwatches();
       // Recolor the current selection (all selected, any type) in one step.
       applyStyleToSelection({ color: color });
     }
 
-    SWATCH_COLORS.forEach(function (color, idx) {
-      var swatch = el("button", "co-color-swatch" + (idx === 0 ? " active" : ""));
-      swatch.type = "button";
-      swatch.setAttribute("data-tooltip", "Annotation color " + color);
-      swatch.setAttribute("aria-label", "Annotation color " + color);
-      swatch.setAttribute("data-color", color);
-      swatch.style.setProperty("--co-swatch-color", color);
-      swatch.addEventListener("click", function () { applyAnnColor(color); });
-      swatchHost.appendChild(swatch);
-    });
+    function applyAnnColorSecondary(color) {
+      state.annColorSecondary = color;
+      paintSwatches();
+    }
 
-    var custom = el("button", "co-color-swatch co-color-custom");
-    custom.type = "button";
-    custom.setAttribute("data-tooltip", "Custom color…");
-    custom.setAttribute("aria-label", "Custom color…");
-    custom.style.setProperty("--co-swatch-color", state.annColor || SWATCH_COLORS[0]);
-    custom.appendChild(el("span", "co-btn-icon co-icon-eye-dropper"));
-    custom.addEventListener("click", function () {
+    // Swap runs the incoming color through applyAnnColor, so with a selection
+    // live the swap recolors it as one undo step — that is the whole point of
+    // keeping two slots.
+    function swapAnnotationColors() {
+      var parked = state.annColorSecondary;
+      state.annColorSecondary = state.annColor;
+      applyAnnColor(parked);
+    }
+
+    function openSlotPicker(anchor, current, onChange) {
       window.ClipgenColorPicker.open({
-        anchor: custom,
-        value: state.annColor || SWATCH_COLORS[0],
+        anchor: anchor,
+        value: current,
         swatches: SWATCH_COLORS,
-        onChange: applyAnnColor,
+        onChange: onChange,
       });
-    });
-    swatchHost.appendChild(custom);
+    }
 
-    // Stroke width + style menus. Like the color control, each sets the default
-    // for new annotations and retro-applies to the current selection.
-    function updateStrokeTriggers() {
+    primaryBtn.addEventListener("click", function () {
+      openSlotPicker(primaryBtn, state.annColor, applyAnnColor);
+    });
+    secondaryBtn.addEventListener("click", function () {
+      openSlotPicker(secondaryBtn, state.annColorSecondary, applyAnnColorSecondary);
+    });
+
+    var swapBtn = el("button", "co-swatch-chip co-swatch-swap");
+    swapBtn.type = "button";
+    swapBtn.setAttribute("data-hotkey", "composer.swapColors");
+    swapBtn.setAttribute("aria-label", "Swap primary and secondary color");
+    swapBtn.setAttribute("data-tooltip", "Swap primary and secondary color");
+    swapBtn.appendChild(el("span", "co-btn-icon co-icon-swap"));
+    swapBtn.addEventListener("click", swapAnnotationColors);
+
+    var resetBtn = el("button", "co-swatch-chip co-swatch-reset");
+    resetBtn.type = "button";
+    resetBtn.setAttribute("aria-label", "Reset to the default colors");
+    resetBtn.setAttribute("data-tooltip", "Reset to the default colors");
+    var resetGlyph = el("span", "co-swatch-reset-glyph");
+    resetGlyph.style.setProperty(
+      "--co-swatch-default", CLIPGEN_CONFIG.composerAnnotationColor);
+    resetGlyph.style.setProperty(
+      "--co-swatch-default-secondary",
+      CLIPGEN_CONFIG.composerAnnotationColorSecondary);
+    resetBtn.appendChild(resetGlyph);
+    resetBtn.addEventListener("click", function () {
+      state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
+      applyAnnColor(CLIPGEN_CONFIG.composerAnnotationColor);
+    });
+
+    pairHost.appendChild(secondaryBtn);
+    pairHost.appendChild(primaryBtn);
+    pairHost.appendChild(swapBtn);
+    pairHost.appendChild(resetBtn);
+    paintSwatches();
+    CO.swapAnnotationColors = swapAnnotationColors;
+
+    // Stroke width / style / text size chips. Like the color control, each sets
+    // the default for new annotations and retro-applies to the current
+    // selection (applyStyleToSelection skips the types a patch can't touch).
+    function updateChipPreviews() {
       var wp = qs(".co-stroke-width-preview");
       if (wp) {
         wp.style.borderTopWidth = strokeDisplayPx(state.annStrokeWidth) + "px";
@@ -682,29 +796,37 @@
         sp.style.borderTopWidth = "2px";
         sp.style.borderTopStyle = state.annStrokeStyle;  // solid | dashed | dotted
       }
+      var fp = qs(".co-font-preview");
+      if (fp) fp.textContent = String(Math.round(state.annFontSize * 1000));
     }
 
     function applyAnnStrokeWidth(v) {
       state.annStrokeWidth = v;
-      updateStrokeTriggers();
+      updateChipPreviews();
       applyStyleToSelection({ strokeWidth: v });
     }
 
     function applyAnnStrokeStyle(s) {
       state.annStrokeStyle = s;
-      updateStrokeTriggers();
+      updateChipPreviews();
       applyStyleToSelection({ strokeStyle: s });
+    }
+
+    function applyAnnFontSize(v) {
+      state.annFontSize = v;
+      updateChipPreviews();
+      applyStyleToSelection({ fontSize: v });
     }
 
     var widthBtn = qs("#coStrokeWidthBtn");
     if (widthBtn) widthBtn.addEventListener("click", function () {
-      openStrokeMenu(widthBtn, STROKE_WIDTHS.map(function (v) {
+      openPaletteMenu(widthBtn, STROKE_WIDTHS.map(function (v) {
         var weight = Math.round(v * 1000);
         return {
           value: v,
           label: String(weight),
           title: "Stroke weight " + weight,
-          style: function (line) {
+          render: function (line) {
             line.style.borderTopWidth = strokeDisplayPx(v) + "px";
             line.style.borderTopStyle = "solid";
           },
@@ -714,12 +836,12 @@
 
     var styleBtn = qs("#coStrokeStyleBtn");
     if (styleBtn) styleBtn.addEventListener("click", function () {
-      openStrokeMenu(styleBtn, STROKE_STYLES.map(function (s) {
+      openPaletteMenu(styleBtn, STROKE_STYLES.map(function (s) {
         return {
           value: s,
           label: s.charAt(0).toUpperCase() + s.slice(1),
           title: s + " stroke",
-          style: function (line) {
+          render: function (line) {
             line.style.borderTopWidth = "2px";
             line.style.borderTopStyle = s;
           },
@@ -727,7 +849,25 @@
       }), state.annStrokeStyle, applyAnnStrokeStyle);
     });
 
-    updateStrokeTriggers();
+    var fontBtn = qs("#coFontSizeBtn");
+    if (fontBtn) fontBtn.addEventListener("click", function () {
+      openPaletteMenu(fontBtn, FONT_SIZES.map(function (v) {
+        var weight = Math.round(v * 1000);
+        return {
+          value: v,
+          label: String(weight),
+          title: "Text size " + weight,
+          sampleClass: "co-palette-sample-text",
+          render: function (cell) {
+            cell.textContent = "Aa";
+            cell.style.fontSize = fontDisplayPx(v) + "px";
+          },
+        };
+      }), state.annFontSize, applyAnnFontSize);
+    });
+
+    updateChipPreviews();
+    syncPaletteChips();
 
     // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {

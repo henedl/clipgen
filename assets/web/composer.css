@@ -174,9 +174,15 @@ body[data-frontend="composer"] {
 .co-icon-fold-open { --co-icon: url("icons/chevron-down.svg"); }
 .co-icon-fold-closed { --co-icon: url("icons/chevron-right.svg"); }
 .co-icon-cursor { --co-icon: url("icons/cursor-arrow-rays.svg"); }
-.co-icon-text { --co-icon: url("icons/language.svg"); }
+/* Octicons for the palette's three tool glyphs Heroicons has no match for: a
+   type mark, and the bare outline square/circle pair the shape tools need
+   (these two were CSS-drawn outlines while the icon slot was 11px). */
+.co-icon-text { --co-icon: url("icons/octicon/typography-16.svg"); }
+.co-icon-shape-rect { --co-icon: url("icons/octicon/square-16.svg"); }
+.co-icon-shape-ellipse { --co-icon: url("icons/octicon/circle-16.svg"); }
 .co-icon-draw { --co-icon: url("icons/pencil.svg"); }
 .co-icon-erase { --co-icon: url("icons/backspace.svg"); }
+.co-icon-swap { --co-icon: url("icons/arrows-right-left.svg"); }
 .co-icon-zoom-in { --co-icon: url("icons/magnifying-glass-plus.svg"); }
 .co-icon-zoom-out { --co-icon: url("icons/magnifying-glass-minus.svg"); }
 .co-icon-eye { --co-icon: url("icons/eye.svg"); }
@@ -270,53 +276,88 @@ body[data-frontend="composer"] {
   box-sizing: content-box;
 }
 
+/* Row: the docked annotation palette, then the video. The palette is a flex
+   sibling rather than an overlay so it can never cover the frame being
+   annotated; #coVideoFrame takes the rest. */
 #coStage {
   position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--space-3);
   background: var(--bg);
   padding: var(--space-4);
 }
 
-/* ---- Annotate toolbar + overlay ---- */
+/* ---- Annotate palette + overlay ---- */
 
-#coAnnotateBar {
-  position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
-  z-index: var(--z-float);
+/* Vertical tool rail, top-aligned and content-width (Photoshop/Pixelmator
+   palette proportions). Solid chrome, not glass — it sits beside the video
+   rather than over it. */
+#coPalette {
+  align-self: flex-start;
+  max-height: 100%;
+  overflow-y: auto;
+  flex: 0 0 auto;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-1-5);
-  background: color-mix(in oklab, var(--bg) 82%, transparent);
+  padding: var(--space-1-5);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+}
+
+/* Hairline between palette groups (tools · colors · style chips · view).
+   The horizontal-bar equivalent is .co-toolbar-sep. */
+.co-palette-sep {
+  width: var(--space-5);
+  height: 1px;
+  background: var(--border);
+  flex: 0 0 auto;
+  margin: var(--space-1) 0;
 }
 
 .co-tool-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
+  flex: 0 0 auto;
+  transition: background var(--duration-fast), color var(--duration-fast),
+    border-color var(--duration-fast);
 }
 
-.co-tool-btn:hover {
+.co-tool-btn .co-btn-icon {
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  vertical-align: 0;
+}
+
+.co-tool-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--fg);
+}
+
+.co-tool-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.co-tool-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* .active marks the exclusive V/T/D/E tool; aria-pressed marks the
@@ -328,61 +369,124 @@ body[data-frontend="composer"] {
   color: var(--fg);
 }
 
-/* Shape-tool glyphs: plain outline square/circle (Heroicons has no bare
-   circle, so both are CSS outlines for a matched pair — not icon masks). */
-.co-shape-glyph {
-  display: inline-block;
-  width: 11px;
-  height: 11px;
-  border: 1.5px solid currentColor;
-  box-sizing: border-box;
+/* ---- Two-color swatch pair (composer-annotate.js builds the children) ----
+
+   Photoshop's overlapping foreground/background squares: primary at the top
+   left, secondary tucked behind at the bottom right, a swap arrow above and a
+   reset-to-defaults chip below. Only the primary is the active annotation
+   color; the secondary is the slot X swaps it with. */
+.co-swatch-pair {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
 }
 
-.co-shape-rect {
-  border-radius: 2px;
-}
-
-.co-shape-ellipse {
-  border-radius: 50%;
-}
-
-.co-annotate-colors {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.co-color-swatch {
-  width: 16px;
-  height: 16px;
+.co-swatch-slot {
+  position: absolute;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border: 2px solid transparent;
-  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
   cursor: pointer;
   background: var(--co-swatch-color, var(--accent));
 }
 
-.co-color-swatch.active {
-  border-color: var(--fg);
+.co-swatch-slot:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
 }
 
-/* Custom-color entry to the shared ClipgenColorPicker popover; its fill
-   tracks the current annotation color. */
-.co-color-custom {
-  display: inline-flex;
+/* Inset from the corners the chips own, so neither square ever overlaps the
+   swap arrow (top right) or the reset glyph (bottom left). */
+.co-swatch-primary {
+  left: 6px;
+  top: 6px;
+  z-index: 2;
+  box-shadow: var(--shadow-sm);
+}
+
+.co-swatch-secondary {
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+}
+
+/* Swap (X) and reset chips: bare currentColor masks in the pair's two free
+   corners. */
+.co-swatch-chip {
+  position: absolute;
+  display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition: color var(--duration-fast);
 }
 
-.co-color-custom .co-btn-icon {
+.co-swatch-chip:hover {
+  color: var(--fg);
+}
+
+.co-swatch-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.co-swatch-chip .co-btn-icon {
   width: 10px;
   height: 10px;
-  background-color: var(--bg);
+  vertical-align: 0;
 }
 
-/* Stroke width + style triggers (open the co-stroke-menu popover). */
-.co-annotate-stroke {
-  display: flex;
-  gap: var(--space-1);
+.co-swatch-swap {
+  right: 0;
+  top: 0;
+  width: 12px;
+  height: 12px;
+}
+
+.co-swatch-reset {
+  left: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+}
+
+/* Reset glyph: the default pair in miniature, drawn the same overlapping way
+   as the live swatches so the affordance reads without a label. */
+.co-swatch-reset-glyph {
+  position: relative;
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+
+.co-swatch-reset-glyph::before,
+.co-swatch-reset-glyph::after {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+}
+
+.co-swatch-reset-glyph::before {
+  left: 0;
+  top: 0;
+  background: var(--co-swatch-default);
+}
+
+.co-swatch-reset-glyph::after {
+  right: 0;
+  bottom: 0;
+  background: var(--co-swatch-default-secondary);
 }
 
 /* Sample-line chip inside a trigger; border-top set by JS to reflect the
@@ -393,8 +497,20 @@ body[data-frontend="composer"] {
   border-top: 2px solid currentColor;
 }
 
-/* Stroke popover (composer-annotate.js openStrokeMenu), fixed-positioned. */
-.co-stroke-menu {
+/* Text-size chip: the current preset as a number, matching how the stroke
+   weights are labelled. Deliberately NOT an "Aa" — the type tool's octicon is
+   already an "Aa" and two of them in one rail read as the same control. */
+.co-font-preview {
+  display: block;
+  font-size: var(--text-2xs);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* Chip popover (composer-annotate.js openPaletteMenu) — shared by the stroke
+   width / stroke style / text size triggers. Fixed-positioned beside the rail. */
+.co-palette-menu {
   position: fixed;
   z-index: var(--z-dropdown);
   display: flex;
@@ -408,7 +524,7 @@ body[data-frontend="composer"] {
   box-shadow: var(--shadow-pop);
 }
 
-.co-stroke-option {
+.co-palette-option {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -421,22 +537,29 @@ body[data-frontend="composer"] {
   text-align: left;
 }
 
-.co-stroke-option:hover {
+.co-palette-option:hover {
   background: var(--bg-hover);
 }
 
-.co-stroke-option.active {
+.co-palette-option.active {
   border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
   background: color-mix(in oklab, var(--accent) 14%, transparent);
 }
 
-.co-stroke-sample {
+.co-palette-sample {
   flex: 1;
   min-width: 48px;
   border-top: 2px solid currentColor;
 }
 
-.co-stroke-label {
+/* Text-size rows sample with a live-sized "Aa" instead of a rule. */
+.co-palette-sample-text {
+  flex: 1;
+  min-width: 48px;
+  line-height: 1;
+}
+
+.co-palette-label {
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   color: var(--fg-muted);
@@ -473,7 +596,8 @@ body[data-frontend="composer"] {
 
 #coVideoFrame {
   position: relative;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   display: flex;
   align-items: center;

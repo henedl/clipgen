@@ -37,9 +37,11 @@
     annotations: [],        // all annotation records (all participants)
     selectedAnnotationIds: [], // multi-select: ids of the selected annotations
     annTool: "select",      // "select" | "text" | "draw"
-    annColor: "",           // filled from CLIPGEN_CONFIG at boot
+    annColor: "",           // palette's PRIMARY slot — the live annotation color (boot)
+    annColorSecondary: "",  // palette's parked second slot; X swaps the two (boot)
     annStrokeWidth: 0,      // default stroke width for new shapes/strokes (boot)
     annStrokeStyle: "solid", // default stroke style: solid | dashed | dotted (boot)
+    annFontSize: 0,         // default text size for new text annotations (boot)
     annHidden: false,       // hide the annotation layer (B: hold to peek, tap to toggle)
     selectedCutId: null,
     pendingIn: null,        // in-point awaiting its out-point (global seconds)
@@ -348,10 +350,11 @@
     // down the previous participant's track mix for this new participant.
     if (audioPanel) audioPanel.refresh();
 
-    ["#coPlayBtn", "#coMuteBtn", "#coSpeedBtn", "#coSetInBtn", "#coSetOutBtn"].forEach(function (sel) {
+    ["#coPlayBtn", "#coMuteBtn", "#coSpeedBtn", "#coSetInBtn", "#coSetOutBtn",
+      "#coExportShotBtn", "#coExportGifBtn", "#coExportBurnBtn"].forEach(function (sel) {
       qs(sel).disabled = false;
     });
-    qs("#coAnnotateBar").classList.remove("hidden");
+    qs("#coPalette").classList.remove("hidden");
     state.annTool = "select";
     setAnnotateTool("select"); // also closes a pending text input
     updatePendingInfo();
@@ -1513,6 +1516,12 @@
       { id: "composer.toolRect", handler: function () { setAnnotateTool("rect"); } },
       { id: "composer.toolEllipse", handler: function () { setAnnotateTool("ellipse"); } },
       {
+        id: "composer.swapColors",
+        handler: function () {
+          if (CO.swapAnnotationColors) CO.swapAnnotationColors();
+        },
+      },
+      {
         id: "composer.toggleSource",
         handler: function (e, combo) {
           var src = ["sheet", "screenspace", "transcript"][parseInt(combo, 10) - 1];
@@ -1687,8 +1696,10 @@
     }
 
     state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+    state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
     state.annStrokeWidth = CLIPGEN_CONFIG.composerAnnotationStrokeWidth;
     state.annStrokeStyle = CLIPGEN_CONFIG.composerAnnotationStrokeStyle;
+    state.annFontSize = CLIPGEN_CONFIG.composerAnnotationFontSize;
     updateTimelineHint();
     initCommandPalette();
     initParticipantSelect();
