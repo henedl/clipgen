@@ -61,6 +61,7 @@ var CLIPGEN_CONFIG = {
   screenshotFormat: ".png",
   gifFormat: ".gif",
   composerAnnotationColor: "#f05a3c",
+  composerAnnotationColorSecondary: "#f8fafc",
   composerAnnotationStrokeWidth: 0.004,
   composerAnnotationStrokeStyle: "solid",
   composerAnnotationFontSize: 0.035,

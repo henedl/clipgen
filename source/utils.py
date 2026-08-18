@@ -1103,6 +1103,7 @@ def get_frontend_config() -> dict[str, Any]:
         "screenshotFormat": config.SCREENSHOT_FORMAT,
         "gifFormat": config.GIF_FORMAT,
         "composerAnnotationColor": config.COMPOSER_ANNOTATION_COLOR,
+        "composerAnnotationColorSecondary": config.COMPOSER_ANNOTATION_COLOR_SECONDARY,
         "composerAnnotationStrokeWidth": config.COMPOSER_ANNOTATION_STROKE_WIDTH,
         "composerAnnotationStrokeStyle": config.COMPOSER_ANNOTATION_STROKE_STYLE,
         "composerAnnotationFontSize": config.COMPOSER_ANNOTATION_FONT_SIZE,

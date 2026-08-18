@@ -190,6 +190,10 @@ COMPOSER_MANIFEST_FILENAME: str = (
 # PIL/ffmpeg burn-in agree at any resolution. Mirrored to JS via
 # get_frontend_config() (never hardcode).
 COMPOSER_ANNOTATION_COLOR: str = "#f05a3c"
+# The palette's second color slot. Only ever the *inactive* half of the
+# primary/secondary pair the user swaps between (X) — never written onto an
+# annotation record, so the style schema stays four keys.
+COMPOSER_ANNOTATION_COLOR_SECONDARY: str = "#f8fafc"
 COMPOSER_ANNOTATION_STROKE_WIDTH: float = 0.004  # fraction of frame width
 COMPOSER_ANNOTATION_STROKE_STYLE: str = "solid"  # solid | dashed | dotted
 COMPOSER_ANNOTATION_FONT_SIZE: float = 0.035  # fraction of frame height

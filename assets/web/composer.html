@@ -43,6 +43,16 @@
             data-hotkey="global.primary" data-tooltip="Generate clips from all cuts for this participant">Generate clips</button>
     <button id="coCancelBtn" class="btn btn-small hidden" type="button"
             data-tooltip="Cancel generation">Cancel</button>
+    <span class="co-toolbar-sep"></span>
+    <!-- Annotation exports: document actions, not palette tools, so they sit
+         with Generate rather than in the tool rail. Enabled once a participant
+         loads (selectParticipant), like the transport buttons. -->
+    <button id="coExportShotBtn" class="btn btn-small" type="button" disabled
+            data-tooltip="Export an annotated screenshot at the playhead">Shot</button>
+    <button id="coExportGifBtn" class="btn btn-small" type="button" disabled
+            data-tooltip="Export an annotated GIF of the selected cut's span">GIF</button>
+    <button id="coExportBurnBtn" class="btn btn-small" type="button" disabled
+            data-tooltip="Burn annotations into a clip of the selected cut's span">Burn</button>
     <!-- Keyboard shortcuts: opens the shared hotkeys.js cheatsheet. -->
     <button id="coShortcutsBtn" class="btn btn-small hk-help-btn" type="button"
             data-hotkeys-help data-hotkey="global.cheatsheet"
@@ -53,10 +63,14 @@
 
   <main id="coShell">
     <section id="coStage" aria-label="Video">
-      <!-- Annotation toolbar: tools (V/T/D/U/C + eraser), hide toggle, color
-           swatches + picker, span-gated exports. Floats over the stage's
-           top-left. -->
-      <div id="coAnnotateBar" class="hidden" role="toolbar" aria-label="Annotate">
+      <!-- Annotation palette: a vertical tool rail docked to the stage's left
+           edge, outside the video so it never covers the frame. Four groups,
+           hairline-separated: tools (V/T/D/U/C/E) · the primary/secondary color
+           pair (X swaps) · stroke width / stroke style / font size chips · the
+           hide-annotations toggle. The swatch pair is built by
+           composer-annotate.js; exports live in the subheader. -->
+      <div id="coPalette" class="hidden" role="toolbar" aria-orientation="vertical"
+           aria-label="Annotate">
         <button id="coToolSelect" class="co-tool-btn active" type="button"
                 data-tool="select" data-hotkey="composer.toolSelect" aria-label="Select / move annotations"
                 data-tooltip="Select / move annotations">
@@ -75,47 +89,43 @@
         <button id="coToolRect" class="co-tool-btn" type="button"
                 data-tool="rect" data-hotkey="composer.toolRect" aria-label="Rectangle"
                 data-tooltip="Rectangle. Drag on the video to place">
-          <span class="co-shape-glyph co-shape-rect" aria-hidden="true"></span>
+          <span class="co-btn-icon co-icon-shape-rect" aria-hidden="true"></span>
         </button>
         <button id="coToolEllipse" class="co-tool-btn" type="button"
                 data-tool="ellipse" data-hotkey="composer.toolEllipse" aria-label="Circle"
                 data-tooltip="Circle. Drag on the video to place">
-          <span class="co-shape-glyph co-shape-ellipse" aria-hidden="true"></span>
+          <span class="co-btn-icon co-icon-shape-ellipse" aria-hidden="true"></span>
         </button>
         <button id="coToolErase" class="co-tool-btn" type="button"
                 data-tool="erase" data-hotkey="composer.toolErase" aria-label="Eraser"
                 data-tooltip="Eraser. Click or drag over annotations">
           <span class="co-btn-icon co-icon-erase" aria-hidden="true"></span>
         </button>
+        <span class="co-palette-sep"></span>
+        <div id="coSwatchPair" class="co-swatch-pair" role="group"
+             aria-label="Annotation colors"></div>
+        <span class="co-palette-sep"></span>
+        <button id="coStrokeWidthBtn" class="co-tool-btn"
+                type="button" aria-haspopup="true" aria-expanded="false"
+                aria-label="Stroke width" data-tooltip="Stroke width">
+          <span class="co-stroke-preview co-stroke-width-preview" aria-hidden="true"></span>
+        </button>
+        <button id="coStrokeStyleBtn" class="co-tool-btn"
+                type="button" aria-haspopup="true" aria-expanded="false"
+                aria-label="Stroke style" data-tooltip="Stroke style">
+          <span class="co-stroke-preview co-stroke-style-preview" aria-hidden="true"></span>
+        </button>
+        <button id="coFontSizeBtn" class="co-tool-btn"
+                type="button" aria-haspopup="true" aria-expanded="false"
+                aria-label="Text size" data-tooltip="Text size">
+          <span class="co-font-preview" aria-hidden="true"></span>
+        </button>
+        <span class="co-palette-sep"></span>
         <button id="coToolHide" class="co-tool-btn" type="button" aria-pressed="false"
                 data-hotkey="composer.holdHideAnnotations" aria-label="Hide annotations"
                 data-tooltip="Hide annotations (hold to peek, tap to toggle)">
           <span class="co-btn-icon co-icon-eye-slash" aria-hidden="true"></span>
         </button>
-        <span class="co-toolbar-sep"></span>
-        <div id="coAnnotateColors" class="co-annotate-colors" role="group"
-             aria-label="Annotation color"></div>
-        <span class="co-toolbar-sep"></span>
-        <div id="coAnnotateStroke" class="co-annotate-stroke" role="group"
-             aria-label="Stroke">
-          <button id="coStrokeWidthBtn" class="co-tool-btn co-stroke-trigger"
-                  type="button" aria-haspopup="true" aria-expanded="false"
-                  aria-label="Stroke width" data-tooltip="Stroke width">
-            <span class="co-stroke-preview co-stroke-width-preview" aria-hidden="true"></span>
-          </button>
-          <button id="coStrokeStyleBtn" class="co-tool-btn co-stroke-trigger"
-                  type="button" aria-haspopup="true" aria-expanded="false"
-                  aria-label="Stroke style" data-tooltip="Stroke style">
-            <span class="co-stroke-preview co-stroke-style-preview" aria-hidden="true"></span>
-          </button>
-        </div>
-        <span class="co-toolbar-sep"></span>
-        <button id="coExportShotBtn" class="btn btn-small" type="button"
-                data-tooltip="Export an annotated screenshot at the playhead">Shot</button>
-        <button id="coExportGifBtn" class="btn btn-small" type="button"
-                data-tooltip="Export an annotated GIF of the selected cut's span">GIF</button>
-        <button id="coExportBurnBtn" class="btn btn-small" type="button"
-                data-tooltip="Burn annotations into a clip of the selected cut's span">Burn</button>
       </div>
       <div id="coVideoFrame">
         <video id="coVideo" preload="metadata" playsinline></video>
