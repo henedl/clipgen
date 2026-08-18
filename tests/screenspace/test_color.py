@@ -125,22 +125,18 @@ class TestAverageColorHsv:
         assert result["s"] > 250
         assert result["v"] > 250
 
-    def test_downsample_matches_one_step_mean(self):
-        """Color downsample must be a single INTER_AREA resize.
+    def test_exact_per_pixel_hsv_mean_no_downsample(self):
+        """average_color_hsv is the exact per-pixel HSV mean of the crop.
 
-        The two-pass integer-ratio split used by pHash shifts the HSV mean
-        enough to flip color_matches at default tolerances.
+        A downsample before the conversion averages in BGR space first, which
+        desaturates textured regions (mean-of-converted != convert-of-mean),
+        so the mean must be computed on the full-resolution conversion.
         """
         rng = np.random.default_rng(11)
         for h, w in ((720, 1280), (1280, 720), (45, 61)):
             frame = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
             got = screenspace.average_color_hsv(frame)
-            new_w, new_h = min(w, 64), min(h, 64)
-            if h > 64 or w > 64:
-                one = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            else:
-                one = frame
-            hsv = cv2.cvtColor(one, cv2.COLOR_BGR2HSV)
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
             mean = hsv.mean(axis=(0, 1))
             assert abs(got["h"] - float(mean[0])) < 1e-6, (h, w, got, mean)
             assert abs(got["s"] - float(mean[1])) < 1e-6, (h, w, got, mean)

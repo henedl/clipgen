@@ -586,7 +586,8 @@ def _preview_color(
     if pixels is None:
         return _placeholder("Select a region to preview")
 
-    # Downscaled crop (mirrors average_color_hsv's ≤64 resize)
+    # Downscaled crop for the swatch panel display only; the mean itself is
+    # computed on the full-resolution crop by average_color_hsv below.
     h, w = pixels.shape[:2]
     if h > 64 or w > 64:
         down = cv2.resize(
