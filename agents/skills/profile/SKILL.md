@@ -178,23 +178,24 @@ uv run clipgen.py --ss-task change P01 --ss-threshold 0.05 --ss-interval 0.1 \
 `--ss-threshold` (and the tool's other required flags) is load-bearing: without
 it `change` / `similarity` / `inactivity` / `flow` / `template` refuse to
 build a task, and the report is just `ffprobe.run` — which looks like a
-fast-filter skip. Compare tools with unique `-o` dirs so a cached manifest
-does not hide the callback:
+fast-filter skip. **For the whole-sweep comparison, don't hand-roll the
+per-tool loop** — `tests/perf/scan_bench.py` owns the canonical flag set per
+tool, builds the fixture on demand, wipes each tool's output dir (a cached
+manifest hides the callback), and diffs runs as JSON:
 
 ```bash
-# 15s 1280x720 testsrc, --ss-interval 0.1. Grep scan.callback.<tool>.
+uv run python tests/perf/scan_bench.py --save /tmp/base.json     # baseline
+# ...make the change...
+uv run python tests/perf/scan_bench.py --compare /tmp/base.json  # Δcallback %
+```
+
+`--tools color,text` narrows the sweep (`text` is off by default: OCR is 10×
+slower and pins ~1 GB RSS); `--runs 2` keeps the fastest run per tool. For a
+single tool the direct CLI form is still useful (unique `-o` dir per run):
+
+```bash
 uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
     --ss-tolerance 20,30,30 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-color --profile
-uv run clipgen.py --ss-task similarity P01 --ss-reference-timestamp 1 \
-    --ss-threshold 0.5 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-sim --profile
-uv run clipgen.py --ss-task inactivity P01 --ss-threshold 10 --ss-interval 0.1 \
-    -i /tmp/ssbench -o /tmp/ssbench/cb-inact --profile
-uv run clipgen.py --ss-task scene P01 --ss-scene-ref menu:1 --ss-interval 0.1 \
-    -i /tmp/ssbench -o /tmp/ssbench/cb-scene --profile
-uv run clipgen.py --ss-task flow P01 --ss-threshold 2 --ss-interval 0.1 \
-    -i /tmp/ssbench -o /tmp/ssbench/cb-flow --profile
-uv run clipgen.py --ss-task template P01 --ss-reference-timestamp 1 \
-    --ss-threshold 0.7 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-tmpl --profile
 ```
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
