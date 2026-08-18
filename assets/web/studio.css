@@ -1140,6 +1140,17 @@ body.panel-dragging #bottomPanel {
   }
 }
 
+/* Same trade, one step earlier: the mid-run "N / M artifacts · elapsed" readout
+ * and its spinner add ~215px to a row that only just fits at rest, so at typical
+ * column widths they pushed Generate / Stash / Clear off the end. The format and
+ * titlecard inputs configure the *next* run, so they are what gives way. */
+@container artifacts-toolbar (max-width: 920px) {
+  #artifactsToolbar:has(#generateProgress:not(.hidden)) #artifactFormat,
+  #artifactsToolbar:has(#generateProgress:not(.hidden)) #titlecardGroup {
+    display: none;
+  }
+}
+
 .bs-label {
   font-size: 12.5px;
   font-weight: 500;

@@ -114,16 +114,25 @@
     var failReasons = [];
     var cancelled = false;
     var pending = (sheetItems.length > 0 ? 1 : 0) + (intakeItems.length > 0 ? 1 : 0);
-    var sheetCellTotal = 0;
-    var sheetCellsDone = 0;
+    // Everything below counts artifacts (one per queue card), never cells: a
+    // cell holding several timestamp pairs posts as one ref but produces one
+    // file per pair, and the readout must match the panel's card count.
+    var sheetArtifactTotal = sheetItems.length;
+    var sheetArtifactsDone = 0;
     var intakeDone = 0;
     var intakeTotal = intakeItems.length;
     var generateCardIndex = null;
+    updateGenerateProgress(0, sheetArtifactTotal + intakeTotal);
 
+    // Both branches feed one readout and one button fill. They share a unit now,
+    // so an intake-only run gets a real count instead of elapsed alone — which
+    // is also what a mid-run reload reattaches to from /api/job-status.
     function updateGenerateButtonProgress() {
-      var total = sheetCellTotal + intakeTotal;
+      var total = sheetArtifactTotal + intakeTotal;
       if (total <= 0) return;
-      setButtonProgress("generateBtn", (sheetCellsDone + intakeDone) / total);
+      var done = sheetArtifactsDone + intakeDone;
+      setButtonProgress("generateBtn", done / total);
+      updateGenerateProgress(done, total);
     }
 
     function finishBranch() {
@@ -179,15 +188,18 @@
 
     // Handle spreadsheet items via streaming api/generate
     if (sheetItems.length > 0) {
+      // One POST ref per cell, but tally how many cards each ref stands for so
+      // a returning line can advance the readout by that cell's artifacts.
       var cellsSeen = {};
       var cells = [];
+      var cardsPerCell = {};
       for (var si = 0; si < sheetItems.length; si++) {
         var ck = sheetItems[si].participant + "." + sheetItems[si].row;
         if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
+        cardsPerCell[ck] = (cardsPerCell[ck] || 0) + 1;
       }
-      sheetCellTotal = cells.length;
+      var cellCounted = {};
       generateCardIndex = buildGenerateCardIndex(list);
-      updateGenerateProgress(0, sheetCellTotal);
 
       function handleLine(line) {
         var data;
@@ -202,9 +214,14 @@
           return;
         }
         if (!data.cell) return;
-        sheetCellsDone++;
-        updateGenerateProgress(sheetCellsDone, sheetCellTotal);
-        updateGenerateButtonProgress();
+        // At most one advance per cell: the server can emit both a result line
+        // and a trailing "No clip found" for the same ref when its casing
+        // differs from the sheet header, which would push done past total.
+        if (!cellCounted[data.cell]) {
+          cellCounted[data.cell] = true;
+          sheetArtifactsDone += cardsPerCell[data.cell] || 1;
+          updateGenerateButtonProgress();
+        }
         var cards = generateCardIndex[data.cell] || [];
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);

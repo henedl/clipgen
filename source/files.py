@@ -448,12 +448,14 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
                 f"No valid timestamps found in cell {cell_ref}",
                 [
                     f"Cell contents: '{clip['cell'].value}'",
-                    f"Participant: {clip['participant']}, Description: {clip['desc'][:50]}...",
+                    f"Participant: {clip['participant']}, Description: {(clip.get('desc') or '')[:50]}...",
                 ],
             )
 
-    # Clean description: remove bracketed prefix and sanitize for use in filename
-    raw_desc = clip["desc"]
+    # Clean description: remove bracketed prefix and sanitize for use in filename.
+    # `.get` mirrors the fast path above: a record built without desc/category is
+    # legal (synthetic clips, sheet rows with empty columns) and must not KeyError.
+    raw_desc = clip.get("desc") or ""
     bracket_pos = raw_desc.rfind("]")
     cleaned_desc = (
         raw_desc[bracket_pos + 1 :].strip() if bracket_pos >= 0 else raw_desc.strip()
@@ -462,8 +464,8 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     if config.DEBUGGING:
         config.debug_ic(clip["desc"])
 
-    # Sanitize category (handle None/empty)
-    if clip["category"]:
+    # Sanitize category (handle missing/None/empty)
+    if clip.get("category"):
         clip["category"] = utils.sanitize_filename(clip["category"])
     else:
         clip["category"] = "uncategorized"
