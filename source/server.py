@@ -1426,9 +1426,14 @@ def _apply_time_overrides(clips: list[Any], overrides: dict[str, Any]) -> None:
     """
     if not overrides:
         return
+    # Folded lookup: the client keys these on the ref it posted, while the clip
+    # carries the sheet header the server resolved it to, and the two only match
+    # case-insensitively (spreadsheet.find_participant_column). An exact-match
+    # lookup would silently drop the user's edited in/out points.
+    by_key = {str(k).lower(): v for k, v in overrides.items()}
     for clip in clips:
-        key = clip["participant"] + "." + str(clip["cell"].row)
-        seg_times = overrides.get(key)
+        key = (clip["participant"] + "." + str(clip["cell"].row)).lower()
+        seg_times = by_key.get(key)
         if not seg_times:
             continue
         new_times: list[tuple[str, str]] = []
@@ -1464,6 +1469,9 @@ def api_generate() -> FlaskResponse:
     cell_strings = data.get("cells", [])
     output_format = data.get("format", "clip")
     overrides: dict[str, Any] = data.get("overrides") or {}
+    # Folded for the same reason _apply_time_overrides folds its lookup: the
+    # client keys on the ref it posted, the clip carries the sheet header.
+    override_keys = {str(k).lower() for k in overrides}
     titlecards_enabled, titlecard_duration_seconds = _parse_titlecard_request(data)
 
     if not cell_strings:
@@ -1525,7 +1533,10 @@ def api_generate() -> FlaskResponse:
         existence_cache: dict[str, bool] = {}
         for clip in clips:
             cell_str = clip["participant"] + "." + str(clip["cell"].row)
-            clip_cells.add(cell_str)
+            # Folded: cell_str is the *sheet header* the ref resolved to, and the
+            # match is case-insensitive, so the trailing "No clip found" sweep
+            # below must not treat a differently-spelled ref as unresolved.
+            clip_cells.add(cell_str.lower())
 
             existing = _find_existing_artifacts(
                 clip["cell"].row,
@@ -1538,7 +1549,7 @@ def api_generate() -> FlaskResponse:
             # effect on the next Generate. An overridden cell is always stale:
             # artifacts are keyed by cell row/col/format only, so an edited in/out
             # point would otherwise be reused at the old duration.
-            cell_overridden = cell_str in overrides
+            cell_overridden = cell_str.lower() in override_keys
             fresh: list[dict[str, Any]] = []
             stale: list[dict[str, Any]] = []
             for a in existing:
@@ -1693,7 +1704,7 @@ def api_generate() -> FlaskResponse:
                         )
 
         for cs in cell_strings:
-            if cs not in clip_cells:
+            if str(cs).lower() not in clip_cells:
                 # No clip means no segments, so this ref contributed nothing to
                 # total_artifacts — advancing here would overshoot the total.
                 yield (

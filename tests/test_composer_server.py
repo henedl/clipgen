@@ -855,6 +855,32 @@ def test_annotated_burn_within_part_keeps_single_pass_fast_path(
     assert resp["artifact"]["sourceVideo"] == "study_P01-1.mp4"
 
 
+def test_annotated_burn_rejects_a_span_that_only_grazes_an_annotation(
+    co_client, monkeypatch
+):
+    """Overlap under the 0.01 s window floor leaves nothing to burn.
+
+    The annotation is "in the span" as far as _annotations_in_span is concerned,
+    so the no-annotations check passes, but _annotation_windows drops the window
+    — which used to hand ffmpeg an empty filter graph and a `[0:v]` label it
+    never defined.
+    """
+    _make_annotation(co_client, span={"start": 10.0, "end": 20.0})
+
+    def _no_ffmpeg(*_a, **_kw):
+        raise AssertionError("ffmpeg must not run with nothing to overlay")
+
+    monkeypatch.setattr(composer_server.video, "run_ffmpeg_process", _no_ffmpeg)
+
+    resp = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 19.995, "end": 25.0},
+    ).get_json()
+
+    assert resp["ok"] is False
+    assert "visible for long enough" in resp["error"]
+
+
 def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
     # _export_cancel is a single shared Event; the busy lock enforces the
     # one-export-at-a-time assumption it relies on. Without it a second

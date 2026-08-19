@@ -551,8 +551,9 @@ def _process_single_clip_segments(
 
     # Padding / max-duration (Workflows artifact nodes); the default path is a
     # no-op and never probes. The EOF limit is only needed when *extending* the
-    # end, since run_ffmpeg silently skips a clip running past EOF — trimming or
-    # capping can never push the end out.
+    # end — trimming or capping can never push the end out. run_ffmpeg now
+    # clamps an over-running span itself, so this is about keeping the padded
+    # end *honest* in the artifact record rather than about salvaging the cut.
     padding_active = pad_pre != 0.0 or pad_post != 0.0 or max_duration > 0.0
     span_limit: float | None = None
     if pad_post > 0.0:

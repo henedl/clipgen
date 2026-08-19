@@ -43,6 +43,16 @@
     _generateEtaTracker = STUDIO._generateEtaTracker,
     _studioEtaTicker = STUDIO._studioEtaTicker;
 
+  // Canonical key for a "participant.row" cell ref. The POST carries the
+  // client's own string, but a result line echoes the *sheet header* the server
+  // resolved it to (spreadsheet.generate_cell_timestamps), and the two match
+  // case-insensitively rather than exactly — so every map keyed on a cell ref
+  // must fold, or a case difference splits one cell across two keys and the
+  // trailing "No clip found" line paints cards that already succeeded.
+  function generateCellKey(ref) {
+    return String(ref).toLowerCase();
+  }
+
   function buildGenerateCardIndex(listEl) {
     var map = {};
     var cards = listEl.querySelectorAll(".queue-card");
@@ -51,7 +61,7 @@
       var participant = card.getAttribute("data-participant");
       var row = card.getAttribute("data-row");
       if (!participant || row == null) continue;
-      var key = participant + "." + row;
+      var key = generateCellKey(participant + "." + row);
       if (!map[key]) map[key] = [];
       map[key].push(card);
     }
@@ -194,8 +204,11 @@
       var cells = [];
       var cardsPerCell = {};
       for (var si = 0; si < sheetItems.length; si++) {
-        var ck = sheetItems[si].participant + "." + sheetItems[si].row;
-        if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ck); }
+        // The POST carries the ref as written; the tallies key on the folded
+        // form so a returning line finds them whatever casing it comes back in.
+        var ref = sheetItems[si].participant + "." + sheetItems[si].row;
+        var ck = generateCellKey(ref);
+        if (!cellsSeen[ck]) { cellsSeen[ck] = true; cells.push(ref); }
         cardsPerCell[ck] = (cardsPerCell[ck] || 0) + 1;
       }
       var cellCounted = {};
@@ -217,12 +230,14 @@
         // At most one advance per cell: the server can emit both a result line
         // and a trailing "No clip found" for the same ref when its casing
         // differs from the sheet header, which would push done past total.
-        if (!cellCounted[data.cell]) {
-          cellCounted[data.cell] = true;
-          sheetArtifactsDone += cardsPerCell[data.cell] || 1;
+        // Folded, so those two spellings are one key (see generateCellKey).
+        var cellKey = generateCellKey(data.cell);
+        if (!cellCounted[cellKey]) {
+          cellCounted[cellKey] = true;
+          sheetArtifactsDone += cardsPerCell[cellKey] || 1;
           updateGenerateButtonProgress();
         }
-        var cards = generateCardIndex[data.cell] || [];
+        var cards = generateCardIndex[cellKey] || [];
         if (data.ok) {
           for (var ci = 0; ci < cards.length; ci++) setCardResult(cards[ci], true);
           totalSuccess += (data.generated || 1);

@@ -1606,6 +1606,89 @@ def test_run_ffmpeg_forwards_cancel_flag(monkeypatch):
     assert captured == [sentinel]
 
 
+# -- end-of-recording spans are shortened, not dropped --
+
+
+def _run_ffmpeg_harness(monkeypatch, captured, *, file_duration):
+    """Stub out the filesystem + ffmpeg around run_ffmpeg / extract_gif."""
+    monkeypatch.setattr(video.Path, "is_file", lambda self: True)
+    monkeypatch.setattr(
+        video.Path, "stat", lambda self: type("_S", (), {"st_size": 1})()
+    )
+    monkeypatch.setattr(video, "get_file_duration", lambda *_a: file_duration)
+    monkeypatch.setattr(video, "verify_output_file", lambda *_a, **_kw: True)
+    monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
+
+    def _fake(cmd, **_kwargs):
+        captured.append(list(cmd))
+        return subprocess.CompletedProcess(args=["ffmpeg"], returncode=0, stderr="")
+
+    monkeypatch.setattr(video, "run_ffmpeg_process", _fake)
+
+
+def test_run_ffmpeg_shortens_a_clip_running_past_the_end(monkeypatch):
+    """A bare end-of-session timestamp overshoots by DEFAULT_DURATION_SECONDS.
+
+    ffmpeg stops at EOF anyway, and the multi-video path already clamps, so the
+    clip is cut short rather than dropped.
+    """
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    ok = video.run_ffmpeg("in.mp4", "out.mp4", "01:20", "02:20", reencode=False)
+
+    assert ok is True
+    cmd = captured[0]
+    assert cmd[cmd.index("-t") + 1] == "20"  # 100 - 80, not the requested 60
+
+
+def test_run_ffmpeg_leaves_an_in_bounds_clip_alone(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert video.run_ffmpeg("in.mp4", "out.mp4", "00:10", "00:40", reencode=False)
+    cmd = captured[0]
+    assert cmd[cmd.index("-t") + 1] == "30"
+
+
+def test_run_ffmpeg_still_skips_a_start_past_the_end(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert (
+        video.run_ffmpeg("in.mp4", "out.mp4", "02:00", "03:00", reencode=False) is False
+    )
+    assert captured == []
+
+
+def test_run_ffmpeg_skips_when_clamping_leaves_nothing(monkeypatch):
+    """Defensive floor: a sub-second tail truncates to 0 and must not be cut."""
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=80.5)
+
+    assert (
+        video.run_ffmpeg("in.mp4", "out.mp4", "01:20", "02:20", reencode=False) is False
+    )
+    assert captured == []
+
+
+def test_extract_gif_shortens_a_range_running_past_the_end(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert video.extract_gif("in.mp4", "out.gif", "01:30", 60) is True
+    cmd = captured[0]
+    assert cmd[cmd.index("-t") + 1] == "10"  # 100 - 90
+
+
+def test_extract_gif_still_skips_a_start_past_the_end(monkeypatch):
+    captured: list = []
+    _run_ffmpeg_harness(monkeypatch, captured, file_duration=100)
+
+    assert video.extract_gif("in.mp4", "out.gif", "02:00", 5) is False
+    assert captured == []
+
+
 def test_enforce_filesize_limit_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(video.config, "MAX_FILESIZE_MB", 0)
 
