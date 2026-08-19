@@ -1182,6 +1182,15 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     if not annotations:
         return err("No annotations in this span — use Generate for plain clips.")
     windows = _annotation_windows(annotations, start, end)
+    # An annotation can overlap the span by less than the 0.01 s a window needs
+    # to survive, which clears the "no annotations" check above and still leaves
+    # nothing to burn. Without this the filter graph would come out empty and
+    # ffmpeg would fail on a `[0:v]` label the graph never defines.
+    if not windows:
+        return err(
+            "No annotation is visible for long enough in this span — widen the "
+            "span or the annotation's visibility."
+        )
     if len(windows) > MAX_OVERLAY_WINDOWS:
         return err(
             f"Too many distinct annotation windows ({len(windows)}); "
@@ -1291,6 +1300,12 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
             os_error_message="Annotated export failed.",
             cancel_flag=_export_cancel.is_set,
         )
+    except Exception:
+        # A failed mkstemp / overlay.save would otherwise leave the placeholder
+        # get_unique_filename reserved above sitting on disk; the two explicit
+        # ffmpeg failure paths below release it themselves.
+        files.release_reservation(out_path)
+        raise
     finally:
         for png_path, _, _ in overlay_specs:
             _unlink_quiet(png_path)
