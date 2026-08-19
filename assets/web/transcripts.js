@@ -1049,14 +1049,26 @@
         }
       }
       html += '</span>';
-      // Split text into word spans
+      // Split text into word spans. When per-word timing exists and the row is
+      // uncorrected, the Nth token gets the Nth word's data-ws/data-we for the
+      // karaoke sweep (transcripts-video.js). Display text stays exactly
+      // seg.text; a token/word count mismatch (corrections, tokenization drift)
+      // just leaves the spans untimed and the row degrades to row-level highlight.
       var tokens = seg.text.split(/(\s+)/);
+      var wordCount = 0;
+      for (var w = 0; w < tokens.length; w++) {
+        if (tokens[w] && !/^\s+$/.test(tokens[w])) wordCount++;
+      }
+      var segWords = (!seg.corrected && seg.words && seg.words.length === wordCount) ? seg.words : null;
       var wordHtml = "";
+      var wi = 0;
       for (var w = 0; w < tokens.length; w++) {
         if (/^\s+$/.test(tokens[w])) {
           wordHtml += tokens[w];
         } else if (tokens[w]) {
-          wordHtml += '<span class="segment-word">' + escapeHtml(tokens[w]) + '</span>';
+          var timing = segWords ? ' data-ws="' + segWords[wi].start + '" data-we="' + segWords[wi].end + '"' : "";
+          wordHtml += '<span class="segment-word"' + timing + '>' + escapeHtml(tokens[w]) + '</span>';
+          wi++;
         }
       }
       html += '<span class="segment-text" data-id="' + escapeHtml(seg.id) + '">' + annoBadgeHtml + wordHtml + '</span>';
@@ -2985,9 +2997,10 @@
 
   // Mirrors Studio's #trIntakeClusterThreshold default so identical marks
   // cluster identically on both pages. Padding defaults to 0 for the same
-  // reason — the spans then match Studio's exactly — but is exposed because a
-  // mark's segment boundaries sit tight against the speech, and a tight cut can
-  // clip the first or last word.
+  // reason — the spans then match Studio's exactly. Segment boundaries are
+  // word/energy-tight since TRANSCRIBE_WORD_TIMESTAMPS + TRANSCRIBE_EDGE_SNAP,
+  // so pad-0 cuts no longer clip the first or last word; the pad remains for
+  // users who want breathing room around the speech.
   var CLIP_MARKS_DEFAULT_GAP_SECONDS = 10;
   var CLIP_MARKS_DEFAULT_PAD_SECONDS = 0;
 

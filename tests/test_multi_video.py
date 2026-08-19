@@ -592,6 +592,60 @@ def test_transcribe_timeline_shifts_segment_times(monkeypatch):
     assert merged["source_file"] == "a.mp4 + b.mp4"
 
 
+def test_transcribe_timeline_shifts_word_times(monkeypatch):
+    from typing import Any
+
+    results: dict[str, Any] = {
+        "a.mp4": {
+            "segments": [
+                {
+                    "start": 0.0,
+                    "end": 5.0,
+                    "text": "one",
+                    "words": [{"start": 0.5, "end": 4.5, "text": "one"}],
+                }
+            ],
+            "language": "en",
+            "source_file": "a.mp4",
+            "model": "base",
+        },
+        "b.mp4": {
+            "segments": [
+                {
+                    "start": 1.0,
+                    "end": 4.0,
+                    "text": "two",
+                    "words": [{"start": 1.25, "end": 3.75, "text": "two"}],
+                }
+            ],
+            "language": "en",
+            "source_file": "b.mp4",
+            "model": "base",
+        },
+    }
+    streamed: list = []
+
+    def _fake_transcribe(path, on_segment=None, **kwargs):
+        result = results[path]
+        if on_segment is not None:
+            for seg in result["segments"]:
+                on_segment(seg["end"], seg)
+        return result
+
+    monkeypatch.setattr(transcripts, "transcribe_video", _fake_transcribe)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    merged = transcripts.transcribe_timeline(
+        timeline, on_segment=lambda end, seg: streamed.append(seg)
+    )
+    assert merged is not None
+    assert merged["segments"][0]["words"] == [{"start": 0.5, "end": 4.5, "text": "one"}]
+    assert merged["segments"][1]["words"] == [
+        {"start": 81.25, "end": 83.75, "text": "two"}
+    ]
+    # The streaming shifter rebases word times identically.
+    assert [s["words"] for s in streamed] == [s["words"] for s in merged["segments"]]
+
+
 def test_transcribe_timeline_none_on_failure(monkeypatch):
     monkeypatch.setattr(transcripts, "transcribe_video", lambda p, **kwargs: None)
     assert transcripts.transcribe_timeline([("a.mp4", 10, 0)]) is None

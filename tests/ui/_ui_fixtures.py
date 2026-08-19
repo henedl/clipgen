@@ -426,6 +426,16 @@ def _seed_transcripts() -> None:
                             "start": 0.0,
                             "end": 2.5,
                             "text": "Where is the export button.",
+                            # Per-word timing on one segment so the smoke renders
+                            # the karaoke path (data-ws spans); the others cover
+                            # the words-absent fallback.
+                            "words": [
+                                {"start": 0.0, "end": 0.4, "text": "Where"},
+                                {"start": 0.4, "end": 0.7, "text": "is"},
+                                {"start": 0.7, "end": 1.0, "text": "the"},
+                                {"start": 1.0, "end": 1.7, "text": "export"},
+                                {"start": 1.7, "end": 2.5, "text": "button."},
+                            ],
                         },
                         {
                             "id": "P01:1",

@@ -4,9 +4,13 @@ The Whisper model is lazy-loaded on first use and cached at module level for the
 Loads are serialized with a lock so background warm-up and transcription cannot race.
 
 Data types (defined below):
-  TranscriptSegment – TypedDict: start (float), end (float), text (str)
+  TranscriptWord    – TypedDict: start (float), end (float), text (str) — one aligned word
+  TranscriptSegment – TypedDict: start (float), end (float), text (str),
+                      optional words (list[TranscriptWord]; present when
+                      config.TRANSCRIBE_WORD_TIMESTAMPS produced per-word timing)
   TranscriptResult  – TypedDict: segments, language, source_file, model
-  ManifestSegment   – TypedDict: id (str), start, end, text — enriched segment for manifest storage
+  ManifestSegment   – TypedDict: id (str), start, end, text, optional words —
+                      enriched segment for manifest storage
 
 Key functions:
   transcribe_video(path, *, model_name, language, initial_prompt, context_keywords)
@@ -35,6 +39,14 @@ Standalone transcript file output (type "transcript" artifacts) is opt-in via --
 Anti-hallucination knobs (``config.TRANSCRIBE_*``) are passed through to faster-whisper:
 VAD pre-filter, no-speech / log-probability / compression-ratio thresholds, optional
 hallucination silence skip (requires word timestamps when > 0), and condition-on-previous-text.
+
+Timestamp tightening (both on by default):
+  config.TRANSCRIBE_WORD_TIMESTAMPS – per-word DTW alignment; segment bounds are
+    tightened to the first/last word (Whisper's own segment bounds include the
+    VAD pad) and the words ride on each segment as ``words``.
+  config.TRANSCRIBE_EDGE_SNAP – ``_build_energy_snapper``: an RMS-envelope pass
+    over the already-decoded PCM snaps each segment start to measured speech
+    onset and trims the end back from Whisper's silence overshoot.
 """
 
 import copy
@@ -50,7 +62,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 import config
 import profiling
@@ -61,10 +73,19 @@ import utils
 # ---------------------------------------------------------------------------
 
 
+class TranscriptWord(TypedDict):
+    start: float  # seconds
+    end: float  # seconds
+    text: str
+
+
 class TranscriptSegment(TypedDict):
     start: float  # seconds
     end: float  # seconds
     text: str
+    # Present when TRANSCRIBE_WORD_TIMESTAMPS produced per-word timing; absent on
+    # older manifests and when the knob is off. Consumers treat it as optional.
+    words: NotRequired[list[TranscriptWord]]
 
 
 class TranscriptResult(TypedDict):
@@ -81,6 +102,7 @@ class ManifestSegment(TypedDict):
     start: float
     end: float
     text: str
+    words: NotRequired[list[TranscriptWord]]
 
 
 # Known faster-whisper model variants with approximate download sizes.
@@ -429,9 +451,13 @@ def _build_transcribe_kwargs(
             "speech_pad_ms": config.TRANSCRIBE_VAD_SPEECH_PAD_MS,
             "min_silence_duration_ms": config.TRANSCRIBE_VAD_MIN_SILENCE_MS,
         }
+    if config.TRANSCRIBE_WORD_TIMESTAMPS:
+        kwargs["word_timestamps"] = True
     hall_silence = config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD
     if hall_silence > 0:
         kwargs["hallucination_silence_threshold"] = hall_silence
+        # faster-whisper hard requirement: the silence skip needs word timing,
+        # so this wins even when TRANSCRIBE_WORD_TIMESTAMPS is off.
         kwargs["word_timestamps"] = True
     return kwargs
 
@@ -452,6 +478,139 @@ def _resolve_audio_index(video_path: str, requested: int | None) -> int:
     props = video_mod.probe_video_properties(video_path)
     tracks = (props or {}).get("audio_tracks") or []
     return video_mod.pick_speech_audio_track(tracks)
+
+
+# ---------------------------------------------------------------------------
+# Energy edge-snap (TRANSCRIBE_EDGE_SNAP)
+# ---------------------------------------------------------------------------
+
+# RMS envelope framing. The frame is an exact multiple of the hop so frame
+# energies are sums of per-hop energies (no giant cumsum over the raw samples).
+_SNAP_FRAME_HOPS = 3  # 30 ms frames
+_SNAP_HOP_MS = 10
+# Threshold derivation: bail entirely when the file's speech/noise contrast is
+# below this (constant-noise or near-silent recordings — snapping would guess).
+_SNAP_MIN_DYNAMIC_RANGE_DB = 12.0
+# Per-segment search windows and clamps, in seconds.
+_SNAP_START_BACK_S = 0.15  # how far before the nominal start to look for onset
+_SNAP_START_FWD_S = 0.35  # how far after it (VAD pad slack lives here)
+_SNAP_END_BACK_S = 0.60  # how far back from the nominal end to trim
+_SNAP_LEAD_IN_S = 0.03  # breathing room kept before the detected onset
+_SNAP_RELEASE_S = 0.06  # room kept after the last speech frame (fricative tails)
+_SNAP_MIN_SEGMENT_S = 0.10
+_SNAP_ONSET_FRAMES = 3  # sustained frames (30 ms) required to call it speech
+_SNAP_OFFSET_FRAMES = 2
+_SNAP_WORD_MARGIN_S = 0.05  # never move a segment edge past its edge word
+
+
+def _build_energy_snapper(
+    audio: Any, sample_rate: int = 16000
+) -> Callable[[TranscriptSegment, float], None] | None:
+    """Build a per-segment edge snapper from the decoded PCM's RMS envelope.
+
+    Returns a ``snap(segment, prev_end)`` callable that mutates the segment's
+    ``start``/``end`` in place: the start moves to the measured speech onset
+    (within a bounded window, never before *prev_end*), the end is trimmed back
+    to the last speech frame — **trim only, never extend**, which keeps the
+    snap independent of the not-yet-decoded next segment (streaming-safe) and
+    matches the direction Whisper errs in. Returns ``None`` (snap disabled for
+    this file) for sub-second audio or low speech/noise contrast.
+
+    Deliberate v1 non-goal: interior word boundaries are not snapped. DTW
+    interiors are mutually consistent and the karaoke highlight sweeps to the
+    *next* word's start, so interior end-overshoot is invisible — while
+    energy-snapping every word risks eating soft onsets (/f/, /s/) for no
+    visible gain. Only segment edges (and the edge words' clamps) move.
+    """
+    import numpy as np
+
+    if audio is None or len(audio) < sample_rate:
+        return None
+    hop = sample_rate * _SNAP_HOP_MS // 1000
+    frame = hop * _SNAP_FRAME_HOPS
+    n_hops = len(audio) // hop
+    n_frames = n_hops - (_SNAP_FRAME_HOPS - 1)
+    if n_frames < _SNAP_ONSET_FRAMES:
+        return None
+    # Per-hop sum of squares, accumulated in float64 without materializing a
+    # float64 copy of the samples (einsum keeps peak memory at ~n_hops floats).
+    blocks = audio[: n_hops * hop].reshape(n_hops, hop)
+    hop_energy = np.einsum("ij,ij->i", blocks, blocks, dtype=np.float64)
+    frame_energy = hop_energy[:n_frames].copy()
+    for k in range(1, _SNAP_FRAME_HOPS):
+        frame_energy += hop_energy[k : k + n_frames]
+    db = 10.0 * np.log10(frame_energy / frame + 1e-16)
+    noise_floor = float(np.percentile(db, 10))
+    speech_ref = float(np.percentile(db, 90))
+    if speech_ref - noise_floor < _SNAP_MIN_DYNAMIC_RANGE_DB:
+        return None
+    threshold = max(noise_floor + 6.0, noise_floor + 0.35 * (speech_ref - noise_floor))
+    speech = db >= threshold
+    hop_s = hop / sample_rate
+    frame_s = frame / sample_rate
+
+    def _frame_at(t: float) -> int:
+        return min(max(int(t / hop_s), 0), n_frames - 1)
+
+    def snap(segment: TranscriptSegment, prev_end: float) -> None:
+        start = segment["start"]
+        end = segment["end"]
+        words = segment.get("words")
+
+        # Start: first sustained speech run in a bounded window around the
+        # nominal start. Not found → unchanged.
+        new_start = start
+        lo = _frame_at(max(start - _SNAP_START_BACK_S, prev_end, 0.0))
+        hi = _frame_at(min(start + _SNAP_START_FWD_S, end))
+        run = 0
+        for i in range(lo, hi + 1):
+            if speech[i]:
+                run += 1
+                if run >= _SNAP_ONSET_FRAMES:
+                    cand = (i - _SNAP_ONSET_FRAMES + 1) * hop_s - _SNAP_LEAD_IN_S
+                    cand = max(cand, prev_end, 0.0)
+                    if words:
+                        cand = min(cand, words[0]["end"] - _SNAP_WORD_MARGIN_S)
+                    new_start = min(max(cand, 0.0), end - _SNAP_MIN_SEGMENT_S)
+                    break
+            else:
+                run = 0
+
+        # End: scan backward for the last sustained speech run; trim only. No
+        # speech in the window → unchanged (quiet trailing speech below the
+        # threshold must not be amputated).
+        new_end = end
+        floor_t = new_start + _SNAP_MIN_SEGMENT_S
+        if words:
+            floor_t = max(floor_t, words[-1]["start"] + _SNAP_WORD_MARGIN_S)
+        lo = _frame_at(max(end - _SNAP_END_BACK_S, floor_t))
+        hi = _frame_at(end)
+        run = 0
+        for i in range(hi, lo - 1, -1):
+            if speech[i]:
+                run += 1
+                if run >= _SNAP_OFFSET_FRAMES:
+                    last = i + _SNAP_OFFSET_FRAMES - 1
+                    cand = last * hop_s + frame_s + _SNAP_RELEASE_S
+                    new_end = min(end, max(cand, new_start + _SNAP_MIN_SEGMENT_S))
+                    break
+            else:
+                run = 0
+
+        segment["start"] = round(new_start, 3)
+        segment["end"] = round(new_end, 3)
+        if words:
+            # Clamp the edge words into the snapped span, then keep word times
+            # monotonic non-decreasing across the list.
+            words[0]["start"] = max(words[0]["start"], segment["start"])
+            words[-1]["end"] = min(words[-1]["end"], segment["end"])
+            prev = segment["start"]
+            for w in words:
+                w["start"] = max(w["start"], prev)
+                w["end"] = max(w["end"], w["start"])
+                prev = w["end"]
+
+    return snap
 
 
 def _flush_transcribe_profile(
@@ -607,6 +766,10 @@ def transcribe_video(
         raise _TranscriptionCancelled
 
     try:
+        snapper = None
+        if config.TRANSCRIBE_EDGE_SNAP:
+            with profiling.span("transcribe.energy_envelope"):
+                snapper = _build_energy_snapper(audio_source)
         transcribe_kwargs = _build_transcribe_kwargs(
             language=lang, initial_prompt=prompt
         )
@@ -632,6 +795,7 @@ def transcribe_video(
         _n_seg = _n_cb = 0
         _audio_s = 0.0
         _t_last = time.perf_counter() if _prof else 0.0
+        _prev_end = 0.0  # last kept segment's (snapped) end; start-snap floor
         try:
             for seg in segments_iter:
                 if _prof:
@@ -648,13 +812,33 @@ def transcribe_video(
                 # never skipped — an empty segment would otherwise charge its
                 # (tiny) processing to the *next* pull.
                 if text:
-                    segments.append(
-                        TranscriptSegment(start=seg.start, end=seg.end, text=text)
+                    # Tighten to the aligned words when present: Whisper's
+                    # segment bounds include the VAD pad; its word bounds don't.
+                    words = [
+                        TranscriptWord(
+                            start=round(w.start, 2),
+                            end=round(w.end, 2),
+                            text=w.word.strip(),
+                        )
+                        for w in (getattr(seg, "words", None) or [])
+                        if w.word.strip()
+                    ]
+                    segment = TranscriptSegment(
+                        start=words[0]["start"] if words else seg.start,
+                        end=words[-1]["end"] if words else seg.end,
+                        text=text,
                     )
+                    if words:
+                        segment["words"] = words
+                    # Snap before streaming so partials equal the final list.
+                    if snapper is not None:
+                        snapper(segment, _prev_end)
+                    _prev_end = segment["end"]
+                    segments.append(segment)
                     if on_segment is not None:
                         if _prof:
                             _t_cb = time.perf_counter()
-                        on_segment(seg.end, segments[-1])
+                        on_segment(segment["end"], segments[-1])
                         if _prof:
                             _dt = time.perf_counter() - _t_cb
                             _cb_s += _dt
@@ -695,6 +879,26 @@ def transcribe_video(
             details=traceback.format_exc().rstrip().splitlines(),
         )
         return None
+
+
+def _shift_segment(segment: TranscriptSegment, offset: float) -> TranscriptSegment:
+    """Return a copy of *segment* with start/end (and any words) shifted by *offset*."""
+    shifted = TranscriptSegment(
+        start=segment["start"] + offset,
+        end=segment["end"] + offset,
+        text=segment["text"],
+    )
+    words = segment.get("words")
+    if words:
+        shifted["words"] = [
+            TranscriptWord(
+                start=round(w["start"] + offset, 2),
+                end=round(w["end"] + offset, 2),
+                text=w["text"],
+            )
+            for w in words
+        ]
+    return shifted
 
 
 def transcribe_timeline(
@@ -743,14 +947,7 @@ def transcribe_timeline(
                 _cum: int = cumulative,
                 _cb: Callable[[float, "TranscriptSegment"], None] = inner,
             ) -> None:
-                _cb(
-                    end_time + _cum,
-                    {
-                        "start": segment["start"] + _cum,
-                        "end": segment["end"] + _cum,
-                        "text": segment["text"],
-                    },
-                )
+                _cb(end_time + _cum, _shift_segment(segment, _cum))
 
         result = transcribe_video(
             path,
@@ -764,13 +961,7 @@ def transcribe_timeline(
         if result is None:
             return None
         for seg in result["segments"]:
-            merged.append(
-                {
-                    "start": seg["start"] + cumulative,
-                    "end": seg["end"] + cumulative,
-                    "text": seg["text"],
-                }
-            )
+            merged.append(_shift_segment(seg, cumulative))
         out_language = out_language or result["language"]
         out_model = out_model or result["model"]
     return {
@@ -946,9 +1137,12 @@ def apply_corrections(
                 text = new_text
                 seg_applied += count
         total_applied += seg_applied
-        corrected.append(
-            TranscriptSegment(start=seg["start"], end=seg["end"], text=text)
-        )
+        new_seg = TranscriptSegment(start=seg["start"], end=seg["end"], text=text)
+        # Word timings stay valid even when the text changed — the frontend
+        # falls back to row-level highlight on corrected rows.
+        if "words" in seg:
+            new_seg["words"] = seg["words"]
+        corrected.append(new_seg)
 
     if total_applied > 0:
         utils.verbose_print(
@@ -992,14 +1186,16 @@ def filter_segments(
         if seg["end"] > start_sec and seg["start"] < end_sec
     ]
     if offset_to_zero and filtered:
-        filtered = [
-            TranscriptSegment(
-                start=max(0.0, seg["start"] - start_sec),
-                end=seg["end"] - start_sec,
-                text=seg["text"],
-            )
-            for seg in filtered
-        ]
+        shifted: list[TranscriptSegment] = []
+        for seg in filtered:
+            new_seg = _shift_segment(seg, -start_sec)
+            new_seg["start"] = max(0.0, new_seg["start"])
+            if "words" in new_seg:
+                for w in new_seg["words"]:
+                    w["start"] = max(0.0, w["start"])
+                    w["end"] = max(w["start"], w["end"])
+            shifted.append(new_seg)
+        filtered = shifted
     return TranscriptResult(
         segments=filtered,
         language=result["language"],

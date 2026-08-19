@@ -1942,6 +1942,31 @@ def test_intake_poll_agents_running_without_stat(
     assert resp.get_json()["status"]["agents_running"] is True
 
 
+def test_transcript_includes_words_when_present(tr_client):
+    words = [
+        {"start": 0.4, "end": 0.7, "text": "the"},
+        {"start": 0.75, "end": 1.0, "text": "cat"},
+    ]
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {
+                "id": "P01:0",
+                "start": 0.4,
+                "end": 1.0,
+                "text": "the cat",
+                "words": words,
+            },
+            {"id": "P01:1", "start": 2.0, "end": 3.0, "text": "old shape"},
+        ],
+    }
+    resp = tr_client.get("/transcripts/api/transcript/P01")
+    assert resp.status_code == 200
+    segments = resp.get_json()["segments"]
+    assert segments[0]["words"] == words
+    # Segments from manifests predating word timing degrade to an empty list.
+    assert segments[1]["words"] == []
+
+
 def test_corrected_segments_cached_and_invalidated_on_correction(
     tr_client, monkeypatch
 ):
