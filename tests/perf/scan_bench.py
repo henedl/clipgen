@@ -88,6 +88,25 @@ def summarize(tool: str, profile: dict[str, dict[str, float]]) -> dict[str, floa
     }
 
 
+def keep_best(
+    best: dict[str, float] | None, summary: dict[str, float]
+) -> dict[str, float]:
+    """Pick the run to keep across --runs: fastest *successful* callback.
+
+    A failed run parses to callback_s == 0.0, which naive min-keeping would
+    hold onto forever (0 < anything), poisoning --compare baselines with a 0s
+    row. A successful run always beats a failed one; among successes the
+    minimum callback wins (standard treatment for scheduler noise).
+    """
+    if best is None:
+        return summary
+    if not summary["callback_s"]:
+        return best
+    if not best["callback_s"] or summary["callback_s"] < best["callback_s"]:
+        return summary
+    return best
+
+
 def ensure_fixture(input_dir: Path, duration: int) -> Path:
     """Build the deterministic benchmark video if it is not already there."""
     video = input_dir / "bench_P01.mp4"
@@ -230,10 +249,7 @@ def main() -> int:
             summary = summarize(
                 tool, run_tool(tool, args.input, out_root, args.interval)
             )
-            if best is None or (
-                summary["callback_s"] and summary["callback_s"] < best["callback_s"]
-            ):
-                best = summary
+            best = keep_best(best, summary)
         assert best is not None  # loop runs at least once
         rows[tool] = best
         print(

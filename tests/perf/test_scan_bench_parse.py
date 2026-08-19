@@ -37,6 +37,19 @@ def test_summarize_reduces_to_comparison_row():
     assert row["peak_rss_mb"] == 104.7
 
 
+def test_keep_best_prefers_success_over_failed_first_run():
+    failed = {"callback_s": 0.0, "frames": 0}
+    ok = {"callback_s": 0.5, "frames": 962}
+    faster = {"callback_s": 0.4, "frames": 962}
+    # A failed first run must be replaced by any later success...
+    assert scan_bench.keep_best(scan_bench.keep_best(None, failed), ok) is ok
+    # ...a later failure never displaces a success...
+    assert scan_bench.keep_best(scan_bench.keep_best(None, ok), failed) is ok
+    # ...and among successes the minimum callback wins.
+    assert scan_bench.keep_best(scan_bench.keep_best(None, ok), faster) is faster
+    assert scan_bench.keep_best(scan_bench.keep_best(None, faster), ok) is faster
+
+
 def test_summarize_handles_missing_labels():
     row = scan_bench.summarize("flow", scan_bench.parse_profile(""))
     assert row["callback_s"] == 0.0
