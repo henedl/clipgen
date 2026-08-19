@@ -621,6 +621,84 @@ def test_friction_refetch_keeps_the_programmatic_scores():
     ), "_setFrictionData clears the generating flag, so it has to run first"
 
 
+# ---- Normalize Audio (Quick action -> in-place loudnorm rewrite) ----
+
+
+def test_norm_audio_quick_action_and_modal_exist():
+    assert "Normalize Audio…" in _JS
+    assert "openNormalizeAudioModal" in _JS
+    assert 'id="normAudioModal"' in _HTML
+
+
+def test_norm_audio_run_outlives_its_dialog():
+    """Same contract as the embed run: Escape/backdrop close the dialog while
+    the rewrite batch keeps streaming, so the run must live outside the open
+    handler or a dismissed dialog strands a job with no way to stop it."""
+    assert "var _normAudioRun = null;" in _JS
+    close_start = _JS.index("function closeNormalizeAudioModal(")
+    close_body = _JS[close_start : _JS.index("\n  function ", close_start + 1)]
+    assert "_normAudioRun" not in close_body, (
+        "closing the dialog must not touch the in-flight run"
+    )
+    open_start = _JS.index("function openNormalizeAudioModal(")
+    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
+    assert "if (_normAudioRun) return;" in open_body, (
+        "reopening mid-run must show progress, not reset the pickers"
+    )
+
+
+def test_norm_audio_ignores_the_indexless_stream_lines():
+    """The stream opens with a header line and can close with
+    {"cancelled": true}; neither carries an index. Counting them as completed
+    items over-reports progress."""
+    start = _JS.index("function submitNormalizeAudio(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'typeof data.index !== "number"' in body, (
+        "the NDJSON handler must bail on lines with no index"
+    )
+
+
+def test_norm_audio_reloads_after_a_successful_rewrite():
+    """A success swapped a source file out from under the page: the <video> is
+    mid-stream on a renamed-away inode and the per-track mixers point at stale
+    extracts. media-banner.js reloads for the identical file swap; skipping the
+    reload here leaves the player wedged on the old bytes."""
+    start = _JS.index("function submitNormalizeAudio(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "window.location.reload" in body
+    reload_branch = body[body.index("function finish(") :]
+    assert "made > 0" in reload_branch, (
+        "an all-failed run changed nothing on disk and must not reload"
+    )
+
+
+def test_norm_audio_excludes_kept_backup_participants():
+    """The server refuses a file whose .orig slot is occupied (by either
+    rewriter). api/remux/status re-probes that from disk, so filtering here
+    turns a guaranteed failure line into an up-front note in the summary."""
+    start = _JS.index("function _normAudioTargets(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_normAudioKept" in body, (
+        "targets must drop participants with a kept original before the POST"
+    )
+    open_start = _JS.index("function openNormalizeAudioModal(")
+    open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]
+    assert '"api/remux/status"' in open_body, (
+        "kept-original state lives on disk, not in state.participants"
+    )
+
+
+def test_norm_audio_track_checkboxes_guard_against_stale_fetches():
+    """The current-scope track list is built from an async audio-info fetch; a
+    scope flip or participant change while the probe runs must not dress the
+    dialog with the wrong participant's tracks (or worse, their indices)."""
+    start = _JS.index("function _renderNormAudioTrackField(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "_normAudioTrackPid !== pid" in body, (
+        "the async render must be rejected when the pinned participant changed"
+    )
+
+
 # ---- Friction evidence table (programmatic vs agentic) ----
 
 

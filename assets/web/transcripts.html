@@ -330,6 +330,42 @@
     </div>
   </div>
 
+  <!-- Normalize audio: parameters for the Quick action that rewrites source
+       videos in place with loudness-normalized audio. The original file is
+       parked beside the source as .orig, same flow as the remux banner. -->
+  <div id="normAudioModal" class="modal cg-modal-overlay hidden">
+    <div class="modal-content param-modal-card">
+      <div class="modal-header">
+        <h3>Normalize Audio</h3>
+      </div>
+      <p class="param-modal-message">Rewrite each source video in place with loudness-normalized audio. The picture is copied untouched, and the original file is kept beside the source until you delete it.</p>
+      <div class="param-modal-fields">
+        <label class="param-modal-label" data-tooltip="Normalize only the participant open on this page, or every participant with a source video.">Scope
+          <select id="normAudioScope" class="param-modal-select">
+            <option value="current">Current participant</option>
+            <option value="all">All participants</option>
+          </select>
+        </label>
+        <label id="normAudioTrackModeLabel" class="param-modal-label" data-tooltip="Which audio tracks to normalize. Unselected tracks are copied untouched.">Tracks
+          <select id="normAudioTrackMode" class="param-modal-select">
+            <option value="auto">Speech track (auto-detected)</option>
+            <option value="all">All tracks</option>
+          </select>
+        </label>
+        <div id="normAudioTrackList" class="param-modal-track-list hidden"></div>
+      </div>
+      <p id="normAudioSummary" class="param-modal-summary"></p>
+      <div id="normAudioProgress" class="param-modal-progress hidden">
+        <div class="param-modal-bar"><div id="normAudioBarFill" class="param-modal-bar-fill"></div></div>
+        <p id="normAudioProgressText" class="param-modal-progress-text cg-shimmer"></p>
+      </div>
+      <div class="param-modal-actions">
+        <button id="normAudioCancel" type="button" class="btn btn-small">Cancel</button>
+        <button id="normAudioConfirm" type="button" class="btn btn-small btn-primary">Normalize</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Mark popover (shared, repositioned per use) -->
   <div id="markPopover" class="mark-popover cg-menu hidden">
     <div class="mark-popover-categories"></div>

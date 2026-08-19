@@ -14,6 +14,8 @@ API endpoints (all under /transcripts/):
   GET  /api/vtt/<participant>                     - serve transcript as WebVTT
   POST /api/embed-subtitles                       - NDJSON: mux each requested participant's transcript into a subtitled copy of their video
   POST /api/embed-subtitles/cancel                - stop the in-flight embed run after the current file
+  POST /api/normalize-audio                       - NDJSON: rewrite each requested participant's source video(s) in place with loudness-normalized audio (original kept as .orig)
+  POST /api/normalize-audio/cancel                - stop the in-flight normalize run, interrupting the current file
   GET  /api/agent/<key>/<participant>            - a thinking agent's result (summary/citations/friction/report), status, or 404
   POST /api/agent/<key>/<participant>/regenerate - clear + re-trigger an agent (forces past its enabled config)
   POST /api/agent/<key>/<participant>/stop       - flag an in-flight agent run for discard
@@ -47,7 +49,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -813,6 +815,194 @@ def api_embed_subtitles() -> FlaskResponse:
 def api_embed_subtitles_cancel() -> FlaskResponse:
     """Stop the in-flight embed run once the current file finishes."""
     _embed_cancel_event.set()
+    return ok()
+
+
+# One normalize run at a time — same single-slot shape as the embed run above
+# (and deliberately a *separate* slot: an embed reads sources, a normalize
+# rewrites them, and neither should be blocked by the other's queue position).
+_normalize_cancel_event = threading.Event()
+_normalize_lock = threading.Lock()
+_normalize_busy = False
+# Token-scoped release, same rationale as _embed_owner: the release is attempted
+# twice per run and must never clear a successor run's claim.
+_normalize_owner: str | None = None
+
+
+def _claim_normalize_slot() -> str | None:
+    """Take the single normalize slot, returning its token, or None if held."""
+    global _normalize_busy, _normalize_owner
+    with _normalize_lock:
+        if _normalize_busy:
+            return None
+        _normalize_busy = True
+        _normalize_owner = uuid.uuid4().hex
+        _normalize_cancel_event.clear()
+        return _normalize_owner
+
+
+def _release_normalize_slot(token: str | None = None) -> None:
+    """Free the slot, but only if *token* still owns it.
+
+    ``token=None`` releases unconditionally (tests and teardown).
+    """
+    global _normalize_busy, _normalize_owner
+    with _normalize_lock:
+        if token is not None and _normalize_owner != token:
+            return
+        _normalize_busy = False
+        _normalize_owner = None
+
+
+def _resolve_normalize_indices(
+    props: dict[str, Any], tracks: str | list[int]
+) -> list[int] | str:
+    """Resolve a tracks spec against one file's probed layout.
+
+    Returns the audio-relative indices to normalize, or an error string.
+    Single-track files always normalize track 0 whatever the spec — there is
+    nothing to choose. An explicit list is intersected with the file's real
+    range rather than failed outright: it comes from the current-participant
+    checkbox UI, and on a multi-part participant part 2 may legitimately have
+    fewer tracks than the part the dialog was built from.
+    """
+    count = int(props.get("audio_track_count") or 0)
+    if count <= 1:
+        return [0]
+    # isinstance rather than equality so ty narrows tracks to list[int] below;
+    # the route already validated any string here is "all" or "auto".
+    if isinstance(tracks, str):
+        if tracks == "all":
+            return list(range(count))
+        return [video.pick_speech_audio_track(props.get("audio_tracks") or [])]
+    valid = [i for i in tracks if 0 <= i < count]
+    if not valid:
+        return "None of the selected tracks exist in this file."
+    return valid
+
+
+def _normalize_audio_for_participant(
+    participant: str,
+    tracks: str | list[int],
+    cancel_flag: Callable[[], bool],
+) -> dict[str, Any]:
+    """Normalize *participant*'s source video(s) in place.
+
+    Multi-part participants are supported — each part is an independent file
+    (unlike subtitle muxing, where timing spans parts) — and failures are
+    aggregated per part so a retry can name exactly what is left.
+    """
+    video_paths = _video_paths_for_participant(participant)
+    if not video_paths:
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": "Source video not found",
+        }
+
+    failures: list[str] = []
+    for path in video_paths:
+        if cancel_flag():
+            failures.append(f"{Path(path).name}: cancelled")
+            break
+        props = video.probe_video_properties(path)
+        if props is None:
+            failures.append(f"{Path(path).name}: could not probe the file")
+            continue
+        indices = _resolve_normalize_indices(props, tracks)
+        if isinstance(indices, str):
+            failures.append(f"{Path(path).name}: {indices}")
+            continue
+        success, message = video.normalize_audio_inplace(
+            path, indices, cancel_flag=cancel_flag
+        )
+        if not success:
+            failures.append(f"{Path(path).name}: {message}")
+    if failures:
+        return {"participant": participant, "ok": False, "error": " ".join(failures)}
+    return {
+        "participant": participant,
+        "ok": True,
+        "message": "Audio normalized; original kept beside the source.",
+        "parts": len(video_paths),
+    }
+
+
+@transcripts_bp.route("/api/normalize-audio", methods=["POST"])
+def api_normalize_audio() -> FlaskResponse:
+    """Rewrite each requested participant's source video(s) in place with
+    loudness-normalized audio (original kept as ``.orig``, like remux).
+
+    Body: ``{"participants": ["P01", ...], "tracks": "auto" | "all" | [0, 1]}``.
+    ``"auto"`` (the default) normalizes the speech track picked by the same
+    heuristic transcription uses; an explicit index list comes from the
+    current-participant track checkboxes.
+
+    Streams the same NDJSON shape as the embed route: a ``{"total": N}`` header
+    (no ``output_dir`` — the rewrite is in place), one ``{"index", "participant",
+    "ok", ...}`` line per participant, ``{"cancelled": true}`` if stopped, and
+    the terminal ``{"done": true}`` sentinel whose absence marks a truncated run.
+
+    Unlike the embed run, cancel is also threaded into ffmpeg itself, so Stop
+    interrupts the current file mid-encode instead of waiting it out.
+    """
+    data = request.get_json(silent=True) or {}
+    participants = [str(pid) for pid in data.get("participants", []) if pid]
+    if not participants:
+        return err("No participants specified")
+    tracks_raw = data.get("tracks", "auto")
+    tracks: str | list[int]
+    if tracks_raw in ("auto", "all"):
+        tracks = tracks_raw
+    elif isinstance(tracks_raw, list) and all(
+        isinstance(i, int) and not isinstance(i, bool) for i in tracks_raw
+    ):
+        if not tracks_raw:
+            return err("No tracks selected")
+        tracks = [int(i) for i in tracks_raw]
+    else:
+        return err("tracks must be 'auto', 'all', or a list of track indices")
+
+    normalize_token = _claim_normalize_slot()
+    if normalize_token is None:
+        return err("An audio normalization is already in progress", 409)
+
+    def stream() -> Iterator[str]:
+        cancel_flag = _normalize_cancel_event.is_set
+        try:
+            yield json.dumps({"total": len(participants)}) + "\n"
+            # Sequential on purpose: each rewrite reads and rewrites a whole
+            # source file, so concurrency only contends for the same disk.
+            for idx, pid in enumerate(participants):
+                if cancel_flag():
+                    break
+                outcome = _normalize_audio_for_participant(pid, tracks, cancel_flag)
+                outcome["index"] = idx
+                yield json.dumps(outcome) + "\n"
+            if cancel_flag():
+                yield json.dumps({"cancelled": True}) + "\n"
+            # Terminal sentinel; its absence is the client's truncation signal.
+            yield json.dumps({"done": True}) + "\n"
+        finally:
+            # Also runs when the client disconnects mid-stream, so a closed tab
+            # cannot wedge the slot for the rest of the session.
+            _release_normalize_slot(normalize_token)
+
+    response = Response(
+        profiled_stream(stream()),
+        mimetype="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no"},
+    )
+    # Covers a generator that is torn down before it ever starts; the token
+    # makes the double release harmless (see the embed route).
+    response.call_on_close(lambda: _release_normalize_slot(normalize_token))
+    return response
+
+
+@transcripts_bp.route("/api/normalize-audio/cancel", methods=["POST"])
+def api_normalize_audio_cancel() -> FlaskResponse:
+    """Stop the in-flight normalize run, interrupting the current file."""
+    _normalize_cancel_event.set()
     return ok()
 
 

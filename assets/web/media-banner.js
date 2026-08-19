@@ -200,7 +200,10 @@
     }
     render({
       mode: "done",
-      text: "Remuxed. Original kept as " + names.join(", ") + ".",
+      // "Original kept", not "Remuxed": the Transcripts Normalize Audio action
+      // parks its original in the same .orig slot, so this banner can follow
+      // either rewrite.
+      text: "Original kept as " + names.join(", ") + ".",
       actions: [
         {
           label: "Delete original",
@@ -211,7 +214,7 @@
         },
         {
           label: "Restore",
-          tooltip: "Put the original recording back and discard the remux",
+          tooltip: "Put the original recording back and discard the rewrite",
           onClick: function () {
             originalAction("restore-original", "Original restored.", true);
           },

@@ -3486,6 +3486,356 @@
     qs("#embedSubsDefault").addEventListener("change", renderEmbedSubsSummary);
   }
 
+  // ---- Normalize audio ----
+  //
+  // Rewrites source videos in place with loudness-normalized audio: the picture
+  // (and any unselected track) is stream-copied, the chosen tracks are
+  // re-encoded through the server's loudnorm preset, and the original is parked
+  // beside the source as .orig — the same kept-original flow the remux banner
+  // manages, so Restore/Delete come for free after the run. Structurally a twin
+  // of the Embed Subtitles dialog above; its one extra wrinkle is the track
+  // field, which swaps between a coarse mode select (scope: all — per-participant
+  // track layouts are heterogeneous, so explicit indices would be ambiguous) and
+  // per-track checkboxes fetched from api/audio-info (scope: current).
+
+  // { done, failed, total, abort } while a batch streams; null when idle. Lives
+  // out here so the dialog can be dismissed mid-run and reopened onto the live
+  // progress, exactly like _embedSubsRun.
+  var _normAudioRun = null;
+
+  // pid -> true while a kept .orig occupies the participant's backup slot (from
+  // api/remux/status on open). The server would refuse those files anyway;
+  // excluding them here keeps the summary from promising N rewrites and the run
+  // coming back with guard-failure lines.
+  var _normAudioKept = {};
+
+  // The current-scope track checkboxes are built from an async audio-info
+  // fetch; these pin which participant the rendered list (and its indices)
+  // belong to, so a stale response can never dress the wrong participant.
+  var _normAudioTrackPid = null;
+  var _normAudioTrackInfo = null;
+
+  function _normAudioCandidates() {
+    var ps = state.participants || [];
+    var out = [];
+    for (var i = 0; i < ps.length; i++) {
+      // A transcript is not required — normalization reads only the media.
+      if (ps[i].has_video) out.push(ps[i]);
+    }
+    return out;
+  }
+
+  function _normAudioScoped() {
+    var all = _normAudioCandidates();
+    if ((qs("#normAudioScope") || {}).value !== "current") return all;
+    var pid = state.selectedParticipant;
+    return all.filter(function (p) { return p.id === pid; });
+  }
+
+  function _normAudioTargets() {
+    return _normAudioScoped().filter(function (p) {
+      return !_normAudioKept[p.id];
+    });
+  }
+
+  function _normAudioFileCount(targets) {
+    var n = 0;
+    for (var i = 0; i < targets.length; i++) {
+      n += (targets[i].video_paths || []).length || 1;
+    }
+    return n;
+  }
+
+  // Which tracks the submit should send: the mode select's word for scope=all,
+  // the checked checkbox indices for a multi-track current participant, and
+  // "auto" when there is nothing to choose (single track).
+  function _normAudioTracksSpec() {
+    if ((qs("#normAudioScope") || {}).value !== "current") {
+      return (qs("#normAudioTrackMode") || {}).value || "auto";
+    }
+    var info = _normAudioTrackInfo;
+    if (!info || info.count <= 1) return "auto";
+    var boxes = document.querySelectorAll("#normAudioTrackList input");
+    var picked = [];
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxes[i].checked) picked.push(parseInt(boxes[i].value, 10));
+    }
+    return picked;
+  }
+
+  function renderNormAudioSummary() {
+    var summaryEl = qs("#normAudioSummary");
+    var confirmBtn = qs("#normAudioConfirm");
+    if (!summaryEl || !confirmBtn) return;
+    if (_normAudioRun) return; // progress block owns the copy while a run streams
+    var scope = (qs("#normAudioScope") || {}).value;
+    var scoped = _normAudioScoped();
+    var targets = _normAudioTargets();
+    var kept = scoped.filter(function (p) { return _normAudioKept[p.id]; });
+    var keptNote = kept.length
+      ? " " + kept.map(function (p) { return p.id; }).join(", ") +
+        " skipped (an earlier original is still kept — delete or restore it first)."
+      : "";
+    if (!targets.length) {
+      summaryEl.textContent = kept.length
+        ? "Nothing to normalize —" + keptNote
+        : scope === "current" && state.selectedParticipant
+          ? "No source video for " + state.selectedParticipant + "."
+          : "No source videos yet.";
+      confirmBtn.disabled = true;
+      return;
+    }
+    if (scope === "current" && _normAudioTrackPid && !_normAudioTrackInfo) {
+      summaryEl.textContent = "Checking audio tracks…";
+      confirmBtn.disabled = true;
+      return;
+    }
+    var spec = _normAudioTracksSpec();
+    if (Object.prototype.toString.call(spec) === "[object Array]" && !spec.length) {
+      summaryEl.textContent = "Select at least one track to normalize." + keptNote;
+      confirmBtn.disabled = true;
+      return;
+    }
+    var files = _normAudioFileCount(targets);
+    var trackNote =
+      scope === "current" && _normAudioTrackInfo && _normAudioTrackInfo.count === 1
+        ? " (1 audio track)"
+        : "";
+    summaryEl.textContent =
+      clipgenPluralUnit(files, "video", "videos") + trackNote +
+      " → rewritten in place; " +
+      (files === 1 ? "the original is" : "originals are") +
+      " kept beside " + (files === 1 ? "it" : "them") + "." + keptNote;
+    confirmBtn.disabled = false;
+  }
+
+  // Both option labels carry live counts so the scope choice and its
+  // consequence are legible in one place (mirrors the embed picker).
+  function _renderNormAudioScopeOptions() {
+    var sel = qs("#normAudioScope");
+    if (!sel || sel.options.length < 2) return;
+    var pid = state.selectedParticipant;
+    var all = _normAudioCandidates();
+    var mine = pid
+      ? all.filter(function (p) { return p.id === pid; }).length
+      : 0;
+    sel.options[0].textContent =
+      (pid ? "Current participant (" + pid + ")" : "Current participant") +
+      " — " + clipgenPluralUnit(mine, "video", "videos");
+    sel.options[0].disabled = !mine;
+    sel.options[1].textContent =
+      "All participants — " + clipgenPluralUnit(all.length, "video", "videos");
+    if (!mine) sel.value = "all";
+  }
+
+  // Swap the track field between the coarse mode select (scope: all) and the
+  // per-track checkboxes (scope: current, multi-track file).
+  function _renderNormAudioTrackField() {
+    var modeLabel = qs("#normAudioTrackModeLabel");
+    var list = qs("#normAudioTrackList");
+    if (!modeLabel || !list) return;
+    var scope = (qs("#normAudioScope") || {}).value;
+    var pid = scope === "current" ? state.selectedParticipant : null;
+    var p = pid
+      ? _normAudioCandidates().filter(function (c) { return c.id === pid; })[0]
+      : null;
+    if (!p) {
+      _normAudioTrackPid = null;
+      _normAudioTrackInfo = null;
+      modeLabel.classList.toggle("hidden", scope === "current");
+      list.classList.add("hidden");
+      list.innerHTML = "";
+      renderNormAudioSummary();
+      return;
+    }
+    modeLabel.classList.add("hidden");
+    list.classList.add("hidden");
+    list.innerHTML = "";
+    _normAudioTrackPid = pid;
+    _normAudioTrackInfo = null;
+    renderNormAudioSummary(); // "Checking audio tracks…" while the probe runs
+    _trFetchAudioInfo(pid, p.video_version).then(function (info) {
+      // A scope flip or participant change while the probe ran owns the field.
+      if (_normAudioTrackPid !== pid) return;
+      _normAudioTrackInfo = info || { tracks: [], count: 1, auto: 0 };
+      if (_normAudioTrackInfo.count > 1) {
+        for (var i = 0; i < _normAudioTrackInfo.tracks.length; i++) {
+          var row = document.createElement("label");
+          row.className = "param-modal-label";
+          var text = document.createElement("span");
+          // Late-bound: transcripts-pills.js loads after the hub and publishes
+          // the label helper on the namespace.
+          text.textContent = TS.trackOptionLabel
+            ? TS.trackOptionLabel(_normAudioTrackInfo.tracks[i], i)
+            : "Track " + (i + 1);
+          var box = document.createElement("input");
+          box.type = "checkbox";
+          box.className = "param-modal-checkbox";
+          box.value = String(i);
+          box.checked = i === _normAudioTrackInfo.auto;
+          row.appendChild(text);
+          row.appendChild(box);
+          list.appendChild(row);
+        }
+        list.classList.remove("hidden");
+      }
+      renderNormAudioSummary();
+    });
+  }
+
+  function _renderNormAudioProgress() {
+    var wrap = qs("#normAudioProgress");
+    var fill = qs("#normAudioBarFill");
+    var text = qs("#normAudioProgressText");
+    var confirmBtn = qs("#normAudioConfirm");
+    var cancelBtn = qs("#normAudioCancel");
+    if (!wrap || !fill || !text || !confirmBtn || !cancelBtn) return;
+    var run = _normAudioRun;
+    wrap.classList.toggle("hidden", !run);
+    confirmBtn.classList.toggle("hidden", !!run);
+    cancelBtn.textContent = run ? "Stop" : "Cancel";
+    if (!run) return;
+    var pct = run.total ? Math.round((run.done / run.total) * 100) : 0;
+    fill.style.width = pct + "%";
+    text.textContent =
+      "Normalizing… " + run.done + "/" + run.total +
+      (run.failed ? " (" + run.failed + " failed)" : "");
+  }
+
+  function openNormalizeAudioModal() {
+    var modal = qs("#normAudioModal");
+    if (!modal) return;
+    modal.classList.remove("hidden");
+    openBlockingModal(modal, {
+      onEscape: closeNormalizeAudioModal,
+      onBackdropClick: closeNormalizeAudioModal,
+    });
+    _renderNormAudioProgress();
+    // A run in flight owns the dialog's copy; only refresh the pickers when idle.
+    if (_normAudioRun) return;
+    _normAudioKept = {};
+    _renderNormAudioScopeOptions();
+    _renderNormAudioTrackField();
+    // Kept-original state lives on disk, not in state.participants — the remux
+    // status endpoint re-probes it on every call, so one fetch on open is
+    // always current.
+    apiGet("api/remux/status")
+      .then(function (data) {
+        if (!data || !data.ok || _normAudioRun) return;
+        var kept = data.kept || {};
+        var map = {};
+        for (var pid in kept) {
+          if (kept[pid] && kept[pid].length) map[pid] = true;
+        }
+        _normAudioKept = map;
+        renderNormAudioSummary();
+      })
+      .catch(function () {});
+  }
+
+  function closeNormalizeAudioModal() {
+    var modal = qs("#normAudioModal");
+    if (!modal) return;
+    closeBlockingModal(modal);
+    modal.classList.add("hidden");
+  }
+
+  function submitNormalizeAudio() {
+    if (_normAudioRun) return;
+    var targets = _normAudioTargets();
+    if (!targets.length) return;
+    var pids = targets.map(function (p) { return p.id; });
+    var spec = _normAudioTracksSpec();
+
+    var run = { done: 0, failed: 0, total: pids.length, abort: new AbortController() };
+    _normAudioRun = run;
+    _renderNormAudioProgress();
+
+    var sawDone = false;
+
+    function handleLine(line) {
+      var data;
+      try { data = JSON.parse(line); } catch (_) { return; }
+      if (!data) return;
+      // The header and the trailing {"cancelled": true} / {"done": true} lines
+      // carry no index, which is also what keeps them out of the tally.
+      if (data.done) sawDone = true;
+      if (typeof data.index !== "number") return;
+      run.done++;
+      if (!data.ok) run.failed++;
+      _renderNormAudioProgress();
+    }
+
+    function finish(message) {
+      var made = run.done - run.failed;
+      _normAudioRun = null;
+      _renderNormAudioProgress();
+      closeNormalizeAudioModal();
+      showToast(message);
+      // Any success swapped a source file out from under the page: the <video>
+      // is mid-stream on a renamed-away inode and the per-track mixers point at
+      // stale extracts. media-banner.js reloads for the identical file swap
+      // (reloadAfterFileSwap); the delay lets the batch toast — which, unlike
+      // remux's single-file one, carries failure counts — be seen first.
+      // Playback position survives via videoTimeByParticipant.
+      if (made > 0) {
+        setTimeout(function () { window.location.reload(); }, 1500);
+      }
+    }
+
+    apiPostNDJSON(
+      "api/normalize-audio",
+      { participants: pids, tracks: spec },
+      { signal: run.abort.signal, onLine: handleLine }
+    )
+      .then(function () {
+        var made = run.done - run.failed;
+        // No sentinel means the server died partway and the body simply
+        // stopped; without this check a run that blew up at participant 4 of
+        // 10 would report 3 rewrites as a clean finish.
+        if (!sawDone) {
+          finish(
+            "Audio normalization stopped early — " +
+              clipgenPluralUnit(made, "video was", "videos were") + " rewritten of " +
+              run.total + ". Check the clipgen log."
+          );
+          return;
+        }
+        finish(
+          run.failed
+            ? clipgenPluralUnit(made, "video", "videos") + " normalized, " + run.failed + " failed"
+            : clipgenPluralUnit(made, "video", "videos") + " normalized; originals kept beside the sources"
+        );
+      })
+      .catch(function (err) {
+        var aborted = err && (err.name === "AbortError" || err.code === 20);
+        finish(aborted ? "Audio normalization cancelled" : "Audio normalization failed: " + (err && err.message));
+      });
+  }
+
+  function onNormalizeAudioCancel() {
+    if (!_normAudioRun) {
+      closeNormalizeAudioModal();
+      return;
+    }
+    // Unlike the embed run, the cancel event is threaded into ffmpeg itself, so
+    // Stop interrupts the current file mid-encode; the abort just drops our end
+    // of a stream that is already winding down.
+    apiPost("api/normalize-audio/cancel", {}).catch(function () {});
+    _normAudioRun.abort.abort();
+  }
+
+  function initNormalizeAudioModal() {
+    qs("#normAudioCancel").addEventListener("click", onNormalizeAudioCancel);
+    qs("#normAudioConfirm").addEventListener("click", submitNormalizeAudio);
+    // Scope decides which track control is shown, so it re-renders the field
+    // (which re-renders the summary itself once the async probe settles).
+    qs("#normAudioScope").addEventListener("change", _renderNormAudioTrackField);
+    qs("#normAudioTrackMode").addEventListener("change", renderNormAudioSummary);
+    // Delegated: the checkbox rows are rebuilt per participant.
+    qs("#normAudioTrackList").addEventListener("change", renderNormAudioSummary);
+  }
+
   // ---- Boot ----
 
   // Participants the Transcribe All action would enqueue: a source video, no
@@ -3555,6 +3905,14 @@
           // transcript count and disables its own Embed button, so the scope
           // choice lives where its consequence is visible.
           title: "Write a subtitled copy of each source video into the output folder; the originals are never modified",
+        },
+        {
+          icon: "speaker-wave",
+          label: "Normalize Audio…",
+          action: openNormalizeAudioModal,
+          // Never gated, same as the neighbours: the modal reports the video
+          // count and disables its own Normalize button.
+          title: "Rewrite source videos in place with loudness-normalized audio; the original is kept beside each file until you delete it",
         },
         {
           icon: "scissors",
@@ -3663,6 +4021,7 @@
     initCorrectionsModal();
     initClipMarksModal();
     initEmbedSubsModal();
+    initNormalizeAudioModal();
     initVideoPlayer();
     initVideoSync();
     initTimelineCanvas();

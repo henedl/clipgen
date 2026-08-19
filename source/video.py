@@ -789,6 +789,11 @@ def _concat_list_file(clip_paths: list[str]) -> Iterator[str]:
                 )
 
 
+# EBU R128 single-pass preset shared by clip cutting and in-place source
+# normalization: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range).
+LOUDNORM_FILTER = "loudnorm=I=-16:TP=-1.5:LRA=11"
+
+
 def build_ffmpeg_cut_command(
     input_file: str,
     output_file: str,
@@ -823,7 +828,6 @@ def build_ffmpeg_cut_command(
     )
     if not reencode:
         if audio_normalize:
-            # loudnorm: I=-16 (target LUFS), TP=-1.5 (true peak dB), LRA=11 (loudness range)
             # -avoid_negative_ts 1: shift timestamps so output starts at 0 (avoids glitches after cut)
             return base + [
                 "-c:v",
@@ -831,7 +835,7 @@ def build_ffmpeg_cut_command(
                 "-c:a",
                 "aac",
                 "-af",
-                "loudnorm=I=-16:TP=-1.5:LRA=11",
+                LOUDNORM_FILTER,
                 "-avoid_negative_ts",
                 "1",
                 output_file,
@@ -844,12 +848,7 @@ def build_ffmpeg_cut_command(
         else []
     )
     if audio_normalize:
-        return (
-            base
-            + ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
-            + encoder_args
-            + [output_file]
-        )
+        return base + ["-af", LOUDNORM_FILTER] + encoder_args + [output_file]
     return base + encoder_args + [output_file]
 
 
@@ -2413,7 +2412,8 @@ def _remux_lock(resolved: str) -> threading.Lock:
 
 
 def original_backup_path(filepath: str) -> Path:
-    """Return where :func:`remux_to_faststart` parks this file's original."""
+    """Return where the in-place rewriters (:func:`remux_to_faststart`,
+    :func:`normalize_audio_inplace`) park this file's original."""
     return Path(str(filepath) + REMUX_ORIGINAL_SUFFIX)
 
 
@@ -2513,16 +2513,26 @@ def remux_to_faststart(
     return True, f"Remuxed. Original kept as '{backup.name}'."
 
 
-def _remux_output_mismatch(tmp: Path, before: dict[str, Any]) -> str | None:
-    """Return why a remux output must not be swapped in, or None if it is sound."""
+def _remux_output_mismatch(
+    tmp: Path, before: dict[str, Any], *, seekability_required: bool = True
+) -> str | None:
+    """Return why a rewritten output must not be swapped in, or None if it is sound.
+
+    ``seekability_required=False`` (the normalize path, which may write .mkv/.mov)
+    treats a ``None`` seekability probe as *unknown* rather than a failure; a
+    positive "not browser-seekable" still refuses the swap either way.
+    """
     if not tmp.is_file() or tmp.stat().st_size <= 0:
-        return "Remux produced no output."
+        return "Rewrite produced no output."
     seekability = probe_container_seekability(str(tmp))
-    if seekability is None or not seekability["browser_seekable"]:
-        return "The remuxed file is still not browser-seekable; keeping the original."
+    if seekability is None:
+        if seekability_required:
+            return "The rewritten file is still not browser-seekable; keeping the original."
+    elif not seekability["browser_seekable"]:
+        return "The rewritten file is still not browser-seekable; keeping the original."
     after = probe_video_properties(str(tmp))
     if after is None:
-        return "Could not probe the remuxed file; keeping the original."
+        return "Could not probe the rewritten file; keeping the original."
 
     source_duration = float(before.get("duration") or 0.0)
     new_duration = float(after.get("duration") or 0.0)
@@ -2530,19 +2540,19 @@ def _remux_output_mismatch(tmp: Path, before: dict[str, Any]) -> str | None:
         tolerance = max(1.0, source_duration * 0.01)
         if abs(new_duration - source_duration) > tolerance:
             return (
-                f"Remuxed duration ({new_duration:.0f}s) does not match the source "
+                f"Rewritten duration ({new_duration:.0f}s) does not match the source "
                 f"({source_duration:.0f}s); keeping the original."
             )
     if after.get("audio_track_count") != before.get("audio_track_count"):
         return (
-            f"Remux kept {after.get('audio_track_count')} audio track(s) but the "
+            f"The rewrite kept {after.get('audio_track_count')} audio track(s) but the "
             f"source has {before.get('audio_track_count')}; keeping the original."
         )
     if (after.get("width"), after.get("height")) != (
         before.get("width"),
         before.get("height"),
     ):
-        return "Remuxed dimensions do not match the source; keeping the original."
+        return "Rewritten dimensions do not match the source; keeping the original."
     return None
 
 
@@ -2571,6 +2581,159 @@ def discard_remux_original(filepath: str) -> tuple[bool, str]:
         except OSError as error:
             return False, f"Could not delete the original: {error}"
     return True, "Original deleted."
+
+
+# Containers normalize_audio_inplace can rewrite, and the -f value the
+# extensionless scratch file needs. .webm is absent on purpose: it cannot
+# carry AAC, and re-encoding to Opus would silently change the codec family.
+NORMALIZE_MUXER_BY_EXT = {
+    ".mp4": "mp4",
+    ".m4v": "mp4",
+    ".mov": "mov",
+    ".mkv": "matroska",
+}
+_NORMALIZE_FASTSTART_MUXERS = frozenset({"mp4", "mov"})
+
+
+def build_normalize_audio_command(
+    input_file: str,
+    output_file: str,
+    audio_indices: list[int],
+    muxer: str,
+    sample_rate: int,
+) -> list[str]:
+    """Build ffmpeg argv for loudness-normalizing selected audio tracks.
+
+    Every stream is mapped and copied; only the selected audio-relative track
+    indices are re-encoded to AAC through :data:`LOUDNORM_FILTER` (per-stream
+    ``-filter:a:N`` is only legal on re-encoded streams, which ``-c:a:N aac``
+    guarantees). Caller runs subprocess.
+    """
+    command = _ffmpeg_cmd("-i", input_file, "-map", "0", "-c", "copy")
+    for index in audio_indices:
+        command += [
+            f"-c:a:{index}",
+            "aac",
+            f"-b:a:{index}",
+            f"{config.AUDIO_BITRATE_KBPS}k",
+            f"-filter:a:{index}",
+            LOUDNORM_FILTER,
+            # loudnorm resamples to 192 kHz internally; without an explicit
+            # rate the AAC encoder would land on 96 kHz — tolerable in a
+            # throwaway clip, ugly baked into a source file.
+            f"-ar:a:{index}",
+            str(sample_rate),
+        ]
+    if muxer in _NORMALIZE_FASTSTART_MUXERS:
+        command += ["-movflags", "+faststart"]
+    command += ["-f", muxer, output_file]
+    return command
+
+
+def normalize_audio_inplace(
+    filepath: str,
+    audio_indices: list[int],
+    *,
+    on_progress: Callable[[float], None] | None = None,
+    cancel_flag: Callable[[], bool] | None = None,
+) -> tuple[bool, str]:
+    """Rewrite a source video in place with loudness-normalized audio.
+
+    The picture and any unselected audio track are stream-copied; each selected
+    audio-relative track index is re-encoded to AAC through
+    :data:`LOUDNORM_FILTER`. The source is replaced in place — same rationale as
+    :func:`remux_to_faststart`: a sibling copy would register as a phantom
+    participant — and the original parked at ``<name>.orig``. It shares remux's
+    backup slot and per-file lock so the two in-place rewriters cannot race each
+    other, and a kept original from either tool blocks the other until it is
+    discarded or restored.
+
+    Returns ``(ok, message)``. On any failure the source is left exactly as it
+    was: the new file is only swapped in after it has been re-probed and matched
+    against the original's duration, dimensions and track count.
+    """
+    src = Path(filepath)
+    backup = original_backup_path(filepath)
+    progress = on_progress or (lambda _fraction: None)
+
+    if not src.is_file():
+        return False, "Source file is missing."
+    if backup.exists():
+        return False, (
+            f"An earlier original is still kept at '{backup.name}'. "
+            "Discard or restore it before normalizing."
+        )
+
+    muxer = NORMALIZE_MUXER_BY_EXT.get(src.suffix.lower())
+    if muxer is None:
+        return False, f"Audio can't be normalized in place in '{src.suffix}' files."
+
+    before = probe_video_properties(str(src))
+    if before is None:
+        return False, "Could not probe the source file."
+    track_count = int(before.get("audio_track_count") or 0)
+    if track_count == 0:
+        return False, "The source file has no audio track."
+    indices = sorted({i for i in audio_indices if 0 <= i < track_count})
+    if not indices:
+        return False, "No matching audio track to normalize."
+
+    resolved = str(src.resolve())
+    with _remux_lock(resolved):
+        # Re-check under the lock: a racing rewrite may have finished the swap.
+        if backup.exists():
+            return False, "Another rewrite of this file just completed."
+        # No source extension — pathlib.glob('*.mp4') matches dotfiles too, so a
+        # hidden name alone would not keep the scratch file out of the
+        # participant list. -f supplies the format the name no longer does.
+        tmp = src.parent / f".{src.stem}.loudnorm.{os.getpid()}.{threading.get_ident()}"
+        command = build_normalize_audio_command(
+            str(src),
+            str(tmp),
+            indices,
+            muxer,
+            int(before.get("audio_sample_rate") or 0) or 48000,
+        )
+        if config.DEBUGGING:
+            config.debug_ic(command)
+            return False, "Skipped in DEBUGGING mode."
+        try:
+            result = _run_ffmpeg_with_progress(
+                command,
+                input_file=str(src),
+                output_file=str(tmp),
+                os_error_message="Failed to normalize the source video's audio.",
+                on_progress=progress,
+                expected_duration_sec=float(before.get("duration") or 0.0) or 1.0,
+                cancel_flag=cancel_flag,
+            )
+            if result is None:
+                return (
+                    False,
+                    "Normalization was cancelled or ffmpeg could not be started.",
+                )
+            if result.returncode != 0:
+                return False, f"ffmpeg failed: {(result.stderr or '').strip()[:400]}"
+
+            # Only the mp4 family can be positively asserted browser-seekable;
+            # the probe answers None (= unknown) for .mkv and must not fail.
+            problem = _remux_output_mismatch(
+                tmp, before, seekability_required=muxer == "mp4"
+            )
+            if problem is not None:
+                return False, problem
+
+            # Atomic within the directory: both names are on the same filesystem.
+            src.rename(backup)
+            try:
+                tmp.rename(src)
+            except OSError as error:
+                backup.rename(src)  # put the original back, leave no gap
+                return False, f"Could not swap in the normalized file: {error}"
+        finally:
+            _delete_quietly(tmp)
+
+    return True, f"Audio normalized. Original kept as '{backup.name}'."
 
 
 def extract_frame_at_timestamp(
