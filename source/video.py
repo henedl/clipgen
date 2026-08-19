@@ -1029,13 +1029,6 @@ def run_ffmpeg(
             [f"Video file: '{input_file}'"],
         )
         return False
-    if start_seconds is not None and start_seconds + duration > duration_seconds:
-        utils.error_print(
-            f"Clip range ({start_pos} to {end_pos}) extends beyond video duration ({duration_seconds}s). Skipping.",
-            [f"Video file: '{input_file}'"],
-        )
-        return False
-
     if duration < 0:
         utils.error_print(
             "Negative duration calculated for video clip. Skipping.",
@@ -1045,6 +1038,28 @@ def run_ffmpeg(
             ],
         )
         return False
+    # A span running past the end of the recording is shortened, not dropped.
+    # The common case is a bare single timestamp near the end of a session: its
+    # end is start + DEFAULT_DURATION_SECONDS, so it overshoots by construction,
+    # and rejecting it meant the last observation of a study produced nothing.
+    # ffmpeg stops at EOF on its own, which is exactly what the other two clip
+    # paths already rely on — utils.map_global_range_to_segments clamps the end
+    # for multi-video participants, and transcript intake clamps only the start.
+    if start_seconds is not None and start_seconds + duration > duration_seconds:
+        clamped = int(duration_seconds - start_seconds)
+        if clamped <= 0:
+            utils.error_print(
+                f"Clip range ({start_pos} to {end_pos}) leaves under a second before "
+                f"the end of the video ({duration_seconds}s). Skipping.",
+                [f"Video file: '{input_file}'"],
+            )
+            return False
+        utils.warning_print(
+            f"Clip range ({start_pos} to {end_pos}) extends beyond video duration "
+            f"({duration_seconds}s); shortening the clip to {clamped}s.",
+            [f"Video file: '{input_file}'"],
+        )
+        duration = clamped
     if duration > duration_seconds:
         utils.error_print(
             f"Timestamp duration ({duration}s) exceeds video file length ({duration_seconds}s). Skipping.",
@@ -1481,15 +1496,27 @@ def extract_gif(
                 [f"Video file: '{input_file}'"],
             )
             return False
+        # Shortened rather than skipped, for the same reason as run_ffmpeg's
+        # clamp above: a GIF from a bare end-of-session timestamp overshoots by
+        # construction and used to produce nothing at all.
         if (
             start_seconds is not None
             and start_seconds + duration_seconds > file_duration
         ):
-            utils.error_print(
-                f"GIF range ({timestamp} + {duration_seconds}s) extends beyond video duration ({file_duration}s). Skipping.",
+            clamped = int(file_duration - start_seconds)
+            if clamped <= 0:
+                utils.error_print(
+                    f"GIF range ({timestamp} + {duration_seconds}s) leaves under a "
+                    f"second before the end of the video ({file_duration}s). Skipping.",
+                    [f"Video file: '{input_file}'"],
+                )
+                return False
+            utils.warning_print(
+                f"GIF range ({timestamp} + {duration_seconds}s) extends beyond video "
+                f"duration ({file_duration}s); shortening the GIF to {clamped}s.",
                 [f"Video file: '{input_file}'"],
             )
-            return False
+            duration_seconds = clamped
 
     utils.verbose_print(
         f"Extracting GIF from {input_file} at {timestamp} ({duration_seconds}s)."
