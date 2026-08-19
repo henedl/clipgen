@@ -2267,9 +2267,10 @@
 
   // ---- Open / close ----
 
-  function open() {
+  function open(tab) {
     if (!state.mounted) {
-      mount().then(open);
+      // Not mount().then(open): then() would pass mount's resolved value as tab.
+      mount().then(function () { open(tab); });
       return;
     }
     if (state.open) return;
@@ -2301,8 +2302,10 @@
         restoreFocus: true
       });
     }
-    // Always land on the workspace form, wherever the user left the tabs.
-    setStartTab("open");
+    // Always land on the workspace form, wherever the user left the tabs —
+    // unless the caller asked for a specific one (the desktop Help menu's
+    // "What's New…" opens straight onto the changelog).
+    setStartTab(tab || "open");
     runIntro();
     refresh();
   }

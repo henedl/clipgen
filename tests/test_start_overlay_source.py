@@ -101,13 +101,14 @@ def test_tab_classes_toggled_by_js_have_css():
     assert "max-height" not in body
 
 
-def test_overlay_always_opens_on_the_open_tab():
+def test_overlay_defaults_to_the_open_tab():
+    """open(tab) may target a specific tab (the desktop menu's What's New…),
+    but with no argument it must land on the workspace form — a launcher left
+    on About would otherwise open with no way to confirm."""
     src = strip_comments(read("start-overlay.js"))
-    body = src[src.index("function open()") :]
+    body = src[src.index("function open(tab)") :]
     body = body[: body.index("\n  function ")]
-    assert 'setStartTab("open")' in body, (
-        "a launcher left on About would open with no way to confirm"
-    )
+    assert 'setStartTab(tab || "open")' in body
 
 
 def _hotkey_register_block() -> str:

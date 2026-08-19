@@ -28,6 +28,7 @@ from typing import Any
 
 import config
 import desktop_chrome
+import desktop_menu
 import server
 import server_utils
 import start_settings
@@ -399,12 +400,26 @@ def launch_desktop(
         window.events.shown += lambda: desktop_chrome.on_shown(window)
         window.events.loaded += lambda: desktop_chrome.reassert(window)
         window.events.shown += lambda: _on_shown(window)
+        # After the chrome hooks: by shown-time first_show has already installed
+        # the Tier 1 menu bar, and the polish pass queues itself onto the run
+        # loop via callAfter, so it lands exactly once, after setMainMenu_.
+        window.events.shown += lambda: desktop_menu.enhance_menu_bar(lambda: _window)
         window.events.moved += _on_moved
         window.events.resized += _on_resized
         window.events.closing += _on_closing
 
+        # Defensive: a menu-construction failure must degrade to the default
+        # bar, not throw — launch() demotes any launch_desktop exception to a
+        # plain browser launch, which would cost the user the whole window.
+        try:
+            menus = desktop_menu.menus(lambda: _window)
+        except Exception as exc:
+            utils.warning_print(f"Could not build the menu bar: {exc}")
+            menus = []
+
         _hide_own_console()
         webview.start(
+            menu=menus,
             debug=config.DEBUGGING,
             # pywebview defaults private_mode=True, discarding localStorage and
             # sessionStorage between runs — but the frontends keep real user state
