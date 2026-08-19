@@ -170,10 +170,15 @@ def test_generate_progress_counts_artifacts_not_cells():
     assert "sheetCellTotal" not in src
     assert "sheetCellsDone" not in src
     # A line covering a multi-segment cell advances by that cell's card count.
-    assert "sheetArtifactsDone += cardsPerCell[data.cell] || 1;" in src
+    assert "sheetArtifactsDone += cardsPerCell[cellKey] || 1;" in src
     # Guard against the double-advance when a ref draws both a result line and
     # a trailing "No clip found".
-    assert "if (!cellCounted[data.cell]) {" in src
+    assert "if (!cellCounted[cellKey]) {" in src
+    # Every cell-ref map folds case, so a ref spelled unlike its sheet header
+    # can't split one cell across two keys (the server folds the same way).
+    assert "function generateCellKey(ref)" in src
+    assert "var cellKey = generateCellKey(data.cell);" in src
+    assert "generateCardIndex[cellKey]" in src
     # Readout noun matches the panel, and works for screenshots/GIFs too.
     assert '_genLastTotal + " cells"' not in src
     assert 'clipgenPluralUnit(_genLastTotal, "artifact", "artifacts")' in src

@@ -1187,6 +1187,20 @@ def test_apply_time_overrides_single_and_multi_segment():
     assert "times" not in clips[2]
 
 
+def test_apply_time_overrides_matches_a_ref_case_insensitively():
+    """The posted ref and the sheet header only ever match case-insensitively.
+
+    find_participant_column resolves a ref against the header with .lower(), so
+    an exact-match lookup here would silently drop the user's trimmed in/out
+    points for any ref not spelled exactly like its column.
+    """
+    import types
+
+    clips = [{"participant": "P01", "cell": types.SimpleNamespace(row=5)}]
+    server._apply_time_overrides(clips, {"p01.5": [[10, 70]]})
+    assert clips[0]["times"] == [("0:10", "1:10")]
+
+
 def test_apply_time_overrides_forces_hours_across_hour_boundary():
     """When either endpoint crosses an hour, both render H:MM:SS (no mixed pair)."""
     import types
@@ -4079,6 +4093,28 @@ def test_api_generate_progress_skips_unmatched_refs(client, monkeypatch, tmp_pat
     assert [line["cell"] for line in lines] == ["P01.5", "P09.99"]
     assert lines[1]["error"] == "No clip found"
     assert server._generate_job_state["total"] == 1
+    assert server._generate_job_state["done"] == 1
+
+
+def test_api_generate_ref_spelled_unlike_its_header_gets_one_line(
+    client, monkeypatch, tmp_path
+):
+    """A resolved ref must not also draw a trailing "No clip found".
+
+    The result line echoes the sheet header the ref resolved to, while the
+    unmatched-ref sweep compares against the ref as posted — and the two only
+    match case-insensitively. Exact-match comparison emitted both lines for one
+    cell, which double-advanced the readout and painted succeeded cards failed.
+    """
+    _setup_single_cell_generate(monkeypatch, tmp_path, "1:00", generated=1)
+
+    resp = client.post(
+        "/studio/api/generate", json={"cells": ["p01.5"], "format": "clip"}
+    )
+    lines = [json.loads(line) for line in resp.data.decode().strip().split("\n")]
+
+    assert [line["cell"] for line in lines] == ["P01.5"]
+    assert lines[0]["ok"] is True
     assert server._generate_job_state["done"] == 1
 
 
