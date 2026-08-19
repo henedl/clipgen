@@ -627,6 +627,51 @@ def test_scan_callback_label_uses_profile_kind(monkeypatch):
     assert snap["scan.callback.change"]["max"] >= 0.01
 
 
+def test_deep_profiler_disabled_when_scan_callback_raises(monkeypatch):
+    """A raising callback must not leave cProfile attached to the thread.
+
+    The scan loop's `except Exception` swallows the callback error (warn +
+    return False), and a live server reuses the worker thread — a leaked
+    enable() would keep profiling everything that thread runs next, and the
+    next deep enable() on it would silently fail.
+    """
+    import numpy as np
+    import sys as _sys
+
+    import screenspace_frames as sf
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "scan.callback.change")
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    def fake_pipe(*_a, **_k):
+        yield (0.0, frame)
+
+    monkeypatch.setattr(sf, "_ffmpeg_pipe_frames", fake_pipe)
+    monkeypatch.setattr(
+        sf.video,
+        "probe_video_properties",
+        lambda _p: {"width": 8, "height": 8, "video_codec": "h264"},
+    )
+    monkeypatch.setattr(sf.shutil, "which", lambda _x: "/bin/ffmpeg")
+
+    def _cb(_ts, _pixels):
+        raise RuntimeError("boom")
+
+    ran = sf._scan_via_ffmpeg_pipe(
+        "/x.mp4",
+        {"x": 0, "y": 0, "w": 8, "h": 8},
+        0.1,
+        _cb,
+        fps=30,
+        duration=1,
+        profile_kind="change",
+    )
+    assert ran is False  # the loop swallowed the callback error
+    # No profiler may still be attached to this thread.
+    assert _sys.getprofile() is None
+
+
 def test_ffprobe_run_records_on_properties_probe(monkeypatch, tmp_path):
     import video as video_mod
 

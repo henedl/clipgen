@@ -402,10 +402,18 @@ def _scan_via_ffmpeg_pipe(
             if _prof:
                 _t_cb = time.perf_counter()
                 _filter_s += _t_cb - _t_dec
-            _deep_on = _deep is not None and profiling.deep_enable(_deep)
-            result = callback(ts, frame)
-            if _deep_on and _deep is not None:
-                _deep.disable()
+            if _deep is not None and profiling.deep_enable(_deep):
+                # finally, not straight-line: a raising callback lands in this
+                # loop's `except Exception` (warn + return False), and a live
+                # server reuses the worker thread — without the disable it
+                # would keep cProfile attached to everything that thread runs
+                # next. The common no-deep path stays branch-free.
+                try:
+                    result = callback(ts, frame)
+                finally:
+                    _deep.disable()
+            else:
+                result = callback(ts, frame)
             if _prof:
                 _t_last = time.perf_counter()
                 _cb_dt = _t_last - _t_cb
