@@ -882,3 +882,175 @@ def test_transcribe_enqueue_adopts_the_returned_tasks_immediately():
     assert body.index("state.tasks.concat") < body.index("renderPills()"), (
         "adopt before repainting, or the pills render the pre-enqueue state"
     )
+
+
+# ---- Cancelling a transcription ----
+#
+# The server keeps reporting a cancelled-but-still-running task as "running"
+# until the worker reaches its next checkpoint — up to a whole uninterruptible
+# cold model load away. Every assertion below defends some part of the
+# client-side optimistic state that closes that gap.
+
+
+def test_the_cancel_trigger_reports_before_the_server_does():
+    """A flag written in the DELETE's callback is no better than the poll: the
+    round trip is the short part of the wait. Cancelling during loading_model
+    means ~10s of a spinning icon, a creeping fill and a dotted timeline band all
+    insisting the transcription is still running."""
+    start = _JS.index("function cancelTranscribeTask(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    flag = body.index("state.cancellingTasks[taskId] = {")
+    request = body.index("apiDelete(")
+    assert flag < request, "the optimistic flag must go down before the request"
+    for repaint in (
+        "renderPills()",
+        "updateTranscribeFill()",
+        "refreshTranscribeWording()",
+    ):
+        assert body.index(repaint) < request, (
+            f"{repaint} must run before the request, not in its callback"
+        )
+
+
+def test_the_cancelling_flag_is_keyed_by_task_not_participant():
+    """A re-transcribe issued right after a cancel is a *new* task. Keyed by
+    participant, a flag the poll had not yet swept would paint the fresh run as
+    "Cancelling…" and disable its own stop button, stranding the pill until the
+    stale-flag timeout."""
+    for wrong in (
+        "cancellingTasks[p.id]",
+        "cancellingTasks[pid]",
+        "cancellingTasks[p.participant]",
+    ):
+        assert wrong not in _JS, f"{wrong} keys the flag by participant"
+    start = _JS.index("function cancelTranscribeTask(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.cancellingTasks[taskId] = {" in body
+
+
+def test_a_pending_cancel_stops_the_timeline_band_immediately():
+    """The dotted band is the loudest "still working" signal on the page. It is
+    driven purely off task.status === "running", which stays true across the
+    whole cancel — so the band has to ask the flag too, or it outlives the click
+    by a model load."""
+    start = _JS.index("function _selectedTranscribeProgress()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert "state.cancellingTasks[t.id]" in body and "return null" in body
+
+
+def test_a_pending_cancel_is_swept_off_every_exit():
+    """Four ways a cancelling task stops being active: it flips to cancelled (the
+    happy path), to completed or failed (the cancel raced the finish line), or it
+    vanishes from the list (dismissed, worker restart). A flag that survives any
+    of them leaves the pill permanently inert."""
+    start = _JS.index("function _sweepCancellingTasks()")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert '"running"' in body and '"queued"' in body, (
+        "the live set is both active statuses"
+    )
+    assert "!active[id]" in body, "a task that vanished entirely must clear too"
+    assert "CANCEL_PENDING_MAX_MS" in body, "a wedged worker needs an age backstop"
+
+    poll_start = _JS.index("function pollTaskStatus()")
+    poll = _JS[poll_start : _JS.index("\n  // ---- ", poll_start)]
+    assert (
+        poll.index("state.tasks = data.tasks")
+        < poll.index("_sweepCancellingTasks()")
+        < poll.index("updateTranscribeFill()")
+    ), "sweep after adopting the tasks, before anything reads the flag"
+
+
+def test_a_failed_cancel_reverts_the_optimistic_state():
+    """The usual rejection is "already finished" from a task that crossed the line
+    mid-request. The early return is the load-bearing half: if the poll already
+    swept the flag the pill is correct, and a toast would contradict it."""
+    start = _JS.index("function cancelTranscribeTask(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    catch = body[body.index(".catch(function ()") :]
+    assert catch.index("if (!state.cancellingTasks[taskId]) return;") < catch.index(
+        "delete state.cancellingTasks[taskId]"
+    ), "bail out before reverting when the poll already resolved the race"
+    assert catch.index("delete state.cancellingTasks[taskId]") < catch.index(
+        "showToast("
+    )
+
+
+def test_every_transcribing_surface_asks_the_same_cancel_question():
+    """Five surfaces word a task's progress. Any one of them re-deriving "running
+    means working" from task.status alone goes on claiming the transcription is
+    live for the whole cancel — which is the original bug, just relocated."""
+    for fn in (
+        "function computeIndicatorState()",
+        "function _setTranscriptEmptyText(",
+        "function _streamingTextStr(",
+    ):
+        start = _JS.index(fn)
+        body = _JS[start : _JS.index("\n  function ", start + 1)]
+        assert "_cancelPending(" in body, f"{fn} must consult the shared predicate"
+    start = _JS.index("function buildAgentRow(")
+    assert "opts.cancelPending" in _JS[start : _JS.index("\n  function ", start + 1)]
+
+
+def test_the_press_squish_survives_the_running_spin():
+    """The press feedback has to work on the stop-circle of a *running* pill —
+    the one case where the icon already carries a transform from an animation.
+    Animations outrank normal declarations in the cascade, so an icon-level
+    :active rule is silently dropped exactly where it is needed."""
+    assert ".pill-trigger:active" in _CSS, "the trigger needs a press affordance"
+    # Comments stripped: the rule below carries this reasoning in prose, and the
+    # prose names both halves of what it forbids.
+    declarations = re.sub(r"/\*.*?\*/", "", _CSS, flags=re.DOTALL)
+    assert not re.search(r"\.pill-trigger-icon[^{;]*:active", declarations), (
+        "the squish belongs on the button; on the icon the spin animation wins"
+    )
+    start = _CSS.index(".pill-trigger {")
+    assert "transform" in _CSS[start : _CSS.index("}", start)], (
+        "transform must be in the transition list or the press snaps"
+    )
+
+
+def test_reduced_motion_opt_outs_come_after_the_animations_they_cancel():
+    """Regression test for a bug that already shipped: the spin opt-out sat above
+    the spin rule with an identical selector and identical specificity, so source
+    order handed the win to the animation and the icon spun anyway."""
+    for selector, animation in (
+        (".pill-trigger--running .pill-trigger-icon--rest", "animation: spin"),
+        (".pill-trigger--cancelling", "animation: cg-pulse"),
+    ):
+        anim_at = _CSS.index(animation)
+        opt_out = _CSS.index(selector + " { animation: none")
+        assert opt_out > anim_at, (
+            f"{selector}'s reduced-motion opt-out must follow its animation"
+        )
+
+
+def test_the_cancelling_trigger_cannot_fire_a_second_delete():
+    """Two ways a click on an in-flight cancel goes wrong: a repeat DELETE the
+    server rejects, or — worse — falling through the action table's trailing
+    else and enqueueing a whole second transcription."""
+    start = _JS.index("var PILL_TRIGGER = {")
+    table = _JS[start : _JS.index("};", start)]
+    cancelling = table[table.index("cancelling:") :]
+    assert 'action: "none"' in cancelling[: cancelling.index("\n")]
+
+    start = _JS.index("function buildPillTrigger(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    assert 'else if (cfg.action === "transcribe")' in body, (
+        "a bare trailing else turns a cancelling click into a start"
+    )
+    assert 's.status === "cancelling"' in body and 'setAttribute("disabled"' in body
+
+
+def test_a_cancelled_stream_does_not_leave_its_footer_behind():
+    """Nothing calls renderSegments() on the non-completed path, and
+    renderSegmentsImpl is the only other place the indicator is removed — so a
+    cancelled run used to leave its progress footer frozen under the partial rows
+    until the participant was reselected."""
+    start = _JS.index("function _finalizeStreamingIfComplete(")
+    body = _JS[start : _JS.index("\n  function ", start + 1)]
+    branch = body[body.index("if (!completed) {") :]
+    branch = branch[: branch.index("\n    }")]
+    assert "_cancelStreamingIndicator()" in branch, (
+        "cancel the queued insert first, or a backgrounded RAF re-adds the footer"
+    )
+    assert ".streaming-indicator" in branch and "removeChild" in branch

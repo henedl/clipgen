@@ -1855,7 +1855,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pill-trigger--running .pill-trigger-icon--rest { animation: none; }
   .pill-progress { transition: none; }
 }
 
@@ -1874,7 +1873,29 @@ body {
   flex-shrink: 0;
   position: relative;
   color: var(--color-text-dim);
-  transition: color var(--duration-fast);
+  /* transform rides the transition so the press springs back on release rather
+     than snapping. --duration-instant, not --duration-fast: a quick click is
+     often shorter than 150ms and would never reach full depth. */
+  transition: color var(--duration-fast), transform var(--duration-instant);
+}
+
+/* Press feedback for both faces of the trigger: the microphone that starts a run
+   and the stop-circle that cancels one.
+ *
+ * 0.86, not the repo's usual 0.96 (gallery/topnav/viewer/studio) — those squish a
+ * ~30px chrome button, this is an 18px icon, where 4% is a sub-pixel change.
+ *
+ * On the button, NOT on .pill-trigger-icon. The running glyph's `spin` sets
+ * `transform` from a CSS animation, and an animation outranks a normal
+ * declaration in the cascade — an icon-level squish would be silently dropped on
+ * exactly the running pill a Cancel click lands on. A transform here composes
+ * with the child's rotation, leaves the opacity crossfade alone, and cannot
+ * reflow (fixed 18px flex item) or clip (it scales down inside .pill's
+ * overflow: hidden). Ungated by prefers-reduced-motion, like every other press
+ * affordance in the repo: a 120ms scale bound to the pointer is direct
+ * manipulation, not ambient motion. */
+.pill-trigger:active:not(:disabled) {
+  transform: scale(0.86);
 }
 
 .pill-trigger-icon {
@@ -1913,6 +1934,17 @@ body {
 .pill-trigger--failed { color: var(--sev-critical); }
 .pill-trigger--idle { color: var(--color-text-dim); }
 
+/* Cancel acknowledged, worker not stopped yet. The glyph is the stop-circle the
+   user just pressed, held in the same critical red the hover showed, breathing
+   rather than spinning: spin means "work is progressing", which is precisely the
+   claim being retracted. On the button, so both stacked icons breathe together
+   and the --running spin selector is never in play. cg-pulse animates only
+   opacity, so it never fights the :active transform above. */
+.pill-trigger--cancelling {
+  color: var(--sev-critical);
+  animation: cg-pulse 1s ease-in-out infinite;
+}
+
 .pill-trigger--running .pill-trigger-icon--rest {
   animation: spin 1.2s linear infinite;
 }
@@ -1931,6 +1963,15 @@ body {
 .pill-trigger--failed:hover,
 .pill-trigger--failed:focus-visible {
   color: var(--color-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Must sit AFTER the .pill-trigger--running spin rule above: same selector,
+     same specificity, so source order decides. Placed before it (where this
+     block used to live) the opt-out lost to the animation and the icon kept
+     spinning for every reduced-motion user. */
+  .pill-trigger--running .pill-trigger-icon--rest { animation: none; }
+  .pill-trigger--cancelling { animation: none; opacity: 0.75; }
 }
 
 .pill-chevron {

@@ -207,20 +207,35 @@
     }
   }
 
-  // The selected participant's running-transcription progress (0..1), or null
-  // when it has no running task. Progress is media-time processed / duration,
-  // so it maps directly onto the timeline's x-axis.
-  function _selectedTranscribeProgress() {
+  // The selected participant's running transcription task (the last match, so
+  // duplicates resolve the same way they always have), or null.
+  function _selectedRunningTask() {
     var pid = state.selectedParticipant;
     if (!pid || !state.tasks) return null;
-    var prog = null;
+    var found = null;
     for (var i = 0; i < state.tasks.length; i++) {
       var t = state.tasks[i];
-      if (t.participant === pid && t.status === "running") {
-        prog = Math.max(0, Math.min(1, t.progress || 0));
-      }
+      if (t.participant === pid && t.status === "running") found = t;
     }
-    return prog;
+    return found;
+  }
+
+  // The selected participant's running-transcription progress (0..1), or null
+  // when it has no running task — or when its cancel is already in flight.
+  // Progress is media-time processed / duration, so it maps directly onto the
+  // timeline's x-axis. The cancel case is the whole point: the server reports
+  // "running" until the worker checkpoints, and a dotted band that outlives the
+  // click by a model load is the timeline telling the user their cancel did not
+  // take.
+  function _selectedTranscribeProgress() {
+    var t = _selectedRunningTask();
+    if (!t || state.cancellingTasks[t.id]) return null;
+    return Math.max(0, Math.min(1, t.progress || 0));
+  }
+
+  function _selectedCancelPending() {
+    var t = _selectedRunningTask();
+    return !!(t && state.cancellingTasks[t.id]);
   }
 
   function _prefersReducedMotion() {
@@ -343,11 +358,15 @@
       ctx.fillStyle = theme.textDim;
       ctx.font = "11px -apple-system, sans-serif";
       ctx.textAlign = "center";
+      // "Loading…" is about the *video*, so falling back to it the instant a
+      // cancel wipes the band would read as "something else is still starting up".
       var placeholder = _txFillActive
         ? "Transcribing… " + Math.round(_txFillDisplay * 100) + "%"
-        : state.selectedParticipant
-          ? "Loading…"
-          : "No video";
+        : _selectedCancelPending()
+          ? "Cancelling…"
+          : state.selectedParticipant
+            ? "Loading…"
+            : "No video";
       ctx.fillText(placeholder, cssW / 2, cssH / 2 + 4);
       ctx.textAlign = "start";
       renderPlayhead();

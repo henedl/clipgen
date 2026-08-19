@@ -21,6 +21,18 @@
     segments: [],
     corrections: [],
     tasks: [],
+    // Task ids with a cancel DELETE in flight → { at, progress }. The server
+    // keeps reporting a cancelled-but-still-running task as "running" until the
+    // worker reaches its next checkpoint — up to a whole cold model load away —
+    // so every surface that reads task.status has to ask this too, or it goes on
+    // saying "transcribing" for ten seconds after the click.
+    //
+    // Keyed by task id, never by participant: a re-transcribe issued right after
+    // a cancel is a *new* task, and a pid key that had not yet been swept would
+    // paint the fresh run as "Cancelling…" and disable its own stop button.
+    // Written by the pills satellite, read by pills + video — hence state, not a
+    // module var (see agents/skills/carve-satellite/SKILL.md).
+    cancellingTasks: {},
     searchQuery: "",
     searchResults: null,
     activeSegmentIndex: -1,
@@ -386,6 +398,13 @@
     return latest;
   }
 
+  // A cancel DELETE is in flight for this task. Every surface that words a
+  // task's progress asks this; without a shared predicate each one re-derives
+  // "running means working" and they drift apart.
+  function _cancelPending(task) {
+    return !!(task && state.cancellingTasks[task.id]);
+  }
+
   function _selectedParticipantRow() {
     var pid = state.selectedParticipant;
     if (!pid) return null;
@@ -424,6 +443,12 @@
 
     if (!pid) {
       taskLine = "No participant selected";
+    } else if (_cancelPending(task)) {
+      // Stays --working, not --ready: the worker really is still winding down,
+      // and a ready dot beside a pill that says "Cancelling…" is a second
+      // contradiction on top of the one this whole change removes.
+      cls = "status-indicator--working";
+      taskLine = pid + ": cancelling…";
     } else if (task && task.status === "running" && task.phase === "loading_model") {
       cls = "status-indicator--working";
       taskLine = pid + ": loading transcription model\u2026";
@@ -489,6 +514,19 @@
       return computeIndicatorState().lines.join("\n");
     }, { multiline: true, align: "center" });
     updateStatusIndicator();
+  }
+
+  // Repaint the three hub-owned surfaces that word a task's progress — the
+  // status dot, the empty-pane copy and the streaming footer — without waiting
+  // for the next poll. Only the pills satellite needs this: it is the one place
+  // that changes task wording outside the poll loop. Deliberately NOT folded
+  // into _txEtaTicker's tick body, which is a per-second hot path.
+  function refreshTranscribeWording() {
+    updateStatusIndicator();
+    var task = _taskForSelectedParticipant();
+    _setTranscriptEmptyText(task);
+    var txt = document.querySelector("#segmentList .streaming-text");
+    if (txt && task) txt.textContent = _streamingTextStr(task.progress || 0);
   }
 
   function refreshTranscriptionModelHintOnce() {
@@ -892,7 +930,12 @@
     // state, not an in-flight one, so it stays flat.
     var waiting = !!(task && (task.status === "running" || task.status === "queued"));
     main.classList.toggle("cg-shimmer", waiting);
-    if (task && task.status === "running" && task.phase === "loading_model") {
+    if (_cancelPending(task)) {
+      main.textContent = "Cancelling…";
+      // Deliberately not "finishing the current segment": a cancel during
+      // loading_model is waiting on the model load, not on a segment.
+      hint.textContent = "Waiting for the transcription worker to stop";
+    } else if (task && task.status === "running" && task.phase === "loading_model") {
       main.textContent = "Loading transcription model…";
       hint.textContent = "The first transcription after a restart takes a few extra seconds";
     } else if (task && task.status === "running") {
@@ -1204,6 +1247,10 @@
   function _streamingTextStr(progress) {
     var pid = state.streamingParticipant || state.selectedParticipant;
     var task = _taskForSelectedParticipant();
+    // Single choke point for the footer \u2014 the append path, the coalesced RAF
+    // update and the per-second ETA ticker all render through here, so one
+    // branch keeps all three honest while a cancel is in flight.
+    if (_cancelPending(task)) return "Cancelling\u2026";
     return "Transcribing\u2026 " + Math.round(progress * 100) + "%" + _txEtaSuffix(pid, task);
   }
 
@@ -2175,6 +2222,31 @@
   var _postCompletionGrace = 0;
   var POST_COMPLETION_GRACE_CYCLES = 4; // ~12s at POLL_INTERVAL=3000ms
 
+  // Ceiling on how long a pill may sit in "Cancelling…". Nothing normal comes
+  // close — the worst real case is a cold model load (~10s, uninterruptible)
+  // plus one poll. This exists only so a wedged worker thread, whose task stays
+  // "running" forever, hands the stop button back instead of leaving a dead pill.
+  var CANCEL_PENDING_MAX_MS = 30000;
+
+  // Drop the pending-cancel flag for every task the server no longer reports as
+  // active. One predicate covers all four exits: the status flipped to cancelled
+  // (the happy path), it flipped to completed or failed (the cancel raced the
+  // finish line), or the task vanished from the list entirely (dismissed, worker
+  // restart).
+  function _sweepCancellingTasks() {
+    var active = {};
+    for (var i = 0; i < state.tasks.length; i++) {
+      var t = state.tasks[i];
+      if (t.status === "running" || t.status === "queued") active[t.id] = true;
+    }
+    var now = Date.now();
+    for (var id in state.cancellingTasks) {
+      if (!active[id] || now - state.cancellingTasks[id].at > CANCEL_PENDING_MAX_MS) {
+        delete state.cancellingTasks[id];
+      }
+    }
+  }
+
   function _anyAgentActive() {
     for (var i = 0; i < state.participants.length; i++) {
       var ag = state.participants[i].agents;
@@ -2241,6 +2313,15 @@
     // the poll loop can wind down (matches the prior behaviour here).
     if (!completed) {
       state.streamingParticipant = null;
+      // The partial rows stay — they are real transcript the user may still want
+      // to read — but the footer under them has to go, or a cancelled run leaves
+      // a frozen "Cancelling…" line forever: nothing calls renderSegments() on
+      // this path, and renderSegmentsImpl is the only other place the indicator
+      // is removed. Cancel the queued insert first, or a RAF scheduled while the
+      // tab was hidden re-inserts the footer right after we remove it.
+      _cancelStreamingIndicator();
+      var ind = document.querySelector("#segmentList .streaming-indicator");
+      if (ind) ind.parentNode.removeChild(ind);
       return;
     }
     var ver = state.participantReqVer;
@@ -2265,6 +2346,10 @@
     apiGet("api/transcribe/status").then(function (data) {
       if (!data.ok) return;
       state.tasks = data.tasks;
+      // Before updateTranscribeFill / updateStatusIndicator / renderPills below
+      // — all three read the flag, and a stale one would keep the band off and
+      // the pill inert for a full extra tick.
+      _sweepCancellingTasks();
       if (_anyTxEtaActive()) _txEtaTicker.ensure();
 
       // Fill the timeline in sync with the selected participant's transcription
@@ -3781,6 +3866,7 @@
   TS.maybeWarmOnPillHover = maybeWarmOnPillHover; // pills
   TS.tryPostTranscriptionWarmup = tryPostTranscriptionWarmup; // pills
   TS.pollTaskStatus = pollTaskStatus; // pills
+  TS.refreshTranscribeWording = refreshTranscribeWording; // pills (cancel repaints before the next poll)
   TS.startPolling = startPolling; // pills
   TS._refreshAgentStateNow = _refreshAgentStateNow; // pills
   TS._trFetchModels = _trFetchModels; // pills
