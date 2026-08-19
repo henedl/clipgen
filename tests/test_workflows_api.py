@@ -1267,6 +1267,34 @@ def test_arming_reseeds_so_backlog_never_fires(wf_client, monkeypatch):
     assert calls == []
 
 
+def test_arming_one_type_leaves_another_types_pending_arrival_alone(
+    wf_client, monkeypatch
+):
+    # Arming re-baselines only the type being armed. A blanket re-seed marked a
+    # video that was mid-partial-copy (pending its second stable stat for the
+    # already-armed new_video trigger) as seen, so it never fired.
+    calls = _record_launches(monkeypatch)
+    watcher = _video_source_blueprint(wf_client)
+    chained = _video_source_blueprint(wf_client)
+    _mock_discovery(monkeypatch, [_entry("P01")], {"P01": (100, 1.0)})
+
+    wf_client.put(
+        f"/workflows/api/blueprints/{watcher}/trigger",
+        json={"enabled": True, "type": "new_video"},
+    )
+    _mock_discovery(monkeypatch, [_entry("P02")], {"P02": (100, 1.0)})
+    workflows_server._watch_poll_once()  # P02 recorded as pending, not yet fired
+    assert calls == []
+
+    wf_client.put(
+        f"/workflows/api/blueprints/{chained}/trigger",
+        json={"enabled": True, "type": "transcript_complete"},
+    )
+
+    workflows_server._watch_poll_once()  # P02 still pending -> now stable -> fires
+    assert [c[1] for c in calls] == ["P02"]
+
+
 def test_watch_two_armed_is_ambiguous_and_skips(wf_client, monkeypatch):
     calls = _record_launches(monkeypatch)
     a = _video_source_blueprint(wf_client)

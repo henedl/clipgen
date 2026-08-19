@@ -268,9 +268,11 @@ def api_blueprint_trigger(bp_id: str) -> Any:
         result = copy.deepcopy(target)
     # Re-baseline on arm so the current backlog (present videos, already-finished
     # transcripts/scans) never retro-fires. The poll maintains no baselines while
-    # nothing is armed, so this re-seed is what upholds that promise.
+    # nothing is armed, so this re-seed is what upholds that promise. Scoped to
+    # the type being armed: the other two may already be armed and live, and a
+    # blanket re-seed would drop their pending arrivals/completions.
     if enabled:
-        _seed_watch_seen()
+        _seed_watch_seen(trigger_type)
     return ok(blueprint=result)
 
 
@@ -1108,27 +1110,36 @@ def _scan_markers() -> dict[str, str]:
     return markers
 
 
-def _seed_watch_seen() -> None:
-    """Baseline every trigger source so the existing backlog never auto-fires.
+def _seed_watch_seen(trigger_type: str | None = None) -> None:
+    """Baseline a trigger source so its existing backlog never auto-fires.
 
     Present videos, already-transcribed participants, and already-completed
-    scans are all recorded; the watcher fires only for arrivals/completions
-    that happen *after* this call.
+    scans are recorded; the watcher fires only for arrivals/completions that
+    happen *after* this call.
+
+    *trigger_type* scopes the reset to one source. ``None`` seeds all three and
+    belongs to startup only: re-seeding a type that is already armed throws away
+    its live state — a video mid-partial-copy sitting in ``_watch_pending`` would
+    be marked seen and never fire, and any completion since the last poll tick
+    would be swallowed. Arming passes the type it is arming.
     """
     global _watch_transcript_cache, _watch_scan_cache
     with _watch_lock:
-        _watch_seen.clear()
-        _watch_pending.clear()
-        for entry in utils.discover_participant_videos():
-            if entry.get("has_video"):
-                _watch_seen.add(str(entry["id"]))
-        # Force a fresh parse (the cached mtime may predate this call).
-        _watch_transcript_cache = (-1.0, {})
-        _watch_scan_cache = (-1.0, {})
-        _watch_transcript_baseline.clear()
-        _watch_transcript_baseline.update(_transcript_markers())
-        _watch_scan_seen.clear()
-        _watch_scan_seen.update(_scan_markers())
+        if trigger_type in (None, "new_video"):
+            _watch_seen.clear()
+            _watch_pending.clear()
+            for entry in utils.discover_participant_videos():
+                if entry.get("has_video"):
+                    _watch_seen.add(str(entry["id"]))
+        if trigger_type in (None, "transcript_complete"):
+            # Force a fresh parse (the cached mtime may predate this call).
+            _watch_transcript_cache = (-1.0, {})
+            _watch_transcript_baseline.clear()
+            _watch_transcript_baseline.update(_transcript_markers())
+        if trigger_type in (None, "scan_event"):
+            _watch_scan_cache = (-1.0, {})
+            _watch_scan_seen.clear()
+            _watch_scan_seen.update(_scan_markers())
 
 
 def _stat_first_video(video_paths: list[str]) -> tuple[int, float] | None:
