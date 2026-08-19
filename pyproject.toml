@@ -46,7 +46,7 @@ packages = []
 package-dir = {"" = "source"}
 py-modules = [
     "app", "changelog", "cli", "composer_server", "config", "data_export",
-    "desktop", "desktop_chrome", "excel_io",
+    "desktop", "desktop_chrome", "desktop_menu", "excel_io",
     "files", "friction", "google_api", "interactive", "licenses", "mindnode",
     "ollama_client",
     "overview", "pipeline", "profiling", "remux_server",
