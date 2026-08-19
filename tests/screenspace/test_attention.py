@@ -242,6 +242,27 @@ class TestSaliencyGrid:
             assert 0.0 <= cell["y"] <= 1.0
             assert 0.15 <= cell["mag"] <= 1.0
 
+    def test_sparse_grid_cells_bit_identical_to_inline_rounding(self):
+        """The memoized-center fast path must emit byte-identical cells.
+
+        Reference is the formula it replaced: Python round() applied inline
+        per cell (hot-path rule: exact equality, not tolerance).
+        """
+        rng = np.random.default_rng(7)
+        for grid_n in (5, 16, 24):
+            cells = rng.random((grid_n, grid_n), dtype=np.float32)
+            got = screenspace.sparse_grid_cells(cells, 0.3)
+            ys, xs = np.nonzero(cells >= 0.3)
+            expected = [
+                {
+                    "x": round((int(x) + 0.5) / grid_n, 3),
+                    "y": round((int(y) + 0.5) / grid_n, 3),
+                    "mag": round(float(cells[y, x]), 3),
+                }
+                for y, x in zip(ys, xs)
+            ]
+            assert got == expected
+
     def test_grid_empty_on_zero_map(self):
         sal = np.zeros((60, 80), dtype=np.float32)
         assert screenspace.saliency_grid_from_map(sal, 16, 0.15) == []

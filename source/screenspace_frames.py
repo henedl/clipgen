@@ -356,6 +356,8 @@ def _scan_via_ffmpeg_pipe(
     # Profiling accumulates into locals and flushes once after the loop, so the
     # off-path per-frame cost is a single boolean check (see profiling.py).
     _prof = config.PROFILING
+    _cb_label = f"scan.callback.{profile_kind}" if profile_kind else "scan.callback"
+    _deep = profiling.deep_profiler(_cb_label) if _prof else None
     _decode_s = _filter_s = _cb_s = 0.0
     _cb_max = 0.0
     _n_frames = _n_skipped = 0
@@ -400,7 +402,18 @@ def _scan_via_ffmpeg_pipe(
             if _prof:
                 _t_cb = time.perf_counter()
                 _filter_s += _t_cb - _t_dec
-            result = callback(ts, frame)
+            if _deep is not None and profiling.deep_enable(_deep):
+                # finally, not straight-line: a raising callback lands in this
+                # loop's `except Exception` (warn + return False), and a live
+                # server reuses the worker thread — without the disable it
+                # would keep cProfile attached to everything that thread runs
+                # next. The common no-deep path stays branch-free.
+                try:
+                    result = callback(ts, frame)
+                finally:
+                    _deep.disable()
+            else:
+                result = callback(ts, frame)
             if _prof:
                 _t_last = time.perf_counter()
                 _cb_dt = _t_last - _t_cb
@@ -412,12 +425,9 @@ def _scan_via_ffmpeg_pipe(
 
         if _prof:
             _seen = _n_frames + _n_skipped
-            cb_label = (
-                f"scan.callback.{profile_kind}" if profile_kind else "scan.callback"
-            )
             profiling.add("scan.decode_wait", _decode_s, _seen)
             profiling.add("scan.fast_filter", _filter_s, _seen)
-            profiling.add(cb_label, _cb_s, _n_frames, peak=_cb_max)
+            profiling.add(_cb_label, _cb_s, _n_frames, peak=_cb_max)
             profiling.scan_summary(
                 Path(video_path).name,
                 [

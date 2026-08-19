@@ -193,8 +193,8 @@ class TestMaskedColor:
         assert avg["h"] < 5 or avg["h"] > 175
         assert avg["s"] > 250 and avg["v"] > 250
 
-    def test_average_masked_downscale_path(self):
-        crop = _left_red_right_blue(200, 200)  # forces the <=64 INTER_AREA path
+    def test_average_masked_large_crop(self):
+        crop = _left_red_right_blue(200, 200)
         mask = region_mask_for({"mask_points": [LEFT_HALF]}, 200, 200)
         avg = average_color_hsv(crop, mask=mask)
         assert avg["s"] > 240 and avg["v"] > 240

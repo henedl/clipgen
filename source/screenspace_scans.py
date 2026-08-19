@@ -40,6 +40,7 @@ from screenspace_primitives import (
     region_masker,
     saliency_grid_from_map,
     saliency_peak,
+    sparse_grid_cells,
     structural_similarity,
 )
 from screenspace_ocr import (
@@ -204,15 +205,7 @@ def scan_changes(
                         ).astype(np.float32)
                         / 255.0
                     )
-                    ys, xs = np.nonzero(cells >= min_frac)
-                    rd["change_grid"] = [
-                        {
-                            "x": round((int(x) + 0.5) / grid, 3),
-                            "y": round((int(y) + 0.5) / grid, 3),
-                            "mag": round(float(cells[y, x]), 3),
-                        }
-                        for y, x in zip(ys, xs)
-                    ]
+                    rd["change_grid"] = sparse_grid_cells(cells, min_frac)
                 emitted = buf.push(ts, rd)
                 if emitted is not None:
                     results.append(emitted)

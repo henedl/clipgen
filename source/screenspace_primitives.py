@@ -436,25 +436,19 @@ def average_color_hsv(
         Dict with keys ``h`` (0-180), ``s`` (0-255), ``v`` (0-255).
     """
     if region_pixels.size == 0:
-        # A region cropped fully off-frame: np.mean on the empty crop would
+        # A region cropped fully off-frame: a mean over the empty crop would
         # yield NaN (same guard as color_present).
         return {"h": 0.0, "s": 0.0, "v": 0.0}
-    h, w = region_pixels.shape[:2]
-    if h > 64 or w > 64:
-        new_w, new_h = min(w, 64), min(h, 64)
-        # One-step INTER_AREA: the two-pass integer-ratio split used by
-        # pHash rounds through an intermediate uint8 image and can shift
-        # the HSV mean enough to flip color_matches at default tolerances.
-        region_pixels = cv2.resize(
-            region_pixels, (new_w, new_h), interpolation=cv2.INTER_AREA
-        )
-        if mask is not None:
-            mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+    # Full-resolution convert + cv2.mean is the exact per-pixel HSV mean this
+    # function documents. It replaced a ≤64 INTER_AREA downsample + np.mean:
+    # the resize averaged in *BGR* space before converting, which desaturates
+    # textured regions (mean-of-converted ≠ convert-of-mean), and its generic
+    # resize path cost ~3.6 ms per 720p frame vs ~0.5 ms for this pair.
     hsv = cv2.cvtColor(region_pixels, cv2.COLOR_BGR2HSV)
     if mask is not None and np.any(mask):
-        mean = hsv[mask > 0].mean(axis=0)
+        mean = cv2.mean(hsv, mask=mask)
     else:
-        mean = np.mean(hsv, axis=(0, 1))
+        mean = cv2.mean(hsv)
     return {"h": float(mean[0]), "s": float(mean[1]), "v": float(mean[2])}
 
 
@@ -1568,6 +1562,38 @@ def saliency_kwargs_from_params(params: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+# grid_n -> rounded cell-center coordinates. Bounded by the handful of grid
+# sizes in use (config default plus explicit task params).
+_grid_center_cache: dict[int, list[float]] = {}
+
+
+def sparse_grid_cells(cells: np.ndarray, min_mag: float) -> list[dict[str, float]]:
+    """Threshold a small square cell grid to sparse ``{"x","y","mag"}`` dicts.
+
+    The shared tail of attention's saliency grid and change's ``change_grid``:
+    coordinates are cell centers normalized 0-1 (3 decimals), ``mag`` is the
+    cell value (3 decimals). Cell-center coordinates depend only on the grid
+    size but this runs per frame (~256 cells at the default grid), so the
+    rounded centers are memoized rather than re-rounded per cell per frame
+    (measured 740k round() calls, 0.13s, across one 962-frame attention scan).
+    Python round, not np.round, so emitted values stay bit-identical.
+    """
+    grid_n = int(cells.shape[0])
+    ys, xs = np.nonzero(cells >= min_mag)
+    if ys.size == 0:
+        return []
+    centers = _grid_center_cache.get(grid_n)
+    if centers is None:
+        inv_n = 1.0 / grid_n
+        centers = [round((i + 0.5) * inv_n, 3) for i in range(grid_n)]
+        _grid_center_cache[grid_n] = centers
+    mags = cells[ys, xs].tolist()
+    return [
+        {"x": centers[x], "y": centers[y], "mag": round(mag, 3)}
+        for y, x, mag in zip(ys.tolist(), xs.tolist(), mags)
+    ]
+
+
 def saliency_grid_from_map(
     sal: np.ndarray, grid_n: int, min_mag: float
 ) -> list[dict[str, float]]:
@@ -1583,17 +1609,7 @@ def saliency_grid_from_map(
     peak = float(cells.max())
     if peak <= 0:
         return []
-    normed = cells / peak
-    ys, xs = np.nonzero(normed >= min_mag)
-    inv_n = 1.0 / grid_n
-    return [
-        {
-            "x": round((int(x) + 0.5) * inv_n, 3),
-            "y": round((int(y) + 0.5) * inv_n, 3),
-            "mag": round(float(normed[y, x]), 3),
-        }
-        for y, x in zip(ys, xs)
-    ]
+    return sparse_grid_cells(cells / peak, min_mag)
 
 
 def saliency_peak(sal: np.ndarray) -> tuple[float, float, float]:

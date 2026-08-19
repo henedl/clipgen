@@ -761,6 +761,13 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "see agents/skills/profile/SKILL.md)",
     )
     run_opts.add_argument(
+        "--profile-deep",
+        metavar="LABEL",
+        default=None,
+        help="cProfile the spans whose profile label contains LABEL (implies "
+        "--profile); prints a per-label function breakdown at exit",
+    )
+    run_opts.add_argument(
         "--settings",
         action="store_true",
         help="Open the interactive settings editor before running "
@@ -3548,6 +3555,9 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.VERBOSITY = config.VERBOSE if args.verbose else config.STANDARD
 
     if getattr(args, "profile", False):
+        profiling.enable()
+    if getattr(args, "profile_deep", None):
+        config.PROFILE_DEEP = args.profile_deep
         profiling.enable()
 
     if getattr(args, "titlecards", None) is not None:

@@ -100,6 +100,109 @@ def test_label_cap_drops_new_labels(monkeypatch):
     assert snap["a"]["seconds"] == 2.0
 
 
+# ---------- deep profiling ---------------------------------------------------
+
+
+def _deep_probe_workload():
+    """A named function the deep profile must be able to attribute time to."""
+    return sum(range(2000))
+
+
+def test_deep_profiler_none_when_unrequested(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "")
+    assert profiling.deep_profiler("scan.callback.template") is None
+
+
+def test_deep_profiler_none_when_profiling_off(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "scan.callback")
+    assert profiling.deep_profiler("scan.callback.template") is None
+
+
+def test_deep_profiler_matches_substring_and_reuses(monkeypatch):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "callback")
+    prof = profiling.deep_profiler("scan.callback.template")
+    assert prof is not None
+    assert profiling.deep_profiler("scan.callback.template") is prof
+    assert profiling.deep_profiler("ffmpeg.run") is None
+
+
+def test_deep_report_names_the_hot_function(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.deep")
+    with profiling.span("unit.deep"):
+        _deep_probe_workload()
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.deep" in out
+    assert "_deep_probe_workload" in out
+
+
+def test_deep_report_silent_when_nothing_ran(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "")
+    with profiling.span("plain"):
+        pass
+    profiling.report()
+    assert "profile-deep" not in capsys.readouterr().out
+
+
+def test_deep_nested_matching_spans_do_not_break_the_work(monkeypatch, capsys):
+    """A broad match hitting an outer span AND nested work must not raise.
+
+    cProfile raises on a second enable() in one thread; letting it propagate
+    aborts the instrumented work (a --profile-deep heatmap. run lost its GIFs
+    to exactly this). The outermost profiler keeps running and absorbs the
+    nested work.
+    """
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.nest")
+
+    ran = []
+
+    @profiling.timed("unit.nest.inner")
+    def inner():
+        ran.append(True)
+        return _deep_probe_workload()
+
+    with profiling.span("unit.nest.outer"):
+        inner()
+
+    assert ran == [True]
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.nest.outer" in out
+    assert "_deep_probe_workload" in out  # inner work attributed to the outer
+
+
+def test_deep_report_covers_timed_decorator(monkeypatch, capsys):
+    """@timed functions (often run in executor threads) get deep-profiled too."""
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.timed")
+
+    @profiling.timed("unit.timed")
+    def work():
+        return _deep_probe_workload()
+
+    work()
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.timed" in out
+    assert "_deep_probe_workload" in out
+
+
+def test_reset_clears_deep_profiles(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.deep")
+    with profiling.span("unit.deep"):
+        _deep_probe_workload()
+    profiling.reset()
+    profiling.report()
+    assert "profile-deep" not in capsys.readouterr().out
+
+
 def test_enable_flips_config_and_registers_report_once(monkeypatch):
     registered = []
     monkeypatch.setattr(profiling.atexit, "register", registered.append)
@@ -522,6 +625,51 @@ def test_scan_callback_label_uses_profile_kind(monkeypatch):
     assert "scan.callback" not in snap
     assert snap["scan.callback.change"]["count"] == 2
     assert snap["scan.callback.change"]["max"] >= 0.01
+
+
+def test_deep_profiler_disabled_when_scan_callback_raises(monkeypatch):
+    """A raising callback must not leave cProfile attached to the thread.
+
+    The scan loop's `except Exception` swallows the callback error (warn +
+    return False), and a live server reuses the worker thread — a leaked
+    enable() would keep profiling everything that thread runs next, and the
+    next deep enable() on it would silently fail.
+    """
+    import numpy as np
+    import sys as _sys
+
+    import screenspace_frames as sf
+
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "scan.callback.change")
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+
+    def fake_pipe(*_a, **_k):
+        yield (0.0, frame)
+
+    monkeypatch.setattr(sf, "_ffmpeg_pipe_frames", fake_pipe)
+    monkeypatch.setattr(
+        sf.video,
+        "probe_video_properties",
+        lambda _p: {"width": 8, "height": 8, "video_codec": "h264"},
+    )
+    monkeypatch.setattr(sf.shutil, "which", lambda _x: "/bin/ffmpeg")
+
+    def _cb(_ts, _pixels):
+        raise RuntimeError("boom")
+
+    ran = sf._scan_via_ffmpeg_pipe(
+        "/x.mp4",
+        {"x": 0, "y": 0, "w": 8, "h": 8},
+        0.1,
+        _cb,
+        fps=30,
+        duration=1,
+        profile_kind="change",
+    )
+    assert ran is False  # the loop swallowed the callback error
+    # No profiler may still be attached to this thread.
+    assert _sys.getprofile() is None
 
 
 def test_ffprobe_run_records_on_properties_probe(monkeypatch, tmp_path):
