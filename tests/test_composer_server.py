@@ -950,6 +950,40 @@ def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
         composer_server._export_busy.release()
 
 
+def test_export_cancel_sets_the_shared_event(co_client):
+    composer_server._export_cancel.clear()
+    resp = co_client.post("/composer/api/export/cancel").get_json()
+    assert resp["ok"] is True
+    assert composer_server._export_cancel.is_set()
+    composer_server._export_cancel.clear()
+
+
+def test_remux_routes_registered_on_composer(co_app):
+    """The shared remux routes ride on the composer blueprint itself.
+
+    tests/test_container_seekability.py exercises the route bodies against a
+    throwaway blueprint; this pins the composer registration.
+    """
+    rules = {r.rule for r in co_app.url_map.iter_rules()}
+    assert "/composer/api/remux/status" in rules
+    assert "/composer/api/remux/<pid>" in rules
+
+
+def test_repin_sheet_state_repoints_context(monkeypatch):
+    """Worksheet swaps go through repin_sheet_state, not a re-init.
+
+    The remux registration hands the blueprint ``lambda: _sheet_context``, so
+    this repoint is what keeps remux (and participant resolution) on the newly
+    opened sheet.
+    """
+    monkeypatch.setattr(composer_server, "_sheet_context", None)
+    sentinel = object()
+    composer_server.repin_sheet_state(sentinel)
+    assert composer_server._sheet_context is sentinel
+    composer_server.repin_sheet_state(None)
+    assert composer_server._sheet_context is None
+
+
 def test_combined_app_registers_composer(tmp_path, monkeypatch):
     import server
     import start_settings
