@@ -1644,6 +1644,11 @@ body {
   background: var(--color-selected);
 }
 
+/* Word-level karaoke sweep on the playing row (transcripts-video.js) */
+.segment-row.active .segment-word.word-active {
+  background: var(--color-selected);
+}
+
 .segment-text-editing {
   outline: none;
   box-shadow: 0 1px 0 var(--color-accent);

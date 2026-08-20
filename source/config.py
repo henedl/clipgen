@@ -508,6 +508,13 @@ TRANSCRIBE_LOG_PROB_THRESHOLD: float = -1.0  # drop low-confidence segments
 TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD: float = 2.4  # drop repetitive / looped text
 # Seconds of surrounding silence for hallucination skip logic; 0 = off (requires word_timestamps when > 0)
 TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD: float = 0.0
+# Per-word timing via faster-whisper's DTW alignment. Tightens segment bounds to
+# the first/last word (Whisper's own segment bounds include the VAD pad) and
+# enables the word-level playback highlight; costs extra decode time.
+TRANSCRIBE_WORD_TIMESTAMPS: bool = True
+# Snap segment edges to measured speech energy in the already-decoded audio,
+# trimming Whisper's silence overshoot. One vectorized envelope pass per file.
+TRANSCRIBE_EDGE_SNAP: bool = True
 TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT: bool = (
     True  # False reduces chained hallucinations
 )
@@ -704,6 +711,8 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD": "Drop segments whose gzip compression ratio exceeds this (catches repetitive loops).",
     "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD": "Seconds of surrounding silence for hallucination skip logic; 0 = off. When > 0, enables word-level timestamps (slower).",
     "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": "Use prior segment text as context for the next decode; disable to reduce chained hallucinations.",
+    "TRANSCRIBE_WORD_TIMESTAMPS": "Per-word timing via alignment. Tightens segment boundaries to the spoken words and enables the word-level playback highlight; adds decode time (roughly 10–30%).",
+    "TRANSCRIBE_EDGE_SNAP": "Snap segment boundaries to measured speech energy in the decoded audio, trimming silence overshoot at segment edges. Effectively free.",
     "MARK_CATEGORIES": "Categories available when marking transcript segments. Each entry has a label and a color swatch.",
     "HOTKEY_OVERRIDES": "Custom keyboard-shortcut bindings, keyed by action id. Click a shortcut to rebind it; an empty value disables the shortcut.",
     "HIGHLIGHTS_REEL_DURATION_SECONDS": "Maximum duration in seconds for the highlights reel time budget.",
@@ -984,6 +993,16 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "step": 0.5,
     },
     "TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "bool",
+    },
+    "TRANSCRIBE_WORD_TIMESTAMPS": {
+        "tab": "Transcription",
+        "group": "Transcription quality",
+        "type": "bool",
+    },
+    "TRANSCRIBE_EDGE_SNAP": {
         "tab": "Transcription",
         "group": "Transcription quality",
         "type": "bool",

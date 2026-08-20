@@ -114,6 +114,169 @@ class TestFilterSegments:
         filtered = transcripts.filter_segments(_empty_result(), 0.0, 100.0)
         assert filtered["segments"] == []
 
+    def test_offset_to_zero_shifts_words(self):
+        result = TranscriptResult(
+            segments=[
+                TranscriptSegment(
+                    start=12.0,
+                    end=14.0,
+                    text="hello world",
+                    words=[
+                        {"start": 9.5, "end": 12.5, "text": "hello"},
+                        {"start": 12.6, "end": 14.0, "text": "world"},
+                    ],
+                )
+            ],
+            language="en",
+            source_file="x.mp4",
+            model="base",
+        )
+        filtered = transcripts.filter_segments(result, 10.0, 20.0, offset_to_zero=True)
+        seg = filtered["segments"][0]
+        assert seg["start"] == 2.0
+        # First word started before the clip window: clamped to 0, end intact.
+        assert seg["words"] == [
+            {"start": 0.0, "end": 2.5, "text": "hello"},
+            {"start": 2.6, "end": 4.0, "text": "world"},
+        ]
+
+    def test_non_offset_path_keeps_words(self):
+        result = TranscriptResult(
+            segments=[
+                TranscriptSegment(
+                    start=1.0,
+                    end=2.0,
+                    text="hi",
+                    words=[{"start": 1.0, "end": 2.0, "text": "hi"}],
+                )
+            ],
+            language="en",
+            source_file="x.mp4",
+            model="base",
+        )
+        filtered = transcripts.filter_segments(result, 0.0, 10.0)
+        assert filtered["segments"][0]["words"] == [
+            {"start": 1.0, "end": 2.0, "text": "hi"}
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Energy edge-snap
+# ---------------------------------------------------------------------------
+
+
+def _tone_burst_audio(
+    lead: float = 0.5, tone: float = 1.0, tail: float = 0.7, sr: int = 16000
+):
+    """Quiet noise floor + a loud 440 Hz burst + quiet tail (deterministic)."""
+
+    def _sine(duration, freq, amp):
+        t = np.arange(int(duration * sr)) / sr
+        return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+    return np.concatenate(
+        [_sine(lead, 3000, 0.001), _sine(tone, 440, 0.3), _sine(tail, 3000, 0.001)]
+    )
+
+
+class TestEnergySnap:
+    """Speech spans exactly [0.5, 1.5] in _tone_burst_audio. Frames are 30 ms on
+    a 10 ms hop, so onset lands in the frame at 0.48 (new start 0.45 after the
+    30 ms lead-in) and the last speech frame starts at 1.49 (new end 1.58 after
+    frame width + release)."""
+
+    def test_snaps_start_to_onset_and_trims_end(self):
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(start=0.2, end=2.0, text="x")
+        snap(seg, 0.0)
+        assert seg["start"] == pytest.approx(0.45)
+        assert seg["end"] == pytest.approx(1.58)
+
+    def test_end_never_extends(self):
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(start=0.7, end=1.2, text="x")  # ends mid-speech
+        snap(seg, 0.0)
+        assert seg["end"] == pytest.approx(1.2)
+
+    def test_end_unchanged_when_no_speech_in_window(self):
+        # End overshoot larger than the search window: quiet trailing audio must
+        # not be amputated on a guess, so the end stays put.
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(start=0.2, end=2.15, text="x")
+        snap(seg, 0.0)
+        assert seg["end"] == pytest.approx(2.15)
+
+    def test_start_never_crosses_prev_end(self):
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(start=0.5, end=2.0, text="x")
+        snap(seg, 0.47)
+        assert seg["start"] == pytest.approx(0.47)
+
+    def test_start_never_crosses_first_word_and_words_clamped(self):
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(
+            start=0.2,
+            end=2.0,
+            text="a b",
+            words=[
+                {"start": 0.4, "end": 0.46, "text": "a"},
+                {"start": 1.0, "end": 1.9, "text": "b"},
+            ],
+        )
+        snap(seg, 0.0)
+        # Onset says 0.45, but the first word ends at 0.46: clamp to 0.41.
+        assert seg["start"] == pytest.approx(0.41)
+        words = seg["words"]
+        assert words[0]["start"] == pytest.approx(0.41)  # pulled into the span
+        assert words[-1]["end"] == seg["end"]  # trimmed with the segment
+        # Monotonic non-decreasing across the list.
+        flat = [t for w in words for t in (w["start"], w["end"])]
+        assert flat == sorted(flat)
+
+    def test_short_first_word_cannot_undo_prev_end_floor(self):
+        # First word ends only 20 ms after prev_end: the word-margin ceiling
+        # (word end - 50 ms) lands below prev_end and must lose to it, or the
+        # segment would overlap its predecessor and steal the playhead highlight.
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(
+            start=0.5,
+            end=2.0,
+            text="a b",
+            words=[
+                {"start": 0.45, "end": 0.48, "text": "a"},
+                {"start": 1.0, "end": 1.9, "text": "b"},
+            ],
+        )
+        snap(seg, 0.46)
+        assert seg["start"] == pytest.approx(0.46)
+
+    def test_sub_min_duration_segment_cannot_overlap_predecessor(self):
+        # Segment shorter than the 100 ms minimum: the min-duration ceiling
+        # (end - 100 ms) lands below prev_end and must lose to it.
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(start=0.5, end=0.58, text="x")
+        snap(seg, 0.5)
+        assert seg["start"] == pytest.approx(0.5)
+        assert seg["end"] == pytest.approx(0.58)
+
+    def test_low_dynamic_range_disables_snap(self):
+        constant = _tone_burst_audio(lead=0.0, tone=2.0, tail=0.0)
+        assert transcripts._build_energy_snapper(constant) is None
+        assert transcripts._build_energy_snapper(np.zeros(32000, np.float32)) is None
+
+    def test_short_audio_disables_snap(self):
+        assert (
+            transcripts._build_energy_snapper(_tone_burst_audio(0.1, 0.3, 0.1)) is None
+        )
+        assert transcripts._build_energy_snapper(None) is None
+
 
 # ---------------------------------------------------------------------------
 # Markdown format / roundtrip
@@ -306,11 +469,29 @@ class TestBuildTranscribeKwargs:
         assert kwargs["hallucination_silence_threshold"] == 2.0
         assert kwargs["word_timestamps"] is True
 
-    def test_hallucination_threshold_zero_omits_word_timestamps(self, monkeypatch):
+    def test_hallucination_threshold_zero_omits_the_kwarg(self, monkeypatch):
         monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
+        monkeypatch.setattr(config, "TRANSCRIBE_WORD_TIMESTAMPS", False)
         kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
         assert "hallucination_silence_threshold" not in kwargs
         assert "word_timestamps" not in kwargs
+
+    def test_word_timestamps_default_on(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_WORD_TIMESTAMPS", True)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert kwargs["word_timestamps"] is True
+
+    def test_word_timestamps_can_be_disabled(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_WORD_TIMESTAMPS", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert "word_timestamps" not in kwargs
+
+    def test_hallucination_forces_word_timestamps_even_when_knob_off(self, monkeypatch):
+        monkeypatch.setattr(config, "TRANSCRIBE_WORD_TIMESTAMPS", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 2.0)
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert kwargs["word_timestamps"] is True
 
 
 class TestTranscribeVideoWhisperKwargs:
@@ -341,11 +522,137 @@ class TestTranscribeVideoWhisperKwargs:
         )
         monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", True)
         monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
+        monkeypatch.setattr(config, "TRANSCRIBE_WORD_TIMESTAMPS", False)
 
         result = transcripts.transcribe_video("/fake/video.mp4")
         assert result is not None
         assert captured["vad_filter"] is True
         assert "word_timestamps" not in captured
+
+    def test_segments_carry_rounded_words_and_tightened_bounds(self, monkeypatch):
+        """Word timing rides on the segment; segment bounds tighten to the words."""
+        from types import SimpleNamespace
+
+        import video as video_mod
+
+        class FakeSeg:
+            text = " hello world"
+            start = 0.0  # looser than the words: includes the VAD pad
+            end = 2.0
+            words = [
+                SimpleNamespace(start=0.401, end=0.9, word=" hello"),
+                SimpleNamespace(start=0.95, end=1.402, word=" world"),
+            ]
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **_kwargs):
+                return iter([FakeSeg()]), FakeInfo()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_EDGE_SNAP", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+        )
+
+        streamed: list = []
+        result = transcripts.transcribe_video(
+            "/fake/video.mp4", on_segment=lambda end, seg: streamed.append((end, seg))
+        )
+        assert result is not None
+        seg = result["segments"][0]
+        assert seg["start"] == 0.4  # words[0].start, rounded to 2 dp
+        assert seg["end"] == 1.4  # words[-1].end, rounded to 2 dp
+        assert seg["words"] == [
+            {"start": 0.4, "end": 0.9, "text": "hello"},
+            {"start": 0.95, "end": 1.4, "text": "world"},
+        ]
+        # The streamed partial is the same (finalized) dict as the result's.
+        assert streamed == [(1.4, seg)]
+
+    def test_segments_without_words_keep_whisper_bounds(self, monkeypatch):
+        import video as video_mod
+
+        class FakeSeg:
+            text = " hello"
+            start = 0.25
+            end = 1.75
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **_kwargs):
+                return iter([FakeSeg()]), FakeInfo()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_EDGE_SNAP", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+        )
+
+        result = transcripts.transcribe_video("/fake/video.mp4")
+        assert result is not None
+        seg = result["segments"][0]
+        assert seg["start"] == 0.25
+        assert seg["end"] == 1.75
+        assert "words" not in seg
+
+    def test_edge_snap_applied_before_streaming(self, monkeypatch):
+        """The snapper sees each segment with the previous (snapped) end as floor,
+        and mutations land before on_segment fires."""
+        import video as video_mod
+
+        class FakeSeg:
+            def __init__(self, start, end, text):
+                self.start = start
+                self.end = end
+                self.text = text
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **_kwargs):
+                return iter([FakeSeg(0.0, 2.0, "one"), FakeSeg(2.5, 4.0, "two")]), (
+                    FakeInfo()
+                )
+
+        snapped_with: list = []
+
+        def _fake_snapper(segment, prev_end):
+            snapped_with.append((segment["text"], prev_end))
+            segment["end"] = segment["end"] - 0.5  # pretend we trimmed silence
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_EDGE_SNAP", True)
+        monkeypatch.setattr(
+            transcripts, "_build_energy_snapper", lambda _audio: _fake_snapper
+        )
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+        )
+
+        streamed: list = []
+        result = transcripts.transcribe_video(
+            "/fake/video.mp4", on_segment=lambda end, seg: streamed.append(end)
+        )
+        assert result is not None
+        # Second segment's floor is the first's *snapped* end (1.5, not 2.0).
+        assert snapped_with == [("one", 0.0), ("two", 1.5)]
+        # on_segment received the snapped end times.
+        assert streamed == [1.5, 3.5]
 
     def test_no_audio_stream_returns_none_without_loading_model(
         self, monkeypatch, capsys
@@ -575,6 +882,18 @@ class TestApplyCorrections:
         original_text = segs[0]["text"]
         transcripts.apply_corrections(segs, [{"from": "teh", "to": "the"}])
         assert segs[0]["text"] == original_text
+
+    def test_preserves_words(self):
+        words: list[transcripts.TranscriptWord] = [
+            {"start": 0.0, "end": 0.5, "text": "teh"},
+            {"start": 0.5, "end": 1.0, "text": "fox"},
+        ]
+        segs = [
+            transcripts.TranscriptSegment(start=0, end=1, text="teh fox", words=words)
+        ]
+        result = transcripts.apply_corrections(segs, [{"from": "teh", "to": "the"}])
+        assert result[0]["text"] == "the fox"
+        assert result[0]["words"] == words
 
     def test_case_insensitive(self):
         segs = [transcripts.TranscriptSegment(start=0, end=1, text="Teh quick TEH fox")]

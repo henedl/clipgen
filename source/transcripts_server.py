@@ -446,6 +446,7 @@ def api_transcript(participant: str) -> FlaskResponse:
             "text": corrected["text"],
             "corrected": raw["text"] != corrected["text"],
             "marks": marks_by_seg.get(seg_id, []),
+            "words": corrected.get("words", []),
         }
         segments.append(seg)
 

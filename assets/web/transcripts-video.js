@@ -1168,6 +1168,14 @@
     });
     // Native scrubbing on a paused video doesn't always fire timeupdate.
     video.addEventListener("seeked", save);
+
+    // Word karaoke rides the same element: loop only while playing, one manual
+    // update on pause/seek so the highlighted word matches the resting playhead.
+    video.addEventListener("play", _startKaraoke);
+    video.addEventListener("pause", function () { _stopKaraoke(); _updateActiveWord(); });
+    video.addEventListener("ended", function () { _stopKaraoke(); _clearActiveWord(); });
+    video.addEventListener("seeked", _updateActiveWord);
+    window.addEventListener("pagehide", _stopKaraoke);
   }
 
   function persistVideoTime(t) {
@@ -1191,6 +1199,7 @@
     if (state.activeSegmentIndex >= 0 && state.activeSegmentIndex < rows.length) {
       rows[state.activeSegmentIndex].classList.remove("active");
     }
+    _clearActiveWord();
     state.activeSegmentIndex = newIndex;
     if (newIndex >= 0 && newIndex < rows.length) {
       rows[newIndex].classList.add("active");
@@ -1222,6 +1231,80 @@
     // user is reading elsewhere — a manual scroll pauses follow for a few seconds.
     var follow = (state.autoFollow || state.pipActive) && !_autoFollowPaused();
     setActiveSegment(newIndex, { follow: follow });
+  }
+
+  // ---- Word-level karaoke ----
+  // Sweeps a .word-active class across the active row's timed word spans
+  // (data-ws, written by renderSegments when per-word timing exists). Driven by
+  // its own rAF loop while the video plays: the ~4 Hz timeupdate that paces the
+  // row highlight is too chunky for a word sweep. Early-outs when the active
+  // row has no timed spans (old manifests, corrected rows, streaming rows).
+  var _karaokeRaf = 0;
+  var _wordSpans = null; // cached timed spans of the active row
+  var _wordRow = -1; // segment index the cache belongs to
+  var _activeWordEl = null;
+
+  function _clearActiveWord() {
+    if (_activeWordEl) _activeWordEl.classList.remove("word-active");
+    _activeWordEl = null;
+    _wordSpans = null;
+    _wordRow = -1;
+  }
+
+  function _updateActiveWord() {
+    var idx = state.activeSegmentIndex;
+    var seg = idx >= 0 ? state.segments[idx] : null;
+    if (!seg || !seg.words || !seg.words.length) {
+      if (_activeWordEl) _clearActiveWord();
+      return;
+    }
+    // (Re)build the span cache when the row changed or the list was re-rendered
+    // out from under us (renderSegments swaps innerHTML, orphaning old spans).
+    if (_wordRow !== idx || (_wordSpans && _wordSpans[0] && !_wordSpans[0].isConnected)) {
+      _wordSpans = null;
+      _wordRow = idx;
+      var rows = state.cachedSegmentRows;
+      if (!rows) {
+        var list = qs("#segmentList");
+        rows = state.cachedSegmentRows = list ? list.querySelectorAll(".segment-row") : [];
+      }
+      if (rows && idx < rows.length) {
+        var spans = rows[idx].querySelectorAll(".segment-word[data-ws]");
+        if (spans.length) _wordSpans = spans;
+      }
+    }
+    if (!_wordSpans) return;
+    var t = videoGlobalTime();
+    // Last word with start <= t; spans and words are index-aligned by contract
+    // (renderSegments only writes data-ws when the counts match).
+    var words = seg.words;
+    var lo = 0, hi = words.length - 1, wi = -1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (words[mid].start <= t) { wi = mid; lo = mid + 1; }
+      else { hi = mid - 1; }
+    }
+    var el = wi >= 0 && wi < _wordSpans.length ? _wordSpans[wi] : null;
+    if (el === _activeWordEl) return;
+    if (_activeWordEl) _activeWordEl.classList.remove("word-active");
+    if (el) el.classList.add("word-active");
+    _activeWordEl = el;
+  }
+
+  function _karaokeTick() {
+    _karaokeRaf = 0;
+    var video = qs("#videoPlayer");
+    if (!video || video.paused || video.ended) return;
+    _updateActiveWord();
+    _karaokeRaf = requestAnimationFrame(_karaokeTick);
+  }
+
+  function _startKaraoke() {
+    if (!_karaokeRaf) _karaokeRaf = requestAnimationFrame(_karaokeTick);
+  }
+
+  function _stopKaraoke() {
+    if (_karaokeRaf) { cancelAnimationFrame(_karaokeRaf); _karaokeRaf = 0; }
   }
 
   // ---- Auto-follow scroll-pause ----
