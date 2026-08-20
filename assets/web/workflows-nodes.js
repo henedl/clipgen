@@ -12,6 +12,16 @@
   var WF = window.ClipgenWorkflows;
   var state = WF.state;
 
+  // The one participant menu currently portaled onto <body>, as {menu, close}.
+  // Anything that invalidates its anchor — a card rebuild, a canvas pan/zoom,
+  // leaving the page — closes it through closeParticipantMenu() below, which
+  // also un-portals it and drops bindMenuToggle's document-level listeners.
+  var _openParticipantMenu = null;
+
+  function closeParticipantMenu() {
+    if (_openParticipantMenu) _openParticipantMenu.close();
+  }
+
   // One column of port rows (inputs left, outputs right — the outputs column is
   // CSS-flipped so its dot sits on the card edge). Ports already wired per
   // `state.edges` get `.wf-port-connected`, which fills the dot rather than
@@ -224,7 +234,7 @@
     btn.type = "button";
     btn.setAttribute("aria-haspopup", "menu");
     btn.setAttribute("aria-expanded", "false");
-    var menu = el("div", "wf-participant-menu hidden");
+    var menu = el("div", "wf-participant-menu cg-menu hidden");
     menu.setAttribute("role", "menu");
     wrap.appendChild(btn);
     wrap.appendChild(menu);
@@ -299,7 +309,34 @@
       });
     });
 
-    if (WF.bindMenuToggle) WF.bindMenuToggle(btn, menu);
+    // The menu is portaled onto <body> while open. It cannot stay in the card:
+    // .wf-canvas clips with overflow:hidden and #wfWorld's transform is both a
+    // stacking context and a containing block, so neither z-index nor
+    // position:fixed can lift it out — and in-place it would also inherit the
+    // canvas zoom scale. Same reason (and same shape) as the Transcripts pill
+    // popover in transcripts-pills.js.
+    if (WF.bindMenuToggle) {
+      // `toggle` is assigned before any click can fire, so onOpen can close over it.
+      var toggle = WF.bindMenuToggle(btn, menu, {
+        onOpen: function () {
+          closeParticipantMenu(); // only one open at a time
+          document.body.appendChild(menu);
+          positionPopoverAnchored(menu, btn.getBoundingClientRect());
+          _openParticipantMenu = { menu: menu, close: toggle.close };
+        },
+        onClose: function () {
+          // Back into the card so it dies with it on the next rebuild. If the
+          // card is already gone (renderAllNodes, or one of the in-place
+          // container rebuilds in this file), drop the menu instead of
+          // stranding it on <body>.
+          if (wrap.isConnected) wrap.appendChild(menu);
+          else if (menu.parentNode) menu.parentNode.removeChild(menu);
+          if (_openParticipantMenu && _openParticipantMenu.menu === menu) {
+            _openParticipantMenu = null;
+          }
+        },
+      });
+    }
     refreshSummary();
     return wrap;
   }
@@ -556,6 +593,9 @@
   function renderAllNodesImpl() {
     var world = qs("#wfWorld");
     if (!world) return;
+    // Its anchor card is about to be discarded, and the menu itself lives on
+    // <body> — close it here or it lingers there with live listeners.
+    closeParticipantMenu();
     // Clear the cards but keep the nested wire <svg> (it lives in #wfWorld so it
     // shares the cards' stacking context — see workflows.html). renderWires()
     // below repopulates its paths.
@@ -587,6 +627,9 @@
     if (WF.renderMinimap) WF.renderMinimap();
   }
 
+  window.addEventListener("pagehide", closeParticipantMenu);
+
   WF.renderNode = renderNode;
   WF.renderAllNodes = renderAllNodes;
+  WF.closeParticipantMenu = closeParticipantMenu;
 })();

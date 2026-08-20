@@ -273,6 +273,39 @@ def test_batch_via_all_participants_option():
     assert ".wf-batch-card" in css
 
 
+def test_participant_menu_portals_to_body():
+    """The picker mounts on <body> while open. In the card it was clipped by
+    .wf-canvas's overflow:hidden (and #wfWorld's transform is both a stacking
+    context and a containing block, so neither z-index nor position:fixed could
+    lift it out) — a long cohort showed ~6 rows with no way to reach the rest."""
+    nodes = (_WEB / "workflows-nodes.js").read_text(encoding="utf-8")
+    assert "document.body.appendChild(menu)" in nodes
+    assert "positionPopoverAnchored(" in nodes  # flips above + clamps, from utils.js
+
+    # Portaling makes the menu outlive its card, so every path that invalidates
+    # the anchor has to close it or it strands on <body> holding bindMenuToggle's
+    # document-level mousedown/keydown listeners.
+    assert nodes.index("closeParticipantMenu()") < nodes.index('world.innerHTML = ""')
+    assert 'window.addEventListener("pagehide", closeParticipantMenu)' in nodes
+    assert "WF.closeParticipantMenu = closeParticipantMenu" in nodes
+    # Pan/zoom slides the card out from under a screen-positioned menu.
+    canvas = (_WEB / "workflows-canvas.js").read_text(encoding="utf-8")
+    assert "WF.closeParticipantMenu()" in canvas
+
+    # The hooks are opt-in, so the Run split-button and shortcuts legend, which
+    # pass no opts, keep their plain toggle behaviour.
+    src = _workflows_js()
+    assert "opts.onOpen" in src and "opts.onClose" in src
+
+    css = WORKFLOWS_CSS.read_text(encoding="utf-8")
+    block = css[css.index(".wf-participant-menu {") :][:700]
+    assert "position: fixed" in block
+    assert "max-height: 12rem" not in block  # the old ~6-row cap
+    # A percentage min-width would resolve against the viewport once fixed.
+    assert "min-width: 100%" not in block
+    assert "min-width: var(--wf-node-width)" in block
+
+
 def test_stash_satellite_present_and_wired():
     """M5 stashes + P4 built-in recipes: the sidebar list, the "Stash selection"
     toolbar control, the satellite (loaded last), and the hub<->satellite stash

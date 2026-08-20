@@ -87,6 +87,11 @@
     // The wire-delete button is screen-positioned, so reposition it when the
     // viewport changes (wires themselves move with the SVG transform).
     if (WF.refreshWireDelete) WF.refreshWireDelete();
+    // An open participant menu is mounted on <body>, so it does NOT move with
+    // the world transform — the card slides out from under it. Same chokepoint
+    // argument as the zoom readout below: close it here and no pan/zoom/drag
+    // path can leave it stranded mid-air.
+    if (WF.closeParticipantMenu) WF.closeParticipantMenu();
     // Zoom % readout beside the minimap buttons. writeViewport is the single
     // chokepoint every pan/zoom path funnels through, so it can't go stale.
     var zoomLevel = qs("#wfZoomLevel");
