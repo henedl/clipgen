@@ -1,198 +1,308 @@
 # Changelog
 
-Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Studio`, `Screenspace`, `Transcripts`, `Workflows`, or `Core`. The first bolded line is the title; everything after is the body.
+Notable changes per release. Headings follow `## <version> — <YYYY-MM-DD> — <tool>` where the tool is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, or `Overview`. The first bolded line is the title; everything after is the body.
+
+Keep bodies to one or two sentences, ideally under 35 words. Titles and bodies are rendered as **plain text** in the Start overlay's Recent updates tab — no backticks, no markdown inline syntax, or it shows up literally.
+
+## v0.16.0 — 2026-08-20 — Core
+**Choose how source video files are named**
+A Settings → Video & Clips pattern with {study} and {participant} placeholders replaces the hardcoded {study}_{participant}.mp4, driving both filename construction and disk discovery. Non-default file formats work now.
+
+## v0.15.18 — 2026-08-20 — Workflows
+**Region picker, conditional params, and stricter validation**
+The Region node picks from saved Screenspace regions instead of free text, param knobs hide when they do not apply, and cycle errors name the offending nodes. A refused Run now toasts instead of failing silently.
+
+## v0.15.18 — 2026-08-20 — Transcripts
+**Fix: swapping spreadsheets no longer mixes studies**
+The previous study's transcription worker and thinking agents are stopped on swap, so their results cannot land in the new study's manifest. Marks resolve by segment id and invalidate on re-transcribe.
+
+## v0.15.18 — 2026-08-20 — Core
+**Fix: hardened startup**
+A failed Start overlay mount no longer loops, a corrupt start.json warns instead of silently dropping filename overrides, and shared config reaches Composer annotations and the Transcripts participant list.
+
+## v0.15.16 — 2026-08-20 — Transcripts
+**Transcribe only between in/out markers**
+I and O set a per-participant window on the timeline, and every transcribe path — single pill, force, Transcribe All — decodes just that range. Parts wholly outside the window are skipped, not failed.
+
+## v0.15.16 — 2026-08-20 — Composer
+**Fix: playback, exports, annotations, and timeline**
+Burn and GIF exports are cancellable, in-progress text commits instead of vanishing, the playhead survives an unprobeable part, and right-click no longer starts a timeline drag.
+
+## v0.15.15 — 2026-08-20 — Transcripts
+**Normalize Audio quick action**
+Batch-rewrites source videos in place with EBU R128 loudness-normalized audio, per-track and multi-part aware, parking the original as .orig until the swap validates.
+
+## v0.15.15 — 2026-08-20 — Transcripts
+**Tighter segment timestamps and a word-level highlight**
+Word timing and an RMS energy snap trim Whisper's silence overshoot from segment edges, and the active transcript row now highlights word by word during playback.
+
+## v0.15.15 — 2026-08-19 — Core
+**A real macOS menu bar**
+The desktop window gains File, Go, Window and Help menus plus a Settings… item, with ⌘ equivalents for the six pages, Reload Page, and Toggle Dark Mode.
+
+## v0.15.14 — 2026-08-19 — Core
+**Fix: the last clip of a session went missing**
+A bare timestamp in the final minute of a recording overshot the end, and the whole clip was rejected for it. Clips now shorten to the footage that is actually there.
+
+## v0.15.14 — 2026-08-19 — Core
+**Profiling drill-down and faster color scans**
+--profile-deep LABEL attaches cProfile to a labeled span, worker threads included. It found the Color tool's downsample: removing it made per-frame color scanning 7× faster and more accurate.
+
+## v0.15.13 — 2026-08-18 — Composer
+**Annotation tools become a vertical palette**
+The floating pill is now a tool rail docked beside the video, with a two-color swatch pair (X swaps), a text-size chip, and Shot / GIF / Burn moved up to the subheader. Delete is Backspace.
+
+## v0.15.13 — 2026-08-18 — Core
+**Dropdowns match the rest of the app**
+Every <select> now carries the app's field styling and chevron. Safari and the desktop window showed none of it before — WebKit discards border, background and radius on a native menulist.
+
+## v0.15.12 — 2026-08-17 — Core
+**Shimmer on in-flight status text**
+Indeterminate "…" status labels across every page, the Start overlay, settings and the boot splash sweep a highlight once a second. Error, success and idle copy stay flat.
+
+## v0.15.11 — 2026-08-17 — Core
+**Fixes across OCR, seeking, Windows install, and Start**
+Incompatible OCR language pairs are rejected at task creation, clips from containers with a nonzero start time seek correctly, Windows installer upgrades clean up dropped files, and Start overlay hotkeys and the About panel behave.
+
+## v0.15.11 — 2026-08-17 — Core
+**Fix a mis-named recording without leaving the app**
+Each source-video preview row on Start gets an inline editor listing the videos in the input folder that no participant claims. Overrides persist per user and beat the spreadsheet's Filename row.
+
+## v0.15.11 — 2026-08-17 — Core
+**Third-party attribution in About**
+The About tab lists every bundled component with its version and license, generated from the shipped notice so the two cannot drift.
+
+## v0.15.10 — 2026-08-17 — Core
+**A smaller, GPL-free macOS build**
+PyAV, scikit-image, imagehash and their dependency trees are gone, and OpenCV is compiled without FFmpeg — roughly 230 MB less unpacked, and the DMG is no longer conveyed under GPLv3.
+
+## v0.15.10 — 2026-08-16 — Core
+**Start overlay splits into three tabs**
+Open, About and Recent updates replace one long scrolling column, so the Open workspace button can no longer scroll out of view and the changelog gets full panel height. 1/2/3 switch tabs.
+
+## v0.15.9 — 2026-08-16 — Screenspace
+**RapidOCR replaces EasyOCR**
+Text and Numbers detection moves to RapidOCR, dropping torch from the dependency tree — a much smaller download with the same language coverage.
+
+## v0.15.8 — 2026-08-16 — Core
+**Windows ships an installer**
+The Windows download is a real installer with Start-menu and uninstall entries instead of a zip to unpack, and the app folder's _internal directory is renamed lib.
+
+## v0.15.7 — 2026-08-16 — Core
+**Opt-in profiling, and the speedups it found**
+--profile reports where time goes across scans, ffmpeg, Whisper, Sheets and streaming routes, with matching spans in the browser. Six measured wins landed in Screenspace scans, heatmaps and seeks.
+
+## v0.15.4 — 2026-08-15 — Core
+**Themed scrollbars and native controls**
+Scrollbars, <select> popups, checkboxes and autofill are painted for the active theme instead of the OS default — the bright grey track no longer glows through the translucent navbar.
+
+## v0.15.3 — 2026-08-15 — Core
+**--version and --licenses flags**
+--version prints the bare version number for shell substitution; --licenses prints the bundled third-party notice. Both work from a frozen bundle.
+
+## v0.15.1 — 2026-08-13 — Transcripts
+**Install Ollama from inside the app on Windows**
+The install dialog's Download & install now works on Windows, fetching the SHA-pinned official installer and running it silently — no UAC prompt, no console flash.
+
+## v0.15.0 — 2026-08-13 — Core
+**Fix: the desktop app could not transcribe at all**
+Frozen builds shipped without faster-whisper's VAD model, so every default transcription died instantly. Source checkouts were unaffected.
+
+## v0.14.75 — 2026-08-09 — Core
+**A boot page instead of a blank wait**
+The server answers immediately with a progress page naming each startup phase and reloads when ready, and transcription pills now distinguish "loading model…" from queued or running.
 
 ## v0.14.74 — 2026-08-08 — Transcripts
 **One "Embed Subtitles…" modal replaces the two embed quick actions**
-"Embed Subtitle in Video" and "Embed all Subtitles" are now a single action with a scope picker (live counts, same layout as Clip Marked Lines) and a "Set as default track" toggle. The new `POST /api/embed-subtitles` NDJSON route streams per-file progress, is cancellable, and reports one bad id as an `ok:false` line instead of sinking the batch. Multi-part participants are filtered client-side with an explanation rather than costing an ffmpeg round-trip. Subtitle language tags now normalize to ISO 639-2 (`en`→`eng`, `unknown`→`und`), and the default-track toggle is hidden on `.mp4`/`.mov` where ffmpeg cannot set disposition.
+The two embed actions become a single dialog with a scope picker and a "Set as default track" toggle. Progress streams per file and is cancellable, and one bad id no longer sinks the batch.
 
 ## v0.14.73 — 2026-08-04 — Studio
 **Read MindNode mind maps as a clip source**
-Studio can open a `.mindnode` bundle directly — no spreadsheet required — and cut clips from its timestamps. A new MindNode tab on Start (picker, recents, QuickLook summary) and a MindNode Intake tab in Studio mirror the Composer intake flow; notes without timestamps list disabled with a count. Participant nodes are auto-detected via `P##`/`G##` headers, categories join everything above that level, and timestamps use the same parsing and `!key` rules as sheet cells. Mind-map-only sessions now carry study name and category through intake generation instead of falling back to empty strings.
+Studio can open a .mindnode bundle directly — no spreadsheet — and cut clips from its timestamps, with its own Start tab and intake tab. Participants come from P##/G## headings, categories from the levels above.
 
 ## v0.14.72 — 2026-08-04 — Transcripts
 **Download Ollama in-app on macOS**
-When Ollama is missing, the Transcripts install dialog offers a consent-gated Download & install that fetches the pinned official standalone CLI into `~/.config/clipgen/tools/ollama`, then chains serve → refetch → ready. PATH installs still win over the managed copy so a user-managed Ollama self-updates normally; Windows and Linux keep the existing brew/winget hints. Settings, Overview reports, and the summary empty state point at the in-app flow when `can_install` is true, with a secondary "I've installed it — retry" for the manual path.
+When Ollama is missing, the install dialog offers a consent-gated download of the official CLI and then starts it. An Ollama already on PATH still wins, so a user-managed copy self-updates normally.
 
 ## v0.14.71 — 2026-08-04 — Core
 **Desktop builds ship pinned GPL ffmpeg/ffprobe**
-The macOS DMG and Windows zip no longer require a separate ffmpeg install: SHA256-pinned full-GPL static builds land in `<bundle>/bin` and prepend to PATH on frozen launches. CI verifies the bundle includes `libx264`, `libwebp`, `libvpx-vp9`, and `drawtext` so provider drift fails the build; the bundled libfreetype also fixes titlecard encoding under Homebrew ffmpeg 8.x. `THIRD-PARTY-LICENSES` documents the GPL provenance; clipgen itself stays MIT (subprocess invocation only).
+The macOS DMG and Windows build no longer need a separate ffmpeg install. The bundled libfreetype also fixes titlecard encoding, which fails under Homebrew's ffmpeg 8.x.
 
 ## v0.14.70 — 2026-08-03 — Screenspace
 **Hover-scrub heatmap animations, paused by default**
-Animated heatmap thumbs now start paused and scrub through frames on hover, resting on the last frame; the GIF loads only when you click play. Scrubbing uses an on-demand sprite sheet from `GET /api/heatmap-sprite` (cached in memory, never written to disk) via the shared `clipgenCardScrubber`. Heatmaps written after a directory change no longer 404 for the rest of the session, PNG write failures surface instead of silently completing empty tasks, and a broken image shows an "Image unavailable" placeholder rather than a broken glyph.
+Animated heatmap thumbs start paused and scrub through frames on hover, resting on the last one; the GIF loads only when you click play. A broken image now says so instead of showing a broken glyph.
 
 ## v0.14.69 — 2026-08-03 — Transcripts
 **Transcribe All quick action**
-A one-click Transcribe All queues every participant with a source video and no transcript yet, respecting each pill's model, language, and audio-track overrides. The action skips participants already transcribed or queued, never passes `force` (re-transcribe stays per-pill), and claims pids before the POST so a repeat trigger cannot double-enqueue during the round trip.
+Queues every participant that has a source video and no transcript yet, honoring each pill's model, language and audio-track overrides. Already-transcribed and queued participants are skipped.
 
 ## v0.14.68 — 2026-08-02 — Core
 **Missing-dependency guidance where users can actually see it**
-Windowed launches have no console, so ffmpeg, Google credentials, and Ollama install hints now surface in the UI instead of stdout. The Start overlay explains `credentials.json` paths and links to gspread's guide; `/api/models` distinguishes "not installed" from "not running" and exposes install hints; Overview no longer tells users who never installed Ollama to "start it, then Refresh." Install guidance probes for Homebrew on macOS and leads with a direct download when brew is absent. A missing ffmpeg no longer marks a timelapse completed with no output, and the CLI `--transcribe` path asks before a first multi-GB Whisper download.
+Windowed launches have no console, so missing ffmpeg, Google credentials and Ollama now explain themselves in the UI — with platform-aware install hints — instead of on a stdout nobody reads.
 
 ## v0.14.67 — 2026-08-01 — Core
 **Overview drops the Map tab**
-The WIP 3D similarity Map is gone, along with Three.js and the server routes behind it. Overview now has three tabs — Metadata, Convergence, and Reports — with hotkeys renumbered 1/2/3.
+The WIP 3D similarity Map is gone, along with Three.js and the routes behind it. Overview now has three tabs — Metadata, Convergence and Reports — with hotkeys renumbered 1/2/3.
 
 ## v0.14.66 — 2026-08-01 — Core
 **Detect fragmented OBS recordings and remux them in one click**
-OBS's "fragmented recording" option writes MP4s that ffmpeg reads correctly but browsers cannot seek — duration stays Infinity and seeks land wrong until the whole file downloads. Clipgen now detects that container on discovery, warns on Screenspace, Transcripts, and Composer, and offers a stream-copy remux that fixes playback in place while parking the original as `<name>.mp4.orig`.
+OBS's fragmented recordings play fine in ffmpeg but browsers cannot seek them. Screenspace, Transcripts and Composer now detect that container, warn, and offer a stream-copy remux that fixes playback in place.
 
 ## v0.14.65 — 2026-08-01 — Transcripts
 **Clip marked lines, and Friction split into keyword vs AI evidence**
-A new "Clip Marked Lines…" quick action clusters transcript marks and streams them to Studio's intake generator. The Friction tab's evidence table now separates keyword scores from AI-cited moments — each category shows per-source counts and filters independently — and the density band draws the union of both. Mid-run regeneration no longer blanks the histogram while scores recalculate.
+A new quick action clusters transcript marks and streams them to Studio's clip generator. The Friction evidence table separates keyword scores from AI-cited moments, each filterable on its own.
 
 ## v0.14.62 — 2026-07-31 — Composer
 **Playback-speed button on the transport bar**
-Composer now has the same 0.5/1/2/3/5× speed cycle as Screenspace and Transcripts, next to the mute button. The rate re-applies after every part switch (Composer reloads the video element on each part boundary), and multi-part playback hands off on `ended` so 5× playback does not stall between parts.
+The same 0.5/1/2/3/5× cycle as Screenspace and Transcripts, next to the mute button. The rate survives a part switch, and multi-part playback no longer stalls at a seam.
 
 ## v0.14.61 — 2026-07-31 — Overview
 **Reports tab with AI mini-report and clip strip**
-Overview gains a WIP Reports tab: a manual-trigger thinking agent synthesizes transcript summary, sheet observations, and marked lines into a per-participant markdown report with streaming partials. Sheet timestamps cut into a playable clip strip inline; `[M:SS]` stamps in the report become playable chips with severity coloring.
+A manual-trigger thinking agent synthesizes the transcript summary, sheet observations and marked lines into a per-participant report. [M:SS] stamps become playable chips over a clip strip cut from the sheet.
 
 ## v0.14.61 — 2026-07-31 — Transcripts
 **Local-AI badge on run buttons instead of tabs**
-The dependabot badge that marked Summary/Friction tabs now sits on the controls that actually start local-AI runs — Summary regenerate, Friction re-run, and the pill dropdown's agent rows — so Citations gets labeled too. Labels moved into their own span so runtime relabels (Run / Re-run / Stop) no longer wipe the badge.
+The badge marking local-AI work moves from the Summary and Friction tabs onto the controls that actually start a run, so Citations gets labeled too.
 
 ## v0.14.60 — 2026-07-31 — Core
 **Remember window size and position, and list off-sheet videos**
-The desktop window restores its last size and position from `start.json` on launch (Shift-at-launch resets). A new Start setting toggles this independently of the recents list. Screenspace and Transcripts now union sheet participants with any source videos on disk — off-sheet entries show a link-slash glyph or `(off-sheet)` suffix — and the list refreshes when files appear in the input folder without a server restart.
+The desktop window restores its last size and position, with a Start setting to toggle it and Shift-at-launch to reset. Screenspace and Transcripts also list source videos on disk that no spreadsheet column claims.
 
 ## v0.14.59 — 2026-07-31 — Core
 **Double-click the top bar to zoom (macOS)**
-With the native title bar hidden, double-clicking the topnav now triggers the system's zoom/minimize preference (`AppleActionOnDoubleClick`). The gesture respects the same drag-region boundary as window dragging, and the window's `NSAppearance` tracks the page theme to prevent a white flash when zooming in light mode.
+With the native title bar hidden, double-clicking the topnav triggers the system's zoom or minimize preference, and the window tracks the page theme so light mode no longer flashes white.
 
 ## v0.14.58 — 2026-07-31 — Transcripts
 **Friction tab filters the transcript itself**
-The Friction tab is now a control surface over `#segmentList` rather than a separate results pane. Off/Highlight/Isolate modes replace the player-bar heatmap button; a dual-bound score histogram and toggleable category chips drive tints, the timeline band, and keyboard navigation from one derived match set. Moment cards collapse into a one-line jump strip with rationale callouts under the quoted passage.
+Off / Highlight / Isolate modes turn the tab into a control surface over the segment list, driven by a dual-bound score histogram and category chips. Moment cards collapse into a one-line jump strip.
 
 ## v0.14.57 — 2026-07-31 — Transcripts
 **Audio-track picker with speech auto-detection**
-Multitrack recordings (mic + system audio) transcribed the container's first stream. The participant pill dropdown now has an Audio track row, and `pick_speech_audio_track()` auto-detects a speech-looking track by stream name when nothing is picked. A non-zero track is demuxed through the existing extraction path; the track used is recorded in the manifest and shown as a "Last run" hint.
+Multitrack recordings no longer default to the container's first stream: pick a track from the pill dropdown, or let clipgen detect the speech-looking one by stream name.
 
 ## v0.14.56 — 2026-07-30 — Transcripts
 **Local-AI badge on thinking-agent tabs**
-The Summary and Friction tabs now carry a dependabot glyph whose tooltip reads "Local AI: results in this tab are generated by an on-device thinking agent." The badge is static (capability, not runtime state) and lives in `transcripts.css` so exported viewers without an `/icons/` route are unaffected.
+The Summary and Friction tabs carry a glyph marking their results as generated by an on-device thinking agent.
 
 ## v0.14.55 — 2026-07-30 — Core
 **Cache the Google Drive spreadsheet listing**
-The Start overlay's Google picker, worksheet dropdown, and open-by-name path each called Drive's `files.list` independently — three round-trips, each with 2/4/8s backoff on a 429. They now share a five-minute TTL cache with single-flight dedup; a Refresh button on the picker and a one-shot re-list when a pasted name is missing cover staleness.
+The Start picker, worksheet dropdown and open-by-name path each made their own rate-limited Drive round-trip. They now share a five-minute cache, with a Refresh button for staleness.
 
 ## v0.14.54 — 2026-07-30 — Core
 **Faster Screenspace boot and honest loading states**
-Frame-0 warming is now a concurrency-2 queue instead of one simultaneous ffmpeg extraction per participant. Transcripts, Workflows, and Screenspace show skeleton placeholders during their first fetch instead of a false empty state. A reconnected Screenspace SSE stream stops the fallback poller that previously kept ticking alongside it.
+Frame-0 warming is a bounded queue instead of one ffmpeg per participant, and Transcripts, Workflows and Screenspace show skeletons during their first fetch instead of a false empty state.
 
 ## v0.14.53 — 2026-07-30 — Core
 **One modal system across every page**
-Every dialog now opens and closes through the same `popModalIn`/`popModalOut` pair with a shared `.cg-modal-veil` backdrop. `motion.js` loads on all pages (and exports), so toasts fade instead of snapping. Composer's artifact log, which had been a divergent copy of Studio's with racing fade durations, now rides the same path.
+Every dialog opens and closes through the same animation and backdrop, and toasts fade instead of snapping. Composer's artifact log, previously a divergent copy of Studio's, rides the same path.
 
 ## v0.14.50 — 2026-07-29 — Core
 **Parallel ffprobe and VideoToolbox hardware encoding**
-Reel clips and multi-part source videos probe concurrently instead of serially (852 ms → 202 ms on 20 clips). A new Video & Clips setting routes encoding through Apple's VideoToolbox when available, with a one-shot libx264 fallback — measured on a 1080p/60 s source, wall time drops from 48.4 s to 12.5 s. `compress_to_size` stays on software x264 because VideoToolbox cannot hold a bitrate cap.
+Reel clips and multi-part sources probe concurrently (852 ms → 202 ms on 20 clips), and a new Video & Clips setting routes encoding through Apple's VideoToolbox: 48.4 s → 12.5 s on a 1080p minute.
 
 ## v0.14.48 — 2026-07-29 — Core
 **One tab-aware Refresh button per page**
-Overview's three Refresh buttons and Studio's per-tab refresh collapse into a single subheader control that acts on whatever tab is active. The stale-data accent highlight moves onto that button, and the spinner finally runs (it had targeted a `querySelector("svg")` but the icon is a masked `<span>`).
+Overview's three Refresh buttons and Studio's per-tab refresh collapse into a single subheader control that acts on the active tab, and its spinner finally runs.
 
 ## v0.14.47 — 2026-07-28 — Core
 **Preview expected source videos on Start**
-Once a worksheet is selected, the Start overlay lists the source-video filenames clipgen will look for and marks which are already in the input folder — so a misnamed recording surfaces before the workspace opens instead of afterwards as clips with no source. Settings reset buttons turn red on hover as the only warning (no confirmation dialog), and the keyboard cursor no longer paints a focus ring on row 0 the moment the modal opens.
+Once a worksheet is selected, Start lists the source-video filenames clipgen will look for and marks which are already in the input folder — so a misnamed recording surfaces before the workspace opens.
 
 ## v0.14.46 — 2026-07-28 — Core
 **The app window drops its title bar (macOS)**
-The desktop window no longer stacks a native title bar on top of clipgen's own navigation. The window controls sit inside the left end of the top bar, with the clipgen mark shifted clear of them, and the bar itself is a drag handle — grab any empty part of it to move the window. Links, tabs and buttons in the bar behave as before, and resizing, snapping and green-button fullscreen stay native. Browser launches are unchanged.
+The window controls move into the left end of clipgen's own top bar, and the bar becomes a drag handle. Resizing, snapping and green-button fullscreen stay native; browser launches are unchanged.
 
 ## v0.14.45 — 2026-07-28 — Core
 **Name your projects, and a denser Recently-opened rail**
-The Start overlay takes an optional project name, which becomes the title of that project's entry in the left rail. Recent entries now fit four facts on two lines — name, input folder, output folder and spreadsheet — where before they showed two stacked full paths and never mentioned the spreadsheet at all; hover a row for the full paths. The rail lists the three most recent and folds the rest out over the logo behind a blurred scrim, and twelve projects are remembered instead of eight. A name is metadata, not identity: renaming doesn't create a second entry, and relaunching from the CLI won't wipe the label.
+Start takes an optional project name that titles its entry in the left rail. Recent entries now fit name, input folder, output folder and spreadsheet on two lines, and twelve are remembered instead of eight.
 
 ## v0.14.44 — 2026-07-28 — Core
 **16× faster app startup**
-The bundle is now a one-dir build. One-file re-extracted the whole 261 MB archive to a *new* temp directory on every launch, so every large library loaded cold — no OS page cache, and macOS re-validated each code signature from scratch. Double-click to a usable window drops from ~17.6s to ~1.1s. This also clears PyInstaller's deprecation of one-file + windowed on macOS, which becomes a hard error in v7.0. macOS still ships a `.dmg`; Windows now ships a `.zip` of the app folder, and the separate raw-binary download is gone.
+The bundle is now a one-dir build, so libraries load from a stable path with the OS page cache intact. Double-click to a usable window drops from ~17.6 s to ~1.1 s.
 
 ## v0.14.43 — 2026-07-28 — Core
 **Fix: double-clicked app quit immediately on macOS**
-A Finder-launched `.app` does not inherit the shell PATH, so Homebrew's ffmpeg was invisible and startup aborted with `sys.exit(1)` — no window, and the error printed to a stdout nobody could see. The frozen macOS launch now appends the standard package-manager bin directories (`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`), and every hard exit reachable before the window exists surfaces in a native dialog instead of dying silently.
+A Finder-launched .app inherits no shell PATH, so Homebrew's ffmpeg was invisible and startup aborted with no window at all. The frozen launch now probes the standard bin directories and surfaces fatal errors in a dialog.
 
 ## v0.14.42 — 2026-07-27 — Core
 **Desktop app: clipgen opens in its own window**
-Double-clicking the bundled `.app`/`.exe` now opens a native window (pywebview over the existing loopback server) instead of spawning a Terminal and hijacking the default browser. The CLI is unchanged — only an argument-less frozen launch opens a window; `--desktop` forces one from a source checkout and `--browser` forces the old behaviour. Inter and JetBrains Mono are vendored locally, so the interface no longer blocks on a Google Fonts fetch and works fully offline. `credentials.json` is now found beside the app, in `~/.config/gspread`, or in clipgen's config dir, and a cached Google token alone is enough to stay signed in. Exports (Overview JSON/CSV, Workflows blueprints, Screenspace events) route through a native save dialog in the window, because embedded WebKit silently discards every kind of browser download. macOS builds ship as a `.dmg` on GitHub Releases — the previous artifact zip stripped the executable bit and broke the code signature.
+Double-clicking the bundled app opens a native window instead of spawning a Terminal and hijacking the browser. Fonts are vendored so it works offline, and exports route through a native save dialog. The CLI is unchanged.
 
 ## v0.14.36 — 2026-07-25 — Screenspace
 **Spatial anchor for the magic-wand tolerance scrub**
-The wand scrub paints an anchor dot at the press point, a dashed horizontal track, and a head dot that stops growing at slider min/max; the tolerance readout sits at the head beside the pointer, including when the flood finds no contour.
+The wand scrub paints an anchor dot at the press point, a dashed horizontal track, and a head dot that stops growing at slider min/max, with the tolerance readout at the head beside the pointer.
 
 ## v0.14.35 — 2026-07-24 — Core
 **Audio volume popover with per-track mixing**
-Hover the speaker icon for a 0–200% volume slider (Web Audio gain, boost past 100%); multi-track sources get independent per-track sliders mixed in the browser with drift correction; wired into Screenspace, Transcripts, and Composer.
+Hover the speaker icon for a 0–200% volume slider; multi-track sources get independent per-track sliders mixed in the browser. Wired into Screenspace, Transcripts and Composer.
 
 ## v0.14.35 — 2026-07-24 — Core
 **Segmented capsule track control**
-New `.cg-segtrack` primitive with a sliding thumb for mutually exclusive options; adopted at Screenspace Color Mode, Text Normalize, and the region tools (rect/lasso/wand).
+New .cg-segtrack primitive with a sliding thumb for mutually exclusive options; adopted at Screenspace Color Mode, Text Normalize, and the region tools (rect/lasso/wand).
 
 ## v0.14.34 — 2026-07-24 — Core
 **Shift+numeral panel focus with arrow navigation**
-Shift+numeral targets a panel for keyboard focus while bare numerals pick tools or actions; Screenspace sidebar, tool, tasks, and results panels gain arrow-key navigation; Transcripts pill dropdowns are keyboard-navigable; stray modal focus is cleared on Escape.
+Shift+numeral targets a panel for keyboard focus while bare numerals pick tools or actions; Screenspace's sidebar, tool, tasks and results panels gain arrow-key navigation.
 
 ## v0.14.33 — 2026-07-23 — Core
 **Studio and Screenspace keyboard and slider polish**
-Empty-queue focus hotkeys pulse a ghost card; Backspace/Delete remove the focused queue card; timeline step buttons seek 5s with Shift for 1s; Set In/Out bind to `i`/`o`; slider defaults fixed (Min OCR 0.6, Fuzzy 0.75).
+Empty-queue focus hotkeys pulse a ghost card; Backspace/Delete removes the focused queue card; timeline step buttons seek 5s with Shift for 1s; Set In/Out bind to i/o.
 
 ## v0.14.32 — 2026-07-23 — Core
 **Keyboard shortcuts across pages and Workflows toolbar polish**
-New hotkeys on Studio, Screenspace, Transcripts, and Workflows; blueprint rename modal, cleaner toolbar layout, custom `[data-tooltip]` tooltips, and Composer undo/redo aligned to the compact icon buttons.
+New hotkeys on Studio, Screenspace, Transcripts and Workflows; blueprint rename modal, cleaner toolbar layout, custom [data-tooltip] tooltips, and Composer undo/redo on compact icon buttons.
 
 ## v0.14.31 — 2026-07-23 — Core
 **Modal keyboard navigation and scoped Alt hints**
-Alt-hold hint chips scope to the open modal; the Start launcher and Settings modal gain tab, list, and reset hotkeys with focus trapping; the Start overlay is now a real blocking modal.
+Alt-hold hint chips scope to the open modal; the Start launcher and Settings modal gain tab, list and reset hotkeys with focus trapping; the Start overlay is now a real blocking modal.
 
 ## v0.14.31 — 2026-07-23 — Core
 **Sheet last-edit date and worksheet picker on Start**
-Each spreadsheet dropdown entry shows an "Edited …" date; multi-tab spreadsheets get a worksheet picker that threads through open and persists across reloads, with a spinner gating Open while tabs load.
+Each spreadsheet dropdown entry shows an "Edited …" date, and multi-tab spreadsheets get a worksheet picker that threads through open and persists across reloads.
 
 ## v0.14.30 — 2026-07-22 — Composer
 **Annotation stroke controls, multi-select, and timeline chrome**
-Stroke width and Solid/Dashed/Dotted style menus apply to new and selected annotations; shift-click and marquee multi-select with group move/style/delete; hold-Shift proportion lock when drawing; dashed/dotted strokes export via PIL; timeline gains lane bands and a step-track ruler.
+Stroke width and Solid/Dashed/Dotted menus apply to new and selected annotations; shift-click and marquee multi-select move, restyle or delete as a group; the timeline gains lane bands and a step-track ruler.
 
 ## v0.14.29 — 2026-07-22 — Composer
 **Hideable Timelines sidebar**
-The right Timelines panel collapses to a thin strip with animation and persisted state; `F` toggles the sidebar (matching Studio) and thumbnail strips move to `S`.
+The right Timelines panel collapses to a thin strip with persisted state; F toggles the sidebar (matching Studio) and thumbnail strips move to S.
 
 ## v0.14.28 — 2026-07-21 — Composer
 **Timeline chrome rework, shape annotations, and cut UX**
-Transport and controls move above the canvas; rotatable rect/ellipse shape tools with corner and rotation handles; draggable annotation spans on the timeline; double-click cuts on empty timeline space; chronological index badges on markers and cut list.
+Transport and controls move above the canvas; rotatable rect/ellipse shape tools with corner and rotation handles; draggable annotation spans; double-click cuts on empty timeline space.
 
 ## v0.14.26 — 2026-07-20 — Screenspace
 **Attention computational-saliency tool**
-A bottom-up saliency composite (spectral residual + contrast + motion + optional faces) predicts visual attention without eye-tracking; full-frame scans feed heatmaps and gaze-replay GIFs while timeline events fire only at confirmed attention shifts.
+A bottom-up saliency composite predicts visual attention without eye-tracking; full-frame scans feed heatmaps and gaze-replay GIFs while timeline events fire only at confirmed attention shifts.
 
 ## v0.14.25 — 2026-07-20 — Screenspace
 **Grouped tool navigation with numeral hotkeys**
-Optional category dropdown chips (Difference, Detection, Classification, Attention, Utility) replace the flat 12-tab row; numeral hotkeys pick tabs or open a category then its tool, with Alt-hold hints and a Settings toggle.
+Optional category dropdown chips (Difference, Detection, Classification, Attention, Utility) replace the flat 12-tab row; numeral hotkeys pick tabs or open a category then its tool.
 
 ## v0.14.24 — 2026-07-20 — Composer
 **Follow the playhead when panning the zoomed timeline**
-When zoomed in, seeks and playback pan the viewport minimally to keep the playhead visible; a persisted Follow toggle extends this to playback while clicks always reveal regardless.
+When zoomed in, seeks and playback pan the viewport minimally to keep the playhead visible; a persisted Follow toggle extends this to playback, while clicks always reveal.
 
 ## v0.14.23 — 2026-07-20 — Workflows
 **Phase 3 — exports, canvas polish, resume, and trigger chaining**
-New transcript and data export nodes, compound filter clauses, heatmap rolling GIF output; two-finger pan, pinch zoom, snap-to-grid, sticky notes, and in-page dialogs; resume failed runs, cross-blueprint history, and dry-run hover preview; transcript-complete and scan-event trigger chaining plus parallel batch children.
+New transcript and data export nodes and compound filter clauses; two-finger pan, pinch zoom, snap-to-grid and sticky notes on the canvas; resume failed runs; transcript-complete and scan-event triggers chain into new runs.
 
 ## v0.14.15 — 2026-07-20 — Composer
 **Thumbnail strips and hover audio scrub on timeline markers**
-Zoom-adaptive thumbnail tiles on marker bars and cut bands refetch finer frames as you zoom in; hover audio scrub with waveform via the shared card-scrubber primitives, toggled with `F`/`W` and persisted in the UI manifest.
+Zoom-adaptive thumbnail tiles on marker bars and cut bands refetch finer frames as you zoom in; hover audio scrub with waveform, toggled with F/W and persisted.
 
 ## v0.14.14 — 2026-07-18 — Screenspace
 **Colorized Change, SSIM, and Flow model-view previews**
-The Change diff preview is JET-colorized with an on-frame overlay that tints changed pixels without darkening the live frame; Similarity adds an SSIM difference map and score; Flow arrows are color-coded by magnitude.
+The Change diff preview is JET-colorized with an overlay that tints changed pixels without darkening the frame; Similarity adds an SSIM difference map and score; Flow arrows are color-coded by magnitude.
 
 ## v0.14.13 — 2026-07-17 — Core
 **Filter and panel commands in the palette**
-Filter clears, sidebar/panel toggles, and drawer actions across Studio, Screenspace, Transcripts, Composer, Workflows, and Overview are searchable in the command palette with visibility gates so only relevant commands surface.
+Filter clears, sidebar and panel toggles, and drawer actions across all six pages are searchable in the command palette, gated so only relevant commands surface.
 
 ## v0.14.13 — 2026-07-17 — Studio
 **Region-aware keyboard navigation**
-Stash/clear hotkeys, filter-sidebar and artifact/reel panel collapse, and a region-aware cursor: `1`–`5` jump between the filter list, queues, and stash lists with Enter activating each target.
+Stash and clear hotkeys, filter-sidebar and artifact/reel panel collapse, and a region-aware cursor: 1–5 jump between the filter list, queues and stash lists, with Enter activating each target.
 
 ## v0.14.13 — 2026-07-17 — Screenspace
 **Panel and tool-tab hotkeys**
@@ -200,23 +310,23 @@ Collapse the bottom panel and cycle tool tabs from the keyboard; Alt-hold hint c
 
 ## v0.14.12 — 2026-07-16 — Core
 **Alt-hold shortcut hints**
-Hold Alt to see combo chips on tagged controls across every page; Studio shows action hints on the keyboard-browsed cell or card; a uniform "?" cheatsheet button replaces per-page help popovers.
+Hold Alt to see combo chips on tagged controls across every page; Studio shows action hints on the browsed cell or card, and a uniform "?" cheatsheet button replaces per-page help popovers.
 
 ## v0.14.11 — 2026-07-16 — Core
 **Global command palette**
-Cmd+Shift+P or Cmd+K opens a Spotlight-style palette for page navigation, participant jumps, chrome actions, and recents across all six hub pages; deep links honor `#tab=` and `#P07` arrival hashes.
+Cmd+Shift+P or Cmd+K opens a Spotlight-style palette for page navigation, participant jumps, chrome actions and recents across all six hub pages; deep links honor #tab= and #P07 hashes.
 
 ## v0.14.10 — 2026-07-16 — Core
 **Rebindable hotkeys across all frontends**
-A shared hotkey registry unifies defaults (Space, j/k, g, seek, fine-step) and auto-generates the `?` cheatsheet; Settings → Hotkeys lets you rebind, with conflicts resolved per binding and overrides persisted across sessions.
+A shared registry unifies the defaults and auto-generates the ? cheatsheet; Settings → Hotkeys lets you rebind, with conflicts resolved per binding and overrides persisted across sessions.
 
 ## v0.14.9 — 2026-07-15 — Studio
 **Content-aware tooltips**
-Queue action buttons and intake controls show context-aware tooltips that reflect card count, selected format, and state instead of stale nudges; Add-all buttons match the blue solid CTA style of Add-all to Reel.
+Queue action buttons and intake controls show tooltips reflecting card count, selected format and state instead of stale nudges.
 
 ## v0.14.8 — 2026-07-15 — Core
 **Composer lane in Convergence and Metadata search**
-Convergence adds a per-participant Composer swim lane from cut pairs; Metadata gains a search box that highlights matches and scrolls to the target row; Detect boundaries moves to a Screenspace topnav quick action.
+Convergence adds a per-participant Composer swim lane from cut pairs, and Metadata gains a search box that highlights matches and scrolls to the target row.
 
 ## v0.14.7 — 2026-07-13 — Core
 **Five new Map visualizations**
@@ -228,59 +338,59 @@ Composer burn and GIF exports stitch spans that cross a multi-part boundary into
 
 ## v0.14.0 — 2026-07-13 — Core
 **Overview page with 3D similarity Map**
-A new Overview tab gathers cohort-level lenses: a 3D Map positions participants by PCA over sheet timestamps, transcript marks, and Screenspace events, with click-to-explain, session replay, and drill-down; Metadata and Convergence move here from Studio.
+A new Overview tab gathers cohort-level lenses: a 3D Map positions participants by PCA over sheet timestamps, transcript marks and Screenspace events; Metadata and Convergence move here from Studio.
 
 ## v0.13.61 — 2026-07-12 — Core
 **Composer — source-video cutting and annotations**
-A Composer page cuts source video with named in/out pairs, non-destructive marker trims, and canvas annotations; cuts and trims feed Studio Artifact/Reel queues, and annotated screenshot/GIF/burn exports render via overlay.
+A Composer page cuts source video with named in/out pairs, non-destructive marker trims, and canvas annotations; cuts and trims feed Studio's Artifact and Reel queues.
 
 ## v0.13.61 — 2026-07-12 — Transcripts
 **Friction before Summary**
-Deterministic friction scores populate the heatmap, timeline band, and stat chips immediately; LLM-refined moments still require Summary, and search results drop cross-reference badges that crowded the narrow dropdown.
+Deterministic friction scores populate the heatmap, timeline band and stat chips immediately; LLM-refined moments still require Summary.
 
 ## v0.13.60 — 2026-07-10 — Screenspace
 **Live magic-wand tolerance scrub**
-Press-drag-release on the magic wand: horizontal drag scrubs flood-fill tolerance with a live contour preview on the canvas; release commits a new region or applies Shift/Alt boolean combine; Escape cancels mid-scrub.
+Press-drag-release on the magic wand: horizontal drag scrubs flood-fill tolerance with a live contour preview, release commits or applies a Shift/Alt boolean combine, Escape cancels.
 
 ## v0.13.59 — 2026-07-10 — Screenspace
 **Boolean edits on unsaved canvas regions**
-Shift/Alt/Shift+Alt add, subtract, and intersect now target the pending region drawn on the video before it is saved. Refine a rough shape in place with no server round-trip.
+Shift/Alt/Shift+Alt add, subtract and intersect now target the pending region drawn on the video before it is saved — refine a rough shape in place with no server round-trip.
 
 ## v0.13.59 — 2026-07-10 — Screenspace
 **Auto-generated task and event names**
-New tasks get descriptive names from their params (e.g. `Text "checkout" · header`, `Color: blue · HUD`) instead of generic `type: region` labels; task cards, run pill, results switcher, and timeline tooltip show the stored name.
+New tasks get descriptive names from their params (e.g. Text "checkout" · header) instead of generic type: region labels, shown on task cards, the run pill, results and timeline tooltips.
 
 ## v0.13.58 — 2026-07-10 — Screenspace
 **Boolean region editing**
-Combine shaped regions with Photoshop-style modifiers (Shift add, Alt subtract, Shift+Alt intersect) or merge shift-selected regions; multi-contour combo shapes persist when the result is not axis-aligned.
+Combine shaped regions with Photoshop-style modifiers (Shift add, Alt subtract, Shift+Alt intersect) or merge shift-selected regions; multi-contour shapes persist when the result is not axis-aligned.
 
 ## v0.13.57 — 2026-07-09 — Transcripts
 **Optional severity on flagged segments**
-Marks gain a severity dropdown in the pop-over, a colored dot on segment rows, and a `mark_severities` export column; Studio intake filters by severity; Metadata adds a transcript severity distribution chart.
+Marks gain a severity dropdown, a colored dot on segment rows and a mark_severities export column; Studio intake filters by severity and Metadata charts the distribution.
 
 ## v0.13.57 — 2026-07-09 — Transcripts
 **Transcription progress on the timeline**
-While a participant is being transcribed, a faint dot texture covers the un-transcribed portion of the video timeline and wipes away left-to-right in sync with decode progress.
+While a participant is being transcribed, a faint dot texture covers the un-transcribed portion of the timeline and wipes away left-to-right in sync with decode progress.
 
 ## v0.13.57 — 2026-07-09 — Studio
 **Screenspace clusters in Metadata**
-The Metadata tab counts time-adjacent Screenspace event clusters instead of raw per-second events so dense scans do not dominate tables and charts; toggle in settings with live re-render and clustered export field names.
+Metadata counts time-adjacent Screenspace event clusters instead of raw per-second events, so dense scans do not dominate tables and charts. Toggle it in settings.
 
 ## v0.13.56 — 2026-07-09 — Workflows
 **Clip padding and max duration on artifact nodes**
-Make Clips and Build Reel nodes expose pad start, pad end, and max duration params: nudge clip boundaries inward or outward or cap segment length without new queue cards.
+Make Clips and Build Reel nodes expose pad start, pad end and max duration: nudge clip boundaries or cap segment length without new queue cards.
 
 ## v0.13.55 — 2026-07-09 — Screenspace
 **Lasso and magic-wand region selectors**
-Draw freehand lasso or flood-fill magic-wand regions alongside rectangles; shaped polygons rasterize to masks for color, change, flow, OCR, template, and scene tools, with dimmed model-view previews outside the polygon.
+Draw freehand lasso or flood-fill magic-wand regions alongside rectangles; shaped polygons rasterize to masks for the color, change, flow, OCR, template and scene tools.
 
 ## v0.13.55 — 2026-07-09 — Workflows
 **Live minimap and zoom controls**
-The corner minimap mirrors the canvas view in real time with an edge-safe view frame; floating zoom-in, zoom-out, and fit-to-content buttons; restores canvas drag and wheel-zoom after deferred script loading.
+The corner minimap mirrors the canvas view in real time with an edge-safe view frame, alongside floating zoom-in, zoom-out and fit-to-content buttons.
 
 ## v0.13.54 — 2026-07-09 — Core
 **CLI friction agent and --settings**
-Run the friction thinking agent from the command line with `--friction`; open the interactive settings editor with `--settings` before a run; improved fallback to a local Excel file when Google auth fails.
+Run the friction thinking agent from the command line with --friction, and open the interactive settings editor with --settings before a run.
 
 ## v0.13.53 — 2026-07-06 — Transcripts
 **Streaming AI summaries**
@@ -292,15 +402,15 @@ VAD on by default skips silence without clipping quiet speech; beam size 2 and c
 
 ## v0.13.51 — 2026-07-04 — Core
 **Unified motion for toasts and Studio overlays**
-Toast and Studio overlay cards animate through the shared ClipgenMotion engine with fade/pop entrances; duplicate CSS keyframes retired, and overlays no longer snap in when revealed from hidden.
+Toast and Studio overlay cards animate through the shared motion engine with fade/pop entrances, and overlays no longer snap in when revealed from hidden.
 
 ## v0.13.50 — 2026-07-03 — Core
 **Animated stash and delete exits**
-Screenspace region pills and Studio queue, artifact, and reel cards play staged exit animations on stash, delete, and clear before the list re-renders, with reduced-motion fallbacks.
+Screenspace region pills and Studio queue, artifact and reel cards play staged exit animations on stash, delete and clear before the list re-renders, with reduced-motion fallbacks.
 
 ## v0.13.49 — 2026-06-30 — Workflows
 **Multi-select participant batch**
-Video Source participant param is a checkbox popover. Pick any subset to fan out a batch instead of only one participant or all; empty selection raises a validation warning.
+The Video Source participant param is a checkbox popover, so a batch can fan out over any subset instead of only one participant or all.
 
 ## v0.13.48 — 2026-06-30 — Workflows
 **Canvas navigation**
@@ -308,39 +418,39 @@ Fit-to-view button and F shortcut frame all nodes; dragging near the canvas edge
 
 ## v0.13.47 — 2026-06-29 — Screenspace
 **Boundary flags above the timeline**
-Scene boundaries render as flag glyphs in a rail above the timeline instead of in-band ticks; hover shows a tooltip and locator hairline, click seeks to the boundary time.
+Scene boundaries render as flag glyphs in a rail above the timeline instead of in-band ticks; hover shows a tooltip and locator hairline, click seeks to the boundary.
 
 ## v0.13.46 — 2026-06-29 — Transcripts
 **Editable thinking-agent prompts**
-View, edit, and reset summary, citations, and friction prompts in Settings → Summaries → Agent prompts; edits persist and apply on the next run, with placeholder validation.
+View, edit and reset the summary, citations and friction prompts in Settings → Summaries; edits persist and apply on the next run, with placeholder validation.
 
 ## v0.13.45 — 2026-06-28 — Workflows
 **Canvas discoverability and run panel polish**
-Toolbar undo/redo, autosave status, shortcuts legend, and focus rings; run panel shows per-node status icons, duration, result filters, expandable result lists, and a Reconnecting pill when SSE drops; collapsible port-type legend and wider param-heavy node cards.
+Toolbar undo/redo, autosave status and a shortcuts legend; the run panel gains per-node status icons, durations, result filters and a Reconnecting pill when the stream drops.
 
 ## v0.13.43 — 2026-06-28 — Studio
 **Feedback, persistence, and accessibility polish**
-Stash saves animate the new card in; generation failures show per-cell reasons; sidebar filter selections persist across reload; focus-visible rings and modal focus traps; overlay cards fade in with reduced-motion support.
+Stash saves animate the new card in, generation failures show per-cell reasons, sidebar filter selections persist across reload, and modals gain focus traps and focus-visible rings.
 
 ## v0.13.43 — 2026-06-28 — Transcripts
 **Keyboard review loop and AI-trust cues**
-j/k/arrows move and seek segments, m marks, 1–6 set friction category, n/p jump between marks; auto-follow scrolls the active segment during playback; marks update optimistically; friction panel warns when segments were edited after AI analysis.
+j/k/arrows move and seek segments, m marks, 1–6 set friction category, n/p jump between marks; the friction panel warns when segments were edited after AI analysis.
 
 ## v0.13.43 — 2026-06-28 — Screenspace
 **Virtualized results and clearer task feedback**
-Large result lists lazy-render in chunks; loading indicators during fetch and participant switch; failed-task errors expand on click; SSE drop shows a one-shot toast; exclude/include toggles revert and toast on failure.
+Large result lists lazy-render in chunks, loading indicators cover fetch and participant switch, and failed-task errors expand on click.
 
 ## v0.13.42 — 2026-06-28 — Workflows
 **Run notes, skip fixes, and batch efficiency**
-Completed nodes surface non-fatal run notes when output is degraded; skip propagation respects optional merge inputs; validation warns on unwired or mismatched filter values; batch runs reuse participant-independent sheet data; watch-dir polling idles when disarmed; empty canvas offers built-in recipes and an armed auto-run indicator.
+Completed nodes surface run notes when output is degraded, validation warns on unwired or mismatched filter values, batch runs reuse participant-independent sheet data, and an empty canvas offers built-in recipes.
 
 ## v0.13.41 — 2026-06-27 — Workflows
 **Detect node, interval captures, and editor power tools**
-Unified Detect node over per-detector types; Interval Captures samples screenshots or GIFs across a range; per-node Ollama and Whisper model levers; palette search; blueprint JSON import/export; copy/paste/duplicate, mute, undo/redo; Run split-button with Run to here; middle-mouse pan and colour-coded title bars.
+A unified Detect node replaces the per-detector types and Interval Captures samples screenshots or GIFs across a range; blueprint JSON import/export, copy/paste, mute, undo/redo, and a Run split-button with Run to here.
 
 ## v0.13.27 — 2026-06-27 — Workflows
 **Collection control nodes**
-Filter, partition, merge, limit, and dedup nodes thin or combine the collections flowing through a graph: gate clip selections before Make Clips, cap artifacts before the viewer, or branch matched vs. unmatched streams.
+Filter, partition, merge, limit and dedup nodes thin or combine the collections flowing through a graph: gate clip selections before Make Clips, or branch matched vs. unmatched streams.
 
 ## v0.13.26 — 2026-06-27 — Workflows
 **Watch-dir auto-run**
@@ -348,39 +458,39 @@ Arm one blueprint to run automatically when a new participant video lands in the
 
 ## v0.13.22 — 2026-06-27 — Workflows
 **Pre-run validation and inspectable results**
-An Issues panel blocks Run on wiring or param errors; completed nodes expose lazy-loaded result sidecars; Re-run replays a finished graph; timelapse and heatmap land in the viewer Attachments pane and Build Reel → Viewer renders playable reel cards.
+An Issues panel blocks Run on wiring or param errors, completed nodes expose lazy-loaded result sidecars, and Re-run replays a finished graph.
 
 ## v0.13.20 — 2026-06-26 — Workflows
 **Expanded catalog, batch runs, and stashes**
-Per-detector Screenspace nodes, highlights selector, multitool/timelapse/heatmap/measure, and adapter-aware dashed wires; Video Source "All participants" fans out a whole study; save sub-graphs as named stashes or start from two built-in recipes.
+Per-detector Screenspace nodes, highlights selector, multitool/timelapse/heatmap/measure, and adapter-aware dashed wires; Video Source "All participants" fans out a whole study, and sub-graphs save as named stashes.
 
 ## v0.13.16 — 2026-06-25 — Workflows
 **Workflows mode: node canvas and run engine**
-A fourth top-level tab chains clip, Screenspace, and transcript actions on an infinite pan/zoom canvas: drag nodes from a catalog, wire typed ports, edit params, Run with live per-node progress, and skip branches via Gate control edges.
+A fourth top-level tab chains clip, Screenspace and transcript actions on an infinite pan/zoom canvas: drag nodes from a catalog, wire typed ports, edit params and Run with live per-node progress.
 
 ## v0.13.11 — 2026-06-23 — Core
 **Card scrubber on hover**
-Sweep a queue or viewer card thumbnail to scrub frames with audio and a waveform playhead; toggle on in Studio settings or the exported timeline viewer header.
+Sweep a queue or viewer card thumbnail to scrub frames with audio and a waveform playhead; toggle it on in Studio settings or the exported timeline viewer header.
 
 ## v0.13.10 — 2026-06-23 — Screenspace
 **Scene-aware boundary segmentation**
-The Boundary detector gains hybrid scene metrics, hierarchical Scene A1/B2 labels, and a post-run consolidation pass; boundaries surface in results, Studio intake, Convergence, Metadata, and the timeline viewer.
+The Boundary detector gains hybrid scene metrics, hierarchical Scene A1/B2 labels and a post-run consolidation pass; boundaries surface in results, Studio intake, Convergence, Metadata and the viewer.
 
 ## v0.13.6 — 2026-06-22 — Studio
 **Clip-length intake timeline markers**
-Screenspace and Transcript intake density timelines size each marker by its clip span so longer selections read wider at a glance.
+Screenspace and Transcript intake density timelines size each marker by its clip span, so longer selections read wider at a glance.
 
 ## v0.13.5 — 2026-06-22 — Transcripts
 **Model install consent and dynamic Ollama pickers**
-Whisper and Ollama models now require explicit confirmation before downloading. Summary, citations, and friction pickers list installed Ollama models, friction can use a separate model, and pull progress is shown in-app.
+Whisper and Ollama models require explicit confirmation before downloading; the pickers list installed Ollama models, friction can use a separate model, and pull progress shows in-app.
 
 ## v0.13.3 — 2026-06-22 — Studio
 **Titlecard and endcard background picker**
-Choose a default, solid color, uploaded image, or no endcard from Settings → Video & Clips, with a live preview and reusable color picker. Selections persist and are baked into generated clips and reels.
+Choose a default, solid color, uploaded image, or no endcard from Settings → Video & Clips, with a live preview. Selections persist and are baked into generated clips and reels.
 
 ## v0.13.2 — 2026-06-22 — Screenspace
 **Rolling-window and change heatmaps**
-Template tasks gain a rolling-window animation alongside static and cumulative views; Change tasks get full heatmaps. Each tool has a per-tool toggle under Settings → Screenspace → Heatmaps, and results show as a collapsible thumbnail strip.
+Template tasks gain a rolling-window animation alongside static and cumulative views, and Change tasks get full heatmaps, with a per-tool toggle and a collapsible thumbnail strip in results.
 
 ## v0.13.1 — 2026-06-21 — Transcripts
 **Cancel summary and citations**
@@ -388,27 +498,27 @@ An inline Cancel button stops summary generation or the citations pass mid-run, 
 
 ## v0.13.0 — 2026-06-20 — Core
 **Multiple source videos per participant**
-A session can span several videos declared in the spreadsheet Filename row or auto-detected on disk; timestamps, clips, transcripts, and Screenspace events map across the full continuous timeline.
+A session can span several videos declared in the spreadsheet Filename row or auto-detected on disk; timestamps, clips, transcripts and Screenspace events map across the full continuous timeline.
 
 ## v0.12.9 — 2026-06-20 — Studio
 **Sortable Sheet Preview columns**
-Cycle #, Category, Severity, and Function headers through Ascending → Descending → Off; severity sorts most-severe-first with empty values at the bottom.
+Cycle #, Category, Severity and Function headers through Ascending → Descending → Off; severity sorts most-severe-first with empty values at the bottom.
 
 ## v0.12.9 — 2026-06-20 — Screenspace
 **Color presence detection mode**
-The Color tool can fire when a target colour appears anywhere in the region (per-pixel), with a Min area % control and presence-aware calibration, standalone, in Multitool steps, or from the CLI.
+The Color tool can fire when a target color appears anywhere in the region, with a Min area % control and presence-aware calibration — standalone, in Multitool steps, or from the CLI.
 
 ## v0.12.8 — 2026-06-20 — Studio
 **Source times and severity tint on queue cards**
-Every artifact and reel card shows its source start–stop time; spreadsheet-sourced cards tint their caption by row severity.
+Every artifact and reel card shows its source start–stop time, and spreadsheet-sourced cards tint their caption by row severity.
 
 ## v0.12.8 — 2026-06-20 — Core
 **Elapsed time and ETA on long operations**
-Screenspace tasks and transcription show elapsed plus an estimated time remaining; Studio builds and thinking agents show elapsed only. Clocks survive a page reload via server-stamped start times.
+Screenspace tasks and transcription show elapsed plus an estimated time remaining; Studio builds and thinking agents show elapsed only. Clocks survive a page reload.
 
 ## v0.12.7 — 2026-06-20 — Screenspace
 **CLI scene analysis and headless task re-run**
-Run scene analysis from the command line with `--ss-task scene` and re-run any saved manifest task headlessly with `--ss-run-task`, the path for unattended multitool chains.
+Run scene analysis with --ss-task scene and re-run any saved manifest task headlessly with --ss-run-task, the path for unattended multitool chains.
 
 ## v0.12.6 — 2026-06-20 — Studio
 **Editable clip length**
@@ -436,11 +546,11 @@ Alignment offsets can be set independently per participant lane when sessions ar
 
 ## v0.12.2 — 2026-06-18 — Screenspace
 **Automated scene boundary detector**
-A full-frame Boundary tool flags where visual content changes substantially (menu-to-gameplay, level transitions, loading screens ending) without drawing a region first.
+A full-frame Boundary tool flags where visual content changes substantially — menu-to-gameplay, level transitions, loading screens ending — without drawing a region first.
 
 ## v0.12.1 — 2026-06-18 — Screenspace
 **Pinned-frame calibration workflow**
-Pin reference frames on the timeline, score detector sensitivity against them, get a suggested threshold, and apply it, with a calibration strip, grid controls, and integration into task creation.
+Pin reference frames on the timeline, score detector sensitivity against them, get a suggested threshold and apply it, with a calibration strip and integration into task creation.
 
 ## v0.11.21 — 2026-06-09 — Screenspace
 **OCR accuracy controls**
