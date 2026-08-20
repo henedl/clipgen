@@ -651,6 +651,70 @@ def test_transcribe_timeline_none_on_failure(monkeypatch):
     assert transcripts.transcribe_timeline([("a.mp4", 10, 0)]) is None
 
 
+def test_transcribe_timeline_window_inside_one_part_skips_the_others(monkeypatch):
+    """A global in/out window wholly inside part 2 never touches part 1, and the
+    part-local results land back on the global timeline."""
+    calls: list = []
+
+    def fake_video(path, **kwargs):
+        calls.append((path, kwargs.get("start_seconds"), kwargs.get("end_seconds")))
+        # transcribe_video returns times on the *file's* timeline.
+        return {
+            "segments": [{"start": 11.0, "end": 12.0, "text": "two"}],
+            "language": "en",
+            "source_file": path,
+            "model": "base",
+        }
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    merged = transcripts.transcribe_timeline(
+        timeline, start_seconds=90, end_seconds=100
+    )
+    assert merged is not None
+    assert calls == [("b.mp4", 10.0, 20.0)]  # part-local window; a.mp4 skipped
+    assert merged["segments"] == [{"start": 91.0, "end": 92.0, "text": "two"}]
+
+
+def test_transcribe_timeline_window_spanning_boundary(monkeypatch):
+    """A window straddling the part boundary gives each part its own sub-window,
+    unbounded on the side that runs to the part's edge."""
+    calls: list = []
+
+    def fake_video(path, **kwargs):
+        calls.append((path, kwargs.get("start_seconds"), kwargs.get("end_seconds")))
+        return {"segments": [], "language": "en", "source_file": path, "model": "base"}
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    merged = transcripts.transcribe_timeline(
+        timeline, start_seconds=60, end_seconds=100
+    )
+    assert merged is not None
+    assert calls == [("a.mp4", 60.0, None), ("b.mp4", None, 20.0)]
+
+
+def test_transcribe_timeline_attempted_part_failure_still_aborts(monkeypatch):
+    """Skipped-by-window is not failed — but a part that was attempted and
+    returned None aborts the job exactly as before."""
+
+    def fake_video(path, **kwargs):
+        return (
+            None
+            if path == "b.mp4"
+            else {
+                "segments": [],
+                "language": "en",
+                "source_file": path,
+                "model": "base",
+            }
+        )
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+    timeline = [("a.mp4", 80, 0), ("b.mp4", 120, 80)]
+    assert transcripts.transcribe_timeline(timeline, start_seconds=60) is None
+
+
 def test_transcribe_segments_multi_video_uses_global_timeline(
     make_clip, monkeypatch, tmp_path
 ):
@@ -1097,6 +1161,98 @@ def test_transcript_worker_single_video_no_timeline(monkeypatch):
     worker._execute_task(task)
     assert task["status"] == transcripts.TASK_STATUS_COMPLETED
     build.assert_not_called()  # single-video fast path: no duration probe via timeline
+
+
+def test_transcript_worker_window_reaches_transcribe_and_result(monkeypatch):
+    """The task's in/out window is clamped, forwarded to the transcribe call,
+    recorded on the result, and used as the progress denominator."""
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task(
+        "P01", ["solo.mp4"], start_seconds=10.0, end_seconds=40.0
+    )
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_codec": "aac", "duration": 50.0},
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    captured = {}
+
+    def fake_video(path, on_segment=None, **kwargs):
+        captured.update(kwargs)
+        # Emitted times are global (already shifted by the window start).
+        seg = {"start": 20.0, "end": 25.0, "text": "mid"}
+        if on_segment is not None:
+            on_segment(seg["end"], seg)
+        captured["progress_at_seg"] = task["progress"]
+        return {
+            "segments": [seg],
+            "language": "en",
+            "model": "base",
+            "source_file": "solo.mp4",
+        }
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+    assert captured["start_seconds"] == 10.0
+    assert captured["end_seconds"] == 40.0
+    # Progress uses the window as denominator: (25 - 10) / (40 - 10) = 0.5.
+    assert captured["progress_at_seg"] == pytest.approx(0.5)
+    assert task["result"]["start_seconds"] == 10.0
+    assert task["result"]["end_seconds"] == 40.0
+
+
+def test_transcript_worker_unbounded_result_carries_null_window(monkeypatch):
+    """No markers → both provenance keys present as None, so a full re-run's
+    manifest merge overwrites any previous window rather than leaving it stale."""
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["solo.mp4"])
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_codec": "aac", "duration": 50.0},
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    captured = {}
+
+    def fake_video(path, **kwargs):
+        captured.update(kwargs)
+        return {"segments": [], "language": "en", "model": "base", "source_file": path}
+
+    monkeypatch.setattr(transcripts, "transcribe_video", fake_video)
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_COMPLETED
+    assert captured["start_seconds"] is None
+    assert captured["end_seconds"] is None
+    assert task["result"]["start_seconds"] is None
+    assert task["result"]["end_seconds"] is None
+
+
+def test_transcript_worker_fails_window_outside_video(monkeypatch):
+    worker = transcripts.TranscriptWorker()
+    task = transcripts.create_transcript_task("P01", ["solo.mp4"], start_seconds=60.0)
+    worker._tasks[task["id"]] = task
+
+    monkeypatch.setattr(
+        video,
+        "probe_video_properties",
+        lambda p: {"audio_codec": "aac", "duration": 50.0},
+    )
+    monkeypatch.setattr(video, "timeline_or_none", lambda paths: None)
+    monkeypatch.setattr(
+        transcripts, "transcribe_video", lambda *a, **k: pytest.fail("must not run")
+    )
+
+    worker._execute_task(task)
+    assert task["status"] == transcripts.TASK_STATUS_FAILED
+    assert "Marker range" in task["error"]
 
 
 # ---- Screenspace: _dispatch scans each part with global-offset results ----

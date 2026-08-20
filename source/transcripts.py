@@ -677,6 +677,8 @@ def transcribe_video(
     context_keywords: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
 ) -> TranscriptResult | None:
     """Transcribe a video file and return timestamped segments.
 
@@ -687,6 +689,12 @@ def transcribe_video(
         language: Language code (e.g. "en"). None = auto-detect.
         audio_index: Which audio stream (``0:a:N``) to transcribe. None
             auto-detects a speech-looking track from the stream names.
+        start_seconds / end_seconds: Optional window — only this span of the
+            file is decoded and transcribed (in/out markers). Returned segment
+            times are still on the *file's* timeline: the decode is
+            window-relative (input-side ``-ss`` zeroes PTS), so the loop below
+            runs in window time and each finished segment is shifted by
+            ``start_seconds`` before it is stored or streamed.
         initial_prompt: Override the default initial prompt.
         context_keywords: Extra keywords to append to the prompt.
         on_segment: Optional callback invoked after each segment with the
@@ -757,7 +765,14 @@ def transcribe_video(
     # instead of handing faster-whisper the path: its own decoder is PyAV,
     # which is deliberately not installed (see _ensure_av_stub), and it can
     # only read the container's first audio stream anyway.
-    audio_source = video_mod.decode_audio_pcm(str(video_path), idx)
+    win_start = max(0.0, start_seconds or 0.0)
+    win_duration = end_seconds - win_start if end_seconds is not None else None
+    audio_source = video_mod.decode_audio_pcm(
+        str(video_path),
+        idx,
+        start_seconds=win_start or None,
+        duration_seconds=win_duration,
+    )
     if audio_source is None:
         # Never fall back to another track — that would silently transcribe the
         # wrong audio, which reads as "clipgen is broken", not "it failed".
@@ -837,7 +852,12 @@ def transcribe_video(
                     # Snap before streaming so partials equal the final list.
                     if snapper is not None:
                         snapper(segment, _prev_end)
+                    # The snapper and _prev_end floor work in window-relative
+                    # time (the decoded array starts at win_start); shift onto
+                    # the file's timeline only after both have seen the segment.
                     _prev_end = segment["end"]
+                    if win_start:
+                        segment = _shift_segment(segment, win_start)
                     segments.append(segment)
                     if on_segment is not None:
                         if _prof:
@@ -914,6 +934,8 @@ def transcribe_timeline(
     context_keywords: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
 ) -> TranscriptResult | None:
     """Transcribe an ordered set of source-video parts as one continuous timeline.
 
@@ -927,6 +949,11 @@ def transcribe_timeline(
     ``on_segment``/``cancel_flag`` are forwarded to each part's transcription so
     live progress streaming and cancellation work for multi-part jobs; the
     reported end time and segment times are shifted to the global timeline.
+
+    ``start_seconds``/``end_seconds`` are *global*-timeline bounds (in/out
+    markers): each part gets the window intersected against its own span, and a
+    part wholly outside the window is skipped — skipped is not failed, so only
+    a part that was actually attempted can abort the job.
     """
     merged: list[TranscriptSegment] = []
     out_language = ""
@@ -938,7 +965,17 @@ def transcribe_timeline(
     resolved_audio_index = (
         _resolve_audio_index(timeline[0][0], audio_index) if timeline else 0
     )
-    for path, _duration, cumulative in timeline:
+    for path, duration, cumulative in timeline:
+        # Intersect the global window with this part's [cumulative, +duration)
+        # span; a part wholly outside is skipped before any work happens.
+        if start_seconds is not None and start_seconds >= cumulative + duration:
+            continue
+        if end_seconds is not None and end_seconds <= cumulative:
+            continue
+        local_start = max(0.0, (start_seconds or 0.0) - cumulative) or None
+        local_end: float | None = None
+        if end_seconds is not None and end_seconds - cumulative < duration:
+            local_end = end_seconds - cumulative
         part_on_segment: Callable[[float, TranscriptSegment], None] | None = None
         if on_segment is not None:
             inner = on_segment
@@ -961,6 +998,8 @@ def transcribe_timeline(
             context_keywords=context_keywords,
             on_segment=part_on_segment,
             cancel_flag=cancel_flag,
+            start_seconds=local_start,
+            end_seconds=local_end,
         )
         if result is None:
             return None
@@ -1463,6 +1502,8 @@ def create_transcript_task(
     model: str | None = None,
     language: str | None = None,
     audio_index: int | None = None,
+    start_seconds: float | None = None,
+    end_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Create a new transcription task dict ready to enqueue.
 
@@ -1471,7 +1512,9 @@ def create_transcript_task(
     files (transcribed as one continuous timeline). *model*, *language* and
     *audio_index* are optional per-participant overrides; when None, the worker
     falls back to ``config.TRANSCRIBE_MODEL``, whisper auto-detect, and
-    speech-track auto-detection respectively.
+    speech-track auto-detection respectively. *start_seconds*/*end_seconds*
+    bound the transcription to a global-timeline window (in/out markers); None
+    means unbounded on that side.
     """
     return {
         "id": f"tr_{uuid.uuid4().hex[:8]}",
@@ -1480,6 +1523,8 @@ def create_transcript_task(
         "model": model,
         "language": language,
         "audio_index": audio_index,
+        "start_seconds": start_seconds,
+        "end_seconds": end_seconds,
         "status": TASK_STATUS_QUEUED,
         # Sub-state of "running": "loading_model" while the Whisper model is
         # constructed (~10s cold, invisible to the progress float), then
@@ -1704,6 +1749,27 @@ class TranscriptWorker:
         else:
             duration = float(props.get("duration", 0.0)) if props else 0.0
 
+        # In/out marker window, clamped to the known duration so ``-ss`` never
+        # lands past EOF. The clamped values (not the raw task fields) drive
+        # the dispatch, the progress math, and the result provenance below.
+        # ``win_end is None`` = unbounded (no end marker and duration unknown).
+        win_start = max(0.0, float(task.get("start_seconds") or 0.0))
+        win_end: float | None = duration if duration > 0 else None
+        if task.get("end_seconds") is not None:
+            win_end = float(task["end_seconds"])
+        if duration > 0:
+            win_start = min(win_start, duration)
+            assert win_end is not None  # duration fallback above
+            win_end = min(win_end, duration)
+        if win_end is not None and win_end - win_start <= 0:
+            with self._lock:
+                task["status"] = TASK_STATUS_FAILED
+                task["error"] = "Marker range is outside the video."
+                task["partial_segments"] = []
+                task["completed_at"] = datetime.now(UTC).isoformat()
+            return
+        window_len = win_end - win_start if win_end is not None else 0.0
+
         # Load corrections for context keywords
         manifest = load_transcripts_manifest()
         corrections = manifest.get("corrections", [])
@@ -1751,11 +1817,21 @@ class TranscriptWorker:
             if task.get("_cancelled"):
                 raise _TranscriptionCancelled
             with self._lock:
-                if duration > 0:
-                    task["progress"] = min(end_time / duration, 0.99)
+                if window_len > 0:
+                    # end_time is global — the transcribe functions emit
+                    # already-shifted times — so rebase onto the window.
+                    task["progress"] = min(
+                        max(end_time - win_start, 0.0) / window_len, 0.99
+                    )
                 task["partial_segments"].append(segment)
 
         try:
+            # Pass None for unbounded sides so the unbounded path is untouched
+            # (and the decode argv byte-identical to pre-window clipgen).
+            dispatch_start = win_start or None
+            dispatch_end = win_end
+            if win_end is not None and duration > 0 and win_end >= duration:
+                dispatch_end = None
             if timeline is not None:
                 result = transcribe_timeline(
                     timeline,
@@ -1765,6 +1841,8 @@ class TranscriptWorker:
                     context_keywords=context_kw,
                     on_segment=_on_seg,
                     cancel_flag=lambda: bool(task.get("_cancelled")),
+                    start_seconds=dispatch_start,
+                    end_seconds=dispatch_end,
                 )
             else:
                 result = transcribe_video(
@@ -1775,6 +1853,8 @@ class TranscriptWorker:
                     context_keywords=context_kw,
                     on_segment=_on_seg,
                     cancel_flag=lambda: bool(task.get("_cancelled")),
+                    start_seconds=dispatch_start,
+                    end_seconds=dispatch_end,
                 )
             if result is None:
                 with self._lock:
@@ -1802,6 +1882,12 @@ class TranscriptWorker:
                         if audio_index < len(tracks)
                         else ""
                     ),
+                    # Window provenance — always present (None = unbounded), so
+                    # a later full transcribe's merge (`existing.update(...)`)
+                    # overwrites a prior run's window rather than leaving it
+                    # stale on the participant entry.
+                    "start_seconds": dispatch_start,
+                    "end_seconds": dispatch_end,
                     "transcribed_at": datetime.now(UTC).isoformat(),
                 }
                 task["completed_at"] = datetime.now(UTC).isoformat()

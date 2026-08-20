@@ -972,7 +972,14 @@
   // Generic dropdown toggle: wires a trigger button to a menu element with
   // outside-click + Escape close (shared by the Run split-button and the
   // shortcuts legend). Returns {open, close} for callers that need them.
-  function bindMenuToggle(btn, menu) {
+  //
+  // Optional opts.onOpen/onClose let a caller portal the menu elsewhere in the
+  // DOM (the participant select mounts it on <body> to escape the canvas clip).
+  // onOpen fires *after* .hidden comes off so the callback can measure the menu;
+  // onClose fires after it goes back on. Wrapping the returned {open, close}
+  // would not work — the click handler below calls the internals directly.
+  function bindMenuToggle(btn, menu, opts) {
+    opts = opts || {};
     function onDocDown(e) {
       // Ignore mousedowns on the trigger itself so its click handler toggles (a
       // close-then-reopen race otherwise).
@@ -985,6 +992,7 @@
     function open() {
       menu.classList.remove("hidden");
       btn.setAttribute("aria-expanded", "true");
+      if (opts.onOpen) opts.onOpen();
       document.addEventListener("mousedown", onDocDown, true);
       document.addEventListener("keydown", onKey, true);
     }
@@ -993,6 +1001,7 @@
       btn.setAttribute("aria-expanded", "false");
       document.removeEventListener("mousedown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
+      if (opts.onClose) opts.onClose();
     }
     btn.addEventListener("click", function () {
       if (menu.classList.contains("hidden")) open();

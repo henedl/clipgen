@@ -1259,8 +1259,9 @@ body[data-frontend="workflows"] {
 
 /* ---- Participant multi-select (Video Source) ---- */
 
+/* No `position: relative` — the menu is portaled onto <body> and positioned in
+   viewport coordinates, so this is not its containing block. */
 .wf-participant-select {
-  position: relative;
   flex: 1;
   min-width: 0;
 }
@@ -1282,19 +1283,28 @@ body[data-frontend="workflows"] {
   text-overflow: ellipsis;
 }
 
+/* Portaled onto <body> by buildParticipantSelect and placed with
+   positionPopoverAnchored(), so it escapes .wf-canvas's overflow clip and the
+   #wfWorld transform's containing block, and is not scaled by the canvas zoom.
+   Shell (bg/border/radius/shadow/padding/z-index) comes from .cg-menu; only
+   geometry lives here, and left/top come from the positioner.
+
+   Sizing follows the "dropdowns size to their trigger, not their content" rule
+   in agents/CODE-REVIEW.md: shrink-to-fit against a viewport-sized containing
+   block would size to the longest id alone. The floor is the *unzoomed* node
+   width token rather than the trigger's measured rect — that rect is scaled by
+   the canvas zoom, so at 0.5x it would floor the menu at half the card width. */
 .wf-participant-menu {
-  position: absolute;
-  top: calc(100% + var(--space-1));
-  left: 0;
-  z-index: var(--z-dropdown);
-  min-width: 100%;
-  max-height: 12rem;
+  position: fixed;
+  width: max-content;
+  min-width: var(--wf-node-width);
+  max-width: 22rem;
+  max-height: min(24rem, 60vh);
   overflow-y: auto;
-  padding: var(--space-1);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-pop);
+  /* Zero out .cg-menu's top padding: a sticky row sticks to the *padding* box,
+     so that 4px would be a gap for rows to scroll into above the pinned "All
+     participants" header. .wf-participant-all carries it instead, below. */
+  padding-top: 0;
 }
 
 .wf-participant-opt {
@@ -1311,10 +1321,17 @@ body[data-frontend="workflows"] {
   background: var(--bg-hover);
 }
 
-/* Separate the "All participants" shortcut from the individual rows. */
+/* Separate the "All participants" shortcut from the individual rows, and keep
+   it pinned while a long cohort scrolls under it. It owns the menu's top
+   padding (see .wf-participant-menu) and needs an opaque background, since rows
+   scroll underneath. */
 .wf-participant-all {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
   border-bottom: 1px solid var(--border);
   margin-bottom: var(--space-1);
+  padding-top: calc(var(--space-1) * 2);
   padding-bottom: var(--space-1-5);
 }
 
