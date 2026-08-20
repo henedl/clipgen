@@ -2805,6 +2805,60 @@ def test_api_settings_includes_grouped_tool_nav(client):
     assert s["default"] is True
 
 
+def test_api_settings_includes_source_filename_pattern(client):
+    """GET /api/settings exposes the source-video filename pattern."""
+    import config
+
+    assert "SOURCE_FILENAME_PATTERN" in config.SETTINGS_DESCRIPTIONS
+    resp = client.get("/studio/api/settings")
+    by_name = {s["name"]: s for s in resp.get_json()["settings"]}
+    s = by_name["SOURCE_FILENAME_PATTERN"]
+    assert s["tab"] == "Video & Clips"
+    assert s["group"] == "Source Videos"
+    assert s["type"] == "str"
+    assert s["default"] == "{study}_{participant}"
+
+
+def test_settings_put_rejects_bad_source_filename_pattern(
+    client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    default = server.config.SOURCE_FILENAME_PATTERN
+    monkeypatch.setattr(server.config, "SOURCE_FILENAME_PATTERN", default)
+    for bad in (
+        "{study}",  # missing {participant}
+        "{foo}_{participant}",  # unknown placeholder
+        "a/{participant}",  # path separator
+        "{participant}_{participant}",  # duplicate
+        "",  # empty
+    ):
+        resp = client.put(
+            "/studio/api/settings",
+            json={"settings": {"SOURCE_FILENAME_PATTERN": bad}},
+        )
+        assert resp.status_code == 400, bad
+        assert resp.get_json()["ok"] is False
+        assert server.config.SOURCE_FILENAME_PATTERN == default  # unchanged
+
+
+def test_settings_put_applies_source_filename_pattern(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.config, "INPUT_DIR", str(tmp_path), raising=False)
+    default = server.config.SOURCE_FILENAME_PATTERN
+    monkeypatch.setattr(server.config, "SOURCE_FILENAME_PATTERN", default)
+    (tmp_path / "P01_demo.mp4").write_text("v")
+    assert server.utils.discover_participant_videos() == []
+
+    resp = client.put(
+        "/studio/api/settings",
+        json={"settings": {"SOURCE_FILENAME_PATTERN": "{participant}_{study}"}},
+    )
+    assert resp.status_code == 200
+    assert server.config.SOURCE_FILENAME_PATTERN == "{participant}_{study}"
+    # Discovery honors the new pattern immediately (memo keys on the pattern).
+    assert [p["id"] for p in server.utils.discover_participant_videos()] == ["P01"]
+
+
 def test_api_settings_includes_provider_field(client):
     """model_select settings include a provider field."""
     resp = client.get("/studio/api/settings")

@@ -105,6 +105,20 @@ def test_discover_clips_excludes_numbered_source_videos(tmp_path, monkeypatch):
     assert clips == ["[cat] study P01 desc.mp4"]
 
 
+def test_discover_clips_exclusion_follows_pattern_setting(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        files.config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}"
+    )
+    (tmp_path / "P01_study.mp4").write_text("video")  # plain source
+    (tmp_path / "P01_study-2.mp4").write_text("part")  # numbered source part
+    (tmp_path / "study_P01.mp4").write_text("clip")  # not a source under this pattern
+    (tmp_path / "study_P01_chronologic.mp4").write_text("reel")  # generated reel
+
+    clips = files.discover_clips()
+    assert clips == ["study_P01.mp4", "study_P01_chronologic.mp4"]
+
+
 def test_prepare_clip_pre_parsed_fast_path_keeps_times_and_sanitizes_desc():
     # Synthetic clips (e.g. --ss-clips) arrive with times already parsed and a
     # SimpleNamespace cell. prepare_clip should skip the cell-based parse,

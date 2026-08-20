@@ -466,14 +466,14 @@ COMPRESSION_SIZE_FACTOR: float = 0.95  # Target 95% of max to leave headroom
 MIN_VIDEO_BITRATE_KBPS: int = 100
 
 # ── Source Video ──────────────────────────────────────────────────────
-# Matches source-video filenames so discover_clips() can exclude them from the
-# generated-clip list. The optional ``-N`` group matches numbered parts of a
-# multi-video participant (e.g. study_P01-1.mp4, study_P01-2.mp4).
-SOURCE_VIDEO_PATTERN: str = r"_[PG]\d+(-\d+)?\.mp4$"
-# Trailing numbered suffix used to auto-detect a participant's source-video parts
-# on disk (one continuous timeline): study_P01-1.mp4, study_P01-2.mp4. The
-# capture group is the integer order; parts are sorted numerically, not lexically.
-NUMBERED_SOURCE_VIDEO_SUFFIX_PATTERN: str = r"-(\d+)\.mp4$"
+# Filename syntax for source session videos in the input directory (stem only —
+# the extension always comes from FILEFORMAT, and numbered multi-part files
+# append ``-N`` after the stem: mystudy_P01-1.mp4, mystudy_P01-2.mp4). Both
+# directions derive from this one template: forward construction via
+# utils.format_source_video_stem() and reverse parsing/discovery via
+# utils.compile_source_video_regex(). ``{participant}`` is required;
+# ``{study}`` is optional (drop it when files are named plain P01.mp4).
+SOURCE_FILENAME_PATTERN: str = "{study}_{participant}"
 
 # ── Transcription ────────────────────────────────────────────────────
 TRANSCRIBE_ENABLED: bool = False  # use --transcribe CLI flag to enable per run
@@ -680,6 +680,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "REENCODING": "Re-encode clips via ffmpeg instead of stream-copying. Slower but fixes some codec issues.",
     "AUDIO_NORMALIZE": "Normalize audio levels across generated clips for consistent volume.",
     "FILEFORMAT": "Output container format for generated video clips.",
+    "SOURCE_FILENAME_PATTERN": "Filename pattern for source session videos in the input folder. Placeholders: {study}, {participant} (required). Extension comes from the video file format; multi-part recordings append -1, -2, … Example: {study}_{participant} matches mystudy_P01.mp4.",
     "FFMPEG_VIDEO_ENCODER": "H.264 encoder used whenever clipgen re-encodes (reel concat, clip re-encode, timelapse, Composer burn-in). auto picks Apple's VideoToolbox hardware encoder on Macs that have it — several times faster, at the cost of somewhat larger files for the same visual quality — and falls back to libx264 if it is missing or fails. Pick libx264 to always encode in software. Size-capped compression (Max filesize) always uses libx264 regardless: hardware encoders cannot hit a bitrate target accurately.",
     "MAX_FILESIZE_MB": "Compress output to stay under this size limit. Set to 0 to disable.",
     "DEFAULT_DURATION_SECONDS": "Clip length when only a start time is provided.",
@@ -803,6 +804,11 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "min": 0,
         "max": 100,
         "step": 1,
+    },
+    "SOURCE_FILENAME_PATTERN": {
+        "tab": "Video & Clips",
+        "group": "Source Videos",
+        "type": "str",
     },
     "REENCODING": {"tab": "Video & Clips", "group": "Video Output", "type": "bool"},
     "AUDIO_NORMALIZE": {

@@ -1240,6 +1240,12 @@ def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None
         if not _HEX_COLOR_RE.match(color):
             return False, None, f"Invalid {name}: expected a #rrggbb hex color"
         return True, color, None
+    if name == "SOURCE_FILENAME_PATTERN":
+        text = str(value).strip()
+        err = utils.validate_source_filename_pattern(text)
+        if err is not None:
+            return False, None, f"Invalid {name}: {err}"
+        return True, text, None
 
     expected_type = type(default) if default is not None else str
     try:

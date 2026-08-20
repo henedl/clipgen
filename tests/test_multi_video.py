@@ -880,12 +880,132 @@ def test_participant_id_from_source_name():
     assert utils.participant_id_from_source_name("study_P03 copy 2.mp4") is None
 
 
-def test_split_source_stem():
-    assert utils.split_source_stem("study_P01.mp4") == ("study", "P01")
-    assert utils.split_source_stem("study_P01-2.mp4") == ("study", "P01")
-    assert utils.split_source_stem("my-study_G02-10.mp4") == ("my-study", "G02")
-    assert utils.split_source_stem("random.mp4") == ("", "random")
-    assert utils.split_source_stem("study_P03 copy.mp4") == ("study", "P03 copy")
+def test_parse_source_video_name():
+    assert utils.parse_source_video_name("study_P01.mp4") == ("study", "P01", None)
+    assert utils.parse_source_video_name("study_P01-2.mp4") == ("study", "P01", 2)
+    # Study may contain the separator (greedy rsplit-like semantics) and dashes.
+    assert utils.parse_source_video_name("my_study_P01.mp4") == (
+        "my_study",
+        "P01",
+        None,
+    )
+    assert utils.parse_source_video_name("my-study_G02-10.mp4") == (
+        "my-study",
+        "G02",
+        10,
+    )
+    # Empty study accepted; a stem with no separator is not a source video.
+    assert utils.parse_source_video_name("_P01.mp4") == ("", "P01", None)
+    assert utils.parse_source_video_name("random.mp4") is None
+    assert utils.parse_source_video_name("study_P03 copy.mp4") is None
+    # A lowercase prefix groups under the configured casing.
+    assert utils.parse_source_video_name("study_p01.mp4") == ("study", "P01", None)
+
+
+def test_parse_source_video_name_custom_patterns(monkeypatch):
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    assert utils.parse_source_video_name("P01_study.mp4") == ("study", "P01", None)
+    assert utils.parse_source_video_name("P01_study-2.mp4") == ("study", "P01", 2)
+    assert utils.parse_source_video_name("study_P01.mp4") is None
+
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
+    assert utils.parse_source_video_name("P01.mp4") == ("", "P01", None)
+    assert utils.parse_source_video_name("G02-3.mp4") == ("", "G02", 3)
+    assert utils.parse_source_video_name("P01 copy.mp4") is None
+    assert utils.parse_source_video_name("random.mp4") is None
+
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{study} {participant}")
+    assert utils.parse_source_video_name("my study P01.mp4") == (
+        "my study",
+        "P01",
+        None,
+    )
+    assert utils.parse_source_video_name("my_study_P01.mp4") is None
+
+
+def test_format_source_video_stem(monkeypatch):
+    assert utils.format_source_video_stem("study", "P01") == "study_P01"
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
+    # str.format ignores the unused study kwarg.
+    assert utils.format_source_video_stem("study", "P01") == "P01"
+
+
+def test_get_source_video_filenames_custom_pattern(monkeypatch):
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    assert files.get_source_video_filenames("study", "P01") == ["P01_study.mp4"]
+    # Per-participant overrides still beat the pattern.
+    assert files.get_source_video_filenames("study", "P01", "x.mp4") == ["x.mp4"]
+
+
+def test_discover_numbered_source_videos_custom_pattern(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    (tmp_path / "P01_study-1.mp4").write_text("v1")
+    (tmp_path / "P01_study-2.mp4").write_text("v2")
+    found = files.discover_numbered_source_videos(tmp_path, "study", "P01")
+    assert [p.name for p in found] == ["P01_study-1.mp4", "P01_study-2.mp4"]
+
+
+def test_discover_numbered_source_videos_glob_metachars_in_pattern(
+    monkeypatch, tmp_path
+):
+    # "[" / "]" are legal filename characters and pass pattern validation, but
+    # they are Path.glob metacharacters — an unescaped glob reads them as a
+    # character class and silently finds no parts, so regex-based participant
+    # discovery would list files that clip resolution then reports missing.
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "[{study}] {participant}")
+    (tmp_path / "[study] P01-1.mp4").write_text("v1")
+    (tmp_path / "[study] P01-2.mp4").write_text("v2")
+    found = files.discover_numbered_source_videos(tmp_path, "study", "P01")
+    assert [p.name for p in found] == ["[study] P01-1.mp4", "[study] P01-2.mp4"]
+    # Numbered-part resolution and regex discovery agree on the same files.
+    paths = files.resolve_source_video_paths("study", "P01", None, tmp_path)
+    assert [p.name for p in paths] == ["[study] P01-1.mp4", "[study] P01-2.mp4"]
+    assert utils.parse_source_video_name("[study] P01-1.mp4") == ("study", "P01", 1)
+
+
+def test_discover_participant_videos_custom_pattern(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
+    (tmp_path / "P01.mp4").write_text("v")
+    (tmp_path / "G02-1.mp4").write_text("v1")
+    (tmp_path / "G02-2.mp4").write_text("v2")
+    (tmp_path / "random.mp4").write_text("x")
+    found = utils.discover_participant_videos()
+    assert [p["id"] for p in found] == ["G02", "P01"]
+    assert [_basename(p) for p in found[0]["video_paths"]] == [
+        "G02-1.mp4",
+        "G02-2.mp4",
+    ]
+
+
+def test_discover_participant_videos_rescans_on_pattern_change(monkeypatch, tmp_path):
+    # A settings PUT changes the pattern without touching the directory mtime;
+    # the memo must not serve the old pattern's participant list.
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
+    (tmp_path / "P01_study.mp4").write_text("v")
+    assert utils.discover_participant_videos() == []
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}_{study}")
+    assert [p["id"] for p in utils.discover_participant_videos()] == ["P01"]
+
+
+def test_validate_source_filename_pattern():
+    assert utils.validate_source_filename_pattern("{study}_{participant}") is None
+    assert utils.validate_source_filename_pattern("{participant}") is None
+    assert utils.validate_source_filename_pattern("{study} {participant}") is None
+    assert utils.validate_source_filename_pattern("session-{participant}") is None
+    # Each rejection rule.
+    assert utils.validate_source_filename_pattern("") is not None
+    assert utils.validate_source_filename_pattern("   ") is not None
+    assert utils.validate_source_filename_pattern("{study}_{p") is not None
+    assert utils.validate_source_filename_pattern("{foo}_{participant}") is not None
+    assert utils.validate_source_filename_pattern("{}_{participant}") is not None
+    assert utils.validate_source_filename_pattern("{study}") is not None
+    assert (
+        utils.validate_source_filename_pattern("{participant}_{participant}")
+        is not None
+    )
+    assert utils.validate_source_filename_pattern("a/{participant}") is not None
+    assert utils.validate_source_filename_pattern("a:{participant}") is not None
 
 
 def test_numbered_parts_are_contiguous():

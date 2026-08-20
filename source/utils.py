@@ -2157,6 +2157,15 @@ def set_program_settings() -> bool:
         if prompt_err is not None:
             error_print(f"Invalid prompt: {prompt_err}")
             return False
+    # Same story for the source-filename template: it is .format()-ed and
+    # regex-compiled at discovery time, so an unvalidated edit would only
+    # surface as a broken participant list.
+    if setting_name == "SOURCE_FILENAME_PATTERN":
+        converted = str(converted).strip()
+        pattern_err = validate_source_filename_pattern(converted)
+        if pattern_err is not None:
+            error_print(f"Invalid pattern: {pattern_err}")
+            return False
 
     setattr(config, setting_name, converted)
     info_print(f"  '{setting_name}' set to {converted!r}")
@@ -2308,57 +2317,153 @@ def numbered_parts_are_contiguous(indices: list[int]) -> bool:
     return sorted(indices) == list(range(1, len(indices) + 1))
 
 
-def split_source_stem(name: str) -> tuple[str, str]:
-    """Split a source-video filename into ``(study, remainder)``.
+def validate_source_filename_pattern(text: str) -> str | None:
+    """Validate a user-edited SOURCE_FILENAME_PATTERN.
 
-    Strips a numbered-part ``-N`` suffix first so ``study_P01-2.mp4`` yields
-    ``("study", "P01")``. When the stem has no ``_``, study is ``""`` and
-    remainder is the stripped stem.
+    Returns an error string, or ``None`` if the pattern is safe to save (same
+    contract as :func:`validate_prompt`). The pattern drives both filename
+    construction (``str.format``) and discovery (a compiled regex), so it must
+    parse cleanly, use only the ``{study}``/``{participant}`` placeholders
+    (each at most once, ``{participant}`` required), and contain no characters
+    that are illegal in filenames.
     """
-    stem = Path(name).stem
-    head, sep, tail = stem.rpartition("-")
-    if sep and head and tail.isdigit():
-        stem = head
-    parts = stem.rsplit("_", 1)
-    if len(parts) == 2:
-        return (parts[0], parts[1])
-    return ("", stem)
+    if not text.strip():
+        return "pattern is empty"
+    used: list[str] = []
+    literals: list[str] = []
+    try:
+        for literal, field_name, _spec, _conv in string.Formatter().parse(text):
+            literals.append(literal)
+            if field_name is not None:
+                used.append(field_name)
+    except (ValueError, IndexError):
+        return "unbalanced { } braces — escape literal braces as {{ and }}"
+    for field in used:
+        if not field:
+            return "positional {} is not allowed; use {study} or {participant}"
+        if field not in ("study", "participant"):
+            return (
+                f"unknown placeholder {{{field}}}; allowed: {{study}}, {{participant}}"
+            )
+    if "participant" not in used:
+        return "missing the required {participant} placeholder"
+    if len(used) != len(set(used)):
+        return "each placeholder may appear only once"
+    illegal = set('/\\:*?"<>|')
+    for lit in literals:
+        for ch in lit:
+            if ch in illegal or ord(ch) < 32:
+                return f"literal text may not contain {ch!r}"
+    # Ground truth: the pattern must format and compile cleanly.
+    try:
+        text.format(study="s", participant="P01")
+        _compile_source_regex(
+            text, config.FILEFORMAT, tuple(config.PARTICIPANT_PREFIXES)
+        )
+    except (KeyError, IndexError, ValueError, re.error) as exc:
+        return f"pattern does not compile ({exc})"
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def _compile_source_regex(
+    pattern: str, fileformat: str, prefixes: tuple[str, ...]
+) -> re.Pattern[str]:
+    """Compile a SOURCE_FILENAME_PATTERN template into a filename regex.
+
+    ``{study}`` becomes a lazy, possibly-empty group. Anchored backtracking
+    still yields rsplit-like semantics for a leading study (``my_study_P01``
+    parses study ``my_study``), while laziness keeps a *trailing* study from
+    swallowing the ``-N`` part suffix (``P01_study-2`` under
+    ``{participant}_{study}`` parses part 2, not study ``study-2``).
+    ``{participant}`` becomes prefix + digits + alnum tail
+    (P01, G02, P01b): no whitespace (a Finder-duplicate ``study_P03 copy.mp4``
+    never becomes a phantom participant that auto-launches watch-dir runs), no
+    underscore/dot/dash (so generated clips like ``study_P01_chronologic.mp4``
+    never read as source videos). An optional ``-N`` part suffix and the
+    extension are appended; matching is case-insensitive.
+    """
+    prefix_class = "[" + "".join(re.escape(p) for p in prefixes) + "]"
+    parts: list[str] = ["^"]
+    for literal, field_name, _spec, _conv in string.Formatter().parse(pattern):
+        parts.append(re.escape(literal))
+        if field_name == "study":
+            parts.append(r"(?P<study>.*?)")
+        elif field_name == "participant":
+            parts.append(rf"(?P<participant>{prefix_class}\d+[A-Za-z0-9]*)")
+    parts.append(rf"(?:-(?P<part>\d+))?{re.escape(fileformat)}$")
+    return re.compile("".join(parts), re.IGNORECASE)
+
+
+def compile_source_video_regex() -> re.Pattern[str]:
+    """The compiled regex for the current SOURCE_FILENAME_PATTERN.
+
+    Reads ``config.SOURCE_FILENAME_PATTERN`` / ``FILEFORMAT`` /
+    ``PARTICIPANT_PREFIXES`` at call time — a settings PUT mutates config live,
+    so the lru cache keys on the values rather than holding one module-level
+    compiled pattern.
+    """
+    return _compile_source_regex(
+        config.SOURCE_FILENAME_PATTERN,
+        config.FILEFORMAT,
+        tuple(config.PARTICIPANT_PREFIXES),
+    )
+
+
+def format_source_video_stem(study: str, participant: str) -> str:
+    """Format the expected source-video stem for a participant (no extension).
+
+    ``str.format`` ignores unused kwargs, so a ``{participant}``-only pattern
+    needs no special case.
+    """
+    return config.SOURCE_FILENAME_PATTERN.format(study=study, participant=participant)
+
+
+def parse_source_video_name(name: str) -> tuple[str, str, int | None] | None:
+    """Parse a source-video filename into ``(study, participant, part)``.
+
+    ``part`` is the integer ``-N`` suffix, or None for a plain (single-file)
+    source. Returns None when *name* does not match the configured
+    SOURCE_FILENAME_PATTERN — then it is not a source video (a generated clip,
+    an unrelated file). Study is ``""`` when the pattern has no ``{study}``.
+    The participant prefix is normalised to its configured casing so a
+    ``study_p01.mp4`` groups under ``P01``.
+    """
+    m = compile_source_video_regex().fullmatch(name)
+    if m is None:
+        return None
+    groups = m.groupdict()
+    pid = m.group("participant")
+    for prefix in config.PARTICIPANT_PREFIXES:
+        if pid[: len(prefix)].upper() == prefix.upper():
+            pid = prefix + pid[len(prefix) :]
+            break
+    part = groups.get("part")
+    return (groups.get("study") or "", pid, int(part) if part else None)
 
 
 def participant_id_from_source_name(name: str) -> str | None:
     """Extract the participant id from a source-video filename, or None.
 
-    Handles both the plain ``{study}_{participant}{FILEFORMAT}`` form and a
-    numbered part ``{study}_{participant}-N{FILEFORMAT}`` — the ``-N`` suffix is
-    stripped first so a part groups under its base participant id. Returns None
-    when the trailing segment is not a recognised id (config.PARTICIPANT_PREFIXES).
+    Thin wrapper over :func:`parse_source_video_name`; a numbered ``-N`` part
+    groups under its base participant id.
     """
-    study, pid = split_source_stem(name)
-    if not pid:
-        return None
-    # A stem with no ``_`` maps to ``("", stripped_stem)``. That is not a
-    # participant id — unlike ``_P01.mp4``, which splits to ``("", "P01")``.
-    if not study and "_" not in Path(name).stem:
-        return None
-    if pid[0] not in config.PARTICIPANT_PREFIXES:
-        return None
-    # Reject ids with whitespace: real participant ids are clean tokens (P01,
-    # G02). A space is the signature of a Finder/Explorer duplicate
-    # ("study_P03 copy.mp4"), which is never a new participant — without this it
-    # becomes a phantom participant in every tool's dropdown and (with the P6
-    # watch-dir trigger) auto-launches a run for a bogus id.
-    if any(ch.isspace() for ch in pid):
-        return None
-    return pid
+    parsed = parse_source_video_name(name)
+    return parsed[1] if parsed else None
 
 
-# One participant-video scan per input-dir state, keyed dir -> (mtime_ns, result).
-# The directory mtime advances on add/remove/rename, invalidating on real change
-# (incl. the P6 watch-dir drop). Result is directory-only (study_name is unused),
-# so it is shared across all callers regardless of the study_name they pass, and
-# keying on the dir string (not a single slot) means a runtime input-dir switch
-# selects a different entry rather than needing explicit invalidation.
-_discover_videos_cache: dict[str, tuple[int | None, list[dict[str, Any]]]] = {}
+# One participant-video scan per input-dir state, keyed dir -> (mtime_ns,
+# pattern, fileformat, result). The directory mtime advances on add/remove/
+# rename, invalidating on real change (incl. the P6 watch-dir drop); the
+# pattern + fileformat are part of the cached state because a settings PUT
+# changes them without touching the directory. Result is directory-only
+# (study_name is unused), so it is shared across all callers regardless of the
+# study_name they pass, and keying on the dir string (not a single slot) means
+# a runtime input-dir switch selects a different entry rather than needing
+# explicit invalidation.
+_discover_videos_cache: dict[
+    str, tuple[int | None, str, str, list[dict[str, Any]]]
+] = {}
 _discover_videos_lock = threading.Lock()
 
 
@@ -2366,16 +2471,17 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
     """Scan the input directory and return one entry per participant.
 
     A participant's session may span several files (a recording that broke off,
-    or a diary study); this groups the plain ``{study}_{pid}{FILEFORMAT}`` and/or
-    the numbered parts ``{study}_{pid}-N{FILEFORMAT}`` into one entry with ordered
-    ``video_paths``. The plain file wins when both it and numbered parts exist; a
-    non-contiguous numbered set is skipped with a warning (see
+    or a diary study); this groups the plain file and/or the numbered ``-N``
+    parts matching ``config.SOURCE_FILENAME_PATTERN`` into one entry with
+    ordered ``video_paths``. The plain file wins when both it and numbered
+    parts exist; a non-contiguous numbered set is skipped with a warning (see
     :func:`numbered_parts_are_contiguous`). Only ids starting with a recognised
     prefix (``config.PARTICIPANT_PREFIXES``) are included.
 
-    Cached on the input directory's ``mtime_ns``, so the many hot callers
-    (``/api/status``, the Workflows video-source node, the watch-dir daemon) share
-    one glob/parse pass until the directory changes.
+    Cached on the input directory's ``mtime_ns`` plus the active pattern and
+    file format, so the many hot callers (``/api/status``, the Workflows
+    video-source node, the watch-dir daemon) share one glob/parse pass until
+    the directory — or the pattern setting — changes.
 
     Returns:
         ``{"id", "video_paths", "has_video"}`` dicts, sorted by participant id.
@@ -2389,21 +2495,23 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
     except OSError:
         mtime_ns = None
 
+    pattern = config.SOURCE_FILENAME_PATTERN
+    fileformat = config.FILEFORMAT
     with _discover_videos_lock:
         cached = _discover_videos_cache.get(dir_str)
-        if cached is not None and cached[0] == mtime_ns:
-            return cached[1]
+        if cached is not None and cached[:3] == (mtime_ns, pattern, fileformat):
+            return cached[3]
 
         plain: dict[str, Path] = {}
         numbered: dict[str, list[tuple[int, Path]]] = {}
         if input_dir.is_dir():
-            for path in sorted(input_dir.glob(f"*{config.FILEFORMAT}")):
-                pid = participant_id_from_source_name(path.name)
-                if pid is None:
+            for path in sorted(input_dir.glob(f"*{fileformat}")):
+                parsed = parse_source_video_name(path.name)
+                if parsed is None:
                     continue
-                head, sep, tail = path.stem.rpartition("-")
-                if sep and head and tail.isdigit():
-                    numbered.setdefault(pid, []).append((int(tail), path))
+                _study, pid, part = parsed
+                if part is not None:
+                    numbered.setdefault(pid, []).append((part, path))
                 else:
                     plain[pid] = path
 
@@ -2435,7 +2543,7 @@ def discover_participant_videos(study_name: str = "") -> list[dict[str, Any]]:
                 }
             )
 
-        _discover_videos_cache[dir_str] = (mtime_ns, participants)
+        _discover_videos_cache[dir_str] = (mtime_ns, pattern, fileformat, participants)
         return participants
 
 
