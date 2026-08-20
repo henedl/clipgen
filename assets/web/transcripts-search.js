@@ -197,10 +197,21 @@
 
   function highlightQuery(text, query) {
     if (!query) return escapeHtml(text);
-    var escaped = escapeHtml(text);
-    var queryEscaped = escapeHtml(query);
-    var regex = new RegExp("(" + queryEscaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
-    return escaped.replace(regex, '<span class="search-highlight">$1</span>');
+    // Match on the RAW text and escape each piece separately: matching the
+    // escaped text let a query like "amp" or "lt" land inside an entity
+    // escapeHtml had just produced and split it with the span, rendering the
+    // entity literally.
+    var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var out = "";
+    var last = 0;
+    var m;
+    while ((m = regex.exec(text)) !== null) {
+      out += escapeHtml(text.slice(last, m.index));
+      out += '<span class="search-highlight">' + escapeHtml(m[0]) + "</span>";
+      last = m.index + m[0].length;
+    }
+    out += escapeHtml(text.slice(last));
+    return out;
   }
 
   function hideSearchResults() {

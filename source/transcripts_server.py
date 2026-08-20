@@ -499,7 +499,8 @@ def api_edit_segment(participant: str) -> FlaskResponse:
         return err("Missing JSON body")
 
     segment_id = data.get("segment_id", "")
-    new_text = data.get("text", "").strip()
+    text_raw = data.get("text", "")
+    new_text = text_raw.strip() if isinstance(text_raw, str) else ""
     if not segment_id or not new_text:
         return err("segment_id and text required")
 
@@ -809,7 +810,15 @@ def api_embed_subtitles() -> FlaskResponse:
         cancel_flag = _embed_cancel_event.is_set
         try:
             yield (
-                json.dumps({"total": len(participants), "output_dir": str(output_dir)})
+                json.dumps(
+                    {
+                        "total": len(participants),
+                        "output_dir": str(output_dir),
+                        # The client echoes this in /cancel so a late cancel
+                        # POST for this run can never stop a successor run.
+                        "token": embed_token,
+                    }
+                )
                 + "\n"
             )
             # Sequential on purpose: every mux is a whole-file stream copy, so
@@ -852,8 +861,17 @@ def api_embed_subtitles() -> FlaskResponse:
 
 @transcripts_bp.route("/api/embed-subtitles/cancel", methods=["POST"])
 def api_embed_subtitles_cancel() -> FlaskResponse:
-    """Stop the in-flight embed run once the current file finishes."""
-    _embed_cancel_event.set()
+    """Stop the in-flight embed run once the current file finishes.
+
+    Scoped by the run token from the stream's header line: a cancel POST that
+    arrives after its own run released the slot (user stops run 1 and starts
+    run 2 immediately) must not cancel the successor.
+    """
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    with _embed_lock:
+        if _embed_busy and token == _embed_owner:
+            _embed_cancel_event.set()
     return ok()
 
 
@@ -1048,7 +1066,10 @@ def api_normalize_audio() -> FlaskResponse:
     def stream() -> Iterator[str]:
         cancel_flag = _normalize_cancel_event.is_set
         try:
-            yield json.dumps({"total": len(participants)}) + "\n"
+            yield (
+                json.dumps({"total": len(participants), "token": normalize_token})
+                + "\n"
+            )
             # Sequential on purpose: each rewrite reads and rewrites a whole
             # source file, so concurrency only contends for the same disk.
             for idx, pid in enumerate(participants):
@@ -1079,8 +1100,15 @@ def api_normalize_audio() -> FlaskResponse:
 
 @transcripts_bp.route("/api/normalize-audio/cancel", methods=["POST"])
 def api_normalize_audio_cancel() -> FlaskResponse:
-    """Stop the in-flight normalize run, interrupting the current file."""
-    _normalize_cancel_event.set()
+    """Stop the in-flight normalize run, interrupting the current file.
+
+    Token-scoped like the embed cancel above.
+    """
+    data = request.get_json(silent=True) or {}
+    token = data.get("token")
+    with _normalize_lock:
+        if _normalize_busy and token == _normalize_owner:
+            _normalize_cancel_event.set()
     return ok()
 
 
@@ -1293,7 +1321,8 @@ def api_summary_stream(participant: str) -> FlaskResponse:
 def api_summary_save(participant: str) -> FlaskResponse:
     """Save a user-edited summary for a participant."""
     data = request.get_json(silent=True)
-    if not data or not data.get("summary", "").strip():
+    summary_raw = (data or {}).get("summary", "")
+    if not isinstance(summary_raw, str) or not summary_raw.strip():
         return err("Summary text is required")
     summary_agent = thinking_agents.get_agent("summary")
     assert summary_agent is not None  # built-in agent, always registered
@@ -1301,7 +1330,7 @@ def api_summary_save(participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if not entry:
             return err("Participant not found", 404)
-        entry["summary"] = data["summary"].strip()
+        entry["summary"] = summary_raw.strip()
         # An edited summary feeds every downstream agent: clear citations and
         # the report, flag friction stale — same invalidation as the summary
         # regenerate route.
@@ -1347,7 +1376,7 @@ def api_corrections_add() -> FlaskResponse:
                 break
 
         if chained:
-            if chained["from"].lower() == to_text.lower():
+            if chained.get("from", "").lower() == to_text.lower():
                 corrections.remove(chained)
                 removed_id = chained["id"]
                 correction = None
@@ -1573,7 +1602,7 @@ def api_marks_add() -> FlaskResponse:
     created = []
     with _manifest_lock:
         marks = _manifest.setdefault("marks", [])
-        existing_by_seg = {m["segment_id"]: m for m in marks}
+        existing_by_seg = {m.get("segment_id", ""): m for m in marks}
 
         for sid in segment_ids:
             if sid in existing_by_seg:

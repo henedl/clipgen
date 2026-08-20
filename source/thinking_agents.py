@@ -758,12 +758,21 @@ def report_source_lines(participant: str) -> tuple[list[str], list[str]]:
     sheet-less launch) both lists come back empty and a report simply covers
     the summary alone. Shared by ``_run_report`` and the Workflows report node.
     """
-    obs_rows = _observation_rows_getter() if _observation_rows_getter else []
-    marks = (
-        _participant_marks_getter(participant)
-        if (_participant_marks_getter and participant)
-        else []
-    )
+    # Guard each getter so the documented "degrade to the sources that exist"
+    # holds for a *raising* source too — the sheet getter reaches Google's API
+    # and a network hiccup must cost that section, not the whole report.
+    obs_rows: list[dict[str, Any]] = []
+    if _observation_rows_getter:
+        try:
+            obs_rows = _observation_rows_getter()
+        except Exception as exc:
+            utils.warning_print(f"Report: sheet observations unavailable: {exc}")
+    marks: list[dict[str, Any]] = []
+    if _participant_marks_getter and participant:
+        try:
+            marks = _participant_marks_getter(participant)
+        except Exception as exc:
+            utils.warning_print(f"Report: transcript marks unavailable: {exc}")
     return (
         _format_report_observations(obs_rows, participant),
         _format_report_marks(marks),

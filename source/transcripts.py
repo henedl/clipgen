@@ -373,16 +373,6 @@ def _load_model(model_name: str | None = None) -> Any:
             )
             return None
 
-        # Drop the previous model first, or ~1-2 GB of weights is double-held
-        # until the next GC cycle; gc.collect() also prods CUDA/MPS cleanup.
-        if _cached_model is not None:
-            import gc
-
-            _cached_model = None
-            _cached_model_name = None
-            _cached_model_key = None
-            gc.collect()
-
         def _do_load() -> Any:
             # Built from load_key, not re-read from config, so what is cached
             # is exactly what was constructed even if a setting changes while
@@ -414,6 +404,20 @@ def _load_model(model_name: str | None = None) -> Any:
         try:
             if not _confirm_model_download(model_name):
                 return None
+
+            # Drop the previous model only once the load is definitely
+            # happening (post-consent), or ~1-2 GB of weights is double-held
+            # until the next GC cycle; gc.collect() also prods CUDA/MPS
+            # cleanup. Evicting before the consent prompt left the cache empty
+            # when the user declined, costing a pointless reload of the model
+            # that was already warm.
+            if _cached_model is not None:
+                import gc
+
+                _cached_model = None
+                _cached_model_name = None
+                _cached_model_key = None
+                gc.collect()
 
             utils.info_print(f"Loading transcription model '{model_name}'...")
             _cached_model = utils.run_with_spinner(
@@ -1433,8 +1437,10 @@ def _vtt_time_to_seconds(ts: str) -> float:
     return 0.0
 
 
-def _md_time_to_seconds(ts: str) -> float:
-    return utils.timestamp_to_seconds(ts) or 0.0
+def _md_time_to_seconds(ts: str) -> float | None:
+    """Parse a Markdown transcript stamp; None on failure — never a fabricated
+    0.0, which reads as a valid segment start at the top of the recording."""
+    return utils.timestamp_to_seconds(ts)
 
 
 def _parse_srt(text: str, filepath: str) -> TranscriptResult:
@@ -1480,10 +1486,20 @@ def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
         model = model_match.group(1)
 
     for match in _MD_SEGMENT.finditer(text):
+        start = _md_time_to_seconds(match.group(1))
+        end = _md_time_to_seconds(match.group(2))
+        if start is None or end is None:
+            # Hand-edited / third-party stamp the parser can't read (e.g.
+            # "0:00.5"): skip loudly rather than fabricate a 0:00 segment.
+            utils.warning_print(
+                f"Skipping transcript line with unparseable timestamp: "
+                f"{match.group(1)} - {match.group(2)}"
+            )
+            continue
         segments.append(
             TranscriptSegment(
-                start=_md_time_to_seconds(match.group(1)),
-                end=_md_time_to_seconds(match.group(2)),
+                start=start,
+                end=end,
                 text=match.group(3).strip(),
             )
         )

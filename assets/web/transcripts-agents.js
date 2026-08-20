@@ -340,6 +340,12 @@
     }
   }
 
+  // The stream is closed on participant switch, cancel, completion and
+  // visibilitychange, but a bfcache-suspended page would otherwise keep the
+  // EventSource connection open — the one page-scope resource here with no
+  // pagehide teardown.
+  window.addEventListener("pagehide", _stopSummaryStream);
+
   // Stops all live summary updates — the poller AND the SSE stream — so every
   // existing teardown site (participant switch, clear, cancel, completion)
   // covers both transports without needing to know which one is active.

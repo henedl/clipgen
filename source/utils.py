@@ -6,7 +6,9 @@ import functools
 import json
 import math
 import os
+import re
 import shutil
+import string
 import subprocess
 import sys
 import threading
@@ -2146,9 +2148,57 @@ def set_program_settings() -> bool:
         error_print(f"Invalid value '{new_raw}' for type {current_type.__name__}")
         return False
 
+    # Prompt-typed settings are .format()-ed at agent runtime; an unvalidated
+    # edit here (unlike the Settings-modal PUT, which validates) would only
+    # surface as a KeyError inside the next agent run.
+    meta = config.STUDIO_SETTINGS.get(setting_name) or {}
+    if meta.get("type") == "prompt":
+        prompt_err = validate_prompt(str(converted), meta.get("placeholders") or [])
+        if prompt_err is not None:
+            error_print(f"Invalid prompt: {prompt_err}")
+            return False
+
     setattr(config, setting_name, converted)
     info_print(f"  '{setting_name}' set to {converted!r}")
     return True
+
+
+def validate_prompt(text: str, placeholders: list[str]) -> str | None:
+    """Validate a user-edited thinking-agent prompt.
+
+    Returns an error string, or ``None`` if the prompt is safe to save. Prompts
+    that declare *placeholders* are ``.format()``-ed at runtime, so every
+    required placeholder must be present and the prompt must format cleanly with
+    exactly those keys. Prompts with no placeholders (the ``*_SYSTEM`` strings)
+    are sent to the model verbatim and accept any text.
+    """
+    if not placeholders:
+        return None
+    allowed = set(placeholders)
+    used: set[str] = set()
+    try:
+        for _literal, field_name, _spec, _conv in string.Formatter().parse(text):
+            if field_name:
+                # Strip any attribute/index access, e.g. "{a.b}" / "{a[0]}".
+                used.add(re.split(r"[.\[]", field_name, maxsplit=1)[0])
+    except (ValueError, IndexError):
+        return "unbalanced { } braces — escape literal braces as {{ and }}"
+    missing = allowed - used
+    if missing:
+        return "missing required placeholder(s): " + ", ".join(
+            "{" + p + "}" for p in sorted(missing)
+        )
+    # Ground truth: the prompt must .format() cleanly with exactly these keys.
+    # Catches unknown placeholders ({foo}), stray positional {}, and nested
+    # format-spec references the parse() scan above does not surface.
+    try:
+        text.format(**{p: "" for p in placeholders})
+    except (KeyError, IndexError, ValueError) as exc:
+        bad = exc.args[0] if exc.args else exc
+        return f"references an unknown placeholder ({bad}); allowed: " + ", ".join(
+            "{" + p + "}" for p in placeholders
+        )
+    return None
 
 
 # ---- Miscellaneous utilities ----

@@ -1563,7 +1563,10 @@
   // any write to invalidate renderPartialSegments' append-only fast path.
   var _streamingMarks = {};
   var _streamingMarksVersion = 0;
-  var _streamingMarksLoaded = false;
+  // Keyed by participant: a single boolean would make the first streaming
+  // participant's load swallow every later one's, leaving a second live
+  // stream's persisted marks unrendered until some task completed.
+  var _streamingMarksLoadedByPid = {};
 
   function _bumpStreamingMarksVersion() {
     _streamingMarksVersion++;
@@ -1571,8 +1574,8 @@
   }
 
   function _loadStreamingMarks(pid) {
-    if (_streamingMarksLoaded) return;
-    _streamingMarksLoaded = true;
+    if (_streamingMarksLoadedByPid[pid]) return;
+    _streamingMarksLoadedByPid[pid] = true;
     apiGet("api/marks").then(function (data) {
       if (!data.ok) return;
       if (data.categories) setMarkCategories(data.categories);
@@ -2064,6 +2067,10 @@
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
+    // A provisional mark (optimistic paint, POST still in flight) has no id
+    // yet — every popover action would hit api/marks/null. The POST resolves
+    // in well under a click-reopen, so just don't open for it.
+    if (markObj && markObj.id == null) return;
     var popover = qs("#markPopover");
     hideMarkPopover();
 
@@ -2472,7 +2479,7 @@
         // extending the grace window.
         _postCompletionGrace = POST_COMPLETION_GRACE_CYCLES;
         _streamingMarks = {};
-        _streamingMarksLoaded = false;
+        _streamingMarksLoadedByPid = {};
         _bumpStreamingMarksVersion();
       }
       if (needsRefresh) {
@@ -3564,6 +3571,7 @@
       // {"cancelled": true} / {"done": true} carry nothing — none has an
       // index, which is also what keeps them out of the completion tally.
       if (data.output_dir) outputDir = data.output_dir;
+      if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
       if (data.done) sawDone = true;
       if (typeof data.index !== "number") return;
       run.done++;
@@ -3617,7 +3625,7 @@
     }
     // The server stops between files (a mux cannot be interrupted mid-copy), so
     // the abort just drops our end of a stream that is already winding down.
-    apiPost("api/embed-subtitles/cancel", {}).catch(function () {});
+    apiPost("api/embed-subtitles/cancel", { token: _embedSubsRun.token || null }).catch(function () {});
     _embedSubsRun.abort.abort();
   }
 
@@ -3932,6 +3940,7 @@
       if (!data) return;
       // The header and the trailing {"cancelled": true} / {"done": true} lines
       // carry no index, which is also what keeps them out of the tally.
+      if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
       if (data.done) sawDone = true;
       if (typeof data.index !== "number") return;
       run.done++;
@@ -3998,7 +4007,7 @@
     // Unlike the embed run, the cancel event is threaded into ffmpeg itself, so
     // Stop interrupts the current file mid-encode; the abort just drops our end
     // of a stream that is already winding down.
-    apiPost("api/normalize-audio/cancel", {}).catch(function () {});
+    apiPost("api/normalize-audio/cancel", { token: _normAudioRun.token || null }).catch(function () {});
     _normAudioRun.abort.abort();
   }
 

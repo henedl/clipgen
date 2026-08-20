@@ -1067,7 +1067,9 @@ def test_embed_subtitles_happy_path(tr_client, tmp_path, monkeypatch):
     assert resp.mimetype == "application/x-ndjson"
     header, result, done = _ndjson(resp)
     assert done == {"done": True}
-    assert header == {"total": 1, "output_dir": str(tmp_path)}
+    assert header["total"] == 1
+    assert header["output_dir"] == str(tmp_path)
+    assert header["token"]  # echoed by the Stop button to scope the cancel
     assert result["index"] == 0
     assert result["participant"] == "P01"
     assert result["ok"] is True
@@ -1294,12 +1296,27 @@ def test_embed_slot_release_is_scoped_to_its_own_run(monkeypatch):
     assert transcripts_server._embed_busy is False
 
 
-def test_embed_subtitles_cancel_route_sets_the_event(tr_client):
-    transcripts_server._embed_cancel_event.clear()
-    resp = tr_client.post("/transcripts/api/embed-subtitles/cancel")
-    assert resp.status_code == 200
-    assert transcripts_server._embed_cancel_event.is_set()
-    transcripts_server._embed_cancel_event.clear()
+def test_embed_subtitles_cancel_route_is_token_scoped(tr_client):
+    """Cancel only takes effect with the in-flight run's token: a late cancel
+    POST from a stopped run must not cancel its successor."""
+    token = transcripts_server._claim_embed_slot()
+    assert token is not None
+    try:
+        # Wrong (stale) token: ignored.
+        resp = tr_client.post(
+            "/transcripts/api/embed-subtitles/cancel", json={"token": "stale"}
+        )
+        assert resp.status_code == 200
+        assert not transcripts_server._embed_cancel_event.is_set()
+        # Matching token: cancels.
+        resp = tr_client.post(
+            "/transcripts/api/embed-subtitles/cancel", json={"token": token}
+        )
+        assert resp.status_code == 200
+        assert transcripts_server._embed_cancel_event.is_set()
+    finally:
+        transcripts_server._embed_cancel_event.clear()
+        transcripts_server._release_embed_slot()
 
 
 # ---- Normalize audio ----
@@ -1357,7 +1374,8 @@ def test_normalize_audio_happy_path_auto_track(tr_client, tmp_path, monkeypatch)
     assert resp.status_code == 200
     assert resp.mimetype == "application/x-ndjson"
     header, result, done = _ndjson(resp)
-    assert header == {"total": 1}
+    assert header["total"] == 1
+    assert header["token"]  # echoed by the Stop button to scope the cancel
     assert done == {"done": True}
     assert result["index"] == 0
     assert result["participant"] == "P01"
@@ -1744,12 +1762,24 @@ def test_normalize_slot_release_is_scoped_to_its_own_run(monkeypatch):
     assert transcripts_server._normalize_busy is False
 
 
-def test_normalize_audio_cancel_route_sets_the_event(tr_client):
-    transcripts_server._normalize_cancel_event.clear()
-    resp = tr_client.post("/transcripts/api/normalize-audio/cancel")
-    assert resp.status_code == 200
-    assert transcripts_server._normalize_cancel_event.is_set()
-    transcripts_server._normalize_cancel_event.clear()
+def test_normalize_audio_cancel_route_is_token_scoped(tr_client):
+    """Token-scoped like the embed cancel: see that test for the rationale."""
+    token = transcripts_server._claim_normalize_slot()
+    assert token is not None
+    try:
+        resp = tr_client.post(
+            "/transcripts/api/normalize-audio/cancel", json={"token": "stale"}
+        )
+        assert resp.status_code == 200
+        assert not transcripts_server._normalize_cancel_event.is_set()
+        resp = tr_client.post(
+            "/transcripts/api/normalize-audio/cancel", json={"token": token}
+        )
+        assert resp.status_code == 200
+        assert transcripts_server._normalize_cancel_event.is_set()
+    finally:
+        transcripts_server._normalize_cancel_event.clear()
+        transcripts_server._release_normalize_slot()
 
 
 # ---- Friction endpoints ----

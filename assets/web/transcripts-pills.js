@@ -339,7 +339,9 @@
       var offSheet = document.createElement("span");
       offSheet.className = "pill-offsheet-badge";
       offSheet.setAttribute("aria-label", "Not in sheet");
-      offSheet.title = "Source video found on disk; not a column in the loaded sheet";
+      // data-tooltip, matching the stale badge beside it — two badges in one
+      // pill must not mix tooltip systems (different delay and styling).
+      offSheet.setAttribute("data-tooltip", "Source video found on disk; not a column in the loaded sheet");
       pill.appendChild(offSheet);
     }
 
