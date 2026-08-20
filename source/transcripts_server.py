@@ -363,10 +363,14 @@ def api_participants() -> FlaskResponse:
 
     # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
     # ``in_sheet: False``, and marking them all would be noise.
+    # Bootstrap channel for shared frontend config (hotkey overrides etc.),
+    # mirroring screenspace/workflows: the page's only other config path is the
+    # cross-frontend /studio/api/sheet poll, which is status-gated and late.
     return ok(
         participants=result,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
         transcribe_prewarm=_transcribe_prewarm_setting(),
+        config=utils.get_frontend_config(),
     )
 
 
@@ -2576,6 +2580,15 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     the stored reference is replaced rather than going stale.
     """
     global _manifest, _worker, _participant_source
+
+    # A sheet swap re-runs this init: detach and stop the old worker daemon
+    # before any state is replaced — a transcription finishing while the lines
+    # below run would otherwise fire on_task_complete, re-merge its result
+    # into the replacement manifest past the cleared _merged_task_ids, and
+    # start thinking-agent chains against the new sheet.
+    if _worker is not None:
+        _worker.on_task_complete = None
+        _worker.stop()
 
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()

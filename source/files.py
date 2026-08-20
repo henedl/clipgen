@@ -354,6 +354,45 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
     return entries
 
 
+def derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
+    """Return ``{type, id_or_path, label, worksheet}`` identifying *worksheet*.
+
+    This triple keys the per-source filename overrides in ``start.json`` and
+    the Start overlay's recent-projects entries. Shared by the server (picker
+    display, override seeding) and the CLI launch path, so both derive the
+    same identity for the same worksheet.
+    """
+    if worksheet is None:
+        return None
+    try:
+        import excel_io
+
+        if isinstance(worksheet, excel_io.ExcelSheetAdapter):
+            path = getattr(worksheet, "_workbook_path", "") or ""
+            if not path:
+                return None
+            return {
+                "type": "excel",
+                "id_or_path": path,
+                "label": Path(path).name,
+                "worksheet": getattr(worksheet, "title", ""),
+            }
+    except ImportError:
+        pass  # no excel_io in this build; fall through to the gspread branch
+    # gspread Worksheet (or anything quacking like one): use the parent
+    # spreadsheet title as both the identifier and the label.
+    parent = getattr(worksheet, "spreadsheet", None)
+    title = getattr(parent, "title", "") if parent is not None else ""
+    if not title:
+        return None
+    return {
+        "type": "google",
+        "id_or_path": title,
+        "label": title,
+        "worksheet": getattr(worksheet, "title", ""),
+    }
+
+
 def find_participant_record(
     sheet_context: Any, participant_id: str
 ) -> dict[str, Any] | None:

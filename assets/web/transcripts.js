@@ -209,9 +209,9 @@
   // With no spreadsheet open, /studio/api/sheet answers {ok, sheet_loaded: false}
   // with no rows — nothing this page can index — so stop asking after the first
   // such answer. Cleared on tab focus (see startXrefPolling's resume): a sheet
-  // opened from another tab reloads only that document, not this one. The first
-  // tick always runs, which matters because this handler is the page's only
-  // caller of clipgenApplyConfig.
+  // opened from another tab reloads only that document, not this one. The
+  // clipgenApplyConfig call below is a refresh only; loadParticipants applies
+  // the same config from this page's own api/participants at boot.
   var _sheetXrefIdle = false;
 
   function loadCrossRefData() {
@@ -714,6 +714,10 @@
         _clearBootPlaceholders();
         return;
       }
+      // Primary config channel for this page: the only other caller of
+      // clipgenApplyConfig here is the xref poller's /studio/api/sheet leg,
+      // which is status-gated and lands (if ever) after first render.
+      if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants;
       state.hasSheet = !!data.has_sheet;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";

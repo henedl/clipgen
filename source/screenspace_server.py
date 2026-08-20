@@ -2843,6 +2843,15 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
     global _manifest, _worker, _participant_source
 
+    # A sheet swap re-runs this init: detach and stop the old worker daemon
+    # before any state is replaced — a task finishing while the lines below
+    # run would otherwise fire on_task_complete and write the old worker's
+    # tasks/events into the replacement manifest.
+    if _worker is not None:
+        _worker.on_task_complete = None
+        _worker.on_progress_update = None
+        _worker.stop()
+
     _manifest = screenspace.load_screenspace_manifest()
     _backfill_missing_events(_manifest)
 

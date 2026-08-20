@@ -1848,7 +1848,12 @@
 
     apiGet("api/participants").then(function (data) {
       if (!data.ok) return;
-      if (data.config) clipgenApplyConfig(data.config);
+      if (data.config) {
+        clipgenApplyConfig(data.config);
+        // boot() seeded state.ann* (and the annotate toolbar painted) from the
+        // JS defaults before this fetch landed; re-seed from the real config.
+        if (CO.syncAnnotationDefaults) CO.syncAnnotationDefaults();
+      }
       updateTimelineHint(); // the double-click hint follows the fetched config
       state.hasSheet = !!data.has_sheet;
       state.participants = data.participants || [];
