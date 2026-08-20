@@ -18,8 +18,8 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 **Core:** Fix: A damaged settings file now warns you instead of quietly forgetting your saved filename overrides.
 
 ## v0.15.16 — 2026-08-20
-**Transcripts:** Feat: Transcribe only part of a recording. Set in and out markers with I and O, and every transcribe button obeys them.
-**Transcripts:** Feat: Normalize Audio evens out loudness across your source videos in one pass, so quiet participants stop needing a volume ride.
+**Transcripts:** Feat: Transcribe only part of a recording. Set in and out markers with I and O.
+**Transcripts:** Feat: Normalize Audio quick action to even out loudness across videos.
 **Composer:** Fix: Burn and GIF exports can be cancelled, and text you were typing is kept instead of thrown away when you click elsewhere.
 
 ## v0.15.15 — 2026-08-19
@@ -67,7 +67,7 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 **Transcripts:** Feat: Windows can install Ollama from inside the app, the same as macOS — no terminal, no admin prompt.
 
 ## v0.15.0 — 2026-08-13
-**Core:** Fix: The installed desktop app could not transcribe at all. A file Whisper needs to skip silence was missing from the build, so every transcription failed immediately. Running from source was unaffected.
+**Core:** Fix: The installed desktop app could not transcribe at all. A file Whisper needs to skip silence was missing from the build, so every transcription failed immediately.
 
 ## v0.14.75 — 2026-08-09
 **Core:** Feat: Starting up shows a progress page naming what it is doing, instead of a blank window, and transcription now tells you when it is loading the model rather than just waiting.
