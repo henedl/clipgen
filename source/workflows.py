@@ -512,7 +512,7 @@ def _exec_friction(
     if not ollama_client.is_available():
         return {"friction": [], "__note__": "Ollama not available. Friction skipped"}
     scored = friction.score_segments(segments)
-    candidates = friction.select_candidates(scored)
+    candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
     moments = thinking_agents.find_friction_moments(
         summary,
         segments,
@@ -520,7 +520,11 @@ def _exec_friction(
         model=params.get("model") or None,
         cancel_event=ctx.cancel_event,
     )
-    return {"friction": moments or []}
+    if moments is None:
+        # "Didn't run" (model failure / unrenderable candidates) must not read
+        # as "ran and found nothing".
+        return {"friction": [], "__note__": "Friction analysis failed. See log"}
+    return {"friction": moments}
 
 
 def _exec_report(

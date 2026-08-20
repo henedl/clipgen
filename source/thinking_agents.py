@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import math
 import re
 import threading
 from collections.abc import Callable
@@ -238,14 +239,14 @@ def _find_closest_segment(
         return None
     pos = bisect.bisect_left(sorted_starts, target_seconds)
     best_pos: int | None = None
-    best_dist = tolerance + 1
+    best_dist = math.inf
     for candidate in (pos - 1, pos):
         if 0 <= candidate < len(sorted_starts):
             dist = abs(sorted_starts[candidate] - target_seconds)
             if dist < best_dist:
                 best_dist = dist
                 best_pos = candidate
-    if best_pos is None:
+    if best_pos is None or best_dist > tolerance:
         return None
     return sorted_indices[best_pos]
 
@@ -343,12 +344,30 @@ def find_citations(
         utils.warning_print("Citations: no response from the model")
         return None
 
-    parsed = _parse_citation_response(_strip_think(response), segments)
+    stripped = _strip_think(response)
+    if not _CITATION_LINE_RE.search(stripped):
+        # A non-empty response with zero lines in the expected "N: ts" shape
+        # (markdown bolding, "1." numbering, prose) is a parse failure, not
+        # "no sources exist" — committing a full list of empty refs would look
+        # identical to the latter in the UI. A response that *does* match the
+        # format but answers NONE everywhere still commits below.
+        utils.warning_print("Citations: response did not match the expected format")
+        return None
+    parsed = _parse_citation_response(stripped, segments)
 
     citations: list[dict[str, Any]] = []
     for i, sentence in enumerate(sentences):
         refs = sorted(parsed.get(i, []), key=lambda r: r["start"])
-        citations.append({"sentence": sentence, "refs": refs[:_MAX_REFS_PER_CLAIM]})
+        # The model may cite two timestamps that resolve to one segment;
+        # duplicates would eat the per-claim ref budget.
+        seen_segments: set[int] = set()
+        deduped: list[dict[str, Any]] = []
+        for ref in refs:
+            if ref["segment_index"] in seen_segments:
+                continue
+            seen_segments.add(ref["segment_index"])
+            deduped.append(ref)
+        citations.append({"sentence": sentence, "refs": deduped[:_MAX_REFS_PER_CLAIM]})
 
     total_refs = sum(len(c["refs"]) for c in citations)
     utils.verbose_print(
@@ -440,12 +459,20 @@ def _extract_json_array(text: str) -> list[Any]:
     def _is_object_array(data: Any) -> bool:
         return isinstance(data, list) and all(isinstance(x, dict) for x in data)
 
+    # Only a *non-empty* object array wins the scan — `[]` matches trivially,
+    # so an empty array anywhere before the payload ('{"moments": [], ...}')
+    # would otherwise end the search with zero results. A genuine empty array
+    # is remembered and returned only after nothing better turns up.
+    saw_empty_array = False
+
     fence = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", cleaned, re.DOTALL)
     if fence:
         try:
             data = json.loads(fence.group(1))
             if _is_object_array(data):
-                return data
+                if data:
+                    return data
+                saw_empty_array = True
         except json.JSONDecodeError:
             pass
 
@@ -455,11 +482,18 @@ def _extract_json_array(text: str) -> list[Any]:
         try:
             data, _ = decoder.raw_decode(cleaned[start:])
             if _is_object_array(data):
-                return data
+                if data:
+                    return data
+                saw_empty_array = True
         except json.JSONDecodeError:
             pass
         start = cleaned.find("[", start + 1)
 
+    if saw_empty_array:
+        # The model explicitly answered with an empty array — that IS the
+        # result; salvaging stray objects from surrounding prose would
+        # fabricate entries the model never returned.
+        return []
     return list(_extract_json_objects(cleaned))
 
 
@@ -471,7 +505,11 @@ def _format_friction_candidates(
     Context segments are merged into a single ordered, de-duplicated block so
     adjacent candidates don't repeat lines.
     """
-    id_to_idx = {seg.get("id"): i for i, seg in enumerate(segments)}
+    # Mirror friction.score_segments' id scheme exactly: it synthesizes
+    # str(index) for id-less segments (the Workflows path, where segments are
+    # never manifest-saved and so never get ids), and a lookup keyed on the
+    # raw id would drop every candidate there.
+    id_to_idx = {(seg.get("id") or str(i)): i for i, seg in enumerate(segments)}
     include: set[int] = set()
     for cand in candidates:
         idx = id_to_idx.get(cand.get("id"))
@@ -559,8 +597,9 @@ def find_friction_moments(
       - a list of moments (possibly empty) when the model responded — empty means
         it ran but found nothing,
       - ``[]`` when there are no candidates to send,
-      - ``None`` when the model call itself failed (unavailable / wrong model /
-        cancelled), so the caller can distinguish "no moments" from "didn't run".
+      - ``None`` when no model call was made or it failed (unavailable / wrong
+        model / cancelled / candidates that couldn't be rendered), so the
+        caller can distinguish "no moments" from "didn't run".
     """
     if not candidates:
         return []
@@ -569,7 +608,11 @@ def find_friction_moments(
 
     block = _format_friction_candidates(segments, candidates)
     if not block:
-        return []
+        # Candidates exist but none rendered (ids drifted after an edit, or
+        # every context segment is empty) — no model call was made, so this is
+        # "didn't run", not "ran and found nothing".
+        utils.warning_print("Friction: no candidate segments could be rendered")
+        return None
 
     prompt = config.OLLAMA_FRICTION_PROMPT.format(
         summary=_truncate_middle(summary, _MAX_FRICTION_SUMMARY_CHARS),
@@ -596,7 +639,7 @@ def find_friction_moments(
     # Keep only moments that cite at least one real segment, trimming any
     # hallucinated IDs. An unsourced moment can't be seeked to or quoted, so it
     # must never reach the manifest.
-    valid_ids = {seg.get("id") for seg in segments if seg.get("id")}
+    valid_ids = {(seg.get("id") or str(i)) for i, seg in enumerate(segments)}
     moments: list[dict[str, Any]] = []
     for moment in _parse_friction_response(response):
         kept = [sid for sid in moment["segment_ids"] if sid in valid_ids]

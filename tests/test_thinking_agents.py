@@ -671,3 +671,37 @@ class TestRunReport:
         kwargs = mock_generate.call_args[1]
         assert kwargs["cancel_event"] is evt
         assert kwargs["on_token"] is sink
+
+
+class TestCitationParseHardening:
+    @patch("thinking_agents.ollama_client.generate")
+    def test_unparseable_format_returns_none(self, mock_generate):
+        """A non-empty answer with zero "N: ts" lines (markdown bolding, "1."
+        numbering) is a parse failure — committing all-empty refs would read
+        as "no sources exist"."""
+        mock_generate.return_value = "**1:** 0:05\n2. 0:10\nClaim 3 - 0:15"
+        segments = [{"start": 0, "end": 5, "text": "Some text"}]
+        assert thinking_agents.find_citations("A claim.", segments) is None
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_duplicate_segment_refs_are_deduped(self, mock_generate):
+        """Two timestamps resolving to one segment must not eat the per-claim
+        ref budget as two entries."""
+        mock_generate.return_value = "1: 0:00, 0:02, 0:10"
+        segments = [
+            {"start": 0, "end": 5, "text": "Part A"},
+            {"start": 10, "end": 15, "text": "Part B"},
+        ]
+        result = thinking_agents.find_citations("A claim.", segments)
+        assert result is not None
+        assert [r["segment_index"] for r in result[0]["refs"]] == [0, 1]
+
+
+class TestFindClosestSegmentTolerance:
+    def test_distance_beyond_tolerance_is_rejected(self):
+        # 5.9 s away with the default 5.0 s tolerance: the old
+        # `best_dist = tolerance + 1` bound effectively accepted up to 6.0 s.
+        assert thinking_agents._find_closest_segment(5.9, [0.0], [0]) is None
+
+    def test_distance_at_tolerance_is_accepted(self):
+        assert thinking_agents._find_closest_segment(5.0, [0.0], [0]) == 0
