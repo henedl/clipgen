@@ -207,9 +207,25 @@
   // The summary poll (AGENT_DESCRIPTORS.summary._poller) is the fallback used
   // when EventSource is unsupported or the stream drops mid-run.
   var _summaryStream = null;
+  // Which participant's summary is currently painted in the panel. Drives the
+  // clear-on-switch in loadSummary; deliberately NOT reset by clearSummary
+  // itself (a cleared panel plus a skipped re-clear is still a cleared panel).
+  var _summaryPaintedPid = null;
 
   function loadSummary(pid) {
     var ver = state.participantReqVer;
+
+    // On a real participant switch, blank the previous summary before
+    // fetching: the catch below deliberately leaves painted panes alone on
+    // transient failures, which is only safe when what is painted belongs to
+    // *this* participant — otherwise a failed switch kept the previous
+    // participant's summary on screen under the new selection. Tracked by
+    // painted pid, not selectedParticipant, so same-participant refetches
+    // (tab refocus, mid-run re-arm) never blank a live panel.
+    if (_summaryPaintedPid !== pid) {
+      clearSummary();
+      _summaryPaintedPid = pid;
+    }
 
     // The analysis panel must be visible whenever we surface agent state for the
     // selected, transcribed participant. renderSummaryGenerating/renderSummary
@@ -884,10 +900,13 @@
     // must keep the programmatic scores on screen: they come from the
     // deterministic scorer and owe nothing to the LLM. Wiping them here is what
     // blanked the histogram, chips, tinting and timeline band for a whole run.
+    // On a real switch, clear the DOM too (clearFriction), not just the state:
+    // the fetch's catch below deliberately leaves painted panes alone on
+    // transient failures, which is only safe when what is painted belongs to
+    // *this* participant — otherwise a failed switch kept the previous
+    // participant's histogram and chips on screen.
     if (state.frictionPid !== pid) {
-      state.frictionData = null;
-      state.frictionBySegId = {};
-      state.frictionMomentIndex = -1;
+      clearFriction();
     }
     state.frictionPid = pid;
     state.frictionGenerating = false;
