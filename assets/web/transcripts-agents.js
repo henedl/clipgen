@@ -134,6 +134,7 @@
       _stopAgentPoll(desc);
       var started = Date.now();
       var ver = state.participantReqVer;
+      desc._failStreak = 0;
       desc._poller = createPoller(function () {
         if (ver !== state.participantReqVer ||
             state.selectedParticipant !== pid ||
@@ -144,6 +145,7 @@
         }
         apiGet(desc.urlBase + "/" + pid).then(function (data) {
           if (ver !== state.participantReqVer) return;
+          desc._failStreak = 0;
           if (data.ok && desc.getResult(data)) {
             _stopAgentPoll(desc);
             desc.onResult(pid, data);
@@ -153,10 +155,25 @@
             _stopAgentPoll(desc);
             desc.onEmpty(pid, data);
           }
-        }).catch(function () {
+        }).catch(function (err) {
           if (ver !== state.participantReqVer) return;
-          _stopAgentPoll(desc);
-          desc.onEmpty(pid);
+          if (err && err.status === 404) {
+            // The endpoint 404s once the run is over with nothing persisted
+            // (find_citations' failure return, Ollama down) — the genuine
+            // empty case.
+            _stopAgentPoll(desc);
+            desc.onEmpty(pid);
+            return;
+          }
+          // Transient transport blip or server hiccup mid-run: keep the poll
+          // armed and the rendered panel untouched — one failed GET must not
+          // wipe a five-minute Ollama run. Only a streak gives up, and via
+          // onStale so the painted state survives.
+          desc._failStreak = (desc._failStreak || 0) + 1;
+          if (desc._failStreak >= 3) {
+            _stopAgentPoll(desc);
+            desc.onStale(pid);
+          }
         });
       }, desc.interval, { runImmediately: false, label: "transcripts.agent." + desc.key });
       desc._poller.start();
@@ -216,10 +233,13 @@
       } else {
         renderSummaryEmpty();
       }
-    }).catch(function () {
+    }).catch(function (err) {
       if (ver !== state.participantReqVer) return;
-      // Ollama unavailable or no summary — show the empty-state CTA.
-      renderSummaryEmpty();
+      // 404 = genuinely no summary — show the empty-state CTA. Any other
+      // failure is a transport blip (e.g. a refocus reload racing a server
+      // restart): leave whatever is painted alone rather than blanking a
+      // possibly-live panel.
+      if (err && err.status === 404) renderSummaryEmpty();
     });
   }
 
@@ -882,9 +902,11 @@
       } else {
         renderFrictionEmpty();
       }
-    }).catch(function () {
+    }).catch(function (err) {
       if (ver !== state.participantReqVer) return;
-      renderFrictionEmpty();
+      // Same contract as loadSummary: only a 404 (no result exists) may blank
+      // the panel; a transient failure leaves the painted state alone.
+      if (err && err.status === 404) renderFrictionEmpty();
     });
   }
 

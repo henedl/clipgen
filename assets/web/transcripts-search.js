@@ -22,6 +22,11 @@
 
   var SEARCH_DEBOUNCE = 300;
   var _searchTimer = null;
+  // Request generation: the debounce limits how many requests fire, not their
+  // ordering. A slow response for an old query landing after a fast one for
+  // the current query must not overwrite state.searchResults — "Mark All"
+  // reads it and would persist marks for a query the user already replaced.
+  var _searchVer = 0;
 
   function markAllSearchResults() {
     if (!state.searchResults || !state.searchResults.results) return;
@@ -54,6 +59,7 @@
       clearTimeout(_searchTimer);
       var q = input.value.trim();
       if (q.length < 2) {
+        _searchVer++; // invalidate any in-flight response so it can't re-show
         hideSearchResults();
         return;
       }
@@ -88,7 +94,9 @@
 
   function doSearch(query) {
     state.searchQuery = query;
+    var reqVer = ++_searchVer;
     apiGet("api/search?q=" + encodeURIComponent(query)).then(function (data) {
+      if (reqVer !== _searchVer) return; // a newer query superseded this one
       if (!data || !data.ok) { _renderSearchError(); return; }
       // Merge client-side search of partial segments for the streaming participant
       if (state.streamingParticipant) {
@@ -102,7 +110,10 @@
       }
       state.searchResults = data;
       renderSearchResults(data);
-    }).catch(function () { _renderSearchError(); });
+    }).catch(function () {
+      if (reqVer !== _searchVer) return;
+      _renderSearchError();
+    });
   }
 
   function _searchPartialSegments(query, pid) {

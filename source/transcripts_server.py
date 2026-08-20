@@ -373,10 +373,15 @@ def api_participants() -> FlaskResponse:
 
     # ``has_sheet`` gates the off-sheet badge: with no sheet every entry is
     # ``in_sheet: False``, and marking them all would be noise.
+    # ``config`` rides along because this is the page's boot fetch: in a
+    # transcripts-only session nothing else delivers get_frontend_config(),
+    # leaving the page on utils.js' hardcoded fallbacks (customized severity
+    # labels, friction categories, and hotkey rebinds silently ignored).
     return ok(
         participants=result,
         has_sheet=bool(_participant_source and _participant_source["sheet_context"]),
         transcribe_prewarm=_transcribe_prewarm_setting(),
+        config=utils.get_frontend_config(),
     )
 
 

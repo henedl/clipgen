@@ -714,6 +714,12 @@
         _clearBootPlaceholders();
         return;
       }
+      // The page's boot fetch carries the live server config: in a
+      // transcripts-only session the cross-ref sheet fetch (the historical
+      // sole clipgenApplyConfig caller) never runs, leaving CLIPGEN_CONFIG on
+      // the hardcoded fallbacks — customized severity labels, friction
+      // categories, and hotkey rebinds would silently not apply here.
+      if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants;
       state.hasSheet = !!data.has_sheet;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
@@ -1984,15 +1990,37 @@
   }
 
   function updateMarkLabel(markId, label) {
-    apiPut("api/marks/" + markId, { label: label || null });
     if (state.streamingParticipant) {
+      apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+        showToast("Failed to update mark");
+      });
       for (var key in _streamingMarks) {
         if (_streamingMarks[key].id === markId) {
           _streamingMarks[key].label = label || "";
           break;
         }
       }
+      return;
     }
+    // Mirror updateMarkCategory/Severity: write the state and repaint
+    // optimistically, restore on failure. Without the state write the badge
+    // never appears, reopening the popover shows the old label, and a later
+    // category/severity repaint resurrects it.
+    var found = _findSegmentByMarkId(markId);
+    if (!found) {
+      apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+        showToast("Failed to update mark");
+      });
+      return;
+    }
+    var prevLabel = found.mark.label;
+    found.mark.label = label || "";
+    _paintSegmentMark(found.idx, found.mark);
+    apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+      found.mark.label = prevLabel;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
+    });
   }
 
   function updateMarkSeverity(markId, severity) {
@@ -2628,30 +2656,34 @@
     return apiPost("api/models/ollama/pull", { model: model }).then(function (data) {
       if (!data || !data.ok) return false;
       return new Promise(function (resolve) {
+        // createPoller, not a raw setInterval: the install dialog can sit
+        // open in a backgrounded tab for minutes, and this must pause with
+        // it instead of streaming 1 Hz requests at the server.
         var misses = 0;
-        var poll = setInterval(function () {
+        var poller = createPoller(function () {
           if (isCancelled && isCancelled()) {
-            clearInterval(poll);
+            poller.stop();
             resolve(false);
             return;
           }
           apiGet("api/models/ollama/pull-status?model=" + encodeURIComponent(model))
             .then(function (st) {
               if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { clearInterval(poll); resolve(false); }
+                if (++misses >= 20) { poller.stop(); resolve(false); }
                 return;
               }
               misses = 0;
               if (onProgress) onProgress(st);
               if (st.done) {
-                clearInterval(poll);
+                poller.stop();
                 resolve(!!st.succeeded);
               }
             })
             .catch(function () {
-              if (++misses >= 20) { clearInterval(poll); resolve(false); }
+              if (++misses >= 20) { poller.stop(); resolve(false); }
             });
-        }, 1000);
+        }, 1000, { runImmediately: true, label: "transcripts.ollamaPull" });
+        poller.start();
       });
     }).catch(function () { return false; });
   }
@@ -2666,30 +2698,32 @@
       if (!data || !data.ok) return false;
       if (data.already_installed) return true;
       return new Promise(function (resolve) {
+        // Same createPoller rationale as installOllamaModel above.
         var misses = 0;
-        var poll = setInterval(function () {
+        var poller = createPoller(function () {
           if (isCancelled && isCancelled()) {
-            clearInterval(poll);
+            poller.stop();
             resolve(false);
             return;
           }
           apiGet("api/models/ollama/install-status")
             .then(function (st) {
               if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { clearInterval(poll); resolve(false); }
+                if (++misses >= 20) { poller.stop(); resolve(false); }
                 return;
               }
               misses = 0;
               if (onProgress) onProgress(st);
               if (st.done) {
-                clearInterval(poll);
+                poller.stop();
                 resolve(!!st.succeeded);
               }
             })
             .catch(function () {
-              if (++misses >= 20) { clearInterval(poll); resolve(false); }
+              if (++misses >= 20) { poller.stop(); resolve(false); }
             });
-        }, 1000);
+        }, 1000, { runImmediately: true, label: "transcripts.ollamaInstall" });
+        poller.start();
       });
     }).catch(function () { return false; });
   }
