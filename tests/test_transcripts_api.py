@@ -2562,7 +2562,7 @@ def test_persist_keeps_corrected_cache_for_unchanged_transcription(
     }
 
     class _FakeWorker:
-        def get_all_tasks(self):
+        def get_all_tasks(self, include_partials=True):
             return [_copy.deepcopy(completed)]  # mirror the real deepcopy contract
 
     monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
@@ -2683,7 +2683,7 @@ def test_on_task_complete_registers_summary_before_disk_write(
     }
 
     class _FakeWorker:
-        def get_all_tasks(self):
+        def get_all_tasks(self, include_partials=True):
             return [dict(completed_task)]
 
     monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
@@ -3007,7 +3007,7 @@ class _CompletedTasksWorker:
     def __init__(self, tasks):
         self._tasks = tasks
 
-    def get_all_tasks(self):
+    def get_all_tasks(self, include_partials=True):
         return self._tasks
 
 
@@ -3186,3 +3186,31 @@ class TestMediaRouteFollowsTheInputDir:
         (chosen / "study_P03.mp4").write_bytes(b"chosen")
         monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
         assert tr_client.get("/transcripts/media/study_P03.mp4").status_code == 200
+
+
+def test_reinit_stops_previous_worker(tmp_path, monkeypatch):
+    """A sheet swap re-inits the blueprint; the old worker must be retired.
+
+    Left alive, its on_task_complete resolves the module globals at call time
+    and would merge the old study's segments into the new study's manifest —
+    and every swap would leak a live worker thread.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_manifest", {})
+    monkeypatch.setattr(transcripts_server, "_participant_source", None)
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    transcripts_server._init_transcripts_state()
+    first = transcripts_server._worker
+    assert first is not None
+    try:
+        transcripts_server._init_transcripts_state()
+        second = transcripts_server._worker
+        assert second is not first
+        assert first.on_task_complete is None
+        assert first._running is False
+    finally:
+        if transcripts_server._worker is not None:
+            transcripts_server._worker.stop(join_timeout=2.0)

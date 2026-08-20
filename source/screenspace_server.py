@@ -2843,6 +2843,18 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
     global _manifest, _worker, _participant_source
 
+    # Retire the previous session's worker before touching any state: its
+    # callbacks resolve the module globals at call time, so left alive it
+    # would persist the old study's task results into the *new* study's
+    # manifest. Detach the callbacks and cancel first so the thread can only
+    # finish inertly; the short join keeps a swap request from blocking on an
+    # in-flight scan.
+    if _worker is not None:
+        _worker.on_task_complete = None
+        _worker.on_progress_update = None
+        _worker.cancel_all()
+        _worker.stop(join_timeout=2.0)
+
     _manifest = screenspace.load_screenspace_manifest()
     _backfill_missing_events(_manifest)
 

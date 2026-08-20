@@ -2166,7 +2166,10 @@ def _merge_completed_results_locked() -> list[str]:
     if not _worker:
         return []
     merged_pids: list[str] = []
-    for task in _worker.get_all_tasks():
+    # include_partials=False: the merge only needs status/result, and the full
+    # copy would deep-copy the in-flight task's growing partial_segments tail
+    # on every debounced persist — all while holding _manifest_lock.
+    for task in _worker.get_all_tasks(include_partials=False):
         if (
             task["status"] == transcripts.TASK_STATUS_COMPLETED
             and task.get("result")
@@ -2179,7 +2182,6 @@ def _merge_completed_results_locked() -> list[str]:
             src[pid] = existing
             _merged_task_ids.add(task["id"])
             merged_pids.append(pid)
-    _manifest["tasks"] = _worker.get_all_tasks()
     # Queue the completion side effects for _on_task_complete no matter which
     # caller performed the merge (a debounced _do_persist can win the race).
     _pending_chain_pids.extend(merged_pids)
@@ -2360,6 +2362,28 @@ class AgentOrchestrator:
         if event is not None:
             event.set()
         return True
+
+    def stop_all(self) -> None:
+        """Abort every in-flight run across all agents (used on sheet swap).
+
+        The cancel events gate the commit step in ``run_agent``, so a run that
+        finishes after this returns discards its result instead of writing it
+        into the freshly-swapped manifest.
+        """
+        events: list[threading.Event] = []
+        with self._lock:
+            for agent_key, pids in self._in_flight.items():
+                for participant in pids:
+                    event = self._cancel_events.get(agent_key, {}).get(participant)
+                    if event is not None:
+                        events.append(event)
+                pids.clear()
+                self._started_at.get(agent_key, {}).clear()
+        with self._partial_lock:
+            for per_agent in self._partial.values():
+                per_agent.clear()
+        for event in events:
+            event.set()
 
     def next_eligible(
         self,
@@ -2577,6 +2601,18 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     """
     global _manifest, _worker, _participant_source
 
+    # Retire the previous session's background work before touching any state:
+    # a lingering worker thread or agent run resolves the module globals at
+    # call time, so left alive it would merge the old study's segments and
+    # agent results into the *new* study's manifest. Detach the callback and
+    # cancel first so the thread can only finish inertly; the short join keeps
+    # a swap request from blocking on an in-flight Whisper segment.
+    if _worker is not None:
+        _worker.on_task_complete = None
+        _worker.cancel_all()
+        _worker.stop(join_timeout=2.0)
+    _orchestrator.stop_all()
+
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()
     _pending_chain_pids.clear()
@@ -2587,13 +2623,6 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
 
     _worker = transcripts.TranscriptWorker()
     _worker.on_task_complete = _on_task_complete
-    _worker.restore_tasks(_manifest.get("tasks", []))
-    # Restored completed tasks already have their segments saved in the manifest
-    # (possibly with later edits); seed the merged set so a startup persist does
-    # not re-apply their frozen results over those segments.
-    for task in _worker.get_all_tasks():
-        if task["status"] == transcripts.TASK_STATUS_COMPLETED and task.get("result"):
-            _merged_task_ids.add(task["id"])
     _worker.start()
 
     # Reclaim a stale empty manifest left by a prior abandoned session: the

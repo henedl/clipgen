@@ -1561,19 +1561,27 @@ class TranscriptWorker:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
-        """Signal the worker thread to stop."""
+    def stop(self, join_timeout: float = 15) -> None:
+        """Signal the worker thread to stop.
+
+        *join_timeout* bounds the wait for the thread: shutdown can afford the
+        full default, while a sheet swap passes a short one — the thread is a
+        daemon and, once ``_running`` is False and the callbacks are detached,
+        it can only finish its current (cancelled) task and exit.
+        """
         self._running = False
         self._queue.put((0, _TRANSCRIPT_SENTINEL))
         if self._thread is not None:
-            self._thread.join(timeout=15)
+            self._thread.join(timeout=join_timeout)
 
-    def restore_tasks(self, tasks: list[dict[str, Any]]) -> None:
-        """Load historical tasks (completed/failed/cancelled) for display."""
+    def cancel_all(self) -> None:
+        """Cancel every queued or running task (used when the worker is retired)."""
         with self._lock:
-            for t in tasks:
-                if t.get("id"):
-                    self._tasks[t["id"]] = copy.deepcopy(t)
+            for task in self._tasks.values():
+                if task["status"] == TASK_STATUS_QUEUED:
+                    task["status"] = TASK_STATUS_CANCELLED
+                elif task["status"] == TASK_STATUS_RUNNING:
+                    task["_cancelled"] = True
 
     def enqueue(self, task: dict[str, Any]) -> str:
         """Add a task to the queue. Returns the task ID."""
