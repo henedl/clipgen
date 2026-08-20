@@ -219,6 +219,7 @@ _INSPECTABLE_PORT_TYPES = frozenset(
         "summary",
         "citations",
         "friction",
+        "report",
         "manifest",
         "viewerHtml",
         "scalar",

@@ -296,6 +296,38 @@ def test_catalog_serves_param_editor_metadata(wf_client):
     assert _param("summarize", "model")["datalist"] == "ollama-models"
 
 
+def test_catalog_serves_coverage_gap_nodes(wf_client):
+    # PR 3 of the workflows review: every app capability with backend support
+    # gets a node — the attention detector (+ heatmap style), the report agent,
+    # transcript marks, post-processing, and the gallery viewer.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    assert {
+        "ss_attention",
+        "report",
+        "transcript_marks",
+        "post_process",
+        "gallery_viewer",
+    } <= set(by_id)
+    assert "attention" in _param("detect", "detector")["choices"]
+    assert "attention" in _param("heatmap", "style")["choices"]
+    assert by_id["ss_attention"].get("multitoolStep") is False
+    assert by_id["report"]["outputs"] == [{"name": "report", "type": "report"}]
+    # Marks category enum stays in lockstep with config.MARK_CATEGORIES.
+    assert set(_param("transcript_marks", "category")["choices"]) == {""} | set(
+        config.MARK_CATEGORIES
+    )
+    # Post-process op-specific knobs hide behind their operation.
+    assert _param("post_process", "target_mb")["showIf"] == {
+        "param": "operation",
+        "equals": "compress",
+    }
+
+
 def test_catalog_context_serves_region_names(wf_client, monkeypatch):
     import screenspace
 

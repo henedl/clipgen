@@ -721,7 +721,8 @@ body[data-frontend="workflows"] {
 .wf-port-dot[data-port-type="transcript"],
 .wf-port-dot[data-port-type="summary"],
 .wf-port-dot[data-port-type="citations"],
-.wf-port-dot[data-port-type="friction"] {
+.wf-port-dot[data-port-type="friction"],
+.wf-port-dot[data-port-type="report"] {
   --wf-port-color: var(--wf-type-insight);
 }
 .wf-port-dot[data-port-type="video"],

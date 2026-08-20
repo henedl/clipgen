@@ -347,7 +347,7 @@ _CLI_TASK_EXCLUDES = frozenset({"boundary", "multitool"})
 _WORKFLOWS_SEPARATE_NODES = frozenset({"multitool", "timelapse"})
 # In TOOLS but not yet a workflows node. A 14th tool must join specs, a
 # separate NODE_TYPES entry, or this set — otherwise the equality below fails.
-_WORKFLOWS_UNWIRED = frozenset({"attention"})
+_WORKFLOWS_UNWIRED: frozenset[str] = frozenset()
 # Timeline viewer has no per-event icon for timelapse (single output file).
 _VIEWER_ICON_SKIP = frozenset({"timelapse"})
 

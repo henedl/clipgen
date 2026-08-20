@@ -300,6 +300,36 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
+    "transcript_marks": {
+        "id": "transcript_marks",
+        "label": "Transcript Marks",
+        "description": "Read the participant's marked transcript lines (from the Transcripts page) as time ranges.",
+        "domain": "transcript",
+        "category": "Transcript",
+        "inputs": [{"name": "video", "type": "video"}],
+        "outputs": [
+            {"name": "timeRange", "type": "timeRange"},
+            {"name": "timestamps", "type": "timestamps"},
+        ],
+        "params": [
+            {
+                "name": "category",
+                "type": "enum",
+                "default": "",
+                "choices": [""] + sorted(config.MARK_CATEGORIES),
+                "label": "Category (blank = all)",
+            },
+            {
+                "name": "pad",
+                "type": "number",
+                "default": 2,
+                "min": 0,
+                "max": 30,
+                "label": "Pad (seconds)",
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "transcript_export": {
         "id": "transcript_export",
         "label": "Transcript Export",
@@ -359,6 +389,22 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "summary", "type": "summary", "optional": True},
         ],
         "outputs": [{"name": "friction", "type": "friction"}],
+        "params": [_OLLAMA_MODEL_PARAM],
+        "requires": [],
+    },
+    "report": {
+        "id": "report",
+        "label": "Report",
+        "description": "Synthesize a per-participant mini-report from the summary plus sheet observations and transcript marks (Ollama).",
+        "domain": "thinking",
+        "category": "Thinking",
+        "inputs": [
+            {"name": "summary", "type": "summary"},
+            # Carries the participant id, which scopes the observations/marks
+            # the report cites; without it the report covers the summary only.
+            {"name": "video", "type": "video", "optional": True},
+        ],
+        "outputs": [{"name": "report", "type": "report"}],
         "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
@@ -436,7 +482,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "name": "style",
                 "type": "enum",
                 "default": "change",
-                "choices": ["template", "flow", "change"],
+                "choices": ["template", "flow", "change", "attention"],
                 "label": "Style (needs matching upstream detector)",
             },
             {
@@ -621,10 +667,60 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": ["videoDir"],
     },
+    "post_process": {
+        "id": "post_process",
+        "label": "Post-process Video",
+        "description": "Embed subtitles, normalize audio, remux for browser seeking, or write a size-capped copy of the source video.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            # Embed-subtitles takes its cues from a wired transcript; the other
+            # operations ignore this port.
+            {"name": "transcript", "type": "transcript", "optional": True},
+        ],
+        "outputs": [
+            # Pass-through descriptor (pointed at the new file for the copy
+            # operations) so post-processing can chain ahead of transcription
+            # or clip cutting; artifacts carries the produced copies.
+            {"name": "video", "type": "video"},
+            {"name": "artifacts", "type": "artifacts"},
+        ],
+        "params": [
+            {
+                "name": "operation",
+                "type": "enum",
+                "default": "embed_subtitles",
+                "choices": [
+                    "embed_subtitles",
+                    "normalize_audio",
+                    "remux_faststart",
+                    "compress",
+                ],
+                "label": "Operation",
+            },
+            {
+                "name": "default_track",
+                "type": "bool",
+                "default": True,
+                "label": "Default subtitle track",
+                "showIf": {"param": "operation", "equals": "embed_subtitles"},
+            },
+            {
+                "name": "target_mb",
+                "type": "number",
+                "default": 100,
+                "min": 1,
+                "label": "Target size (MB)",
+                "showIf": {"param": "operation", "equals": "compress"},
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "data_export": {
         "id": "data_export",
         "label": "Data Export",
-        "description": "Export events and segments as analysis-ready JSON/CSV tables.",
+        "description": "Export events and segments as analysis-ready JSON/CSV tables (plus optional pins/friction tables from the app manifests).",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -640,6 +736,22 @@ NODE_TYPES: dict[str, NodeType] = {
                 "choices": ["both", "json", "csv"],
                 "label": "Format",
             },
+            # These tables come from the Screenspace / Transcripts manifests on
+            # disk (calibration pins, friction moments + scored segments), not
+            # from wired ports — opt-in so the node's default output stays
+            # driven by what's wired.
+            {
+                "name": "include_pins",
+                "type": "bool",
+                "default": False,
+                "label": "Include calibration pins",
+            },
+            {
+                "name": "include_friction",
+                "type": "bool",
+                "default": False,
+                "label": "Include friction tables",
+            },
         ],
         "requires": [],
     },
@@ -654,6 +766,17 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "events", "type": "events", "optional": True},
             {"name": "segments", "type": "segments", "optional": True},
         ],
+        "outputs": [{"name": "viewer", "type": "viewerHtml"}],
+        "params": [],
+        "requires": [],
+    },
+    "gallery_viewer": {
+        "id": "gallery_viewer",
+        "label": "Gallery Viewer",
+        "description": "Bundle screenshot/GIF artifacts into a standalone gallery HTML viewer.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [{"name": "artifacts", "type": "artifacts"}],
         "outputs": [{"name": "viewer", "type": "viewerHtml"}],
         "params": [],
         "requires": [],
@@ -759,6 +882,7 @@ _SS_DETECTOR_LABELS: dict[str, str] = {
     "scene": "Detect Scene",
     "inactivity": "Detect Inactivity",
     "boundary": "Detect Boundary",
+    "attention": "Detect Attention",
 }
 
 _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
@@ -772,6 +896,7 @@ _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
     "scene": "Detect scene changes against a reference fingerprint sampled from the region.",
     "inactivity": "Detect stretches of inactivity (no change) in the region.",
     "boundary": "Detect UI boundaries or edges appearing in the region.",
+    "attention": "Track predicted visual attention (saliency) and detect focus shifts. Full-frame.",
 }
 
 _INTERVAL_PARAM: ParamSpec = {
@@ -1057,6 +1182,24 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "default": config.SCREENSPACE_BOUNDARY_METRIC,
             "choices": ["hybrid", "phash", "scene"],
             "label": "Metric",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "attention": [
+        {
+            "name": "shift_threshold",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Shift threshold (0=auto)",
+        },
+        {
+            "name": "ema_alpha",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "max": 1,
+            "label": "Smoothing α (0=auto)",
         },
         _INTERVAL_PARAM,
     ],

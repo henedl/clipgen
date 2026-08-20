@@ -113,6 +113,179 @@ def test_region_notes_missing_name(tmp_path, monkeypatch):
     assert "__note__" not in out
 
 
+def test_transcript_marks_resolves_categories_and_pads(tmp_path, monkeypatch):
+    import transcripts
+
+    manifest = {
+        "source_transcripts": {
+            "P01": {
+                "segments": [
+                    {"start": 10.0, "end": 12.0, "text": "a"},
+                    {"start": 30.0, "end": 33.0, "text": "b"},
+                ]
+            }
+        },
+        "marks": [
+            {"segment_id": "P01:0", "category": "pain_point"},
+            {"segment_id": "P01:1", "category": "quote"},
+            {"segment_id": "P02:0", "category": "pain_point"},  # other participant
+            {"segment_id": "P01:9", "category": "pain_point"},  # stale index
+        ],
+    }
+    monkeypatch.setattr(transcripts, "load_transcripts_manifest", lambda: manifest)
+    src = {"participant": "P01", "video_paths": ["v.mp4"]}
+
+    out = _run("transcript_marks", _ctx(tmp_path), {"video": src}, {"pad": 2})
+    assert out["timeRange"]["ranges"] == [(8.0, 14.0), (28.0, 35.0)]
+    assert out["timestamps"]["times"] == [10.0, 30.0]
+
+    out = _run(
+        "transcript_marks",
+        _ctx(tmp_path),
+        {"video": src},
+        {"pad": 0, "category": "quote"},
+    )
+    assert out["timeRange"]["ranges"] == [(30.0, 33.0)]
+
+    out = _run(
+        "transcript_marks",
+        _ctx(tmp_path),
+        {"video": src},
+        {"category": "bookmark"},
+    )
+    assert out["timeRange"]["ranges"] == []
+    assert "No marks" in out["__note__"]
+
+
+def test_report_builds_from_summary_and_sources(tmp_path, monkeypatch):
+    import ollama_client
+    import thinking_agents
+
+    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    monkeypatch.setattr(
+        thinking_agents,
+        "report_source_lines",
+        lambda pid: ([f"- obs for {pid}"], ["[0:10] (Quote) hello"]),
+    )
+    seen = {}
+
+    def fake_build(summary, obs, marks, *, participant, model, cancel_event):
+        seen.update(
+            {"summary": summary, "obs": obs, "marks": marks, "pid": participant}
+        )
+        return "the report"
+
+    monkeypatch.setattr(thinking_agents, "build_report", fake_build)
+    src = {"participant": "P01", "video_paths": ["v.mp4"]}
+    out = _run("report", _ctx(tmp_path), {"summary": "the summary", "video": src}, {})
+    assert out["report"] == "the report"
+    assert "__note__" not in out
+    assert seen == {
+        "summary": "the summary",
+        "obs": "- obs for P01",
+        "marks": "[0:10] (Quote) hello",
+        "pid": "P01",
+    }
+    # No summary → skipped with a note, no model call.
+    out = _run("report", _ctx(tmp_path), {}, {})
+    assert out["report"] == ""
+    assert "No summary" in out["__note__"]
+
+
+def test_post_process_remux_skips_already_seekable(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        video, "probe_container_seekability", lambda p: {"browser_seekable": True}
+    )
+    monkeypatch.setattr(
+        video, "remux_to_faststart", lambda p, **kw: called.append(p) or (True, "ok")
+    )
+    src = {"participant": "P01", "study": "s", "video_paths": ["a.mp4", "b.mp4"]}
+    out = _run(
+        "post_process",
+        _ctx(tmp_path),
+        {"video": src},
+        {"operation": "remux_faststart"},
+    )
+    assert called == []
+    assert out["video"] is src
+    assert "Already browser-seekable" in out["__note__"]
+
+
+def test_post_process_embed_subtitles_muxes_a_copy(tmp_path, monkeypatch):
+    import transcripts
+
+    monkeypatch.setattr(transcripts, "write_transcript", lambda *a, **kw: True)
+    muxed = {}
+    monkeypatch.setattr(
+        video,
+        "mux_subtitles",
+        lambda vid, srt, out, **kw: muxed.update({"vid": vid, "out": out}) or True,
+    )
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / name),
+    )
+    src = {
+        "participant": "P01",
+        "study": "s",
+        "source_filename": "s_P01.mp4",
+        "video_paths": [str(tmp_path / "s_P01.mp4")],
+    }
+    transcript = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": src}
+    out = _run(
+        "post_process",
+        _ctx(tmp_path),
+        {"video": src, "transcript": transcript},
+        {"operation": "embed_subtitles"},
+    )
+    assert muxed["out"].endswith("s_P01-subtitled.mp4")
+    assert out["video"]["video_paths"] == [muxed["out"]]
+    assert out["artifacts"]["count"] == 1
+    # No transcript wired → note, no mux.
+    out = _run(
+        "post_process", _ctx(tmp_path), {"video": src}, {"operation": "embed_subtitles"}
+    )
+    assert out["artifacts"]["count"] == 0
+    assert "transcript" in out["__note__"]
+
+
+def test_gallery_viewer_filters_stills(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        viewer,
+        "finalize_gallery_data",
+        lambda arts, **kw: seen.update({"arts": arts, **kw}) or {"artifacts": arts},
+    )
+    monkeypatch.setattr(
+        viewer,
+        "generate_gallery_viewer",
+        lambda data, output_basename="": tmp_path / output_basename,
+    )
+    arts = {
+        "artifacts": [
+            {"type": "screen", "file": "a.png"},
+            {"type": "clip", "file": "c.mp4"},
+            {"type": "gif", "file": "b.gif"},
+        ],
+        "study": "s",
+    }
+    out = _run("gallery_viewer", _ctx(tmp_path), {"artifacts": arts}, {})
+    assert [a["file"] for a in seen["arts"]] == ["a.png", "b.gif"]
+    assert seen["output_format"] == "gif"
+    assert out["viewer"]["path"].endswith("workflow_gallery.html")
+    # Clips only → note instead of an empty gallery.
+    out = _run(
+        "gallery_viewer",
+        _ctx(tmp_path),
+        {"artifacts": {"artifacts": [{"type": "clip", "file": "c.mp4"}]}},
+        {},
+    )
+    assert out["viewer"]["path"] is None
+    assert "Timeline Viewer" in out["__note__"]
+
+
 def test_video_source_coerces_single_element_list(tmp_path, monkeypatch):
     # The canvas multi-select stores a list; a one-element list is a plain
     # single-participant run and must not stringify to "['P01']".
