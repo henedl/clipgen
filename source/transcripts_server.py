@@ -282,16 +282,6 @@ def api_participants() -> FlaskResponse:
             has_transcript = bool(entry.get("segments"))
             video_paths = p["video_paths"]
             first_path = video_paths[0]
-            # Combine every part's mtime so the frontend cache-bust (?v=) on any
-            # part URL invalidates when a non-first part is replaced too.
-            video_version: int | None = None
-            if p["has_video"]:
-                try:
-                    video_version = sum(
-                        Path(vp).stat().st_mtime_ns for vp in video_paths
-                    )
-                except OSError:
-                    video_version = None
             info: dict[str, Any] = {
                 "id": pid,
                 "video_path": first_path,
@@ -303,7 +293,8 @@ def api_participants() -> FlaskResponse:
                 "segment_count": len(entry.get("segments", [])),
                 "video_filename": Path(first_path).name,
                 "video_filenames": [Path(vp).name for vp in video_paths],
-                "video_version": video_version,
+                # Filled outside the lock below (stat/probe I/O).
+                "video_version": None,
                 "agents": {
                     "transcription": _step_state_transcription(entry),
                     "summary": _step_state_agent(pid, entry, "summary"),
@@ -312,20 +303,6 @@ def api_participants() -> FlaskResponse:
                     "report": _step_state_agent(pid, entry, "report"),
                 },
             }
-            # Multi-video: expose the timeline so the frontend can switch <video>
-            # source per part and seek the local offset. Omitted for a single video
-            # (no probe), leaving the frontend on its one-file path.
-            if p["has_video"] and len(video_paths) >= 2:
-                timeline = video.timeline_or_none(video_paths)
-                if timeline is not None:
-                    info["timeline"] = [
-                        {
-                            "filename": Path(path).name,
-                            "duration": dur,
-                            "cumulativeStart": cum,
-                        }
-                        for path, dur, cum in timeline
-                    ]
             if has_transcript:
                 info["language"] = entry.get("language", "")
                 info["model"] = entry.get("model", "")
@@ -336,6 +313,36 @@ def api_participants() -> FlaskResponse:
                 info["audio_track_label"] = entry.get("audio_track_label", "")
                 info["has_summary"] = bool(entry.get("summary"))
             result.append(info)
+
+    # Per-file stat()s and the (ffprobe-backed on a cache miss) multi-part
+    # timeline probe run after the lock is released — this I/O previously
+    # blocked every other route for the duration of the probes.
+    for info in result:
+        if not info["has_video"]:
+            continue
+        video_paths = info["video_paths"]
+        # Combine every part's mtime so the frontend cache-bust (?v=) on any
+        # part URL invalidates when a non-first part is replaced too.
+        try:
+            info["video_version"] = sum(
+                Path(vp).stat().st_mtime_ns for vp in video_paths
+            )
+        except OSError:
+            info["video_version"] = None
+        # Multi-video: expose the timeline so the frontend can switch <video>
+        # source per part and seek the local offset. Omitted for a single video
+        # (no probe), leaving the frontend on its one-file path.
+        if len(video_paths) >= 2:
+            timeline = video.timeline_or_none(video_paths)
+            if timeline is not None:
+                info["timeline"] = [
+                    {
+                        "filename": Path(path).name,
+                        "duration": dur,
+                        "cumulativeStart": cum,
+                    }
+                    for path, dur, cum in timeline
+                ]
 
     # Check for stale artifacts (transcript outdated relative to source)
     artifacts = viewer.load_manifest_artifacts()
@@ -398,10 +405,21 @@ def _corrected_segments(
     participant: str,
     raw_segments: list[Any],
     corrections: list[Any],
+    version: int | None = None,
 ) -> list[Any]:
-    """apply_corrections() for *participant*, memoized by corrections version."""
+    """apply_corrections() for *participant*, memoized by corrections version.
+
+    *version* is the ``_corrections_version`` the caller observed when it
+    snapshotted *raw_segments*/*corrections* under ``_manifest_lock``. Passing
+    it keys the memo to that snapshot generation: without it, a reader whose
+    snapshot predates a segment-list replacement could be served an entry a
+    *newer* snapshot cached under the current version and zip mismatched
+    lists. Callers that invoke this while still holding ``_manifest_lock`` may
+    omit it (their snapshot is by construction the current generation).
+    """
     with _corrected_cache_lock:
-        version = _corrections_version
+        if version is None:
+            version = _corrections_version
         cached = _corrected_cache.get(participant)
         if cached is not None and cached[0] == version:
             return cached[1]
@@ -428,9 +446,12 @@ def api_transcript(participant: str) -> FlaskResponse:
         language = entry.get("language", "")
         model = entry.get("model", "")
         transcribed_at = entry.get("transcribed_at", "")
+        version_snapshot = _corrections_version
 
     # Apply corrections to get corrected text (memoized per participant)
-    corrected_segments = _corrected_segments(participant, raw_segments, corrections)
+    corrected_segments = _corrected_segments(
+        participant, raw_segments, corrections, version=version_snapshot
+    )
 
     # Build marks-by-segment-id lookup
     marks_by_seg: dict[str, list[dict[str, Any]]] = {}
@@ -525,9 +546,13 @@ def api_vtt(participant: str) -> FlaskResponse:
         language = entry.get("language", "")
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
+        version_snapshot = _corrections_version
 
     corrected = _corrected_segments(
-        participant, segments_snapshot, corrections_snapshot
+        participant,
+        segments_snapshot,
+        corrections_snapshot,
+        version=version_snapshot,
     )
     result = transcripts.TranscriptResult(
         segments=corrected,
@@ -651,6 +676,7 @@ def _embed_subtitle_for_participant(
         language = entry.get("language", "")
         source_file = entry.get("source_file", "")
         model = entry.get("model", "")
+        version_snapshot = _corrections_version
 
     video_paths = _video_paths_for_participant(participant)
     if not video_paths or not Path(video_paths[0]).is_file():
@@ -670,7 +696,10 @@ def _embed_subtitle_for_participant(
     video_path = video_paths[0]
 
     corrected = _corrected_segments(
-        participant, segments_snapshot, corrections_snapshot
+        participant,
+        segments_snapshot,
+        corrections_snapshot,
+        version=version_snapshot,
     )
     result = transcripts.TranscriptResult(
         segments=corrected,
@@ -1056,9 +1085,13 @@ def api_normalize_audio_cancel() -> FlaskResponse:
 
 
 def _deterministic_friction(
-    agent_key: str, entry: dict[str, Any] | None
+    agent_key: str, segments: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
     """The friction payload that needs no summary and no LLM, or None.
+
+    *segments* must be a snapshot taken under ``_manifest_lock`` — the scorer
+    iterates the whole list, and the live entry's list can be rebound by a
+    concurrent merge mid-scan.
 
     Friction's per-segment scores + session stats come from a pure, deterministic
     scorer (friction.py). They are served both *before* the summary-gated agent
@@ -1067,9 +1100,8 @@ def _deterministic_friction(
     ``deterministic`` flag lets the client show programmatic-only copy and keeps
     the friction poll from mistaking this for a completed run.
     """
-    if agent_key != "friction" or not entry or not entry.get("segments"):
+    if agent_key != "friction" or not segments:
         return None
-    segments = entry["segments"]
     scored = friction.score_segments(segments)
     stats = friction.compute_stats(scored, thinking_agents._segments_duration(segments))
     return {
@@ -1101,6 +1133,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         result = entry.get(field) if entry else None
+        segments_snapshot = list(entry.get("segments") or []) if entry else []
     if result:
         resp: dict[str, Any] = {"ok": True, field: result}
         for dep in thinking_agents.AGENTS:
@@ -1125,11 +1158,11 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         # on the LLM. Any client refetch mid-run (tab refocus, participant
         # re-select, page reload) would otherwise blank the histogram, chips,
         # transcript tinting and timeline band until the agent finished.
-        deterministic = _deterministic_friction(agent_key, entry)
+        deterministic = _deterministic_friction(agent_key, segments_snapshot)
         if deterministic is not None:
             resp["friction"] = deterministic
         return jsonify(resp)
-    deterministic = _deterministic_friction(agent_key, entry)
+    deterministic = _deterministic_friction(agent_key, segments_snapshot)
     if deterministic is not None:
         return jsonify({"ok": True, "friction": deterministic})
     return jsonify({"ok": False}), 404
@@ -1627,33 +1660,42 @@ def api_search() -> FlaskResponse:
     results: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
 
+    # Snapshot every participant's segment list (and the corrections) under
+    # the lock, then run the regex correction pass and build the payload
+    # against the snapshots — on a cache miss that pass covers every
+    # participant's entire transcript and must not stall every other route.
     with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
-        corrections = _manifest.get("corrections", [])
+        corrections = list(_manifest.get("corrections", []))
+        version_snapshot = _corrections_version
+        segment_snapshots = {
+            pid: list(entry["segments"])
+            for pid, entry in src.items()
+            if entry.get("segments")
+        }
 
-        for pid, entry in src.items():
-            raw_segments = entry.get("segments", [])
-            if not raw_segments:
-                continue
-            corrected = _corrected_segments(pid, raw_segments, corrections)
-            participant_count = 0
-            for raw, seg in zip(raw_segments, corrected):
-                text_lower = seg["text"].lower()
-                n = text_lower.count(query_lower)
-                if n > 0:
-                    participant_count += n
-                    results.append(
-                        {
-                            "participant": pid,
-                            "segment_id": raw.get("id", ""),
-                            "start": seg["start"],
-                            "end": seg["end"],
-                            "text": seg["text"],
-                            "count": n,
-                        }
-                    )
-            if participant_count > 0:
-                counts[pid] = participant_count
+    for pid, raw_segments in segment_snapshots.items():
+        corrected = _corrected_segments(
+            pid, raw_segments, corrections, version=version_snapshot
+        )
+        participant_count = 0
+        for raw, seg in zip(raw_segments, corrected):
+            text_lower = seg["text"].lower()
+            n = text_lower.count(query_lower)
+            if n > 0:
+                participant_count += n
+                results.append(
+                    {
+                        "participant": pid,
+                        "segment_id": raw.get("id", ""),
+                        "start": seg["start"],
+                        "end": seg["end"],
+                        "text": seg["text"],
+                        "count": n,
+                    }
+                )
+        if participant_count > 0:
+            counts[pid] = participant_count
 
     total = sum(counts.values())
     return ok(

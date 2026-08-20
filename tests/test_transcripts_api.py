@@ -3313,3 +3313,24 @@ def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
     assert merged == ["P01"]
     remaining = {m["id"] for m in transcripts_server._manifest["marks"]}
     assert remaining == {"m_live", "m_other"}
+
+
+def test_corrected_cache_generation_mismatch_recomputes(monkeypatch):
+    """A reader whose snapshot predates a segment-list replacement must not be
+    served the entry a *newer* snapshot cached under the current version —
+    that zipped old raw segments against new corrected text."""
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    monkeypatch.setattr(transcripts_server, "_corrections_version", 5)
+    old_segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+    new_segments = [{"start": 0.0, "end": 1.0, "text": "new"}]
+
+    # A current-generation reader populates the cache.
+    out_new = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
+    assert out_new[0]["text"] == "new"
+    # A reader holding a pre-replacement snapshot recomputes from its own
+    # segments instead of hitting the newer cache entry...
+    out_old = transcripts_server._corrected_segments("P01", old_segments, [], version=4)
+    assert out_old[0]["text"] == "old"
+    # ...and does not poison the cache for current-generation readers.
+    again = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
+    assert again[0]["text"] == "new"
