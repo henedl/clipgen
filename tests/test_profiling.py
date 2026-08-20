@@ -510,7 +510,7 @@ def whisper_probe(monkeypatch, tmp_path):
     monkeypatch.setattr(
         video_mod,
         "decode_audio_pcm",
-        lambda _path, _idx=0: np.zeros(16000, dtype=np.float32),
+        lambda _path, _idx=0, **_kw: np.zeros(16000, dtype=np.float32),
     )
     src = tmp_path / "study_P01.mp4"
     src.write_bytes(b"stub")

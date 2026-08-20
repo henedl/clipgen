@@ -42,6 +42,7 @@ API endpoints (all under /transcripts/):
 
 import atexit
 import json
+import math
 import os
 import sys
 import tempfile
@@ -1946,9 +1947,7 @@ def api_transcribe() -> FlaskResponse:
 
         # Resolve the participants that would actually be enqueued, with the
         # effective Whisper model for each (per-participant override → default).
-        eligible: list[
-            tuple[dict[str, Any], str | None, str | None, int | None, str]
-        ] = []
+        eligible: list[dict[str, Any]] = []
         for pid in participant_ids:
             p = available.get(pid)
             if not p or not p.get("has_video"):
@@ -1974,9 +1973,41 @@ def api_transcribe() -> FlaskResponse:
                     return err(f"Invalid audio_index for {pid}")
             # No upper bound here — that needs an ffprobe per participant, and
             # the worker already fails the task with the real track count.
+            # In/out marker window. Same explicit non-falsy handling: 0.0 is a
+            # valid start. The worker clamps to the real duration; here we only
+            # reject shapes that are wrong at any duration.
+            window: dict[str, float | None] = {
+                "start_seconds": None,
+                "end_seconds": None,
+            }
+            for key in ("start_seconds", "end_seconds"):
+                raw = o.get(key)
+                if raw is None or str(raw).strip() == "":
+                    continue
+                try:
+                    val = float(raw)
+                except (TypeError, ValueError):
+                    return err(f"Invalid marker range for {pid}")
+                if not math.isfinite(val) or val < 0:
+                    return err(f"Invalid marker range for {pid}")
+                window[key] = val
+            if (
+                window["start_seconds"] is not None
+                and window["end_seconds"] is not None
+                and window["end_seconds"] <= window["start_seconds"]
+            ):
+                return err(f"Invalid marker range for {pid}")
             effective_model = model_override or config.TRANSCRIBE_MODEL
             eligible.append(
-                (p, model_override, language_override, audio_override, effective_model)
+                {
+                    "participant": p,
+                    "model": model_override,
+                    "language": language_override,
+                    "audio_index": audio_override,
+                    "effective_model": effective_model,
+                    "start_seconds": window["start_seconds"],
+                    "end_seconds": window["end_seconds"],
+                }
             )
 
         # Authoritative download gate: never let a worker silently pull an
@@ -1984,7 +2015,8 @@ def api_transcribe() -> FlaskResponse:
         # this enforces it for direct API calls and the /api/models fallback.
         if not allow_download:
             uncached: list[str] = []
-            for _p, _mo, _lo, _ao, effective_model in eligible:
+            for e in eligible:
+                effective_model = e["effective_model"]
                 if (
                     effective_model not in uncached
                     and not transcripts.is_whisper_model_cached(effective_model)
@@ -2002,13 +2034,16 @@ def api_transcribe() -> FlaskResponse:
                     }
                 )
 
-        for p, model_override, language_override, audio_override, _em in eligible:
+        for e in eligible:
+            p = e["participant"]
             task = transcripts.create_transcript_task(
                 p["id"],
                 p["video_paths"],
-                model=model_override,
-                language=language_override,
-                audio_index=audio_override,
+                model=e["model"],
+                language=e["language"],
+                audio_index=e["audio_index"],
+                start_seconds=e["start_seconds"],
+                end_seconds=e["end_seconds"],
             )
             if _worker:
                 _worker.enqueue(task)
@@ -2027,6 +2062,8 @@ def api_transcribe() -> FlaskResponse:
                     "error": task["error"],
                     "created_at": task["created_at"],
                     "completed_at": task["completed_at"],
+                    "start_seconds": task["start_seconds"],
+                    "end_seconds": task["end_seconds"],
                 }
             )
 
@@ -2050,6 +2087,11 @@ def api_transcribe_status() -> FlaskResponse:
                 "error": t.get("error"),
                 "created_at": t.get("created_at"),
                 "completed_at": t.get("completed_at"),
+                # Marker window (None = unbounded side) — the frontend clips
+                # the transcribe progress band to the *task's* window rather
+                # than live marker state, which the user can change mid-run.
+                "start_seconds": t.get("start_seconds"),
+                "end_seconds": t.get("end_seconds"),
             }
             if t["status"] == transcripts.TASK_STATUS_RUNNING:
                 task_info["partial_count"] = t.get("partial_count", 0)

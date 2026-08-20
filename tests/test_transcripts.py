@@ -518,7 +518,7 @@ class TestTranscribeVideoWhisperKwargs:
             transcripts, "_load_model", lambda model_name=None: FakeModel()
         )
         monkeypatch.setattr(
-            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
         )
         monkeypatch.setattr(config, "TRANSCRIBE_VAD_FILTER", True)
         monkeypatch.setattr(config, "TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD", 0.0)
@@ -557,7 +557,7 @@ class TestTranscribeVideoWhisperKwargs:
             transcripts, "_load_model", lambda model_name=None: FakeModel()
         )
         monkeypatch.setattr(
-            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
         )
 
         streamed: list = []
@@ -596,7 +596,7 @@ class TestTranscribeVideoWhisperKwargs:
             transcripts, "_load_model", lambda model_name=None: FakeModel()
         )
         monkeypatch.setattr(
-            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
         )
 
         result = transcripts.transcribe_video("/fake/video.mp4")
@@ -641,7 +641,7 @@ class TestTranscribeVideoWhisperKwargs:
             transcripts, "_load_model", lambda model_name=None: FakeModel()
         )
         monkeypatch.setattr(
-            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
         )
 
         streamed: list = []
@@ -653,6 +653,107 @@ class TestTranscribeVideoWhisperKwargs:
         assert snapped_with == [("one", 0.0), ("two", 1.5)]
         # on_segment received the snapped end times.
         assert streamed == [1.5, 3.5]
+
+    def test_window_shifts_segments_onto_file_timeline(self, monkeypatch):
+        """With start_seconds set, the decode is windowed and every stored /
+        streamed segment (words included) is shifted back by the window start."""
+        from types import SimpleNamespace
+
+        import video as video_mod
+
+        class FakeSeg:
+            text = " hello"
+            start = 1.0  # window-relative: the decoded array starts at -ss
+            end = 2.0
+            words = [SimpleNamespace(start=1.1, end=1.9, word=" hello")]
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **_kwargs):
+                return iter([FakeSeg()]), FakeInfo()
+
+        decode_kwargs = {}
+
+        def fake_decode(_path, _idx=0, **kw):
+            decode_kwargs.update(kw)
+            return _FAKE_AUDIO
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_EDGE_SNAP", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(video_mod, "decode_audio_pcm", fake_decode)
+
+        streamed: list = []
+        result = transcripts.transcribe_video(
+            "/fake/video.mp4",
+            start_seconds=10.0,
+            end_seconds=30.0,
+            on_segment=lambda end, seg: streamed.append((end, seg)),
+        )
+        assert result is not None
+        assert decode_kwargs == {"start_seconds": 10.0, "duration_seconds": 20.0}
+        seg = result["segments"][0]
+        # Bounds tighten to the words (window-relative 1.1–1.9), then shift.
+        assert seg["start"] == 11.1
+        assert seg["end"] == 11.9
+        assert seg["words"] == [{"start": 11.1, "end": 11.9, "text": "hello"}]
+        # The streamed partial is the shifted dict, with the shifted end time.
+        assert streamed == [(11.9, seg)]
+
+    def test_window_snap_runs_before_shift(self, monkeypatch):
+        """The snapper (built on the windowed array) sees window-relative times
+        and the window-relative _prev_end floor; the shift happens after."""
+        import video as video_mod
+
+        class FakeSeg:
+            def __init__(self, start, end, text):
+                self.start = start
+                self.end = end
+                self.text = text
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **_kwargs):
+                return iter([FakeSeg(0.0, 2.0, "one"), FakeSeg(2.5, 4.0, "two")]), (
+                    FakeInfo()
+                )
+
+        snapped_with: list = []
+
+        def _fake_snapper(segment, prev_end):
+            snapped_with.append((segment["start"], prev_end))
+            segment["end"] = segment["end"] - 0.5
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(config, "TRANSCRIBE_EDGE_SNAP", True)
+        monkeypatch.setattr(
+            transcripts, "_build_energy_snapper", lambda _audio: _fake_snapper
+        )
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
+        )
+
+        streamed: list = []
+        result = transcripts.transcribe_video(
+            "/fake/video.mp4",
+            start_seconds=100.0,
+            on_segment=lambda end, seg: streamed.append(end),
+        )
+        assert result is not None
+        # Window-relative starts and floors — not 100.x / 101.5.
+        assert snapped_with == [(0.0, 0.0), (2.5, 1.5)]
+        # Streamed (and stored) ends are on the file's timeline.
+        assert streamed == [101.5, 103.5]
+        assert [s["end"] for s in result["segments"]] == [101.5, 103.5]
 
     def test_no_audio_stream_returns_none_without_loading_model(
         self, monkeypatch, capsys
@@ -745,7 +846,7 @@ class TestTranscribeVideoAudioTrack:
         monkeypatch.setattr(
             video_mod,
             "decode_audio_pcm",
-            lambda path, idx=0: calls.append((path, idx)) or _FAKE_AUDIO,
+            lambda path, idx=0, **_kw: calls.append((path, idx)) or _FAKE_AUDIO,
         )
         return calls
 
@@ -804,7 +905,9 @@ class TestTranscribeVideoAudioTrack:
         monkeypatch.setattr(
             video_mod, "probe_video_properties", _multitrack_probe("System", "Mic")
         )
-        monkeypatch.setattr(video_mod, "decode_audio_pcm", lambda _path, _idx=0: None)
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: None
+        )
 
         assert transcripts.transcribe_video("/fake/video.mp4", audio_index=1) is None
         assert "Could not decode audio track 2" in capsys.readouterr().out
@@ -831,6 +934,43 @@ class TestTranscribeVideoAudioTrack:
 # ---------------------------------------------------------------------------
 # transcribe_video in debug mode
 # ---------------------------------------------------------------------------
+
+
+class TestDecodeAudioPcmWindow:
+    """decode_audio_pcm's in/out window rides on the ffmpeg argv: input-side
+    -ss (so PTS zero = window start) plus -t after the -map."""
+
+    def _decode(self, monkeypatch, **kwargs):
+        import video as video_mod
+
+        captured = {}
+
+        class FakeResult:
+            returncode = 0
+            stdout = np.zeros(16, dtype=np.float32).tobytes()
+            stderr = b""
+
+        def fake_run(cmd, **_kw):
+            captured["cmd"] = cmd
+            return FakeResult()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(video_mod.subprocess, "run", fake_run)
+        result = video_mod.decode_audio_pcm("/fake/video.mp4", 0, **kwargs)
+        assert result is not None
+        return captured["cmd"]
+
+    def test_windowed_argv_has_ss_before_input_and_t(self, monkeypatch):
+        cmd = self._decode(monkeypatch, start_seconds=10.0, duration_seconds=20.0)
+        assert cmd.index("-ss") < cmd.index("-i")
+        assert cmd[cmd.index("-ss") + 1] == "10.000"
+        assert cmd.index("-t") > cmd.index("-map")
+        assert cmd[cmd.index("-t") + 1] == "20.000"
+
+    def test_unwindowed_argv_is_unchanged(self, monkeypatch):
+        cmd = self._decode(monkeypatch)
+        assert "-ss" not in cmd
+        assert "-t" not in cmd
 
 
 class TestTranscribeVideoDebug:
@@ -1347,7 +1487,7 @@ class TestTranscriptWorker:
             lambda *_a, **_k: {"duration": 100.0, "audio_codec": "aac"},
         )
         monkeypatch.setattr(
-            video_mod, "decode_audio_pcm", lambda _path, _idx=0: _FAKE_AUDIO
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
         )
         monkeypatch.setattr(
             transcripts, "load_transcripts_manifest", lambda: {"corrections": []}

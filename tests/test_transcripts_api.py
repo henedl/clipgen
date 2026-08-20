@@ -415,6 +415,8 @@ def test_transcribe_returns_adoptable_task_records(tr_client, monkeypatch):
         "error",
         "created_at",
         "completed_at",
+        "start_seconds",
+        "end_seconds",
     }
     assert task["participant"] == "P01"
     assert task["status"] == transcripts.TASK_STATUS_QUEUED
@@ -538,6 +540,65 @@ def test_transcribe_rejects_invalid_audio_track(tr_client, monkeypatch, bad):
             "force": True,
             "overrides": {"P01": {"audio_index": bad}},
         },
+    )
+    assert resp.get_json()["ok"] is False
+    assert captured == []
+
+
+def test_transcribe_applies_marker_window_override(tr_client, monkeypatch):
+    """start_seconds/end_seconds overrides (in/out markers) reach the task."""
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"start_seconds": 12.5, "end_seconds": 90}},
+        },
+    )
+    assert resp.status_code == 200
+    assert captured[0]["start_seconds"] == 12.5
+    assert captured[0]["end_seconds"] == 90.0
+    # And the adoptable record carries the window for the progress band.
+    task = resp.get_json()["tasks"][0]
+    assert task["start_seconds"] == 12.5
+    assert task["end_seconds"] == 90.0
+
+
+def test_transcribe_marker_start_zero_is_kept(tr_client, monkeypatch):
+    """0.0 is a real window start, not "no override" — a falsy test loses it."""
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={
+            "participants": ["P01"],
+            "force": True,
+            "overrides": {"P01": {"start_seconds": 0, "end_seconds": 30}},
+        },
+    )
+    assert resp.status_code == 200
+    assert captured[0]["start_seconds"] == 0.0
+    assert captured[0]["end_seconds"] == 30.0
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"start_seconds": "x"},
+        {"start_seconds": -1},
+        {"end_seconds": float("nan")},
+        {"start_seconds": 30, "end_seconds": 30},
+        {"start_seconds": 30, "end_seconds": 10},
+    ],
+)
+def test_transcribe_rejects_invalid_marker_window(tr_client, monkeypatch, window):
+    captured = _stub_transcribe_worker(monkeypatch)
+
+    resp = tr_client.post(
+        "/transcripts/api/transcribe",
+        json={"participants": ["P01"], "force": True, "overrides": {"P01": window}},
     )
     assert resp.get_json()["ok"] is False
     assert captured == []

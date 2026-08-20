@@ -418,6 +418,22 @@ body {
   margin-left: auto;
 }
 
+/* Transcribe-range marker readout (matches Screenspace's .marker-info, minus
+   the auto push — .player-time owns the right edge of this bar). */
+.marker-info {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-dim);
+  margin-left: var(--space-2);
+}
+
+#setInBtn,
+#setOutBtn,
+#clearMarkersBtn {
+  margin-left: var(--space-1);
+  flex-shrink: 0;
+}
+
 #timelineRow {
   padding: 0 var(--space-4) var(--space-2) var(--space-4);
 }
@@ -2077,6 +2093,15 @@ body {
    are; everything else comes from the `select` base in tokens.css. */
 .pill-options select {
   min-width: 110px;
+}
+
+/* Transcribe-range readout in the Range row (set via the timeline's I/O). */
+.pill-options-range {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  margin-left: auto;
 }
 
 /* Stacks a row with a sub-line beneath it (audio track + its "Last run" hint). */
