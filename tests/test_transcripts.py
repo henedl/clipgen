@@ -1349,26 +1349,31 @@ class TestCreateTranscriptTask:
 
 
 class TestTranscriptWorker:
-    def test_restore_tasks(self):
-        worker = transcripts.TranscriptWorker()
-        tasks = [
-            {"id": "tr_abc12345", "status": "completed", "participant": "P01"},
-            {"id": "tr_def67890", "status": "failed", "participant": "P02"},
-        ]
-        worker.restore_tasks(tasks)
-        all_tasks = worker.get_all_tasks()
-        assert len(all_tasks) == 2
-        ids = {t["id"] for t in all_tasks}
-        assert "tr_abc12345" in ids
-        assert "tr_def67890" in ids
-
     def test_get_task(self):
         worker = transcripts.TranscriptWorker()
-        worker.restore_tasks([{"id": "tr_test1234", "status": "completed"}])
-        task = worker.get_task("tr_test1234")
+        task_id = worker.enqueue(transcripts.create_transcript_task("P01", ["/v.mp4"]))
+        task = worker.get_task(task_id)
         assert task is not None
-        assert task["id"] == "tr_test1234"
+        assert task["id"] == task_id
         assert worker.get_task("nonexistent") is None
+
+    def test_cancel_all_cancels_queued_and_flags_running(self):
+        """cancel_all marks queued tasks cancelled and flags running ones."""
+        worker = transcripts.TranscriptWorker()
+        queued_id = worker.enqueue(
+            transcripts.create_transcript_task("P01", ["/v.mp4"])
+        )
+        running_id = worker.enqueue(
+            transcripts.create_transcript_task("P02", ["/v.mp4"])
+        )
+        with worker._lock:
+            worker._tasks[running_id]["status"] = transcripts.TASK_STATUS_RUNNING
+        worker.cancel_all()
+        queued = worker.get_task(queued_id)
+        running = worker.get_task(running_id)
+        assert queued is not None and running is not None
+        assert queued["status"] == transcripts.TASK_STATUS_CANCELLED
+        assert running["_cancelled"] is True
 
     def test_get_all_tasks_slim_omits_partial_segments(self):
         """include_partials=False drops the growing segment tail, reports count."""
@@ -2023,3 +2028,29 @@ class TestConfirmModelDownload:
             lambda *a, **k: pytest.fail("must not load after a decline"),
         )
         assert transcripts._load_model("large-v3") is None
+
+
+class TestApplyCorrectionsBoundaries:
+    def test_word_boundary_does_not_rewrite_substrings(self):
+        """ "the" -> "they" must not turn "there" into "theyre"."""
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="the cat sat there")]
+        result = transcripts.apply_corrections(segs, [{"from": "the", "to": "they"}])
+        assert result[0]["text"] == "they cat sat there"
+
+    def test_punctuation_edges_still_match(self):
+        """\\b against a punctuation edge never matches, so it is only applied
+        to word-character edges."""
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="use e.g. this")]
+        result = transcripts.apply_corrections(
+            segs, [{"from": "e.g.", "to": "for example"}]
+        )
+        assert result[0]["text"] == "use for example this"
+
+    def test_replacement_is_literal_not_template(self):
+        """A backslash in the replacement is text, not a re.sub escape —
+        previously this raised re.error and 500'd every corrected route."""
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="the path")]
+        result = transcripts.apply_corrections(
+            segs, [{"from": "path", "to": "C:\\Users\\path \\g<0>"}]
+        )
+        assert result[0]["text"] == "the C:\\Users\\path \\g<0>"

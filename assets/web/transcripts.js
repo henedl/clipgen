@@ -1561,7 +1561,10 @@
   // any write to invalidate renderPartialSegments' append-only fast path.
   var _streamingMarks = {};
   var _streamingMarksVersion = 0;
-  var _streamingMarksLoaded = false;
+  // Keyed by participant: a single boolean would make the first streaming
+  // participant's load swallow every later one's, leaving a second live
+  // stream's persisted marks unrendered until some task completed.
+  var _streamingMarksLoadedByPid = {};
 
   function _bumpStreamingMarksVersion() {
     _streamingMarksVersion++;
@@ -1569,8 +1572,8 @@
   }
 
   function _loadStreamingMarks(pid) {
-    if (_streamingMarksLoaded) return;
-    _streamingMarksLoaded = true;
+    if (_streamingMarksLoadedByPid[pid]) return;
+    _streamingMarksLoadedByPid[pid] = true;
     apiGet("api/marks").then(function (data) {
       if (!data.ok) return;
       if (data.categories) setMarkCategories(data.categories);
@@ -1988,15 +1991,37 @@
   }
 
   function updateMarkLabel(markId, label) {
-    apiPut("api/marks/" + markId, { label: label || null });
     if (state.streamingParticipant) {
+      apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+        showToast("Failed to update mark");
+      });
       for (var key in _streamingMarks) {
         if (_streamingMarks[key].id === markId) {
           _streamingMarks[key].label = label || "";
           break;
         }
       }
+      return;
     }
+    // Mirror updateMarkCategory/Severity: write the state and repaint
+    // optimistically, restore on failure. Without the state write the badge
+    // never appears, reopening the popover shows the old label, and a later
+    // category/severity repaint resurrects it.
+    var found = _findSegmentByMarkId(markId);
+    if (!found) {
+      apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+        showToast("Failed to update mark");
+      });
+      return;
+    }
+    var prevLabel = found.mark.label;
+    found.mark.label = label || "";
+    _paintSegmentMark(found.idx, found.mark);
+    apiPut("api/marks/" + markId, { label: label || null }).catch(function () {
+      found.mark.label = prevLabel;
+      _paintSegmentMark(found.idx, found.mark);
+      showToast("Failed to update mark");
+    });
   }
 
   function updateMarkSeverity(markId, severity) {
@@ -2040,6 +2065,10 @@
   }
 
   function showMarkPopover(anchorEl, segmentId, markObj) {
+    // A provisional mark (optimistic paint, POST still in flight) has no id
+    // yet — every popover action would hit api/marks/null. The POST resolves
+    // in well under a click-reopen, so just don't open for it.
+    if (markObj && markObj.id == null) return;
     var popover = qs("#markPopover");
     hideMarkPopover();
 
@@ -2448,7 +2477,7 @@
         // extending the grace window.
         _postCompletionGrace = POST_COMPLETION_GRACE_CYCLES;
         _streamingMarks = {};
-        _streamingMarksLoaded = false;
+        _streamingMarksLoadedByPid = {};
         _bumpStreamingMarksVersion();
       }
       if (needsRefresh) {
@@ -2632,30 +2661,34 @@
     return apiPost("api/models/ollama/pull", { model: model }).then(function (data) {
       if (!data || !data.ok) return false;
       return new Promise(function (resolve) {
+        // createPoller, not a raw setInterval: the install dialog can sit
+        // open in a backgrounded tab for minutes, and this must pause with
+        // it instead of streaming 1 Hz requests at the server.
         var misses = 0;
-        var poll = setInterval(function () {
+        var poller = createPoller(function () {
           if (isCancelled && isCancelled()) {
-            clearInterval(poll);
+            poller.stop();
             resolve(false);
             return;
           }
           apiGet("api/models/ollama/pull-status?model=" + encodeURIComponent(model))
             .then(function (st) {
               if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { clearInterval(poll); resolve(false); }
+                if (++misses >= 20) { poller.stop(); resolve(false); }
                 return;
               }
               misses = 0;
               if (onProgress) onProgress(st);
               if (st.done) {
-                clearInterval(poll);
+                poller.stop();
                 resolve(!!st.succeeded);
               }
             })
             .catch(function () {
-              if (++misses >= 20) { clearInterval(poll); resolve(false); }
+              if (++misses >= 20) { poller.stop(); resolve(false); }
             });
-        }, 1000);
+        }, 1000, { runImmediately: true, label: "transcripts.ollamaPull" });
+        poller.start();
       });
     }).catch(function () { return false; });
   }
@@ -2670,30 +2703,32 @@
       if (!data || !data.ok) return false;
       if (data.already_installed) return true;
       return new Promise(function (resolve) {
+        // Same createPoller rationale as installOllamaModel above.
         var misses = 0;
-        var poll = setInterval(function () {
+        var poller = createPoller(function () {
           if (isCancelled && isCancelled()) {
-            clearInterval(poll);
+            poller.stop();
             resolve(false);
             return;
           }
           apiGet("api/models/ollama/install-status")
             .then(function (st) {
               if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { clearInterval(poll); resolve(false); }
+                if (++misses >= 20) { poller.stop(); resolve(false); }
                 return;
               }
               misses = 0;
               if (onProgress) onProgress(st);
               if (st.done) {
-                clearInterval(poll);
+                poller.stop();
                 resolve(!!st.succeeded);
               }
             })
             .catch(function () {
-              if (++misses >= 20) { clearInterval(poll); resolve(false); }
+              if (++misses >= 20) { poller.stop(); resolve(false); }
             });
-        }, 1000);
+        }, 1000, { runImmediately: true, label: "transcripts.ollamaInstall" });
+        poller.start();
       });
     }).catch(function () { return false; });
   }
@@ -3534,6 +3569,7 @@
       // {"cancelled": true} / {"done": true} carry nothing — none has an
       // index, which is also what keeps them out of the completion tally.
       if (data.output_dir) outputDir = data.output_dir;
+      if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
       if (data.done) sawDone = true;
       if (typeof data.index !== "number") return;
       run.done++;
@@ -3587,7 +3623,7 @@
     }
     // The server stops between files (a mux cannot be interrupted mid-copy), so
     // the abort just drops our end of a stream that is already winding down.
-    apiPost("api/embed-subtitles/cancel", {}).catch(function () {});
+    apiPost("api/embed-subtitles/cancel", { token: _embedSubsRun.token || null }).catch(function () {});
     _embedSubsRun.abort.abort();
   }
 
@@ -3902,6 +3938,7 @@
       if (!data) return;
       // The header and the trailing {"cancelled": true} / {"done": true} lines
       // carry no index, which is also what keeps them out of the tally.
+      if (data.token) run.token = data.token; // echoed by Stop to scope the cancel
       if (data.done) sawDone = true;
       if (typeof data.index !== "number") return;
       run.done++;
@@ -3968,7 +4005,7 @@
     // Unlike the embed run, the cancel event is threaded into ffmpeg itself, so
     // Stop interrupts the current file mid-encode; the abort just drops our end
     // of a stream that is already winding down.
-    apiPost("api/normalize-audio/cancel", {}).catch(function () {});
+    apiPost("api/normalize-audio/cancel", { token: _normAudioRun.token || null }).catch(function () {});
     _normAudioRun.abort.abort();
   }
 

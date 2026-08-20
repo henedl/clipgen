@@ -14,7 +14,7 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
      - `transcript_entry` is the dict for one participant from `transcripts_manifest.json`
    - Append an `Agent(...)` entry to the `AGENTS` list
      - Respect topological order: dependencies must appear before dependents
-     - Set `depends_on` to the `manifest_field` names of agents this one needs
+     - Set `depends_on` to the agent *keys* (not `manifest_field` names) of agents this one needs
      - Set `manifest_field` to the key that will be written into the transcript entry
      - Set `on_upstream_change` to `"clear"` (drop the result when an upstream
        dependency regenerates, the default) or `"stale"` (keep it but flag for a

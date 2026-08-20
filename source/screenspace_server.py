@@ -2843,14 +2843,17 @@ def _init_screenspace_state(sheet_context: Any = None) -> None:
 
     global _manifest, _worker, _participant_source
 
-    # A sheet swap re-runs this init: detach and stop the old worker daemon
-    # before any state is replaced — a task finishing while the lines below
-    # run would otherwise fire on_task_complete and write the old worker's
-    # tasks/events into the replacement manifest.
+    # Retire the previous session's worker before touching any state: its
+    # callbacks resolve the module globals at call time, so left alive it
+    # would persist the old study's task results into the *new* study's
+    # manifest. Detach the callbacks and cancel first so the thread can only
+    # finish inertly; the short join keeps a swap request from blocking on an
+    # in-flight scan.
     if _worker is not None:
         _worker.on_task_complete = None
         _worker.on_progress_update = None
-        _worker.stop()
+        _worker.cancel_all()
+        _worker.stop(join_timeout=2.0)
 
     _manifest = screenspace.load_screenspace_manifest()
     _backfill_missing_events(_manifest)

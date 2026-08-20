@@ -165,7 +165,11 @@
             // Phase feeds the dot tooltip's closure — a loading_model →
             // transcribing flip must rebuild or the tooltip stays stale.
             existing[k].getAttribute("data-phase") !== (s0.phase || "") ||
-            existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0)) {
+            existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0) ||
+            // Regenerating artifacts in Studio flips has_stale_artifacts with
+            // identical status/agents/phase — without this the patch path
+            // short-circuits and the "stale" badge never clears.
+            existing[k].getAttribute("data-stale") !== (p0.has_stale_artifacts ? "1" : "0")) {
           canPatch = false; break;
         }
       }
@@ -176,6 +180,13 @@
           s0 = pillState(p0, taskByPid);
           var bar = wrap.querySelector(".pill-progress");
           if (bar) bar.style.width = s0.progress + "%";
+        }
+        // The open options pane tracks state the patch guard doesn't see
+        // (sessionStorage in/out markers feeding the Range row, audio-track
+        // hints) — and the steady state during a running transcription IS the
+        // patch path, so it must refresh here too, not only on rebuild.
+        if (state.pillOptionsOpen !== null) {
+          _refreshPillOptionsContent(state.pillOptionsOpen, taskByPid);
         }
         return;
       }
@@ -240,6 +251,7 @@
     wrap.setAttribute("data-agents", s.agents.transcription + "," + s.agents.summary + "," + s.agents.citations + "," + s.agents.friction);
     wrap.setAttribute("data-phase", s.phase || "");
     wrap.setAttribute("data-offsheet", offSheetFlag(p));
+    wrap.setAttribute("data-stale", p.has_stale_artifacts ? "1" : "0");
     wrap.appendChild(buildPill(p, s, isActive));
     wrap.appendChild(buildPillDots(p, s));
     if (state.pillOptionsOpen === p.id) {
@@ -327,7 +339,9 @@
       var offSheet = document.createElement("span");
       offSheet.className = "pill-offsheet-badge";
       offSheet.setAttribute("aria-label", "Not in sheet");
-      offSheet.title = "Source video found on disk; not a column in the loaded sheet";
+      // data-tooltip, matching the stale badge beside it — two badges in one
+      // pill must not mix tooltip systems (different delay and styling).
+      offSheet.setAttribute("data-tooltip", "Source video found on disk; not a column in the loaded sheet");
       pill.appendChild(offSheet);
     }
 

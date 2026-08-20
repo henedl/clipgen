@@ -607,9 +607,12 @@ def test_friction_refetch_keeps_the_programmatic_scores():
     assert "if (state.frictionPid !== pid) {" in body, (
         "the wipe must be gated on the participant actually changing"
     )
-    assert body.index("frictionPid !== pid") < body.index(
-        "state.frictionData = null"
-    ), "the gate has to precede the wipe it exists to prevent"
+    gate = body[body.index("frictionPid !== pid") :]
+    assert "clearFriction()" in gate.split("state.frictionPid = pid")[0], (
+        "the gated branch must wipe state AND DOM via clearFriction — a "
+        "state-only wipe left the previous participant's panes painted when "
+        "the switch's fetch failed transiently"
+    )
     # Mid-run the server ships the scores alongside the generating flag.
     gen = body[body.index("data.generating") :]
     assert "if (data.friction) _setFrictionData(data.friction);" in gen, (

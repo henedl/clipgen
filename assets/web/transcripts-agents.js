@@ -134,6 +134,7 @@
       _stopAgentPoll(desc);
       var started = Date.now();
       var ver = state.participantReqVer;
+      desc._failStreak = 0;
       desc._poller = createPoller(function () {
         if (ver !== state.participantReqVer ||
             state.selectedParticipant !== pid ||
@@ -144,6 +145,7 @@
         }
         apiGet(desc.urlBase + "/" + pid).then(function (data) {
           if (ver !== state.participantReqVer) return;
+          desc._failStreak = 0;
           if (data.ok && desc.getResult(data)) {
             _stopAgentPoll(desc);
             desc.onResult(pid, data);
@@ -153,10 +155,25 @@
             _stopAgentPoll(desc);
             desc.onEmpty(pid, data);
           }
-        }).catch(function () {
+        }).catch(function (err) {
           if (ver !== state.participantReqVer) return;
-          _stopAgentPoll(desc);
-          desc.onEmpty(pid);
+          if (err && err.status === 404) {
+            // The endpoint 404s once the run is over with nothing persisted
+            // (find_citations' failure return, Ollama down) — the genuine
+            // empty case.
+            _stopAgentPoll(desc);
+            desc.onEmpty(pid);
+            return;
+          }
+          // Transient transport blip or server hiccup mid-run: keep the poll
+          // armed and the rendered panel untouched — one failed GET must not
+          // wipe a five-minute Ollama run. Only a streak gives up, and via
+          // onStale so the painted state survives.
+          desc._failStreak = (desc._failStreak || 0) + 1;
+          if (desc._failStreak >= 3) {
+            _stopAgentPoll(desc);
+            desc.onStale(pid);
+          }
         });
       }, desc.interval, { runImmediately: false, label: "transcripts.agent." + desc.key });
       desc._poller.start();
@@ -190,9 +207,25 @@
   // The summary poll (AGENT_DESCRIPTORS.summary._poller) is the fallback used
   // when EventSource is unsupported or the stream drops mid-run.
   var _summaryStream = null;
+  // Which participant's summary is currently painted in the panel. Drives the
+  // clear-on-switch in loadSummary; deliberately NOT reset by clearSummary
+  // itself (a cleared panel plus a skipped re-clear is still a cleared panel).
+  var _summaryPaintedPid = null;
 
   function loadSummary(pid) {
     var ver = state.participantReqVer;
+
+    // On a real participant switch, blank the previous summary before
+    // fetching: the catch below deliberately leaves painted panes alone on
+    // transient failures, which is only safe when what is painted belongs to
+    // *this* participant — otherwise a failed switch kept the previous
+    // participant's summary on screen under the new selection. Tracked by
+    // painted pid, not selectedParticipant, so same-participant refetches
+    // (tab refocus, mid-run re-arm) never blank a live panel.
+    if (_summaryPaintedPid !== pid) {
+      clearSummary();
+      _summaryPaintedPid = pid;
+    }
 
     // The analysis panel must be visible whenever we surface agent state for the
     // selected, transcribed participant. renderSummaryGenerating/renderSummary
@@ -216,10 +249,13 @@
       } else {
         renderSummaryEmpty();
       }
-    }).catch(function () {
+    }).catch(function (err) {
       if (ver !== state.participantReqVer) return;
-      // Ollama unavailable or no summary — show the empty-state CTA.
-      renderSummaryEmpty();
+      // 404 = genuinely no summary — show the empty-state CTA. Any other
+      // failure is a transport blip (e.g. a refocus reload racing a server
+      // restart): leave whatever is painted alone rather than blanking a
+      // possibly-live panel.
+      if (err && err.status === 404) renderSummaryEmpty();
     });
   }
 
@@ -319,6 +355,12 @@
       _summaryStream = null;
     }
   }
+
+  // The stream is closed on participant switch, cancel, completion and
+  // visibilitychange, but a bfcache-suspended page would otherwise keep the
+  // EventSource connection open — the one page-scope resource here with no
+  // pagehide teardown.
+  window.addEventListener("pagehide", _stopSummaryStream);
 
   // Stops all live summary updates — the poller AND the SSE stream — so every
   // existing teardown site (participant switch, clear, cancel, completion)
@@ -858,10 +900,13 @@
     // must keep the programmatic scores on screen: they come from the
     // deterministic scorer and owe nothing to the LLM. Wiping them here is what
     // blanked the histogram, chips, tinting and timeline band for a whole run.
+    // On a real switch, clear the DOM too (clearFriction), not just the state:
+    // the fetch's catch below deliberately leaves painted panes alone on
+    // transient failures, which is only safe when what is painted belongs to
+    // *this* participant — otherwise a failed switch kept the previous
+    // participant's histogram and chips on screen.
     if (state.frictionPid !== pid) {
-      state.frictionData = null;
-      state.frictionBySegId = {};
-      state.frictionMomentIndex = -1;
+      clearFriction();
     }
     state.frictionPid = pid;
     state.frictionGenerating = false;
@@ -882,9 +927,11 @@
       } else {
         renderFrictionEmpty();
       }
-    }).catch(function () {
+    }).catch(function (err) {
       if (ver !== state.participantReqVer) return;
-      renderFrictionEmpty();
+      // Same contract as loadSummary: only a 404 (no result exists) may blank
+      // the panel; a transient failure leaves the painted state alone.
+      if (err && err.status === 404) renderFrictionEmpty();
     });
   }
 

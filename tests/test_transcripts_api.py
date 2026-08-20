@@ -1067,7 +1067,9 @@ def test_embed_subtitles_happy_path(tr_client, tmp_path, monkeypatch):
     assert resp.mimetype == "application/x-ndjson"
     header, result, done = _ndjson(resp)
     assert done == {"done": True}
-    assert header == {"total": 1, "output_dir": str(tmp_path)}
+    assert header["total"] == 1
+    assert header["output_dir"] == str(tmp_path)
+    assert header["token"]  # echoed by the Stop button to scope the cancel
     assert result["index"] == 0
     assert result["participant"] == "P01"
     assert result["ok"] is True
@@ -1294,12 +1296,27 @@ def test_embed_slot_release_is_scoped_to_its_own_run(monkeypatch):
     assert transcripts_server._embed_busy is False
 
 
-def test_embed_subtitles_cancel_route_sets_the_event(tr_client):
-    transcripts_server._embed_cancel_event.clear()
-    resp = tr_client.post("/transcripts/api/embed-subtitles/cancel")
-    assert resp.status_code == 200
-    assert transcripts_server._embed_cancel_event.is_set()
-    transcripts_server._embed_cancel_event.clear()
+def test_embed_subtitles_cancel_route_is_token_scoped(tr_client):
+    """Cancel only takes effect with the in-flight run's token: a late cancel
+    POST from a stopped run must not cancel its successor."""
+    token = transcripts_server._claim_embed_slot()
+    assert token is not None
+    try:
+        # Wrong (stale) token: ignored.
+        resp = tr_client.post(
+            "/transcripts/api/embed-subtitles/cancel", json={"token": "stale"}
+        )
+        assert resp.status_code == 200
+        assert not transcripts_server._embed_cancel_event.is_set()
+        # Matching token: cancels.
+        resp = tr_client.post(
+            "/transcripts/api/embed-subtitles/cancel", json={"token": token}
+        )
+        assert resp.status_code == 200
+        assert transcripts_server._embed_cancel_event.is_set()
+    finally:
+        transcripts_server._embed_cancel_event.clear()
+        transcripts_server._release_embed_slot()
 
 
 # ---- Normalize audio ----
@@ -1357,7 +1374,8 @@ def test_normalize_audio_happy_path_auto_track(tr_client, tmp_path, monkeypatch)
     assert resp.status_code == 200
     assert resp.mimetype == "application/x-ndjson"
     header, result, done = _ndjson(resp)
-    assert header == {"total": 1}
+    assert header["total"] == 1
+    assert header["token"]  # echoed by the Stop button to scope the cancel
     assert done == {"done": True}
     assert result["index"] == 0
     assert result["participant"] == "P01"
@@ -1744,12 +1762,24 @@ def test_normalize_slot_release_is_scoped_to_its_own_run(monkeypatch):
     assert transcripts_server._normalize_busy is False
 
 
-def test_normalize_audio_cancel_route_sets_the_event(tr_client):
-    transcripts_server._normalize_cancel_event.clear()
-    resp = tr_client.post("/transcripts/api/normalize-audio/cancel")
-    assert resp.status_code == 200
-    assert transcripts_server._normalize_cancel_event.is_set()
-    transcripts_server._normalize_cancel_event.clear()
+def test_normalize_audio_cancel_route_is_token_scoped(tr_client):
+    """Token-scoped like the embed cancel: see that test for the rationale."""
+    token = transcripts_server._claim_normalize_slot()
+    assert token is not None
+    try:
+        resp = tr_client.post(
+            "/transcripts/api/normalize-audio/cancel", json={"token": "stale"}
+        )
+        assert resp.status_code == 200
+        assert not transcripts_server._normalize_cancel_event.is_set()
+        resp = tr_client.post(
+            "/transcripts/api/normalize-audio/cancel", json={"token": token}
+        )
+        assert resp.status_code == 200
+        assert transcripts_server._normalize_cancel_event.is_set()
+    finally:
+        transcripts_server._normalize_cancel_event.clear()
+        transcripts_server._release_normalize_slot()
 
 
 # ---- Friction endpoints ----
@@ -2562,7 +2592,7 @@ def test_persist_keeps_corrected_cache_for_unchanged_transcription(
     }
 
     class _FakeWorker:
-        def get_all_tasks(self):
+        def get_all_tasks(self, include_partials=True):
             return [_copy.deepcopy(completed)]  # mirror the real deepcopy contract
 
     monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
@@ -2683,7 +2713,7 @@ def test_on_task_complete_registers_summary_before_disk_write(
     }
 
     class _FakeWorker:
-        def get_all_tasks(self):
+        def get_all_tasks(self, include_partials=True):
             return [dict(completed_task)]
 
     monkeypatch.setattr(transcripts_server, "_worker", _FakeWorker())
@@ -3007,7 +3037,7 @@ class _CompletedTasksWorker:
     def __init__(self, tasks):
         self._tasks = tasks
 
-    def get_all_tasks(self):
+    def get_all_tasks(self, include_partials=True):
         return self._tasks
 
 
@@ -3186,3 +3216,203 @@ class TestMediaRouteFollowsTheInputDir:
         (chosen / "study_P03.mp4").write_bytes(b"chosen")
         monkeypatch.setattr(config, "INPUT_DIR", str(chosen))
         assert tr_client.get("/transcripts/media/study_P03.mp4").status_code == 200
+
+
+def test_reinit_stops_previous_worker(tmp_path, monkeypatch):
+    """A sheet swap re-inits the blueprint; the old worker must be retired.
+
+    Left alive, its on_task_complete resolves the module globals at call time
+    and would merge the old study's segments into the new study's manifest —
+    and every swap would leak a live worker thread.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_manifest", {})
+    monkeypatch.setattr(transcripts_server, "_participant_source", None)
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    transcripts_server._init_transcripts_state()
+    first = transcripts_server._worker
+    assert first is not None
+    try:
+        transcripts_server._init_transcripts_state()
+        second = transcripts_server._worker
+        assert second is not first
+        assert first.on_task_complete is None
+        assert first._running is False
+    finally:
+        if transcripts_server._worker is not None:
+            transcripts_server._worker.stop(join_timeout=2.0)
+
+
+def test_marks_resolve_by_segment_id_not_index(tr_client):
+    """A mark follows its segment's stable id, never its list position.
+
+    The segment carrying id "P01:2" sits at index 0 here; positional
+    resolution would return the wrong row (or ship wrong times to Clip
+    Marked Lines), by-id resolution finds it regardless of position.
+    """
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {"id": "P01:2", "start": 20.0, "end": 21.0, "text": "late"},
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "early"},
+        ],
+    }
+    transcripts_server._manifest["marks"] = [
+        {
+            "id": "m_1",
+            "segment_id": "P01:2",
+            "category": "friction",
+            "label": None,
+            "severity": None,
+            "created": "2026-01-01T00:00:00+00:00",
+        },
+        # In numeric range as an index (2 segments would cover idx 1), but no
+        # segment carries this id — must resolve invalid, not to index 1.
+        {
+            "id": "m_2",
+            "segment_id": "P01:1",
+            "category": "friction",
+            "label": None,
+            "severity": None,
+            "created": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    marks = tr_client.get("/transcripts/api/marks").get_json()["marks"]
+    by_id = {m["id"]: m for m in marks}
+    assert by_id["m_1"]["valid"] is True
+    assert by_id["m_1"]["text"] == "late"
+    assert by_id["m_1"]["start"] == 20.0
+    assert by_id["m_2"]["valid"] is False
+
+
+def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
+    """Replacing a transcript invalidates marks made against the old one.
+
+    The fresh save mints the same "{pid}:{index}" ids again, so old marks
+    would silently re-point at new content. Marks created after the task
+    started (streaming-era marks on the new transcript) survive; other
+    participants' marks are untouched.
+    """
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                "P01": {
+                    "segments": [
+                        {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "old"}
+                    ]
+                },
+            },
+            "corrections": [],
+            "marks": [
+                {
+                    "id": "m_old",
+                    "segment_id": "P01:0",
+                    "created": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "id": "m_live",
+                    "segment_id": "P01:1",
+                    "created": "2026-03-01T12:00:00+00:00",
+                },
+                {
+                    "id": "m_other",
+                    "segment_id": "P02:0",
+                    "created": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+    task = {
+        "id": "tr_rerun001",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "2026-03-01T00:00:00+00:00",
+        "result": {"segments": [{"start": 0.0, "end": 2.0, "text": "new"}]},
+    }
+    monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))
+
+    with transcripts_server._manifest_lock:
+        merged = transcripts_server._merge_completed_results_locked()
+
+    assert merged == ["P01"]
+    remaining = {m["id"] for m in transcripts_server._manifest["marks"]}
+    assert remaining == {"m_live", "m_other"}
+
+
+def test_corrected_cache_generation_mismatch_recomputes(monkeypatch):
+    """A reader whose snapshot predates a segment-list replacement must not be
+    served the entry a *newer* snapshot cached under the current version —
+    that zipped old raw segments against new corrected text."""
+    monkeypatch.setattr(transcripts_server, "_corrected_cache", {})
+    monkeypatch.setattr(transcripts_server, "_corrections_version", 5)
+    old_segments = [{"start": 0.0, "end": 1.0, "text": "old"}]
+    new_segments = [{"start": 0.0, "end": 1.0, "text": "new"}]
+
+    # A current-generation reader populates the cache.
+    out_new = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
+    assert out_new[0]["text"] == "new"
+    # A reader holding a pre-replacement snapshot recomputes from its own
+    # segments instead of hitting the newer cache entry...
+    out_old = transcripts_server._corrected_segments("P01", old_segments, [], version=4)
+    assert out_old[0]["text"] == "old"
+    # ...and does not poison the cache for current-generation readers.
+    again = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
+    assert again[0]["text"] == "new"
+
+
+def test_regenerate_stops_in_flight_dependents(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """A citations run computed from the summary being regenerated must be
+    aborted, or its result commits after the clear, reads as current, and
+    blocks the fresh chain from re-running it."""
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_agent", lambda *a, **k: None
+    )
+    _seed_friction_entry(citations=None, friction=None)
+    # Mark citations as in flight for P01 (as if it were mid-run off the old
+    # summary) and hand it a cancel event to observe.
+    evt = threading.Event()
+    transcripts_server._orchestrator._in_flight["citations"].add("P01")
+    transcripts_server._orchestrator._cancel_events["citations"]["P01"] = evt
+
+    resp = tr_client.post("/transcripts/api/agent/summary/P01/regenerate")
+    assert resp.status_code == 200
+    assert evt.is_set(), "in-flight dependent must be cancelled"
+    assert "P01" not in transcripts_server._orchestrator._in_flight["citations"]
+
+
+def test_invalidate_dependents_matches_on_agent_keys(monkeypatch):
+    """depends_on holds agent *keys*; an agent whose key differs from its
+    manifest_field must still have its dependents invalidated."""
+    fake_agents = [
+        cast(
+            thinking_agents.Agent,
+            {
+                "key": "themes",
+                "manifest_field": "theme_analysis",
+                "depends_on": [],
+                "on_upstream_change": "clear",
+            },
+        ),
+        cast(
+            thinking_agents.Agent,
+            {
+                "key": "digest",
+                "manifest_field": "digest_result",
+                "depends_on": ["themes"],
+                "on_upstream_change": "clear",
+            },
+        ),
+    ]
+    monkeypatch.setattr(thinking_agents, "AGENTS", fake_agents)
+    entry = {"theme_analysis": "old", "digest_result": "derived"}
+    transcripts_server._invalidate_dependents(entry, fake_agents[0])
+    assert "digest_result" not in entry

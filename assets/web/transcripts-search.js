@@ -22,6 +22,11 @@
 
   var SEARCH_DEBOUNCE = 300;
   var _searchTimer = null;
+  // Request generation: the debounce limits how many requests fire, not their
+  // ordering. A slow response for an old query landing after a fast one for
+  // the current query must not overwrite state.searchResults — "Mark All"
+  // reads it and would persist marks for a query the user already replaced.
+  var _searchVer = 0;
 
   function markAllSearchResults() {
     if (!state.searchResults || !state.searchResults.results) return;
@@ -54,6 +59,7 @@
       clearTimeout(_searchTimer);
       var q = input.value.trim();
       if (q.length < 2) {
+        _searchVer++; // invalidate any in-flight response so it can't re-show
         hideSearchResults();
         return;
       }
@@ -88,7 +94,9 @@
 
   function doSearch(query) {
     state.searchQuery = query;
+    var reqVer = ++_searchVer;
     apiGet("api/search?q=" + encodeURIComponent(query)).then(function (data) {
+      if (reqVer !== _searchVer) return; // a newer query superseded this one
       if (!data || !data.ok) { _renderSearchError(); return; }
       // Merge client-side search of partial segments for the streaming participant
       if (state.streamingParticipant) {
@@ -102,7 +110,10 @@
       }
       state.searchResults = data;
       renderSearchResults(data);
-    }).catch(function () { _renderSearchError(); });
+    }).catch(function () {
+      if (reqVer !== _searchVer) return;
+      _renderSearchError();
+    });
   }
 
   function _searchPartialSegments(query, pid) {
@@ -186,10 +197,21 @@
 
   function highlightQuery(text, query) {
     if (!query) return escapeHtml(text);
-    var escaped = escapeHtml(text);
-    var queryEscaped = escapeHtml(query);
-    var regex = new RegExp("(" + queryEscaped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi");
-    return escaped.replace(regex, '<span class="search-highlight">$1</span>');
+    // Match on the RAW text and escape each piece separately: matching the
+    // escaped text let a query like "amp" or "lt" land inside an entity
+    // escapeHtml had just produced and split it with the span, rendering the
+    // entity literally.
+    var regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    var out = "";
+    var last = 0;
+    var m;
+    while ((m = regex.exec(text)) !== null) {
+      out += escapeHtml(text.slice(last, m.index));
+      out += '<span class="search-highlight">' + escapeHtml(m[0]) + "</span>";
+      last = m.index + m[0].length;
+    }
+    out += escapeHtml(text.slice(last));
+    return out;
   }
 
   function hideSearchResults() {

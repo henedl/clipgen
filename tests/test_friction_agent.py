@@ -332,3 +332,61 @@ class TestRunFriction:
         result = agent["run"](self._entry(), None)
         assert result is not None
         assert result["moments"] == []
+
+
+class TestFrictionIdAlignment:
+    """The Workflows path feeds segments that were never manifest-saved, so
+    they carry no ids; the scorer synthesizes str(index) and the prompt
+    formatter and validity filter must use the same scheme."""
+
+    @patch("thinking_agents.ollama_client.generate")
+    def test_idless_segments_round_trip(self, mock_generate):
+        import friction
+
+        mock_generate.return_value = (
+            '[{"segment_ids": ["1"], "category": "frustration",'
+            ' "rationale": "stuck", "score": 0.8}]'
+        )
+        segments = [
+            {"start": 0.0, "end": 2.0, "text": "This is fine so far."},
+            {"start": 2.0, "end": 4.0, "text": "Ugh, this is so frustrating!"},
+            {"start": 4.0, "end": 6.0, "text": "Okay, moving on."},
+        ]
+        scored = friction.score_segments(segments)
+        candidates = friction.select_candidates(scored)
+        assert candidates, "scorer should flag the frustrated segment"
+        moments = thinking_agents.find_friction_moments(
+            "A summary.", segments, candidates
+        )
+        # Before the fix the candidate lookup keyed on raw ids (all None),
+        # rendered an empty block, and returned without calling the model.
+        assert mock_generate.called
+        assert moments == [
+            {
+                "segment_ids": ["1"],
+                "category": "frustration",
+                "rationale": "stuck",
+                "score": 0.8,
+            }
+        ]
+
+    def test_unrenderable_candidates_return_none(self):
+        """Candidates whose ids match no segment mean no model call was made —
+        that is "didn't run" (None), not "ran and found nothing" ([])."""
+        segments = [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "hello"}]
+        candidates = [{"id": "ghost", "score": 0.5}]
+        assert thinking_agents.find_friction_moments("s", segments, candidates) is None
+
+
+class TestExtractJsonArrayEmptyFirst:
+    def test_empty_array_before_payload_does_not_win(self):
+        out = thinking_agents._extract_json_array(
+            'Here are the moments: [] no wait, the real ones: [{"a": 1}]'
+        )
+        assert out == [{"a": 1}]
+
+    def test_explicit_empty_array_suppresses_object_salvage(self):
+        out = thinking_agents._extract_json_array(
+            '{"moments": [], "meta": {"model": "qwen"}}'
+        )
+        assert out == []

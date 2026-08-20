@@ -109,7 +109,10 @@ def _segment_score(
     is the deduped list of matched substrings, and counts maps each present
     category to its raw match count.
     """
-    word_count = max(len(text.split()), 1)
+    # Floor the denominator so one- and two-word interjections ("Oh.", "Um.")
+    # can't saturate at 1.0 and monopolise the candidate list ahead of longer
+    # segments with several genuine frustration markers.
+    word_count = max(len(text.split()), 8)
     counts: dict[str, int] = {}
     markers: list[str] = []
     seen_markers: set[str] = set()

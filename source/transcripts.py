@@ -373,16 +373,6 @@ def _load_model(model_name: str | None = None) -> Any:
             )
             return None
 
-        # Drop the previous model first, or ~1-2 GB of weights is double-held
-        # until the next GC cycle; gc.collect() also prods CUDA/MPS cleanup.
-        if _cached_model is not None:
-            import gc
-
-            _cached_model = None
-            _cached_model_name = None
-            _cached_model_key = None
-            gc.collect()
-
         def _do_load() -> Any:
             # Built from load_key, not re-read from config, so what is cached
             # is exactly what was constructed even if a setting changes while
@@ -414,6 +404,20 @@ def _load_model(model_name: str | None = None) -> Any:
         try:
             if not _confirm_model_download(model_name):
                 return None
+
+            # Drop the previous model only once the load is definitely
+            # happening (post-consent), or ~1-2 GB of weights is double-held
+            # until the next GC cycle; gc.collect() also prods CUDA/MPS
+            # cleanup. Evicting before the consent prompt left the cache empty
+            # when the user declined, costing a pointless reload of the model
+            # that was already warm.
+            if _cached_model is not None:
+                import gc
+
+                _cached_model = None
+                _cached_model_name = None
+                _cached_model_key = None
+                gc.collect()
 
             utils.info_print(f"Loading transcription model '{model_name}'...")
             _cached_model = utils.run_with_spinner(
@@ -1119,7 +1123,10 @@ def save_transcripts_manifest(
             config.TRANSCRIPTS_MANIFEST_FILENAME,
             default=_empty_transcripts_manifest(),
         )
-        marks = existing["marks"]
+        # .get like every other reader: load_json_manifest returns the raw
+        # parsed JSON (the default is whole-file, not per-key), and a KeyError
+        # here would silently kill the debounce timer thread.
+        marks = existing.get("marks", [])
 
     data = {
         "source_transcripts": source_transcripts,
@@ -1156,16 +1163,27 @@ def apply_corrections(
     """Apply corrections to transcript segments as post-processing.
 
     Returns a new list of segments with ``from -> to`` substitutions applied.
-    Never mutates the input. Case-insensitive, word-boundary matching.
+    Never mutates the input. Case-insensitive, word-boundary matching — a
+    ``"the" -> "they"`` correction must not rewrite "there" — with the
+    replacement inserted literally (a backslash in *to* is text, not a
+    ``re.sub`` template escape).
     """
     if not corrections:
         return list(segments)
 
-    pairs = [
-        (re.compile(re.escape(c["from"]), re.IGNORECASE), c["to"])
-        for c in corrections
-        if c.get("from") and c.get("to")
-    ]
+    pairs: list[tuple[re.Pattern[str], str]] = []
+    for c in corrections:
+        frm, to = c.get("from"), c.get("to")
+        if not frm or not to:
+            continue
+        # Anchor with \b only where the pattern edge is a word character —
+        # "\b" against punctuation would never match ("e.g." or "?!").
+        pattern = re.escape(frm)
+        if frm[0].isalnum() or frm[0] == "_":
+            pattern = r"\b" + pattern
+        if frm[-1].isalnum() or frm[-1] == "_":
+            pattern = pattern + r"\b"
+        pairs.append((re.compile(pattern, re.IGNORECASE), to))
     if not pairs:
         return list(segments)
 
@@ -1175,7 +1193,7 @@ def apply_corrections(
         text = seg["text"]
         seg_applied = 0
         for pattern, to_text in pairs:
-            new_text, count = pattern.subn(to_text, text)
+            new_text, count = pattern.subn(lambda _m, _to=to_text: _to, text)
             if count > 0:
                 text = new_text
                 seg_applied += count
@@ -1419,8 +1437,10 @@ def _vtt_time_to_seconds(ts: str) -> float:
     return 0.0
 
 
-def _md_time_to_seconds(ts: str) -> float:
-    return utils.timestamp_to_seconds(ts) or 0.0
+def _md_time_to_seconds(ts: str) -> float | None:
+    """Parse a Markdown transcript stamp; None on failure — never a fabricated
+    0.0, which reads as a valid segment start at the top of the recording."""
+    return utils.timestamp_to_seconds(ts)
 
 
 def _parse_srt(text: str, filepath: str) -> TranscriptResult:
@@ -1466,10 +1486,20 @@ def _parse_markdown(text: str, filepath: str) -> TranscriptResult:
         model = model_match.group(1)
 
     for match in _MD_SEGMENT.finditer(text):
+        start = _md_time_to_seconds(match.group(1))
+        end = _md_time_to_seconds(match.group(2))
+        if start is None or end is None:
+            # Hand-edited / third-party stamp the parser can't read (e.g.
+            # "0:00.5"): skip loudly rather than fabricate a 0:00 segment.
+            utils.warning_print(
+                f"Skipping transcript line with unparseable timestamp: "
+                f"{match.group(1)} - {match.group(2)}"
+            )
+            continue
         segments.append(
             TranscriptSegment(
-                start=_md_time_to_seconds(match.group(1)),
-                end=_md_time_to_seconds(match.group(2)),
+                start=start,
+                end=end,
                 text=match.group(3).strip(),
             )
         )
@@ -1561,19 +1591,27 @@ class TranscriptWorker:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
-        """Signal the worker thread to stop."""
+    def stop(self, join_timeout: float = 15) -> None:
+        """Signal the worker thread to stop.
+
+        *join_timeout* bounds the wait for the thread: shutdown can afford the
+        full default, while a sheet swap passes a short one — the thread is a
+        daemon and, once ``_running`` is False and the callbacks are detached,
+        it can only finish its current (cancelled) task and exit.
+        """
         self._running = False
         self._queue.put((0, _TRANSCRIPT_SENTINEL))
         if self._thread is not None:
-            self._thread.join(timeout=15)
+            self._thread.join(timeout=join_timeout)
 
-    def restore_tasks(self, tasks: list[dict[str, Any]]) -> None:
-        """Load historical tasks (completed/failed/cancelled) for display."""
+    def cancel_all(self) -> None:
+        """Cancel every queued or running task (used when the worker is retired)."""
         with self._lock:
-            for t in tasks:
-                if t.get("id"):
-                    self._tasks[t["id"]] = copy.deepcopy(t)
+            for task in self._tasks.values():
+                if task["status"] == TASK_STATUS_QUEUED:
+                    task["status"] = TASK_STATUS_CANCELLED
+                elif task["status"] == TASK_STATUS_RUNNING:
+                    task["_cancelled"] = True
 
     def enqueue(self, task: dict[str, Any]) -> str:
         """Add a task to the queue. Returns the task ID."""

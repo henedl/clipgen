@@ -63,18 +63,26 @@ class TestScoreSegments:
         assert scored[0]["score"] == 0.0
 
     def test_score_formula(self):
-        # "um, where is the menu?" → 5 words.
-        # hesitation "um" (w=1.0) + confusion "where is" (w=1.5) = 2.5 / 5 = 0.5
+        # "um, where is the menu?" → 5 words, denominator floored at 8.
+        # hesitation "um" (w=1.0) + confusion "where is" (w=1.5) = 2.5 / 8 = 0.3125
         scored = friction.score_segments(
             [{"id": "P01:0", "text": "um, where is the menu?"}]
         )
-        assert scored[0]["score"] == 0.5
+        assert scored[0]["score"] == 0.3125
         assert scored[0]["categories"] == ["hesitation", "confusion"]
 
     def test_score_clamped_to_one(self):
-        # A one-word frustration interjection would score 2.0 raw → clamped.
-        scored = friction.score_segments([{"id": "P01:0", "text": "ugh"}])
+        # Eight frustration interjections in eight words: 16.0 raw / 8 → clamped.
+        scored = friction.score_segments(
+            [{"id": "P01:0", "text": "ugh ugh ugh ugh ugh ugh ugh ugh"}]
+        )
         assert scored[0]["score"] == 1.0
+
+    def test_short_interjection_no_longer_saturates(self):
+        # The word-count floor keeps a one-word "ugh" well below the ceiling,
+        # so interjections can't monopolise the LLM candidate list.
+        scored = friction.score_segments([{"id": "P01:0", "text": "ugh"}])
+        assert 0 < scored[0]["score"] < 1.0
 
     def test_id_falls_back_to_index(self):
         scored = friction.score_segments([{"text": "um"}])

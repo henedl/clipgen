@@ -100,6 +100,8 @@
         // Reload transcript to apply new correction
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
       }
+    }).catch(function () {
+      showToast("Failed to add correction");
     });
   }
 
@@ -111,6 +113,8 @@
         // Reload transcript to unapply correction
         if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
       }
+    }).catch(function () {
+      showToast("Failed to remove correction");
     });
   }
 

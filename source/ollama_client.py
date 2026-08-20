@@ -12,6 +12,7 @@ Deliberately small — higher-level reasoning lives in
 """
 
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -105,7 +106,7 @@ def is_available() -> bool:
         req = urllib.request.Request(f"{config.OLLAMA_BASE_URL}/api/tags")
         with urllib.request.urlopen(req, timeout=_HEALTH_TIMEOUT):
             return True
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
         return False
 
 
@@ -133,7 +134,13 @@ def list_models() -> list[dict[str, Any]] | None:
                     }
                 )
             return models
-    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+    except (
+        urllib.error.URLError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        http.client.HTTPException,
+    ):
         return None
 
 
@@ -189,7 +196,7 @@ def unload_model(model: str) -> bool:
         with urllib.request.urlopen(req, timeout=_HEALTH_TIMEOUT) as resp:
             resp.read()  # drain
             return True
-    except (urllib.error.URLError, OSError, ValueError):
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
         return False
 
 
@@ -317,7 +324,7 @@ def start_server() -> bool:
 
         utils.info_print("Starting Ollama server...")
         try:
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [resolve_ollama_bin() or "ollama", "serve"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -332,6 +339,16 @@ def start_server() -> bool:
             if is_available():
                 utils.info_print("Ollama server started.")
                 return True
+            # `serve` dying instantly (port already held, broken install)
+            # would otherwise burn the whole timeout with the lock held and
+            # report only a generic "did not start".
+            code = proc.poll()
+            if code is not None:
+                utils.warning_print(
+                    f"Ollama server exited immediately (code {code}) — "
+                    "is the port already in use?"
+                )
+                return False
             time.sleep(_START_POLL_INTERVAL)
 
     utils.warning_print("Ollama server did not start within timeout.")
@@ -689,6 +706,7 @@ def _do_generate(
     watcher: threading.Thread | None = None
     deadline = time.monotonic() + _GENERATE_DEADLINE
     deadline_exceeded = False
+    saw_done = False
     resp: Any = None
     try:
         resp = urllib.request.urlopen(req, timeout=_GENERATE_TIMEOUT)
@@ -714,7 +732,7 @@ def _do_generate(
                 return None
             try:
                 line = resp.readline()
-            except (OSError, ValueError, AttributeError):
+            except (OSError, ValueError, AttributeError, http.client.HTTPException):
                 # Raised when the watcher shuts down the socket mid-read, or
                 # when we shut it down above on deadline. http.client may
                 # surface this as AttributeError on Python 3.13+ when the
@@ -733,6 +751,8 @@ def _do_generate(
                 chunk = json.loads(line.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue  # skip malformed lines, keep reading
+            if not isinstance(chunk, dict):
+                continue
             piece = chunk.get("response", "")
             if piece:
                 parts.append(piece)
@@ -742,6 +762,7 @@ def _do_generate(
                     except Exception as exc:
                         utils.verbose_print(f"Ollama on_token callback failed: {exc}")
             if chunk.get("done"):
+                saw_done = True
                 break
     finally:
         done_event.set()
@@ -759,6 +780,15 @@ def _do_generate(
             )
 
     if cancel_event is not None and cancel_event.is_set():
+        return None
+    if not saw_done:
+        # The stream ended (EOF) without a `done` chunk — Ollama restarted,
+        # was OOM-killed, or the connection dropped mid-generation. The
+        # accumulated text is a truncated prefix; returning it would commit a
+        # half-written result as a finished one.
+        utils.warning_print(
+            f"Ollama stream ended before completion (model: {body.get('model')})"
+        )
         return None
     text = "".join(parts).strip()
     if not text:
@@ -813,7 +843,7 @@ def generate(
     except urllib.error.HTTPError as exc:
         utils.warning_print(f"Ollama generate failed (HTTP {exc.code}): {exc.reason}")
         return None
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         if cancel_event is not None and cancel_event.is_set():
             return None
         if not _is_connection_refused(exc):
@@ -828,6 +858,7 @@ def generate(
             urllib.error.URLError,
             urllib.error.HTTPError,
             OSError,
+            http.client.HTTPException,
         ) as retry_exc:
             if cancel_event is not None and cancel_event.is_set():
                 return None
@@ -907,7 +938,7 @@ def pull_model(
     except urllib.error.HTTPError as exc:
         utils.warning_print(f"Ollama pull failed (HTTP {exc.code}): {exc.reason}")
         return False
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         if not _is_connection_refused(exc):
             utils.warning_print(f"Ollama pull failed (connection): {exc}")
             return False
@@ -916,6 +947,11 @@ def pull_model(
             return False
         try:
             return _do_pull(model, on_progress)
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError) as retry_exc:
+        except (
+            urllib.error.URLError,
+            urllib.error.HTTPError,
+            OSError,
+            http.client.HTTPException,
+        ) as retry_exc:
             utils.warning_print(f"Ollama pull failed after retry: {retry_exc}")
             return False

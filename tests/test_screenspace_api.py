@@ -281,8 +281,14 @@ def test_participant_marks_resolved_and_filtered(client, monkeypatch):
                 },
             ],
             "source_transcripts": {
-                "P01": {"segments": [{"start": 5.0, "end": 7.0, "text": "hello"}]},
-                "P02": {"segments": [{"start": 1.0, "end": 2.0, "text": "x"}]},
+                "P01": {
+                    "segments": [
+                        {"id": "P01:0", "start": 5.0, "end": 7.0, "text": "hello"}
+                    ]
+                },
+                "P02": {
+                    "segments": [{"id": "P02:0", "start": 1.0, "end": 2.0, "text": "x"}]
+                },
             },
             "corrections": [],
         },
