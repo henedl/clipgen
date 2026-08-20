@@ -1,5 +1,6 @@
 """File and filename operations for clipgen."""
 
+import glob
 import os
 import re
 import threading
@@ -204,7 +205,12 @@ def discover_numbered_source_videos(
     prefix = utils.format_source_video_stem(study, participant)
     suffix_re = re.compile(rf"-(\d+){re.escape(config.FILEFORMAT)}$", re.IGNORECASE)
     matches: list[tuple[int, Path]] = []
-    for p in input_dir.glob(f"{prefix}-*{config.FILEFORMAT}"):
+    # glob.escape, not a raw f-string glob: the pattern (or a study name) may
+    # legally contain ``[``/``]``, which Path.glob would read as a character
+    # class — silently finding no parts while regex-based discovery still
+    # matches them, so the participant would list files that clip resolution
+    # then reports missing.
+    for p in input_dir.glob(f"{glob.escape(prefix + '-')}*{config.FILEFORMAT}"):
         m = suffix_re.search(p.name)
         if m:
             matches.append((int(m.group(1)), p))

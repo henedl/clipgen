@@ -945,6 +945,24 @@ def test_discover_numbered_source_videos_custom_pattern(monkeypatch, tmp_path):
     assert [p.name for p in found] == ["P01_study-1.mp4", "P01_study-2.mp4"]
 
 
+def test_discover_numbered_source_videos_glob_metachars_in_pattern(
+    monkeypatch, tmp_path
+):
+    # "[" / "]" are legal filename characters and pass pattern validation, but
+    # they are Path.glob metacharacters — an unescaped glob reads them as a
+    # character class and silently finds no parts, so regex-based participant
+    # discovery would list files that clip resolution then reports missing.
+    monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "[{study}] {participant}")
+    (tmp_path / "[study] P01-1.mp4").write_text("v1")
+    (tmp_path / "[study] P01-2.mp4").write_text("v2")
+    found = files.discover_numbered_source_videos(tmp_path, "study", "P01")
+    assert [p.name for p in found] == ["[study] P01-1.mp4", "[study] P01-2.mp4"]
+    # Numbered-part resolution and regex discovery agree on the same files.
+    paths = files.resolve_source_video_paths("study", "P01", None, tmp_path)
+    assert [p.name for p in paths] == ["[study] P01-1.mp4", "[study] P01-2.mp4"]
+    assert utils.parse_source_video_name("[study] P01-1.mp4") == ("study", "P01", 1)
+
+
 def test_discover_participant_videos_custom_pattern(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path), raising=False)
     monkeypatch.setattr(config, "SOURCE_FILENAME_PATTERN", "{participant}")
