@@ -89,7 +89,8 @@
   function videoGlobalTime() {
     var video = qs("#coVideo");
     var part = state.parts[state.activePart];
-    return (video ? video.currentTime : 0) + (part ? part.offset : 0);
+    // `|| 0`: fallback parts (server couldn't probe) may lack a numeric offset.
+    return (video ? video.currentTime : 0) + ((part && part.offset) || 0);
   }
   CO.videoGlobalTime = videoGlobalTime;
 
@@ -109,7 +110,7 @@
     if (!state.parts.length) return;
     var g = clamp(time, 0, Math.max(0, state.duration - 0.001));
     var i = partForGlobal(g);
-    var local = g - state.parts[i].offset;
+    var local = g - (state.parts[i].offset || 0);
     state.playhead = g;
     if (i !== state.activePart) {
       switchToPart(i, local, state.playing);
@@ -127,21 +128,38 @@
     _seek.seek(time);
   }
 
+  // The one-shot loadedmetadata seek of the part switch in flight, if any.
+  // Tracked so a second switch (or a participant change) before the metadata
+  // arrives can drop it — otherwise the stale handler fires on the NEW
+  // source's loadedmetadata, seeking to the old part's local time and
+  // auto-playing with the old call's resume flag.
+  var _pendingPartMeta = null;
+
+  function cancelPendingPartMeta() {
+    if (!_pendingPartMeta) return;
+    var video = qs("#coVideo");
+    if (video) video.removeEventListener("loadedmetadata", _pendingPartMeta);
+    _pendingPartMeta = null;
+  }
+
   function switchToPart(i, localTime, resume) {
     var video = qs("#coVideo");
     if (!video) return;
     // A same-part seek may still be deferred on loadedmetadata; drop it so it
     // can't fire after this part loads and clobber this cross-part seek.
     cancelPendingSeek();
+    cancelPendingPartMeta();
     state.activePart = i;
     video.src = "media/" + encodeURIComponent(state.parts[i].name);
     video.load();
     var onMeta = function () {
       video.removeEventListener("loadedmetadata", onMeta);
+      if (_pendingPartMeta === onMeta) _pendingPartMeta = null;
       video.currentTime = localTime;
       applyPlaybackRate(); // load() reset the element to its default rate
       if (resume) window.ClipgenVideoControls.safePlay(video);
     };
+    _pendingPartMeta = onMeta;
     video.addEventListener("loadedmetadata", onMeta);
   }
 
@@ -256,6 +274,7 @@
       if (!state.duration && state.parts.length === 1 && isFinite(video.duration)) {
         state.duration = video.duration;
         state.parts[0].duration = video.duration;
+        state.parts[0].offset = 0; // fallback parts ship without probed offsets
         updateTimeLabel();
         updateVideoInfo();
         renderTimeline();
@@ -313,6 +332,7 @@
       window.clipgenMediaBanner.show(qs("#coTimelineSection"), p);
     }
     cancelPendingSeek();
+    cancelPendingPartMeta();
     state.participant = pid;
     setStoredUIStateField("composer", "participant", pid);
     state.parts = p.parts || [];
@@ -806,10 +826,12 @@
 
   // Batch commit of *field* ("style" or "geometry") across many annotations, each
   // already mutated, with *before* the pre-edit value. One undo step, so a group
-  // style change or move undoes atomically; every edit rolls back if any patch is
-  // rejected. Each op's *after* comes from the PATCH response (server-sanitized),
-  // as in the single-annotation path — a partial local object can't reset
-  // backfilled defaults.
+  // style change or move undoes atomically. Each op's *after* comes from the
+  // PATCH response (server-sanitized), as in the single-annotation path — a
+  // partial local object can't reset backfilled defaults. On partial failure
+  // only the *rejected* edits roll back locally: the accepted ones are already
+  // in the manifest, and reverting them in the view would make it disagree
+  // with the server until reload.
   function commitAnnotationFieldGroup(field, edits) {
     if (!edits.length) return Promise.resolve();
     var patches = edits.map(function (e) {
@@ -817,41 +839,64 @@
       payload[field] = e.ann[field];
       return applyAnnPatch(e.ann.id, payload).then(function (saved) {
         return {
-          type: "ann-edit",
-          id: e.ann.id,
-          field: field,
-          before: e.before,
-          after: JSON.parse(JSON.stringify(saved[field])),
+          op: {
+            type: "ann-edit",
+            id: e.ann.id,
+            field: field,
+            before: e.before,
+            after: JSON.parse(JSON.stringify(saved[field])),
+          },
         };
+      }, function (error) {
+        return { edit: e, error: error };
       });
     });
-    return Promise.all(patches).then(function (ops) {
-      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
-    }, function (error) {
-      edits.forEach(function (e) {
-        var ann = findAnnotation(e.ann.id);
-        if (ann) ann[field] = JSON.parse(JSON.stringify(e.before));
+    return Promise.all(patches).then(function (results) {
+      var ops = [];
+      var firstError = null;
+      results.forEach(function (r) {
+        if (r.op) { ops.push(r.op); return; }
+        var ann = findAnnotation(r.edit.ann.id);
+        if (ann) ann[field] = JSON.parse(JSON.stringify(r.edit.before));
+        if (!firstError) firstError = r.error;
       });
-      refreshAnnotationViews();
-      opFailed(error);
+      if (ops.length) {
+        recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+      }
+      if (firstError) {
+        refreshAnnotationViews();
+        opFailed(firstError);
+      }
     });
   }
   CO.commitAnnotationFieldGroup = commitAnnotationFieldGroup;
 
-  // Delete every selected annotation as a single undo step.
+  // Delete every selected annotation as a single undo step. Deletes that land
+  // still get an undo op when a sibling delete fails — without that, a partial
+  // failure left the succeeded deletes unrecoverable.
   function deleteSelectedAnnotations() {
     var snapshots = selectedAnnotations().map(function (ann) {
       return JSON.parse(JSON.stringify(ann));
     });
     if (!snapshots.length) return;
     Promise.all(snapshots.map(function (snap) {
-      return applyAnnDelete(snap.id);
-    })).then(function () {
-      var ops = snapshots.map(function (snap) {
-        return { type: "ann-delete", annotation: snap };
+      return applyAnnDelete(snap.id).then(function () {
+        return { op: { type: "ann-delete", annotation: snap } };
+      }, function (error) {
+        return { error: error };
       });
-      recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
-    }).catch(opFailed);
+    })).then(function (results) {
+      var ops = [];
+      var firstError = null;
+      results.forEach(function (r) {
+        if (r.op) ops.push(r.op);
+        else if (!firstError) firstError = r.error;
+      });
+      if (ops.length) {
+        recordOp(ops.length === 1 ? ops[0] : { type: "ann-group", ops: ops });
+      }
+      if (firstError) opFailed(firstError);
+    });
   }
   CO.deleteSelectedAnnotations = deleteSelectedAnnotations;
 
@@ -933,6 +978,13 @@
 
   var _exporting = false;
 
+  // Ask the server to abort the in-flight burn/GIF encode. Harmless when
+  // nothing is running: the event is cleared at the start of the next export.
+  function onCancelExport() {
+    apiPost("api/export/cancel", {}).catch(function () {});
+    showToast("Cancelling export…");
+  }
+
   function exportSpan() {
     // Burn/GIF need a span: the selected cut wins, else the selected
     // annotation's own visibility span.
@@ -943,17 +995,33 @@
     return null;
   }
 
-  function runExport(path, body, busyLabel) {
+  // *btn*: the toolbar button that launched a cancellable (burn/GIF) export.
+  // While the encode runs it reads "Cancel" and a re-click posts the cancel
+  // (see exportBurn); screenshot exports are near-instant and pass no button.
+  function runExport(path, body, busyLabel, btn) {
     if (_exporting) { showToast("An export is already running"); return; }
     _exporting = true;
+    var restoreLabel = btn ? btn.textContent : "";
+    var restoreTip = btn ? btn.getAttribute("data-tooltip") : "";
+    if (btn) {
+      btn.textContent = "Cancel";
+      btn.setAttribute("data-tooltip", "Cancel this export");
+    }
+    function done() {
+      _exporting = false;
+      if (btn) {
+        btn.textContent = restoreLabel;
+        btn.setAttribute("data-tooltip", restoreTip);
+      }
+    }
     showToast(busyLabel + "…");
     apiPost(path, body).then(function (data) {
-      _exporting = false;
+      done();
       if (!data.ok) { showToast(data.error || "Export failed"); return; }
       logArtifactResult({ ok: true, artifact: data.artifact }, null);
       showToast("Exported " + (data.artifact.file || ""));
     }).catch(function (err) {
-      _exporting = false;
+      done();
       // A 4xx envelope now rejects; err.message carries the server's text
       // ("An export is already running", "The span is outside the recording").
       showToast(err && err.message ? err.message : "Export failed");
@@ -970,6 +1038,8 @@
 
   function exportBurn(gif) {
     if (!state.participant) return;
+    // Re-click while an export runs = cancel it (the button reads "Cancel").
+    if (_exporting) { onCancelExport(); return; }
     var span = exportSpan();
     if (!span) {
       showToast("Select a cut (or an annotation) to define the export span");
@@ -979,7 +1049,8 @@
       participant: state.participant,
       start: span.start,
       end: span.end,
-    }, gif ? "Exporting GIF" : "Burning clip");
+    }, gif ? "Exporting GIF" : "Burning clip",
+    qs(gif ? "#coExportGifBtn" : "#coExportBurnBtn"));
   }
 
   // ---- Marker trims (user actions; non-destructive span overrides) ----

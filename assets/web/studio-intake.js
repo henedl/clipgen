@@ -1226,7 +1226,8 @@
 
   // Composer intake poll: the cuts/trims lists are tiny, so fetch the whole
   // composer manifest and fingerprint the spans — re-render only on change.
-  // Trims also repaint the SS/TR panels (their asterisk badges read coTrims).
+  // Trims also repaint the SS/TR panels (their asterisk badges read
+  // coTrimCardKeys).
   function pollComposerIntake() {
     return apiGet("../composer/api/manifest")
       .then(function (data) {
@@ -1273,7 +1274,6 @@
         if (fp === state._coIntakeFp) return false;
         state._coIntakeFp = fp;
         state.coIntakeItems = items;
-        state.coTrims = trims;
         state.coTrimCardKeys = cardKeys;
         renderComposerIntake();
         renderIntake(false);

@@ -102,6 +102,11 @@
   // strict comparison made a just-created annotation vanish on mouse-up about
   // half the time. The tolerance also absorbs the <video> settling a frame
   // shy of a requested seek when a span was snapped to a cut edge.
+  // KNOWN DIVERGENCE: the server's screenshot window is strict
+  // (span.start < t and span.end > t, composer_server._annotations_in_span),
+  // so within these ±5 ms the preview can draw an annotation the exported
+  // frame omits. Accepted — the eps exists for preview stability, and
+  // widening the server window would burn annotations at t == span.end.
   var SPAN_EPS = 0.005;
 
   function spanContainsPlayhead(a) {
@@ -215,6 +220,10 @@
       };
     }
     // text — mirrors the server's PIL render: dark backing box + colored text.
+    // KNOWN DIVERGENCE: this draws in the UI font (Inter); the burn renders
+    // whatever system font _ANNOTATION_FONT_PATHS finds (Helvetica/Arial/
+    // DejaVu — PIL cannot load the bundled .woff2). Advance widths differ, so
+    // the backing-box width in the export won't match this preview exactly.
     var text = ann.geometry.text || "";
     if (!text) return null;
     var size = Math.max(8,
@@ -543,6 +552,10 @@
   function showTextInput(pos) {
     var input = qs("#coAnnotateText");
     var canvas = canvasEl();
+    // The text tool's pointerdown preventDefault()s (see below), so clicking a
+    // new spot never blurs an open input — commit any typed text instead of
+    // silently discarding it with the reposition below.
+    flushTextInput();
     _pendingText = pos;
     input.style.left = (canvas.offsetLeft + pos.x * canvas.width) + "px";
     input.style.top = (canvas.offsetTop + pos.y * canvas.height) + "px";
@@ -559,12 +572,13 @@
     _pendingText = null;
   }
 
-  function commitTextInput() {
+  // Create the label for the open text input; true when one was created.
+  function flushTextInput() {
     var input = qs("#coAnnotateText");
     var text = input.value.trim();
     var pos = _pendingText;
-    hideTextInput();
-    if (!text || !pos) return;
+    if (!text || !pos) return false;
+    input.value = "";
     CO.createAnnotation({
       participant: state.participant,
       type: "text",
@@ -572,7 +586,13 @@
       geometry: { x: pos.x, y: pos.y, text: text },
       style: { color: state.annColor, fontSize: state.annFontSize },
     });
-    setAnnotateTool("select");
+    return true;
+  }
+
+  function commitTextInput() {
+    var created = flushTextInput();
+    hideTextInput();
+    if (created) setAnnotateTool("select");
   }
 
   // ---- Style chip controls (stroke width / stroke style / text size) ----
@@ -669,6 +689,12 @@
     function onKey(ev) {
       if (ev.key === "Escape") { ev.stopPropagation(); closePaletteMenu(); }
     }
+    // The menu is fixed-positioned from the anchor's rect at open time; a
+    // palette-rail scroll or window resize would leave it floating detached
+    // from its chip (the shared tooltip singleton closes on the same events).
+    function onReposition() {
+      closePaletteMenu();
+    }
     // Defer the outside-click listener so the opening click doesn't close it.
     // Track the timer so a close before it fires (fast reopen / immediate
     // Escape) can cancel it — otherwise the listener orphans on document.
@@ -676,10 +702,14 @@
       document.addEventListener("pointerdown", onDocDown, true);
     }, 0);
     document.addEventListener("keydown", onKey, true);
+    window.addEventListener("scroll", onReposition, true);
+    window.addEventListener("resize", onReposition);
     _paletteMenuCleanup = function () {
       clearTimeout(openTimer);
       document.removeEventListener("pointerdown", onDocDown, true);
       document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("scroll", onReposition, true);
+      window.removeEventListener("resize", onReposition);
       if (menu.parentNode) menu.parentNode.removeChild(menu);
       anchor.setAttribute("aria-expanded", "false");
       _paletteMenuCleanup = null;
@@ -958,7 +988,22 @@
       }
     });
 
+    // Coalesce pointermove work to one update per frame: pointer events can
+    // arrive at 120–240 Hz and every branch below ends in a canvas render
+    // (the hub's timeupdate handler is the same pattern). A move that lands
+    // after pointerup no-ops — endGesture nulls every gesture flag.
+    var _moveRaf = 0;
+    var _lastMove = null;
     canvas.addEventListener("pointermove", function (e) {
+      _lastMove = e;
+      if (_moveRaf) return;
+      _moveRaf = requestAnimationFrame(function () {
+        _moveRaf = 0;
+        handlePointerMove(_lastMove);
+      });
+    });
+
+    function handlePointerMove(e) {
       var pos = eventToNormalized(e);
       if (!pos) return;
       if (_shaping) {
@@ -1004,14 +1049,26 @@
             geometry.x = clamp(orig.x + dx, 0, 1);
             geometry.y = clamp(orig.y + dy, 0, 1);
           } else {
+            // Clamp the DELTA against the stroke's bounding box, not each
+            // point — per-point clamping flattens edge-side points onto the
+            // border and permanently deforms the stroke.
+            var minX = 1, minY = 1, maxX = 0, maxY = 0;
+            orig.points.forEach(function (p) {
+              if (p[0] < minX) minX = p[0];
+              if (p[0] > maxX) maxX = p[0];
+              if (p[1] < minY) minY = p[1];
+              if (p[1] > maxY) maxY = p[1];
+            });
+            var cdx = clamp(dx, -minX, 1 - maxX);
+            var cdy = clamp(dy, -minY, 1 - maxY);
             geometry.points = orig.points.map(function (p) {
-              return [clamp(p[0] + dx, 0, 1), clamp(p[1] + dy, 0, 1)];
+              return [p[0] + cdx, p[1] + cdy];
             });
           }
         });
         renderAnnotations();
       }
-    });
+    }
 
     function endGesture(e) {
       if (canvas.hasPointerCapture && canvas.hasPointerCapture(e.pointerId)) {
@@ -1033,10 +1090,13 @@
           return hb.ann.id;
         });
         if (m.additive) {
-          // Union with the existing selection.
+          // Union with the existing selection in ONE selection write — a
+          // per-id toggle re-renders the full timeline for every hit.
+          var union = state.selectedAnnotationIds.slice();
           hitIds.forEach(function (id) {
-            if (!CO.isAnnotationSelected(id)) CO.toggleAnnotationSelection(id);
+            if (union.indexOf(id) === -1) union.push(id);
           });
+          CO.setAnnotationSelection(union);
         } else {
           // A near-zero drag is a click on empty space (selection already
           // cleared on pointerdown); a real drag replaces the selection.
@@ -1111,5 +1171,4 @@
   CO.initAnnotate = initAnnotate;
   CO.renderAnnotations = renderAnnotations;
   CO.setAnnotateTool = setAnnotateTool;
-  CO.syncAnnotateCanvas = syncCanvasToVideo;
 })();

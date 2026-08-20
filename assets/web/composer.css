@@ -370,6 +370,10 @@ body[data-frontend="composer"] {
    color; the secondary is the slot X swaps it with. */
 .co-swatch-pair {
   position: relative;
+  /* New stacking context: the swatches' z-index 1/2 layer the two squares
+     against each other only, not against the page (the pair's parents create
+     no context of their own, so without this the values are root-level). */
+  isolation: isolate;
   width: 44px;
   height: 44px;
   flex: 0 0 auto;
@@ -467,7 +471,7 @@ body[data-frontend="composer"] {
   width: 6px;
   height: 6px;
   border: 1px solid currentColor;
-  border-radius: 1px;
+  border-radius: var(--radius-xs);
 }
 
 .co-swatch-reset-glyph::before {
@@ -509,7 +513,12 @@ body[data-frontend="composer"] {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  /* Shrink-to-fit against the narrow rail anchor would pin the menu at
+     min-width and wrap any longer preset label; size to the longest label,
+     capped so a future label can't run off-screen (.topnav-qa-panel pattern). */
+  width: max-content;
   min-width: 120px;
+  max-width: 280px;
   padding: var(--space-1);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -589,6 +598,10 @@ body[data-frontend="composer"] {
 
 #coVideoFrame {
   position: relative;
+  /* New stacking context: keeps the annotate canvas / text input z-indexes
+     (1/2) layered against the video only — without this they participate in
+     the ROOT context, above anything z-index:auto elsewhere on the page. */
+  isolation: isolate;
   flex: 1;
   min-width: 0;
   height: 100%;

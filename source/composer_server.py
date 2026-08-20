@@ -201,7 +201,11 @@ def api_participants() -> Any:
                 "has_video": True,
                 "in_sheet": p.get("in_sheet", False),
                 "browser_seekable": p.get("browser_seekable"),
-                "parts": parts or [{"name": Path(vp).name} for vp in p["video_paths"]],
+                # Fallback parts (unprobeable durations) still carry offset: the
+                # client computes global time as currentTime + part.offset on
+                # every timeupdate, and an absent field turns the playhead NaN.
+                "parts": parts
+                or [{"name": Path(vp).name, "offset": 0} for vp in p["video_paths"]],
                 "total_duration": (
                     sum(part["duration"] for part in parts) if parts else None
                 ),
@@ -272,22 +276,33 @@ def api_cut_create() -> Any:
 @composer_bp.route("/api/cuts/<cut_id>", methods=["PATCH"])
 def api_cut_update(cut_id: str) -> Any:
     data = request.get_json(silent=True) or {}
+    # Read the current values under the lock, then clamp OUTSIDE it —
+    # _clamp_span walks the input dir and may ffprobe on a cold cache, and
+    # holding _manifest_lock across that blocks every other composer route
+    # (api_cut_create clamps before locking for the same reason).
     with _manifest_lock:
         cut = find_by_id(_manifest.get("cuts", []), cut_id)
         if cut is None:
             return err(f"No cut {cut_id}", 404)
         start = cut["start"]
         end = cut["end"]
-        try:
-            if data.get("start") is not None:
-                start = float(data["start"])
-            if data.get("end") is not None:
-                end = float(data["end"])
-        except (TypeError, ValueError):
-            return err("start/end must be numbers")
-        if end <= start:
-            return err("end must be after start")
-        cut["start"], cut["end"] = _clamp_span(cut["participant"], start, end)
+        participant = cut["participant"]
+    try:
+        if data.get("start") is not None:
+            start = float(data["start"])
+        if data.get("end") is not None:
+            end = float(data["end"])
+    except (TypeError, ValueError):
+        return err("start/end must be numbers")
+    if end <= start:
+        return err("end must be after start")
+    start, end = _clamp_span(participant, start, end)
+    with _manifest_lock:
+        # Re-find: the cut may have been deleted while the lock was released.
+        cut = find_by_id(_manifest.get("cuts", []), cut_id)
+        if cut is None:
+            return err(f"No cut {cut_id}", 404)
+        cut["start"], cut["end"] = start, end
         if data.get("label") is not None:
             cut["label"] = str(data["label"])
         _persist_locked()
@@ -560,7 +575,10 @@ def api_annotation_delete(ann_id: str) -> Any:
 # ---- Annotation rendering (PIL; no ffmpeg drawtext) ----
 
 # Common system font locations, probed in order. load_default() is the
-# fixed-size last resort (visibly cruder, but never fails).
+# fixed-size last resort (visibly cruder, but never fails). KNOWN DIVERGENCE:
+# the browser preview draws annotation text in the UI font (Inter, a .woff2
+# PIL cannot load), so exported text is metrically close but not identical to
+# the preview — see the matching note in composer-annotate.js.
 _ANNOTATION_FONT_PATHS = (
     "/System/Library/Fonts/Helvetica.ttc",
     "/Library/Fonts/Arial.ttf",
@@ -1208,13 +1226,14 @@ def _run_overlay_export(data: dict[str, Any], *, gif: bool) -> Any:
     # Studio's intake uses, so the overlay filter sees one continuous input.
     video_paths = [p["path"] for p in parts]
     timeline = video.timeline_or_none(video_paths)
-    pieces = (
-        utils.map_global_range_to_segments(timeline, start, end)
-        if timeline is not None
-        else None
-    )
-    if pieces is not None and not pieces:
-        return err("The span is outside the recording", 400)
+    pieces = None
+    if timeline is not None:
+        pieces = utils.map_global_range_to_segments(timeline, start, end)
+        # map_global_range_to_segments signals an out-of-range start (or an
+        # empty range) with None, never [] — for a multi-part participant that
+        # means "span outside the recording", not "take the single-part path".
+        if not pieces:
+            return err("The span is outside the recording", 400)
 
     stitch_tmp: str | None = None
     if pieces is not None and len(pieces) > 1:

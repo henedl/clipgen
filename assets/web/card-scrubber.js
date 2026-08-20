@@ -9,8 +9,20 @@
 
   var _spriteRaf = 0;
   var _audioCtx = null;
+  // Decoded-audio cache. Key: the consumer's audio key (filename or span key —
+  // a span edit changes the key, so the same bar re-caches under a new entry).
+  // Invalidation: LRU by _audioTicks once _audioTotalSeconds exceeds the cap,
+  // plus purgeAudio() for consumers that switch source video wholesale.
+  // Bound: total buffered seconds — entries range from a 2 s clip snippet to a
+  // 180 s Composer bar (~35 MB decoded), so an entry count would not bound
+  // memory. 600 s ≈ ~115 MB float32 at a 48 kHz context rate.
+  var _AUDIO_CACHE_MAX_SECONDS = 600;
   var _audioBuffers = {};
   var _audioLoading = {};
+  var _audioTicks = {}; // key → LRU tick (parallel map keeps the buffer shape)
+  var _audioTick = 0;
+  var _audioTotalSeconds = 0;
+  var _audioGen = 0; // bumped by purgeAudio(); in-flight decodes then discard
   var _audioSource = null;
   var _audioGain = null;
   var _audioLastTime = -1;
@@ -35,16 +47,49 @@
     return _audioCtx;
   }
 
+  function _touchAudio(key) {
+    _audioTicks[key] = ++_audioTick;
+  }
+
+  function _evictAudio() {
+    while (_audioTotalSeconds > _AUDIO_CACHE_MAX_SECONDS) {
+      var oldest = null;
+      var oldestTick = Infinity;
+      for (var key in _audioBuffers) {
+        if (_audioTicks[key] < oldestTick) {
+          oldestTick = _audioTicks[key];
+          oldest = key;
+        }
+      }
+      if (oldest === null) return;
+      _audioTotalSeconds -= _audioBuffers[oldest].duration;
+      delete _audioBuffers[oldest];
+      delete _audioTicks[oldest];
+      delete _waveformCache[oldest];
+    }
+  }
+
   function loadAudioBuffer(url, key) {
-    if (_audioBuffers[key]) return Promise.resolve(_audioBuffers[key]);
+    if (_audioBuffers[key]) {
+      _touchAudio(key);
+      return Promise.resolve(_audioBuffers[key]);
+    }
     if (_audioLoading[key]) return _audioLoading[key];
+    var gen = _audioGen;
     // arrayBuffer (audio) — apiGet only handles JSON, so use fetch directly.
     _audioLoading[key] = fetch(url)
       .then(function (r) { return r.arrayBuffer(); })
       .then(function (buf) { return getAudioContext().decodeAudioData(buf); })
       .then(function (decoded) {
-        _audioBuffers[key] = decoded;
         delete _audioLoading[key];
+        // A purge mid-decode means this buffer belongs to a dropped source;
+        // hand it to the caller but keep it out of the cache.
+        if (gen === _audioGen) {
+          _audioBuffers[key] = decoded;
+          _touchAudio(key);
+          _audioTotalSeconds += decoded.duration;
+          _evictAudio();
+        }
         return decoded;
       })
       .catch(function () {
@@ -52,6 +97,17 @@
         return null;
       });
     return _audioLoading[key];
+  }
+
+  // Drop every cached buffer + waveform (e.g. on a source-video switch). Live
+  // playback stops; in-flight decodes resolve but skip the cache.
+  function purgeAudio() {
+    _audioGen++;
+    audioScrubStop();
+    _audioBuffers = {};
+    _audioTicks = {};
+    _waveformCache = {};
+    _audioTotalSeconds = 0;
   }
 
   function audioScrubAt(audioKey, audioUrl, timeSec) {
@@ -63,6 +119,7 @@
       loadAudioBuffer(audioUrl, audioKey);
       return;
     }
+    _touchAudio(audioKey);
     if (timeSec < 0 || timeSec >= buf.duration) return;
 
     var ctx = getAudioContext();
@@ -369,6 +426,7 @@
     detachAll: detachAll,
     detachStale: detachStale,
     stopAll: stopAll,
+    purgeAudio: purgeAudio,
     // Primitives — let a consumer with its own hover handler (e.g. the viewer's
     // <video>-seek scrub) drive audio + waveform without a second attach().
     loadAudioBuffer: loadAudioBuffer,

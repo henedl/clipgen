@@ -76,8 +76,11 @@
 
   function laneRows(source) {
     if (!state.sourceToggles[source]) return 0; // hidden lane occupies no space
+    // An empty lane occupies none either: a band with nothing to draw would
+    // still cost a full row of strip height and grow a no-op fold button.
+    if (!(state.markers[source] || []).length) return 0;
     if (state.laneFolds[source]) return 1;
-    return neededRows(state.markers[source] || []);
+    return neededRows(state.markers[source]);
   }
 
   // Marker sub-rows and the cuts track always use their large (thumb-sized)
@@ -129,15 +132,20 @@
   // Grow/shrink the whole timeline strip to fit the current fold state by
   // writing the shared --co-timeline-height var (both the shell and the strip
   // are sized from it); the wrapper's ResizeObserver then re-renders.
-  var _sectionExtra = null;
-
   function updateTimelineHeight() {
     var section = qs("#coTimelineSection");
     var wrapper = qs("#coTimelineWrapper");
-    if (_sectionExtra === null) {
-      _sectionExtra = Math.max(section.offsetHeight - wrapper.offsetHeight, 24);
-    }
-    var target = layout().canvasH + _sectionExtra;
+    // Chrome around the wrapper, re-measured every call: the media banner is
+    // inserted into this flex column asynchronously (after the remux status
+    // probe), so a one-shot measure goes stale by the banner's height.
+    var sectionExtra = Math.max(section.offsetHeight - wrapper.offsetHeight, 24);
+    // Cap the strip: #coShell is sized 100vh minus this var, and an uncapped
+    // value (three unfolded dense lanes ≈ 1100px) drives that calc() negative
+    // and swallows the video stage.
+    var target = Math.min(
+      layout().canvasH + sectionExtra,
+      Math.round(window.innerHeight * 0.6)
+    );
     var current = parseFloat(
       getComputedStyle(document.documentElement)
         .getPropertyValue("--co-timeline-height")
@@ -199,6 +207,10 @@
   function sizeCanvases() {
     var canvas = canvasEl();
     _cachedRect = null;
+    // Re-fit the strip first: the wrapper resize that landed us here may be
+    // the media banner appearing/disappearing inside the same flex column.
+    // updateTimelineHeight no-ops within 1px, so this settles, never loops.
+    updateTimelineHeight();
     var rect = canvas.getBoundingClientRect();
     canvas.width = Math.floor(rect.width);
     canvas.height = Math.floor(rect.height);
@@ -434,11 +446,27 @@
     renderPlayhead();
   }
 
-  // Per-lane fold buttons in the DOM rail (rebuilt on every render, like
-  // screenspace's boundary flags). Hidden/empty lanes get no button.
+  // Per-lane fold buttons in the DOM rail. Hidden/empty lanes get no button.
+  // The signature skips the rebuild while the lane geometry is unchanged —
+  // renderTimeline runs per pan/zoom frame and an innerHTML rebuild per frame
+  // both wastes work and destroys a hovered tooltip anchor.
+  var _railSig = null;
+
   function renderLaneRail(L) {
     var rail = qs("#coLaneRail");
     if (!rail) return;
+    var sig = !state.duration ? "" : SOURCES.map(function (s) {
+      return s + ":" + L.lanes[s].rows + ":" + L.lanes[s].y +
+        ":" + (state.laneFolds[s] ? 1 : 0);
+    }).join("|") + "|annotations:" + L.annotationsLane.rows +
+      ":" + L.annotationsLane.y + ":" + (state.laneFolds.annotations ? 1 : 0);
+    if (sig === _railSig) return;
+    _railSig = sig;
+    // The rebuild destroys a focused fold button (keyboard: Enter on one
+    // triggers this render) — remember which and re-focus its replacement.
+    var focused = document.activeElement;
+    var focusSource = focused && rail.contains(focused)
+      ? focused.getAttribute("data-source") : null;
     rail.innerHTML = "";
     if (!state.duration) return;
     var frag = document.createDocumentFragment();
@@ -475,6 +503,10 @@
         foldButton("annotations", L.annotationsLane.y, L.annotationsLane.h));
     }
     rail.appendChild(frag);
+    if (focusSource) {
+      var again = rail.querySelector('[data-source="' + focusSource + '"]');
+      if (again) again.focus();
+    }
   }
 
   function renderPlayhead() {
@@ -655,14 +687,29 @@
     qs("#coZoomOutBtn").appendChild(el("span", "co-btn-icon co-icon-zoom-out"));
 
     sizeCanvases();
+    // The RO fires on the wrapper's SIZE only; the strip is fixed to the
+    // viewport bottom, so a viewport-height change moves the canvas without
+    // resizing it. The window resize listener drops the cached rect (stale
+    // top = hit-tests land on the wrong lane) and re-clamps the strip height
+    // against the new viewport.
+    var onWindowResize = function () {
+      _cachedRect = null;
+      updateTimelineHeight();
+    };
+    var onScroll = function () { _cachedRect = null; };
     if (typeof ResizeObserver === "function") {
       var obs = new ResizeObserver(function () { sizeCanvases(); });
       obs.observe(qs("#coTimelineWrapper"));
-      window.addEventListener("pagehide", function () { obs.disconnect(); });
+      window.addEventListener("resize", onWindowResize);
+      window.addEventListener("pagehide", function () {
+        obs.disconnect();
+        window.removeEventListener("resize", onWindowResize);
+        window.removeEventListener("scroll", onScroll, true);
+      });
     } else {
       window.addEventListener("resize", sizeCanvases);
     }
-    window.addEventListener("scroll", function () { _cachedRect = null; }, true);
+    window.addEventListener("scroll", onScroll, true);
 
     canvas.addEventListener("wheel", function (e) {
       e.preventDefault();
@@ -677,7 +724,9 @@
         state.offset = clamp(mouseTs - frac * visLen, 0, state.duration - visLen);
       }
       if (state.zoom <= 1) state.offset = 0;
-      renderTimeline();
+      // rAF-coalesced: a trackpad delivers 100+ wheel events/s and a full
+      // render (canvas + DOM rail rebuild) per event is wasted between paints.
+      scheduleRender();
     }, { passive: false });
 
     // One pointer gesture at a time: edge drag > body drag > pan (zoomed) > scrub.
@@ -693,6 +742,11 @@
     }
 
     canvas.addEventListener("pointerdown", function (e) {
+      // Primary button only: a right-click is the trim-reset gesture (and the
+      // context menu), a middle-click is autoscroll — neither may start a
+      // drag/seek, and a right-click drag racing the trim DELETE could write
+      // the just-deleted span back onto the marker.
+      if (e.button !== 0) return;
       if (!state.duration) return;
       // Set early so the scrub branch's immediate seek sees an active drag and
       // revealTime() no-ops (the clicked time is on-screen anyway).
@@ -787,7 +841,23 @@
       canvas.setPointerCapture(e.pointerId);
     });
 
+    // Coalesce pointer tracking to one pass per frame: the hover branch alone
+    // runs two full-layout hit-tests plus tooltip DOM writes per event, and
+    // the scrub drag seeks the video — none of it useful between paints. A
+    // move that lands after pointerup falls into the hover branch (drag is
+    // null by then), which is the same treatment a fresh hover would get.
+    var _moveRaf = 0;
+    var _lastMove = null;
     canvas.addEventListener("pointermove", function (e) {
+      _lastMove = e;
+      if (_moveRaf) return;
+      _moveRaf = requestAnimationFrame(function () {
+        _moveRaf = 0;
+        handlePointerMove(_lastMove);
+      });
+    });
+
+    function handlePointerMove(e) {
       if (!drag) {
         // Hover: edge cursor affordance + tooltip + opt-in audio scrub.
         if (!state.duration) return;
@@ -884,7 +954,7 @@
         ts = xToTime(e.clientX);
         if (ts !== null) CO.seekVideo(ts);
       }
-    });
+    }
 
     function endDrag(e) {
       if (!drag) return;
