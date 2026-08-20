@@ -540,11 +540,15 @@ def test_validation_warns_on_node_with_no_inputs_wired():
     assert "willShowOrphan" in validate
 
 
-def test_validation_warns_on_non_numeric_filter_value():
-    """A filter/partition with an ordering comparison but a non-numeric value
-    warns — that value fails the backend float() coerce and drops every item."""
+def test_validation_rejects_drop_everything_predicates():
+    """A filter/partition predicate that would silently drop every item is an
+    error, not a warning: an ordering comparison on a text field, or a numeric
+    field compared against a non-numeric value (fails the backend float()
+    coerce). Numeric-ness comes from the field spec's numericChoices."""
     validate = (_WEB / "workflows-validate.js").read_text(encoding="utf-8")
-    assert "Value must be a number for this comparison" in validate
+    assert "numericChoices" in validate
+    assert "needs a numeric field" in validate
+    assert "must be a number" in validate
 
 
 def test_empty_canvas_offers_builtin_recipes():

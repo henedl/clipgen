@@ -136,20 +136,42 @@
     ) {
       warnings.push("No participants selected");
     }
-    // warning — a filter/partition with an ordering comparison (>=,>,<=,<) needs a
-    // numeric value; a non-numeric one fails the backend float() coerce and
-    // silently drops every item. (Heuristic on the op, so no need to mirror the
-    // backend's per-field numeric/text table.)
+    // error — a filter/partition predicate that would silently drop every item:
+    // an ordering comparison on a text field (the backend returns False per
+    // item), or a numeric field compared against a non-numeric value (the
+    // float() coerce fails). Field numeric-ness comes from the field spec's
+    // numericChoices, so this stays in lockstep with the backend's table.
     if (
       node.type.indexOf("filter_") === 0 ||
       node.type.indexOf("partition_") === 0
     ) {
-      var op = (node.params || {}).op;
-      var val = (node.params || {}).value;
-      var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
-      var numeric = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
-      if (ordering && !paramEmpty(val) && !numeric) {
-        warnings.push("Value must be a number for this comparison");
+      var fpSpecs = type.params || [];
+      var fpParams = node.params || {};
+      var specByName = function (n) {
+        for (var si = 0; si < fpSpecs.length; si++) {
+          if (fpSpecs[si].name === n) return fpSpecs[si];
+        }
+        return null;
+      };
+      var clauseError = function (fieldKey, opKey, valueKey, suffix) {
+        var fs = specByName(fieldKey);
+        var field =
+          fpParams[fieldKey] != null ? fpParams[fieldKey] : fs && fs.default;
+        var numeric = fs && (fs.numericChoices || []).indexOf(field) >= 0;
+        var op = fpParams[opKey] != null ? fpParams[opKey] : ">=";
+        var val = fpParams[valueKey];
+        var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
+        var isNum = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
+        if (ordering && !numeric) {
+          errors.push("Ordering comparison" + suffix + " needs a numeric field");
+        } else if (numeric && op !== "contains" && !paramEmpty(val) && !isNum) {
+          errors.push("Value" + suffix + " must be a number");
+        }
+      };
+      clauseError("field", "op", "value", "");
+      if (fpParams.combine && fpParams.combine !== "off") {
+        clauseError("field2", "op2", "value2", " 2");
+        if (paramEmpty(fpParams.value2)) errors.push("Set “Value 2”");
       }
     }
     var connected = (state.edges || []).some(function (e) {

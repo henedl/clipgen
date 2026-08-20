@@ -93,6 +93,26 @@ def test_video_source_resolves_participant(tmp_path, monkeypatch):
     assert out["video"]["video_paths"] == ["/v/study_P01.mp4"]
 
 
+def test_region_notes_missing_name(tmp_path, monkeypatch):
+    # A named-but-missing region degrades to a full-frame scan downstream; the
+    # node must say so instead of completing silently.
+    monkeypatch.setattr(
+        screenspace, "load_screenspace_manifest", lambda: {"regions": {}}
+    )
+    out = _run("region", _ctx(tmp_path), {}, {"name": "timer"})
+    assert out["region"] == {"name": "timer", "coords": None}
+    assert "not found" in out["__note__"]
+
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {"regions": {"timer": {"x": 1, "y": 2, "w": 3, "h": 4}}},
+    )
+    out = _run("region", _ctx(tmp_path), {}, {"name": "timer"})
+    assert out["region"]["coords"] == {"x": 1, "y": 2, "w": 3, "h": 4}
+    assert "__note__" not in out
+
+
 def test_video_source_coerces_single_element_list(tmp_path, monkeypatch):
     # The canvas multi-select stores a list; a one-element list is a plain
     # single-participant run and must not stringify to "['P01']".

@@ -94,6 +94,23 @@ class ParamSpec(TypedDict):
     # An empty value here is a guaranteed no-op/failure, so the pre-run
     # validation panel surfaces it as an error and disables Run.
     required: NotRequired[bool]
+    # Conditional visibility: {"param": <sibling name>, "equals": v} or
+    # {"param": <sibling name>, "not": v}. The editor hides the row when the
+    # condition fails; the executor still defaults the value server-side.
+    showIf: NotRequired[dict[str, Any]]
+    # On an enum whose choices name collection fields: the subset that compares
+    # numerically. Drives the paired value editor's input mode and lets the
+    # validation panel reject a non-numeric value that the backend float()
+    # coerce would silently drop every item on.
+    numericChoices: NotRequired[list[str]]
+    # On a string param: the sibling enum whose numericChoices decide whether
+    # this input should constrain to numbers (filter/partition values).
+    numericFor: NotRequired[str]
+    # Static completion suggestions (rendered as a datalist; input stays free).
+    suggestions: NotRequired[list[str]]
+    # Named dynamic completion source the frontend resolves itself (currently
+    # "ollama-models" → GET ../api/models). Input stays free text.
+    datalist: NotRequired[str]
 
 
 class NodeType(TypedDict):
@@ -125,6 +142,7 @@ _OLLAMA_MODEL_PARAM: ParamSpec = {
     "type": "string",
     "default": "",
     "label": "Ollama model (blank = default)",
+    "datalist": "ollama-models",
 }
 
 
@@ -200,7 +218,7 @@ NODE_TYPES: dict[str, NodeType] = {
         "inputs": [],
         "outputs": [{"name": "region", "type": "region"}],
         "params": [
-            {"name": "name", "type": "string", "default": "", "label": "Region name"},
+            {"name": "name", "type": "region", "default": "", "label": "Region name"},
         ],
         "requires": ["videoDir"],
     },
@@ -229,6 +247,25 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "auto",
                 "label": "Language",
+                # Whisper takes ISO 639-1 codes; free text stays allowed for the
+                # long tail, these just cover the common cases.
+                "suggestions": [
+                    "auto",
+                    "en",
+                    "sv",
+                    "da",
+                    "no",
+                    "fi",
+                    "de",
+                    "fr",
+                    "es",
+                    "it",
+                    "pt",
+                    "nl",
+                    "pl",
+                    "ja",
+                    "zh",
+                ],
             },
         ],
         "requires": ["videoDir"],
@@ -415,6 +452,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": 24,
                 "min": 2,
                 "label": "GIF frames",
+                "showIf": {"param": "output", "not": "image"},
             },
             {
                 "name": "window",
@@ -422,6 +460,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": 6,
                 "min": 1,
                 "label": "Rolling window (frames)",
+                "showIf": {"param": "output", "equals": "rolling_gif"},
             },
         ],
         "requires": ["videoDir"],
@@ -485,6 +524,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "min": 1,
                 "max": 30,
                 "label": "Titlecard duration (s)",
+                "showIf": {"param": "titlecards", "equals": True},
             },
             # Pad fields omit "min" so the number input accepts negatives
             # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
@@ -538,6 +578,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": config.GALLERY_GIF_DURATION_SECONDS,
                 "min": 1,
                 "label": "GIF duration (s)",
+                "showIf": {"param": "output_format", "equals": "gif"},
             },
         ],
         "requires": ["videoDir"],
@@ -888,9 +929,22 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "type": "number",
             "default": 0,
             "label": "Target value",
+            "showIf": {"param": "operator", "not": "range"},
         },
-        {"name": "range_min", "type": "number", "default": 0, "label": "Range min"},
-        {"name": "range_max", "type": "number", "default": 0, "label": "Range max"},
+        {
+            "name": "range_min",
+            "type": "number",
+            "default": 0,
+            "label": "Range min",
+            "showIf": {"param": "operator", "equals": "range"},
+        },
+        {
+            "name": "range_max",
+            "type": "number",
+            "default": 0,
+            "label": "Range max",
+            "showIf": {"param": "operator", "equals": "range"},
+        },
         {
             "name": "integers_only",
             "type": "bool",

@@ -135,7 +135,14 @@ def api_catalog() -> Any:
     batch endpoint will fan out over (so the dropdown never offers a participant a
     run can't resolve).
     """
+    import screenspace
+
     videos = utils.discover_participant_videos()
+    # Saved Screenspace regions, so the Region node's name param can be a picker
+    # instead of a free string a typo silently full-frames.
+    region_names = sorted(
+        (screenspace.load_screenspace_manifest().get("regions") or {}).keys()
+    )
     return ok(
         # Bootstrap channel for shared frontend config (hotkey overrides etc.);
         # this page has no sheet-data fetch, so the config rides along here.
@@ -148,6 +155,7 @@ def api_catalog() -> Any:
             "sheet": _sheet_context is not None,
             "videoDir": bool(videos),
             "participants": [v["id"] for v in videos if v.get("has_video")],
+            "regions": region_names,
             # Where a run's artifacts land — surfaced in the run panel so the
             # user knows where to find their clips/reels/viewers.
             "outputDir": str(utils.get_effective_output_dir()),

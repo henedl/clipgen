@@ -169,6 +169,7 @@ def test_catalog_returns_serializable_node_types(wf_client):
         "sheet",
         "videoDir",
         "participants",
+        "regions",
         "outputDir",
         "triggerTypes",
     }
@@ -237,6 +238,74 @@ def test_catalog_serves_artifact_padding_params(wf_client):
         max_spec = _param(node_id, "max_duration")
         assert max_spec["type"] == "number"
         assert max_spec["min"] == 0
+
+
+def test_catalog_serves_param_editor_metadata(wf_client):
+    # The parameter-quality layer: conditional visibility (showIf), numeric
+    # field metadata for filter/partition value editors, the region picker
+    # param type, and completion sources for free-text params.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    # showIf hides knobs that don't apply to the current selection.
+    assert _param("heatmap", "frames")["showIf"] == {"param": "output", "not": "image"}
+    assert _param("heatmap", "window")["showIf"] == {
+        "param": "output",
+        "equals": "rolling_gif",
+    }
+    assert _param("make_clips", "titlecard_duration")["showIf"] == {
+        "param": "titlecards",
+        "equals": True,
+    }
+    assert _param("interval_captures", "gif_duration")["showIf"] == {
+        "param": "output_format",
+        "equals": "gif",
+    }
+    assert _param("ss_numbers", "range_min")["showIf"] == {
+        "param": "operator",
+        "equals": "range",
+    }
+    for name in ("field2", "op2", "value2"):
+        assert _param("filter_events", name)["showIf"] == {
+            "param": "combine",
+            "not": "off",
+        }
+
+    # Predicate field enums carry their numeric subset; the value editor points
+    # at its field enum. Text-first kinds default the op to "contains" so a
+    # fresh node doesn't order-compare text (which drops everything).
+    assert _param("filter_events", "field")["numericChoices"] == [
+        "confidence",
+        "duration",
+        "start",
+    ]
+    assert _param("filter_segments", "field")["numericChoices"] == [
+        "duration",
+        "start",
+    ]
+    assert _param("filter_events", "value")["numericFor"] == "field"
+    assert _param("filter_segments", "op")["default"] == "contains"
+    assert _param("filter_events", "op")["default"] == ">="
+
+    # Region picker type + free-text completion sources.
+    assert _param("region", "name")["type"] == "region"
+    assert "auto" in _param("transcribe", "language")["suggestions"]
+    assert _param("summarize", "model")["datalist"] == "ollama-models"
+
+
+def test_catalog_context_serves_region_names(wf_client, monkeypatch):
+    import screenspace
+
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {"regions": {"timer": {"x": 0.1}, "chat": {"x": 0.2}}},
+    )
+    ctx = wf_client.get("/workflows/api/catalog").get_json()["context"]
+    assert ctx["regions"] == ["chat", "timer"]
 
 
 def test_catalog_flags_multitool_step_detectors(wf_client):

@@ -236,7 +236,12 @@ def _exec_region(
         entry = regions.get(name)
         if isinstance(entry, dict):
             coords = {k: entry[k] for k in ("x", "y", "w", "h") if k in entry}
-    return {"region": {"name": name, "coords": coords}}
+    result: dict[str, Any] = {"region": {"name": name, "coords": coords}}
+    if name and coords is None:
+        # A named-but-missing region degrades to the full frame downstream
+        # (_resolve_region_coords); say so instead of silently scanning it all.
+        result["__note__"] = f'Region "{name}" not found — scanning the full frame'
+    return result
 
 
 def _exec_time_range(
@@ -1824,9 +1829,22 @@ def _make_dedup_executor(
     return _exec
 
 
+# The predicate/sort fields that compare as text in _collection_field; every
+# other field coerces to float. Serialized per field-enum as numericChoices so
+# the editor and validation know which values must be numbers.
+_TEXT_FIELDS = frozenset(
+    {"category", "severity", "desc", "text", "type", "participant"}
+)
+
+
 def _predicate_params(kind: str) -> list[ParamSpec]:
     """The shared ``{field, op, value}`` clause for filter / partition nodes."""
     meta = _COLLECTION_KINDS[kind]
+    numeric = [f for f in meta["fields"] if f not in _TEXT_FIELDS]
+    # An ordering default on a text field (segments' first field is ``text``)
+    # would drop every item; default those kinds to ``contains`` instead.
+    default_op = ">=" if meta["fields"][0] not in _TEXT_FIELDS else "contains"
+    second_clause: dict[str, Any] = {"param": "combine", "not": "off"}
     return [
         {
             "name": "field",
@@ -1834,11 +1852,12 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "default": meta["fields"][0],
             "choices": list(meta["fields"]),
             "label": "Field",
+            "numericChoices": numeric,
         },
         {
             "name": "op",
             "type": "enum",
-            "default": ">=",
+            "default": default_op,
             "choices": list(_COLLECTION_OPS),
             "label": "Comparison",
         },
@@ -1848,6 +1867,7 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "default": "",
             "label": "Value",
             "required": True,
+            "numericFor": "field",
         },
         # Optional second clause. "off" keeps the node single-clause; value2 is
         # deliberately not required so validation stays quiet in that case.
@@ -1864,19 +1884,24 @@ def _predicate_params(kind: str) -> list[ParamSpec]:
             "default": meta["fields"][0],
             "choices": list(meta["fields"]),
             "label": "Field 2",
+            "numericChoices": numeric,
+            "showIf": second_clause,
         },
         {
             "name": "op2",
             "type": "enum",
-            "default": ">=",
+            "default": default_op,
             "choices": list(_COLLECTION_OPS),
             "label": "Comparison 2",
+            "showIf": second_clause,
         },
         {
             "name": "value2",
             "type": "string",
             "default": "",
             "label": "Value 2",
+            "numericFor": "field2",
+            "showIf": second_clause,
         },
     ]
 
