@@ -2028,3 +2028,29 @@ class TestConfirmModelDownload:
             lambda *a, **k: pytest.fail("must not load after a decline"),
         )
         assert transcripts._load_model("large-v3") is None
+
+
+class TestApplyCorrectionsBoundaries:
+    def test_word_boundary_does_not_rewrite_substrings(self):
+        """ "the" -> "they" must not turn "there" into "theyre"."""
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="the cat sat there")]
+        result = transcripts.apply_corrections(segs, [{"from": "the", "to": "they"}])
+        assert result[0]["text"] == "they cat sat there"
+
+    def test_punctuation_edges_still_match(self):
+        """\\b against a punctuation edge never matches, so it is only applied
+        to word-character edges."""
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="use e.g. this")]
+        result = transcripts.apply_corrections(
+            segs, [{"from": "e.g.", "to": "for example"}]
+        )
+        assert result[0]["text"] == "use for example this"
+
+    def test_replacement_is_literal_not_template(self):
+        """A backslash in the replacement is text, not a re.sub escape —
+        previously this raised re.error and 500'd every corrected route."""
+        segs = [transcripts.TranscriptSegment(start=0, end=1, text="the path")]
+        result = transcripts.apply_corrections(
+            segs, [{"from": "path", "to": "C:\\Users\\path \\g<0>"}]
+        )
+        assert result[0]["text"] == "the C:\\Users\\path \\g<0>"

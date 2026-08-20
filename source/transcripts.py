@@ -1119,7 +1119,10 @@ def save_transcripts_manifest(
             config.TRANSCRIPTS_MANIFEST_FILENAME,
             default=_empty_transcripts_manifest(),
         )
-        marks = existing["marks"]
+        # .get like every other reader: load_json_manifest returns the raw
+        # parsed JSON (the default is whole-file, not per-key), and a KeyError
+        # here would silently kill the debounce timer thread.
+        marks = existing.get("marks", [])
 
     data = {
         "source_transcripts": source_transcripts,
@@ -1156,16 +1159,27 @@ def apply_corrections(
     """Apply corrections to transcript segments as post-processing.
 
     Returns a new list of segments with ``from -> to`` substitutions applied.
-    Never mutates the input. Case-insensitive, word-boundary matching.
+    Never mutates the input. Case-insensitive, word-boundary matching — a
+    ``"the" -> "they"`` correction must not rewrite "there" — with the
+    replacement inserted literally (a backslash in *to* is text, not a
+    ``re.sub`` template escape).
     """
     if not corrections:
         return list(segments)
 
-    pairs = [
-        (re.compile(re.escape(c["from"]), re.IGNORECASE), c["to"])
-        for c in corrections
-        if c.get("from") and c.get("to")
-    ]
+    pairs: list[tuple[re.Pattern[str], str]] = []
+    for c in corrections:
+        frm, to = c.get("from"), c.get("to")
+        if not frm or not to:
+            continue
+        # Anchor with \b only where the pattern edge is a word character —
+        # "\b" against punctuation would never match ("e.g." or "?!").
+        pattern = re.escape(frm)
+        if frm[0].isalnum() or frm[0] == "_":
+            pattern = r"\b" + pattern
+        if frm[-1].isalnum() or frm[-1] == "_":
+            pattern = pattern + r"\b"
+        pairs.append((re.compile(pattern, re.IGNORECASE), to))
     if not pairs:
         return list(segments)
 
@@ -1175,7 +1189,7 @@ def apply_corrections(
         text = seg["text"]
         seg_applied = 0
         for pattern, to_text in pairs:
-            new_text, count = pattern.subn(to_text, text)
+            new_text, count = pattern.subn(lambda _m, _to=to_text: _to, text)
             if count > 0:
                 text = new_text
                 seg_applied += count
