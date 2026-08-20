@@ -708,6 +708,25 @@ def configure(
     _participant_marks_getter = participant_marks_getter
 
 
+def report_source_lines(participant: str) -> tuple[list[str], list[str]]:
+    """Formatted observation + mark lines for *participant* via the configured getters.
+
+    The seam ``configure()`` wires in server.py; unwired (CLI, tests, a
+    sheet-less launch) both lists come back empty and a report simply covers
+    the summary alone. Shared by ``_run_report`` and the Workflows report node.
+    """
+    obs_rows = _observation_rows_getter() if _observation_rows_getter else []
+    marks = (
+        _participant_marks_getter(participant)
+        if (_participant_marks_getter and participant)
+        else []
+    )
+    return (
+        _format_report_observations(obs_rows, participant),
+        _format_report_marks(marks),
+    )
+
+
 def report_model() -> str:
     """Resolve the Ollama model the report agent should use.
 
@@ -834,14 +853,7 @@ def _run_report(
         return None
     participant = str(entry.get("participant") or "")
 
-    obs_rows = _observation_rows_getter() if _observation_rows_getter else []
-    marks = (
-        _participant_marks_getter(participant)
-        if (_participant_marks_getter and participant)
-        else []
-    )
-    observation_lines = _format_report_observations(obs_rows, participant)
-    mark_lines = _format_report_marks(marks)
+    observation_lines, mark_lines = report_source_lines(participant)
 
     if cancel_event is not None and cancel_event.is_set():
         return None

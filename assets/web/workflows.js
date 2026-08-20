@@ -132,12 +132,11 @@
     return item;
   }
 
-  // The collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/dedup_*)
-  // share one "Collection" category; group by operation so the palette shows
-  // collapsible sub-groups instead of a long flat list.
+  // The collection-algebra nodes (filter_*/merge_*/limit_*/dedup_*) share one
+  // "Collection" category; group by operation so the palette shows collapsible
+  // sub-groups instead of a long flat list.
   var _COLLECTION_OPS = [
     ["filter", "Filter"],
-    ["partition", "Partition"],
     ["merge", "Merge"],
     ["limit", "Limit"],
     ["dedup", "Dedup"],
@@ -174,6 +173,8 @@
   function paletteNodeMatches(node, query) {
     if (!query) return true;
     var hay = (
+      (node.id || "") +
+      " " +
       (node.label || "") +
       " " +
       (node.description || "") +
@@ -1016,6 +1017,7 @@
     var caret = qs("#wfRunMenuBtn");
     var menu = qs("#wfRunMenu");
     var runTo = qs("#wfRunToItem");
+    var runSample = qs("#wfRunSampleItem");
     if (!caret || !menu) return;
     var ctl = bindMenuToggle(caret, menu);
     if (runTo) {
@@ -1023,6 +1025,15 @@
         ctl.close();
         var sel = state.selection || [];
         if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
+      });
+    }
+    if (runSample) {
+      runSample.addEventListener("click", function () {
+        ctl.close();
+        var sel = state.selection || [];
+        if (WF.startRun && sel.length === 1) {
+          WF.startRun(sel[0], null, 30);
+        }
       });
     }
   }

@@ -156,8 +156,9 @@ def test_catalog_returns_serializable_node_types(wf_client):
     # ss_scan with ten per-detector nodes; ss_scan must be gone).
     assert {"transcribe", "ss_text", "ss_color", "make_clips", "gate"} <= ids
     assert "ss_scan" not in ids
-    # P2 catalog tranche additions.
-    assert {"highlights", "multitool", "timelapse", "heatmap", "measure"} <= ids
+    # P2 catalog tranche additions (measure was later folded into gate_collection).
+    assert {"highlights", "multitool", "timelapse", "heatmap", "gate_collection"} <= ids
+    assert "measure" not in ids
     # P2 follow-ups: manual time-range source + the clipRecords→timeRange adapter.
     assert "time_range" in ids
     assert ("clipRecords", "timeRange") in workflows.ADAPTERS
@@ -169,6 +170,7 @@ def test_catalog_returns_serializable_node_types(wf_client):
         "sheet",
         "videoDir",
         "participants",
+        "regions",
         "outputDir",
         "triggerTypes",
     }
@@ -239,6 +241,106 @@ def test_catalog_serves_artifact_padding_params(wf_client):
         assert max_spec["min"] == 0
 
 
+def test_catalog_serves_param_editor_metadata(wf_client):
+    # The parameter-quality layer: conditional visibility (showIf), numeric
+    # field metadata for filter/partition value editors, the region picker
+    # param type, and completion sources for free-text params.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    # showIf hides knobs that don't apply to the current selection.
+    assert _param("heatmap", "frames")["showIf"] == {"param": "output", "not": "image"}
+    assert _param("heatmap", "window")["showIf"] == {
+        "param": "output",
+        "equals": "rolling_gif",
+    }
+    assert _param("make_clips", "titlecard_duration")["showIf"] == {
+        "param": "titlecards",
+        "equals": True,
+    }
+    assert _param("interval_captures", "gif_duration")["showIf"] == {
+        "param": "output_format",
+        "equals": "gif",
+    }
+    assert _param("ss_numbers", "range_min")["showIf"] == {
+        "param": "operator",
+        "equals": "range",
+    }
+    for name in ("field2", "op2", "value2"):
+        assert _param("filter_events", name)["showIf"] == {
+            "param": "combine",
+            "not": "off",
+        }
+
+    # Predicate field enums carry their numeric subset; the value editor points
+    # at its field enum. Text-first kinds default the op to "contains" so a
+    # fresh node doesn't order-compare text (which drops everything).
+    assert _param("filter_events", "field")["numericChoices"] == [
+        "confidence",
+        "duration",
+        "start",
+    ]
+    assert _param("filter_segments", "field")["numericChoices"] == [
+        "duration",
+        "start",
+    ]
+    assert _param("filter_events", "value")["numericFor"] == "field"
+    assert _param("filter_segments", "op")["default"] == "contains"
+    assert _param("filter_events", "op")["default"] == ">="
+
+    # Region picker type + free-text completion sources.
+    assert _param("region", "name")["type"] == "region"
+    assert "auto" in _param("transcribe", "language")["suggestions"]
+    assert _param("summarize", "model")["datalist"] == "ollama-models"
+
+
+def test_catalog_serves_coverage_gap_nodes(wf_client):
+    # PR 3 of the workflows review: every app capability with backend support
+    # gets a node — the attention detector (+ heatmap style), the report agent,
+    # transcript marks, post-processing, and the gallery viewer.
+    catalog = wf_client.get("/workflows/api/catalog").get_json()["catalog"]
+    by_id = {n["id"]: n for n in catalog}
+
+    def _param(node_id, name):
+        return next(p for p in by_id[node_id]["params"] if p["name"] == name)
+
+    assert {
+        "ss_attention",
+        "report",
+        "transcript_marks",
+        "post_process",
+        "gallery_viewer",
+    } <= set(by_id)
+    assert "attention" in _param("detect", "detector")["choices"]
+    assert "attention" in _param("heatmap", "style")["choices"]
+    assert by_id["ss_attention"].get("multitoolStep") is False
+    assert by_id["report"]["outputs"] == [{"name": "report", "type": "report"}]
+    # Marks category enum stays in lockstep with config.MARK_CATEGORIES.
+    assert set(_param("transcript_marks", "category")["choices"]) == {""} | set(
+        config.MARK_CATEGORIES
+    )
+    # Post-process op-specific knobs hide behind their operation.
+    assert _param("post_process", "target_mb")["showIf"] == {
+        "param": "operation",
+        "equals": "compress",
+    }
+
+
+def test_catalog_context_serves_region_names(wf_client, monkeypatch):
+    import screenspace
+
+    monkeypatch.setattr(
+        screenspace,
+        "load_screenspace_manifest",
+        lambda: {"regions": {"timer": {"x": 0.1}, "chat": {"x": 0.2}}},
+    )
+    ctx = wf_client.get("/workflows/api/catalog").get_json()["context"]
+    assert ctx["regions"] == ["chat", "timer"]
+
+
 def test_catalog_flags_multitool_step_detectors(wf_client):
     # The Multitool step editor derives its step types from the catalog's
     # multitoolStep flag (no hardcoded JS list): the six per-frame detectors carry
@@ -251,7 +353,7 @@ def test_catalog_flags_multitool_step_detectors(wf_client):
 
 
 def test_catalog_serves_collection_ops(wf_client):
-    # The collection-algebra control nodes (filter/merge/partition/limit/dedup) are
+    # The collection-algebra control nodes (filter/merge/limit/dedup) are
     # per-type families grouped under "Collection". Ports must be exact-typed
     # (same wire type in/out) so no adapter is needed, and the predicate value /
     # limit take params carry required:true for the validation panel.
@@ -260,7 +362,7 @@ def test_catalog_serves_collection_ops(wf_client):
 
     expected = {
         f"{op}_{k}"
-        for op in ("filter", "partition", "merge", "limit")
+        for op in ("filter", "merge", "limit")
         for k in ("events", "clips", "segments", "timerange", "artifacts")
     }
     # dedup is span-based -> events + clips + time ranges (no segments/artifacts).
@@ -278,15 +380,14 @@ def test_catalog_serves_collection_ops(wf_client):
     assert by_id["filter_timerange"]["outputs"][0]["type"] == "timeRange"
 
     # filter_events: events -> events (exact type, no coercion), value required.
+    # The second `unmatched` output is the old partition family folded in — the
+    # gate's data-level else branch, same type as the input.
     fe = by_id["filter_events"]
     assert [p["type"] for p in fe["inputs"]] == ["events"]
-    assert [p["type"] for p in fe["outputs"]] == ["events"]
+    assert [p["name"] for p in fe["outputs"]] == ["out", "unmatched"]
+    assert {p["type"] for p in fe["outputs"]} == {"events"}
     assert next(p for p in fe["params"] if p["name"] == "value")["required"] is True
-
-    # partition emits two outputs of the input's type (the gate's data-level else).
-    pc = by_id["partition_clips"]
-    assert [p["name"] for p in pc["outputs"]] == ["matched", "unmatched"]
-    assert {p["type"] for p in pc["outputs"]} == {"clipRecords"}
+    assert "partition_clips" not in by_id
 
     # merge takes 2-3 same-typed inputs (in2/in3 optional) into one output.
     ms = by_id["merge_segments"]

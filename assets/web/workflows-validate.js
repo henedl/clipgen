@@ -72,6 +72,20 @@
     var errors = [];
     var warnings = [];
 
+    // error — a node whose type is no longer in the catalog (removed/renamed,
+    // or imported from a different build) can never execute. Without this the
+    // fallback spec above validates clean and the graph fails only at run time.
+    if (!state.catalogById[node.type]) {
+      errors.push("Unknown node type “" + node.type + "”");
+    }
+    // error — multitool chains detectors per frame; fewer than two steps has
+    // nothing to chain and the executor bails to empty events.
+    if (node.type === "multitool") {
+      var mtSteps = (node.params || {}).steps;
+      if (!Array.isArray(mtSteps) || mtSteps.length < 2) {
+        errors.push("Add at least 2 steps");
+      }
+    }
     // error — launch context can't satisfy `requires` (sheet/videoDir).
     if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
       errors.push("Requires " + ((type.requires || []).join(", ") || "context"));
@@ -122,20 +136,39 @@
     ) {
       warnings.push("No participants selected");
     }
-    // warning — a filter/partition with an ordering comparison (>=,>,<=,<) needs a
-    // numeric value; a non-numeric one fails the backend float() coerce and
-    // silently drops every item. (Heuristic on the op, so no need to mirror the
-    // backend's per-field numeric/text table.)
-    if (
-      node.type.indexOf("filter_") === 0 ||
-      node.type.indexOf("partition_") === 0
-    ) {
-      var op = (node.params || {}).op;
-      var val = (node.params || {}).value;
-      var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
-      var numeric = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
-      if (ordering && !paramEmpty(val) && !numeric) {
-        warnings.push("Value must be a number for this comparison");
+    // error — a filter predicate that would silently drop every item:
+    // an ordering comparison on a text field (the backend returns False per
+    // item), or a numeric field compared against a non-numeric value (the
+    // float() coerce fails). Field numeric-ness comes from the field spec's
+    // numericChoices, so this stays in lockstep with the backend's table.
+    if (node.type.indexOf("filter_") === 0) {
+      var fpSpecs = type.params || [];
+      var fpParams = node.params || {};
+      var specByName = function (n) {
+        for (var si = 0; si < fpSpecs.length; si++) {
+          if (fpSpecs[si].name === n) return fpSpecs[si];
+        }
+        return null;
+      };
+      var clauseError = function (fieldKey, opKey, valueKey, suffix) {
+        var fs = specByName(fieldKey);
+        var field =
+          fpParams[fieldKey] != null ? fpParams[fieldKey] : fs && fs.default;
+        var numeric = fs && (fs.numericChoices || []).indexOf(field) >= 0;
+        var op = fpParams[opKey] != null ? fpParams[opKey] : ">=";
+        var val = fpParams[valueKey];
+        var ordering = op === ">=" || op === ">" || op === "<=" || op === "<";
+        var isNum = /^\s*-?(\d+\.?\d*|\.\d+)\s*$/.test(String(val));
+        if (ordering && !numeric) {
+          errors.push("Ordering comparison" + suffix + " needs a numeric field");
+        } else if (numeric && op !== "contains" && !paramEmpty(val) && !isNum) {
+          errors.push("Value" + suffix + " must be a number");
+        }
+      };
+      clauseError("field", "op", "value", "");
+      if (fpParams.combine && fpParams.combine !== "off") {
+        clauseError("field2", "op2", "value2", " 2");
+        if (paramEmpty(fpParams.value2)) errors.push("Set “Value 2”");
       }
     }
     var connected = (state.edges || []).some(function (e) {
@@ -150,7 +183,7 @@
       if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
     } else {
       // warning — a node with data input ports but none wired runs but produces
-      // nothing (e.g. make_clips / measure, whose inputs are all optional so the
+      // nothing (e.g. make_clips / gate_collection, whose inputs are all optional so the
       // required-input check above never fires). Suppressed when the clearer
       // "not connected" orphan message below will fire instead.
       var dataInputs = (type.inputs || []).filter(function (p) {
@@ -173,8 +206,9 @@
 
   // Kahn cycle check, ported from workflows.topo_order. Control edges are real
   // dependencies, so they count; edges to unknown nodes are ignored (a stale wire
-  // never blocks). Returns true iff the graph contains a cycle.
-  function graphHasCycle() {
+  // never blocks). Returns the ids of the nodes Kahn couldn't place — the cycle
+  // members plus anything locked behind them — empty when the graph is acyclic.
+  function cycleNodeIds() {
     var nodes = state.nodes || [];
     var ids = {};
     nodes.forEach(function (n) {
@@ -196,16 +230,26 @@
     nodes.forEach(function (n) {
       if (indeg[n.id] === 0) ready.push(n.id);
     });
-    var seen = 0;
+    var placed = {};
     while (ready.length) {
       var nid = ready.shift();
-      seen += 1;
+      placed[nid] = true;
       adj[nid].forEach(function (nxt) {
         indeg[nxt] -= 1;
         if (indeg[nxt] === 0) ready.push(nxt);
       });
     }
-    return seen !== nodes.length;
+    return nodes
+      .filter(function (n) {
+        return !placed[n.id];
+      })
+      .map(function (n) {
+        return n.id;
+      });
+  }
+
+  function graphHasCycle() {
+    return cycleNodeIds().length > 0;
   }
 
   // ---- Dry-run preview (what would execute) ----
@@ -297,12 +341,34 @@
     var chip = qs("#wfPreviewChip");
     if (chip) {
       var steps = plan.count === 1 ? " step" : " steps";
-      chip.textContent =
+      var text =
         plan.count === plan.total
           ? plan.count + steps
           : plan.count + " of " + plan.total + " steps";
+      // Rough cost signal: how many of the would-run steps are video-duration
+      // bound (decode/transcode the whole recording). A count, not an ETA —
+      // the step total alone weighs a viewer bundle the same as a 2-hour scan.
+      var heavy = 0;
+      (state.nodes || []).forEach(function (n) {
+        if (plan.ids[n.id] && isHeavyNodeType(n.type)) heavy += 1;
+      });
+      if (heavy) text += " · " + heavy + " heavy";
+      chip.textContent = text;
       chip.classList.toggle("hidden", !plan.total);
     }
+  }
+
+  // Video-duration-bound node types: whole-recording decode (detectors,
+  // multitool, timelapse), transcription, or a whole-file rewrite/copy.
+  function isHeavyNodeType(type) {
+    if (String(type).indexOf("ss_") === 0) return true;
+    return (
+      type === "detect" ||
+      type === "multitool" ||
+      type === "timelapse" ||
+      type === "transcribe" ||
+      type === "post_process"
+    );
   }
 
   function clearRunPreview() {
@@ -318,6 +384,7 @@
   // ---- Aggregate + render ----
 
   function nodeLabel(node) {
+    if (node.name) return node.name;
     var type = state.catalogById[node.type];
     return (type && type.label) || node.type;
   }
@@ -326,8 +393,19 @@
     var errors = [];
     var warnings = [];
     // Graph-level: a cycle makes the run unschedulable (Kahn never drains).
-    if (graphHasCycle()) {
-      errors.push({ message: "Graph has a cycle", nodeId: null });
+    // Name the unplaced nodes and anchor the row on the first so it's clickable.
+    var cyc = cycleNodeIds();
+    if (cyc.length) {
+      var cycLabels = cyc.slice(0, 3).map(function (id) {
+        var n = WF.findNode ? WF.findNode(id) : null;
+        return n ? nodeLabel(n) : id;
+      });
+      if (cyc.length > 3) cycLabels.push("+" + (cyc.length - 3) + " more");
+      errors.push({
+        message: "Graph has a cycle",
+        nodeId: cyc[0],
+        label: cycLabels.join(", "),
+      });
     }
     (state.nodes || []).forEach(function (node) {
       var issues = nodeIssues(node);

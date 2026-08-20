@@ -135,7 +135,14 @@ def api_catalog() -> Any:
     batch endpoint will fan out over (so the dropdown never offers a participant a
     run can't resolve).
     """
+    import screenspace
+
     videos = utils.discover_participant_videos()
+    # Saved Screenspace regions, so the Region node's name param can be a picker
+    # instead of a free string a typo silently full-frames.
+    region_names = sorted(
+        (screenspace.load_screenspace_manifest().get("regions") or {}).keys()
+    )
     return ok(
         # Bootstrap channel for shared frontend config (hotkey overrides etc.);
         # this page has no sheet-data fetch, so the config rides along here.
@@ -148,6 +155,7 @@ def api_catalog() -> Any:
             "sheet": _sheet_context is not None,
             "videoDir": bool(videos),
             "participants": [v["id"] for v in videos if v.get("has_video")],
+            "regions": region_names,
             # Where a run's artifacts land — surfaced in the run panel so the
             # user knows where to find their clips/reels/viewers.
             "outputDir": str(utils.get_effective_output_dir()),
@@ -503,6 +511,7 @@ def _launch_run(
     target_node_id: str = "",
     seed_results: dict[str, dict[str, Any]] | None = None,
     seed_note: str = "",
+    sample_window: float = 0.0,
 ) -> dict[str, Any]:
     """Create + spawn one run on a daemon thread; return the initial snapshot.
 
@@ -526,6 +535,7 @@ def _launch_run(
         target_node_id=target_node_id,
         seed_results=seed_results,
         seed_note=seed_note,
+        sample_window=sample_window,
     )
     with _runs_lock:
         _runs[run_id] = runner
@@ -571,6 +581,13 @@ def api_run_create() -> Any:
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
         return err("Unknown target node")
+
+    # Optional sample-window test: bound every unwired detector timeRange to the
+    # video's first N seconds (see WorkflowRunner._apply_sample_window).
+    try:
+        sample_window = max(0.0, float(data.get("sampleWindowSeconds") or 0.0))
+    except (TypeError, ValueError):
+        return err("sampleWindowSeconds must be a number")
 
     # Optional resume: reload the prior run's completed-node sidecars as seeds and
     # execute only what failed or changed, plus everything downstream. Resumes
@@ -621,6 +638,7 @@ def api_run_create() -> Any:
             target_node_id=target,
             seed_results=seed_results,
             seed_note=seed_note,
+            sample_window=sample_window,
         )
     )
 

@@ -102,23 +102,23 @@ def test_filter_empty_value_or_unwired_input_is_safe():
     assert out["out"]["events"] == []
 
 
-# ---- partition ----
+# ---- filter's unmatched branch (subsumes the old partition family) ----
 
 
-def test_partition_events_is_complementary_and_total():
+def test_filter_events_unmatched_is_complementary_and_total():
     env = _events((0.9, 1, 2), (0.3, 5, 6), (0.7, 8, 9))
     res = _exec(
-        "partition_events",
+        "filter_events",
         {"in": env},
         {"field": "confidence", "op": ">=", "value": "0.7"},
     )
-    matched = res["matched"]["events"]
+    matched = res["out"]["events"]
     unmatched = res["unmatched"]["events"]
     assert [e["confidence"] for e in matched] == [0.9, 0.7]
     assert [e["confidence"] for e in unmatched] == [0.3]
     # The two branches cover the input exactly (no item lost or duplicated).
     assert len(matched) + len(unmatched) == len(env["events"])
-    assert res["matched"]["source"] == res["unmatched"]["source"] == env["source"]
+    assert res["out"]["source"] == res["unmatched"]["source"] == env["source"]
 
 
 # ---- merge ----
@@ -294,16 +294,16 @@ def test_limit_artifacts_top_n_by_duration():
     assert out["count"] == 1
 
 
-def test_partition_artifacts_branches_by_duration():
+def test_filter_artifacts_branches_by_duration():
     env = _arts(("clip", 0, 5, "long"), ("clip", 0, 1, "short"))
     res = _exec(
-        "partition_artifacts",
+        "filter_artifacts",
         {"in": env},
         {"field": "duration", "op": ">", "value": "2"},
     )
-    assert [a["category"] for a in res["matched"]["artifacts"]] == ["long"]
+    assert [a["category"] for a in res["out"]["artifacts"]] == ["long"]
     assert [a["category"] for a in res["unmatched"]["artifacts"]] == ["short"]
-    assert res["matched"]["count"] == 1 and res["unmatched"]["count"] == 1
+    assert res["out"]["count"] == 1 and res["unmatched"]["count"] == 1
 
 
 def test_dedup_clips_untimed_record_does_not_reset_overlap_tracker():
@@ -405,10 +405,10 @@ def test_filter_segments_mixed_text_and_numeric_clauses():
     assert [s["text"] for s in out["segments"]] == ["checkout was confusing"]
 
 
-def test_partition_compound_clause_is_complementary():
+def test_filter_compound_clause_is_complementary():
     env = _events((0.9, 1, 2), (0.5, 8, 9), (0.2, 3, 4))
     res = _exec(
-        "partition_events",
+        "filter_events",
         {"in": env},
         {
             "field": "confidence",
@@ -420,7 +420,7 @@ def test_partition_compound_clause_is_complementary():
             "value2": "5",
         },
     )
-    matched = res["matched"]["events"]
+    matched = res["out"]["events"]
     unmatched = res["unmatched"]["events"]
     assert len(matched) + len(unmatched) == 3
     assert [e["confidence"] for e in matched] == [0.9, 0.5]

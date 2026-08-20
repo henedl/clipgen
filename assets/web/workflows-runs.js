@@ -169,12 +169,18 @@
     return batch && !isTerminal(batch.status);
   }
 
-  function startRun(targetNodeId, resumeFromRunId) {
+  function startRun(targetNodeId, resumeFromRunId, sampleWindowSeconds) {
     if (!state.ready || !state.activeBlueprintId) return;
-    if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    if (activeRunInFlight() || activeBatchInFlight()) {
+      showToast("A run is already in flight");
+      return;
+    }
     // Errors gate the run (the button is already disabled; this guards the
     // programmatic path). Warnings never block.
-    if (state.validation && state.validation.errors.length) return;
+    if (state.validation && state.validation.errors.length) {
+      showToast("Fix the errors in the Issues panel to run");
+      return;
+    }
     // "All participants" makes Run fan out over the study, but a partial "run to
     // here" or a resume is always single (a resumed batch child keeps its
     // participant binding server-side).
@@ -189,6 +195,7 @@
         var body = { blueprintId: state.activeBlueprintId };
         if (targetNodeId) body.targetNodeId = targetNodeId;
         if (resumeFromRunId) body.resumeFromRunId = resumeFromRunId;
+        if (sampleWindowSeconds) body.sampleWindowSeconds = sampleWindowSeconds;
         return apiPost("api/runs", body);
       })
       .then(function (res) {
@@ -249,7 +256,10 @@
   // Source is set to "All participants" or a subset.
   function startBatch() {
     if (!state.ready || !state.activeBlueprintId) return;
-    if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    if (activeRunInFlight() || activeBatchInFlight()) {
+      showToast("A run is already in flight");
+      return;
+    }
     setRunningUI(true);
     Promise.resolve(WF.flushSave ? WF.flushSave() : null)
       .then(function () {
@@ -535,12 +545,14 @@
 
   // ---- Rendering ------------------------------------------------------------
 
-  // Build a label map for the active blueprint's nodes (run rows show the node's
-  // catalog label, falling back to its id for a run from another blueprint).
+  // Build a label map for the active blueprint's nodes: the user's rename when
+  // set, else the catalog label, falling back to the id for a run from another
+  // blueprint. The rename is what disambiguates three "Make Clips" rows.
   function nodeLabel(nodeId) {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].id === nodeId) {
+        if (nodes[i].name) return nodes[i].name;
         var type = state.catalogById[nodes[i].type];
         return (type && type.label) || nodes[i].type;
       }
@@ -569,6 +581,9 @@
 
   function buildResultChips(run) {
     // Surface terminal pointers/counts (viewer path, artifact/event counts).
+    // A path chip is a link into the output dir via the studio media route —
+    // the produced reel/viewer/export opens from here rather than being a
+    // filename the user has to go hunt for on disk.
     var results = run.results || {};
     var chips = el("div", "wf-run-results");
     var any = false;
@@ -577,10 +592,19 @@
       Object.keys(ports).forEach(function (port) {
         var val = ports[port];
         if (val == null) return;
+        if (typeof val === "object" && val.path) {
+          var name = basename(val.path);
+          var link = el("a", "wf-run-chip wf-run-chip-link", port + ": " + name);
+          link.href = "../studio/media/" + encodeURIComponent(name);
+          link.target = "_blank";
+          link.rel = "noopener";
+          chips.appendChild(link);
+          any = true;
+          return;
+        }
         var text = null;
         if (typeof val === "object") {
-          if (val.path) text = port + ": " + basename(val.path);
-          else if (typeof val.count === "number") text = port + ": " + val.count;
+          if (typeof val.count === "number") text = port + ": " + val.count;
         } else if (typeof val !== "boolean") {
           text = port + ": " + val;
         }
@@ -629,6 +653,12 @@
           toggleNodeResult(run, nodeId, panel);
         });
         rows.appendChild(panel);
+        if (_expandedResults[run.id + ":" + nodeId]) {
+          // Re-open across re-renders (the run._nodeResults cache makes this
+          // instant; a not-yet-cached payload just re-fetches once).
+          delete _expandedResults[run.id + ":" + nodeId];
+          toggleNodeResult(run, nodeId, panel);
+        }
       }
     });
     wrap.appendChild(rows);
@@ -639,14 +669,22 @@
 
   // ---- Lazy per-node result ------------------------------------------------
 
+  // Which result panels are expanded, keyed "runId:nodeId". Kept in module
+  // state (not the DOM) because every SSE status tick re-renders the panel —
+  // without this, a live run collapses whatever the user was reading.
+  var _expandedResults = {};
+
   // Expand/collapse one node's result panel. The full payload is fetched once
   // and cached on the run object, so re-expanding (even after a card rebuild)
   // never re-hits the endpoint.
   function toggleNodeResult(run, nodeId, panel) {
+    var key = run.id + ":" + nodeId;
     if (!panel.classList.contains("hidden")) {
       panel.classList.add("hidden");
+      delete _expandedResults[key];
       return;
     }
+    _expandedResults[key] = true;
     panel.classList.remove("hidden");
     if (panel.dataset.loaded === "1" || panel.dataset.loading === "1") return;
     var cached = run._nodeResults && run._nodeResults[nodeId];
@@ -839,6 +877,14 @@
       if (run.triggerType) trig.title = "Auto-run trigger: " + run.triggerType;
       head.appendChild(trig);
     }
+    if (run.sampleWindow) {
+      var sw = el("span", "wf-run-triggered", "test " + run.sampleWindow + "s");
+      sw.title =
+        "Sample-window test: detectors scanned only the first " +
+        run.sampleWindow +
+        " seconds";
+      head.appendChild(sw);
+    }
     // Live stream dropped for the active run — polling is covering the gap.
     if (_reconnecting && run.id === state.activeRunId && !isTerminal(run.status)) {
       head.appendChild(el("span", "wf-run-reconnect cg-shimmer", "Reconnecting…"));
@@ -919,7 +965,9 @@
     if (counts.cancelled) parts.push(counts.cancelled + " cancelled");
     var bstart = fmtStartTime(batch.createdAt);
     if (bstart) parts.push(bstart);
-    head.appendChild(el("span", "wf-run-meta", "All participants · " + parts.join(" · ")));
+    var pCount = (batch.participants || []).length || total;
+    var pLabel = pCount === 1 ? "1 participant" : pCount + " participants";
+    head.appendChild(el("span", "wf-run-meta", pLabel + " · " + parts.join(" · ")));
     card.appendChild(head);
 
     if (expanded) {
@@ -1072,6 +1120,51 @@
     });
     container.appendChild(frag);
     container.scrollTop = prevScrollTop;
+    applyLastRunBadges();
+  }
+
+  // ---- Last-run badges on canvas cards ---------------------------------------
+
+  // "last: 14 events · 5 unmatched" under each node, from the newest terminal
+  // run that has a summary for it. Applied to the DOM like the run tinting
+  // (renderAllNodes calls back in after a rebuild), so no card re-render.
+  // On a filter node the out/unmatched pair doubles as a selectivity readout.
+  function lastRunBadgeText(runs, nodeId) {
+    for (var i = 0; i < runs.length; i++) {
+      var ports = (runs[i].results || {})[nodeId];
+      if (!ports) continue;
+      var parts = [];
+      Object.keys(ports).forEach(function (port) {
+        var val = ports[port];
+        if (val && typeof val === "object" && typeof val.count === "number") {
+          parts.push(val.count + " " + port);
+        } else if (val && typeof val === "object" && val.path) {
+          parts.push(basename(val.path));
+        }
+      });
+      if (parts.length) return "last: " + parts.join(" · ");
+    }
+    return null;
+  }
+
+  function applyLastRunBadges() {
+    var world = qs("#wfWorld");
+    if (!world) return;
+    // state.runs arrives newest-first from the server; keep only terminal runs
+    // of the active blueprint so a mid-run partial summary never shows.
+    var runs = (state.runs || []).filter(function (r) {
+      return isTerminal(r.status) && r.blueprintId === state.activeBlueprintId;
+    });
+    var cards = world.querySelectorAll(".wf-node");
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      if (card.getAttribute("data-node-type") === "note") continue;
+      var text = lastRunBadgeText(runs, card.getAttribute("data-node-id"));
+      var old = card.querySelector(".wf-node-lastrun");
+      if (old && old.textContent === text) continue;
+      if (old) old.remove();
+      if (text) card.appendChild(el("div", "wf-node-lastrun", text));
+    }
   }
 
   // ---- Cross-blueprint history scope ----------------------------------------
@@ -1158,10 +1251,21 @@
     var caret = qs("#wfRunMenuBtn");
     if (caret) caret.disabled = blocked;
     // "Run to here" needs exactly one selected node (its target).
+    var one = state.selection && state.selection.length === 1;
     var runToItem = qs("#wfRunToItem");
     if (runToItem) {
-      var one = state.selection && state.selection.length === 1;
       runToItem.disabled = blocked || !one;
+    }
+    // The sample-window test additionally needs that node to be a detector —
+    // it works by bounding the detector's unwired timeRange input.
+    var sampleItem = qs("#wfRunSampleItem");
+    if (sampleItem) {
+      var selNode =
+        one && WF.findNode ? WF.findNode(state.selection[0]) : null;
+      var detector =
+        selNode &&
+        (selNode.type === "detect" || String(selNode.type).indexOf("ss_") === 0);
+      sampleItem.disabled = blocked || !detector;
     }
   }
 
@@ -1250,5 +1354,6 @@
   WF.stopRun = stopRun;
   WF.refreshRuns = refreshRuns;
   WF.renderRuns = renderRuns;
+  WF.applyLastRunBadges = applyLastRunBadges; // re-applied after renderAllNodes
   WF.syncRunButton = syncRunButton; // re-gated by the validation satellite
 })();

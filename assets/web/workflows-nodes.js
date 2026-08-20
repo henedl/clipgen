@@ -104,7 +104,11 @@
   function buildDetectEditor(node) {
     if (!node.params) node.params = {};
     var types = detectTypes();
-    if (!node.params.detector) node.params.detector = types[0] || "text";
+    var seeded = false;
+    if (!node.params.detector) {
+      node.params.detector = types[0] || "text";
+      seeded = true;
+    }
     var wrap = el("div", "wf-node-params");
 
     var row = el("div", "wf-param");
@@ -120,15 +124,20 @@
     var body = el("div", "wf-detect-body");
     function renderBody() {
       body.innerHTML = "";
-      stepParamSpecs(node.params.detector).forEach(function (ps) {
-        // Seed the spec default so number fields show a value (and persist on the
-        // next save); the server also defaults missing params defensively.
-        if (node.params[ps.name] === undefined) node.params[ps.name] = ps.default;
-        var prow = el("div", "wf-param");
-        prow.appendChild(el("label", "wf-param-label", ps.label || ps.name));
-        prow.appendChild(buildParamControl(node, ps));
-        body.appendChild(prow);
+      var specs = stepParamSpecs(node.params.detector);
+      specs.forEach(function (ps) {
+        // Seed the spec default so number fields show a value; anything seeded
+        // must also be saved, or the values exist only until the next reload.
+        if (node.params[ps.name] === undefined) {
+          node.params[ps.name] = ps.default;
+          seeded = true;
+        }
       });
+      buildParamsInto(body, node, specs, node.params);
+      if (seeded) {
+        seeded = false;
+        WF.scheduleSave();
+      }
     }
     sel.addEventListener("change", function () {
       node.params.detector = sel.value;
@@ -143,10 +152,59 @@
     return wrap;
   }
 
-  // One ParamSpec editor (number / enum / bool / participant / string / step-list),
-  // writing back to `store` (default node.params) on change and autosaving. Scalar
-  // editors do NOT re-render on edit, so focus/caret survive typing — the mousedown
-  // router leaves param controls alone for the same reason.
+  // Completion sources for free-text params. Static `suggestions` ride on the
+  // catalog spec; the "ollama-models" source is fetched once from the combined
+  // app's /api/models (page-relative ../api/models) and fills in when it lands.
+  // Datalists are appended to <body> and shared by name across all cards.
+  var _ollamaModelsRequested = false;
+  function suggestionListId(spec) {
+    if (Array.isArray(spec.suggestions) && spec.suggestions.length) {
+      var id = "wfDatalist-" + spec.name;
+      if (!document.getElementById(id)) {
+        var dl = el("datalist");
+        dl.id = id;
+        spec.suggestions.forEach(function (s) {
+          var o = el("option");
+          o.value = s;
+          dl.appendChild(o);
+        });
+        document.body.appendChild(dl);
+      }
+      return id;
+    }
+    if (spec.datalist === "ollama-models") {
+      var mid = "wfDatalistOllamaModels";
+      var mdl = document.getElementById(mid);
+      if (!mdl) {
+        mdl = el("datalist");
+        mdl.id = mid;
+        document.body.appendChild(mdl);
+      }
+      if (!_ollamaModelsRequested) {
+        _ollamaModelsRequested = true;
+        fetch("../api/models")
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (res) {
+            var models = (res && res.ollama && res.ollama.models) || [];
+            models.forEach(function (m) {
+              var o = el("option");
+              o.value = m.name;
+              mdl.appendChild(o);
+            });
+          })
+          .catch(function () {});
+      }
+      return mid;
+    }
+    return null;
+  }
+
+  // One ParamSpec editor (number / enum / bool / participant / region / string /
+  // step-list), writing back to `store` (default node.params) on change and
+  // autosaving. Scalar editors do NOT re-render on edit, so focus/caret survive
+  // typing — the mousedown router leaves param controls alone for the same reason.
   function buildParamControl(node, spec, store) {
     if (spec.type === "step-list") return buildStepList(node, spec);
     store = store || node.params;
@@ -157,6 +215,7 @@
       input.type = "number";
       if (spec.min !== undefined) input.min = spec.min;
       if (spec.max !== undefined) input.max = spec.max;
+      if (spec.default != null) input.placeholder = String(spec.default);
       input.value = value != null ? value : "";
       input.addEventListener("input", function () {
         var n = parseFloat(input.value);
@@ -176,6 +235,9 @@
         store[spec.name] = input.value;
         WF.scheduleSave();
       });
+      // An unset value means "server default"; select it rather than letting
+      // the browser display option[0] while the run uses something else.
+      if (value == null && spec.default != null) input.value = spec.default;
     } else if (spec.type === "bool") {
       input = el("input", "wf-param-input");
       input.type = "checkbox";
@@ -186,10 +248,42 @@
       });
     } else if (spec.type === "participant") {
       input = buildParticipantSelect(spec, store);
+    } else if (
+      spec.type === "region" &&
+      ((state.context && state.context.regions) || []).length
+    ) {
+      // Saved Screenspace regions exist — offer them as a picker so a typo
+      // can't silently full-frame the scan. A stored name that no longer
+      // exists stays selectable, flagged "(missing)", so a saved blueprint
+      // round-trips; with no saved regions the generic text branch below
+      // applies (the server matches by name either way).
+      input = el("select", "wf-param-input");
+      var regions = state.context.regions;
+      var names = [""].concat(regions);
+      if (value && names.indexOf(value) < 0) names.push(value);
+      names.forEach(function (name) {
+        var opt = el("option");
+        opt.value = name;
+        if (name === "") opt.textContent = "(none)";
+        else if (regions.indexOf(name) < 0) opt.textContent = name + " (missing)";
+        else opt.textContent = name;
+        if (name === value) opt.selected = true;
+        input.appendChild(opt);
+      });
+      input.addEventListener("change", function () {
+        store[spec.name] = input.value;
+        WF.scheduleSave();
+        if (WF.refreshValidation) WF.refreshValidation();
+      });
     } else {
       input = el("input", "wf-param-input");
       input.type = "text";
       input.autocomplete = "off";
+      if (spec.default != null && spec.default !== "") {
+        input.placeholder = String(spec.default);
+      }
+      var listId = suggestionListId(spec);
+      if (listId) input.setAttribute("list", listId);
       input.value = value != null ? value : "";
       input.addEventListener("input", function () {
         store[spec.name] = input.value;
@@ -197,6 +291,120 @@
       });
     }
     return input;
+  }
+
+  // One param row: label + reset-to-default chip + control. The chip shows only
+  // when the stored value differs from the spec default; resetting rebuilds the
+  // control in place so the widget logic stays in buildParamControl.
+  function buildParamRow(node, spec, store) {
+    store = store || node.params;
+    var row = el("div", "wf-param");
+    var head = el("div", "wf-param-head");
+    head.appendChild(el("label", "wf-param-label", spec.label || spec.name));
+    var control = buildParamControl(node, spec, store);
+    var reset = null;
+    var resettable =
+      spec.type !== "step-list" &&
+      spec.type !== "participant" &&
+      spec.default !== undefined;
+    function syncReset() {
+      if (!reset) return;
+      var cur = store[spec.name];
+      // An unset value defers to the server default, so it counts as equal.
+      var differs =
+        cur != null &&
+        String(cur) !== String(spec.default == null ? "" : spec.default);
+      reset.classList.toggle("hidden", !differs);
+    }
+    if (resettable) {
+      reset = el("button", "wf-param-reset hidden");
+      reset.type = "button";
+      reset.appendChild(el("span", "wf-btn-icon wf-reset-icon"));
+      reset.setAttribute("data-tooltip", "Reset to default");
+      reset.setAttribute("aria-label", "Reset to default");
+      reset.addEventListener("mousedown", function (e) {
+        // Keep the canvas's delegated drag/select handler out of it.
+        e.stopPropagation();
+      });
+      reset.addEventListener("click", function () {
+        store[spec.name] = spec.default;
+        var next = buildParamControl(node, spec, store);
+        row.replaceChild(next, control);
+        control = next;
+        WF.scheduleSave();
+        if (WF.refreshValidation) WF.refreshValidation();
+        syncReset();
+        // Bubbles to the container so dependent showIf rows re-evaluate.
+        row.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      head.appendChild(reset);
+    }
+    row.appendChild(head);
+    row.appendChild(control);
+    syncReset();
+    return {
+      row: row,
+      spec: spec,
+      syncReset: syncReset,
+      getControl: function () {
+        return control;
+      },
+    };
+  }
+
+  // Build every row for `specs` into `container` and keep the conditional bits
+  // live: showIf visibility, numeric-aware free-text values (filter/partition
+  // `value` follows the picked field's numericChoices), and the reset chips.
+  // One delegated listener pair per container — scalar editors still never
+  // re-render, so focus/caret survive typing.
+  function buildParamsInto(container, node, specs, store) {
+    var entries = specs.map(function (spec) {
+      var entry = buildParamRow(node, spec, store);
+      container.appendChild(entry.row);
+      return entry;
+    });
+    function bySpecName(name) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].spec.name === name) return entries[i];
+      }
+      return null;
+    }
+    function sync() {
+      entries.forEach(function (en) {
+        var spec = en.spec;
+        if (spec.showIf && spec.showIf.param) {
+          var v = store[spec.showIf.param];
+          if (v == null) {
+            // Unset → the server will use the controlling param's default.
+            var ctrl = bySpecName(spec.showIf.param);
+            if (ctrl) v = ctrl.spec.default;
+          }
+          var show = true;
+          if (Object.prototype.hasOwnProperty.call(spec.showIf, "equals")) {
+            show = String(v) === String(spec.showIf.equals);
+          } else if (Object.prototype.hasOwnProperty.call(spec.showIf, "not")) {
+            show = String(v) !== String(spec.showIf.not);
+          }
+          en.row.classList.toggle("hidden", !show);
+        }
+        if (spec.numericFor) {
+          var fieldEntry = bySpecName(spec.numericFor);
+          var fieldVal = store[spec.numericFor];
+          if (fieldVal == null && fieldEntry) fieldVal = fieldEntry.spec.default;
+          var numeric =
+            fieldEntry &&
+            (fieldEntry.spec.numericChoices || []).indexOf(fieldVal) >= 0;
+          var input = en.getControl();
+          if (input && input.tagName === "INPUT") {
+            input.type = numeric ? "number" : "text";
+          }
+        }
+        en.syncReset();
+      });
+    }
+    container.addEventListener("input", sync);
+    container.addEventListener("change", sync);
+    sync();
   }
 
   // Multi-select participant picker: a summary button opening a checkbox popover.
@@ -431,25 +639,16 @@
     card.appendChild(head);
 
     var body = el("div", "wf-step-body");
-    stepParamSpecs(step.type).forEach(function (ps) {
-      var row = el("div", "wf-param");
-      row.appendChild(el("label", "wf-param-label", ps.label || ps.name));
-      row.appendChild(buildParamControl(node, ps, step));
-      body.appendChild(row);
-    });
+    buildParamsInto(body, node, stepParamSpecs(step.type), step);
     card.appendChild(body);
     return card;
   }
 
   function buildParamEditors(node, type) {
     if (node.type === "detect") return buildDetectEditor(node);
+    if (!node.params) node.params = {};
     var wrap = el("div", "wf-node-params");
-    type.params.forEach(function (spec) {
-      var row = el("div", "wf-param");
-      row.appendChild(el("label", "wf-param-label", spec.label || spec.name));
-      row.appendChild(buildParamControl(node, spec));
-      wrap.appendChild(row);
-    });
+    buildParamsInto(wrap, node, type.params, node.params);
     return wrap;
   }
 
@@ -480,6 +679,40 @@
     });
     card.appendChild(ta);
     return card;
+  }
+
+  // Swap a card's title text for an inline rename input. Commit on blur/Enter;
+  // Escape restores the previous name; an empty name clears the rename.
+  function startRenameNode(node, titleText) {
+    var type = state.catalogById[node.type] || {};
+    var input = el("input", "wf-node-rename");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.value = node.name || "";
+    input.placeholder = type.label || node.type;
+    input.addEventListener("mousedown", function (e) {
+      e.stopPropagation(); // keep the canvas drag handler out of it
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") input.blur();
+      else if (e.key === "Escape") {
+        input.value = node.name || "";
+        input.blur();
+      }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", function () {
+      var name = input.value.trim();
+      if (name) node.name = name;
+      else delete node.name;
+      WF.scheduleSave();
+      if (WF.renderAllNodes) WF.renderAllNodes();
+      if (WF.refreshValidation) WF.refreshValidation();
+    });
+    titleText.textContent = "";
+    titleText.appendChild(input);
+    input.focus();
+    input.select();
   }
 
   function renderNode(node) {
@@ -539,7 +772,20 @@
     // plus a `?` help glyph whose tooltip carries the catalog description. Uses
     // the [data-tooltip] singleton (styled/in-viewport), not native title.
     var titleBar = el("div", "wf-node-title");
-    titleBar.appendChild(el("span", "wf-node-title-text", type.label || node.type));
+    var titleText = el(
+      "span",
+      "wf-node-title-text",
+      node.name || type.label || node.type,
+    );
+    // Double-click renames the node (blank restores the catalog label) — the
+    // custom name is what disambiguates duplicate types on the canvas and in
+    // the run panel's rows. A renamed card keeps its type reachable via tooltip.
+    if (node.name) titleText.setAttribute("data-tooltip", type.label || node.type);
+    titleText.addEventListener("dblclick", function (e) {
+      e.stopPropagation();
+      startRenameNode(node, titleText);
+    });
+    titleBar.appendChild(titleText);
     if (type.description) {
       var help = el("span", "wf-node-help");
       help.setAttribute("data-tooltip", type.description);
@@ -621,6 +867,8 @@
     // mutates state.selection.
     if (WF.syncStashButton) WF.syncStashButton();
     if (WF.syncRunButton) WF.syncRunButton();
+    // Card rebuild dropped the last-run badges — re-apply (runs satellite).
+    if (WF.applyLastRunBadges) WF.applyLastRunBadges();
 
     // Node set changed (add/delete/blueprint-load) → refresh the minimap. Pan/
     // zoom and drag are covered by their own hooks in the canvas satellite.

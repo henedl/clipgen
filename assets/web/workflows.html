@@ -96,6 +96,11 @@
                 title="Run only the selected node and the nodes it depends on">
           Run to here
         </button>
+        <button id="wfRunSampleItem" class="wf-run-menu-item" type="button" role="menuitem"
+                disabled
+                title="Run the selected detector and its dependencies, scanning only the video's first 30 seconds — a quick does-it-fire check">
+          Test detector (first 30 s)
+        </button>
       </div>
       <!-- Dry-run preview readout, shown while hovering Run ("N of M steps"). -->
       <span id="wfPreviewChip" class="wf-preview-chip hidden"></span>
@@ -160,7 +165,7 @@
         <summary>Port types</summary>
         <ul class="wf-type-legend-list">
           <li><span class="wf-type-swatch" data-type-family="temporal"></span>Temporal: clips, events, segments, ranges</li>
-          <li><span class="wf-type-swatch" data-type-family="insight"></span>Insight: transcript, summary, citations, friction</li>
+          <li><span class="wf-type-swatch" data-type-family="insight"></span>Insight: transcript, summary, citations, friction, report</li>
           <li><span class="wf-type-swatch" data-type-family="source"></span>Source: video, participant, region</li>
           <li><span class="wf-type-swatch" data-type-family="output"></span>Output: artifacts, manifest, viewer</li>
           <li><span class="wf-type-swatch" data-type-family="value"></span>Value: scalar, number, string</li>

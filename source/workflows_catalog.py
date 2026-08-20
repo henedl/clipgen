@@ -94,6 +94,23 @@ class ParamSpec(TypedDict):
     # An empty value here is a guaranteed no-op/failure, so the pre-run
     # validation panel surfaces it as an error and disables Run.
     required: NotRequired[bool]
+    # Conditional visibility: {"param": <sibling name>, "equals": v} or
+    # {"param": <sibling name>, "not": v}. The editor hides the row when the
+    # condition fails; the executor still defaults the value server-side.
+    showIf: NotRequired[dict[str, Any]]
+    # On an enum whose choices name collection fields: the subset that compares
+    # numerically. Drives the paired value editor's input mode and lets the
+    # validation panel reject a non-numeric value that the backend float()
+    # coerce would silently drop every item on.
+    numericChoices: NotRequired[list[str]]
+    # On a string param: the sibling enum whose numericChoices decide whether
+    # this input should constrain to numbers (filter/partition values).
+    numericFor: NotRequired[str]
+    # Static completion suggestions (rendered as a datalist; input stays free).
+    suggestions: NotRequired[list[str]]
+    # Named dynamic completion source the frontend resolves itself (currently
+    # "ollama-models" → GET ../api/models). Input stays free text.
+    datalist: NotRequired[str]
 
 
 class NodeType(TypedDict):
@@ -125,6 +142,7 @@ _OLLAMA_MODEL_PARAM: ParamSpec = {
     "type": "string",
     "default": "",
     "label": "Ollama model (blank = default)",
+    "datalist": "ollama-models",
 }
 
 
@@ -200,7 +218,7 @@ NODE_TYPES: dict[str, NodeType] = {
         "inputs": [],
         "outputs": [{"name": "region", "type": "region"}],
         "params": [
-            {"name": "name", "type": "string", "default": "", "label": "Region name"},
+            {"name": "name", "type": "region", "default": "", "label": "Region name"},
         ],
         "requires": ["videoDir"],
     },
@@ -229,6 +247,25 @@ NODE_TYPES: dict[str, NodeType] = {
                 "type": "string",
                 "default": "auto",
                 "label": "Language",
+                # Whisper takes ISO 639-1 codes; free text stays allowed for the
+                # long tail, these just cover the common cases.
+                "suggestions": [
+                    "auto",
+                    "en",
+                    "sv",
+                    "da",
+                    "no",
+                    "fi",
+                    "de",
+                    "fr",
+                    "es",
+                    "it",
+                    "pt",
+                    "nl",
+                    "pl",
+                    "ja",
+                    "zh",
+                ],
             },
         ],
         "requires": ["videoDir"],
@@ -262,6 +299,36 @@ NODE_TYPES: dict[str, NodeType] = {
             },
         ],
         "requires": [],
+    },
+    "transcript_marks": {
+        "id": "transcript_marks",
+        "label": "Transcript Marks",
+        "description": "Read the participant's marked transcript lines (from the Transcripts page) as time ranges.",
+        "domain": "transcript",
+        "category": "Transcript",
+        "inputs": [{"name": "video", "type": "video"}],
+        "outputs": [
+            {"name": "timeRange", "type": "timeRange"},
+            {"name": "timestamps", "type": "timestamps"},
+        ],
+        "params": [
+            {
+                "name": "category",
+                "type": "enum",
+                "default": "",
+                "choices": [""] + sorted(config.MARK_CATEGORIES),
+                "label": "Category (blank = all)",
+            },
+            {
+                "name": "pad",
+                "type": "number",
+                "default": 2,
+                "min": 0,
+                "max": 30,
+                "label": "Pad (seconds)",
+            },
+        ],
+        "requires": ["videoDir"],
     },
     "transcript_export": {
         "id": "transcript_export",
@@ -322,6 +389,22 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "summary", "type": "summary", "optional": True},
         ],
         "outputs": [{"name": "friction", "type": "friction"}],
+        "params": [_OLLAMA_MODEL_PARAM],
+        "requires": [],
+    },
+    "report": {
+        "id": "report",
+        "label": "Report",
+        "description": "Synthesize a per-participant mini-report from the summary plus sheet observations and transcript marks (Ollama).",
+        "domain": "thinking",
+        "category": "Thinking",
+        "inputs": [
+            {"name": "summary", "type": "summary"},
+            # Carries the participant id, which scopes the observations/marks
+            # the report cites; without it the report covers the summary only.
+            {"name": "video", "type": "video", "optional": True},
+        ],
+        "outputs": [{"name": "report", "type": "report"}],
         "params": [_OLLAMA_MODEL_PARAM],
         "requires": [],
     },
@@ -398,9 +481,9 @@ NODE_TYPES: dict[str, NodeType] = {
             {
                 "name": "style",
                 "type": "enum",
-                "default": "change",
-                "choices": ["template", "flow", "change"],
-                "label": "Style (needs matching upstream detector)",
+                "default": "auto",
+                "choices": ["auto", "template", "flow", "change", "attention"],
+                "label": "Style (auto = match upstream detector)",
             },
             {
                 "name": "output",
@@ -415,6 +498,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": 24,
                 "min": 2,
                 "label": "GIF frames",
+                "showIf": {"param": "output", "not": "image"},
             },
             {
                 "name": "window",
@@ -422,6 +506,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": 6,
                 "min": 1,
                 "label": "Rolling window (frames)",
+                "showIf": {"param": "output", "equals": "rolling_gif"},
             },
         ],
         "requires": ["videoDir"],
@@ -485,6 +570,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "min": 1,
                 "max": 30,
                 "label": "Titlecard duration (s)",
+                "showIf": {"param": "titlecards", "equals": True},
             },
             # Pad fields omit "min" so the number input accepts negatives
             # (negative = trim inward); max_duration keeps min 0 (0 = no cap).
@@ -521,7 +607,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "name": "interval",
                 "type": "number",
                 "default": config.GALLERY_INTERVAL_SECONDS,
-                "min": 1,
+                "min": 0.2,
                 "label": "Interval (s)",
                 "required": True,
             },
@@ -538,6 +624,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": config.GALLERY_GIF_DURATION_SECONDS,
                 "min": 1,
                 "label": "GIF duration (s)",
+                "showIf": {"param": "output_format", "equals": "gif"},
             },
         ],
         "requires": ["videoDir"],
@@ -580,10 +667,60 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": ["videoDir"],
     },
+    "post_process": {
+        "id": "post_process",
+        "label": "Post-process Video",
+        "description": "Embed subtitles, normalize audio, remux for browser seeking, or write a size-capped copy of the source video.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [
+            {"name": "video", "type": "video"},
+            # Embed-subtitles takes its cues from a wired transcript; the other
+            # operations ignore this port.
+            {"name": "transcript", "type": "transcript", "optional": True},
+        ],
+        "outputs": [
+            # Pass-through descriptor (pointed at the new file for the copy
+            # operations) so post-processing can chain ahead of transcription
+            # or clip cutting; artifacts carries the produced copies.
+            {"name": "video", "type": "video"},
+            {"name": "artifacts", "type": "artifacts"},
+        ],
+        "params": [
+            {
+                "name": "operation",
+                "type": "enum",
+                "default": "embed_subtitles",
+                "choices": [
+                    "embed_subtitles",
+                    "normalize_audio",
+                    "remux_faststart",
+                    "compress",
+                ],
+                "label": "Operation",
+            },
+            {
+                "name": "default_track",
+                "type": "bool",
+                "default": True,
+                "label": "Default subtitle track",
+                "showIf": {"param": "operation", "equals": "embed_subtitles"},
+            },
+            {
+                "name": "target_mb",
+                "type": "number",
+                "default": 100,
+                "min": 1,
+                "label": "Target size (MB)",
+                "showIf": {"param": "operation", "equals": "compress"},
+            },
+        ],
+        "requires": ["videoDir"],
+    },
     "data_export": {
         "id": "data_export",
         "label": "Data Export",
-        "description": "Export events and segments as analysis-ready JSON/CSV tables.",
+        "description": "Export events and segments as analysis-ready JSON/CSV tables (plus optional pins/friction tables from the app manifests).",
         "domain": "artifact",
         "category": "Artifact",
         "inputs": [
@@ -598,6 +735,22 @@ NODE_TYPES: dict[str, NodeType] = {
                 "default": "both",
                 "choices": ["both", "json", "csv"],
                 "label": "Format",
+            },
+            # These tables come from the Screenspace / Transcripts manifests on
+            # disk (calibration pins, friction moments + scored segments), not
+            # from wired ports — opt-in so the node's default output stays
+            # driven by what's wired.
+            {
+                "name": "include_pins",
+                "type": "bool",
+                "default": False,
+                "label": "Include calibration pins",
+            },
+            {
+                "name": "include_friction",
+                "type": "bool",
+                "default": False,
+                "label": "Include friction tables",
             },
         ],
         "requires": [],
@@ -617,34 +770,25 @@ NODE_TYPES: dict[str, NodeType] = {
         "params": [],
         "requires": [],
     },
-    # ---- Control ----
-    "measure": {
-        "id": "measure",
-        "label": "Measure",
-        "description": "Reduce events, clips, or segments to a single number (count, confidence, or duration).",
-        "domain": "control",
-        "category": "Control",
-        "inputs": [
-            {"name": "events", "type": "events", "optional": True},
-            {"name": "clips", "type": "clipRecords", "optional": True},
-            {"name": "segments", "type": "segments", "optional": True},
-        ],
-        "outputs": [{"name": "value", "type": "scalar"}],
-        "params": [
-            {
-                "name": "metric",
-                "type": "enum",
-                "default": "count",
-                "choices": ["count", "max_confidence", "total_duration"],
-                "label": "Metric",
-            },
-        ],
+    "gallery_viewer": {
+        "id": "gallery_viewer",
+        "label": "Gallery Viewer",
+        "description": "Bundle screenshot/GIF artifacts into a standalone gallery HTML viewer.",
+        "domain": "artifact",
+        "category": "Artifact",
+        "inputs": [{"name": "artifacts", "type": "artifacts"}],
+        "outputs": [{"name": "viewer", "type": "viewerHtml"}],
+        "params": [],
         "requires": [],
     },
+    # ---- Control ----
+    # (No standalone "measure" node: Threshold Gate fuses measure+gate for
+    # collections, and the scalar Gate below covers the video→scalar adapter
+    # path — a measured value had no other consumer.)
     "gate": {
         "id": "gate",
         "label": "Gate",
-        "description": "Compare a measured value to a threshold to allow or skip downstream nodes.",
+        "description": "Compare a scalar (e.g. a video's duration via the adapter) to a threshold to allow or skip downstream nodes.",
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],
@@ -718,6 +862,7 @@ _SS_DETECTOR_LABELS: dict[str, str] = {
     "scene": "Detect Scene",
     "inactivity": "Detect Inactivity",
     "boundary": "Detect Boundary",
+    "attention": "Detect Attention",
 }
 
 _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
@@ -731,6 +876,7 @@ _SS_DETECTOR_DESCRIPTIONS: dict[str, str] = {
     "scene": "Detect scene changes against a reference fingerprint sampled from the region.",
     "inactivity": "Detect stretches of inactivity (no change) in the region.",
     "boundary": "Detect UI boundaries or edges appearing in the region.",
+    "attention": "Track predicted visual attention (saliency) and detect focus shifts. Full-frame.",
 }
 
 _INTERVAL_PARAM: ParamSpec = {
@@ -888,9 +1034,22 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "type": "number",
             "default": 0,
             "label": "Target value",
+            "showIf": {"param": "operator", "not": "range"},
         },
-        {"name": "range_min", "type": "number", "default": 0, "label": "Range min"},
-        {"name": "range_max", "type": "number", "default": 0, "label": "Range max"},
+        {
+            "name": "range_min",
+            "type": "number",
+            "default": 0,
+            "label": "Range min",
+            "showIf": {"param": "operator", "equals": "range"},
+        },
+        {
+            "name": "range_max",
+            "type": "number",
+            "default": 0,
+            "label": "Range max",
+            "showIf": {"param": "operator", "equals": "range"},
+        },
         {
             "name": "integers_only",
             "type": "bool",
@@ -1003,6 +1162,24 @@ _SS_DETECTOR_SPECS: dict[str, list[ParamSpec]] = {
             "default": config.SCREENSPACE_BOUNDARY_METRIC,
             "choices": ["hybrid", "phash", "scene"],
             "label": "Metric",
+        },
+        _INTERVAL_PARAM,
+    ],
+    "attention": [
+        {
+            "name": "shift_threshold",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "label": "Shift threshold (0=auto)",
+        },
+        {
+            "name": "ema_alpha",
+            "type": "number",
+            "default": 0.0,
+            "min": 0,
+            "max": 1,
+            "label": "Smoothing α (0=auto)",
         },
         _INTERVAL_PARAM,
     ],

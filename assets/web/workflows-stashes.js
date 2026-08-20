@@ -283,10 +283,21 @@
 
   // Stamp a stash's sub-graph onto the canvas with fresh ids. dropWorld is the
   // world-coord drop point (drag) or null (click-to-add → viewport center).
+  // Recipes stamp with deliberately-empty required params (participant, word,
+  // selector …); rather than leaving the user to hunt the red cards, select and
+  // pan to the first one that needs filling in.
   function instantiateStash(stashId, dropWorld) {
     var stash = findStash(stashId);
     if (!stash || !stash.nodes || !stash.nodes.length) return;
-    instantiateSubgraph(stash.nodes, stash.edges, dropWorld);
+    var newIds = instantiateSubgraph(stash.nodes, stash.edges, dropWorld);
+    for (var i = 0; i < newIds.length; i++) {
+      var node = WF.findNode ? WF.findNode(newIds[i]) : null;
+      var issues = node && WF.nodeIssues ? WF.nodeIssues(node) : null;
+      if (issues && issues.errors.length) {
+        if (WF.focusNode) WF.focusNode(newIds[i]);
+        break;
+      }
+    }
   }
 
   function viewportCenterWorld() {
