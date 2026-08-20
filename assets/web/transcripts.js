@@ -33,6 +33,11 @@
     // Written by the pills satellite, read by pills + video — hence state, not a
     // module var (see agents/skills/carve-satellite/SKILL.md).
     cancellingTasks: {},
+    // In/out transcribe-range markers (seconds on the global timeline, null =
+    // unset). Owned by the video satellite (set/persist/restore/draw); the
+    // pills satellite reads sessionStorage directly for the request bounds.
+    inMarker: null,
+    outMarker: null,
     searchQuery: "",
     searchResults: null,
     activeSegmentIndex: -1,
@@ -773,6 +778,13 @@
     hideMarkPopover();
     state.selectedParticipant = pid;
     setStoredUIStateField("transcripts", "selectedParticipant", pid);
+    // Restore this participant's transcribe-range markers (video satellite;
+    // late-bound — loadedmetadata clamps them once the duration is known).
+    if (TS.restoreMarkers) {
+      TS.restoreMarkers(pid);
+      TS.updateMarkerInfo();
+      renderTimeline();
+    }
     renderPills();
     refreshTopNavActions();
 

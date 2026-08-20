@@ -495,6 +495,37 @@
       });
     }
 
+    // Range row — only when the participant has in/out transcribe markers.
+    // Read-only readout + Clear; the markers themselves are set on the video
+    // timeline (I/O). The 3 s poll rebuilds this pane, so it tracks edits.
+    var mk = TS.getStoredMarkersFor ? TS.getStoredMarkersFor(p.id) : null;
+    if (mk && (mk.in !== null || mk.out !== null)) {
+      var rangeRow = document.createElement("div");
+      rangeRow.className = "pill-options-row";
+      var rangeLabel = document.createElement("label");
+      rangeLabel.textContent = "Range";
+      var rangeValue = document.createElement("span");
+      rangeValue.className = "pill-options-range";
+      rangeValue.textContent =
+        (mk.in !== null ? formatTime(mk.in, { decimals: 1 }) : "start") +
+        " – " +
+        (mk.out !== null ? formatTime(mk.out, { decimals: 1 }) : "end");
+      var rangeClear = document.createElement("button");
+      rangeClear.className = "btn btn-small";
+      rangeClear.setAttribute("data-nav-id", "range-clear");
+      rangeClear.textContent = "Clear";
+      rangeClear.addEventListener("click", function () {
+        if (TS.clearMarkersFor) TS.clearMarkersFor(p.id);
+        // Full re-render (not a bare pane refresh): it re-derives taskByPid and
+        // swaps this pane in place, dropping the Range row immediately.
+        renderPills();
+      });
+      rangeRow.appendChild(rangeLabel);
+      rangeRow.appendChild(rangeValue);
+      rangeRow.appendChild(rangeClear);
+      pane.appendChild(rangeRow);
+    }
+
     // Agent rows — manual run / re-run / stop controls with dependency gating.
     // Order: Transcription → Summary → Citations. Summary requires
     // transcription; citations requires summary. Re-running summary cascades
@@ -937,6 +968,15 @@
         if (ov.model) overrides[pid].model = ov.model;
         if (ov.language) overrides[pid].language = ov.language;
         if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
+      }
+      // In/out transcribe-range markers, per participant from sessionStorage
+      // (so Transcribe All bounds each pid by its own saved range). Omitted
+      // when unset, matching Screenspace's task params.
+      var mk = TS.getStoredMarkersFor ? TS.getStoredMarkersFor(pid) : null;
+      if (mk && (mk.in !== null || mk.out !== null)) {
+        overrides[pid] = overrides[pid] || {};
+        if (mk.in !== null) overrides[pid].start_seconds = mk.in;
+        if (mk.out !== null) overrides[pid].end_seconds = mk.out;
       }
     }
     if (!fresh.length) return;

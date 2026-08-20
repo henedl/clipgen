@@ -2110,13 +2110,23 @@ def extract_audio_track(filepath: str, audio_index: int) -> Path | None:
         return None
 
 
-def decode_audio_pcm(filepath: str, audio_index: int = 0) -> "np.ndarray | None":
+def decode_audio_pcm(
+    filepath: str,
+    audio_index: int = 0,
+    *,
+    start_seconds: float | None = None,
+    duration_seconds: float | None = None,
+) -> "np.ndarray | None":
     """Decode one audio stream to 16 kHz mono float32 PCM for transcription.
 
     Whisper consumes exactly this shape as an ndarray, which keeps PyAV out of
     the dependency tree: faster-whisper only calls ``av`` to decode *path*
     inputs, and ``-map 0:a:<index>`` selects the stream directly, so a
     non-default track no longer needs a demux-to-temp-file round trip either.
+    ``start_seconds``/``duration_seconds`` bound the decode to a window via
+    input-side ``-ss`` (which zeroes PTS, so the returned samples are
+    window-relative) plus ``-t``. A start past EOF yields zero samples and
+    falls into the empty-stream failure path below.
     Returns a writable ``np.ndarray`` (float32), or ``None`` on any failure —
     including an empty stream, since zero samples would only fail later and
     less legibly inside the model. ~4 MB per audio-minute; the transient
@@ -2127,15 +2137,18 @@ def decode_audio_pcm(filepath: str, audio_index: int = 0) -> "np.ndarray | None"
         return None
     import numpy as np  # deferred: keep video.py cheap for non-transcribe CLI paths
 
-    cmd = [
-        "ffmpeg",
-        "-nostdin",
-        "-v",
-        "error",
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
+    if start_seconds:
+        cmd += ["-ss", f"{start_seconds:.3f}"]
+    cmd += [
         "-i",
         filepath,
         "-map",
         f"0:a:{audio_index}",
+    ]
+    if duration_seconds is not None:
+        cmd += ["-t", f"{duration_seconds:.3f}"]
+    cmd += [
         "-ac",
         "1",
         "-ar",

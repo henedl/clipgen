@@ -308,13 +308,20 @@
   // dots simply look wiped away left→right as transcription advances. The dots
   // fade out toward the top via a per-row alpha ramp (strongest at the bottom).
   // Pure draw: reads _txFillActive/_txFillDisplay set by the controller.
-  function _drawTranscribeBand(ctx, cssW, cssH, progress, theme) {
-    var fillW = Math.round(Math.max(0, Math.min(1, progress)) * cssW);
-    if (fillW >= cssW) return; // fully swept — nothing left to pattern
+  // p0/p1 (0..1 fractions, default full-width) confine the band to a windowed
+  // task's in/out range: the wipe runs from p0 to p1 and everything outside
+  // stays plain — that footage is not part of the run at all.
+  function _drawTranscribeBand(ctx, cssW, cssH, progress, theme, p0, p1) {
+    if (p0 === undefined) p0 = 0;
+    if (p1 === undefined) p1 = 1;
+    var startX = Math.round(p0 * cssW);
+    var endX = Math.round(p1 * cssW);
+    var fillW = startX + Math.round(Math.max(0, Math.min(1, progress)) * (endX - startX));
+    if (fillW >= endX) return; // fully swept — nothing left to pattern
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(fillW, 0, cssW - fillW, cssH); // untranscribed remainder only
+    ctx.rect(fillW, 0, endX - fillW, cssH); // untranscribed remainder only
     ctx.clip();
     ctx.fillStyle = theme.textDim;
     var step = _TX_DOT_STEP;
@@ -347,9 +354,19 @@
 
     // Transcribe-progress dot texture (full height, behind the ruler + marks).
     // Drawn before the dur<=0 early return so it also shows during the
-    // pre-metadata window.
+    // pre-metadata window. Window fractions come from the *task* (not live
+    // marker state, which the user can change mid-run); pre-metadata the
+    // duration is unknown and the band falls back to full width.
     if (_txFillActive) {
-      _drawTranscribeBand(ctx, cssW, cssH, _txFillDisplay, theme);
+      var winP0 = 0;
+      var winP1 = 1;
+      var rt = _selectedRunningTask();
+      var rtDur = videoDisplayDuration();
+      if (rt && rtDur > 0) {
+        if (rt.start_seconds != null) winP0 = Math.max(0, Math.min(1, rt.start_seconds / rtDur));
+        if (rt.end_seconds != null) winP1 = Math.max(winP0, Math.min(1, rt.end_seconds / rtDur));
+      }
+      _drawTranscribeBand(ctx, cssW, cssH, _txFillDisplay, theme, winP0, winP1);
     }
 
     var dur = videoDisplayDuration();
@@ -417,6 +434,31 @@
       });
     }
 
+    // In/Out transcribe-range shading — scrim "outside" the active range, over
+    // the surfaceAlt background. fg works in both themes (fg is white in dark
+    // → lightens, dark in light → darkens; both differentiate the range).
+    if (state.inMarker !== null || state.outMarker !== null) {
+      ctx.fillStyle = hexToRgba(theme.fg, 0.12);
+      if (state.inMarker !== null) {
+        var inX = timeToX(state.inMarker);
+        ctx.fillRect(0, 0, Math.max(0, inX), cssH);
+      }
+      if (state.outMarker !== null) {
+        var outX = timeToX(state.outMarker);
+        ctx.fillRect(outX, 0, cssW - outX, cssH);
+      }
+      ctx.strokeStyle = theme.positive;
+      ctx.lineWidth = 2;
+      if (state.inMarker !== null) {
+        var ix = timeToX(state.inMarker);
+        ctx.beginPath(); ctx.moveTo(ix, 0); ctx.lineTo(ix, cssH); ctx.stroke();
+      }
+      if (state.outMarker !== null) {
+        var ox = timeToX(state.outMarker);
+        ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, cssH); ctx.stroke();
+      }
+    }
+
     renderPlayhead();
   }
 
@@ -457,6 +499,117 @@
     var frac = (event.clientX - rect.left) / rect.width;
     if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
     return frac * dur;
+  }
+
+  // ---- In/out transcribe-range markers ----
+  // Shared by the toolbar buttons and the I/O hotkeys; mirrors Screenspace's
+  // analysis bounds. Persisted per participant in sessionStorage so leaving
+  // Transcripts and coming back (every TopNav tab is a full page load, i.e. a
+  // fresh `state`) doesn't silently drop a range the user set. Per-tab, not
+  // localStorage: the markers describe the session you're bounding right now,
+  // not a preference. transcribeParticipants reads them (for any pid, via
+  // getStoredMarkersFor) into the request's start_seconds/end_seconds.
+  var MARKERS_STORAGE_KEY = "ts_markers";
+
+  function _readStoredMarkers() {
+    try {
+      var raw = sessionStorage.getItem(MARKERS_STORAGE_KEY);
+      var all = raw ? JSON.parse(raw) : null;
+      return (all && typeof all === "object") ? all : {};
+    } catch (_) { return {}; }
+  }
+
+  // {in, out} (numbers or null) for any participant — the batch transcribe
+  // path needs markers for pids that are not currently selected.
+  function getStoredMarkersFor(pid) {
+    var entry = pid ? _readStoredMarkers()[pid] : null;
+    return {
+      in: entry && typeof entry.in === "number" ? entry.in : null,
+      out: entry && typeof entry.out === "number" ? entry.out : null,
+    };
+  }
+
+  function persistMarkers() {
+    var pid = state.selectedParticipant;
+    if (!pid) return;
+    var all = _readStoredMarkers();
+    if (state.inMarker === null && state.outMarker === null) delete all[pid];
+    else all[pid] = { in: state.inMarker, out: state.outMarker };
+    try {
+      sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all));
+    } catch (_) { /* sessionStorage may be unavailable */ }
+  }
+
+  // Clear a (possibly non-selected) participant's stored markers — the pill
+  // popover's Range row. Syncs live state when it is the selected participant.
+  function clearMarkersFor(pid) {
+    if (!pid) return;
+    var all = _readStoredMarkers();
+    delete all[pid];
+    try {
+      sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all));
+    } catch (_) { /* sessionStorage may be unavailable */ }
+    if (pid === state.selectedParticipant) {
+      state.inMarker = null;
+      state.outMarker = null;
+      updateMarkerInfo();
+      renderTimeline();
+    }
+  }
+
+  // Load `pid`'s markers into state (nulls when it has none). Callers repaint.
+  function restoreMarkers(pid) {
+    var entry = pid ? _readStoredMarkers()[pid] : null;
+    state.inMarker = entry && typeof entry.in === "number" ? entry.in : null;
+    state.outMarker = entry && typeof entry.out === "number" ? entry.out : null;
+  }
+
+  // Drop markers past the end of the participant's video — a stale one would
+  // reach the transcription as an out-of-range start_seconds/end_seconds.
+  function clampMarkersToDuration(duration) {
+    if (!(duration > 0)) return;
+    var changed = false;
+    if (state.inMarker !== null && state.inMarker > duration) { state.inMarker = null; changed = true; }
+    if (state.outMarker !== null && state.outMarker > duration) { state.outMarker = null; changed = true; }
+    if (changed) {
+      persistMarkers();
+      updateMarkerInfo();
+      renderTimeline();
+    }
+  }
+
+  function setInMark() {
+    if (!(videoDisplayDuration() > 0)) return;
+    state.inMarker = videoGlobalTime();
+    if (state.outMarker !== null && state.inMarker > state.outMarker) state.outMarker = null;
+    persistMarkers();
+    updateMarkerInfo();
+    renderTimeline();
+  }
+
+  function setOutMark() {
+    if (!(videoDisplayDuration() > 0)) return;
+    state.outMarker = videoGlobalTime();
+    if (state.inMarker !== null && state.outMarker < state.inMarker) state.inMarker = null;
+    persistMarkers();
+    updateMarkerInfo();
+    renderTimeline();
+  }
+
+  function updateMarkerInfo() {
+    var info = qs("#markerInfo");
+    var clearBtn = qs("#clearMarkersBtn");
+    if (!info || !clearBtn) return;
+    if (state.inMarker === null && state.outMarker === null) {
+      info.textContent = "";
+      clearBtn.classList.add("hidden");
+      return;
+    }
+    clearBtn.classList.remove("hidden");
+    var parts = [];
+    if (state.inMarker !== null) parts.push("In: " + formatTime(state.inMarker, { decimals: 1 }));
+    if (state.outMarker !== null) parts.push("Out: " + formatTime(state.outMarker, { decimals: 1 }));
+    info.textContent = parts.join("  ");
   }
 
   // ---- Transcript timeline canvas (marks, playhead, hover hit-testing) ----
@@ -658,6 +811,21 @@
       });
     }
 
+    var setInBtn = qs("#setInBtn");
+    if (setInBtn) setInBtn.addEventListener("click", setInMark);
+    var setOutBtn = qs("#setOutBtn");
+    if (setOutBtn) setOutBtn.addEventListener("click", setOutMark);
+    var clearBtn = qs("#clearMarkersBtn");
+    if (clearBtn) {
+      clearBtn.addEventListener("click", function () {
+        state.inMarker = null;
+        state.outMarker = null;
+        persistMarkers();
+        updateMarkerInfo();
+        renderTimeline();
+      });
+    }
+
     initAutoFollowScrollPause();
 
     video.addEventListener("play", function () {
@@ -677,6 +845,8 @@
       applyCaptionMode();
       applyPlaybackRate();
       updateTimeLabel();
+      // Duration is only now known — drop restored markers past the video end.
+      clampMarkersToDuration(videoDisplayDuration());
       renderTimeline();
     });
 
@@ -688,6 +858,7 @@
     }
     video.addEventListener("durationchange", function () {
       updateTimeLabel();
+      clampMarkersToDuration(videoDisplayDuration());
       renderTimeline();
     });
     video.addEventListener("timeupdate", function () {
@@ -1073,6 +1244,16 @@
       { id: "transcripts.speedDown", when: _hotkeysActive, handler: function () { _stepSpeed(-1); } },
       { id: "transcripts.speedUp", when: _hotkeysActive, handler: function () { _stepSpeed(1); } },
       {
+        id: "transcripts.setIn",
+        when: function () { return _hotkeysActive() && videoDisplayDuration() > 0; },
+        handler: setInMark,
+      },
+      {
+        id: "transcripts.setOut",
+        when: function () { return _hotkeysActive() && videoDisplayDuration() > 0; },
+        handler: setOutMark,
+      },
+      {
         id: "transcripts.fullscreen",
         when: _hotkeysActive,
         handler: function () { _toggleVideoFullscreen(); },
@@ -1385,4 +1566,9 @@
   TS.cancelPendingSeek = cancelPendingSeek;
   TS.clearTimelineMarkers = clearTimelineMarkers;
   TS.hasTimelineHover = hasTimelineHover;
+  TS.restoreMarkers = restoreMarkers;
+  TS.updateMarkerInfo = updateMarkerInfo;
+  TS.clampMarkersToDuration = clampMarkersToDuration;
+  TS.getStoredMarkersFor = getStoredMarkersFor;
+  TS.clearMarkersFor = clearMarkersFor;
 })();
