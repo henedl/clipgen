@@ -238,6 +238,34 @@ class TestEnergySnap:
         flat = [t for w in words for t in (w["start"], w["end"])]
         assert flat == sorted(flat)
 
+    def test_short_first_word_cannot_undo_prev_end_floor(self):
+        # First word ends only 20 ms after prev_end: the word-margin ceiling
+        # (word end - 50 ms) lands below prev_end and must lose to it, or the
+        # segment would overlap its predecessor and steal the playhead highlight.
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(
+            start=0.5,
+            end=2.0,
+            text="a b",
+            words=[
+                {"start": 0.45, "end": 0.48, "text": "a"},
+                {"start": 1.0, "end": 1.9, "text": "b"},
+            ],
+        )
+        snap(seg, 0.46)
+        assert seg["start"] == pytest.approx(0.46)
+
+    def test_sub_min_duration_segment_cannot_overlap_predecessor(self):
+        # Segment shorter than the 100 ms minimum: the min-duration ceiling
+        # (end - 100 ms) lands below prev_end and must lose to it.
+        snap = transcripts._build_energy_snapper(_tone_burst_audio())
+        assert snap is not None
+        seg = TranscriptSegment(start=0.5, end=0.58, text="x")
+        snap(seg, 0.5)
+        assert seg["start"] == pytest.approx(0.5)
+        assert seg["end"] == pytest.approx(0.58)
+
     def test_low_dynamic_range_disables_snap(self):
         constant = _tone_burst_audio(lead=0.0, tone=2.0, tail=0.0)
         assert transcripts._build_energy_snapper(constant) is None

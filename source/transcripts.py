@@ -568,10 +568,14 @@ def _build_energy_snapper(
                 run += 1
                 if run >= _SNAP_ONSET_FRAMES:
                     cand = (i - _SNAP_ONSET_FRAMES + 1) * hop_s - _SNAP_LEAD_IN_S
-                    cand = max(cand, prev_end, 0.0)
+                    # Ceilings first, floors last: a "don't start too late" clamp
+                    # (first-word margin, min-duration) must never drag the start
+                    # back below prev_end — playhead sync assumes non-overlapping
+                    # segments, so the non-overlap floor always wins.
                     if words:
                         cand = min(cand, words[0]["end"] - _SNAP_WORD_MARGIN_S)
-                    new_start = min(max(cand, 0.0), end - _SNAP_MIN_SEGMENT_S)
+                    cand = min(cand, end - _SNAP_MIN_SEGMENT_S)
+                    new_start = max(cand, prev_end, 0.0)
                     break
             else:
                 run = 0
