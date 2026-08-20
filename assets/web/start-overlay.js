@@ -2514,14 +2514,6 @@
       apiGet("/api/status").then(function (s) {
         state.statusData = s;
         state.sheetLoaded = !!s.sheet_loaded;
-        // Every hub page runs this fetch, so it doubles as the topnav version
-        // chip's data source — setVersion reads CLIPGEN_CONFIG.version, which
-        // nothing else populates (/api/status ships version as a sibling of
-        // config, so clipgenApplyConfig never sees it).
-        if (typeof s.version === "string" && s.version) {
-          CLIPGEN_CONFIG.version = s.version;
-          if (window.ClipgenTopNav) window.ClipgenTopNav.refreshVersion();
-        }
         if (shouldAutoOpen(s)) open();
       }).catch(function () { /* offline / dev */ });
     });
