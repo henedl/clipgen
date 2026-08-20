@@ -1008,6 +1008,7 @@
     var caret = qs("#wfRunMenuBtn");
     var menu = qs("#wfRunMenu");
     var runTo = qs("#wfRunToItem");
+    var runSample = qs("#wfRunSampleItem");
     if (!caret || !menu) return;
     var ctl = bindMenuToggle(caret, menu);
     if (runTo) {
@@ -1015,6 +1016,15 @@
         ctl.close();
         var sel = state.selection || [];
         if (WF.startRun && sel.length === 1) WF.startRun(sel[0]);
+      });
+    }
+    if (runSample) {
+      runSample.addEventListener("click", function () {
+        ctl.close();
+        var sel = state.selection || [];
+        if (WF.startRun && sel.length === 1) {
+          WF.startRun(sel[0], null, 30);
+        }
       });
     }
   }

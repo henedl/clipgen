@@ -511,6 +511,7 @@ def _launch_run(
     target_node_id: str = "",
     seed_results: dict[str, dict[str, Any]] | None = None,
     seed_note: str = "",
+    sample_window: float = 0.0,
 ) -> dict[str, Any]:
     """Create + spawn one run on a daemon thread; return the initial snapshot.
 
@@ -534,6 +535,7 @@ def _launch_run(
         target_node_id=target_node_id,
         seed_results=seed_results,
         seed_note=seed_note,
+        sample_window=sample_window,
     )
     with _runs_lock:
         _runs[run_id] = runner
@@ -579,6 +581,13 @@ def api_run_create() -> Any:
     target = str(data.get("targetNodeId") or "")
     if target and not any(n.get("id") == target for n in blueprint.get("nodes", [])):
         return err("Unknown target node")
+
+    # Optional sample-window test: bound every unwired detector timeRange to the
+    # video's first N seconds (see WorkflowRunner._apply_sample_window).
+    try:
+        sample_window = max(0.0, float(data.get("sampleWindowSeconds") or 0.0))
+    except (TypeError, ValueError):
+        return err("sampleWindowSeconds must be a number")
 
     # Optional resume: reload the prior run's completed-node sidecars as seeds and
     # execute only what failed or changed, plus everything downstream. Resumes
@@ -629,6 +638,7 @@ def api_run_create() -> Any:
             target_node_id=target,
             seed_results=seed_results,
             seed_note=seed_note,
+            sample_window=sample_window,
         )
     )
 

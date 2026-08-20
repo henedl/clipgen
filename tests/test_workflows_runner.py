@@ -474,6 +474,55 @@ def test_adapter_is_applied_on_type_mismatch(tmp_path):
     assert "records" in inputs["clips"]  # adapter produced ClipRecords
 
 
+def test_sample_window_bounds_unwired_detector_timerange(tmp_path, monkeypatch):
+    # A sample-window test run injects a bounded timeRange into detectors whose
+    # scan window is unwired; wired windows and non-detector nodes are untouched.
+    seen: dict[str, dict] = {}
+
+    def spy(node_id):
+        def _exec(ctx, inputs, params):
+            seen[node_id] = inputs
+            return {"events": {"events": [], "source": {}, "raw_results": []}}
+
+        return _exec
+
+    monkeypatch.setitem(workflows.NODE_TYPES["detect"], "execute", spy("d"))
+    monkeypatch.setitem(workflows.NODE_TYPES["ss_text"], "execute", spy("s"))
+    monkeypatch.setitem(
+        workflows.NODE_TYPES["time_range"],
+        "execute",
+        lambda ctx, inputs, params: (
+            seen.__setitem__("t", inputs)
+            or {"timeRange": {"ranges": [(5.0, 9.0)], "source": {}}}
+        ),
+    )
+    nodes = [
+        {"id": "t", "type": "time_range", "params": {}},
+        {"id": "d", "type": "detect", "params": {}},
+        {"id": "s", "type": "ss_text", "params": {"search_string": "x"}},
+    ]
+    edges = [
+        {
+            "id": "e1",
+            "from": "t",
+            "fromPort": "timeRange",
+            "to": "s",
+            "toPort": "timeRange",
+        }
+    ]
+    runner = workflows.WorkflowRunner(
+        "run_test",
+        {"id": "bp", "nodes": nodes, "edges": edges},
+        _ctx(tmp_path),
+        sample_window=30,
+    )
+    runner.run()
+    assert seen["d"]["timeRange"]["ranges"] == [(0.0, 30.0)]  # unwired → bounded
+    assert seen["s"]["timeRange"]["ranges"] == [(5.0, 9.0)]  # wired wins
+    assert "timeRange" not in seen["t"]  # non-detector untouched
+    assert runner.snapshot()["sampleWindow"] == 30
+
+
 def test_executor_note_surfaces_and_is_stripped(tmp_path, monkeypatch):
     # A node that completes with the reserved __note__ key surfaces it as the
     # node's `note` (a non-fatal degraded outcome, not a FAILED error) and never

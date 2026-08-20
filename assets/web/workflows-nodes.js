@@ -827,6 +827,8 @@
     // mutates state.selection.
     if (WF.syncStashButton) WF.syncStashButton();
     if (WF.syncRunButton) WF.syncRunButton();
+    // Card rebuild dropped the last-run badges — re-apply (runs satellite).
+    if (WF.applyLastRunBadges) WF.applyLastRunBadges();
 
     // Node set changed (add/delete/blueprint-load) → refresh the minimap. Pan/
     // zoom and drag are covered by their own hooks in the canvas satellite.

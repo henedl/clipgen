@@ -341,12 +341,34 @@
     var chip = qs("#wfPreviewChip");
     if (chip) {
       var steps = plan.count === 1 ? " step" : " steps";
-      chip.textContent =
+      var text =
         plan.count === plan.total
           ? plan.count + steps
           : plan.count + " of " + plan.total + " steps";
+      // Rough cost signal: how many of the would-run steps are video-duration
+      // bound (decode/transcode the whole recording). A count, not an ETA —
+      // the step total alone weighs a viewer bundle the same as a 2-hour scan.
+      var heavy = 0;
+      (state.nodes || []).forEach(function (n) {
+        if (plan.ids[n.id] && isHeavyNodeType(n.type)) heavy += 1;
+      });
+      if (heavy) text += " · " + heavy + " heavy";
+      chip.textContent = text;
       chip.classList.toggle("hidden", !plan.total);
     }
+  }
+
+  // Video-duration-bound node types: whole-recording decode (detectors,
+  // multitool, timelapse), transcription, or a whole-file rewrite/copy.
+  function isHeavyNodeType(type) {
+    if (String(type).indexOf("ss_") === 0) return true;
+    return (
+      type === "detect" ||
+      type === "multitool" ||
+      type === "timelapse" ||
+      type === "transcribe" ||
+      type === "post_process"
+    );
   }
 
   function clearRunPreview() {

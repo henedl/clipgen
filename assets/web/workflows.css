@@ -644,6 +644,17 @@ body[data-frontend="workflows"] {
   margin-top: var(--space-2);
 }
 
+/* Last-run outcome badge ("last: 14 events"), applied by the runs satellite
+   after each card rebuild. On filter nodes the out/unmatched pair doubles as
+   a selectivity readout. */
+.wf-node-lastrun {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  border-top: 1px dashed var(--border);
+  padding-top: var(--space-1);
+}
+
 .wf-port-col {
   display: flex;
   flex-direction: column;
@@ -1884,6 +1895,16 @@ body[data-frontend="workflows"] {
   background: var(--bg-hover);
   border-radius: var(--radius-full);
   color: var(--fg-muted);
+}
+
+/* A path chip is a link into the output dir (studio media route). */
+.wf-run-chip-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.wf-run-chip-link:hover {
+  text-decoration: underline;
 }
 
 /* Re-run button on a terminal run card. */

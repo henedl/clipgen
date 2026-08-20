@@ -471,9 +471,14 @@ class WorkflowRunner:
         target_node_id: str = "",
         seed_results: dict[str, dict[str, Any]] | None = None,
         seed_note: str = "",
+        sample_window: float = 0.0,
     ) -> None:
         self.run_id = run_id
         self.blueprint_id = str(blueprint.get("id", "") or "")
+        # Sample-window test run: >0 bounds every unwired detector timeRange to
+        # the video's first N seconds, so a "does this detector fire?" check
+        # doesn't cost a full-video scan. Never touches a wired timeRange.
+        self.sample_window = max(0.0, float(sample_window or 0.0))
         # Partial run: when set, only this node and its transitive ancestors
         # execute; the rest are marked skipped. Empty → run the whole graph.
         self.target_node_id = target_node_id
@@ -652,6 +657,25 @@ class WorkflowRunner:
             inputs[to_port] = value
         return inputs, notes, degraded
 
+    def _apply_sample_window(
+        self, node: dict[str, Any], inputs: dict[str, Any]
+    ) -> None:
+        """Bound an unwired detector timeRange to the first ``sample_window`` s.
+
+        Only the per-frame detectors (``detect`` / ``ss_*``) take the injected
+        window — they declare an optional ``timeRange`` scan-window input. A
+        wired timeRange always wins: the user already scoped the scan.
+        """
+        ntype = str(node.get("type", "") or "")
+        if ntype != "detect" and not ntype.startswith("ss_"):
+            return
+        if inputs.get("timeRange"):
+            return
+        inputs["timeRange"] = {
+            "ranges": [(0.0, self.sample_window)],
+            "source": {},
+        }
+
     # ---- state + notify ----
 
     def _set_node(self, node_id: str, **changes: Any) -> None:
@@ -771,6 +795,8 @@ class WorkflowRunner:
                 continue
 
             inputs, input_notes, inputs_degraded = self._gather_inputs(node)
+            if self.sample_window > 0:
+                self._apply_sample_window(node, inputs)
             params = node.get("params", {}) or {}
             executor = NODE_TYPES.get(node["type"], {}).get("execute")
             self._set_node(
@@ -868,6 +894,7 @@ class WorkflowRunner:
             "participant": self.participant,
             "triggered": self.triggered,
             "triggerType": self.trigger_type,
+            "sampleWindow": self.sample_window or None,
             "status": self.status,
             "nodeStates": node_states,
             "results": results,
