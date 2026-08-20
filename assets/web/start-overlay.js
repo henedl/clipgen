@@ -1190,16 +1190,23 @@
       // visible when this lands, the panel would otherwise stay on v0.0.0.
       if (state.startTab === "about") renderAbout();
       return s;
+    }).catch(function (err) {
+      // Same contract as loadGoogleSheets: log and keep refresh()'s boot
+      // chain going — one failed link must not strand every later panel
+      // on its static "Scanning…" shimmer.
+      console.error("Status load failed", err);
     });
   }
 
   function loadDirs() {
     return apiGet("/api/dirs").then(function (d) {
       if (!d || !d.ok) return;
-      els.inputDir.value = d.input || "";
-      els.outputDir.value = d.output || "";
+      if (els.inputDir) els.inputDir.value = d.input || "";
+      if (els.outputDir) els.outputDir.value = d.output || "";
       renderFolderRecents(els.inputRecentsList, d.recent_inputs || [], els.inputDir, "input");
       renderFolderRecents(els.outputRecentsList, d.recent_outputs || [], els.outputDir, "output");
+    }).catch(function (err) {
+      console.error("Directory load failed", err);
     });
   }
 
@@ -1473,6 +1480,11 @@
       if (els.rememberWindowRow) els.rememberWindowRow.hidden = !r.desktop;
       state.recentProjects = r.settings.recent_projects || [];
       renderRailRecents(state.recentProjects);
+    }).catch(function (err) {
+      // Log-and-continue like the loaders below — and still render the
+      // recents rail so it shows its empty state instead of staying blank.
+      console.error("Start settings load failed", err);
+      renderRailRecents(state.recentProjects || []);
     });
   }
 
@@ -2270,7 +2282,10 @@
   function open(tab) {
     if (!state.mounted) {
       // Not mount().then(open): then() would pass mount's resolved value as tab.
-      mount().then(function () { open(tab); });
+      // Re-enter only if the mount actually succeeded — mount() resolves (never
+      // rejects) on a missing slot or a failed template fetch, and recursing on
+      // that would spin forever re-fetching start-overlay.html.
+      mount().then(function () { if (state.mounted) open(tab); });
       return;
     }
     if (state.open) return;
@@ -2499,6 +2514,14 @@
       apiGet("/api/status").then(function (s) {
         state.statusData = s;
         state.sheetLoaded = !!s.sheet_loaded;
+        // Every hub page runs this fetch, so it doubles as the topnav version
+        // chip's data source — setVersion reads CLIPGEN_CONFIG.version, which
+        // nothing else populates (/api/status ships version as a sibling of
+        // config, so clipgenApplyConfig never sees it).
+        if (typeof s.version === "string" && s.version) {
+          CLIPGEN_CONFIG.version = s.version;
+          if (window.ClipgenTopNav) window.ClipgenTopNav.refreshVersion();
+        }
         if (shouldAutoOpen(s)) open();
       }).catch(function () { /* offline / dev */ });
     });

@@ -41,3 +41,16 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         utils.info_print("Interrupted by user")
         sys.exit(0)
+    except Exception:
+        # Last resort for a windowed launch (Finder double-click of the frozen
+        # bundle): with no attached console an unexpected crash is a bouncing
+        # dock icon and silence. fatal_startup_error prints on console runs too,
+        # but the re-raise keeps the full traceback as the final word there.
+        if utils.GUI_LAUNCH:
+            import traceback
+
+            utils.fatal_startup_error(
+                "clipgen hit an unexpected error and has to close.",
+                traceback.format_exc().strip().splitlines()[-8:],
+            )
+        raise

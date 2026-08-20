@@ -96,9 +96,13 @@ def load_start_settings() -> dict[str, Any]:
         return _defaults()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        # Not silent: this file also carries filename_overrides, which change
+        # which source video a participant's clips are cut from.
+        utils.warning_print(f"Could not read start settings ({exc}); using defaults.")
         return _defaults()
     if not isinstance(data, dict):
+        utils.warning_print("Start settings file is not a JSON object; using defaults.")
         return _defaults()
     merged = _defaults()
     merged.update(data)
@@ -127,8 +131,10 @@ def _prepend_dedup(items: list[Any], new_item: Any, key: Any = None) -> list[Any
     if key is None:
         deduped = [x for x in items if x != new_item]
     else:
+        # Keyed entries are dicts and every key fn calls .get(); drop anything
+        # else so a malformed list off disk can't crash the boot-build thread.
         new_key = key(new_item)
-        deduped = [x for x in items if key(x) != new_key]
+        deduped = [x for x in items if isinstance(x, dict) and key(x) != new_key]
     return [new_item] + deduped[: RECENTS_CAP - 1]
 
 
