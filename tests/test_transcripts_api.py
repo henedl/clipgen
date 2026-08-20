@@ -3363,18 +3363,24 @@ def test_invalidate_dependents_matches_on_agent_keys(monkeypatch):
     """depends_on holds agent *keys*; an agent whose key differs from its
     manifest_field must still have its dependents invalidated."""
     fake_agents = [
-        {
-            "key": "themes",
-            "manifest_field": "theme_analysis",
-            "depends_on": [],
-            "on_upstream_change": "clear",
-        },
-        {
-            "key": "digest",
-            "manifest_field": "digest_result",
-            "depends_on": ["themes"],
-            "on_upstream_change": "clear",
-        },
+        cast(
+            thinking_agents.Agent,
+            {
+                "key": "themes",
+                "manifest_field": "theme_analysis",
+                "depends_on": [],
+                "on_upstream_change": "clear",
+            },
+        ),
+        cast(
+            thinking_agents.Agent,
+            {
+                "key": "digest",
+                "manifest_field": "digest_result",
+                "depends_on": ["themes"],
+                "on_upstream_change": "clear",
+            },
+        ),
     ]
     monkeypatch.setattr(thinking_agents, "AGENTS", fake_agents)
     entry = {"theme_analysis": "old", "digest_result": "derived"}
