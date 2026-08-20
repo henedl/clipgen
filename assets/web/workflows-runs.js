@@ -544,12 +544,14 @@
 
   // ---- Rendering ------------------------------------------------------------
 
-  // Build a label map for the active blueprint's nodes (run rows show the node's
-  // catalog label, falling back to its id for a run from another blueprint).
+  // Build a label map for the active blueprint's nodes: the user's rename when
+  // set, else the catalog label, falling back to the id for a run from another
+  // blueprint. The rename is what disambiguates three "Make Clips" rows.
   function nodeLabel(nodeId) {
     var nodes = state.nodes || [];
     for (var i = 0; i < nodes.length; i++) {
       if (nodes[i].id === nodeId) {
+        if (nodes[i].name) return nodes[i].name;
         var type = state.catalogById[nodes[i].type];
         return (type && type.label) || nodes[i].type;
       }

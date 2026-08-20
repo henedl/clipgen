@@ -1020,32 +1020,29 @@ def test_highlights_truncates_to_budget(tmp_path, monkeypatch):
     assert out["clips"]["study"] == "study"
 
 
-def test_measure_counts_events_and_durations(tmp_path):
+def test_gate_collection_covers_every_metric(tmp_path):
+    # gate_collection subsumed the standalone measure node; its three metrics
+    # must keep reducing correctly (thresholds chosen to pin exact values).
     ctx = _ctx(tmp_path)
     events = {
-        "events": [
-            {"time_in": 1.0, "time_out": 3.0, "confidence": 0.4},
-            {"time_in": 5.0, "time_out": 6.0, "confidence": 0.9},
-        ]
+        "events": {
+            "events": [
+                {"time_in": 1.0, "time_out": 3.0, "confidence": 0.4},
+                {"time_in": 5.0, "time_out": 6.0, "confidence": 0.9},
+            ]
+        }
     }
-    assert _run("measure", ctx, {"events": events}, {"metric": "count"})["value"] == 2.0
-    assert (
-        _run("measure", ctx, {"events": events}, {"metric": "max_confidence"})["value"]
-        == 0.9
-    )
-    assert (
-        _run("measure", ctx, {"events": events}, {"metric": "total_duration"})["value"]
-        == 3.0
-    )
-
-
-def test_measure_drives_gate(tmp_path):
-    ctx = _ctx(tmp_path)
-    events = {"events": [{"time_in": 0, "time_out": 1} for _ in range(5)]}
-    measured = _run("measure", ctx, {"events": events}, {"metric": "count"})
-    assert _run(
-        "gate", ctx, {"value": measured["value"]}, {"op": ">=", "threshold": 3}
-    )["pass"]
+    for metric, value in (
+        ("count", 2.0),
+        ("max_confidence", 0.9),
+        ("total_duration", 3.0),
+    ):
+        assert _run(
+            "gate_collection",
+            ctx,
+            events,
+            {"metric": metric, "op": "==", "threshold": value},
+        )["pass"]
 
 
 def test_ss_detector_reshapes_real_params(tmp_path, monkeypatch):
@@ -1139,6 +1136,44 @@ def test_heatmap_consumes_raw_results(tmp_path, monkeypatch):
     assert called["results"] == [{"change_grid": []}]
     assert called["dims"] == (640, 480)
     assert out["artifacts"]["artifacts"][0]["type"] == "heatmap"
+
+
+def test_heatmap_auto_infers_style_from_payload_keys(tmp_path, monkeypatch):
+    # "auto" (the default) picks the style from the detector data actually
+    # present, so the user no longer mirrors the upstream detector by hand.
+    import screenspace_heatmap
+
+    monkeypatch.setattr(
+        video, "probe_video_properties", lambda p: {"width": 640, "height": 480}
+    )
+    monkeypatch.setattr(
+        files,
+        "get_unique_filename",
+        lambda name, file_format=None: str(tmp_path / "heatmap.png"),
+    )
+    styles = {
+        "attention": [{"saliency_grid": []}],
+        "flow": [{"flow_grid": []}],
+        "template": [{"matches": [{"x": 0, "y": 0, "w": 1, "h": 1}]}],
+    }
+    for style, raw in styles.items():
+        called = {}
+        monkeypatch.setattr(
+            screenspace_heatmap,
+            f"generate_{style}_heatmap",
+            lambda results, w, h, out_path, _c=called: _c.update(hit=True) or out_path,
+        )
+        src = {"participant": "P01", "study": "s", "video_paths": ["v.mp4"]}
+        events_in = {"events": [], "source": src, "raw_results": raw}
+        out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {"style": "auto"})
+        assert called.get("hit"), f"auto did not route to {style}"
+        assert out["artifacts"]["count"] == 1
+    # Events with no heatmap payload (e.g. a text detector) → note, not a wrong map.
+    src = {"participant": "P01", "study": "s", "video_paths": ["v.mp4"]}
+    events_in = {"events": [], "source": src, "raw_results": [{"text": "hi"}]}
+    out = _run("heatmap", _ctx(tmp_path), {"events": events_in}, {})
+    assert out["artifacts"]["count"] == 0
+    assert "no heatmap data" in out["__note__"]
 
 
 # ---- Full-frame fallback + time-range authoring ----

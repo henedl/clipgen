@@ -481,9 +481,9 @@ NODE_TYPES: dict[str, NodeType] = {
             {
                 "name": "style",
                 "type": "enum",
-                "default": "change",
-                "choices": ["template", "flow", "change", "attention"],
-                "label": "Style (needs matching upstream detector)",
+                "default": "auto",
+                "choices": ["auto", "template", "flow", "change", "attention"],
+                "label": "Style (auto = match upstream detector)",
             },
             {
                 "name": "output",
@@ -782,33 +782,13 @@ NODE_TYPES: dict[str, NodeType] = {
         "requires": [],
     },
     # ---- Control ----
-    "measure": {
-        "id": "measure",
-        "label": "Measure",
-        "description": "Reduce events, clips, or segments to a single number (count, confidence, or duration).",
-        "domain": "control",
-        "category": "Control",
-        "inputs": [
-            {"name": "events", "type": "events", "optional": True},
-            {"name": "clips", "type": "clipRecords", "optional": True},
-            {"name": "segments", "type": "segments", "optional": True},
-        ],
-        "outputs": [{"name": "value", "type": "scalar"}],
-        "params": [
-            {
-                "name": "metric",
-                "type": "enum",
-                "default": "count",
-                "choices": ["count", "max_confidence", "total_duration"],
-                "label": "Metric",
-            },
-        ],
-        "requires": [],
-    },
+    # (No standalone "measure" node: Threshold Gate fuses measure+gate for
+    # collections, and the scalar Gate below covers the video→scalar adapter
+    # path — a measured value had no other consumer.)
     "gate": {
         "id": "gate",
         "label": "Gate",
-        "description": "Compare a measured value to a threshold to allow or skip downstream nodes.",
+        "description": "Compare a scalar (e.g. a video's duration via the adapter) to a threshold to allow or skip downstream nodes.",
         "domain": "control",
         "category": "Control",
         "inputs": [{"name": "value", "type": "scalar"}],

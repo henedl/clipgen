@@ -136,15 +136,12 @@
     ) {
       warnings.push("No participants selected");
     }
-    // error — a filter/partition predicate that would silently drop every item:
+    // error — a filter predicate that would silently drop every item:
     // an ordering comparison on a text field (the backend returns False per
     // item), or a numeric field compared against a non-numeric value (the
     // float() coerce fails). Field numeric-ness comes from the field spec's
     // numericChoices, so this stays in lockstep with the backend's table.
-    if (
-      node.type.indexOf("filter_") === 0 ||
-      node.type.indexOf("partition_") === 0
-    ) {
+    if (node.type.indexOf("filter_") === 0) {
       var fpSpecs = type.params || [];
       var fpParams = node.params || {};
       var specByName = function (n) {
@@ -186,7 +183,7 @@
       if (wired < 2) warnings.push("Merge needs 2+ inputs to combine");
     } else {
       // warning — a node with data input ports but none wired runs but produces
-      // nothing (e.g. make_clips / measure, whose inputs are all optional so the
+      // nothing (e.g. make_clips / gate_collection, whose inputs are all optional so the
       // required-input check above never fires). Suppressed when the clearer
       // "not connected" orphan message below will fire instead.
       var dataInputs = (type.inputs || []).filter(function (p) {
@@ -365,6 +362,7 @@
   // ---- Aggregate + render ----
 
   function nodeLabel(node) {
+    if (node.name) return node.name;
     var type = state.catalogById[node.type];
     return (type && type.label) || node.type;
   }

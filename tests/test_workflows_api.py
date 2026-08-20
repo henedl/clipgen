@@ -156,8 +156,9 @@ def test_catalog_returns_serializable_node_types(wf_client):
     # ss_scan with ten per-detector nodes; ss_scan must be gone).
     assert {"transcribe", "ss_text", "ss_color", "make_clips", "gate"} <= ids
     assert "ss_scan" not in ids
-    # P2 catalog tranche additions.
-    assert {"highlights", "multitool", "timelapse", "heatmap", "measure"} <= ids
+    # P2 catalog tranche additions (measure was later folded into gate_collection).
+    assert {"highlights", "multitool", "timelapse", "heatmap", "gate_collection"} <= ids
+    assert "measure" not in ids
     # P2 follow-ups: manual time-range source + the clipRecords→timeRange adapter.
     assert "time_range" in ids
     assert ("clipRecords", "timeRange") in workflows.ADAPTERS
@@ -352,7 +353,7 @@ def test_catalog_flags_multitool_step_detectors(wf_client):
 
 
 def test_catalog_serves_collection_ops(wf_client):
-    # The collection-algebra control nodes (filter/merge/partition/limit/dedup) are
+    # The collection-algebra control nodes (filter/merge/limit/dedup) are
     # per-type families grouped under "Collection". Ports must be exact-typed
     # (same wire type in/out) so no adapter is needed, and the predicate value /
     # limit take params carry required:true for the validation panel.
@@ -361,7 +362,7 @@ def test_catalog_serves_collection_ops(wf_client):
 
     expected = {
         f"{op}_{k}"
-        for op in ("filter", "partition", "merge", "limit")
+        for op in ("filter", "merge", "limit")
         for k in ("events", "clips", "segments", "timerange", "artifacts")
     }
     # dedup is span-based -> events + clips + time ranges (no segments/artifacts).
@@ -379,15 +380,14 @@ def test_catalog_serves_collection_ops(wf_client):
     assert by_id["filter_timerange"]["outputs"][0]["type"] == "timeRange"
 
     # filter_events: events -> events (exact type, no coercion), value required.
+    # The second `unmatched` output is the old partition family folded in — the
+    # gate's data-level else branch, same type as the input.
     fe = by_id["filter_events"]
     assert [p["type"] for p in fe["inputs"]] == ["events"]
-    assert [p["type"] for p in fe["outputs"]] == ["events"]
+    assert [p["name"] for p in fe["outputs"]] == ["out", "unmatched"]
+    assert {p["type"] for p in fe["outputs"]} == {"events"}
     assert next(p for p in fe["params"] if p["name"] == "value")["required"] is True
-
-    # partition emits two outputs of the input's type (the gate's data-level else).
-    pc = by_id["partition_clips"]
-    assert [p["name"] for p in pc["outputs"]] == ["matched", "unmatched"]
-    assert {p["type"] for p in pc["outputs"]} == {"clipRecords"}
+    assert "partition_clips" not in by_id
 
     # merge takes 2-3 same-typed inputs (in2/in3 optional) into one output.
     ms = by_id["merge_segments"]

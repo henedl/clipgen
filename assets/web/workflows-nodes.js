@@ -644,6 +644,40 @@
     return card;
   }
 
+  // Swap a card's title text for an inline rename input. Commit on blur/Enter;
+  // Escape restores the previous name; an empty name clears the rename.
+  function startRenameNode(node, titleText) {
+    var type = state.catalogById[node.type] || {};
+    var input = el("input", "wf-node-rename");
+    input.type = "text";
+    input.autocomplete = "off";
+    input.value = node.name || "";
+    input.placeholder = type.label || node.type;
+    input.addEventListener("mousedown", function (e) {
+      e.stopPropagation(); // keep the canvas drag handler out of it
+    });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") input.blur();
+      else if (e.key === "Escape") {
+        input.value = node.name || "";
+        input.blur();
+      }
+      e.stopPropagation();
+    });
+    input.addEventListener("blur", function () {
+      var name = input.value.trim();
+      if (name) node.name = name;
+      else delete node.name;
+      WF.scheduleSave();
+      if (WF.renderAllNodes) WF.renderAllNodes();
+      if (WF.refreshValidation) WF.refreshValidation();
+    });
+    titleText.textContent = "";
+    titleText.appendChild(input);
+    input.focus();
+    input.select();
+  }
+
   function renderNode(node) {
     if (node.type === "note") return renderNoteCard(node);
     var type = state.catalogById[node.type] || {
@@ -701,7 +735,20 @@
     // plus a `?` help glyph whose tooltip carries the catalog description. Uses
     // the [data-tooltip] singleton (styled/in-viewport), not native title.
     var titleBar = el("div", "wf-node-title");
-    titleBar.appendChild(el("span", "wf-node-title-text", type.label || node.type));
+    var titleText = el(
+      "span",
+      "wf-node-title-text",
+      node.name || type.label || node.type,
+    );
+    // Double-click renames the node (blank restores the catalog label) — the
+    // custom name is what disambiguates duplicate types on the canvas and in
+    // the run panel's rows. A renamed card keeps its type reachable via tooltip.
+    if (node.name) titleText.setAttribute("data-tooltip", type.label || node.type);
+    titleText.addEventListener("dblclick", function (e) {
+      e.stopPropagation();
+      startRenameNode(node, titleText);
+    });
+    titleBar.appendChild(titleText);
     if (type.description) {
       var help = el("span", "wf-node-help");
       help.setAttribute("data-tooltip", type.description);

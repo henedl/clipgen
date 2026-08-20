@@ -347,7 +347,6 @@ def write_node_sidecar(
 _RAW_RESULTS_PRESERVING = frozenset(
     {
         "filter_events",
-        "partition_events",
         "merge_events",
         "limit_events",
         "dedup_events",
@@ -428,10 +427,16 @@ def compute_resume_plan(
             if n.get("type") != "heatmap" or n["id"] not in rerun:
                 continue
             stack = list(parents.get(n["id"], []))
+            visited: set[str] = set()
             while stack:
                 pid = stack.pop()
-                if pid in rerun:
+                # Track visits separately from the rerun set: an ancestor that
+                # is already re-running for its own reasons must still be
+                # traversed *through*, or the walk never reaches the events
+                # producer behind it.
+                if pid in visited:
                     continue
+                visited.add(pid)
                 rerun.add(pid)
                 if by_id[pid].get("type") in _RAW_RESULTS_PRESERVING:
                     stack.extend(parents.get(pid, []))

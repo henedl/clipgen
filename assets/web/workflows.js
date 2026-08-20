@@ -132,12 +132,11 @@
     return item;
   }
 
-  // The collection-algebra nodes (filter_*/partition_*/merge_*/limit_*/dedup_*)
-  // share one "Collection" category; group by operation so the palette shows
-  // collapsible sub-groups instead of a long flat list.
+  // The collection-algebra nodes (filter_*/merge_*/limit_*/dedup_*) share one
+  // "Collection" category; group by operation so the palette shows collapsible
+  // sub-groups instead of a long flat list.
   var _COLLECTION_OPS = [
     ["filter", "Filter"],
-    ["partition", "Partition"],
     ["merge", "Merge"],
     ["limit", "Limit"],
     ["dedup", "Dedup"],

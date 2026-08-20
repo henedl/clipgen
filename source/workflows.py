@@ -1143,15 +1143,11 @@ def _exec_heatmap(
     src = events_in.get("source") or {}
     study = str(src.get("study", "") or "")
     results = list(events_in.get("raw_results") or [])
-    style = str(params.get("style", "change") or "change")
+    style = str(params.get("style", "auto") or "auto")
     paths = list(src.get("video_paths") or [])
-    if (
-        not results
-        or not paths
-        or style not in ("template", "flow", "change", "attention")
-    ):
+    if not results or not paths:
         note = (
-            "No detector results. Wire a matching detector for the chosen style"
+            "No detector results. Wire a template/flow/change/attention detector"
             if not results
             else "No video for the heatmap"
         )
@@ -1159,6 +1155,19 @@ def _exec_heatmap(
             "artifacts": {"artifacts": [], "study": study, "count": 0},
             "__note__": note,
         }
+    if style not in ("template", "flow", "change", "attention"):
+        # "auto": infer from the detector data actually present. Keying on the
+        # per-frame payload (match boxes / grids) rather than the producing
+        # node's type keeps the inference correct through merges and edits.
+        style = _infer_heatmap_style(results)
+        if not style:
+            return {
+                "artifacts": {"artifacts": [], "study": study, "count": 0},
+                "__note__": (
+                    "The wired events carry no heatmap data — use a "
+                    "template/flow/change/attention detector upstream"
+                ),
+            }
 
     props = video.probe_video_properties(paths[0]) or {}
     width = int(props.get("width", 0) or 0) or 1920
@@ -1219,6 +1228,27 @@ def _exec_heatmap(
         }
     rec = _attachment_artifact("heatmap", result, src, f"{style.title()} heatmap")
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
+
+
+def _infer_heatmap_style(results: list[Any]) -> str:
+    """Pick the heatmap style from the detector payload keys in *results*.
+
+    Each style's generator reads a distinctive key (template match boxes,
+    flow/change/saliency grids — see ``screenspace_heatmap._GRID_KEYS``), so
+    the first result carrying one decides. Empty string when none match.
+    """
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        if r.get("saliency_grid") is not None:
+            return "attention"
+        if r.get("flow_grid") is not None:
+            return "flow"
+        if r.get("change_grid") is not None:
+            return "change"
+        if r.get("matches"):
+            return "template"
+    return ""
 
 
 def _reel_start_seconds(rec: Any) -> float:
@@ -1744,14 +1774,6 @@ def _reduce_collection(metric: str, inputs: dict[str, Any]) -> float:
     return 0.0
 
 
-def _exec_measure(
-    ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
-) -> dict[str, Any]:
-    """Reduce a wired collection to one scalar for a downstream gate."""
-    metric = str(params.get("metric", "count") or "count")
-    return {"value": _reduce_collection(metric, inputs)}
-
-
 def _apply_gate(value: float, params: dict[str, Any]) -> bool:
     """Compare *value* to a threshold per the node's ``op`` (shared gate logic)."""
     fn = _GATE_OPS.get(str(params.get("op", ">=") or ">="))
@@ -1779,14 +1801,14 @@ def _exec_gate(
 def _exec_gate_collection(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    """Reduce a wired collection to a scalar then gate it — the measure+gate pair
-    fused into one node (see :func:`_exec_measure` and :func:`_exec_gate`)."""
+    """Reduce a wired collection to a scalar then gate it (measure+gate fused —
+    the scalar :func:`_exec_gate` remains for the video→scalar adapter path)."""
     metric = str(params.get("metric", "count") or "count")
     value = _reduce_collection(metric, inputs)
     return {"pass": _apply_gate(value, params)}
 
 
-# ---- Collection-algebra control nodes (filter / merge / partition / limit / dedup) ----
+# ---- Collection-algebra control nodes (filter / merge / limit / dedup) ----
 #
 # These thin / combine / branch / cap / dedup the collections already flowing
 # through the graph (events, clipRecords, segments). The collections *are* the
@@ -1993,7 +2015,12 @@ def _wrap_collection(
 def _make_filter_executor(
     kind: str,
 ) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Keep items matching the clause(s) (see ``_eval_clauses``); same type in/out."""
+    """Keep items matching the clause(s) on ``out``; the rest go to ``unmatched``.
+
+    The second output makes filter subsume the old partition family — leave
+    ``unmatched`` unwired for a plain filter, wire it for the gate's data-level
+    branch. Same type on every port (runner stores the whole result dict;
+    consumers read per-port)."""
     meta = _COLLECTION_KINDS[kind]
 
     def _exec(
@@ -2001,33 +2028,14 @@ def _make_filter_executor(
     ) -> dict[str, Any]:
         env = inputs.get("in") or {}
         items = list(env.get(meta["key"]) or [])
-        kept = [it for it in items if _eval_clauses(kind, it, params)]
-        return {"out": _wrap_collection(kind, env, kept)}
-
-    return _exec
-
-
-def _make_partition_executor(
-    kind: str,
-) -> Callable[[NodeContext, dict[str, Any], dict[str, Any]], dict[str, Any]]:
-    """Split one collection into ``matched`` / ``unmatched`` — the gate's missing
-    data-level branch. Two same-typed outputs (runner stores the whole result
-    dict; consumers read per-port)."""
-    meta = _COLLECTION_KINDS[kind]
-
-    def _exec(
-        ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
-    ) -> dict[str, Any]:
-        env = inputs.get("in") or {}
-        items = list(env.get(meta["key"]) or [])
-        matched: list[Any] = []
-        unmatched: list[Any] = []
+        kept: list[Any] = []
+        rejected: list[Any] = []
         for it in items:
-            target = matched if _eval_clauses(kind, it, params) else unmatched
+            target = kept if _eval_clauses(kind, it, params) else rejected
             target.append(it)
         return {
-            "matched": _wrap_collection(kind, env, matched),
-            "unmatched": _wrap_collection(kind, env, unmatched),
+            "out": _wrap_collection(kind, env, kept),
+            "unmatched": _wrap_collection(kind, env, rejected),
         }
 
     return _exec
@@ -2334,7 +2342,6 @@ _EXECUTORS: dict[
     "post_process": _exec_post_process,
     "timelapse": _exec_timelapse,
     "heatmap": _exec_heatmap,
-    "measure": _exec_measure,
     "timeline_viewer": _exec_timeline_viewer,
     "gallery_viewer": _exec_gallery_viewer,
     "gate": _exec_gate,
@@ -2350,7 +2357,7 @@ _EXECUTORS["detect"] = _exec_detect
 # Collection-algebra control nodes — per-type families, all factory-generated.
 # Registered here (NODE_TYPES + _EXECUTORS together) so the attach loop below
 # wires their ``execute`` like any other node. Category "Collection" groups them
-# apart from measure/gate in the palette.
+# apart from the gates in the palette.
 for _kind, _meta in _COLLECTION_KINDS.items():
     _T = _meta["port"]
     _name = _meta["label"]
@@ -2360,28 +2367,19 @@ for _kind, _meta in _COLLECTION_KINDS.items():
         "label": f"Filter {_name}",
         "domain": "control",
         "category": "Collection",
-        "description": f"Keep only the {_lname} matching a field/comparison/value test.",
-        "inputs": [{"name": "in", "type": _T}],
-        "outputs": [{"name": "out", "type": _T}],
-        "params": _predicate_params(_kind),
-        "requires": [],
-    }
-    _EXECUTORS[f"filter_{_kind}"] = _make_filter_executor(_kind)
-    NODE_TYPES[f"partition_{_kind}"] = {
-        "id": f"partition_{_kind}",
-        "label": f"Partition {_name}",
-        "domain": "control",
-        "category": "Collection",
-        "description": f"Split {_lname} into matched and unmatched branches by a test.",
+        "description": (
+            f"Keep the {_lname} matching a field/comparison/value test; "
+            "the unmatched output carries the rest."
+        ),
         "inputs": [{"name": "in", "type": _T}],
         "outputs": [
-            {"name": "matched", "type": _T},
+            {"name": "out", "type": _T},
             {"name": "unmatched", "type": _T},
         ],
         "params": _predicate_params(_kind),
         "requires": [],
     }
-    _EXECUTORS[f"partition_{_kind}"] = _make_partition_executor(_kind)
+    _EXECUTORS[f"filter_{_kind}"] = _make_filter_executor(_kind)
     NODE_TYPES[f"merge_{_kind}"] = {
         "id": f"merge_{_kind}",
         "label": f"Merge {_name}",

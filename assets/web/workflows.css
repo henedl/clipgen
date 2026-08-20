@@ -1175,6 +1175,20 @@ body[data-frontend="workflows"] {
   gap: var(--space-1);
 }
 
+/* Inline node-rename input, swapped into the title bar on double-click. */
+.wf-node-rename {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  font-size: inherit;
+  font-family: inherit;
+  font-weight: inherit;
+}
+
 /* Label + reset-to-default chip on one line above the control. The chip is
    hidden (tokens.css .hidden) while the value matches the spec default. */
 .wf-param-head {

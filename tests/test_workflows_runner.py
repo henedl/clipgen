@@ -478,11 +478,11 @@ def test_executor_note_surfaces_and_is_stripped(tmp_path, monkeypatch):
     # A node that completes with the reserved __note__ key surfaces it as the
     # node's `note` (a non-fatal degraded outcome, not a FAILED error) and never
     # stores it as a result port.
-    nodes = [{"id": "m", "type": "measure", "params": {}}]
+    nodes = [{"id": "m", "type": "gate", "params": {}}]
     monkeypatch.setitem(
-        workflows.NODE_TYPES["measure"],
+        workflows.NODE_TYPES["gate"],
         "execute",
-        lambda ctx, inputs, params: {"value": 0, "__note__": "nothing measured"},
+        lambda ctx, inputs, params: {"pass": False, "__note__": "nothing measured"},
     )
     runner = _runner(tmp_path, nodes, [])
     runner.run()
