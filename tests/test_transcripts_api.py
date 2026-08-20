@@ -3334,3 +3334,49 @@ def test_corrected_cache_generation_mismatch_recomputes(monkeypatch):
     # ...and does not poison the cache for current-generation readers.
     again = transcripts_server._corrected_segments("P01", new_segments, [], version=5)
     assert again[0]["text"] == "new"
+
+
+def test_regenerate_stops_in_flight_dependents(
+    tr_client, _agent_state_clean, monkeypatch
+):
+    """A citations run computed from the summary being regenerated must be
+    aborted, or its result commits after the clear, reads as current, and
+    blocks the fresh chain from re-running it."""
+    monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "run_agent", lambda *a, **k: None
+    )
+    _seed_friction_entry(citations=None, friction=None)
+    # Mark citations as in flight for P01 (as if it were mid-run off the old
+    # summary) and hand it a cancel event to observe.
+    evt = threading.Event()
+    transcripts_server._orchestrator._in_flight["citations"].add("P01")
+    transcripts_server._orchestrator._cancel_events["citations"]["P01"] = evt
+
+    resp = tr_client.post("/transcripts/api/agent/summary/P01/regenerate")
+    assert resp.status_code == 200
+    assert evt.is_set(), "in-flight dependent must be cancelled"
+    assert "P01" not in transcripts_server._orchestrator._in_flight["citations"]
+
+
+def test_invalidate_dependents_matches_on_agent_keys(monkeypatch):
+    """depends_on holds agent *keys*; an agent whose key differs from its
+    manifest_field must still have its dependents invalidated."""
+    fake_agents = [
+        {
+            "key": "themes",
+            "manifest_field": "theme_analysis",
+            "depends_on": [],
+            "on_upstream_change": "clear",
+        },
+        {
+            "key": "digest",
+            "manifest_field": "digest_result",
+            "depends_on": ["themes"],
+            "on_upstream_change": "clear",
+        },
+    ]
+    monkeypatch.setattr(thinking_agents, "AGENTS", fake_agents)
+    entry = {"theme_analysis": "old", "digest_result": "derived"}
+    transcripts_server._invalidate_dependents(entry, fake_agents[0])
+    assert "digest_result" not in entry

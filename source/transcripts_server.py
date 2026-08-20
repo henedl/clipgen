@@ -209,7 +209,10 @@ def _invalidate_dependents(entry: dict[str, Any], agent: thinking_agents.Agent) 
     ``_manifest_lock``.
     """
     for dep in thinking_agents.AGENTS:
-        if agent["manifest_field"] not in dep["depends_on"]:
+        # depends_on holds agent *keys* (the convention every reader now
+        # shares); the four built-ins have key == manifest_field, which is
+        # what let a field-based check here pass by accident.
+        if agent["key"] not in dep["depends_on"]:
             continue
         if dep.get("on_upstream_change") == "stale":
             _mark_friction_stale(entry)  # only the friction shape has a stale flag
@@ -1137,7 +1140,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     if result:
         resp: dict[str, Any] = {"ok": True, field: result}
         for dep in thinking_agents.AGENTS:
-            if field in dep["depends_on"]:
+            if agent_key in dep["depends_on"]:  # depends_on holds agent keys
                 dep_field = dep["manifest_field"]
                 generating = _orchestrator.is_generating(participant, dep["key"])
                 resp[f"{dep_field}_generating"] = generating
@@ -1186,6 +1189,14 @@ def api_agent_regenerate(agent_key: str, participant: str) -> FlaskResponse:
         return jsonify({"ok": False}), 404
     if _orchestrator.is_generating(participant, agent_key):
         return ok(generating=True)
+    # Abort in-flight dependents *before* clearing their fields: a citations
+    # run computed from the summary being discarded would otherwise commit
+    # after the clear, sit on the entry looking current, and block the fresh
+    # chain from ever re-running it. (stop acquires _manifest_lock, so it
+    # cannot live inside the block below.)
+    for dep in thinking_agents.AGENTS:
+        if agent_key in dep["depends_on"]:
+            _orchestrator.stop(dep["key"], participant)
     with _manifest_lock:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         if (
@@ -2295,6 +2306,19 @@ def _on_task_complete() -> None:
         _merge_completed_results_locked()
         merged_pids = list(dict.fromkeys(_pending_chain_pids))
         _pending_chain_pids.clear()
+
+    # Abort any agent runs still in flight for the merged participants: they
+    # were computed from the *old* transcript, and left alive they'd commit
+    # after the clear below — an old-transcript summary would then read as
+    # current and the chain would advance from it. Stop first, clear second:
+    # a run that commits before its stop lands is wiped by the clear, and one
+    # stopped here can no longer commit (the cancel event gates the write).
+    # (stop acquires _manifest_lock, so it cannot live inside either block.)
+    for pid in merged_pids:
+        for agent in thinking_agents.AGENTS:
+            _orchestrator.stop(agent["key"], pid)
+
+    with _manifest_lock:
         src = _manifest.get("source_transcripts", {})
         for pid in merged_pids:
             entry = src.get(pid)
