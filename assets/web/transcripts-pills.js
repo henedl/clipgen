@@ -11,9 +11,11 @@
  * loadFriction lives in the agents satellite, which loads AFTER this one, so the
  * friction run/stop rows reach it late-bound via TS.loadFriction rather than a
  * captured local. _confirmUncachedWhisperModels stays in the hub (model-install
- * state). Plain utils.js globals (qs/el/escapeHtml/apiPost/apiDelete/
- * clipgenPluralUnit/applyMaskIcon/attachHoverTooltip/positionPopoverAnchored)
- * are reached via the scope chain.
+ * state). updateTranscribeFill comes from the video satellite, which loads
+ * before this one, so it can be destructured like the hub's own exports. Plain
+ * utils.js globals (qs/el/escapeHtml/apiPost/apiDelete/clipgenPluralUnit/
+ * applyMaskIcon/attachHoverTooltip/positionPopoverAnchored) are reached via the
+ * scope chain.
  */
 (function () {
   "use strict";
@@ -25,6 +27,8 @@
     maybeWarmOnPillHover = TS.maybeWarmOnPillHover,
     tryPostTranscriptionWarmup = TS.tryPostTranscriptionWarmup,
     pollTaskStatus = TS.pollTaskStatus,
+    refreshTranscribeWording = TS.refreshTranscribeWording,
+    updateTranscribeFill = TS.updateTranscribeFill, // video satellite (loads before this one)
     startPolling = TS.startPolling,
     _refreshAgentStateNow = TS._refreshAgentStateNow,
     _trFetchModels = TS._trFetchModels,
@@ -38,6 +42,11 @@
     failed: { rest: "icons/exclamation-triangle.svg", hover: "icons/microphone.svg", label: "Retry transcription", action: "transcribe" },
     queued: { rest: "icons/clock.svg", hover: "icons/stop-circle.svg", label: "Cancel", action: "cancel" },
     running: { rest: "icons/arrow-path.svg", hover: "icons/stop-circle.svg", label: "Cancel transcription", action: "cancel" },
+    // Cancel acknowledged, worker not stopped yet. Same glyph on both faces:
+    // there is nothing left to click, so a hover swap would promise an action
+    // that is not there. action:"none" is the re-click guard at the config level
+    // — the click handler can no longer reach the cancel branch at all.
+    cancelling: { rest: "icons/stop-circle.svg", hover: "icons/stop-circle.svg", label: "Cancelling…", action: "none" },
     completed: { rest: "icons/check-circle.svg", hover: "icons/arrow-path.svg", label: "Re-transcribe", action: "retranscribe" }
   };
 
@@ -75,9 +84,19 @@
     var taskId = null;
 
     if (task && (task.status === "running" || task.status === "queued")) {
-      status = task.status;
       taskId = task.id;
-      if (task.status === "running") progress = Math.round((task.progress || 0) * 100);
+      var pending = state.cancellingTasks[task.id];
+      if (pending) {
+        status = "cancelling";
+        // Frozen at the click, not re-read from the task: the worker keeps
+        // emitting segments until its next checkpoint, and renderPills' patch
+        // path still writes this width on every tick — so an unfrozen fill would
+        // keep creeping under "Cancelling…", the same lie the dotted band told.
+        progress = pending.progress;
+      } else {
+        status = task.status;
+        if (task.status === "running") progress = Math.round((task.progress || 0) * 100);
+      }
     } else if (task && task.status === "failed") {
       status = "failed";
       taskId = task.id;
@@ -264,7 +283,11 @@
       var lines = [];
       for (var k = 0; k < keys.length; k++) {
         var label = _dotStateLabel(ag[keys[k]]);
-        if (keys[k] === "transcription" && ag[keys[k]] === "running" &&
+        // The dot itself stays --running (something really is winding down), but
+        // the wording has to agree with the trigger beside it.
+        if (keys[k] === "transcription" && s.status === "cancelling") {
+          label = "stopping…";
+        } else if (keys[k] === "transcription" && ag[keys[k]] === "running" &&
             s.phase === "loading_model") {
           label = "loading model…";
         }
@@ -351,6 +374,11 @@
     btn.className = "pill-trigger pill-trigger--" + s.status;
     btn.setAttribute("aria-label", cfg.label);
     btn.setAttribute("data-tooltip", cfg.label);
+    // Inert while the cancel is in flight — nothing to press, and a second
+    // DELETE against the same task is a no-op the server would reject. The
+    // shared button[data-tooltip]:disabled rule in tokens.css keeps the tooltip
+    // reachable (pointer-events: auto).
+    if (s.status === "cancelling") btn.setAttribute("disabled", "disabled");
 
     // Two stacked icons; CSS hides one and shows the other on hover/focus.
     var rest = document.createElement("span");
@@ -366,12 +394,13 @@
     btn.addEventListener("click", function (e) {
       e.stopPropagation();
       if (cfg.action === "cancel") {
-        if (s.taskId) {
-          apiDelete("api/transcribe/" + s.taskId).then(function () { pollTaskStatus(); });
-        }
+        cancelTranscribeTask(s.taskId, s.progress);
       } else if (cfg.action === "retranscribe") {
         startTranscribe(p.id, true);
-      } else {
+      } else if (cfg.action === "transcribe") {
+        // Explicit, not a bare else: the cancelling row's action is "none", and
+        // falling through here would turn a click on an in-flight cancel into a
+        // second *start*.
         startTranscribe(p.id, false);
       }
     });
@@ -537,14 +566,15 @@
       agent: "transcription",
       depMet: true,
       agentState: s.agents.transcription,
+      // Reads the same flag the pill trigger writes, so this row's optimistic
+      // "Stopping…" survives _refreshPillOptionsContent instead of reverting to
+      // "Stop" on the next poll — and so a cancel started from the trigger shows
+      // up here too.
+      cancelPending: s.status === "cancelling",
       hasResult: !!p.has_transcript,
       cascadeWarning: !!(p.agents && (p.agents.summary === "done" || p.agents.citations === "done")),
       onStart: function () { startTranscribe(p.id, !!p.has_transcript); },
-      onStop: function () {
-        if (s.taskId) {
-          apiDelete("api/transcribe/" + s.taskId).then(function () { pollTaskStatus(); });
-        }
-      },
+      onStop: function () { cancelTranscribeTask(s.taskId, s.progress); },
     }));
 
     // 2. Summary
@@ -681,7 +711,14 @@
     var mode = "start"; // start | stop | disabled
     var title = "";
 
-    if (running) {
+    if (opts.cancelPending) {
+      // Disabled rather than "stop": the DELETE is already out, and this pane is
+      // rebuilt from pillState on every poll, so the label has to come from the
+      // shared flag or it reverts to "Stop" within one tick.
+      btnLabel.textContent = "Stopping…";
+      btn.classList.add("pill-agent-btn--stop");
+      mode = "disabled";
+    } else if (running) {
       btnLabel.textContent = "Stop";
       btn.classList.add("pill-agent-btn--stop");
       mode = "stop";
@@ -836,6 +873,37 @@
 
   function startTranscribe(pid, force) {
     transcribeParticipants([pid], force);
+  }
+
+  // The single cancel path — the pill trigger and the dropdown's Transcription
+  // row both land here, so the optimistic flag, the revert and the toast exist
+  // once. The flag goes down *before* the request so the pill, the timeline
+  // band, the status dot, the empty pane and the streaming footer all stop
+  // claiming work is in progress in the same frame as the click, instead of up
+  // to a poll interval (and, on the loading_model path, a whole model load)
+  // later. renderPills() replaces the clicked button mid-dispatch, which is
+  // safe: :active ends at mouseup, before click fires, so the press squish has
+  // already played.
+  function cancelTranscribeTask(taskId, progress) {
+    if (!taskId || state.cancellingTasks[taskId]) return;
+    state.cancellingTasks[taskId] = { at: Date.now(), progress: progress || 0 };
+    renderPills();
+    updateTranscribeFill();
+    refreshTranscribeWording();
+    apiDelete("api/transcribe/" + taskId).then(function () {
+      pollTaskStatus();
+    }).catch(function () {
+      // The common failure is "Task not found or already finished" from a task
+      // that crossed the line while the request was in flight. If the poll has
+      // already swept the flag the pill is correct and a toast is just noise —
+      // only speak up if we are the ones putting the state back.
+      if (!state.cancellingTasks[taskId]) return;
+      delete state.cancellingTasks[taskId];
+      renderPills();
+      updateTranscribeFill();
+      refreshTranscribeWording();
+      showToast("Failed to cancel transcription");
+    });
   }
 
   // Participants with an un-acked transcribe POST. The server has no in-flight
