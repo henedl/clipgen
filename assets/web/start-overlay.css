@@ -1824,6 +1824,12 @@
   letter-spacing: 0;
 }
 
+.start-overlay .changelog__change {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .start-overlay .changelog__tag {
   display: inline-flex;
   align-items: center;
@@ -1831,6 +1837,9 @@
   font-size: 11px;
   color: var(--fg-muted);
   font-weight: 500;
+  /* One release lists several tools down a column; a fixed width keeps their
+     text left-aligned with each other instead of ragged. */
+  flex: 0 0 84px;
 }
 
 .start-overlay .changelog__tag-dot {
@@ -1844,6 +1853,9 @@
 .start-overlay .changelog__tag[data-tool="Screenspace"] .changelog__tag-dot { background: #22d3ee; }
 .start-overlay .changelog__tag[data-tool="Transcripts"] .changelog__tag-dot { background: #34d399; }
 .start-overlay .changelog__tag[data-tool="Core"]        .changelog__tag-dot { background: #a78bfa; }
+.start-overlay .changelog__tag[data-tool="Composer"]    .changelog__tag-dot { background: #f472b6; }
+.start-overlay .changelog__tag[data-tool="Workflows"]   .changelog__tag-dot { background: #fbbf24; }
+.start-overlay .changelog__tag[data-tool="Overview"]    .changelog__tag-dot { background: #fb923c; }
 
 .start-overlay .changelog__when {
   margin-left: auto;
@@ -1851,17 +1863,18 @@
   font-size: 11px;
 }
 
-.start-overlay .changelog__title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg);
-  letter-spacing: -0.005em;
-}
-
 .start-overlay .changelog__body {
   font-size: 12px;
   color: var(--fg-muted);
   line-height: 1.5;
+  flex: 1;
+  min-width: 0;
+}
+
+.start-overlay .changelog__kind {
+  color: var(--fg);
+  font-weight: 500;
+  margin-right: 5px;
 }
 
 /* ---- About ---------------------------------------------------------- */

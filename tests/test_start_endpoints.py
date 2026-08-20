@@ -103,7 +103,8 @@ def test_changelog_returns_entries(client):
     # parser regex drifted from the file format.
     assert body["entries"], "CHANGELOG.md present but no entries parsed"
     first = body["entries"][0]
-    assert {"version", "date", "tool", "title", "body"} <= set(first)
+    assert {"version", "date", "changes"} <= set(first)
+    assert {"tool", "kind", "text"} <= set(first["changes"][0])
 
 
 def test_changelog_handles_missing_file(client, monkeypatch):

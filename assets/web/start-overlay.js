@@ -1990,7 +1990,12 @@
       var entries = (r && r.entries) || [];
       renderChangelog(entries);
       if (entries.length > 0 && els.updatesBadge) {
-        els.updatesBadge.textContent = String(entries.length);
+        // Count changes, not releases: a release holding four of them should
+        // not read as "1 update".
+        var changes = entries.reduce(function (n, e) {
+          return n + ((e.changes && e.changes.length) || 0);
+        }, 0);
+        els.updatesBadge.textContent = String(changes);
         setHidden(els.updatesBadge, false);
       }
     }).catch(function () {
@@ -2011,15 +2016,23 @@
       var item = el("li", "changelog__entry");
       var head = el("div", "changelog__head");
       head.appendChild(el("span", "changelog__version", entry.version));
-      var tag = el("span", "changelog__tag");
-      tag.setAttribute("data-tool", entry.tool || "Core");
-      tag.appendChild(el("span", "changelog__tag-dot"));
-      tag.appendChild(document.createTextNode(entry.tool || "Core"));
-      head.appendChild(tag);
       head.appendChild(el("span", "changelog__when", entry.date || ""));
       item.appendChild(head);
-      if (entry.title) item.appendChild(el("div", "changelog__title", entry.title));
-      if (entry.body) item.appendChild(el("div", "changelog__body", entry.body));
+      (entry.changes || []).forEach(function (change) {
+        var row = el("div", "changelog__change");
+        var tag = el("span", "changelog__tag");
+        tag.setAttribute("data-tool", change.tool || "Core");
+        tag.appendChild(el("span", "changelog__tag-dot"));
+        tag.appendChild(document.createTextNode(change.tool || "Core"));
+        row.appendChild(tag);
+        var text = el("span", "changelog__body");
+        if (change.kind) {
+          text.appendChild(el("span", "changelog__kind", change.kind + ":"));
+        }
+        text.appendChild(document.createTextNode(change.text || ""));
+        row.appendChild(text);
+        item.appendChild(row);
+      });
       els.changelogList.appendChild(item);
     });
   }
