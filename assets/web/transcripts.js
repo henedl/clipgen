@@ -3503,10 +3503,12 @@
   // progress, exactly like _embedSubsRun.
   var _normAudioRun = null;
 
-  // pid -> true while a kept .orig occupies the participant's backup slot (from
-  // api/remux/status on open). The server would refuse those files anyway;
-  // excluding them here keeps the summary from promising N rewrites and the run
-  // coming back with guard-failure lines.
+  // pid -> how many of the participant's parts have a kept .orig occupying
+  // their backup slot (from api/remux/status on open). Only a *fully* occupied
+  // participant is excluded: the server counts already-rewritten parts as done,
+  // so a run that failed or was stopped halfway through a multi-part
+  // participant resumes from the parts that are left rather than being locked
+  // out until the successful backups are deleted or restored.
   var _normAudioKept = {};
 
   // The current-scope track checkboxes are built from an async audio-info
@@ -3532,16 +3534,27 @@
     return all.filter(function (p) { return p.id === pid; });
   }
 
+  function _normAudioKeptCount(p) {
+    return _normAudioKept[p.id] || 0;
+  }
+
+  function _normAudioIsFullyKept(p) {
+    var parts = (p.video_paths || []).length || 1;
+    return _normAudioKeptCount(p) >= parts;
+  }
+
   function _normAudioTargets() {
     return _normAudioScoped().filter(function (p) {
-      return !_normAudioKept[p.id];
+      return !_normAudioIsFullyKept(p);
     });
   }
 
+  // Files a run would actually rewrite: parts whose backup slot is free.
   function _normAudioFileCount(targets) {
     var n = 0;
     for (var i = 0; i < targets.length; i++) {
-      n += (targets[i].video_paths || []).length || 1;
+      var parts = (targets[i].video_paths || []).length || 1;
+      n += Math.max(0, parts - _normAudioKeptCount(targets[i]));
     }
     return n;
   }
@@ -3571,13 +3584,23 @@
     var scope = (qs("#normAudioScope") || {}).value;
     var scoped = _normAudioScoped();
     var targets = _normAudioTargets();
-    var kept = scoped.filter(function (p) { return _normAudioKept[p.id]; });
-    var keptNote = kept.length
-      ? " " + kept.map(function (p) { return p.id; }).join(", ") +
+    var fullyKept = scoped.filter(_normAudioIsFullyKept);
+    var resuming = targets.filter(function (p) { return _normAudioKeptCount(p) > 0; });
+    var keptNote = fullyKept.length
+      ? " " + fullyKept.map(function (p) { return p.id; }).join(", ") +
         " skipped (an earlier original is still kept — delete or restore it first)."
       : "";
+    if (resuming.length) {
+      // Partially-rewritten multi-part participants: the server skips the
+      // parts whose backup slot is occupied, so the run finishes what's left.
+      keptNote += " " + resuming.map(function (p) { return p.id; }).join(", ") +
+        (resuming.length === 1
+          ? " resumes where it stopped"
+          : " resume where they stopped") +
+        " — already-rewritten parts are skipped.";
+    }
     if (!targets.length) {
-      summaryEl.textContent = kept.length
+      summaryEl.textContent = fullyKept.length
         ? "Nothing to normalize —" + keptNote
         : scope === "current" && state.selectedParticipant
           ? "No source video for " + state.selectedParticipant + "."
@@ -3725,7 +3748,7 @@
         var kept = data.kept || {};
         var map = {};
         for (var pid in kept) {
-          if (kept[pid] && kept[pid].length) map[pid] = true;
+          if (kept[pid] && kept[pid].length) map[pid] = kept[pid].length;
         }
         _normAudioKept = map;
         renderNormAudioSummary();
@@ -3747,7 +3770,13 @@
     var pids = targets.map(function (p) { return p.id; });
     var spec = _normAudioTracksSpec();
 
-    var run = { done: 0, failed: 0, total: pids.length, abort: new AbortController() };
+    var run = {
+      done: 0,
+      failed: 0,
+      changed: 0,
+      total: pids.length,
+      abort: new AbortController(),
+    };
     _normAudioRun = run;
     _renderNormAudioProgress();
 
@@ -3763,22 +3792,26 @@
       if (typeof data.index !== "number") return;
       run.done++;
       if (!data.ok) run.failed++;
+      // Files actually swapped — can be non-zero on an ok=false line when a
+      // later part of a multi-part participant failed or was stopped.
+      if (typeof data.parts_done === "number") run.changed += data.parts_done;
       _renderNormAudioProgress();
     }
 
     function finish(message) {
-      var made = run.done - run.failed;
       _normAudioRun = null;
       _renderNormAudioProgress();
       closeNormalizeAudioModal();
       showToast(message);
-      // Any success swapped a source file out from under the page: the <video>
-      // is mid-stream on a renamed-away inode and the per-track mixers point at
-      // stale extracts. media-banner.js reloads for the identical file swap
+      // Any swapped file was pulled out from under the page: the <video> is
+      // mid-stream on a renamed-away inode and the per-track mixers point at
+      // stale extracts. Keyed on parts swapped (run.changed), not successful
+      // participants — a participant that failed on part 2 still replaced
+      // part 1. media-banner.js reloads for the identical file swap
       // (reloadAfterFileSwap); the delay lets the batch toast — which, unlike
       // remux's single-file one, carries failure counts — be seen first.
       // Playback position survives via videoTimeByParticipant.
-      if (made > 0) {
+      if (run.changed > 0) {
         setTimeout(function () { window.location.reload(); }, 1500);
       }
     }

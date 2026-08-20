@@ -658,28 +658,35 @@ def test_norm_audio_ignores_the_indexless_stream_lines():
     )
 
 
-def test_norm_audio_reloads_after_a_successful_rewrite():
-    """A success swapped a source file out from under the page: the <video> is
+def test_norm_audio_reloads_after_any_swapped_file():
+    """A swap pulled a source file out from under the page: the <video> is
     mid-stream on a renamed-away inode and the per-track mixers point at stale
     extracts. media-banner.js reloads for the identical file swap; skipping the
-    reload here leaves the player wedged on the old bytes."""
+    reload here leaves the player wedged on the old bytes. The reload must key
+    on files swapped (parts_done), not on ok-participants: a multi-part
+    participant that failed on part 2 still replaced part 1 on disk."""
     start = _JS.index("function submitNormalizeAudio(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
     assert "window.location.reload" in body
+    assert 'typeof data.parts_done === "number"' in body, (
+        "the handler must tally swapped files off the lines' parts_done"
+    )
     reload_branch = body[body.index("function finish(") :]
-    assert "made > 0" in reload_branch, (
-        "an all-failed run changed nothing on disk and must not reload"
+    assert "run.changed > 0" in reload_branch, (
+        "a run that swapped nothing must not reload; one that swapped anything "
+        "must, even when every participant line was ok=false"
     )
 
 
-def test_norm_audio_excludes_kept_backup_participants():
-    """The server refuses a file whose .orig slot is occupied (by either
-    rewriter). api/remux/status re-probes that from disk, so filtering here
-    turns a guaranteed failure line into an up-front note in the summary."""
+def test_norm_audio_excludes_only_fully_kept_participants():
+    """A participant is excluded only when *every* part's .orig slot is
+    occupied. Excluding on any kept original locked a half-finished multi-part
+    participant out of its own retry: the successful parts hold backups, so the
+    remaining parts could never be reached without restoring or deleting them."""
     start = _JS.index("function _normAudioTargets(")
     body = _JS[start : _JS.index("\n  function ", start + 1)]
-    assert "_normAudioKept" in body, (
-        "targets must drop participants with a kept original before the POST"
+    assert "_normAudioIsFullyKept" in body, (
+        "targets must drop only fully-rewritten participants before the POST"
     )
     open_start = _JS.index("function openNormalizeAudioModal(")
     open_body = _JS[open_start : _JS.index("\n  function ", open_start + 1)]

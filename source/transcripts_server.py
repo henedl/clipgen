@@ -890,7 +890,18 @@ def _normalize_audio_for_participant(
 
     Multi-part participants are supported — each part is an independent file
     (unlike subtitle muxing, where timing spans parts) — and failures are
-    aggregated per part so a retry can name exactly what is left.
+    aggregated per part so a retry can name exactly what is left. Two rules
+    make a run that failed (or was stopped) halfway through a participant
+    retryable and honestly reported:
+
+    - A part whose ``.orig`` slot is already occupied counts as done rather
+      than failed, mirroring ``remux_server._already_remuxed``: without the
+      skip, every retry would collect a "still kept" refusal line for the
+      parts that already succeeded and read as a failure forever.
+    - ``parts_done`` reports how many files this run actually swapped. It can
+      be non-zero on an ``ok: false`` line (part 1 swapped, part 2 failed),
+      and the client's post-run reload keys on it — after any swap the page
+      is streaming a renamed-away inode, whatever the participant verdict.
     """
     video_paths = _video_paths_for_participant(participant)
     if not video_paths:
@@ -898,13 +909,21 @@ def _normalize_audio_for_participant(
             "participant": participant,
             "ok": False,
             "error": "Source video not found",
+            "parts_done": 0,
         }
 
     failures: list[str] = []
+    done = 0
+    already = 0
     for path in video_paths:
         if cancel_flag():
             failures.append(f"{Path(path).name}: cancelled")
             break
+        if video.original_backup_path(path).exists():
+            # The slot is shared with remux, so this cannot prove the audio is
+            # normalized — the same accepted ambiguity as _already_remuxed.
+            already += 1
+            continue
         props = video.probe_video_properties(path)
         if props is None:
             failures.append(f"{Path(path).name}: could not probe the file")
@@ -916,15 +935,32 @@ def _normalize_audio_for_participant(
         success, message = video.normalize_audio_inplace(
             path, indices, cancel_flag=cancel_flag
         )
-        if not success:
+        if success:
+            done += 1
+        else:
             failures.append(f"{Path(path).name}: {message}")
     if failures:
-        return {"participant": participant, "ok": False, "error": " ".join(failures)}
+        return {
+            "participant": participant,
+            "ok": False,
+            "error": " ".join(failures),
+            "parts_done": done,
+        }
+    if already and not done:
+        message = "Already rewritten; the original is still kept beside the source."
+    elif already:
+        message = (
+            f"Audio normalized ({already} already-rewritten "
+            f"{'part' if already == 1 else 'parts'} skipped)."
+        )
+    else:
+        message = "Audio normalized; original kept beside the source."
     return {
         "participant": participant,
         "ok": True,
-        "message": "Audio normalized; original kept beside the source.",
+        "message": message,
         "parts": len(video_paths),
+        "parts_done": done,
     }
 
 
@@ -942,6 +978,9 @@ def api_normalize_audio() -> FlaskResponse:
     (no ``output_dir`` — the rewrite is in place), one ``{"index", "participant",
     "ok", ...}`` line per participant, ``{"cancelled": true}`` if stopped, and
     the terminal ``{"done": true}`` sentinel whose absence marks a truncated run.
+    Every participant line carries ``parts_done`` — files actually swapped this
+    run, possibly non-zero even when ``ok`` is false — because the client must
+    reload after any swap, not just after fully-successful participants.
 
     Unlike the embed run, cancel is also threaded into ffmpeg itself, so Stop
     interrupts the current file mid-encode instead of waiting it out.

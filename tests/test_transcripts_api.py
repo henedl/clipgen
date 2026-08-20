@@ -1484,6 +1484,72 @@ def test_normalize_audio_partial_part_failure_names_the_part(
     assert result["ok"] is False
     assert p2.name in result["error"]
     assert p1.name not in result["error"]
+    # Part 1 was swapped on disk despite the participant-level failure — the
+    # client's post-run reload keys on this count, not on ok.
+    assert result["parts_done"] == 1
+
+
+def test_normalize_audio_retry_skips_parts_with_kept_originals(
+    tr_client, tmp_path, monkeypatch
+):
+    """A retry of a half-finished multi-part participant must finish the
+    remaining parts, not collect a 'still kept' refusal for the ones that
+    already succeeded (which would read as a failure forever)."""
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    # Part 1 already rewritten by the failed run: its backup slot is occupied.
+    Path(str(p1) + ".orig").write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert [c[0] for c in captured["calls"]] == [str(p2)]
+    assert result["ok"] is True
+    assert result["parts_done"] == 1
+    assert "already-rewritten" in result["message"]
+
+
+def test_normalize_audio_fully_kept_participant_is_a_clean_noop(
+    tr_client, tmp_path, monkeypatch
+):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    Path(str(video_path) + ".orig").write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert captured["calls"] == []
+    assert result["ok"] is True
+    assert result["parts_done"] == 0
+    assert "Already rewritten" in result["message"]
 
 
 def test_normalize_audio_400_without_participants(tr_client):
