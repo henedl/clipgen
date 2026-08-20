@@ -1332,7 +1332,6 @@ def _exec_post_process(
     paths = list(src.get("video_paths") or [])
     study = str(src.get("study", "") or "")
     op = str(params.get("operation", "embed_subtitles") or "embed_subtitles")
-    empty_art = {"artifacts": [], "study": study, "count": 0}
 
     def _done(
         video_out: dict[str, Any],
