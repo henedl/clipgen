@@ -136,6 +136,24 @@ var clipgenApplyConfig = function (payload) {
   if (typeof payload.gifFormat === "string") {
     CLIPGEN_CONFIG.gifFormat = payload.gifFormat;
   }
+  if (typeof payload.composerAnnotationColor === "string") {
+    CLIPGEN_CONFIG.composerAnnotationColor = payload.composerAnnotationColor;
+  }
+  if (typeof payload.composerAnnotationColorSecondary === "string") {
+    CLIPGEN_CONFIG.composerAnnotationColorSecondary = payload.composerAnnotationColorSecondary;
+  }
+  if (typeof payload.composerAnnotationStrokeWidth === "number") {
+    CLIPGEN_CONFIG.composerAnnotationStrokeWidth = payload.composerAnnotationStrokeWidth;
+  }
+  if (typeof payload.composerAnnotationStrokeStyle === "string") {
+    CLIPGEN_CONFIG.composerAnnotationStrokeStyle = payload.composerAnnotationStrokeStyle;
+  }
+  if (typeof payload.composerAnnotationFontSize === "number") {
+    CLIPGEN_CONFIG.composerAnnotationFontSize = payload.composerAnnotationFontSize;
+  }
+  if (typeof payload.composerAnnotationSpanSeconds === "number") {
+    CLIPGEN_CONFIG.composerAnnotationSpanSeconds = payload.composerAnnotationSpanSeconds;
+  }
   if (typeof payload.composerScrubMaxAudioSeconds === "number") {
     CLIPGEN_CONFIG.composerScrubMaxAudioSeconds = payload.composerScrubMaxAudioSeconds;
   }
@@ -2145,7 +2163,10 @@ var initFrontendSwitcher = function () {
   });
 
   fetch("/api/status")
-    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
     .then(function (status) {
       var items = panel.querySelectorAll(".frontend-switcher-item");
       items.forEach(function (item) {

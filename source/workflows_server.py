@@ -1325,8 +1325,13 @@ def _init_workflows_state(
 
     Loads the workflows manifest and records the active sheet context +
     worksheet (the latter feeds the ``sheet_selection`` executor), then seeds
-    the watch-dir baseline and starts the trigger daemon. Per-participant
-    video paths and the input dir are resolved on demand.
+    the watch-dir baseline. Per-participant video paths and the input dir are
+    resolved on demand.
+
+    Deliberately does *not* start the trigger daemon: an armed trigger firing
+    here could launch a workflow run before the sibling blueprints (and
+    ``thinking_agents.configure``) are initialized. ``server._init_combined_state``
+    calls :func:`_start_watch_thread` as its last step instead.
 
     Called once, from ``build_combined_app``. A worksheet swap goes through
     :func:`repin_sheet_state` instead — re-running this would reload the
@@ -1344,7 +1349,6 @@ def _init_workflows_state(
     with _manifest_lock:
         _persist_locked()
     _seed_watch_seen()
-    _start_watch_thread()
 
 
 def repin_sheet_state(sheet_context: Any = None, worksheet: Any = None) -> None:

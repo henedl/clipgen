@@ -3901,7 +3901,7 @@ def main() -> None:
         if value.lower() == ".webp"
     ]
     if webp_formats and not video.check_webp_support():
-        utils.error_print(
+        utils.fatal_startup_error(
             "WebP output is configured but ffmpeg lacks libwebp support.",
             [
                 f"Affected config: {', '.join(webp_formats)}",
@@ -3911,7 +3911,7 @@ def main() -> None:
         sys.exit(1)
 
     if config.GIF_FORMAT.lower() == ".webm" and not video.check_vp9_support():
-        utils.error_print(
+        utils.fatal_startup_error(
             "WebM output is configured but ffmpeg lacks libvpx-vp9 support.",
             [
                 "Affected config: GIF_FORMAT",
@@ -3955,7 +3955,7 @@ def main() -> None:
                     # without touching the (absent) gspread client.
                     args.spreadsheet = fallback
                 else:
-                    utils.error_print(
+                    utils.fatal_startup_error(
                         "Google authentication failed.",
                         [
                             "Use -s path/to/file.xlsx to work with a local Excel file instead.",
@@ -3977,6 +3977,18 @@ def main() -> None:
                 utils.standard_print("Using local Excel file.")
             else:
                 worksheet = select_worksheet(gspread_client, args, cli_mode)
+
+            # The Start overlay's per-source filename overrides are functional
+            # config — they decide which file a participant's clips are cut
+            # from. Web launches seed them in server._seed_filename_overrides;
+            # seed here so headless CLI and interactive runs honor them too.
+            meta = files.derive_sheet_meta(worksheet)
+            if meta is not None:
+                import start_settings
+
+                config.FILENAME_OVERRIDES = start_settings.filename_overrides(
+                    meta["type"], meta["id_or_path"], meta.get("worksheet", "")
+                )
 
             web_mode = _resolve_web_mode(args)
             if web_mode is not None:

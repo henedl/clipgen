@@ -1276,6 +1276,42 @@ def _load_studio_settings() -> dict[str, Any]:
     return applied
 
 
+def _revert_unsupported_formats() -> None:
+    """Re-run the ffmpeg capability guards against the loaded studio settings.
+
+    ``cli.main`` validates webp/vp9/drawtext support before this module applies
+    ``studio_settings.json``, so a persisted format can name an encoder this
+    ffmpeg build lacks — or re-enable titlecards the CLI guard just disabled
+    for missing drawtext. By now the server is booting, so warn and revert to
+    the defaults instead of exiting. The ``video.check_*`` probes are cached,
+    so the repeat costs nothing when the CLI already ran them.
+    """
+    webp_names = [
+        name
+        for name in ("SCREENSHOT_FORMAT", "GIF_FORMAT")
+        if str(getattr(config, name)).lower() == ".webp"
+    ]
+    if webp_names and not video.check_webp_support():
+        for name in webp_names:
+            setattr(config, name, _settings_defaults[name])
+        utils.warning_print(
+            f"{', '.join(webp_names)} set to .webp but ffmpeg lacks libwebp; "
+            f"reverting to the default format."
+        )
+    if config.GIF_FORMAT.lower() == ".webm" and not video.check_vp9_support():
+        config.GIF_FORMAT = _settings_defaults["GIF_FORMAT"]
+        utils.warning_print(
+            "GIF_FORMAT set to .webm but ffmpeg lacks libvpx-vp9; "
+            "reverting to the default format."
+        )
+    if config.TITLECARDS_ENABLED and not video.check_drawtext_support():
+        config.TITLECARDS_ENABLED = False
+        utils.warning_print(
+            "Titlecards are enabled but ffmpeg lacks the drawtext filter; "
+            "disabling titlecards for this run."
+        )
+
+
 def _save_studio_settings(overrides: dict[str, Any]) -> Path | None:
     """Write only non-default settings to studio_settings.json."""
     to_save = {}
@@ -3076,6 +3112,7 @@ def _init_studio_state(worksheet: Any) -> None:
     global _worksheet, _generated_artifacts, _generated_reels
 
     _load_studio_settings()
+    _revert_unsupported_formats()
     _worksheet = worksheet
     new_context = None
     if worksheet is not None:
@@ -3104,35 +3141,7 @@ def _derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
     loaded sheet when the overlay is opened on a session that was launched
     from the CLI (not via the runtime ``/api/spreadsheets/open`` endpoint).
     """
-    if worksheet is None:
-        return None
-    try:
-        import excel_io
-
-        if isinstance(worksheet, excel_io.ExcelSheetAdapter):
-            path = getattr(worksheet, "_workbook_path", "") or ""
-            if not path:
-                return None
-            return {
-                "type": "excel",
-                "id_or_path": path,
-                "label": Path(path).name,
-                "worksheet": getattr(worksheet, "title", ""),
-            }
-    except ImportError:
-        pass  # no excel_io in this build; fall through to the gspread branch
-    # gspread Worksheet (or anything quacking like one): use the parent
-    # spreadsheet title as both the identifier and the label.
-    parent = getattr(worksheet, "spreadsheet", None)
-    title = getattr(parent, "title", "") if parent is not None else ""
-    if not title:
-        return None
-    return {
-        "type": "google",
-        "id_or_path": title,
-        "label": title,
-        "worksheet": getattr(worksheet, "title", ""),
-    }
+    return files.derive_sheet_meta(worksheet)
 
 
 def _spreadsheet_label() -> str:
@@ -3584,6 +3593,11 @@ def _init_combined_state(
         observation_rows_getter=_sheet_observation_rows,
         participant_marks_getter=transcripts_server.marks_for_participant,
     )
+
+    # Last, so an armed trigger firing on the daemon's immediate first poll
+    # can't start a workflow run against half-initialized sibling state (or a
+    # report agent with the getters above still unset).
+    workflows_server._start_watch_thread()
 
 
 def build_combined_app(
@@ -4596,6 +4610,11 @@ def _port_available(port: int) -> bool:
     ``sys.exit(1)``) off the console in the ordinary second-instance case.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        # Match werkzeug's bind semantics (HTTPServer sets allow_reuse_address):
+        # without SO_REUSEADDR the probe reports a port still draining TIME_WAIT
+        # connections as taken, and a quick restart silently relocates off 8089
+        # even though the real bind would have succeeded.
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", port))
         except OSError:

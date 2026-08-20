@@ -159,6 +159,29 @@ def test_clipgen_config_defaults_match_python():
     assert py_config["profiling"] == config.PROFILING
 
 
+def test_clipgen_apply_config_covers_frontend_config():
+    """clipgenApplyConfig must have a branch for every get_frontend_config key.
+
+    test_clipgen_config_defaults_match_python compares default *values*, so a
+    key the server ships but the applier silently drops stays green while the
+    live frontend runs the JS defaults forever (the six composerAnnotation*
+    keys shipped un-applied this way). Coverage is asserted as payload.<key>
+    access inside the function body.
+    """
+    match = re.search(
+        r"var\s+clipgenApplyConfig\s*=\s*function\s*\(payload\)\s*\{(.*?)\n\};",
+        _js_source(),
+        re.DOTALL,
+    )
+    assert match, "clipgenApplyConfig not found in utils.js"
+    handled = set(re.findall(r"payload\.(\w+)", match.group(1)))
+    missing = set(utils.get_frontend_config().keys()) - handled
+    assert not missing, (
+        f"clipgenApplyConfig drops config keys the server ships: "
+        f"{sorted(missing)}. Add a type-guarded branch for each in utils.js."
+    )
+
+
 def test_get_frontend_config_shape():
     """Contract: every consumer of get_frontend_config relies on these keys."""
     cfg = utils.get_frontend_config()

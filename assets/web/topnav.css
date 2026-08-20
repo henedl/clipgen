@@ -306,17 +306,6 @@ html[data-desktop-chrome="macos"][data-desktop-fullscreen] .topnav-left {
   transform: translateX(0) scale(1);
 }
 
-/* Version pill — small mono text */
-.topnav-version {
-  margin-left: 6px;
-  padding: 2px 6px;
-  font-family: var(--font-mono);
-  font-feature-settings: "tnum";
-  font-size: 11px;
-  color: var(--fg-faint);
-  border-radius: 4px;
-}
-
 /* ---- Quick Actions menu ---- */
 
 .topnav-qa {

@@ -899,6 +899,25 @@
     updateChipPreviews();
     syncPaletteChips();
 
+    // The hub seeds state.ann* and this toolbar paints before the
+    // api/participants config fetch lands, so both run on the JS defaults.
+    // The hub calls this after clipgenApplyConfig to re-seed from the real
+    // server config and repaint everything that shows a default.
+    CO.syncAnnotationDefaults = function () {
+      state.annColor = CLIPGEN_CONFIG.composerAnnotationColor;
+      state.annColorSecondary = CLIPGEN_CONFIG.composerAnnotationColorSecondary;
+      state.annStrokeWidth = CLIPGEN_CONFIG.composerAnnotationStrokeWidth;
+      state.annStrokeStyle = CLIPGEN_CONFIG.composerAnnotationStrokeStyle;
+      state.annFontSize = CLIPGEN_CONFIG.composerAnnotationFontSize;
+      resetGlyph.style.setProperty(
+        "--co-swatch-default", CLIPGEN_CONFIG.composerAnnotationColor);
+      resetGlyph.style.setProperty(
+        "--co-swatch-default-secondary",
+        CLIPGEN_CONFIG.composerAnnotationColorSecondary);
+      paintSwatches();
+      updateChipPreviews();
+    };
+
     // Tool buttons ([data-tool] excludes the independent #coToolHide toggle).
     qsa(".co-tool-btn[data-tool]").forEach(function (btn) {
       btn.addEventListener("click", function () {

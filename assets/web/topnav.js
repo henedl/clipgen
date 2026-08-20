@@ -85,11 +85,9 @@
     els.qaWrap = nav.querySelector(".topnav-qa");
     els.qaTrigger = nav.querySelector(".topnav-qa-trigger");
     els.qaPanel = nav.querySelector(".topnav-qa-panel");
-    els.version = nav.querySelector(".topnav-version");
 
     bindEvents();
     setQuickActions(window.CLIPGEN_QUICK_ACTIONS || []);
-    setVersion();
 
     isReady = true;
     for (var i = 0; i < readyCallbacks.length; i++) {
@@ -220,12 +218,6 @@
     themeBtn.innerHTML = '<span class="theme-toggle-icon theme-icon-sun"></span><span class="theme-toggle-icon theme-icon-moon"></span>';
     right.appendChild(themeBtn);
 
-    // Version pill
-    var version = document.createElement("span");
-    version.className = "topnav-version";
-    version.setAttribute("aria-label", "clipgen version");
-    right.appendChild(version);
-
     return right;
   }
 
@@ -344,22 +336,6 @@
     return btn;
   }
 
-  function setVersion() {
-    if (!els.version) return;
-    var v = "";
-    try {
-      if (window.CLIPGEN_CONFIG && typeof window.CLIPGEN_CONFIG.version === "string") {
-        v = window.CLIPGEN_CONFIG.version;
-      }
-    } catch (_) {}
-    if (!v) {
-      els.version.style.display = "none";
-      return;
-    }
-    els.version.style.display = "";
-    els.version.textContent = "v" + v;
-  }
-
   function onReady(cb) {
     if (typeof cb !== "function") return;
     if (isReady) {
@@ -377,7 +353,6 @@
   window.ClipgenTopNav = {
     setQuickActions: setQuickActions,
     getQuickActions: getQuickActions,
-    refreshVersion: setVersion,
     onReady: onReady,
     onBeforeOpen: onBeforeOpen,
   };
