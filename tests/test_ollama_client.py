@@ -5,6 +5,7 @@ tests/test_thinking_agents.py.
 """
 
 import hashlib
+import http.client
 import http.server
 import io
 import json
@@ -506,6 +507,8 @@ class TestAutoStartServer:
         # What is under test is the poll *loop*, not the production 0.5 s spacing
         # between attempts — leaving it real just slept through two intervals.
         monkeypatch.setattr(ollama_client, "_START_POLL_INTERVAL", 0)
+        # A live server process: poll() None means "still running".
+        mock_popen.return_value.poll.return_value = None
         mock_avail.side_effect = [False, False, True]
         assert ollama_client.start_server() is True
         assert mock_avail.call_count == 3
@@ -895,3 +898,54 @@ class TestManagedInstall:
             assert ollama_client.install_managed() is False
         managed_dir = tmp_path / "cfg" / "tools" / "ollama"
         assert not list(managed_dir.glob("*.exe"))
+
+
+@patch("ollama_client.shutil.which", return_value="/usr/local/bin/ollama")
+@patch("ollama_client.subprocess.Popen")
+@patch("ollama_client.is_available", return_value=False)
+def test_start_server_reports_immediate_death(
+    mock_avail, mock_popen, mock_which, monkeypatch
+):
+    """A `serve` that dies instantly fails fast with its exit code instead of
+    burning the whole startup timeout holding the lock."""
+    monkeypatch.setattr(ollama_client, "_START_POLL_INTERVAL", 0)
+    mock_popen.return_value.poll.return_value = 1
+    start = time.monotonic()
+    assert ollama_client.start_server() is False
+    assert time.monotonic() - start < ollama_client._START_TIMEOUT
+
+
+class TestGenerateStreamTruncation:
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_eof_without_done_chunk_returns_none(self, mock_urlopen):
+        """A stream that ends before its `done` chunk is a truncated
+        generation (Ollama restart / OOM / dropped connection) — returning
+        the partial text would commit a half-written summary as finished."""
+        mock_urlopen.return_value = _make_streaming_resp(
+            _ndjson_lines({"response": "Half a "}, {"response": "summary"})
+        )
+        assert ollama_client.generate("prompt") is None
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_done_chunk_still_returns_text(self, mock_urlopen):
+        mock_urlopen.return_value = _make_streaming_resp(
+            _ndjson_lines({"response": "Full"}, {"response": " text", "done": True})
+        )
+        assert ollama_client.generate("prompt") == "Full text"
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_non_dict_ndjson_lines_are_skipped(self, mock_urlopen):
+        """A line decoding to null/number/list must be skipped, not raise."""
+        lines = _ndjson_lines({"response": "ok"}) + [b"null\n", b"[1,2]\n"]
+        lines += _ndjson_lines({"done": True})
+        mock_urlopen.return_value = _make_streaming_resp(lines)
+        assert ollama_client.generate("prompt") == "ok"
+
+    @patch("ollama_client.urllib.request.urlopen")
+    def test_incomplete_read_is_handled_not_raised(self, mock_urlopen):
+        """http.client exceptions are not OSError; they must not escape a
+        module documented to never raise on a network error."""
+        resp = MagicMock()
+        resp.readline.side_effect = http.client.IncompleteRead(b"partial")
+        mock_urlopen.return_value = resp
+        assert ollama_client.generate("prompt") is None
