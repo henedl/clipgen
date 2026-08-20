@@ -3214,3 +3214,102 @@ def test_reinit_stops_previous_worker(tmp_path, monkeypatch):
     finally:
         if transcripts_server._worker is not None:
             transcripts_server._worker.stop(join_timeout=2.0)
+
+
+def test_marks_resolve_by_segment_id_not_index(tr_client):
+    """A mark follows its segment's stable id, never its list position.
+
+    The segment carrying id "P01:2" sits at index 0 here; positional
+    resolution would return the wrong row (or ship wrong times to Clip
+    Marked Lines), by-id resolution finds it regardless of position.
+    """
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [
+            {"id": "P01:2", "start": 20.0, "end": 21.0, "text": "late"},
+            {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "early"},
+        ],
+    }
+    transcripts_server._manifest["marks"] = [
+        {
+            "id": "m_1",
+            "segment_id": "P01:2",
+            "category": "friction",
+            "label": None,
+            "severity": None,
+            "created": "2026-01-01T00:00:00+00:00",
+        },
+        # In numeric range as an index (2 segments would cover idx 1), but no
+        # segment carries this id — must resolve invalid, not to index 1.
+        {
+            "id": "m_2",
+            "segment_id": "P01:1",
+            "category": "friction",
+            "label": None,
+            "severity": None,
+            "created": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    marks = tr_client.get("/transcripts/api/marks").get_json()["marks"]
+    by_id = {m["id"]: m for m in marks}
+    assert by_id["m_1"]["valid"] is True
+    assert by_id["m_1"]["text"] == "late"
+    assert by_id["m_1"]["start"] == 20.0
+    assert by_id["m_2"]["valid"] is False
+
+
+def test_retranscription_merge_drops_pre_run_marks(monkeypatch, tmp_path):
+    """Replacing a transcript invalidates marks made against the old one.
+
+    The fresh save mints the same "{pid}:{index}" ids again, so old marks
+    would silently re-point at new content. Marks created after the task
+    started (streaming-era marks on the new transcript) survive; other
+    participants' marks are untouched.
+    """
+    monkeypatch.setattr(
+        transcripts_server,
+        "_manifest",
+        {
+            "source_transcripts": {
+                "P01": {
+                    "segments": [
+                        {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "old"}
+                    ]
+                },
+            },
+            "corrections": [],
+            "marks": [
+                {
+                    "id": "m_old",
+                    "segment_id": "P01:0",
+                    "created": "2026-01-01T00:00:00+00:00",
+                },
+                {
+                    "id": "m_live",
+                    "segment_id": "P01:1",
+                    "created": "2026-03-01T12:00:00+00:00",
+                },
+                {
+                    "id": "m_other",
+                    "segment_id": "P02:0",
+                    "created": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(transcripts_server, "_merged_task_ids", set())
+    monkeypatch.setattr(transcripts_server, "_pending_chain_pids", [])
+    task = {
+        "id": "tr_rerun001",
+        "participant": "P01",
+        "status": transcripts.TASK_STATUS_COMPLETED,
+        "created_at": "2026-03-01T00:00:00+00:00",
+        "result": {"segments": [{"start": 0.0, "end": 2.0, "text": "new"}]},
+    }
+    monkeypatch.setattr(transcripts_server, "_worker", _CompletedTasksWorker([task]))
+
+    with transcripts_server._manifest_lock:
+        merged = transcripts_server._merge_completed_results_locked()
+
+    assert merged == ["P01"]
+    remaining = {m["id"] for m in transcripts_server._manifest["marks"]}
+    assert remaining == {"m_live", "m_other"}

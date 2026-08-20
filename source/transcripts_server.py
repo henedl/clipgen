@@ -1369,23 +1369,17 @@ def _resolve_mark(
             "text": "",
         }
     pid, idx_str = parts
-    try:
-        idx = int(idx_str)
-    except ValueError:
-        return {
-            **mark,
-            "valid": False,
-            "participant": pid,
-            "start": 0,
-            "end": 0,
-            "text": "",
-        }
 
-    # Try persisted transcript first
+    # Try the persisted transcript first, resolving by the segment's stable id
+    # — never by the numeric suffix. Ids are assigned once at save and never
+    # rewritten, so a mark keeps pointing at the same segment even when later
+    # segments are added or edited; indexing by position would silently
+    # re-point every mark after any change to the list.
     src = _manifest.get("source_transcripts", {})
     entry = src.get(pid, {})
     segments = entry.get("segments", [])
-    if 0 <= idx < len(segments):
+    idx = next((i for i, s in enumerate(segments) if s.get("id") == seg_id), None)
+    if idx is not None:
         corrections = _manifest.get("corrections", [])
         # Correct the whole participant list once (memoized by corrections
         # version) instead of recompiling the regex set per mark.
@@ -1400,11 +1394,17 @@ def _resolve_mark(
             "text": seg["text"],
         }
 
-    # Fall back to partial segments from a running transcription task
+    # Fall back to partial segments from a running transcription task. Partials
+    # carry no id fields (ids are minted at manifest save), so the streaming
+    # frontend derives "{pid}:{index}" positionally and the suffix is an index.
     if partial_lookup:
         partial_segs = partial_lookup.get(pid, [])
-        if 0 <= idx < len(partial_segs):
-            seg = partial_segs[idx]
+        try:
+            partial_idx = int(idx_str)
+        except ValueError:
+            partial_idx = -1
+        if 0 <= partial_idx < len(partial_segs):
+            seg = partial_segs[partial_idx]
             return {
                 **mark,
                 "valid": True,
@@ -2178,6 +2178,20 @@ def _merge_completed_results_locked() -> list[str]:
             pid = task["participant"]
             src = _manifest.setdefault("source_transcripts", {})
             existing = src.get(pid, {})
+            if existing.get("segments"):
+                # A re-transcription replaces the segment list wholesale, and
+                # the fresh save will mint the same "{pid}:{index}" ids again —
+                # so marks made against the old transcript would re-point at
+                # whatever now sits under the same id. Drop them, keeping only
+                # marks created after this run started (streaming-era marks on
+                # the new transcript).
+                task_started = task.get("created_at") or ""
+                _manifest["marks"] = [
+                    m
+                    for m in _manifest.get("marks", [])
+                    if (m.get("segment_id") or "").split(":", 1)[0] != pid
+                    or (m.get("created") or "") >= task_started
+                ]
             existing.update(task["result"])
             src[pid] = existing
             _merged_task_ids.add(task["id"])
