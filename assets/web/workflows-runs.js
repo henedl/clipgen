@@ -171,10 +171,16 @@
 
   function startRun(targetNodeId, resumeFromRunId) {
     if (!state.ready || !state.activeBlueprintId) return;
-    if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    if (activeRunInFlight() || activeBatchInFlight()) {
+      showToast("A run is already in flight");
+      return;
+    }
     // Errors gate the run (the button is already disabled; this guards the
     // programmatic path). Warnings never block.
-    if (state.validation && state.validation.errors.length) return;
+    if (state.validation && state.validation.errors.length) {
+      showToast("Fix the errors in the Issues panel to run");
+      return;
+    }
     // "All participants" makes Run fan out over the study, but a partial "run to
     // here" or a resume is always single (a resumed batch child keeps its
     // participant binding server-side).
@@ -249,7 +255,10 @@
   // Source is set to "All participants" or a subset.
   function startBatch() {
     if (!state.ready || !state.activeBlueprintId) return;
-    if (activeRunInFlight() || activeBatchInFlight()) return; // one at a time
+    if (activeRunInFlight() || activeBatchInFlight()) {
+      showToast("A run is already in flight");
+      return;
+    }
     setRunningUI(true);
     Promise.resolve(WF.flushSave ? WF.flushSave() : null)
       .then(function () {
@@ -919,7 +928,9 @@
     if (counts.cancelled) parts.push(counts.cancelled + " cancelled");
     var bstart = fmtStartTime(batch.createdAt);
     if (bstart) parts.push(bstart);
-    head.appendChild(el("span", "wf-run-meta", "All participants · " + parts.join(" · ")));
+    var pCount = (batch.participants || []).length || total;
+    var pLabel = pCount === 1 ? "1 participant" : pCount + " participants";
+    head.appendChild(el("span", "wf-run-meta", pLabel + " · " + parts.join(" · ")));
     card.appendChild(head);
 
     if (expanded) {

@@ -521,7 +521,7 @@ NODE_TYPES: dict[str, NodeType] = {
                 "name": "interval",
                 "type": "number",
                 "default": config.GALLERY_INTERVAL_SECONDS,
-                "min": 1,
+                "min": 0.2,
                 "label": "Interval (s)",
                 "required": True,
             },

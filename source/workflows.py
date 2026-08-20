@@ -182,7 +182,22 @@ def save_workflows_manifest(
 def _exec_video_source(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    participant = str(params.get("participant", "") or "")
+    # The canvas stores a multi-selection as a list (or the "__all__" sentinel),
+    # which the run panel routes to the batch endpoint where bind_participant
+    # rewrites it to a scalar. A direct run must not stringify the list into a
+    # participant id that resolves zero videos and "completes" empty.
+    raw = params.get("participant", "")
+    if isinstance(raw, list):
+        if len(raw) > 1:
+            raise RuntimeError(
+                "Video Source has several participants selected — use Run to fan out as a batch"
+            )
+        raw = raw[0] if raw else ""
+    participant = str(raw or "")
+    if participant == "__all__":
+        raise RuntimeError(
+            "Video Source is set to all participants — use Run to fan out as a batch"
+        )
     video_paths = ctx.resolve_videos(participant) if participant else []
     return {
         "video": _source_descriptor(participant, video_paths),
@@ -892,11 +907,11 @@ def _exec_interval_captures(
     if not paths:
         return {**empty, "__note__": "No video wired"}
 
-    interval = int(
-        float(params.get("interval", config.GALLERY_INTERVAL_SECONDS) or 0)
+    interval = float(
+        params.get("interval", config.GALLERY_INTERVAL_SECONDS)
         or config.GALLERY_INTERVAL_SECONDS
     )
-    interval = max(interval, 1)
+    interval = max(interval, 0.2)
     fmt = (
         "gif" if str(params.get("output_format", "screen") or "") == "gif" else "screen"
     )

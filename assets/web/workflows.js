@@ -174,6 +174,8 @@
   function paletteNodeMatches(node, query) {
     if (!query) return true;
     var hay = (
+      (node.id || "") +
+      " " +
       (node.label || "") +
       " " +
       (node.description || "") +

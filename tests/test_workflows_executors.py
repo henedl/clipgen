@@ -93,6 +93,32 @@ def test_video_source_resolves_participant(tmp_path, monkeypatch):
     assert out["video"]["video_paths"] == ["/v/study_P01.mp4"]
 
 
+def test_video_source_coerces_single_element_list(tmp_path, monkeypatch):
+    # The canvas multi-select stores a list; a one-element list is a plain
+    # single-participant run and must not stringify to "['P01']".
+    monkeypatch.setattr(
+        workflows.utils,
+        "discover_participant_videos",
+        lambda *a, **k: [
+            {"id": "P01", "video_paths": ["/v/study_P01.mp4"], "has_video": True}
+        ],
+    )
+    out = _run("video_source", _ctx(tmp_path), {}, {"participant": ["P01"]})
+    assert out["participant"] == "P01"
+    assert out["video"]["video_paths"] == ["/v/study_P01.mp4"]
+
+
+def test_video_source_rejects_multi_selection_on_direct_run(tmp_path):
+    # A multi-selection (or the __all__ sentinel) only makes sense as a batch;
+    # a direct run must fail loudly instead of resolving zero videos.
+    import pytest
+
+    with pytest.raises(RuntimeError, match="batch"):
+        _run("video_source", _ctx(tmp_path), {}, {"participant": ["P01", "P02"]})
+    with pytest.raises(RuntimeError, match="batch"):
+        _run("video_source", _ctx(tmp_path), {}, {"participant": "__all__"})
+
+
 # ---- Transcript ----
 
 
@@ -431,6 +457,33 @@ def test_interval_captures_whole_video_uses_duration(tmp_path, monkeypatch):
     # No timeRange wired → sample the whole video: duration 25, interval 10 → 0,10,20.
     _run("interval_captures", _ctx(tmp_path), {"video": src}, {"interval": 10})
     assert seen["n"] == 3
+
+
+def test_interval_captures_keeps_fractional_interval(tmp_path, monkeypatch):
+    # The interval is seconds as a float; 0.5 must sample every half second,
+    # not silently truncate to 1 s.
+    import pipeline
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(
+        pipeline,
+        "process_clips",
+        lambda records, **kw: seen.__setitem__("n", len(records)) or (len(records), []),
+    )
+    src = {
+        "participant": "P01",
+        "study": "s",
+        "source_filename": "s_P01.mp4",
+        "video_paths": ["s_P01.mp4"],
+    }
+    tr = {"ranges": [(0.0, 2.0)], "source": src}
+    _run(
+        "interval_captures",
+        _ctx(tmp_path),
+        {"video": src, "timeRange": tr},
+        {"interval": 0.5, "output_format": "screen"},
+    )
+    assert seen["n"] == 4  # 0, 0.5, 1.0, 1.5
 
 
 def test_build_reel_honors_name_param(tmp_path, monkeypatch):

@@ -94,7 +94,11 @@
   function buildDetectEditor(node) {
     if (!node.params) node.params = {};
     var types = detectTypes();
-    if (!node.params.detector) node.params.detector = types[0] || "text";
+    var seeded = false;
+    if (!node.params.detector) {
+      node.params.detector = types[0] || "text";
+      seeded = true;
+    }
     var wrap = el("div", "wf-node-params");
 
     var row = el("div", "wf-param");
@@ -111,14 +115,21 @@
     function renderBody() {
       body.innerHTML = "";
       stepParamSpecs(node.params.detector).forEach(function (ps) {
-        // Seed the spec default so number fields show a value (and persist on the
-        // next save); the server also defaults missing params defensively.
-        if (node.params[ps.name] === undefined) node.params[ps.name] = ps.default;
+        // Seed the spec default so number fields show a value; anything seeded
+        // must also be saved, or the values exist only until the next reload.
+        if (node.params[ps.name] === undefined) {
+          node.params[ps.name] = ps.default;
+          seeded = true;
+        }
         var prow = el("div", "wf-param");
         prow.appendChild(el("label", "wf-param-label", ps.label || ps.name));
         prow.appendChild(buildParamControl(node, ps));
         body.appendChild(prow);
       });
+      if (seeded) {
+        seeded = false;
+        WF.scheduleSave();
+      }
     }
     sel.addEventListener("change", function () {
       node.params.detector = sel.value;

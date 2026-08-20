@@ -72,6 +72,20 @@
     var errors = [];
     var warnings = [];
 
+    // error — a node whose type is no longer in the catalog (removed/renamed,
+    // or imported from a different build) can never execute. Without this the
+    // fallback spec above validates clean and the graph fails only at run time.
+    if (!state.catalogById[node.type]) {
+      errors.push("Unknown node type “" + node.type + "”");
+    }
+    // error — multitool chains detectors per frame; fewer than two steps has
+    // nothing to chain and the executor bails to empty events.
+    if (node.type === "multitool") {
+      var mtSteps = (node.params || {}).steps;
+      if (!Array.isArray(mtSteps) || mtSteps.length < 2) {
+        errors.push("Add at least 2 steps");
+      }
+    }
     // error — launch context can't satisfy `requires` (sheet/videoDir).
     if (WF.nodeContextMet && !WF.nodeContextMet(type)) {
       errors.push("Requires " + ((type.requires || []).join(", ") || "context"));
@@ -173,8 +187,9 @@
 
   // Kahn cycle check, ported from workflows.topo_order. Control edges are real
   // dependencies, so they count; edges to unknown nodes are ignored (a stale wire
-  // never blocks). Returns true iff the graph contains a cycle.
-  function graphHasCycle() {
+  // never blocks). Returns the ids of the nodes Kahn couldn't place — the cycle
+  // members plus anything locked behind them — empty when the graph is acyclic.
+  function cycleNodeIds() {
     var nodes = state.nodes || [];
     var ids = {};
     nodes.forEach(function (n) {
@@ -196,16 +211,26 @@
     nodes.forEach(function (n) {
       if (indeg[n.id] === 0) ready.push(n.id);
     });
-    var seen = 0;
+    var placed = {};
     while (ready.length) {
       var nid = ready.shift();
-      seen += 1;
+      placed[nid] = true;
       adj[nid].forEach(function (nxt) {
         indeg[nxt] -= 1;
         if (indeg[nxt] === 0) ready.push(nxt);
       });
     }
-    return seen !== nodes.length;
+    return nodes
+      .filter(function (n) {
+        return !placed[n.id];
+      })
+      .map(function (n) {
+        return n.id;
+      });
+  }
+
+  function graphHasCycle() {
+    return cycleNodeIds().length > 0;
   }
 
   // ---- Dry-run preview (what would execute) ----
@@ -326,8 +351,19 @@
     var errors = [];
     var warnings = [];
     // Graph-level: a cycle makes the run unschedulable (Kahn never drains).
-    if (graphHasCycle()) {
-      errors.push({ message: "Graph has a cycle", nodeId: null });
+    // Name the unplaced nodes and anchor the row on the first so it's clickable.
+    var cyc = cycleNodeIds();
+    if (cyc.length) {
+      var cycLabels = cyc.slice(0, 3).map(function (id) {
+        var n = WF.findNode ? WF.findNode(id) : null;
+        return n ? nodeLabel(n) : id;
+      });
+      if (cyc.length > 3) cycLabels.push("+" + (cyc.length - 3) + " more");
+      errors.push({
+        message: "Graph has a cycle",
+        nodeId: cyc[0],
+        label: cycLabels.join(", "),
+      });
     }
     (state.nodes || []).forEach(function (node) {
       var issues = nodeIssues(node);
