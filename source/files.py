@@ -132,10 +132,11 @@ def get_source_video_filenames(
       cell like ``"morning.mp4 + afternoon.mp4"`` yields two files in order. Each
       part follows the same default-extension rule (:func:`_apply_default_extension`).
       Empty parts are dropped. Order is authoritative (concatenation order).
-    - Without an override: returns the single plain name
-      ``{study}_{participant}.mp4``. On-disk numbered-suffix auto-detection
-      (``study_P01-1.mp4`` ...) is resolved later by the pipeline against the
-      input directory via :func:`discover_numbered_source_videos`.
+    - Without an override: returns the single plain name built from
+      ``config.SOURCE_FILENAME_PATTERN`` (default ``{study}_{participant}.mp4``).
+      On-disk numbered-suffix auto-detection (``study_P01-1.mp4`` ...) is
+      resolved later by the pipeline against the input directory via
+      :func:`discover_numbered_source_videos`.
 
     Always returns at least one entry.
     """
@@ -146,7 +147,7 @@ def get_source_video_filenames(
         names = [_apply_default_extension(p) for p in parts if p]
         if names:
             return names
-    return [f"{study}_{participant}{config.FILEFORMAT}"]
+    return [utils.format_source_video_stem(study, participant) + config.FILEFORMAT]
 
 
 def resolve_source_video_paths(
@@ -160,7 +161,8 @@ def resolve_source_video_paths(
 
     - *override* present (the spreadsheet ``Filename`` row) → its plus-separated
       parts, resolved in order.
-    - else the plain ``{study}_{participant}.mp4`` when it exists on disk.
+    - else the plain patterned name (``config.SOURCE_FILENAME_PATTERN``, default
+      ``{study}_{participant}.mp4``) when it exists on disk.
     - else on-disk numbered parts (``study_P01-1.mp4`` ...) when any exist.
     - else the (missing) plain path, so callers can report it via ``is_file()``.
 
@@ -188,22 +190,22 @@ def discover_numbered_source_videos(
 ) -> list[Path]:
     """Return numbered source-video parts for a participant, ordered by part number.
 
-    Globs *input_dir* for ``{study}_{participant}-N{FILEFORMAT}`` files and sorts
-    them by the integer N (so ``-2`` precedes ``-10``). Used only when no
-    spreadsheet override is set and the plain ``{study}_{participant}{FILEFORMAT}``
-    file is absent. Returns [] when no numbered parts exist.
+    Globs *input_dir* for the patterned stem plus a ``-N`` suffix
+    (``config.SOURCE_FILENAME_PATTERN``, e.g. ``study_P01-1.mp4``) and sorts
+    the hits by the integer N (so ``-2`` precedes ``-10``). Used only when no
+    spreadsheet override is set and the plain patterned file is absent.
+    Returns [] when no numbered parts exist.
 
     The parts must form a gapless ``1..N`` sequence: concatenating non-contiguous
     parts back-to-back would map global timestamps into the wrong sub-video. When
     a gap is found, a warning is emitted and [] is returned (treated as no valid
     multi-part sequence) rather than building a silently-wrong timeline.
     """
-    prefix = f"{study}_{participant}"
+    prefix = utils.format_source_video_stem(study, participant)
+    suffix_re = re.compile(rf"-(\d+){re.escape(config.FILEFORMAT)}$", re.IGNORECASE)
     matches: list[tuple[int, Path]] = []
     for p in input_dir.glob(f"{prefix}-*{config.FILEFORMAT}"):
-        m = re.search(
-            config.NUMBERED_SOURCE_VIDEO_SUFFIX_PATTERN, p.name, re.IGNORECASE
-        )
+        m = suffix_re.search(p.name)
         if m:
             matches.append((int(m.group(1)), p))
     matches.sort(key=lambda item: item[0])
@@ -633,16 +635,17 @@ def build_clip_records(
 def discover_clips() -> list[str]:
     """Find generated clips in the effective output directory.
 
-    Scans for .mp4 files and excludes source videos (those matching the
-    pattern study_P01.mp4, study_G02.mp4, etc.).
+    Scans for FILEFORMAT files and excludes source videos — anything matching
+    the configured ``SOURCE_FILENAME_PATTERN`` (study_P01.mp4, study_G02-2.mp4,
+    etc.), via :func:`utils.compile_source_video_regex`.
 
     Returns:
         Sorted list of clip filenames (relative to the output directory)
     """
     base_dir = utils.get_effective_output_dir()
+    source_re = utils.compile_source_video_regex()
     return sorted(
         p.name
         for p in base_dir.iterdir()
-        if p.name.endswith(config.FILEFORMAT)
-        and not re.search(config.SOURCE_VIDEO_PATTERN, p.name, re.IGNORECASE)
+        if p.name.endswith(config.FILEFORMAT) and not source_re.fullmatch(p.name)
     )

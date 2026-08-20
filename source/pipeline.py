@@ -231,9 +231,10 @@ def _check_source_video(
 
     Resolution order:
     - Override present → resolve each plus-separated part; any missing → skip clip.
-    - No override → the plain ``{study}_{participant}.mp4`` wins when present
-      (single video). Only when it is absent do we auto-detect numbered parts;
-      if none exist, fall back to the fuzzy-match prompt on the plain name.
+    - No override → the plain patterned name (``config.SOURCE_FILENAME_PATTERN``,
+      default ``{study}_{participant}.mp4``) wins when present (single video).
+      Only when it is absent do we auto-detect numbered parts; if none exist,
+      fall back to the fuzzy-match prompt on the plain name.
 
     When 2+ videos resolve, the duration timeline is built and stored on
     ``clip['source_timeline']`` so the cut/artifact stages can map global

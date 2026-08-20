@@ -2697,10 +2697,8 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
     last_study = ""
     for idx, cluster in enumerate(clusters):
         source_video = cluster.get("source_video") or ""
-        if source_video:
-            study = utils.split_source_stem(source_video)[0]
-        else:
-            study = ""
+        parsed = utils.parse_source_video_name(source_video) if source_video else None
+        study = parsed[0] if parsed else ""
         participant = cluster.get("participant") or ""
         detector = cluster.get("detector") or ""
         region = cluster.get("region") or ""
@@ -2785,9 +2783,8 @@ def _run_transcript_clips(args: argparse.Namespace) -> None:
     last_study = ""
     for idx, cluster in enumerate(clusters):
         source_video = cluster.get("source_video") or ""
-        study = ""
-        if source_video:
-            study = utils.split_source_stem(source_video)[0]
+        parsed = utils.parse_source_video_name(source_video) if source_video else None
+        study = parsed[0] if parsed else ""
         participant = cluster.get("participant") or ""
         text = cluster.get("text") or ""
         desc = _truncate_for_filename(text) if text else "transcript"
