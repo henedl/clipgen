@@ -50,6 +50,21 @@
     return keyStem + "|" + start.toFixed(2) + "|" + end.toFixed(2);
   }
 
+  // The server samples a span from the part that owns its START, clamped to
+  // that part's tail (_resolve_scrub_source) — mirror the clamp here so the
+  // client never maps frames or audio onto footage the server didn't render.
+  function partTailFor(start, fallbackEnd) {
+    var parts = state.parts || [];
+    for (var i = 0; i < parts.length; i++) {
+      var off = parts[i].offset || 0;
+      if (typeof parts[i].duration === "number" &&
+          start >= off && start < off + parts[i].duration) {
+        return off + parts[i].duration;
+      }
+    }
+    return fallbackEnd;
+  }
+
   function mediaUrl(kind, start, end) {
     return "api/" + kind + "/" + encodeURIComponent(state.participant) +
       "?start=" + start + "&end=" + end;
@@ -221,9 +236,14 @@
     ctx.beginPath();
     ctx.rect(x, y, w, h);
     ctx.clip();
+    // Cap each tile at the owning part's tail: the server truncates the
+    // sprite's content there, so an uncapped tile span would spread the
+    // truncated frames across the full tile and drift every frame after the
+    // part boundary. The stretch past the boundary stays a flat bar.
+    var spanCap = partTailFor(start, end);
     for (var n = n0; n <= n1; n++) {
       var tileStart = start + n * tileSpan;
-      var tileEnd = Math.min(tileStart + tileSpan, end);
+      var tileEnd = Math.min(tileStart + tileSpan, end, spanCap);
       if (tileEnd <= tileStart) continue;
       var key = barKey + n;
       var entry = _sprites[key];
@@ -260,6 +280,13 @@
     if (end - start > CLIPGEN_CONFIG.composerScrubMaxAudioSeconds) {
       // The server caps the WAV at this length; scrubbing a longer span would
       // misalign hover fraction ↔ audio time, so skip it entirely.
+      scrubHoverEnd();
+      return;
+    }
+    if (partTailFor(start, end) < end - 0.05) {
+      // Boundary-straddling span: the server samples only the owning part's
+      // tail, so audio past the boundary doesn't exist — and a full-width
+      // waveform would claim it does. Thumbnails clamp instead (drawTile).
       scrubHoverEnd();
       return;
     }
@@ -318,6 +345,10 @@
       _fetchTimer = 0;
     }
     scrubHoverEnd();
+    // The decoded-audio + waveform caches live in card-scrubber and are keyed
+    // by span, not participant — purge them or the old video's audio survives
+    // the switch until LRU pressure evicts it.
+    if (window.clipgenCardScrubber) window.clipgenCardScrubber.purgeAudio();
     if (_waveHost) _waveHost.innerHTML = ""; // drop the size-cached canvas
   }
 
@@ -369,6 +400,13 @@
     }
     syncScrubToggles();
   }
+
+  window.addEventListener("pagehide", function () {
+    if (_fetchTimer) {
+      clearTimeout(_fetchTimer);
+      _fetchTimer = 0;
+    }
+  });
 
   CO.initMarkerScrub = initMarkerScrub;
   CO.syncScrubToggles = syncScrubToggles;

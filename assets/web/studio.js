@@ -89,7 +89,6 @@
     trIntakeHoveredIdx: -1,
     trIntakeTooltipsEnabled: true,
     coIntakeItems: [],
-    coTrims: {},
     coTrimCardKeys: {},
     coIntakeFilterParticipants: [],
     coIntakeFilterTypes: [],

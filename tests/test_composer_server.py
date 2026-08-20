@@ -91,6 +91,19 @@ def test_participants_reports_parts_and_total(co_client):
     assert body["has_sheet"] is False
 
 
+def test_participants_fallback_parts_carry_offset(co_client, monkeypatch):
+    """Unprobeable videos still serve offset-complete part entries.
+
+    The client computes global time as ``currentTime + part.offset`` on every
+    timeupdate; a fallback entry without the field turned the playhead NaN.
+    """
+    monkeypatch.setattr(video, "get_file_duration", lambda path: None)
+    body = co_client.get("/composer/api/participants").get_json()
+    (p,) = body["participants"]
+    assert p["total_duration"] is None
+    assert [part["offset"] for part in p["parts"]] == [0, 0]
+
+
 def test_participants_prewarms_probes_before_the_loop(co_client, monkeypatch):
     """Every part is probed in one batch, not one ffprobe per participant.
 
@@ -212,6 +225,22 @@ def test_cut_patch_clamps_to_duration(co_client):
         f"/composer/api/cuts/{cut['id']}", json={"end": 999.0}
     ).get_json()
     assert patched["cut"]["end"] == 20  # stitched duration caps the out point
+
+
+def test_cut_patch_start_zero_survives(co_client):
+    """``start: 0`` must read as a value, not a missing field.
+
+    The guard is ``data.get("start") is not None`` — an ``if data.get("start")``
+    regression would silently keep the old start on a snap-to-zero PATCH.
+    """
+    cut = co_client.post(
+        "/composer/api/cuts", json={"participant": "P01", "start": 2.0, "end": 5.0}
+    ).get_json()["cut"]
+    patched = co_client.patch(
+        f"/composer/api/cuts/{cut['id']}", json={"start": 0}
+    ).get_json()
+    assert patched["cut"]["start"] == 0.0
+    assert patched["cut"]["end"] == 5.0
 
 
 def test_cut_patch_unknown_id_404(co_client):
@@ -881,6 +910,28 @@ def test_annotated_burn_rejects_a_span_that_only_grazes_an_annotation(
     assert "visible for long enough" in resp["error"]
 
 
+def test_annotated_export_rejects_out_of_range_span(co_client, monkeypatch):
+    """A multi-part span past the recording errs cleanly, never encodes.
+
+    ``map_global_range_to_segments`` signals an out-of-range start with None
+    (never ``[]``); conflating that with the single-part fast path sent the
+    span down the parts-based branch and into a doomed ffmpeg run.
+    """
+    _make_annotation(co_client, span={"start": 24.0, "end": 30.0})
+
+    def _no_ffmpeg(*_a, **_kw):
+        raise AssertionError("ffmpeg must not run for an out-of-range span")
+
+    monkeypatch.setattr(composer_server.video, "run_ffmpeg_process", _no_ffmpeg)
+
+    resp = co_client.post(
+        "/composer/api/export/burn",
+        json={"participant": "P01", "start": 25.0, "end": 30.0},
+    )
+    assert resp.status_code == 400
+    assert "outside the recording" in resp.get_json()["error"]
+
+
 def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
     # _export_cancel is a single shared Event; the busy lock enforces the
     # one-export-at-a-time assumption it relies on. Without it a second
@@ -897,6 +948,40 @@ def test_ffmpeg_exports_rejected_while_another_export_runs(co_client):
             assert resp.get_json()["ok"] is False
     finally:
         composer_server._export_busy.release()
+
+
+def test_export_cancel_sets_the_shared_event(co_client):
+    composer_server._export_cancel.clear()
+    resp = co_client.post("/composer/api/export/cancel").get_json()
+    assert resp["ok"] is True
+    assert composer_server._export_cancel.is_set()
+    composer_server._export_cancel.clear()
+
+
+def test_remux_routes_registered_on_composer(co_app):
+    """The shared remux routes ride on the composer blueprint itself.
+
+    tests/test_container_seekability.py exercises the route bodies against a
+    throwaway blueprint; this pins the composer registration.
+    """
+    rules = {r.rule for r in co_app.url_map.iter_rules()}
+    assert "/composer/api/remux/status" in rules
+    assert "/composer/api/remux/<pid>" in rules
+
+
+def test_repin_sheet_state_repoints_context(monkeypatch):
+    """Worksheet swaps go through repin_sheet_state, not a re-init.
+
+    The remux registration hands the blueprint ``lambda: _sheet_context``, so
+    this repoint is what keeps remux (and participant resolution) on the newly
+    opened sheet.
+    """
+    monkeypatch.setattr(composer_server, "_sheet_context", None)
+    sentinel = object()
+    composer_server.repin_sheet_state(sentinel)
+    assert composer_server._sheet_context is sentinel
+    composer_server.repin_sheet_state(None)
+    assert composer_server._sheet_context is None
 
 
 def test_combined_app_registers_composer(tmp_path, monkeypatch):

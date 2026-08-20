@@ -79,6 +79,12 @@
         return;
       }
       var baselineOffset = baselines[pid] || 0;
+      // NOTE: `off` (the Convergence sheet-lane offset) is applied here but
+      // NOT by Studio's own sheet grid — with a non-zero offset the same
+      // observation queues at different spans from there vs. from a Composer
+      // trim card. Deliberate: these lanes must line up with the video the
+      // way the Convergence Browser does, and any trim saved here bakes the
+      // offset in (trims are video-global seconds).
       var markers = [];
       sheet.rows.forEach(function (row) {
         var cell = row.cells && row.cells[pid];
@@ -126,7 +132,13 @@
           var type = cl.event_type || cl.detector || "";
           return {
             // Keyed on the cluster's earliest event so trims survive reloads
-            // while the event set is stable (clusterIntakeEvents sorts by time).
+            // while the event set is stable (clusterIntakeEvents sorts by
+            // time). KNOWN TRADEOFF: a re-scan or un-exclude that adds an
+            // earlier event to the burst changes events[0] and orphans the
+            // trim — it stays in the manifest (and as a card in Studio's
+            // Composer Intake) but no longer applies here. There is no stable
+            // cluster identity to key on instead; deleting the orphan via
+            // Studio's card is the recovery path.
             key: "screenspace:" + cl.events[0].id,
             source: "screenspace",
             start: cl.start + off,
@@ -157,6 +169,9 @@
           if (!marks.length) return;
           marks.forEach(function (mark) {
             markers.push({
+              // The pid:seg fallback is defensive only — every mark the
+              // transcripts server writes has an id, and Studio's intake
+              // badge lookup (trimBadgeKey) only matches id-based keys.
               key: "transcript-mark:" + (mark.id || pid + ":" + seg.id),
               source: "transcript",
               start: seg.start + off,
