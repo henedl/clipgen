@@ -46,6 +46,35 @@ def test_build_ffmpeg_cut_command_includes_expected_flags():
     assert "out.mp4" in cmd_reencode
 
 
+def test_build_normalize_audio_command_shape():
+    cmd = video.build_normalize_audio_command(
+        "in.mp4", "tmp.out", audio_indices=[1], muxer="mp4", sample_rate=44100
+    )
+    assert cmd[:2] == ["ffmpeg", "-y"]
+    # Every stream rides along; only the selected track is re-encoded.
+    assert "-map" in cmd and "0" == cmd[cmd.index("-map") + 1]
+    assert "-c" in cmd and "copy" == cmd[cmd.index("-c") + 1]
+    assert cmd[cmd.index("-c:a:1") + 1] == "aac"
+    assert cmd[cmd.index("-b:a:1") + 1] == f"{config.AUDIO_BITRATE_KBPS}k"
+    assert cmd[cmd.index("-filter:a:1") + 1] == video.LOUDNORM_FILTER
+    # loudnorm resamples to 192 kHz internally; the pin keeps AAC off 96 kHz.
+    assert cmd[cmd.index("-ar:a:1") + 1] == "44100"
+    assert "-c:a:0" not in cmd
+    assert "+faststart" in cmd
+    assert cmd[cmd.index("-f") + 1] == "mp4"
+    assert cmd[-1] == "tmp.out"
+
+
+def test_build_normalize_audio_command_matroska_has_no_faststart():
+    cmd = video.build_normalize_audio_command(
+        "in.mkv", "tmp.out", audio_indices=[0, 1], muxer="matroska", sample_rate=48000
+    )
+    assert "-movflags" not in cmd
+    assert cmd[cmd.index("-f") + 1] == "matroska"
+    assert cmd[cmd.index("-c:a:0") + 1] == "aac"
+    assert cmd[cmd.index("-c:a:1") + 1] == "aac"
+
+
 def test_concatenate_clips_reencode_fallback(monkeypatch):
     monkeypatch.setattr(video.Path, "is_file", lambda self: True)
     monkeypatch.setattr(video, "verify_output_file", lambda *_args, **_kwargs: True)

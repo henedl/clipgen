@@ -1241,6 +1241,456 @@ def test_embed_subtitles_cancel_route_sets_the_event(tr_client):
     transcripts_server._embed_cancel_event.clear()
 
 
+# ---- Normalize audio ----
+
+
+def _audio_props(track_count: int) -> dict:
+    """A probe_video_properties stub with *track_count* generic audio tracks."""
+    return {
+        "audio_track_count": track_count,
+        "audio_tracks": [
+            {"index": i, "codec": "aac", "channels": 2, "label": f"Track {i + 1}"}
+            for i in range(track_count)
+        ],
+    }
+
+
+def _capturing_normalize(captured: dict, results=None):
+    """A normalize_audio_inplace stub recording (path, indices) per call.
+
+    *results* maps a path's basename to a (ok, message) tuple; unlisted paths
+    succeed.
+    """
+    captured["calls"] = []
+
+    def stub(path, indices, **_kwargs):
+        captured["calls"].append((path, indices))
+        outcome = (results or {}).get(Path(path).name)
+        return outcome if outcome else (True, "Audio normalized.")
+
+    return stub
+
+
+def test_normalize_audio_happy_path_auto_track(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(2)
+    )
+    monkeypatch.setattr(
+        transcripts_server.video, "pick_speech_audio_track", lambda _tracks: 1
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/x-ndjson"
+    header, result, done = _ndjson(resp)
+    assert header == {"total": 1}
+    assert done == {"done": True}
+    assert result["index"] == 0
+    assert result["participant"] == "P01"
+    assert result["ok"] is True
+    assert result["parts"] == 1
+    # The default "auto" spec resolves through the speech-track heuristic.
+    assert captured["calls"] == [(str(video_path), [1])]
+
+
+def test_normalize_audio_all_tracks(tr_client, tmp_path, monkeypatch):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(3)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": "all"},
+    )
+    assert resp.status_code == 200
+    _ndjson(resp)
+    assert captured["calls"] == [(str(video_path), [0, 1, 2])]
+
+
+def test_normalize_audio_explicit_list_is_intersected_per_file(
+    tr_client, tmp_path, monkeypatch
+):
+    """Out-of-range indices are dropped, not fatal: on a multi-part participant
+    part 2 may legitimately have fewer tracks than the part the dialog probed."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(2)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": [0, 5]},
+    )
+    assert resp.status_code == 200
+    _ndjson(resp)
+    assert captured["calls"] == [(str(video_path), [0])]
+
+
+def test_normalize_audio_explicit_list_with_no_match_is_a_failure_line(
+    tr_client, tmp_path, monkeypatch
+):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(2)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": [5]},
+    )
+    assert resp.status_code == 200
+    _, result, done = _ndjson(resp)
+    assert done == {"done": True}
+    assert result["ok"] is False
+    assert "None of the selected tracks" in result["error"]
+    assert captured["calls"] == []
+
+
+def test_normalize_audio_single_track_file_overrides_the_spec(
+    tr_client, tmp_path, monkeypatch
+):
+    """A single-track file always normalizes track 0 — there is nothing to
+    choose, so even an explicit index list must not fail it."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": [1]},
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert result["ok"] is True
+    assert captured["calls"] == [(str(video_path), [0])]
+
+
+def test_normalize_audio_multi_part_normalizes_every_part(
+    tr_client, tmp_path, monkeypatch
+):
+    """Unlike subtitle muxing, parts are independent files — each is rewritten,
+    and the participant still gets exactly one aggregate NDJSON line."""
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    lines = _ndjson(resp)
+    assert [c[0] for c in captured["calls"]] == [str(p1), str(p2)]
+    results = [ln for ln in lines if "participant" in ln]
+    assert len(results) == 1
+    assert results[0]["ok"] is True
+    assert results[0]["parts"] == 2
+
+
+def test_normalize_audio_partial_part_failure_names_the_part(
+    tr_client, tmp_path, monkeypatch
+):
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured, results={p2.name: (False, "ffmpeg failed")}),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    # Both parts were attempted; the aggregate line names only the failed one.
+    assert len(captured["calls"]) == 2
+    assert result["ok"] is False
+    assert p2.name in result["error"]
+    assert p1.name not in result["error"]
+    # Part 1 was swapped on disk despite the participant-level failure — the
+    # client's post-run reload keys on this count, not on ok.
+    assert result["parts_done"] == 1
+
+
+def test_normalize_audio_retry_skips_parts_with_kept_originals(
+    tr_client, tmp_path, monkeypatch
+):
+    """A retry of a half-finished multi-part participant must finish the
+    remaining parts, not collect a 'still kept' refusal for the ones that
+    already succeeded (which would read as a failure forever)."""
+    p1 = tmp_path / "study_P01.mp4"
+    p2 = tmp_path / "study_P01 2.mp4"
+    p1.write_bytes(b"\x00")
+    p2.write_bytes(b"\x00")
+    # Part 1 already rewritten by the failed run: its backup slot is occupied.
+    Path(str(p1) + ".orig").write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(p1), str(p2)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert [c[0] for c in captured["calls"]] == [str(p2)]
+    assert result["ok"] is True
+    assert result["parts_done"] == 1
+    assert "already-rewritten" in result["message"]
+
+
+def test_normalize_audio_fully_kept_participant_is_a_clean_noop(
+    tr_client, tmp_path, monkeypatch
+):
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    Path(str(video_path) + ".orig").write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    _, result, _done = _ndjson(resp)
+    assert captured["calls"] == []
+    assert result["ok"] is True
+    assert result["parts_done"] == 0
+    assert "Already rewritten" in result["message"]
+
+
+def test_normalize_audio_400_without_participants(tr_client):
+    resp = tr_client.post("/transcripts/api/normalize-audio", json={"participants": []})
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+@pytest.mark.parametrize("bad_tracks", ["bogus", [1.5], [True], [], {"a": 1}])
+def test_normalize_audio_400_on_malformed_tracks(tr_client, bad_tracks):
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio",
+        json={"participants": ["P01"], "tracks": bad_tracks},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["ok"] is False
+
+
+def test_normalize_audio_missing_video_is_a_failure_line(
+    tr_client, tmp_path, monkeypatch
+):
+    """An unknown participant is an ok=false line, not a failed request — one
+    bad id must not sink the rest of the batch."""
+    video_path = tmp_path / "study_P01.mp4"
+    video_path.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(video_path)], "has_video": True}
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        transcripts_server.video,
+        "normalize_audio_inplace",
+        _capturing_normalize(captured),
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P99", "P01"]}
+    )
+    assert resp.status_code == 200
+    lines = _ndjson(resp)
+    assert lines[1]["participant"] == "P99"
+    assert lines[1]["ok"] is False
+    assert lines[1]["error"] == "Source video not found"
+    assert lines[2]["participant"] == "P01"
+    assert lines[2]["ok"] is True
+
+
+def test_normalize_audio_cancel_stops_before_the_next_participant(
+    tr_client, tmp_path, monkeypatch
+):
+    v1 = tmp_path / "study_P01.mp4"
+    v2 = tmp_path / "study_P02.mp4"
+    v1.write_bytes(b"\x00")
+    v2.write_bytes(b"\x00")
+    transcripts_server._participants = [
+        {"id": "P01", "video_paths": [str(v1)], "has_video": True},
+        {"id": "P02", "video_paths": [str(v2)], "has_video": True},
+    ]
+    monkeypatch.setattr(
+        transcripts_server.video, "probe_video_properties", lambda _p: _audio_props(1)
+    )
+
+    def cancelling_normalize(path, indices, **_kwargs):
+        # Stand in for the user hitting Stop while the first file rewrites.
+        transcripts_server._normalize_cancel_event.set()
+        return True, "Audio normalized."
+
+    monkeypatch.setattr(
+        transcripts_server.video, "normalize_audio_inplace", cancelling_normalize
+    )
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01", "P02"]}
+    )
+    lines = _ndjson(resp)
+    assert lines[0]["total"] == 2
+    assert lines[1]["participant"] == "P01"
+    assert lines[-2] == {"cancelled": True}
+    assert lines[-1] == {"done": True}
+    assert not any(ln.get("participant") == "P02" for ln in lines)
+    # The slot is released even on the cancel path, so the next run can claim it.
+    assert transcripts_server._normalize_busy is False
+
+
+def test_normalize_audio_409_while_a_run_holds_the_slot(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_normalize_busy", True)
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["ok"] is False
+
+
+def test_normalize_slot_is_freed_when_the_stream_is_never_consumed(
+    tr_client, monkeypatch
+):
+    monkeypatch.setattr(transcripts_server, "_normalize_busy", False)
+    monkeypatch.setattr(transcripts_server, "_normalize_owner", None)
+
+    resp = tr_client.post(
+        "/transcripts/api/normalize-audio", json={"participants": ["P01"]}
+    )
+    assert resp.status_code == 200
+    # Tear the response down without ever pulling a line from the body.
+    resp.close()
+
+    assert transcripts_server._normalize_busy is False
+    assert transcripts_server._normalize_owner is None
+
+
+def test_normalize_slot_release_is_scoped_to_its_own_run(monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_normalize_busy", False)
+    monkeypatch.setattr(transcripts_server, "_normalize_owner", None)
+
+    first = transcripts_server._claim_normalize_slot()
+    assert first is not None
+    transcripts_server._release_normalize_slot(first)
+
+    second = transcripts_server._claim_normalize_slot()
+    assert second is not None and second != first
+
+    # The first run's straggler release must not free the second run's slot.
+    transcripts_server._release_normalize_slot(first)
+    assert transcripts_server._normalize_busy is True
+    assert transcripts_server._claim_normalize_slot() is None
+
+    transcripts_server._release_normalize_slot(second)
+    assert transcripts_server._normalize_busy is False
+
+
+def test_normalize_audio_cancel_route_sets_the_event(tr_client):
+    transcripts_server._normalize_cancel_event.clear()
+    resp = tr_client.post("/transcripts/api/normalize-audio/cancel")
+    assert resp.status_code == 200
+    assert transcripts_server._normalize_cancel_event.is_set()
+    transcripts_server._normalize_cancel_event.clear()
+
+
 # ---- Friction endpoints ----
 
 

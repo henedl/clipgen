@@ -1111,4 +1111,5 @@
   TS.pillNavMove = pillNavMove; // video (Up/Down while dropdown open)
   TS.pillNavAdjust = pillNavAdjust; // video (Left/Right while dropdown open)
   TS.pillNavActivate = pillNavActivate; // video (Enter while dropdown open)
+  TS.trackOptionLabel = _trackOptionLabel; // hub (Normalize Audio track checkboxes)
 })();
