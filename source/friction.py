@@ -29,8 +29,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# Category weights: frustration and confusion are stronger UX-research signals
-# than baseline hesitation. Tunable in code, not user-facing.
+# Category weights: frustration and confusion signal more than baseline hesitation.
 CATEGORY_WEIGHTS: dict[str, float] = {
     "hesitation": 1.0,
     "confusion": 1.5,
@@ -40,8 +39,7 @@ CATEGORY_WEIGHTS: dict[str, float] = {
     "help_seeking": 1.5,
 }
 
-# Phrase patterns (not bare words). Word boundaries avoid overcounting common
-# substrings. Compiled once at module load, case-insensitive.
+# Phrase patterns, not bare words: boundaries avoid overcounting common substrings.
 _FRICTION_PATTERNS_RAW: dict[str, list[str]] = {
     "hesitation": [
         r"\bum+\b",
@@ -109,9 +107,7 @@ def _segment_score(
     is the deduped list of matched substrings, and counts maps each present
     category to its raw match count.
     """
-    # Floor the denominator so one- and two-word interjections ("Oh.", "Um.")
-    # can't saturate at 1.0 and monopolise the candidate list ahead of longer
-    # segments with several genuine frustration markers.
+    # Floor the denominator so short interjections ("Oh.", "Um.") can't saturate at 1.0.
     word_count = max(len(text.split()), 8)
     counts: dict[str, int] = {}
     markers: list[str] = []
