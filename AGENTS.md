@@ -1,6 +1,10 @@
 # clipgen – Project context for AI assistants
 
-This document contains stable project facts: architecture, data structures, genuine gotchas, conventions (the things that don't change run-to-run).
+This document contains project facts: architecture, data structures, gotchas, conventions.
+
+## Core agent instructions
+
+Comment blocks are <= 7 words, function names <= 4 words. User-facing message strings should be <= 10 words. Use an active voice, no stage performances, and pick the most common word when choosing among alternatives.
 
 ## Project overview
 
