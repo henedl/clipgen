@@ -2,18 +2,9 @@
 
 This document contains project facts: architecture, data structures, gotchas, conventions.
 
-## Core agent instructions
-
-Comment blocks are <= 7 words, function names <= 4 words. User-facing message strings should be <= 10 words. Use an active voice, no stage performances, and pick the most common word when choosing among alternatives.
-
 ## Project overview
 
-clipgen is a tool for user researchers that:
-
-1. Generates clips from timestamps stored in a Google Sheet or a local Excel file. It uses **gspread** for Google Sheets access, **openpyxl** for Excel, and **ffmpeg/ffprobe** for media processing.
-2. Allows video and audio analysis of local video files, in the **Screenspace** and **Transcript** tools.
-
-**Data flow:** Timestamps in spreadsheet → clipgen reads records (description, study, participant ID, category) → timestamp parsing/annotation filtering → ffmpeg → video clips, screenshots, GIFs, or a single reel. Optionally, generated artifacts can be transcribed via faster-whisper to produce timestamped transcript files.
+clipgen is a tool for user researchers that generates clips from timestamps. It uses **gspread** for Google Sheets access, **openpyxl** for Excel, and **ffmpeg/ffprobe** for media processing. It also provides video and audio analysis in the **Screenspace** and **Transcript** tools.
 
 ## Quick commands
 
@@ -100,6 +91,7 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 - **Never install heavy software without asking; do use what is already installed.** Browsers, torch, and similar large downloads are never pulled in unilaterally — ask first, every time. But verifying UI changes in a browser is now expected rather than forbidden: run [/ui-check](agents/skills/ui-check/SKILL.md), which loads all six pages headless, fails on any uncaught error, and writes screenshots you should **actually look at** with `Read`. For in-browser diagnostics, run the snippet yourself via `tests/ui/shot.py --eval` instead of handing the human a DevTools paste. Ask the human only for what the smoke genuinely cannot see: interaction feel, motion, drag behaviour, and real-media playback.
 - **Pre-commit check:** Before every `git commit`, run [agents/skills/check/SKILL.md](agents/skills/check/SKILL.md).
 - **Never edit .gitignore automatically.** Always confirm changes with the user.
+- **Be concise.** Comment blocks are <= 7 words, function names <= 4 words. User-facing message strings should be <= 10 words. Use an active voice, no stage performances, and pick the most common word when choosing among alternatives.
 
 ## Soft preferences
 
