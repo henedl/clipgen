@@ -196,6 +196,12 @@ stay the **first statement** of the launcher's `__main__` block, before any clip
   symlinks, and signature through the round trip); Windows ships a **`.zip`**.
 - **Actions artifacts need a login and expire after 90 days.** Tagged builds publish to **GitHub
   Releases**; that step needs `permissions: contents: write`.
+- **Two workflows publish to one release, in parallel.** `release-notes.yml` owns the body,
+  `build-binaries.yml` owns the assets, both on the tag push. Either order is safe *because*
+  `release-notes.yml` does create-or-update rather than skip-if-exists, and
+  `softprops/action-gh-release` keeps the existing body when its `body` input is empty. Never add
+  a `body:` to the publish step — it would clobber the generated notes. `release-notes.yml` checks
+  out the default branch, not the tag: the renderer does not exist at the older tags it backfills.
 - **`upload-artifact` always zips, with no opt-out** (Actions has stored artifacts as zips since
   v4), so an artifact download is always one wrapper deeper than the Release asset: a zip *around*
   the `.dmg` / `.zip`. It costs nothing in size — the outer zip is a wash or a small win — but on a

@@ -39,20 +39,15 @@ def _changelog_path() -> Path:
     return utils.get_bundled_assets_root() / "CHANGELOG.md"
 
 
-def load_entries(limit: int = 20) -> list[dict[str, Any]]:
-    """Return up to *limit* releases in file order (newest first)."""
-    path = _changelog_path()
-    if not path.is_file():
-        utils.warning_print(
-            f"CHANGELOG.md not found at {path}; Start overlay 'Recent updates' will be empty."
-        )
-        return []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        utils.warning_print(f"Could not read CHANGELOG.md at {path}: {exc}")
-        return []
+def parse_entries(text: str) -> list[dict[str, Any]]:
+    """Parse changelog markdown into ``{version, date, changes}`` releases.
 
+    Pure, and takes the file's *text* rather than a path, so ``build/release_notes.py``
+    can feed it a changelog read from anywhere while the heading regex — which has
+    silently mis-parsed the format once already (see the module docstring) — stays in
+    one place. Releases with no parsable change lines are kept here; dropping them is
+    the caller's policy, and only the Start overlay wants it.
+    """
     entries: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
 
@@ -79,6 +74,23 @@ def load_entries(limit: int = 20) -> list[dict[str, Any]]:
                 }
             )
 
+    return entries
+
+
+def load_entries(limit: int = 20) -> list[dict[str, Any]]:
+    """Return up to *limit* releases in file order (newest first)."""
+    path = _changelog_path()
+    if not path.is_file():
+        utils.warning_print(
+            f"CHANGELOG.md not found at {path}; Start overlay 'Recent updates' will be empty."
+        )
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        utils.warning_print(f"Could not read CHANGELOG.md at {path}: {exc}")
+        return []
+
     # A release heading with no parsable change lines would render as an empty
     # card, which reads as a rendering bug rather than an empty release.
-    return [e for e in entries if e["changes"]][:limit]
+    return [e for e in parse_entries(text) if e["changes"]][:limit]

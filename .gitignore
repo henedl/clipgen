@@ -32,6 +32,7 @@ build/*
 !build/clipgen.ico
 !build/render_icons.py
 !build/fetch_binaries.py
+!build/release_notes.py
 dist/
 
 # Working docs

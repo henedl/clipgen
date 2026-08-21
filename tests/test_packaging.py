@@ -18,6 +18,7 @@ Two drifts, both silent from the source tree:
 
 import itertools
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -233,6 +234,46 @@ def test_gitignore_allowlists_the_fetch_script() -> None:
     fetch script exists locally but never lands in a commit."""
     gitignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "!build/fetch_binaries.py" in gitignore.splitlines()
+
+
+def test_gitignore_allowlists_the_release_notes_script() -> None:
+    """Same allowlist trap as the fetch script: without the ``!`` entry the
+    renderer exists locally, never lands in a commit, and CI keeps publishing
+    releases with the old empty body."""
+    gitignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "!build/release_notes.py" in gitignore.splitlines()
+
+
+def test_release_notes_workflow_fetches_full_history() -> None:
+    """``build/release_notes.py`` reads the tag range with ``git log``. Under the
+    default shallow checkout that returns nothing, so the release publishes with
+    an empty What's Changed and no error anywhere."""
+    workflow = (_ROOT / ".github" / "workflows" / "release-notes.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "fetch-depth: 0" in workflow
+
+
+def test_release_notes_workflow_updates_an_existing_release() -> None:
+    """build-binaries.yml publishes assets on the same tag with an action that
+    *creates* the release when absent. If this workflow skips a release that
+    already exists, losing that race leaves the body permanently empty — which is
+    the behaviour the create-or-update branch replaced."""
+    workflow = (_ROOT / ".github" / "workflows" / "release-notes.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "gh release edit" in workflow
+    assert "skipping (idempotent rerun)" not in workflow
+
+
+def test_build_workflow_does_not_set_a_release_body() -> None:
+    """A ``body`` input on the asset-upload step would overwrite the generated
+    notes; leaving it unset is what makes the two workflows order-independent."""
+    workflow = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    # A YAML key, not the prose warning in the comment above that step.
+    assert re.search(r"(?m)^\s*body:", workflow) is None
 
 
 def test_license_notice_is_tracked_and_bundled() -> None:

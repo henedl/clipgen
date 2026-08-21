@@ -13,6 +13,11 @@ mirror it when passing `--body` to `gh pr create`.
   `viewer`, `files`, … Lowercase and singular. Omit for cross-cutting changes.
 - Imperative mood ("add", not "added"), no trailing period, ≤ ~70 chars.
 - GitHub appends `(#NNN)` on squash-merge. Don't hand-add the PR number.
+- **PR titles are the release notes.** [build/release_notes.py](../build/release_notes.py) groups
+  merged commits by `type` into the GitHub Release body — `feat` → Features, `fix` → Bug Fixes,
+  `perf` → Performance, `!` or a `BREAKING CHANGE:` trailer → its own leading section. The other
+  types are counted in a footnote rather than listed. The scope is printed in bold, and the
+  `(#NNN)` GitHub appends is parsed out and re-rendered — hand-adding it prints it twice.
 
 ## Body
 
