@@ -955,7 +955,8 @@ class AttentionTool(AnalysisTool):
 class TimelapseTool(AnalysisTool):
     name = "timelapse"
     # Has its own ``sample_interval`` and produces a media file rather than
-    # per-frame events, so the generic fast-scan path does not apply.
+    # per-frame events, so the generic fast-scan path does not apply and no
+    # Viewer SS_DETECTOR_COLORS / SS_DETECTOR_ICON_PATHS entries are needed.
     supports_fast_scan = False
 
     def scan(

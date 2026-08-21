@@ -16,6 +16,11 @@
 
 6. **Annotation keyphrases stripped** — `!key` is stripped before timestamp parsing (configured in `ANNOTATION_KEYPHRASES`). Tokens like `x` are ignored entirely (configured in `IGNORED_TIMESTAMP_TOKENS`). If a timestamp contains one of these, it will be silently skipped.
 
+## Media / encoding issues
+
+- **Titlecard encoding fails / `drawtext` missing** — Homebrew's default ffmpeg 8.x may be built without libfreetype, so the `drawtext` filter is absent. Rebuild ffmpeg with drawtext support, or disable titlecards.
+- **Video plays server-side but breaks in the browser** (duration `Infinity`, seeks land wrong, multi-GB file must fully download) — a fragmented MP4 (OBS "fragmented recording"). ffmpeg reads it fine via the `mfra` tail box; browsers don't. Detect with `video.probe_container_seekability()` (never ffprobe — it cannot tell the containers apart); fix with `video.remux_to_faststart()`. Full story: `probe_container_seekability`'s docstring in [video.py](../../../source/video.py).
+
 ## Web UI issues
 
 7. **UI not loading** — the combined Flask server always starts on port `8089` (`config.SERVER_PORT`). Check that nothing else is bound to that port: `lsof -i :8089`.
@@ -34,3 +39,5 @@
 11. **Type errors in ty** — see [agents/skills/check/SKILL.md](../check/SKILL.md) for common ty failure patterns.
 
 12. **Tests unexpectedly passing despite broken behavior** — check whether the test is mocking at too high a level. The project avoids mocking the database/sheets layer; if a test uses a mock that doesn't reflect reality, consider replacing it with a real fixture.
+
+13. **Problem recurs despite fix attempts** — check the git log for the file. Past fixes and reverts often name the real cause.

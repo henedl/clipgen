@@ -17,6 +17,19 @@
  *  - Combo grammar: "[Mod+][Ctrl+][Alt+][Shift+]Key"; aliases separated by a
  *    space ("X Backspace"). Mod = Cmd on macOS, Ctrl elsewhere. Shift-produced
  *    punctuation keeps the produced character ("?", "{"), dropping Shift.
+ *  - Numeral convention: Shift+numeral targets a panel/region for keyboard
+ *    focus; a bare numeral is a tool/action within the current context
+ *    (Studio preview tabs, Screenspace tools). Pages route the two with
+ *    mutually-exclusive `when` gates on a focusRegion-style state field.
+ *    Arrow keys drive the focused surface; Escape returns focus to the page's
+ *    primary surface (the video player) before the rest of its cascade.
+ *  - Shift+digit yields layout-dependent symbols, so those combos match on
+ *    physical e.code — Shift+1 works across layouts, but only plain
+ *    arrows/Enter (never Tab) can be caught for in-panel navigation.
+ *  - Shared ids (transport.*, nav.*, edit.*, global.*) keep behavior uniform
+ *    across pages; the "?" cheatsheet is generated from what a page registers.
+ *    User rebinds persist as the HOTKEY_OVERRIDES setting and are stripped
+ *    from exported viewers (viewer._export_config) — exports run the defaults.
  */
 
 (function () {

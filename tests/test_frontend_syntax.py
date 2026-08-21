@@ -20,7 +20,7 @@ import subprocess
 
 import pytest
 
-from _frontend_source import WEB
+from _frontend_source import WEB, assert_es5, strip_comments
 
 NODE = shutil.which("node")
 
@@ -44,3 +44,9 @@ def test_js_parses(name: str) -> None:
         text=True,
     )
     assert result.returncode == 0, f"{name} is not valid JavaScript:\n{result.stderr}"
+
+
+@pytest.mark.parametrize("name", JS_FILES)
+def test_js_is_es5(name: str) -> None:
+    """House style: every page script is ES5 (no arrows, no async/await)."""
+    assert_es5(strip_comments((WEB / name).read_text(encoding="utf-8")), name)

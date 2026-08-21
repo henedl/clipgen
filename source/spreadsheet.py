@@ -18,6 +18,9 @@ Optional baseline time row:
   by subtracting the per-column baseline via utils.convert_clock_pairs_to_relative().
 - Participant columns without a baseline cell use relative timestamps as-is.
 - If the marker row is absent entirely, all columns are treated as relative.
+- Baseline row placement is tied to header/``id_cell`` row math (offsets from
+  ``id_cell.row``); changing that offset without aligning tests and sheet
+  layout has broken baseline timestamp handling before.
 
 Optional Filename row (source video override):
 - A "Filename" header marks a row whose per-participant cells override the source video

@@ -352,7 +352,7 @@
           safePlay(el);
           return;
         }
-        var delta = el.currentTime - video.currentTime; // + => audio ahead
+        var delta = el.currentTime - video.currentTime; // positive: audio ahead
         var ad = delta < 0 ? -delta : delta;
         if (ad > SYNC_HARD) {
           // Way out of sync (long stall / tab throttled) — accept one seek pop.

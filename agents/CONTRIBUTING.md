@@ -41,6 +41,8 @@ for non-trivial changes (bullet the notable changes; flag regressions or gotchas
 fixes to a single line. The `type` also drives versioning: `feat:` bumps the patch in
 [build/VERSION](../build/VERSION), others don't. See [skills/bump/SKILL.md](skills/bump/SKILL.md).
 
+Commit early and commit often, so changes are easy to roll back.
+
 ## Before opening
 
 - `/check` is green: ruff format + lint, ty, full test suite. See [skills/check/SKILL.md](skills/check/SKILL.md).

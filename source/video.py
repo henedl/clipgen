@@ -2310,7 +2310,9 @@ def probe_container_seekability(filepath: str) -> dict[str, Any] | None:
 
     Detection is a bounded read of box headers — no ffprobe, no decoding, sub-
     millisecond even on multi-GB files — because ``moov`` always precedes the
-    fragments and box bodies are skipped by seeking, never read.
+    fragments and box bodies are skipped by seeking, never read. Do not try to
+    diagnose this class with ffprobe: it reads ``mfra`` and cannot tell the two
+    containers apart.
 
     Returns ``{"fragmented", "header_duration", "browser_seekable"}``, or
     ``None`` when the shape can't be determined: a non-MP4 container (Matroska,
