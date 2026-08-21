@@ -12,11 +12,7 @@ import config
 import utils
 from utils import ClipRecord
 
-# Per-template high-water counter so a batch of same-named reservations doesn't
-# re-probe 0,1,2,… from scratch each call (which is O(n²) syscalls). Keyed on
-# (directory, base, extension); only ever advances, so released slots leave
-# harmless gaps but uniqueness is preserved. Guarded because get_unique_filename
-# runs inside the clip ThreadPoolExecutor.
+# Per-template high-water counter: a batch of reservations shouldn't re-probe 0,1,2,… each call.
 _unique_high_water: dict[tuple[str, str, str], int] = {}
 _unique_high_water_lock = threading.Lock()
 
@@ -61,7 +57,6 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
         base = name[: -len(file_extension)]
     else:
         base = name
-    # Truncate base if needed (reserve space for extension)
     max_base = config.MAX_FILENAME_LENGTH - len(file_extension)
     base = safe_truncate(base, max_base)
 
@@ -88,9 +83,7 @@ def get_unique_filename(filename: str, file_format: str | None = None) -> str:
             counter += 1
             continue
         except OSError:
-            # Reservation not possible (missing/unwritable directory, name too
-            # long, etc.). Fall back to non-atomic uniqueness so callers still
-            # receive a usable path.
+            # Reservation impossible (unwritable dir, long name); fall back to non-atomic uniqueness.
             while candidate.is_file():
                 counter += 1
                 candidate = _candidate(counter)
@@ -205,11 +198,7 @@ def discover_numbered_source_videos(
     prefix = utils.format_source_video_stem(study, participant)
     suffix_re = re.compile(rf"-(\d+){re.escape(config.FILEFORMAT)}$", re.IGNORECASE)
     matches: list[tuple[int, Path]] = []
-    # glob.escape, not a raw f-string glob: the pattern (or a study name) may
-    # legally contain ``[``/``]``, which Path.glob would read as a character
-    # class — silently finding no parts while regex-based discovery still
-    # matches them, so the participant would list files that clip resolution
-    # then reports missing.
+    # glob.escape: a study name may contain [ ], which Path.glob reads as a character class.
     for p in input_dir.glob(f"{glob.escape(prefix + '-')}*{config.FILEFORMAT}"):
         m = suffix_re.search(p.name)
         if m:
@@ -321,8 +310,7 @@ def resolve_participant_videos(sheet_context: Any = None) -> list[dict[str, Any]
         seen.add(found["id"])
         user_override = config.FILENAME_OVERRIDES.get(found["id"])
         if user_override:
-            # The user pointed this participant at a specific file; what
-            # discovery happened to match by name is not it.
+            # The user pointed at a specific file; a name match is not it.
             paths = resolve_source_video_paths(
                 "", found["id"], user_override, input_dir
             )
@@ -387,8 +375,7 @@ def derive_sheet_meta(worksheet: Any) -> dict[str, str] | None:
             }
     except ImportError:
         pass  # no excel_io in this build; fall through to the gspread branch
-    # gspread Worksheet (or anything quacking like one): use the parent
-    # spreadsheet title as both the identifier and the label.
+    # gspread Worksheet: the parent spreadsheet title is both identifier and label.
     parent = getattr(worksheet, "spreadsheet", None)
     title = getattr(parent, "title", "") if parent is not None else ""
     if not title:
@@ -433,9 +420,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     if config.DEBUGGING:
         config.debug_ic(clip)
 
-    # Pre-parsed fast path: callers (e.g. --ss-clips, --transcript-clips) build
-    # synthetic clips with timestamps already resolved. Skip the cell-based parse
-    # but still sanitize desc/category for use in filenames.
+    # Pre-parsed fast path: synthetic clips arrive with times resolved, so only sanitize.
     if clip.get("times"):
         clip["cell_annotations"] = list(clip.get("cell_annotations") or [])
         clip["segment_annotations"] = dict(clip.get("segment_annotations") or {})
@@ -459,10 +444,8 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
     )
     utils.debug_print("Will attempt to split the cell contents")
 
-    # Get cell reference for error messages
     cell_ref = utils.safe_cell_a1(clip["cell"].row, clip["cell"].col)
 
-    # Parse inline annotations (e.g. !key), then parse timestamps from cleaned value.
     cleaned_cell_value, segment_annotations, cell_annotations = (
         utils.parse_cell_annotations(clip["cell"].value)
     )
@@ -499,9 +482,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
                 ],
             )
 
-    # Clean description: remove bracketed prefix and sanitize for use in filename.
-    # `.get` mirrors the fast path above: a record built without desc/category is
-    # legal (synthetic clips, sheet rows with empty columns) and must not KeyError.
+    # Strip bracketed prefix, sanitize for filename. `.get`: desc/category may be absent.
     raw_desc = clip.get("desc") or ""
     bracket_pos = raw_desc.rfind("]")
     cleaned_desc = (
@@ -523,8 +504,7 @@ def prepare_clip(clip: ClipRecord) -> ClipRecord:
 
 
 _WORKFLOW_CELL_COL = 3  # synthetic cell column for Workflows clip artifacts
-# (col 1 = --ss-clips, col 2 = --transcript-clips; the distinct column keeps
-# synthetic artifact ids from colliding across the three sheet-free clip paths.)
+# Distinct column: 1 = --ss-clips, 2 = --transcript-clips, so ids can't collide.
 
 
 def _make_synthetic_clip_record(
