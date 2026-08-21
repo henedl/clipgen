@@ -8,7 +8,7 @@ It is built for UX researchers — especially games user researchers running pla
 
 ### Desktop app
 
-Download the macOS `.dmg`, or on Windows the `setup.exe` installer, or the portable `.zip`, from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`. 
+Download the macOS `.dmg`, or on Windows the `setup.exe` installer, or the portable `.zip`, from the [Releases page](https://github.com/henedl/clipgen/releases) and follow the bundled `INSTALL.txt`.
 
 The macOS build is unsigned, so Gatekeeper blocks the first launch: right-click the app and choose **Open** once, or run `xattr -dr com.apple.quarantine clipgen.app`. Double-clicking the app opens clipgen in its own desktop window; the same binary is also the full CLI when given arguments.
 
