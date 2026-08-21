@@ -483,6 +483,10 @@ jobs:
             dist/*-setup.exe
           if-no-files-found: error
 
+      # Assets only. release-notes.yml owns the body and runs on the same tag in
+      # parallel; this action falls back to the existing body when the `body`
+      # input is empty, which is what makes either ordering safe. Never add a
+      # `body:` here — it would clobber the generated notes.
       - name: Publish to GitHub Releases (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

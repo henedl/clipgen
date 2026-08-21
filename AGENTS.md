@@ -87,7 +87,7 @@ Source video filenames follow `{study}_{participant}.mp4` (e.g. `mystudy_P01.mp4
 
 The version lives in [build/VERSION](build/VERSION). Agents bump the patch number as part of any `feat:` PR; `fix:`, `refactor:`, `docs:`, `chore:`, `test:`, `build:`, and `ci:` PRs do not bump. The human may also bump manually at any time. There is no CI auto-bump. See [agents/skills/bump/SKILL.md](agents/skills/bump/SKILL.md).
 
-**Do not write `CHANGELOG.md` by hand.** A scheduled cloud agent fills it in on its own cadence, so a hand-added entry only risks duplicating or conflicting with that pass. Bump `build/VERSION` and leave the changelog alone unless the human explicitly asks for an entry.
+**Do not write `CHANGELOG.md` by hand.** A scheduled cloud agent fills it in on its own cadence, so a hand-added entry only risks duplicating or conflicting with that pass. Bump `build/VERSION` and leave the changelog alone unless the human explicitly asks for an entry. The curated file is also the Highlights section of every GitHub Release ([build/release_notes.py](build/release_notes.py) selects the versions in the tag's range and groups them by tool), so its wording is user-facing twice over.
 
 ## Hard rules
 
