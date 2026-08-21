@@ -63,6 +63,22 @@ outer span and work nested inside it on one thread (`heatmap.gifs` wraps an
 inline `heatmap.gif` encode), the outermost profiler wins and absorbs the
 nested work — cProfile cannot nest, and the run must never break over it.
 
+**Startup marks — `startup | ` lines.** Launch-to-window attribution for the
+desktop/web startup path. `clipgen.py` anchors T0 before any clipgen import;
+`profiling.mark()` records milestones *unconditionally* (marks land before
+`--profile` is even parsed) but they are only reported under `--profile`: as a
+`startup |` section at build-ready and in the exit report, and as `startup` on
+`/api/profile` (like `peak_rss`, untouched by `?reset=1`). Key labels:
+`startup.imports_utils_cli`, `startup.webview_start` (last main-thread stop
+before the window), `startup.window_shown` (first-paint proxy),
+`startup.boot_page_alive` (boot page JS executing = content painted),
+`startup.silent_google_auth` / `startup.phase_*` (boot-build thread). Marks
+from concurrent threads interleave chronologically, so a `+delta` spanning a
+thread boundary attributes wall time, not per-thread work. To measure a frozen
+launch, read `/api/profile` from the running app — the frozen bootloader
+ignores `PYTHONUNBUFFERED`, so grepping a killed process's stdout loses the
+buffered `startup |` lines.
+
 Two report tokens are easy to misread:
 
 - **`max=`** is the largest single occurrence. It is absent on labels fed only by
