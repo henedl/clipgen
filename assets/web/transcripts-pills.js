@@ -35,17 +35,13 @@
     ensureAgentModelInstalled = TS.ensureAgentModelInstalled,
     _confirmUncachedWhisperModels = TS._confirmUncachedWhisperModels;
 
-  // Icon shown on the trigger by default (left), and on hover (right).
-  // The trigger click always invokes the appropriate action for the status.
+  // Default icon left, hover icon right; the click always matches the status.
   var PILL_TRIGGER = {
     idle: { rest: "icons/microphone.svg", hover: "icons/microphone.svg", label: "Transcribe", action: "transcribe" },
     failed: { rest: "icons/exclamation-triangle.svg", hover: "icons/microphone.svg", label: "Retry transcription", action: "transcribe" },
     queued: { rest: "icons/clock.svg", hover: "icons/stop-circle.svg", label: "Cancel", action: "cancel" },
     running: { rest: "icons/arrow-path.svg", hover: "icons/stop-circle.svg", label: "Cancel transcription", action: "cancel" },
-    // Cancel acknowledged, worker not stopped yet. Same glyph on both faces:
-    // there is nothing left to click, so a hover swap would promise an action
-    // that is not there. action:"none" is the re-click guard at the config level
-    // — the click handler can no longer reach the cancel branch at all.
+    // Nothing left to click: same glyph both faces, action "none" guards re-clicks.
     cancelling: { rest: "icons/stop-circle.svg", hover: "icons/stop-circle.svg", label: "Cancelling…", action: "none" },
     completed: { rest: "icons/check-circle.svg", hover: "icons/arrow-path.svg", label: "Re-transcribe", action: "retranscribe" }
   };
@@ -88,10 +84,7 @@
       var pending = state.cancellingTasks[task.id];
       if (pending) {
         status = "cancelling";
-        // Frozen at the click, not re-read from the task: the worker keeps
-        // emitting segments until its next checkpoint, and renderPills' patch
-        // path still writes this width on every tick — so an unfrozen fill would
-        // keep creeping under "Cancelling…", the same lie the dotted band told.
+        // Frozen at the click so the fill cannot creep under "Cancelling…".
         progress = pending.progress;
       } else {
         status = task.status;
@@ -120,12 +113,7 @@
     };
   }
 
-  // "1" when the participant's video is on disk but has no column in the loaded
-  // sheet. Only meaningful with a sheet loaded — without one everything is
-  // off-sheet and the badge would be noise. Returned as a string so it can also
-  // feed the in-place-patch guard's data-attribute comparison below: opening a
-  // sheet leaves the pill count and statuses untouched, so without it the patch
-  // path would short-circuit and the badges would never appear.
+  // "1" only with a sheet loaded; a string so the patch guard compares it.
   function offSheetFlag(p) {
     return state.hasSheet && p.in_sheet === false ? "1" : "0";
   }
@@ -133,8 +121,7 @@
   function renderPills() {
     var container = qs("#participantPills");
     if (!container) return;
-    // Whatever we render now is the real answer, so the boot skeletons (and the
-    // aria-busy that announces them) are done.
+    // Real answer now, so the boot skeletons and aria-busy are done.
     container.removeAttribute("aria-busy");
 
     if (state.participants.length === 0) {
@@ -149,8 +136,7 @@
       }
     });
 
-    // In-place patch when structure unchanged (avoids layout thrash + preserves
-    // the open options pane across polling ticks)
+    // In-place patch when structure is unchanged; preserves the open pane.
     var existing = container.querySelectorAll(".pill-wrap[data-pid]");
     if (existing.length === state.participants.length) {
       var canPatch = true;
@@ -162,13 +148,10 @@
             existing[k].getAttribute("data-status") !== s0.status ||
             existing[k].getAttribute("data-active") !== (state.selectedParticipant === p0.id ? "1" : "0") ||
             existing[k].getAttribute("data-agents") !== agentsAttr ||
-            // Phase feeds the dot tooltip's closure — a loading_model →
-            // transcribing flip must rebuild or the tooltip stays stale.
+            // Phase feeds the dot tooltip closure; a flip must rebuild.
             existing[k].getAttribute("data-phase") !== (s0.phase || "") ||
             existing[k].getAttribute("data-offsheet") !== offSheetFlag(p0) ||
-            // Regenerating artifacts in Studio flips has_stale_artifacts with
-            // identical status/agents/phase — without this the patch path
-            // short-circuits and the "stale" badge never clears.
+            // Studio regeneration flips this with identical status, so the badge would never clear.
             existing[k].getAttribute("data-stale") !== (p0.has_stale_artifacts ? "1" : "0")) {
           canPatch = false; break;
         }
@@ -181,10 +164,7 @@
           var bar = wrap.querySelector(".pill-progress");
           if (bar) bar.style.width = s0.progress + "%";
         }
-        // The open options pane tracks state the patch guard doesn't see
-        // (sessionStorage in/out markers feeding the Range row, audio-track
-        // hints) — and the steady state during a running transcription IS the
-        // patch path, so it must refresh here too, not only on rebuild.
+        // The open pane tracks state the guard cannot see, so refresh here too.
         if (state.pillOptionsOpen !== null) {
           _refreshPillOptionsContent(state.pillOptionsOpen, taskByPid);
         }
@@ -200,9 +180,7 @@
     });
     container.innerHTML = "";
     container.appendChild(frag);
-    // The pane is mounted on <body>, not inside the rebuilt wrap — reposition
-    // it to the new wrap's rect and re-render its contents so the agent rows
-    // reflect the latest state. Tear it down if the pill disappeared.
+    // Pane is body-mounted: reposition to the new wrap and re-render.
     if (openPid !== null) {
       var newWrap = _findPillWrap(openPid);
       var floating = document.querySelector("body > .pill-options");
@@ -225,18 +203,12 @@
     }
     if (!p) return;
     var s = pillState(p, taskByPid);
-    // Captured before the swap: the rebuilt pane may carry an audio-track row
-    // the old one lacked (the layout arrives asynchronously, and a rebuild can
-    // race that fetch), which shifts every control below it down one.
+    // Captured before the swap: a rebuild may add the audio-track row.
     var navId = _pillNavCursorId();
     var fresh = buildPillOptions(p, s);
     fresh.setAttribute("data-pid", pid);
     floating.parentNode.replaceChild(fresh, floating);
-    // The whole pane node is swapped, so a painted keyboard cursor goes with it
-    // while state.pillOptionsCursor stays set — and the arrows are still claimed
-    // by _pillMenuActive, so it would look like nothing has focus until the next
-    // keypress. This poll fires most often while a transcription is running,
-    // which is exactly when the dropdown is likely open.
+    // The swap discards the painted cursor while pillOptionsCursor stays set.
     _pillNavRestoreCursor(navId);
   }
 
@@ -295,8 +267,7 @@
       var lines = [];
       for (var k = 0; k < keys.length; k++) {
         var label = _dotStateLabel(ag[keys[k]]);
-        // The dot itself stays --running (something really is winding down), but
-        // the wording has to agree with the trigger beside it.
+        // Dot stays --running, but the wording must agree with the trigger.
         if (keys[k] === "transcription" && s.status === "cancelling") {
           label = "stopping…";
         } else if (keys[k] === "transcription" && ag[keys[k]] === "running" &&
@@ -332,15 +303,12 @@
     idSpan.textContent = p.id;
     pill.appendChild(idSpan);
 
-    // Off-sheet marker (inline) — a source video found on disk that the loaded
-    // sheet has no column for. A bare link-slash glyph rather than a labelled
-    // chip: it sits on every non-sheet pill, so it has to stay quiet.
+    // Off-sheet marker: a bare glyph, since it sits on every non-sheet pill.
     if (offSheetFlag(p) === "1") {
       var offSheet = document.createElement("span");
       offSheet.className = "pill-offsheet-badge";
       offSheet.setAttribute("aria-label", "Not in sheet");
-      // data-tooltip, matching the stale badge beside it — two badges in one
-      // pill must not mix tooltip systems (different delay and styling).
+      // data-tooltip matches the stale badge; one pill must not mix tooltip systems.
       offSheet.setAttribute("data-tooltip", "Source video found on disk; not a column in the loaded sheet");
       pill.appendChild(offSheet);
     }
@@ -360,9 +328,7 @@
     chevBtn.className = "pill-chevron-btn";
     chevBtn.setAttribute("aria-label", "Transcription options");
     chevBtn.setAttribute("aria-expanded", state.pillOptionsOpen === p.id ? "true" : "false");
-    // Alt-hold hint: `O` (pillMenu) opens the options for the *selected*
-    // participant, so only the active pill's chevron carries the hint. Pills
-    // re-render on selection change, keeping this in sync.
+    // Alt-hold hint: O opens the selected participant, so only the active pill.
     if (isActive) chevBtn.setAttribute("data-hotkey", "transcripts.pillMenu");
     var chev = document.createElement("span");
     chev.className = "pill-chevron";
@@ -388,10 +354,7 @@
     btn.className = "pill-trigger pill-trigger--" + s.status;
     btn.setAttribute("aria-label", cfg.label);
     btn.setAttribute("data-tooltip", cfg.label);
-    // Inert while the cancel is in flight — nothing to press, and a second
-    // DELETE against the same task is a no-op the server would reject. The
-    // shared button[data-tooltip]:disabled rule in tokens.css keeps the tooltip
-    // reachable (pointer-events: auto).
+    // Inert while the cancel is in flight; tokens.css keeps the tooltip reachable.
     if (s.status === "cancelling") btn.setAttribute("disabled", "disabled");
 
     // Two stacked icons; CSS hides one and shows the other on hover/focus.
@@ -412,9 +375,7 @@
       } else if (cfg.action === "retranscribe") {
         startTranscribe(p.id, true);
       } else if (cfg.action === "transcribe") {
-        // Explicit, not a bare else: the cancelling row's action is "none", and
-        // falling through here would turn a click on an in-flight cancel into a
-        // second *start*.
+        // Explicit, not else: falling through would turn a cancel click into a start.
         startTranscribe(p.id, false);
       }
     });
@@ -436,8 +397,7 @@
     var modelLabel = document.createElement("label");
     modelLabel.textContent = "Model";
     var modelSelect = document.createElement("select");
-    // data-nav-id keys the keyboard cursor to a control's identity rather than
-    // its position — see _pillNavRestoreCursor.
+    // data-nav-id keys the cursor to identity, not position.
     modelSelect.setAttribute("data-nav-id", "model");
     modelSelect.innerHTML = '<option value="">Loading…</option>';
     _trFetchModels().then(function (data) {
@@ -485,21 +445,16 @@
     langRow.appendChild(langSelect);
     pane.appendChild(langRow);
 
-    // Audio track row — multitrack sources only. Rendered synchronously off the
-    // hub's warm cache when possible: the 3 s poll rebuilds this whole pane via
-    // _refreshPillOptionsContent, and an async insert on every rebuild would
-    // strobe the row and shift the keyboard cursor under the user.
+    // Multitrack only, rendered off the warm cache so the poll cannot strobe it.
     var audioInfo = TS.audioInfoCached(p.id, p.video_version);
     if (audioInfo) {
       if (audioInfo.count > 1) pane.appendChild(buildAudioTrackRow(p, audioInfo, ov));
     } else if (p.has_video) {
       TS._trFetchAudioInfo(p.id, p.video_version).then(function (info) {
-        // The pane we captured may already have been swapped out by a poll tick;
-        // appending to the detached node would silently drop the row.
+        // The captured pane may already be detached; appending would drop the row.
         var live = document.querySelector("body > .pill-options[data-pid='" + p.id + "']");
         if (live !== pane || !info || info.count <= 1) return;
-        // The row lands *above* the agent buttons, so a cursor painted on one of
-        // them would otherwise end up pointing one control too high.
+        // The row lands above the agent buttons, shifting a painted cursor.
         var navId = _pillNavCursorId();
         pane.insertBefore(
           buildAudioTrackRow(p, info, state.pillOverrides[p.id] || {}),
@@ -509,9 +464,7 @@
       });
     }
 
-    // Range row — only when the participant has in/out transcribe markers.
-    // Read-only readout + Clear; the markers themselves are set on the video
-    // timeline (I/O). The 3 s poll rebuilds this pane, so it tracks edits.
+    // Range row only with in/out markers; the poll keeps it tracking edits.
     var mk = TS.getStoredMarkersFor ? TS.getStoredMarkersFor(p.id) : null;
     if (mk && (mk.in !== null || mk.out !== null)) {
       var rangeRow = document.createElement("div");
@@ -530,8 +483,7 @@
       rangeClear.textContent = "Clear";
       rangeClear.addEventListener("click", function () {
         if (TS.clearMarkersFor) TS.clearMarkersFor(p.id);
-        // Full re-render (not a bare pane refresh): it re-derives taskByPid and
-        // swaps this pane in place, dropping the Range row immediately.
+        // Full re-render, not a pane refresh: it drops the Range row immediately.
         renderPills();
       });
       rangeRow.appendChild(rangeLabel);
@@ -540,18 +492,13 @@
       pane.appendChild(rangeRow);
     }
 
-    // Agent rows — manual run / re-run / stop controls with dependency gating.
-    // Order: Transcription → Summary → Citations. Summary requires
-    // transcription; citations requires summary. Re-running summary cascades
-    // to citations server-side (see transcripts_server.py).
+    // Agent rows with dependency gating; re-running summary cascades to citations server-side.
     pane.appendChild(buildPillAgentsSection(p, s));
 
     return pane;
   }
 
-  // Track labels come from the container's stream metadata and can be long
-  // ("Blackhole 16ch (Participant Mic)"); the popover is 220px wide, so clip
-  // them here rather than letting a <select> stretch the pane.
+  // Track labels can be long and the popover is 220px, so clip here.
   function _trackOptionLabel(track, index) {
     var label = String((track && track.label) || "Track " + (index + 1));
     if (label.length > 20) label = label.slice(0, 19) + "…";
@@ -559,9 +506,7 @@
   }
 
   function buildAudioTrackRow(p, info, ov) {
-    // Wrapper, not a bare row: .pill-options-row is a horizontal flex line, so
-    // the "Last run" hint has to stack beneath it rather than sit beside the
-    // select. pillNavControls still finds the select via ".pill-options-row select".
+    // Wrapper, not a bare row: the hint must stack beneath the select.
     var group = document.createElement("div");
     group.className = "pill-options-group";
     var row = document.createElement("div");
@@ -571,8 +516,7 @@
     var select = document.createElement("select");
     select.setAttribute("data-nav-id", "audio-track");
     var auto = info.tracks[info.auto] || null;
-    // The server computes the auto pick (video.pick_speech_audio_track) so the
-    // heuristic has exactly one implementation; this only labels it.
+    // The server owns the auto-pick heuristic; this only labels it.
     var html = '<option value="">' +
       escapeHtml("Auto (" + _trackOptionLabel(auto, info.auto) + ")") + "</option>";
     for (var i = 0; i < info.tracks.length; i++) {
@@ -588,8 +532,7 @@
     row.appendChild(select);
     group.appendChild(row);
 
-    // What the last completed run actually used — the only way to explain a
-    // transcript that changed because auto-detect moved off track 1.
+    // What the last run used: the only way to explain a changed transcript.
     if (p.audio_track_label) {
       var hint = document.createElement("div");
       hint.className = "pill-options-hint";
@@ -611,10 +554,7 @@
       agent: "transcription",
       depMet: true,
       agentState: s.agents.transcription,
-      // Reads the same flag the pill trigger writes, so this row's optimistic
-      // "Stopping…" survives _refreshPillOptionsContent instead of reverting to
-      // "Stop" on the next poll — and so a cancel started from the trigger shows
-      // up here too.
+      // Reads the trigger flag so an optimistic "Stopping…" survives the next poll.
       cancelPending: s.status === "cancelling",
       hasResult: !!p.has_transcript,
       cascadeWarning: !!(p.agents && (p.agents.summary === "done" || p.agents.citations === "done")),
@@ -731,9 +671,7 @@
     btn.type = "button";
     btn.className = "btn btn-small pill-agent-btn";
     btn.setAttribute("data-nav-id", "agent:" + opts.agent);
-    // Ollama-backed rows carry the local-AI badge; Transcription (Whisper) does
-    // not. The label is its own node so the Run/Re-run/Stop swaps below leave
-    // the badge alone.
+    // Ollama rows carry the badge; its own node so Run/Stop swaps leave it.
     if (opts.aiBadge) {
       var badge = document.createElement("span");
       badge.className = "ai-agent-badge";
@@ -743,9 +681,7 @@
     var btnLabel = document.createElement("span");
     btnLabel.className = "agent-run-label";
     btn.appendChild(btnLabel);
-    // Alt-hold hint: while the dropdown is open, digits 1-4 route to these rows
-    // (triggerPillOption). Tag each with the markCategory combo index so the
-    // "1".."4" chips show (mirrors how Screenspace reuses selectTool for menus).
+    // Alt-hold hint: digits 1-4 route to these rows while the dropdown is open.
     var agentIdx = PILL_AGENT_ORDER.indexOf(opts.agent);
     if (agentIdx >= 0 && agentIdx < 9) {
       btn.setAttribute("data-hotkey", "transcripts.markCategory");
@@ -757,9 +693,7 @@
     var title = "";
 
     if (opts.cancelPending) {
-      // Disabled rather than "stop": the DELETE is already out, and this pane is
-      // rebuilt from pillState on every poll, so the label has to come from the
-      // shared flag or it reverts to "Stop" within one tick.
+      // Disabled rather than "stop": the label must come from the shared flag.
       btnLabel.textContent = "Stopping…";
       btn.classList.add("pill-agent-btn--stop");
       mode = "disabled";
@@ -781,8 +715,7 @@
     } else {
       btnLabel.textContent = "Run";
     }
-    // Fallback so the badge always has wording behind it; the dependency and
-    // cascade warnings above are more specific and keep precedence.
+    // Fallback wording; the dependency and cascade warnings above keep precedence.
     if (!title && opts.aiBadge) title = "Runs a local AI thinking agent";
 
     if (mode === "disabled") btn.setAttribute("disabled", "disabled");
@@ -867,8 +800,7 @@
     });
     var s = pillState(p, taskByPid);
 
-    // Mount the pane on <body> (not inside #participantPills) so it escapes the
-    // pill row's overflow clipping and renders above the search bar.
+    // Body-mounted so it escapes the pill row's overflow clipping.
     var pane = buildPillOptions(p, s);
     pane.setAttribute("data-pid", pid);
     document.body.appendChild(pane);
@@ -920,15 +852,7 @@
     transcribeParticipants([pid], force);
   }
 
-  // The single cancel path — the pill trigger and the dropdown's Transcription
-  // row both land here, so the optimistic flag, the revert and the toast exist
-  // once. The flag goes down *before* the request so the pill, the timeline
-  // band, the status dot, the empty pane and the streaming footer all stop
-  // claiming work is in progress in the same frame as the click, instead of up
-  // to a poll interval (and, on the loading_model path, a whole model load)
-  // later. renderPills() replaces the clicked button mid-dispatch, which is
-  // safe: :active ends at mouseup, before click fires, so the press squish has
-  // already played.
+  // Single cancel path: the flag drops before the request so everything stops together.
   function cancelTranscribeTask(taskId, progress) {
     if (!taskId || state.cancellingTasks[taskId]) return;
     state.cancellingTasks[taskId] = { at: Date.now(), progress: progress || 0 };
@@ -938,10 +862,7 @@
     apiDelete("api/transcribe/" + taskId).then(function () {
       pollTaskStatus();
     }).catch(function () {
-      // The common failure is "Task not found or already finished" from a task
-      // that crossed the line while the request was in flight. If the poll has
-      // already swept the flag the pill is correct and a toast is just noise —
-      // only speak up if we are the ones putting the state back.
+      // Only toast when we are the ones putting the state back.
       if (!state.cancellingTasks[taskId]) return;
       delete state.cancellingTasks[taskId];
       renderPills();
@@ -951,20 +872,14 @@
     });
   }
 
-  // Participants with an un-acked transcribe POST. The server has no in-flight
-  // guard — two POSTs for one participant make two tasks that both run — and
-  // the callers that gate on state.tasks (the hub's Transcribe All) cannot see
-  // a task that has not been enqueued yet. That gap spans the whole round trip
-  // plus, on the download path, however long the confirm dialog stays open.
+  // The server has no in-flight guard, so two POSTs would make two tasks.
   var _transcribeInFlight = {};
 
   function _clearTranscribeInFlight(pids) {
     for (var i = 0; i < pids.length; i++) delete _transcribeInFlight[pids[i]];
   }
 
-  // Enqueue one or many participants in a single POST, each carrying whatever
-  // model/language/audio-track override its own pill dropdown holds. The hub's
-  // Transcribe All quick action passes the whole eligible list through here.
+  // One POST for many participants, each carrying its own dropdown overrides.
   function transcribeParticipants(pids, force) {
     var fresh = [];
     var overrides = {};
@@ -974,18 +889,14 @@
       _transcribeInFlight[pid] = true;
       fresh.push(pid);
       var ov = state.pillOverrides[pid];
-      // ov.audioTrack is a <select> value, so track 0 arrives as the string "0" —
-      // truthy, unlike the number. The server parses it back to an int and treats
-      // absent (not falsy) as "auto-detect".
+      // A <select> gives track 0 as "0"; absent, not falsy, means auto-detect.
       if (ov && (ov.model || ov.language || ov.audioTrack)) {
         overrides[pid] = {};
         if (ov.model) overrides[pid].model = ov.model;
         if (ov.language) overrides[pid].language = ov.language;
         if (ov.audioTrack) overrides[pid].audio_index = parseInt(ov.audioTrack, 10);
       }
-      // In/out transcribe-range markers, per participant from sessionStorage
-      // (so Transcribe All bounds each pid by its own saved range). Omitted
-      // when unset, matching Screenspace's task params.
+      // Per-participant range markers from sessionStorage; omitted when unset.
       var mk = TS.getStoredMarkersFor ? TS.getStoredMarkersFor(pid) : null;
       if (mk && (mk.in !== null || mk.out !== null)) {
         overrides[pid] = overrides[pid] || {};
@@ -997,11 +908,7 @@
     _postTranscribe(fresh, force, overrides, false);
   }
 
-  // POST to the transcribe endpoint. The server is the authority on whether a
-  // Whisper model is cached: when it rejects with reason "model_not_cached", we
-  // confirm each uncached download with the user and retry with allow_download.
-  // Every exit from here releases the in-flight claim, except the retry — which
-  // hands the same pids to the next _postTranscribe.
+  // The server decides if a model is cached; every exit releases the claim except retry.
   function _postTranscribe(pids, force, overrides, allowDownload) {
     var body = { participants: pids, force: force };
     if (overrides && Object.keys(overrides).length > 0) body.overrides = overrides;
@@ -1022,11 +929,7 @@
         showToast("Failed to enqueue transcription");
         return;
       }
-      // Adopt the server's task records now rather than a poll interval from
-      // now: state.tasks is both what paints the pills and what the next
-      // enqueue checks for eligibility, and pollTaskStatus() below is itself a
-      // round trip away. The records carry created_at, so a re-transcribe sorts
-      // ahead of the participant's completed task in renderPills' reducer.
+      // Adopt the server records now: they paint pills and gate the next enqueue.
       state.tasks = state.tasks.concat(data.tasks);
       _clearTranscribeInFlight(pids);
       showToast("Enqueued " + clipgenPluralUnit(data.tasks.length, "transcription", "transcriptions"));
@@ -1034,8 +937,7 @@
       startPolling();
       pollTaskStatus();
     }).catch(function () {
-      // Without this the pids stay claimed forever and the participant can
-      // never be re-enqueued without a reload.
+      // Without this the pids stay claimed and can never be re-enqueued.
       _clearTranscribeInFlight(pids);
       showToast("Failed to enqueue transcription");
     });
@@ -1045,9 +947,7 @@
     return state.pillOptionsOpen !== null;
   }
 
-  // Agent rows in the open participant dropdown, in display order. The digit
-  // hotkeys (1–4) map onto these while the dropdown is open (the branch lives in
-  // transcripts-video.js's markCategory handler).
+  // Agent rows in display order; digits 1-4 map onto these.
   var PILL_AGENT_ORDER = ["transcription", "summary", "citations", "friction"];
 
   function triggerPillOption(n) {
@@ -1062,12 +962,7 @@
     btn.click();
   }
 
-  // ---- Keyboard navigation inside the open dropdown ----
-  // The pane is mounted on <body>; its interactive controls in DOM order are the
-  // Model + Language selects, then the four agent buttons. A painted cursor
-  // (.pill-nav-cursor) roves them — no real DOM focus, so the arrow hotkeys are
-  // not swallowed by the dispatcher's typing gate. Left/Right steps a focused
-  // select; Enter runs a focused agent button (digits 1–4 still shortcut them).
+  // Keyboard navigation: a painted cursor roves the selects and agent buttons.
 
   function pillNavControls() {
     var pane = document.querySelector("body > .pill-options");
@@ -1077,12 +972,7 @@
     );
   }
 
-  // The pane is rebuilt wholesale every poll tick and can gain the audio-track
-  // row between two builds (the layout arrives asynchronously), so the cursor is
-  // carried across a rebuild by the control's identity, not its index. Index
-  // arithmetic at each mutation site cannot work: _refreshPillOptionsContent
-  // replaces the node, so by the time it could count controls the old pane —
-  // and the number of rows the cursor was measured against — is already gone.
+  // Cursor carried across rebuilds by control identity, since index arithmetic cannot work.
   function _pillNavCursorId() {
     if (state.pillOptionsCursor < 0) return null;
     var cur = pillNavControls()[state.pillOptionsCursor];
