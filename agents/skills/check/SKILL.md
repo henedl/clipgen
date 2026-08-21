@@ -23,3 +23,8 @@ Report pass/fail per stage. If all pass, remind the agent:
 - **`test_js_parses[…]`**: that `assets/web` file is not valid JavaScript. The assertion message carries `node --check`'s stderr, which names the line. Skipped entirely where `node` is absent.
 
 `/check` covers syntax but never runs a browser. After frontend changes also run [/ui-check](../ui-check/SKILL.md), which boots the pages headless and screenshots them.
+
+## Before committing / opening a PR
+
+- Self-review the diff against [agents/CODE-REVIEW.md](../../CODE-REVIEW.md) — the recurring frontend, backend, concurrency, ty, and integration checks.
+- PR/commit conventions and the pre-merge checklist: [agents/CONTRIBUTING.md](../../CONTRIBUTING.md).

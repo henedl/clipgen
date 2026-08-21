@@ -8,7 +8,7 @@
  *   .participant-pill     monospace participant toggle
  *   .density-timeline     SVG bars with tick labels + optional marker
  *   .spark-bars           flex bar chart, hue-driven
- *   .cg-btn               base button: ghost / solid / bare; sm / md / lg
+ *   .cg-btn               base button: ghost / solid / bare; sm / md / lg (Studio-only)
  *   .skeleton-grid        responsive skeleton row layout (pair with .skeleton cells)
  *
  * All transitions: var(--duration-instant) ease-out on bg/border/color only. Hit targets ≥28px.

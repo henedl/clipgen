@@ -1828,6 +1828,13 @@ def api_highlights_preview() -> FlaskResponse:
 
 @studio_bp.route("/api/reel", methods=["POST"])
 def api_reel() -> FlaskResponse:
+    """Build a reel from spreadsheet cell refs (spreadsheet-only queues).
+
+    Reel panel order and per-segment card removals are ignored: unique cell
+    refs are re-resolved from the sheet and sorted by row then column, and
+    every timestamp in those cells is included. Intake or mixed queues go
+    through ``/api/reel-direct`` instead.
+    """
     if _worksheet is None:
         return err("No spreadsheet loaded — pick one from the Start panel.")
 
@@ -2803,7 +2810,12 @@ def api_generate_intake() -> FlaskResponse:
 
 @studio_bp.route("/api/reel-direct", methods=["POST"])
 def api_reel_direct() -> FlaskResponse:
-    """Build a reel from direct timestamp segments (for intake / mixed queues)."""
+    """Build a reel from direct timestamp segments (for intake / mixed queues).
+
+    Concatenates in panel order from explicit start/end pairs. Titlecards and
+    highlights are not applied on this path; spreadsheet-only queues use
+    ``/api/reel``, which resolves cells from the sheet instead.
+    """
     import tempfile
 
     data = request.get_json(silent=True) or {}

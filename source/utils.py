@@ -1732,6 +1732,10 @@ def seconds_to_timestamp(total_seconds: float, *, force_hours: bool = False) -> 
 
     Accepts an int or float; a float (e.g. a clamped end time) is truncated to
     whole seconds so the ``:d``/``:02d`` format specs can't crash.
+
+    When computing an end time for a start that uses ``H:MM:SS``, pass
+    ``force_hours=True`` so the pair stays format-matched: emitting ``M:SS``
+    for the end breaks mixed-format pairs and duration parsing.
     """
     total_seconds = int(total_seconds)
     total_seconds = max(total_seconds, 0)
