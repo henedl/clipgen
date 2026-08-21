@@ -1182,8 +1182,11 @@
 
   // ---- Data loading ----
 
-  function loadStatus() {
-    return apiGet("/api/status").then(function (s) {
+  function loadStatus(force) {
+    // Shared memoized fetch (utils.js). The overlay's refresh passes
+    // force=true — it must see the current sheet state, not the page-load
+    // snapshot.
+    return clipgenStatus(force).then(function (s) {
       state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
       if (s.startup_notice && !state.startupNoticeShown) {
@@ -1608,8 +1611,8 @@
     }).catch(function (err) {
       // Recovers rather than re-throwing, for two reasons: the panel is
       // mid-load (status replaced, picker hidden) and nothing downstream would
-      // put it back, and on boot this sits in refresh()'s chain ahead of
-      // loadExcelFiles + applyCurrentSessionPrefill, which must still run.
+      // put it back, and a rejection would fail refresh()'s Promise.all and
+      // skip applyCurrentSessionPrefill, which must still run.
       console.error("Google sheet list failed", err);
       keepPreviousGoogleList("Couldn't reach clipgen.");
     });
@@ -2429,19 +2432,25 @@
   }
 
   function refresh() {
-    loadStatus()
-      .then(loadDirs)
-      .then(loadStartSettings)
-      // Wrapped, not passed by reference: loadGoogleSheets(force) would
-      // otherwise receive the previous link's resolved value as `force` and
-      // re-list from Drive on every overlay open.
-      .then(function () { return loadGoogleSheets(); })
-      .then(loadExcelFiles)
-      .then(loadMindnodeFiles)
+    // Concurrent, not serial: each loader renders its own panel on resolve
+    // and swallows its own errors, and the Google listing is a Drive network
+    // call (with exponential backoff on 429) that must not keep the local
+    // Excel/MindNode/changelog panels queued behind it. Only
+    // applyCurrentSessionPrefill waits for everything — it reads status +
+    // all three source lists. loadChangelog reads CHANGELOG.md off disk, so
+    // it is cheap enough to do up front — and the Recent updates count badge
+    // only exists if we do. loadGoogleSheets is wrapped with no argument so
+    // it never mistakes anything for its `force` flag.
+    Promise.all([
+      loadStatus(true),
+      loadDirs(),
+      loadStartSettings(),
+      loadGoogleSheets(),
+      loadExcelFiles(),
+      loadMindnodeFiles(),
+      loadChangelog(),
+    ])
       .then(applyCurrentSessionPrefill)
-      // Reads CHANGELOG.md off disk, so it is cheap enough to do up front —
-      // and the Recent updates count badge only exists if we do.
-      .then(loadChangelog)
       .catch(function (err) {
         console.error("Start overlay refresh failed", err);
       });
@@ -2531,7 +2540,7 @@
 
   function boot() {
     mount().then(function () {
-      apiGet("/api/status").then(function (s) {
+      clipgenStatus().then(function (s) {
         state.statusData = s;
         state.sheetLoaded = !!s.sheet_loaded;
         if (shouldAutoOpen(s)) open();

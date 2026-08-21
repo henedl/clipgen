@@ -3274,6 +3274,18 @@ def _cached_spreadsheet_meta(*, force: bool = False) -> list[dict[str, str]]:
         return list(metas)
 
 
+def _warm_spreadsheet_meta_cache() -> None:
+    """Best-effort prime of the Drive listing cache (boot's warm thread).
+
+    Failures are the overlay's problem to report on its own request — a warm
+    miss must never surface as a boot error.
+    """
+    try:
+        _cached_spreadsheet_meta()
+    except Exception as exc:
+        utils.verbose_print(f"Drive listing warm-up failed: {exc}")
+
+
 def _invalidate_spreadsheet_meta() -> None:
     """Drop the cached Drive listing (a different account may have signed in)."""
     global _google_sheet_list_cache
@@ -4804,6 +4816,17 @@ def serve_combined_app(
                 # A live desktop session should not have to exit (atexit
                 # report) to see the startup attribution.
                 profiling.report_startup()
+            if _google_auth.client is not None:
+                # Warm the 300s-TTL Drive listing cache so the auto-opened
+                # Start overlay's Google panel answers instantly. Not an extra
+                # API call in the common flow: the overlay would issue the
+                # same files.list moments later, and the single-flight cache
+                # dedupes the two.
+                threading.Thread(
+                    target=_warm_spreadsheet_meta_cache,
+                    daemon=True,
+                    name="clipgen-drive-warm",
+                ).start()
         except BaseException as exc:
             # BaseException on purpose: _init_studio_state exits via sys.exit(1)
             # on a bad worksheet, and a SystemExit swallowed by a daemon thread
