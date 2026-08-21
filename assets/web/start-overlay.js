@@ -1186,6 +1186,13 @@
     return apiGet("/api/status").then(function (s) {
       state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
+      if (s.startup_notice && !state.startupNoticeShown) {
+        // A window-first `-s` launch could not open its spreadsheet on the
+        // boot-build thread; explain why the session is sheetless. One-shot:
+        // refresh() re-runs on every overlay open and must not re-toast.
+        state.startupNoticeShown = true;
+        markSheetError(s.startup_notice);
+      }
       // setStartTab("about") renders from statusData; if About is already
       // visible when this lands, the panel would otherwise stay on v0.0.0.
       if (state.startTab === "about") renderAbout();

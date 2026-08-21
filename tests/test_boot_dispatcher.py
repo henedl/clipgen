@@ -207,3 +207,67 @@ def test_gspread_client_factory_skipped_when_client_passed(monkeypatch):
     finally:
         live.srv.shutdown()
         live.srv.server_close()
+
+
+def test_worksheet_factory_success_reaches_build(monkeypatch):
+    """A deferred `-s` open runs on the build thread; its worksheet must reach
+    build_combined_app and leave no startup notice behind."""
+    seen: dict[str, Any] = {}
+
+    def _factory(client: Any) -> tuple[Any, None]:
+        seen["client"] = client
+        seen["thread"] = threading.current_thread().name
+        return "ws-from-factory", None
+
+    def _build(**kwargs: Any) -> Any:
+        seen["worksheet"] = kwargs.get("worksheet")
+        return _fake_app
+
+    monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(server, "build_combined_app", _build)
+
+    live = server.serve_combined_app(
+        port=0,
+        gspread_client="upstream-client",
+        worksheet_factory=_factory,
+        block_until_ready=True,
+    )
+    try:
+        assert seen["thread"] == "clipgen-boot-build"
+        assert seen["client"] == "upstream-client"
+        assert seen["worksheet"] == "ws-from-factory"
+        assert server._startup_notice is None
+    finally:
+        live.srv.shutdown()
+        live.srv.server_close()
+
+
+def test_worksheet_factory_failure_degrades_to_sheetless(monkeypatch):
+    """A factory that could not open the sheet must not kill the boot: the app
+    builds sheetless, ready is set, and the notice is surfaced for /api/status."""
+
+    def _factory(client: Any) -> tuple[None, str]:
+        return None, "Could not open spreadsheet 'X' — pick a source below."
+
+    def _build(**kwargs: Any) -> Any:
+        assert kwargs.get("worksheet") is None
+        return _fake_app
+
+    monkeypatch.setattr(utils, "preload_vision_libs_quietly", lambda **kwargs: None)
+    monkeypatch.setattr(utils, "sweep_stale_temp_artifacts", lambda: None)
+    monkeypatch.setattr(server, "build_combined_app", _build)
+
+    live = server.serve_combined_app(
+        port=0, worksheet_factory=_factory, block_until_ready=True
+    )
+    try:
+        assert live.boot["ready"] is True
+        assert live.boot["error"] is None
+        assert (
+            server._startup_notice
+            == "Could not open spreadsheet 'X' — pick a source below."
+        )
+    finally:
+        live.srv.shutdown()
+        live.srv.server_close()

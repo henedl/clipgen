@@ -171,11 +171,13 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
         default_page="studio",
         gspread_client=None,
         gspread_client_factory=None,
+        worksheet_factory=None,
     ):
         captured["worksheet"] = worksheet
         captured["default_page"] = default_page
         captured["gspread_client"] = gspread_client
         captured["gspread_client_factory"] = gspread_client_factory
+        captured["worksheet_factory"] = worksheet_factory
 
     monkeypatch.setattr(server, "start_combined_server", fake_start)
     # Skip persisted-dir application in this isolated test
@@ -196,6 +198,8 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
     assert captured["default_page"] == expected_default_page
     assert captured["gspread_client"] is None
     assert captured["gspread_client_factory"] is fail_silent_auth
+    # No -s argument → nothing for the boot thread to open.
+    assert captured["worksheet_factory"] is None
 
 
 def test_studio_with_spreadsheet_does_not_short_circuit(monkeypatch):
@@ -1208,3 +1212,84 @@ class TestInstallGuidance:
         lines = self._lines(monkeypatch, platform="linux", has_brew=False)
         assert lines[-1] == "  ffmpeg -version"
         assert lines[-2] == "Then verify in a new terminal:"
+
+
+# ---- Window-first `-s` desktop launches -------------------------------------
+
+
+def test_desktop_with_spreadsheet_defers_auth_and_selection(monkeypatch, tmp_path):
+    """`-s` + --desktop must launch the window path immediately: no Google auth
+    and no worksheet selection on the main thread."""
+    import desktop
+
+    captured = _mock_main_side_effects(monkeypatch, tmp_path)
+
+    def fake_launch(**kw):
+        captured["launcher"] = "desktop"
+        captured.update(kw)
+
+    monkeypatch.setattr(desktop, "launch", fake_launch)
+    monkeypatch.setattr(
+        cli,
+        "authenticate_google",
+        lambda: pytest.fail("desktop -s must not authenticate on the main thread"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "select_worksheet",
+        lambda *_a, **_kw: pytest.fail(
+            "desktop -s must not select a worksheet on the main thread"
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["clipgen.py", "--studio", "--desktop", "-s", "mystudy"]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert captured["launcher"] == "desktop"
+    assert captured["worksheet"] is None
+    assert callable(captured["worksheet_factory"])
+    assert captured["gspread_client_factory"] is cli._try_silent_google_auth
+
+
+def test_worksheet_factory_needs_google_signin_without_client():
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
+    worksheet, notice = factory(None)
+    assert worksheet is None
+    assert "Google sign-in is needed" in notice
+    assert "mystudy" in notice
+
+
+def test_worksheet_factory_turns_select_exit_into_notice(monkeypatch):
+    monkeypatch.setattr(
+        cli, "select_worksheet", lambda *_a, **_kw: (_ for _ in ()).throw(SystemExit(1))
+    )
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
+    worksheet, notice = factory("client")
+    assert worksheet is None
+    assert "Could not open spreadsheet 'mystudy'" in notice
+
+
+def test_worksheet_factory_passes_through_success(monkeypatch):
+    monkeypatch.setattr(cli, "select_worksheet", lambda *_a, **_kw: "the-ws")
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
+    assert factory("client") == ("the-ws", None)
+
+
+def test_worksheet_factory_excel_needs_no_client(monkeypatch, tmp_path):
+    """A local .xlsx opens without any Google client."""
+    seen = {}
+
+    def fake_select(client, args, cli_mode):
+        seen["client"] = client
+        return "excel-ws"
+
+    monkeypatch.setattr(cli, "select_worksheet", fake_select)
+    xlsx = tmp_path / "study.xlsx"
+    xlsx.write_bytes(b"")
+    factory = cli._make_worksheet_factory(_base_args(spreadsheet=str(xlsx)))
+    assert factory(None) == ("excel-ws", None)
+    assert seen["client"] is None

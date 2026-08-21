@@ -3641,19 +3641,56 @@ def _use_desktop_window(args: Any) -> bool:
     return bool(getattr(sys, "frozen", False)) and not sys.argv[1:]
 
 
+def _make_worksheet_factory(args: Any) -> Any:
+    """Deferred `-s` worksheet opener for window-first desktop launches.
+
+    Returns ``factory(client) -> (worksheet, notice)``, run on the server's
+    boot-build thread. That thread operates under ``NO_INPUT_MODE`` with no
+    console, so everything the console path handles interactively degrades to
+    ``(None, notice)`` — the boot continues sheetless and the Start overlay
+    shows *notice* as the recovery surface.
+    """
+    sheet_arg = getattr(args, "spreadsheet", None)
+
+    def factory(client: Any) -> tuple[Any, str | None]:
+        if not _is_excel_spreadsheet_arg(sheet_arg) and client is None:
+            # No cached token to reuse silently, and a background thread must
+            # never launch the interactive browser OAuth flow.
+            notice = (
+                f"Google sign-in is needed to open '{sheet_arg}' — connect "
+                "below, then pick it again."
+            )
+            return None, notice
+        try:
+            return select_worksheet(client, args, cli_mode=False), None
+        except BaseException as exc:
+            # BaseException on purpose: select_worksheet exits via sys.exit(1)
+            # (SystemExit is a BaseException), and swallowing that here is the
+            # point — a bad sheet must not kill the boot build.
+            utils.warning_print(f"Could not open spreadsheet '{sheet_arg}': {exc}")
+            return (
+                None,
+                f"Could not open spreadsheet '{sheet_arg}' — pick a source below.",
+            )
+
+    return factory
+
+
 def _launch_web_frontend(
     args: Any,
     default_page: str,
     worksheet: Any = None,
     gspread_client: Any = None,
     gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
 ) -> None:
     """Serve *default_page*, in a desktop window or the default browser.
 
     Single funnel for all seven launch sites so the window-vs-browser decision
     lives in exactly one place. *gspread_client* is a client the caller already
     authenticated (console `-s` path); *gspread_client_factory* defers that work
-    to the server's boot-build thread instead.
+    to the server's boot-build thread instead, and *worksheet_factory* defers
+    the `-s` worksheet open the same way.
     """
     if _use_desktop_window(args):
         import desktop
@@ -3663,6 +3700,7 @@ def _launch_web_frontend(
             default_page=default_page,
             gspread_client=gspread_client,
             gspread_client_factory=gspread_client_factory,
+            worksheet_factory=worksheet_factory,
         )
         return
 
@@ -3673,6 +3711,7 @@ def _launch_web_frontend(
         default_page=default_page,
         gspread_client=gspread_client,
         gspread_client_factory=gspread_client_factory,
+        worksheet_factory=worksheet_factory,
     )
 
 
@@ -3939,6 +3978,24 @@ def main() -> None:
 
     profiling.mark("startup.ffmpeg_checks")
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
+        sys.exit(0)
+
+    # Window-first `-s` desktop launch: a GUI launch has no console, so the
+    # interactive auth + worksheet selection below would block (or die)
+    # invisibly before any window exists. Defer both to the boot-build thread —
+    # the boot page narrates, and a failure degrades to a sheetless Studio with
+    # the Start overlay explaining why. Browser/console `-s` runs keep the
+    # interactive path below.
+    web_mode = _resolve_web_mode(args)
+    if web_mode is not None and _use_desktop_window(args):
+        profiling.mark("startup.web_dispatch")
+        _launch_web_frontend(
+            args,
+            web_mode,
+            worksheet=None,
+            gspread_client_factory=_try_silent_google_auth,
+            worksheet_factory=_make_worksheet_factory(args),
+        )
         sys.exit(0)
 
     # Authenticate with Google (once per run) – skip for local Excel files.

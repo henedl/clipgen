@@ -214,6 +214,12 @@ class _GoogleAuthState:
 
 _google_auth = _GoogleAuthState()
 
+# Set by the boot build when a window-first `-s` launch could not open the
+# requested spreadsheet (no cached Google token, bad name, network failure).
+# Surfaced on /api/status so the Start overlay — the recovery surface for a
+# sheetless boot — can say why nothing is loaded; cleared when a sheet opens.
+_startup_notice: str | None = None
+
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
 _settings_defaults: dict[str, Any] = {
@@ -3688,6 +3694,7 @@ def build_combined_app(
                 "composer": True,
                 "overview": True,
                 "sheet_loaded": _worksheet is not None,
+                "startup_notice": _startup_notice or "",
                 # What record_project_session last stored, so the overlay's
                 # current-session key matches its recent-projects key.
                 "active_source": _active_project_source,
@@ -4215,9 +4222,11 @@ def build_combined_app(
             source,
             name=project_name,
         )
-        global _active_sheet_meta, _active_project_source
+        global _active_sheet_meta, _active_project_source, _startup_notice
         _active_sheet_meta = dict(source)
         _active_project_source = source
+        # A sheet is open now — whatever the boot build failed to open is moot.
+        _startup_notice = None
         return ok(
             sheet_loaded=True,
             spreadsheet_label=_spreadsheet_label(),
@@ -4517,6 +4526,7 @@ _BOOT_MESSAGES = {
     "starting": "Starting clipgen…",
     "vision_libs": "Loading computer-vision libraries…",
     "workspace": "Preparing workspace…",
+    "sheet": "Connecting to your spreadsheet…",
     "interface": "Building the interface…",
     "ready": "Ready",
 }
@@ -4646,6 +4656,7 @@ def serve_combined_app(
     default_page: str = "studio",
     gspread_client: Any = None,
     gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
     block_until_ready: bool = False,
 ) -> LiveServer:
     """Serve the combined app on a background thread and return once listening.
@@ -4666,6 +4677,12 @@ def serve_combined_app(
     when no ready client was passed. Building the client off the request
     threads is the established pattern here: the runtime "Connect Google"
     route does the same on a daemon thread.
+
+    *worksheet_factory* is the same deferral for a `-s` launch's worksheet:
+    ``factory(client) -> (worksheet, notice)``, run on the build thread under
+    ``NO_INPUT_MODE`` (prompts degrade to failure). On failure the build
+    continues sheetless and *notice* lands in ``_startup_notice`` — the Start
+    overlay, not a dead boot-error page, is the recovery surface.
     """
     # The web server has no interactive console: every request/run/background
     # task executes on a Flask/daemon thread with no attached stdin. Force
@@ -4675,6 +4692,11 @@ def serve_combined_app(
     # workflow runs alike. Set synchronously: requests can arrive before the
     # build thread runs.
     utils.NO_INPUT_MODE = True
+
+    # A fresh serve must not inherit a prior serve's notice (tests spin up
+    # several servers per process).
+    global _startup_notice
+    _startup_notice = None
 
     boot_state: dict[str, Any] = {
         "ready": False,
@@ -4760,9 +4782,17 @@ def serve_combined_app(
             if client is None and gspread_client_factory is not None:
                 client = gspread_client_factory()
                 profiling.mark("startup.silent_google_auth")
+            ws = worksheet
+            if ws is None and worksheet_factory is not None:
+                set_phase("sheet")
+                ws, notice = worksheet_factory(client)
+                if notice:
+                    global _startup_notice
+                    _startup_notice = notice
+                profiling.mark("startup.worksheet_opened")
             set_phase("interface")
             combined = build_combined_app(
-                worksheet=worksheet,
+                worksheet=ws,
                 default_page=default_page,
                 gspread_client=client,
             )
@@ -4853,6 +4883,7 @@ def start_combined_server(
     default_page: str = "studio",
     gspread_client: Any = None,
     gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
 ) -> None:
     """Start a combined Studio + Screenspace + Transcripts server on one port.
 
@@ -4875,6 +4906,7 @@ def start_combined_server(
         default_page=default_page,
         gspread_client=gspread_client,
         gspread_client_factory=gspread_client_factory,
+        worksheet_factory=worksheet_factory,
     )
     utils.info_print(f"clipgen server running at {live.origin}")
     webbrowser.open(live.url)

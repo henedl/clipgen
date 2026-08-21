@@ -342,6 +342,7 @@ def launch_desktop(
     default_page: str = "studio",
     gspread_client: Any = None,
     gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
 ) -> None:
     """Serve the combined app and show it in a native window until closed."""
     import webview
@@ -358,6 +359,7 @@ def launch_desktop(
         default_page=default_page,
         gspread_client=gspread_client,
         gspread_client_factory=gspread_client_factory,
+        worksheet_factory=worksheet_factory,
     )
     profiling.mark("startup.server_bound")
     utils.info_print(f"clipgen running at {live.origin}")
@@ -455,6 +457,7 @@ def launch(
     default_page: str = "studio",
     gspread_client: Any = None,
     gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
 ) -> None:
     """Open a desktop window, falling back to the browser if that is impossible."""
     if not is_available():
@@ -466,6 +469,7 @@ def launch(
             default_page=default_page,
             gspread_client=gspread_client,
             gspread_client_factory=gspread_client_factory,
+            worksheet_factory=worksheet_factory,
         )
         return
     try:
@@ -474,6 +478,7 @@ def launch(
             default_page=default_page,
             gspread_client=gspread_client,
             gspread_client_factory=gspread_client_factory,
+            worksheet_factory=worksheet_factory,
         )
     except KeyboardInterrupt:
         pass
@@ -488,6 +493,7 @@ def launch(
             default_page=default_page,
             gspread_client=gspread_client,
             gspread_client_factory=gspread_client_factory,
+            worksheet_factory=worksheet_factory,
         )
 
 

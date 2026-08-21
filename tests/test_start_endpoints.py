@@ -1236,3 +1236,28 @@ def test_start_settings_get_reports_desktop_launch(client, monkeypatch):
     assert client.get("/api/start-settings").get_json()["desktop"] is False
     monkeypatch.setattr(utils, "GUI_LAUNCH", True)
     assert client.get("/api/start-settings").get_json()["desktop"] is True
+
+
+# ---------- startup notice ---------------------------------------------------
+
+
+def test_status_startup_notice_empty_by_default(client):
+    assert client.get("/api/status").get_json()["startup_notice"] == ""
+
+
+def test_status_carries_startup_notice(client, monkeypatch):
+    monkeypatch.setattr(server, "_startup_notice", "boot could not open 'X'")
+    s = client.get("/api/status").get_json()
+    assert s["startup_notice"] == "boot could not open 'X'"
+
+
+def test_successful_open_clears_startup_notice(client, monkeypatch, tmp_path):
+    """Opening any sheet moots whatever the boot build failed to open."""
+    monkeypatch.setattr(server, "_startup_notice", "boot could not open 'X'")
+    wb_path = tmp_path / "in" / "study.xlsx"
+    _write_preview_workbook(wb_path, ["P01"])
+    resp = client.post(
+        "/api/spreadsheets/open", json={"type": "excel", "id_or_path": str(wb_path)}
+    )
+    assert resp.get_json()["ok"] is True
+    assert client.get("/api/status").get_json()["startup_notice"] == ""
