@@ -214,6 +214,14 @@ class _GoogleAuthState:
 
 _google_auth = _GoogleAuthState()
 
+# Set by the boot build when a window-first `-s` launch could not open the
+# requested spreadsheet (no cached Google token, bad name, network failure):
+# ``{"message": ..., "source_type": "google"|"excel"}``. Surfaced on
+# /api/status so the Start overlay — the recovery surface for a sheetless
+# boot — can say why nothing is loaded and land on the failed source's tab;
+# cleared when a sheet opens.
+_startup_notice: dict[str, str] | None = None
+
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
 _settings_defaults: dict[str, Any] = {
@@ -3268,6 +3276,18 @@ def _cached_spreadsheet_meta(*, force: bool = False) -> list[dict[str, str]]:
         return list(metas)
 
 
+def _warm_spreadsheet_meta_cache() -> None:
+    """Best-effort prime of the Drive listing cache (boot's warm thread).
+
+    Failures are the overlay's problem to report on its own request — a warm
+    miss must never surface as a boot error.
+    """
+    try:
+        _cached_spreadsheet_meta()
+    except Exception as exc:
+        utils.verbose_print(f"Drive listing warm-up failed: {exc}")
+
+
 def _invalidate_spreadsheet_meta() -> None:
     """Drop the cached Drive listing (a different account may have signed in)."""
     global _google_sheet_list_cache
@@ -3668,7 +3688,13 @@ def build_combined_app(
         # it. The knobs it exists for (SCREENSPACE_OCR_POOL_SIZE,
         # WORKFLOWS_BATCH_WORKERS) are live-server knobs, so it has to be
         # reachable here and not only from the atexit report.
-        return ok(profile=snap, peak_rss_mb=profiling.peak_rss_mb())
+        return ok(
+            profile=snap,
+            peak_rss_mb=profiling.peak_rss_mb(),
+            # Like peak_rss: not a label, records once per process, and
+            # ?reset=1 cannot clear it.
+            startup=profiling.startup_snapshot(),
+        )
 
     @combined.route("/api/status")
     def status() -> Response:
@@ -3682,6 +3708,8 @@ def build_combined_app(
                 "composer": True,
                 "overview": True,
                 "sheet_loaded": _worksheet is not None,
+                "startup_notice": (_startup_notice or {}).get("message", ""),
+                "startup_notice_source": (_startup_notice or {}).get("source_type", ""),
                 # What record_project_session last stored, so the overlay's
                 # current-session key matches its recent-projects key.
                 "active_source": _active_project_source,
@@ -4209,9 +4237,11 @@ def build_combined_app(
             source,
             name=project_name,
         )
-        global _active_sheet_meta, _active_project_source
+        global _active_sheet_meta, _active_project_source, _startup_notice
         _active_sheet_meta = dict(source)
         _active_project_source = source
+        # A sheet is open now — whatever the boot build failed to open is moot.
+        _startup_notice = None
         return ok(
             sheet_loaded=True,
             spreadsheet_label=_spreadsheet_label(),
@@ -4511,6 +4541,7 @@ _BOOT_MESSAGES = {
     "starting": "Starting clipgen…",
     "vision_libs": "Loading computer-vision libraries…",
     "workspace": "Preparing workspace…",
+    "sheet": "Connecting to your spreadsheet…",
     "interface": "Building the interface…",
     "ready": "Ready",
 }
@@ -4573,6 +4604,12 @@ def _make_boot_dispatcher(boot_state: dict[str, Any]) -> Callable:
     def dispatcher(environ: dict[str, Any], start_response: Callable) -> Any:
         path = environ.get("PATH_INFO", "")
         if path == "/api/boot-status":
+            if not boot_state.get("first_poll_seen"):
+                # First poll proves the boot page's JS is executing — i.e. the
+                # window has painted content. One-shot; races at worst record
+                # two marks a few ms apart.
+                boot_state["first_poll_seen"] = True
+                profiling.mark("startup.boot_page_alive")
             body = json.dumps(
                 {
                     "ready": boot_state["ready"],
@@ -4633,6 +4670,8 @@ def serve_combined_app(
     port: int | None = None,
     default_page: str = "studio",
     gspread_client: Any = None,
+    gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
     block_until_ready: bool = False,
 ) -> LiveServer:
     """Serve the combined app on a background thread and return once listening.
@@ -4646,6 +4685,19 @@ def serve_combined_app(
     machine) runs on a background thread and is swapped in when done. Pass
     ``block_until_ready=True`` to instead wait for the real app — tests and
     scripted callers want the built app, not the boot shell.
+
+    *gspread_client* is a client the caller already authenticated;
+    *gspread_client_factory* is the deferred form — called on the build thread
+    (so the gspread import stays off the caller's window-paint path) and only
+    when no ready client was passed. Building the client off the request
+    threads is the established pattern here: the runtime "Connect Google"
+    route does the same on a daemon thread.
+
+    *worksheet_factory* is the same deferral for a `-s` launch's worksheet:
+    ``factory(client) -> (worksheet, notice)``, run on the build thread under
+    ``NO_INPUT_MODE`` (prompts degrade to failure). On failure the build
+    continues sheetless and *notice* lands in ``_startup_notice`` — the Start
+    overlay, not a dead boot-error page, is the recovery surface.
     """
     # The web server has no interactive console: every request/run/background
     # task executes on a Flask/daemon thread with no attached stdin. Force
@@ -4655,6 +4707,11 @@ def serve_combined_app(
     # workflow runs alike. Set synchronously: requests can arrive before the
     # build thread runs.
     utils.NO_INPUT_MODE = True
+
+    # A fresh serve must not inherit a prior serve's notice (tests spin up
+    # several servers per process).
+    global _startup_notice
+    _startup_notice = None
 
     boot_state: dict[str, Any] = {
         "ready": False,
@@ -4719,6 +4776,7 @@ def serve_combined_app(
     def set_phase(phase: str) -> None:
         boot_state["phase"] = phase
         boot_state["message"] = _BOOT_MESSAGES[phase]
+        profiling.mark(f"startup.phase_{phase}")
         utils.info_print(_BOOT_MESSAGES[phase])
 
     def build() -> None:
@@ -4735,16 +4793,43 @@ def serve_combined_app(
             # Must stay before the build: it unlinks *.json.tmp regardless of
             # age, and build_combined_app starts workers that atomic-write.
             utils.sweep_stale_temp_artifacts()
+            client = gspread_client
+            if client is None and gspread_client_factory is not None:
+                client = gspread_client_factory()
+                profiling.mark("startup.silent_google_auth")
+            ws = worksheet
+            if ws is None and worksheet_factory is not None:
+                set_phase("sheet")
+                ws, notice = worksheet_factory(client)
+                if notice:
+                    global _startup_notice
+                    _startup_notice = notice
+                profiling.mark("startup.worksheet_opened")
             set_phase("interface")
             combined = build_combined_app(
-                worksheet=worksheet,
+                worksheet=ws,
                 default_page=default_page,
-                gspread_client=gspread_client,
+                gspread_client=client,
             )
             boot_state["app"] = combined
             set_phase("ready")
             boot_state["ready"] = True
             utils.info_print(f"clipgen ready in {time.monotonic() - started:.1f}s")
+            if config.PROFILING:
+                # A live desktop session should not have to exit (atexit
+                # report) to see the startup attribution.
+                profiling.report_startup()
+            if _google_auth.client is not None:
+                # Warm the 300s-TTL Drive listing cache so the auto-opened
+                # Start overlay's Google panel answers instantly. Not an extra
+                # API call in the common flow: the overlay would issue the
+                # same files.list moments later, and the single-flight cache
+                # dedupes the two.
+                threading.Thread(
+                    target=_warm_spreadsheet_meta_cache,
+                    daemon=True,
+                    name="clipgen-drive-warm",
+                ).start()
         except BaseException as exc:
             # BaseException on purpose: _init_studio_state exits via sys.exit(1)
             # on a bad worksheet, and a SystemExit swallowed by a daemon thread
@@ -4823,6 +4908,8 @@ def start_combined_server(
     port: int | None = None,
     default_page: str = "studio",
     gspread_client: Any = None,
+    gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
 ) -> None:
     """Start a combined Studio + Screenspace + Transcripts server on one port.
 
@@ -4844,6 +4931,8 @@ def start_combined_server(
         port=port or config.SERVER_PORT,
         default_page=default_page,
         gspread_client=gspread_client,
+        gspread_client_factory=gspread_client_factory,
+        worksheet_factory=worksheet_factory,
     )
     utils.info_print(f"clipgen server running at {live.origin}")
     webbrowser.open(live.url)

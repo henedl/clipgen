@@ -2109,6 +2109,30 @@ var initThemeToggle = function (onToggle) {
   });
 };
 
+// ---- Shared /api/status fetch ----
+//
+// Three or four callers ask for /api/status on every page load (the frontend
+// switcher here, start-overlay's boot + refresh, Studio's checkNavLinks), and
+// each hit runs a directory scan server-side. Memoize the promise so one page
+// load makes one request; force=true refetches (and re-primes the memo) for
+// callers that need fresh state, like the Start overlay on open.
+var _clipgenStatusPromise = null;
+var clipgenStatus = function (force) {
+  if (force || !_clipgenStatusPromise) {
+    _clipgenStatusPromise = fetch("/api/status").then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+    // A failed fetch must not be memoized forever — drop it so the next
+    // caller retries. (Attaching the catch here also keeps a caller-less
+    // rejection from logging as unhandled.)
+    _clipgenStatusPromise.catch(function () {
+      _clipgenStatusPromise = null;
+    });
+  }
+  return _clipgenStatusPromise;
+};
+
 // ---- Frontend switcher (shared across Studio / Screenspace / Transcripts) ----
 
 var initFrontendSwitcher = function () {
@@ -2162,11 +2186,7 @@ var initFrontendSwitcher = function () {
     if (!root.contains(e.target)) close();
   });
 
-  fetch("/api/status")
-    .then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
-    })
+  clipgenStatus()
     .then(function (status) {
       var items = panel.querySelectorAll(".frontend-switcher-item");
       items.forEach(function (item) {

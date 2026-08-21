@@ -95,6 +95,7 @@
     // can't post an empty name that clears a stored label, and a late-landing
     // prefill can't stomp what the user was typing meanwhile.
     projectNamePrefilled: false,  // applyCurrentSessionPrefill has run at least once
+    startupNoticeShown: false,  // the boot -s failure toast fired (highlight persists)
     projectNameAuthored: false,   // the user typed it, or picked a recent project
     recentsExpanded: false,   // rail fold-out revealing projects past RAIL_RECENTS_VISIBLE
     worksheetsCache: {},      // "type|id_or_path" -> { worksheets, recommended }
@@ -1182,10 +1183,17 @@
 
   // ---- Data loading ----
 
-  function loadStatus() {
-    return apiGet("/api/status").then(function (s) {
+  function loadStatus(force) {
+    // Shared memoized fetch (utils.js). The overlay's refresh passes
+    // force=true — it must see the current sheet state, not the page-load
+    // snapshot.
+    return clipgenStatus(force).then(function (s) {
       state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
+      // The startup_notice from a failed window-first `-s` launch is handled
+      // in applyCurrentSessionPrefill, not here: prefill's setTab calls run
+      // after this and always clearSheetError(), so a highlight applied now
+      // would be wiped before the user sees it.
       // setStartTab("about") renders from statusData; if About is already
       // visible when this lands, the panel would otherwise stay on v0.0.0.
       if (state.startTab === "about") renderAbout();
@@ -1601,8 +1609,8 @@
     }).catch(function (err) {
       // Recovers rather than re-throwing, for two reasons: the panel is
       // mid-load (status replaced, picker hidden) and nothing downstream would
-      // put it back, and on boot this sits in refresh()'s chain ahead of
-      // loadExcelFiles + applyCurrentSessionPrefill, which must still run.
+      // put it back, and a rejection would fail refresh()'s Promise.all and
+      // skip applyCurrentSessionPrefill, which must still run.
       console.error("Google sheet list failed", err);
       keepPreviousGoogleList("Couldn't reach clipgen.");
     });
@@ -2422,19 +2430,25 @@
   }
 
   function refresh() {
-    loadStatus()
-      .then(loadDirs)
-      .then(loadStartSettings)
-      // Wrapped, not passed by reference: loadGoogleSheets(force) would
-      // otherwise receive the previous link's resolved value as `force` and
-      // re-list from Drive on every overlay open.
-      .then(function () { return loadGoogleSheets(); })
-      .then(loadExcelFiles)
-      .then(loadMindnodeFiles)
+    // Concurrent, not serial: each loader renders its own panel on resolve
+    // and swallows its own errors, and the Google listing is a Drive network
+    // call (with exponential backoff on 429) that must not keep the local
+    // Excel/MindNode/changelog panels queued behind it. Only
+    // applyCurrentSessionPrefill waits for everything — it reads status +
+    // all three source lists. loadChangelog reads CHANGELOG.md off disk, so
+    // it is cheap enough to do up front — and the Recent updates count badge
+    // only exists if we do. loadGoogleSheets is wrapped with no argument so
+    // it never mistakes anything for its `force` flag.
+    Promise.all([
+      loadStatus(true),
+      loadDirs(),
+      loadStartSettings(),
+      loadGoogleSheets(),
+      loadExcelFiles(),
+      loadMindnodeFiles(),
+      loadChangelog(),
+    ])
       .then(applyCurrentSessionPrefill)
-      // Reads CHANGELOG.md off disk, so it is cheap enough to do up front —
-      // and the Recent updates count badge only exists if we do.
-      .then(loadChangelog)
       .catch(function (err) {
         console.error("Start overlay refresh failed", err);
       });
@@ -2498,6 +2512,17 @@
       // change things without the dirty glow misfiring.
       state.baseline.sheetTab = state.activeTab;
       state.baseline.sheetKey = "";
+    } else if (s.startup_notice) {
+      // A window-first `-s` launch failed to open this source on the boot
+      // thread. Land on the failed source's tab — never "none", which hides
+      // the pickers and the Google Connect CTA the notice points at — and
+      // highlight the sheet card *after* setTab (which always clears the
+      // highlight). The highlight re-applies on every overlay open while the
+      // notice stands (the server drops it once any sheet opens); the toast
+      // fires only the first time.
+      setTab(s.startup_notice_source === "excel" ? "excel" : "google");
+      markSheetError(state.startupNoticeShown ? "" : s.startup_notice);
+      state.startupNoticeShown = true;
     } else {
       // No sheet loaded: the session's current state is "no spreadsheet".
       setTab("none");
@@ -2524,7 +2549,7 @@
 
   function boot() {
     mount().then(function () {
-      apiGet("/api/status").then(function (s) {
+      clipgenStatus().then(function (s) {
         state.statusData = s;
         state.sheetLoaded = !!s.sheet_loaded;
         if (shouldAutoOpen(s)) open();

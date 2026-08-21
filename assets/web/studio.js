@@ -4592,7 +4592,8 @@
   // ---- Init ----
 
   function checkNavLinks() {
-    apiGet("../api/status")
+    // Shared memoized fetch (utils.js): one /api/status per page load.
+    clipgenStatus()
       .then(function (data) {
         if (data.screenspace) {
           var intakeTab = qs('.preview-tab[data-tab="intake"]');

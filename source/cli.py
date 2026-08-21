@@ -3641,16 +3641,56 @@ def _use_desktop_window(args: Any) -> bool:
     return bool(getattr(sys, "frozen", False)) and not sys.argv[1:]
 
 
+def _make_worksheet_factory(args: Any) -> Any:
+    """Deferred `-s` worksheet opener for window-first desktop launches.
+
+    Returns ``factory(client) -> (worksheet, notice)``, run on the server's
+    boot-build thread. That thread operates under ``NO_INPUT_MODE`` with no
+    console, so everything the console path handles interactively degrades to
+    a ``notice`` dict (``message`` + ``source_type``) — the boot continues
+    sheetless and the Start overlay shows the message as the recovery surface,
+    landed on the failed source's tab.
+    """
+    sheet_arg = getattr(args, "spreadsheet", None)
+    source_type = "excel" if _is_excel_spreadsheet_arg(sheet_arg) else "google"
+
+    def factory(client: Any) -> tuple[Any, dict[str, str] | None]:
+        if source_type == "google" and client is None:
+            # No cached token to reuse silently, and a background thread must
+            # never launch the interactive browser OAuth flow.
+            message = (
+                f"Google sign-in is needed to open '{sheet_arg}' — connect "
+                "below, then pick it again."
+            )
+            return None, {"message": message, "source_type": source_type}
+        try:
+            return select_worksheet(client, args, cli_mode=False), None
+        except BaseException as exc:
+            # BaseException on purpose: select_worksheet exits via sys.exit(1)
+            # (SystemExit is a BaseException), and swallowing that here is the
+            # point — a bad sheet must not kill the boot build.
+            utils.warning_print(f"Could not open spreadsheet '{sheet_arg}': {exc}")
+            message = f"Could not open spreadsheet '{sheet_arg}' — pick a source below."
+            return None, {"message": message, "source_type": source_type}
+
+    return factory
+
+
 def _launch_web_frontend(
     args: Any,
     default_page: str,
     worksheet: Any = None,
     gspread_client: Any = None,
+    gspread_client_factory: Any = None,
+    worksheet_factory: Any = None,
 ) -> None:
     """Serve *default_page*, in a desktop window or the default browser.
 
     Single funnel for all seven launch sites so the window-vs-browser decision
-    lives in exactly one place.
+    lives in exactly one place. *gspread_client* is a client the caller already
+    authenticated (console `-s` path); *gspread_client_factory* defers that work
+    to the server's boot-build thread instead, and *worksheet_factory* defers
+    the `-s` worksheet open the same way.
     """
     if _use_desktop_window(args):
         import desktop
@@ -3659,6 +3699,8 @@ def _launch_web_frontend(
             worksheet=worksheet,
             default_page=default_page,
             gspread_client=gspread_client,
+            gspread_client_factory=gspread_client_factory,
+            worksheet_factory=worksheet_factory,
         )
         return
 
@@ -3668,6 +3710,8 @@ def _launch_web_frontend(
         worksheet=worksheet,
         default_page=default_page,
         gspread_client=gspread_client,
+        gspread_client_factory=gspread_client_factory,
+        worksheet_factory=worksheet_factory,
     )
 
 
@@ -3757,16 +3801,19 @@ def _dispatch_standalone_mode(
     # The Start overlay lets the user pick a spreadsheet from the frontend.
     web_mode = _resolve_web_mode(args)
     if web_mode is not None and not args.spreadsheet:
+        profiling.mark("startup.web_dispatch")
         _maybe_apply_persisted_dirs(args)
         # Silent best-effort reuse of the cached Google token (frozen .app
         # double-clicks land here; without this, every launch forces the user
         # back through "Connect Google" even when their token is still good).
-        gspread_client = _try_silent_google_auth()
+        # Passed as a factory, not called here: the gspread import behind it
+        # costs >100 ms warm (far more frozen), so it runs on the boot-build
+        # thread instead of ahead of the window.
         _launch_web_frontend(
             args,
             web_mode,
             worksheet=None,
-            gspread_client=gspread_client,
+            gspread_client_factory=_try_silent_google_auth,
         )
         return True
 
@@ -3808,6 +3855,7 @@ def main() -> None:
     setup_encoding()
 
     args = parse_arguments()
+    profiling.mark("startup.args_parsed")
 
     # Double-clicked from Finder/Explorer (frozen bundle, no CLI args) → land in
     # Studio. The Start overlay handles in-app spreadsheet selection.
@@ -3928,7 +3976,26 @@ def main() -> None:
         )
         config.TITLECARDS_ENABLED = False
 
+    profiling.mark("startup.ffmpeg_checks")
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
+        sys.exit(0)
+
+    # Window-first `-s` desktop launch: a GUI launch has no console, so the
+    # interactive auth + worksheet selection below would block (or die)
+    # invisibly before any window exists. Defer both to the boot-build thread —
+    # the boot page narrates, and a failure degrades to a sheetless Studio with
+    # the Start overlay explaining why. Browser/console `-s` runs keep the
+    # interactive path below.
+    web_mode = _resolve_web_mode(args)
+    if web_mode is not None and _use_desktop_window(args):
+        profiling.mark("startup.web_dispatch")
+        _launch_web_frontend(
+            args,
+            web_mode,
+            worksheet=None,
+            gspread_client_factory=_try_silent_google_auth,
+            worksheet_factory=_make_worksheet_factory(args),
+        )
         sys.exit(0)
 
     # Authenticate with Google (once per run) – skip for local Excel files.
