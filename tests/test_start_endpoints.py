@@ -1246,14 +1246,23 @@ def test_status_startup_notice_empty_by_default(client):
 
 
 def test_status_carries_startup_notice(client, monkeypatch):
-    monkeypatch.setattr(server, "_startup_notice", "boot could not open 'X'")
+    monkeypatch.setattr(
+        server,
+        "_startup_notice",
+        {"message": "boot could not open 'X'", "source_type": "excel"},
+    )
     s = client.get("/api/status").get_json()
     assert s["startup_notice"] == "boot could not open 'X'"
+    assert s["startup_notice_source"] == "excel"
 
 
 def test_successful_open_clears_startup_notice(client, monkeypatch, tmp_path):
     """Opening any sheet moots whatever the boot build failed to open."""
-    monkeypatch.setattr(server, "_startup_notice", "boot could not open 'X'")
+    monkeypatch.setattr(
+        server,
+        "_startup_notice",
+        {"message": "boot could not open 'X'", "source_type": "google"},
+    )
     wb_path = tmp_path / "in" / "study.xlsx"
     _write_preview_workbook(wb_path, ["P01"])
     resp = client.post(

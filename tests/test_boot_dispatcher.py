@@ -247,8 +247,11 @@ def test_worksheet_factory_failure_degrades_to_sheetless(monkeypatch):
     """A factory that could not open the sheet must not kill the boot: the app
     builds sheetless, ready is set, and the notice is surfaced for /api/status."""
 
-    def _factory(client: Any) -> tuple[None, str]:
-        return None, "Could not open spreadsheet 'X' — pick a source below."
+    def _factory(client: Any) -> tuple[None, dict[str, str]]:
+        return None, {
+            "message": "Could not open spreadsheet 'X' — pick a source below.",
+            "source_type": "excel",
+        }
 
     def _build(**kwargs: Any) -> Any:
         assert kwargs.get("worksheet") is None
@@ -264,10 +267,10 @@ def test_worksheet_factory_failure_degrades_to_sheetless(monkeypatch):
     try:
         assert live.boot["ready"] is True
         assert live.boot["error"] is None
-        assert (
-            server._startup_notice
-            == "Could not open spreadsheet 'X' — pick a source below."
-        )
+        assert server._startup_notice == {
+            "message": "Could not open spreadsheet 'X' — pick a source below.",
+            "source_type": "excel",
+        }
     finally:
         live.srv.shutdown()
         live.srv.server_close()

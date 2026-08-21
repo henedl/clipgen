@@ -95,6 +95,7 @@
     // can't post an empty name that clears a stored label, and a late-landing
     // prefill can't stomp what the user was typing meanwhile.
     projectNamePrefilled: false,  // applyCurrentSessionPrefill has run at least once
+    startupNoticeShown: false,  // the boot -s failure toast fired (highlight persists)
     projectNameAuthored: false,   // the user typed it, or picked a recent project
     recentsExpanded: false,   // rail fold-out revealing projects past RAIL_RECENTS_VISIBLE
     worksheetsCache: {},      // "type|id_or_path" -> { worksheets, recommended }
@@ -1189,13 +1190,10 @@
     return clipgenStatus(force).then(function (s) {
       state.statusData = s;
       state.sheetLoaded = !!s.sheet_loaded;
-      if (s.startup_notice && !state.startupNoticeShown) {
-        // A window-first `-s` launch could not open its spreadsheet on the
-        // boot-build thread; explain why the session is sheetless. One-shot:
-        // refresh() re-runs on every overlay open and must not re-toast.
-        state.startupNoticeShown = true;
-        markSheetError(s.startup_notice);
-      }
+      // The startup_notice from a failed window-first `-s` launch is handled
+      // in applyCurrentSessionPrefill, not here: prefill's setTab calls run
+      // after this and always clearSheetError(), so a highlight applied now
+      // would be wiped before the user sees it.
       // setStartTab("about") renders from statusData; if About is already
       // visible when this lands, the panel would otherwise stay on v0.0.0.
       if (state.startTab === "about") renderAbout();
@@ -2514,6 +2512,17 @@
       // change things without the dirty glow misfiring.
       state.baseline.sheetTab = state.activeTab;
       state.baseline.sheetKey = "";
+    } else if (s.startup_notice) {
+      // A window-first `-s` launch failed to open this source on the boot
+      // thread. Land on the failed source's tab — never "none", which hides
+      // the pickers and the Google Connect CTA the notice points at — and
+      // highlight the sheet card *after* setTab (which always clears the
+      // highlight). The highlight re-applies on every overlay open while the
+      // notice stands (the server drops it once any sheet opens); the toast
+      // fires only the first time.
+      setTab(s.startup_notice_source === "excel" ? "excel" : "google");
+      markSheetError(state.startupNoticeShown ? "" : s.startup_notice);
+      state.startupNoticeShown = true;
     } else {
       // No sheet loaded: the session's current state is "no spreadsheet".
       setTab("none");

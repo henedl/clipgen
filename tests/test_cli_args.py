@@ -1259,8 +1259,9 @@ def test_worksheet_factory_needs_google_signin_without_client():
     factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
     worksheet, notice = factory(None)
     assert worksheet is None
-    assert "Google sign-in is needed" in notice
-    assert "mystudy" in notice
+    assert "Google sign-in is needed" in notice["message"]
+    assert "mystudy" in notice["message"]
+    assert notice["source_type"] == "google"
 
 
 def test_worksheet_factory_turns_select_exit_into_notice(monkeypatch):
@@ -1270,7 +1271,8 @@ def test_worksheet_factory_turns_select_exit_into_notice(monkeypatch):
     factory = cli._make_worksheet_factory(_base_args(spreadsheet="mystudy"))
     worksheet, notice = factory("client")
     assert worksheet is None
-    assert "Could not open spreadsheet 'mystudy'" in notice
+    assert "Could not open spreadsheet 'mystudy'" in notice["message"]
+    assert notice["source_type"] == "google"
 
 
 def test_worksheet_factory_passes_through_success(monkeypatch):

@@ -215,10 +215,12 @@ class _GoogleAuthState:
 _google_auth = _GoogleAuthState()
 
 # Set by the boot build when a window-first `-s` launch could not open the
-# requested spreadsheet (no cached Google token, bad name, network failure).
-# Surfaced on /api/status so the Start overlay — the recovery surface for a
-# sheetless boot — can say why nothing is loaded; cleared when a sheet opens.
-_startup_notice: str | None = None
+# requested spreadsheet (no cached Google token, bad name, network failure):
+# ``{"message": ..., "source_type": "google"|"excel"}``. Surfaced on
+# /api/status so the Start overlay — the recovery surface for a sheetless
+# boot — can say why nothing is loaded and land on the failed source's tab;
+# cleared when a sheet opens.
+_startup_notice: dict[str, str] | None = None
 
 # Snapshot config defaults before any settings file is loaded.
 # Deep-copied so dict-valued defaults are not aliased to live config state.
@@ -3706,7 +3708,8 @@ def build_combined_app(
                 "composer": True,
                 "overview": True,
                 "sheet_loaded": _worksheet is not None,
-                "startup_notice": _startup_notice or "",
+                "startup_notice": (_startup_notice or {}).get("message", ""),
+                "startup_notice_source": (_startup_notice or {}).get("source_type", ""),
                 # What record_project_session last stored, so the overlay's
                 # current-session key matches its recent-projects key.
                 "active_source": _active_project_source,

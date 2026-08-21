@@ -3647,20 +3647,22 @@ def _make_worksheet_factory(args: Any) -> Any:
     Returns ``factory(client) -> (worksheet, notice)``, run on the server's
     boot-build thread. That thread operates under ``NO_INPUT_MODE`` with no
     console, so everything the console path handles interactively degrades to
-    ``(None, notice)`` — the boot continues sheetless and the Start overlay
-    shows *notice* as the recovery surface.
+    a ``notice`` dict (``message`` + ``source_type``) — the boot continues
+    sheetless and the Start overlay shows the message as the recovery surface,
+    landed on the failed source's tab.
     """
     sheet_arg = getattr(args, "spreadsheet", None)
+    source_type = "excel" if _is_excel_spreadsheet_arg(sheet_arg) else "google"
 
-    def factory(client: Any) -> tuple[Any, str | None]:
-        if not _is_excel_spreadsheet_arg(sheet_arg) and client is None:
+    def factory(client: Any) -> tuple[Any, dict[str, str] | None]:
+        if source_type == "google" and client is None:
             # No cached token to reuse silently, and a background thread must
             # never launch the interactive browser OAuth flow.
-            notice = (
+            message = (
                 f"Google sign-in is needed to open '{sheet_arg}' — connect "
                 "below, then pick it again."
             )
-            return None, notice
+            return None, {"message": message, "source_type": source_type}
         try:
             return select_worksheet(client, args, cli_mode=False), None
         except BaseException as exc:
@@ -3668,10 +3670,8 @@ def _make_worksheet_factory(args: Any) -> Any:
             # (SystemExit is a BaseException), and swallowing that here is the
             # point — a bad sheet must not kill the boot build.
             utils.warning_print(f"Could not open spreadsheet '{sheet_arg}': {exc}")
-            return (
-                None,
-                f"Could not open spreadsheet '{sheet_arg}' — pick a source below.",
-            )
+            message = f"Could not open spreadsheet '{sheet_arg}' — pick a source below."
+            return None, {"message": message, "source_type": source_type}
 
     return factory
 
