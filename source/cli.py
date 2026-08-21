@@ -3646,11 +3646,14 @@ def _launch_web_frontend(
     default_page: str,
     worksheet: Any = None,
     gspread_client: Any = None,
+    gspread_client_factory: Any = None,
 ) -> None:
     """Serve *default_page*, in a desktop window or the default browser.
 
     Single funnel for all seven launch sites so the window-vs-browser decision
-    lives in exactly one place.
+    lives in exactly one place. *gspread_client* is a client the caller already
+    authenticated (console `-s` path); *gspread_client_factory* defers that work
+    to the server's boot-build thread instead.
     """
     if _use_desktop_window(args):
         import desktop
@@ -3659,6 +3662,7 @@ def _launch_web_frontend(
             worksheet=worksheet,
             default_page=default_page,
             gspread_client=gspread_client,
+            gspread_client_factory=gspread_client_factory,
         )
         return
 
@@ -3668,6 +3672,7 @@ def _launch_web_frontend(
         worksheet=worksheet,
         default_page=default_page,
         gspread_client=gspread_client,
+        gspread_client_factory=gspread_client_factory,
     )
 
 
@@ -3762,13 +3767,14 @@ def _dispatch_standalone_mode(
         # Silent best-effort reuse of the cached Google token (frozen .app
         # double-clicks land here; without this, every launch forces the user
         # back through "Connect Google" even when their token is still good).
-        gspread_client = _try_silent_google_auth()
-        profiling.mark("startup.silent_google_auth")
+        # Passed as a factory, not called here: the gspread import behind it
+        # costs >100 ms warm (far more frozen), so it runs on the boot-build
+        # thread instead of ahead of the window.
         _launch_web_frontend(
             args,
             web_mode,
             worksheet=None,
-            gspread_client=gspread_client,
+            gspread_client_factory=_try_silent_google_auth,
         )
         return True
 

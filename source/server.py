@@ -4645,6 +4645,7 @@ def serve_combined_app(
     port: int | None = None,
     default_page: str = "studio",
     gspread_client: Any = None,
+    gspread_client_factory: Any = None,
     block_until_ready: bool = False,
 ) -> LiveServer:
     """Serve the combined app on a background thread and return once listening.
@@ -4658,6 +4659,13 @@ def serve_combined_app(
     machine) runs on a background thread and is swapped in when done. Pass
     ``block_until_ready=True`` to instead wait for the real app — tests and
     scripted callers want the built app, not the boot shell.
+
+    *gspread_client* is a client the caller already authenticated;
+    *gspread_client_factory* is the deferred form — called on the build thread
+    (so the gspread import stays off the caller's window-paint path) and only
+    when no ready client was passed. Building the client off the request
+    threads is the established pattern here: the runtime "Connect Google"
+    route does the same on a daemon thread.
     """
     # The web server has no interactive console: every request/run/background
     # task executes on a Flask/daemon thread with no attached stdin. Force
@@ -4748,11 +4756,15 @@ def serve_combined_app(
             # Must stay before the build: it unlinks *.json.tmp regardless of
             # age, and build_combined_app starts workers that atomic-write.
             utils.sweep_stale_temp_artifacts()
+            client = gspread_client
+            if client is None and gspread_client_factory is not None:
+                client = gspread_client_factory()
+                profiling.mark("startup.silent_google_auth")
             set_phase("interface")
             combined = build_combined_app(
                 worksheet=worksheet,
                 default_page=default_page,
-                gspread_client=gspread_client,
+                gspread_client=client,
             )
             boot_state["app"] = combined
             set_phase("ready")
@@ -4840,6 +4852,7 @@ def start_combined_server(
     port: int | None = None,
     default_page: str = "studio",
     gspread_client: Any = None,
+    gspread_client_factory: Any = None,
 ) -> None:
     """Start a combined Studio + Screenspace + Transcripts server on one port.
 
@@ -4861,6 +4874,7 @@ def start_combined_server(
         port=port or config.SERVER_PORT,
         default_page=default_page,
         gspread_client=gspread_client,
+        gspread_client_factory=gspread_client_factory,
     )
     utils.info_print(f"clipgen server running at {live.origin}")
     webbrowser.open(live.url)

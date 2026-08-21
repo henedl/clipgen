@@ -165,17 +165,28 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
     captured = {}
 
     def fake_start(
-        *, worksheet=None, port=None, default_page="studio", gspread_client=None
+        *,
+        worksheet=None,
+        port=None,
+        default_page="studio",
+        gspread_client=None,
+        gspread_client_factory=None,
     ):
         captured["worksheet"] = worksheet
         captured["default_page"] = default_page
         captured["gspread_client"] = gspread_client
+        captured["gspread_client_factory"] = gspread_client_factory
 
     monkeypatch.setattr(server, "start_combined_server", fake_start)
     # Skip persisted-dir application in this isolated test
     monkeypatch.setattr(cli, "_maybe_apply_persisted_dirs", lambda _args: None)
-    # Force the silent-auth helper to return None (no cached token to reuse).
-    monkeypatch.setattr(cli, "_try_silent_google_auth", lambda: None)
+
+    # Silent auth is deferred to the boot-build thread: dispatch must forward
+    # the helper as a factory, never call it on the launch path.
+    def fail_silent_auth():
+        pytest.fail("silent auth must not run during dispatch")
+
+    monkeypatch.setattr(cli, "_try_silent_google_auth", fail_silent_auth)
 
     args = _base_args(**{flag: True})
     result = cli._dispatch_standalone_mode(args, cli_mode=False, gallery_arg=None)
@@ -184,6 +195,7 @@ def test_web_mode_without_spreadsheet_dispatches_standalone(
     assert captured["worksheet"] is None
     assert captured["default_page"] == expected_default_page
     assert captured["gspread_client"] is None
+    assert captured["gspread_client_factory"] is fail_silent_auth
 
 
 def test_studio_with_spreadsheet_does_not_short_circuit(monkeypatch):
@@ -414,7 +426,14 @@ def test_frozen_no_args_threads_into_standalone_branch(monkeypatch, tmp_path):
             "frozen-no-args path must not reach Excel fallback prompt"
         ),
     )
-    monkeypatch.setattr(cli, "_try_silent_google_auth", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "_try_silent_google_auth",
+        lambda: pytest.fail(
+            "silent auth is deferred to the boot-build thread; the launch path "
+            "must not call it"
+        ),
+    )
     monkeypatch.setattr("sys.argv", ["clipgen"])
     monkeypatch.setattr("sys.frozen", True, raising=False)
 
