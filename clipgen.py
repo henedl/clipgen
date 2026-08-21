@@ -25,7 +25,12 @@ Three details here are important:
 
 import multiprocessing
 import sys
+import time
 from pathlib import Path
+
+# Startup anchor: everything the `startup |` report attributes is measured
+# from here, before any clipgen import has run.
+_T0 = time.perf_counter()
 
 if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parent / "source"))
@@ -35,6 +40,11 @@ if __name__ == "__main__":
 
     import utils
     from cli import main
+
+    import profiling
+
+    profiling.set_process_start(_T0)
+    profiling.mark("startup.imports_utils_cli")
 
     try:
         main()

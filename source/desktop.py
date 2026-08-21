@@ -29,6 +29,7 @@ from typing import Any
 import config
 import desktop_chrome
 import desktop_menu
+import profiling
 import server
 import server_utils
 import start_settings
@@ -356,6 +357,7 @@ def launch_desktop(
         default_page=default_page,
         gspread_client=gspread_client,
     )
+    profiling.mark("startup.server_bound")
     utils.info_print(f"clipgen running at {live.origin}")
 
     # Second sample: the server bind above returns fast (the heavy build runs
@@ -369,6 +371,9 @@ def launch_desktop(
         # but the first GET only happens when the window loads.
         utils.DESKTOP_CHROME = desktop_chrome.chrome_style()
         geometry = _restore_geometry()
+        # The cocoa/AppKit toolkit init (webview.screens inside
+        # _restore_geometry) lands in this delta.
+        profiling.mark("startup.gui_init")
         window = webview.create_window(
             f"clipgen v{utils.get_version()}",
             live.url,
@@ -392,6 +397,8 @@ def launch_desktop(
             open_external, save_file, titlebar_double_click, set_window_appearance
         )
         window.events.loaded += lambda: window.run_js(_EXTERNAL_LINK_SHIM)
+        # First shown-hook: the closest observable proxy for first paint.
+        window.events.shown += lambda: profiling.mark("startup.window_shown")
         # before_show is a locking event, so this runs inline on AppKit's thread
         # after the backend finishes its own titlebar styling. The shown hook is
         # not optional: ordering the window front re-lays out the titlebar and
@@ -418,6 +425,7 @@ def launch_desktop(
             menus = []
 
         _hide_own_console()
+        profiling.mark("startup.webview_start")
         webview.start(
             menu=menus,
             debug=config.DEBUGGING,

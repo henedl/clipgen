@@ -3757,11 +3757,13 @@ def _dispatch_standalone_mode(
     # The Start overlay lets the user pick a spreadsheet from the frontend.
     web_mode = _resolve_web_mode(args)
     if web_mode is not None and not args.spreadsheet:
+        profiling.mark("startup.web_dispatch")
         _maybe_apply_persisted_dirs(args)
         # Silent best-effort reuse of the cached Google token (frozen .app
         # double-clicks land here; without this, every launch forces the user
         # back through "Connect Google" even when their token is still good).
         gspread_client = _try_silent_google_auth()
+        profiling.mark("startup.silent_google_auth")
         _launch_web_frontend(
             args,
             web_mode,
@@ -3808,6 +3810,7 @@ def main() -> None:
     setup_encoding()
 
     args = parse_arguments()
+    profiling.mark("startup.args_parsed")
 
     # Double-clicked from Finder/Explorer (frozen bundle, no CLI args) → land in
     # Studio. The Start overlay handles in-app spreadsheet selection.
@@ -3928,6 +3931,7 @@ def main() -> None:
         )
         config.TITLECARDS_ENABLED = False
 
+    profiling.mark("startup.ffmpeg_checks")
     if _dispatch_standalone_mode(args, cli_mode, gallery_arg):
         sys.exit(0)
 

@@ -17,8 +17,15 @@ import profiling
 
 @pytest.fixture(autouse=True)
 def _clean_profiling(monkeypatch):
-    """Every test starts with profiling off and an empty accumulator."""
+    """Every test starts with profiling off and an empty accumulator.
+
+    Startup marks are monkeypatched rather than reset(): reset() deliberately
+    leaves them alone (``?reset=1`` brackets a measurement window; startup
+    happened once and stays reportable).
+    """
     monkeypatch.setattr(config, "PROFILING", False)
+    monkeypatch.setattr(profiling, "_STARTUP_T0", None)
+    monkeypatch.setattr(profiling, "_STARTUP_MARKS", [])
     profiling.reset()
     yield
     profiling.reset()
@@ -248,6 +255,60 @@ def test_scan_summary_single_line(monkeypatch, capsys):
 
 def test_scan_summary_noop_when_off(capsys):
     profiling.scan_summary("x", [("a", 1.0, 1)])
+    assert capsys.readouterr().out == ""
+
+
+# ---------- startup marks -----------------------------------------------------
+
+
+def test_startup_marks_record_even_when_profiling_off():
+    profiling.set_process_start(time.perf_counter())
+    profiling.mark("startup.a")
+    profiling.mark("startup.b")
+    snap = profiling.startup_snapshot()
+    assert [entry["label"] for entry in snap] == ["startup.a", "startup.b"]
+    assert snap[0]["at_ms"] >= 0
+    assert snap[1]["at_ms"] >= snap[0]["at_ms"]
+    assert snap[1]["delta_ms"] == pytest.approx(
+        snap[1]["at_ms"] - snap[0]["at_ms"], abs=1e-6
+    )
+
+
+def test_startup_snapshot_empty_without_anchor():
+    profiling.mark("startup.orphan")  # recorded, but unreportable without T0
+    assert profiling.startup_snapshot() == []
+
+
+def test_startup_marks_capped():
+    profiling.set_process_start(time.perf_counter())
+    for i in range(profiling._MAX_STARTUP_MARKS + 5):
+        profiling.mark(f"startup.m{i}")
+    assert len(profiling.startup_snapshot()) == profiling._MAX_STARTUP_MARKS
+
+
+def test_report_startup_line_shape(capsys):
+    profiling.set_process_start(time.perf_counter())
+    profiling.mark("startup.window_shown")
+    profiling.report_startup()
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("startup | startup.window_shown")
+    assert "t=" in lines[0]
+
+
+def test_report_includes_startup_section_first(monkeypatch, capsys):
+    monkeypatch.setattr(config, "PROFILING", True)
+    profiling.set_process_start(time.perf_counter())
+    profiling.mark("startup.args_parsed")
+    profiling.add("work", 0.5)
+    profiling.report()
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("startup | ")
+    assert any(line.startswith("profile | work") for line in lines[1:])
+
+
+def test_report_startup_silent_when_empty(capsys):
+    profiling.report_startup()
     assert capsys.readouterr().out == ""
 
 

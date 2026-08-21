@@ -3668,7 +3668,13 @@ def build_combined_app(
         # it. The knobs it exists for (SCREENSPACE_OCR_POOL_SIZE,
         # WORKFLOWS_BATCH_WORKERS) are live-server knobs, so it has to be
         # reachable here and not only from the atexit report.
-        return ok(profile=snap, peak_rss_mb=profiling.peak_rss_mb())
+        return ok(
+            profile=snap,
+            peak_rss_mb=profiling.peak_rss_mb(),
+            # Like peak_rss: not a label, records once per process, and
+            # ?reset=1 cannot clear it.
+            startup=profiling.startup_snapshot(),
+        )
 
     @combined.route("/api/status")
     def status() -> Response:
@@ -4573,6 +4579,12 @@ def _make_boot_dispatcher(boot_state: dict[str, Any]) -> Callable:
     def dispatcher(environ: dict[str, Any], start_response: Callable) -> Any:
         path = environ.get("PATH_INFO", "")
         if path == "/api/boot-status":
+            if not boot_state.get("first_poll_seen"):
+                # First poll proves the boot page's JS is executing — i.e. the
+                # window has painted content. One-shot; races at worst record
+                # two marks a few ms apart.
+                boot_state["first_poll_seen"] = True
+                profiling.mark("startup.boot_page_alive")
             body = json.dumps(
                 {
                     "ready": boot_state["ready"],
@@ -4719,6 +4731,7 @@ def serve_combined_app(
     def set_phase(phase: str) -> None:
         boot_state["phase"] = phase
         boot_state["message"] = _BOOT_MESSAGES[phase]
+        profiling.mark(f"startup.phase_{phase}")
         utils.info_print(_BOOT_MESSAGES[phase])
 
     def build() -> None:
@@ -4745,6 +4758,10 @@ def serve_combined_app(
             set_phase("ready")
             boot_state["ready"] = True
             utils.info_print(f"clipgen ready in {time.monotonic() - started:.1f}s")
+            if config.PROFILING:
+                # A live desktop session should not have to exit (atexit
+                # report) to see the startup attribution.
+                profiling.report_startup()
         except BaseException as exc:
             # BaseException on purpose: _init_studio_state exits via sys.exit(1)
             # on a bad worksheet, and a SystemExit swallowed by a daemon thread

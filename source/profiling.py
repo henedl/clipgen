@@ -51,6 +51,70 @@ _DEEP: dict[tuple[str, int], cProfile.Profile] = {}
 _MAX_DEEP = 16
 _DEEP_TOP = 15  # rows of pstats output per label
 
+# Startup milestones. Unlike the label totals these are recorded even when
+# profiling is off: the earliest marks land before --profile has been parsed
+# (clipgen.py fires the first one right after `import cli`), and an append is
+# cheap enough to pay unconditionally. They are only *reported* when profiling
+# is on. Append-only and bounded — startup happens once per process.
+_STARTUP_T0: float | None = None
+_STARTUP_MARKS: list[tuple[str, float]] = []
+_MAX_STARTUP_MARKS = 64
+
+
+def set_process_start(t0: float) -> None:
+    """Anchor startup marks to *t0* (a ``time.perf_counter()`` reading).
+
+    Captured as the first statement of clipgen.py so the anchor predates every
+    clipgen import; without it :func:`startup_snapshot` returns nothing.
+    """
+    global _STARTUP_T0
+    _STARTUP_T0 = t0
+
+
+def mark(label: str) -> None:
+    """Record a startup milestone unconditionally (see the module-level note)."""
+    now = time.perf_counter()
+    with _LOCK:
+        if len(_STARTUP_MARKS) < _MAX_STARTUP_MARKS:
+            _STARTUP_MARKS.append((label, now))
+
+
+def startup_snapshot() -> list[dict[str, Any]]:
+    """Return ``[{label, at_ms, delta_ms}]`` in record order; empty without T0.
+
+    ``at_ms`` is time since process start, ``delta_ms`` since the previous mark.
+    Marks from concurrent threads (the boot-build phases vs. the AppKit
+    window-shown hook) interleave chronologically, so a delta spanning a thread
+    boundary attributes wall time, not per-thread work.
+    """
+    with _LOCK:
+        t0 = _STARTUP_T0
+        marks = list(_STARTUP_MARKS)
+    if t0 is None or not marks:
+        return []
+    out: list[dict[str, Any]] = []
+    prev = t0
+    for label, at in marks:
+        out.append(
+            {
+                "label": label,
+                "at_ms": (at - t0) * 1000,
+                "delta_ms": (at - prev) * 1000,
+            }
+        )
+        prev = at
+    return out
+
+
+def report_startup() -> None:
+    """Print one ``startup | `` line per recorded mark; silent when empty."""
+    for entry in startup_snapshot():
+        # bare print: see module docstring (grep-ability over Rich wrapping)
+        print(
+            f"startup | {entry['label']:<32} +{entry['delta_ms']:8.1f}ms"
+            f"  t={entry['at_ms']:8.1f}ms"
+        )
+
 
 def enable() -> None:
     """Turn profiling on and register the end-of-process report once."""
@@ -292,6 +356,7 @@ def _deep_report() -> None:
 
 def report() -> None:
     """Print one ``profile | `` line per label plus peak RSS; silent when empty."""
+    report_startup()
     snap = snapshot()
     for label, entry in snap.items():
         secs, n, mx = entry["seconds"], int(entry["count"]), entry["max"]
