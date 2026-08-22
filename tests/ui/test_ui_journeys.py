@@ -194,7 +194,7 @@ def test_settings_change_persists_across_reload(
     fixture. The file under the output dir is the real store — only non-default
     values are written — so it is asserted alongside the reopened modal.
     """
-    settings_path = _ui_fixtures.OUTPUT_DIR / config.STUDIO_SETTINGS_FILENAME
+    settings_path = _ui_fixtures.SETTINGS_DIR / config.STUDIO_SETTINGS_FILENAME
     try:
         with _journey(browser_context, live_server, "studio", "journey-settings") as (
             page,

@@ -1270,3 +1270,83 @@ def test_successful_open_clears_startup_notice(client, monkeypatch, tmp_path):
     )
     assert resp.get_json()["ok"] is True
     assert client.get("/api/status").get_json()["startup_notice"] == ""
+
+
+# ---------- /api/settings ---------------------------------------------------
+
+
+def test_settings_get_reports_the_config_dir_path(client, monkeypatch, tmp_path):
+    """The GET carries the settings path so the modal can show it."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    body = client.get("/api/settings").get_json()
+    assert body["ok"] is True
+    assert body["path"] == str(tmp_path / config.STUDIO_SETTINGS_FILENAME)
+
+
+@pytest.mark.parametrize("gui_launch", [True, False])
+def test_settings_get_reports_the_desktop_flag(client, monkeypatch, gui_launch):
+    """The reveal button follows GUI_LAUNCH, so every native window gets it.
+
+    Not ``html[data-desktop-chrome]``: that is macOS-only, and a Windows or
+    Linux webview has no address bar either.
+    """
+    monkeypatch.setattr(server.utils, "GUI_LAUNCH", gui_launch)
+    assert client.get("/api/settings").get_json()["desktop"] is gui_launch
+
+
+def test_settings_put_writes_beside_start_json(client, monkeypatch, tmp_path):
+    """A settings PUT lands in the config dir, never in the output dir."""
+    cfg = tmp_path / "cfg"
+    monkeypatch.setattr(start_settings, "config_dir", lambda: cfg)
+    monkeypatch.setattr(server.config, "WEBP_QUALITY", server.config.WEBP_QUALITY)
+
+    resp = client.put("/api/settings", json={"settings": {"WEBP_QUALITY": 55}})
+    assert resp.get_json()["ok"] is True
+
+    saved = json.loads(
+        (cfg / config.STUDIO_SETTINGS_FILENAME).read_text(encoding="utf-8")
+    )
+    assert saved["WEBP_QUALITY"] == 55
+    output_copy = Path(config.OUTPUT_DIR) / config.STUDIO_SETTINGS_FILENAME
+    assert not output_copy.exists()
+
+
+def test_settings_reveal_shows_the_file(client, monkeypatch, tmp_path):
+    """The reveal route hands the settings file to the OS file browser."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
+    settings_file.write_text("{}", encoding="utf-8")
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+    )
+
+    body = client.post("/api/settings/reveal", json={}).get_json()
+    assert body["ok"] is True
+    assert shown == [settings_file]
+
+
+def test_settings_reveal_falls_back_to_the_folder(client, monkeypatch, tmp_path):
+    """With everything at default there is no file, so the folder opens."""
+    cfg = tmp_path / "cfg"
+    monkeypatch.setattr(start_settings, "config_dir", lambda: cfg)
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+    )
+
+    body = client.post("/api/settings/reveal", json={}).get_json()
+    assert body["ok"] is True
+    assert shown == [cfg]
+    assert cfg.is_dir()
+
+
+def test_settings_reveal_reports_failure(client, monkeypatch, tmp_path):
+    """A file browser that would not start is an error, not a silent ok."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    (tmp_path / config.STUDIO_SETTINGS_FILENAME).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: False)
+
+    body = client.post("/api/settings/reveal", json={}).get_json()
+    assert body["ok"] is False
+    assert "folder" in body["error"]

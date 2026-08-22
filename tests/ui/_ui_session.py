@@ -155,6 +155,7 @@ def redirect_config(
     # setattr rather than plain assignment because the attribute's declared type
     # is the original function; this is the same rebinding monkeypatch does.
     target = settings_dir or _ui_fixtures.SETTINGS_DIR
+    setattr(start_settings, "config_dir", lambda: target)  # noqa: B010
     setattr(  # noqa: B010
         start_settings, "_settings_path", lambda: target / "start.json"
     )

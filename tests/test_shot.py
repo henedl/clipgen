@@ -64,6 +64,7 @@ def test_redirect_config_honors_dir_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "VERBOSITY", config.VERBOSITY)
     monkeypatch.setattr(utils, "NO_INPUT_MODE", utils.NO_INPUT_MODE)
     monkeypatch.setattr(start_settings, "_settings_path", start_settings._settings_path)
+    monkeypatch.setattr(start_settings, "config_dir", start_settings.config_dir)
     session.redirect_config(input_dir=tmp_path / "in", output_dir=tmp_path / "out")
     assert config.INPUT_DIR == str(tmp_path / "in")
     assert config.OUTPUT_DIR == str(tmp_path / "out")

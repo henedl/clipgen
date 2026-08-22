@@ -30,6 +30,7 @@
   var _tabsEl = null;
   var _panelsEl = null;
   var _statusEl = null;
+  var _actionsEl = null;
   var _settings = null;
   var _activeTab = "General";
   var _saveTimer = null;
@@ -41,6 +42,9 @@
   var _cardsCache = null;
   var _cardsCachePromise = null;
   var _cardPickers = [];
+  // Desktop-only footer button; null in a browser tab. Built on first load,
+  // not in _buildDom: only the server knows whether this is a native window.
+  var _revealBtn = null;
   var _SAMPLE_TITLE_TEXT = "Sample description";
 
   function _getApiRoot() {
@@ -183,13 +187,15 @@
     panel.appendChild(panels);
 
     var footer = el("div", "settings-footer");
+    var actions = el("div", "settings-footer-actions");
     var resetAll = el("button", "btn btn-small settings-reset-all");
     resetAll.type = "button";
     resetAll.textContent = "Reset all to defaults";
     resetAll.setAttribute("data-hotkey", "settings.resetAll");
     resetAll.addEventListener("click", function () { _resetAll(); });
+    actions.appendChild(resetAll);
     var status = el("span", "settings-save-status");
-    footer.appendChild(resetAll);
+    footer.appendChild(actions);
     footer.appendChild(status);
     panel.appendChild(footer);
 
@@ -200,6 +206,7 @@
     document.body.appendChild(overlay);
 
     _root = overlay;
+    _actionsEl = actions;
     _tabsEl = tabs;
     _panelsEl = panels;
     _statusEl = status;
@@ -292,10 +299,33 @@
           return;
         }
         _settings = data.settings;
+        _syncRevealBtn(data.desktop, data.path);
         _render();
       })
       .catch(function () {
         _panelsEl.textContent = "Failed to load settings.";
+      });
+  }
+
+  // A native window has no address bar, so the button is the only way to reach
+  // the file. Gated on the server's GUI_LAUNCH, not html[data-desktop-chrome]:
+  // that attribute is macOS-only, and Windows webviews need the button too.
+  function _syncRevealBtn(isDesktop, path) {
+    if (!isDesktop || !_actionsEl) return;
+    if (!_revealBtn) {
+      _revealBtn = el("button", "btn btn-small");
+      _revealBtn.type = "button";
+      _revealBtn.textContent = "Show settings file";
+      _revealBtn.addEventListener("click", _reveal);
+      _actionsEl.appendChild(_revealBtn);
+    }
+    if (path) _revealBtn.title = path;
+  }
+
+  function _reveal() {
+    apiPost(_getApiRoot() + "/settings/reveal", {})
+      .catch(function (err) {
+        _setStatus((err && err.message) || "Could not open the folder");
       });
   }
 

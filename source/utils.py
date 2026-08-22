@@ -2770,3 +2770,25 @@ def open_native_folder_picker(initial_dir: str = "") -> str | None:
     except Exception:
         return None
     return path or None
+
+
+def reveal_in_file_manager(path: Path) -> bool:
+    """Show *path* in the OS file browser. Returns False if nothing could run.
+
+    A file is revealed with its containing folder open and the file selected; a
+    directory is simply opened. Linux has no portable "select this file", so it
+    falls back to opening the parent.
+    """
+    is_dir = path.is_dir()
+    if sys.platform == "darwin":
+        command = ["open", str(path)] if is_dir else ["open", "-R", str(path)]
+    elif os.name == "nt":
+        command = ["explorer", str(path)] if is_dir else ["explorer", f"/select,{path}"]
+    else:
+        command = ["xdg-open", str(path if is_dir else path.parent)]
+    try:
+        subprocess.run(command, check=False)
+    except OSError as exc:
+        warning_print(f"Could not open {path}: {exc}")
+        return False
+    return True

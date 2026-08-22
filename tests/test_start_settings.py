@@ -328,3 +328,33 @@ def test_filename_overrides_are_independent_of_persist_enabled(settings_file):
     assert start_settings.filename_overrides("excel", "/study.xlsx", "Data") == {
         "P01": "a.mp4"
     }
+
+
+# ---------- generic config-dir JSON helpers ---------------------------------
+
+
+@pytest.fixture
+def config_dir(tmp_path, monkeypatch):
+    """Redirect config_dir() to a per-test temp directory."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    return tmp_path
+
+
+def test_config_json_round_trip(config_dir):
+    assert start_settings.load_config_json("thing.json", default={}) == {}
+    written = start_settings.save_config_json("thing.json", {"a": 1})
+    assert written == config_dir / "thing.json"
+    assert start_settings.load_config_json("thing.json") == {"a": 1}
+
+
+def test_config_json_remove_drops_the_tmp_sibling(config_dir):
+    start_settings.save_config_json("thing.json", {"a": 1})
+    (config_dir / "thing.json.tmp").write_text("half", encoding="utf-8")
+    start_settings.remove_config_json("thing.json")
+    assert not (config_dir / "thing.json").exists()
+    assert not (config_dir / "thing.json.tmp").exists()
+
+
+def test_config_json_corrupt_file_returns_default(config_dir):
+    (config_dir / "thing.json").write_text("{not json", encoding="utf-8")
+    assert start_settings.load_config_json("thing.json", default={"x": 2}) == {"x": 2}
