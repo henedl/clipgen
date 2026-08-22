@@ -5,8 +5,8 @@ Both viewers inject ``window.CLIPGEN_DATA`` into their HTML template, replacing
 
 Timeline (--viewer / interactive 'viewer'), from viewer.html::
 
-    { meta: {study, participant, generatedAt, mode, sourceSpreadsheet,
-      sourceFileType, filmstripEnabled},
+    { meta: {study, participant, generatedAt, clipgenVersion, repoUrl, mode,
+      sourceSpreadsheet, sourceFileType, filmstripEnabled},
       artifacts: [{id, type, file, start, end, study, participant, category,
       description, cellRow, cellCol, cellA1, annotations, sourceVideo}],
       timeline: {duration, startOffset} }
@@ -17,7 +17,8 @@ start/end 0 — the viewer JS branches on type and gives those their own panel.
 
 Gallery (--gallery), from gallery.html::
 
-    { meta: {sourceVideo, generatedAt, mode, format, interval, videoDuration},
+    { meta: {sourceVideo, generatedAt, clipgenVersion, repoUrl, mode, format,
+      interval, videoDuration},
       artifacts: [{file, timestamp, timestamp_formatted, type, duration}] }
 
 Gallery artifacts are NOT written to the manifest by default.
@@ -139,6 +140,8 @@ def finalize_timeline_data(
             "study": study,
             "participant": participant,
             "generatedAt": datetime.now(UTC).isoformat(),
+            "clipgenVersion": utils.get_version(),
+            "repoUrl": config.REPO_URL,
             "mode": mode,
             "sourceSpreadsheet": worksheet_title,
             "sourceFileType": "excel" if is_excel else "google",
@@ -481,6 +484,8 @@ def finalize_gallery_data(
         "meta": {
             "sourceVideo": source_video,
             "generatedAt": datetime.now(UTC).isoformat(),
+            "clipgenVersion": utils.get_version(),
+            "repoUrl": config.REPO_URL,
             "mode": "gallery",
             "format": output_format,
             "interval": interval,

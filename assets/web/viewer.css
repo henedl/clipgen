@@ -138,6 +138,26 @@ body {
 #studyName:not(:empty)::before { content: "Study:"; font-weight: 600; }
 #generatedAt:not(:empty)::before { content: "Generated:"; font-weight: 600; }
 
+/* Export credit: version + repo, muted below the last panel. */
+
+#pageFooter {
+  max-width: var(--layout-max-width);
+  margin: 0 auto var(--space-6);
+  padding: 0 var(--layout-padding-x);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  text-align: center;
+}
+
+#pageFooter a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+#pageFooter a:hover {
+  color: var(--color-accent);
+}
+
 .header-buttons {
   display: flex;
   align-items: center;

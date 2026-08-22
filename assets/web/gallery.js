@@ -49,6 +49,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    clipgenRenderFooter((data || {}).meta);
 
     if (!data || !data.artifacts || data.artifacts.length === 0) {
       var grid = qs("#galleryGrid");

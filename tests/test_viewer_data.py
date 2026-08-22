@@ -49,6 +49,18 @@ def test_finalize_timeline_data_duration_and_structure():
     assert "reels" not in data
 
 
+def test_finalize_data_carries_attribution():
+    import config
+    import utils
+
+    timeline = viewer.finalize_timeline_data([_make_artifact("a1")])
+    gallery = viewer.finalize_gallery_data([], source_video="vid.mp4")
+
+    for meta in (timeline["meta"], gallery["meta"]):
+        assert meta["clipgenVersion"] == utils.get_version()
+        assert meta["repoUrl"] == config.REPO_URL
+
+
 def test_finalize_timeline_data_empty_artifacts():
     data = viewer.finalize_timeline_data([])
     assert data["timeline"]["duration"] == 0.0
