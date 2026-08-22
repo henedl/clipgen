@@ -3738,7 +3738,7 @@ def build_combined_app(
                 "version": utils.get_version(),
                 "author": "Henrik Edlund",
                 "license": "MIT",
-                "repo_url": "https://github.com/henedl/clipgen",
+                "repo_url": config.REPO_URL,
             }
         )
 

@@ -23,6 +23,8 @@ import importlib
 from typing import Any
 
 # ── Core Runtime ─────────────────────────────────────────────────────
+# Project home, shown in /api/status and credited in every exported viewer.
+REPO_URL: str = "https://github.com/henedl/clipgen"
 REENCODING: bool = False
 AUDIO_NORMALIZE: bool = False
 FILEFORMAT: str = ".mp4"

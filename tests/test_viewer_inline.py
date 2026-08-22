@@ -42,6 +42,35 @@ def test_generate_timeline_viewer_inlines_css_and_js(tmp_path, monkeypatch):
     assert "window.CLIPGEN_DATA" in html
 
 
+def test_generate_timeline_viewer_has_attribution_footer(tmp_path, monkeypatch):
+    # The export is shared outside the machine that made it, so it must say which
+    # clipgen built it. Version and repo travel in meta and the renderer is inlined.
+    monkeypatch.chdir(tmp_path)
+    data = viewer.finalize_timeline_data([])
+
+    out_path = viewer.generate_timeline_viewer(data, output_basename="viewer.html")
+    assert out_path is not None and out_path.is_file()
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'id="pageFooter"' in html
+    assert 'id="footerCredit"' in html
+    assert "clipgenRenderFooter" in html
+    assert data["meta"]["clipgenVersion"] in html
+    assert data["meta"]["repoUrl"] in html
+
+
+def test_footer_credit_survives_empty_exports():
+    # Regression: the credit used to render inside populateHeader(), which the
+    # empty-state and attachment-only paths return before reaching. An export with
+    # no timeline clips still has to say which clipgen wrote it.
+    for name in ("viewer.js", "gallery.js"):
+        src = (WEB / name).read_text(encoding="utf-8")
+        boot = src.index('addEventListener("DOMContentLoaded"')
+        header = src.index("function populateHeader")
+        credit = src.index("clipgenRenderFooter(")
+        assert boot < credit < header
+
+
 def test_viewer_data_escapes_script_break_sequences(tmp_path, monkeypatch):
     # Regression: user text is embedded into an HTML <script> tag as JSON. json.dumps
     # does not escape `<`, so `</script>` (and the `<!--<script>` double-escape variant)

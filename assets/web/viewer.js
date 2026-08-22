@@ -731,6 +731,7 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
+    clipgenRenderFooter((data || {}).meta);
 
     if (!data || !data.artifacts) {
       showEmptyState();
