@@ -169,6 +169,8 @@ DESKTOP_CHROME_BAR_HEIGHT: int = 48  # titlebar band height; drives --topnav-hei
 DESKTOP_TRAFFIC_LIGHT_INSET: int = 87
 STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
 ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
+# Unlike the manifests above, this one lives in the per-user config dir
+# beside start.json — preferences, not project data.
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
 WORKFLOWS_MANIFEST_FILENAME: str = (
     "workflows_manifest.json"  # node-canvas blueprints, stashes, run history

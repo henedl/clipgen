@@ -44,6 +44,8 @@ def ui_env() -> Iterator[None]:
         # build_combined_app records a project session, which would otherwise
         # prepend the fixture dirs to the maintainer's real "Recently opened"
         # rail in ~/.config/clipgen/start.json. Redirect before the app is built.
+        # config_dir also decides where studio_settings.json lands.
+        mp.setattr(start_settings, "config_dir", lambda: _ui_fixtures.SETTINGS_DIR)
         mp.setattr(
             start_settings,
             "_settings_path",

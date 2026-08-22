@@ -86,6 +86,7 @@ import files
 import spreadsheet
 import pipeline
 import profiling
+import start_settings
 import titlecards
 import utils
 import video
@@ -1275,8 +1276,13 @@ def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None
 
 
 def _load_studio_settings() -> dict[str, Any]:
-    """Load studio_settings.json and apply non-default values to config module."""
-    data = utils.load_json_manifest(config.STUDIO_SETTINGS_FILENAME, default={})
+    """Load studio_settings.json and apply non-default values to config module.
+
+    The file lives in the per-user config dir beside ``start.json``, not in the
+    output dir: these are application preferences, so switching projects must
+    not switch them.
+    """
+    data = start_settings.load_config_json(config.STUDIO_SETTINGS_FILENAME, default={})
 
     applied: dict[str, Any] = {}
     for name, value in data.items():
@@ -1326,16 +1332,21 @@ def _revert_unsupported_formats() -> None:
         )
 
 
+def _studio_settings_path() -> Path:
+    """Where the settings modal's values are persisted."""
+    return start_settings.config_json_path(config.STUDIO_SETTINGS_FILENAME)
+
+
 def _save_studio_settings(overrides: dict[str, Any]) -> Path | None:
-    """Write only non-default settings to studio_settings.json."""
+    """Write only non-default settings to the config dir's studio_settings.json."""
     to_save = {}
     for name, value in overrides.items():
         if name in _settings_defaults and value != _settings_defaults[name]:
             to_save[name] = value
     if not to_save:
-        utils.remove_json_manifest(config.STUDIO_SETTINGS_FILENAME)
+        start_settings.remove_config_json(config.STUDIO_SETTINGS_FILENAME)
         return None
-    return utils.save_json_manifest(config.STUDIO_SETTINGS_FILENAME, to_save)
+    return start_settings.save_config_json(config.STUDIO_SETTINGS_FILENAME, to_save)
 
 
 def _find_existing_artifacts(
@@ -2479,7 +2490,13 @@ def _apply_settings_payload(data: dict[str, Any]) -> tuple[dict[str, Any], str |
 
 @studio_bp.route("/api/settings", methods=["GET"])
 def api_settings_get() -> FlaskResponse:
-    return ok(settings=_settings_records())
+    return ok(
+        settings=_settings_records(),
+        path=str(_studio_settings_path()),
+        # `desktop` tells the modal whether to offer the reveal button: a
+        # browser tab can open the path itself, a native window cannot.
+        desktop=utils.GUI_LAUNCH,
+    )
 
 
 @studio_bp.route("/api/settings", methods=["PUT"])
@@ -3396,8 +3413,6 @@ def _seed_filename_overrides(source: dict[str, str] | None) -> None:
     swap, close, override edit, CLI launch). ``None`` clears the map, which is
     what a session with no identifiable source must run with.
     """
-    import start_settings
-
     overrides = (
         start_settings.filename_overrides(
             source.get("type", ""),
@@ -3482,7 +3497,6 @@ def _open_mindnode(id_or_path: str, project_name: str | None) -> FlaskResponse:
     alone; the two sources coexist.
     """
     import mindnode
-    import start_settings
 
     global _mindnode_doc, _active_project_source
     try:
@@ -3585,7 +3599,6 @@ def _init_combined_state(
     """
     import composer_server
     import screenspace_server
-    import start_settings
     import transcripts_server
     import workflows_server
 
@@ -3783,8 +3796,6 @@ def build_combined_app(
 
     @combined.route("/api/dirs", methods=["GET"])
     def api_dirs_get() -> Response:
-        import start_settings
-
         s = start_settings.load_start_settings()
         return ok(
             input=str(utils.get_effective_input_dir()),
@@ -3795,8 +3806,6 @@ def build_combined_app(
 
     @combined.route("/api/dirs", methods=["POST"])
     def api_dirs_post() -> FlaskResponse:
-        import start_settings
-
         data = request.get_json(silent=True) or {}
         new_input = data.get("input")
         new_output = data.get("output")
@@ -3861,7 +3870,6 @@ def build_combined_app(
         *only* way to point a participant at differently-named footage.
         """
         import mindnode
-        import start_settings
 
         path = (request.args.get("path") or "").strip()
         input_dir = (request.args.get("input_dir") or "").strip()
@@ -4047,8 +4055,6 @@ def build_combined_app(
                 "columns."
             )
 
-        import start_settings
-
         participants = spreadsheet.get_participant_list(
             ctx.header_row, ctx.id_cell, ctx.num_participants
         )
@@ -4091,8 +4097,6 @@ def build_combined_app(
         this route reports — the authoritative resolution happens against the
         real sheet when the workspace opens.
         """
-        import start_settings
-
         data = request.get_json(silent=True) or {}
         type_ = (data.get("type") or "").strip()
         id_or_path = (data.get("id_or_path") or "").strip()
@@ -4184,8 +4188,6 @@ def build_combined_app(
 
     @combined.route("/api/spreadsheets/open", methods=["POST"])
     def api_spreadsheets_open() -> FlaskResponse:
-        import start_settings
-
         data = request.get_json(silent=True) or {}
         type_ = data.get("type", "")
         id_or_path = (data.get("id_or_path") or "").strip()
@@ -4303,8 +4305,6 @@ def build_combined_app(
         An omitted ``name`` leaves any stored project name alone; ``""`` clears
         it. See :func:`start_settings.record_project_session`.
         """
-        import start_settings
-
         data = request.get_json(silent=True) or {}
         input_raw = data.get("input")
         output_raw = data.get("output")
@@ -4361,8 +4361,6 @@ def build_combined_app(
 
     @combined.route("/api/start-settings", methods=["GET"])
     def api_start_settings_get() -> Response:
-        import start_settings
-
         # `desktop` tells the overlay whether to offer the window-rect toggle:
         # in a browser tab there is no window for clipgen to remember.
         return ok(
@@ -4372,8 +4370,6 @@ def build_combined_app(
 
     @combined.route("/api/start-settings", methods=["POST"])
     def api_start_settings_post() -> FlaskResponse:
-        import start_settings
-
         data = request.get_json(silent=True) or {}
         if "persist_enabled" in data:
             start_settings.set_persist_enabled(bool(data["persist_enabled"]))
@@ -4385,7 +4381,11 @@ def build_combined_app(
 
     @combined.route("/api/settings", methods=["GET"])
     def combined_settings_get() -> FlaskResponse:
-        return ok(settings=_settings_records())
+        return ok(
+            settings=_settings_records(),
+            path=str(_studio_settings_path()),
+            desktop=utils.GUI_LAUNCH,
+        )
 
     @combined.route("/api/settings", methods=["PUT"])
     def combined_settings_put() -> FlaskResponse:
@@ -4394,6 +4394,25 @@ def build_combined_app(
         if error is not None:
             return err(error)
         return ok(applied=applied)
+
+    @combined.route("/api/settings/reveal", methods=["POST"])
+    def combined_settings_reveal() -> FlaskResponse:
+        """Show the settings file in the OS file browser.
+
+        Takes no arguments — the path is server-side only. When every setting is
+        at its default the file does not exist, so the config dir is revealed
+        instead (created first, or there would be nothing to open).
+        """
+        path = _studio_settings_path()
+        if not path.is_file():
+            path = path.parent
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return err(f"Could not open the folder: {exc}")
+        if not utils.reveal_in_file_manager(path):
+            return err("Could not open the folder")
+        return ok(path=str(path))
 
     # ---- Titlecard / endcard background picker (shared settings modal) ----
     combined.add_url_rule(

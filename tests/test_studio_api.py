@@ -304,7 +304,7 @@ def test_settings_put_persists_custom_prompt(client, tmp_path, monkeypatch):
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
     assert server.config.OLLAMA_SUMMARY_PROMPT == custom
-    saved = server.utils.load_json_manifest(
+    saved = server.start_settings.load_config_json(
         server.config.STUDIO_SETTINGS_FILENAME, default={}
     )
     assert saved.get("OLLAMA_SUMMARY_PROMPT") == custom
@@ -434,7 +434,7 @@ def test_settings_partial_put_preserves_other_settings(client, tmp_path, monkeyp
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
 
-    saved = server.utils.load_json_manifest(
+    saved = server.start_settings.load_config_json(
         server.config.STUDIO_SETTINGS_FILENAME, default={}
     )
     assert saved.get("TITLECARD_IMAGE") == "card.png"  # preserved, not dropped
@@ -3016,7 +3016,7 @@ def test_load_studio_settings(monkeypatch, tmp_path):
     """_load_studio_settings reads file and applies to config."""
     import config
 
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     # Capture+auto-restore (see test_api_settings_put_applies_values).
     monkeypatch.setattr(config, "REENCODING", config.REENCODING)
 
@@ -3030,7 +3030,7 @@ def test_load_studio_settings(monkeypatch, tmp_path):
 
 def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
     """Missing settings file returns empty dict without error."""
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     applied = server._load_studio_settings()
     assert applied == {}
 
@@ -3038,6 +3038,7 @@ def test_load_studio_settings_missing_file(monkeypatch, tmp_path):
 def test_load_studio_settings_skips_invalid_card_image(monkeypatch, tmp_path):
     """A persisted card image that PUT would reject is not applied on load."""
     monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     monkeypatch.setattr(server.config, "TITLECARD_IMAGE", "")
     monkeypatch.setattr(server.config, "ENDCARD_IMAGE", "")
 
@@ -3071,7 +3072,7 @@ def test_load_studio_settings_skips_invalid_prompt(monkeypatch, tmp_path):
     _validate_prompt. It must now be skipped (config keeps its default), matching
     the card_picker guard, while a valid setting alongside it still applies.
     """
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     default_prompt = server.config.OLLAMA_FRICTION_PROMPT
     monkeypatch.setattr(server.config, "OLLAMA_FRICTION_PROMPT", default_prompt)
     monkeypatch.setattr(server.config, "REENCODING", server.config.REENCODING)
@@ -3098,7 +3099,7 @@ def test_save_studio_settings_non_defaults_only(monkeypatch, tmp_path):
     """Only non-default values are written; all-defaults deletes the file."""
     import config
 
-    monkeypatch.setattr("config.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
     settings_file = tmp_path / config.STUDIO_SETTINGS_FILENAME
 
     # Save a non-default value

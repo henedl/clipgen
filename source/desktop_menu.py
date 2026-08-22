@@ -28,7 +28,6 @@ never cost the user their window.
 """
 
 import importlib
-import subprocess
 import sys
 import webbrowser
 from pathlib import Path
@@ -185,17 +184,7 @@ def _open_folder(path: str) -> None:
     if not path or not Path(path).is_dir():
         utils.warning_print("No folder is configured yet — open a workspace first.")
         return
-    _open_path(Path(path))
-
-
-def _open_path(path: Path) -> None:
-    # darwin-only in practice (menus() gates the whole bar); the xdg-open arm
-    # keeps the helper honest if a future platform grows a menu.
-    opener = "open" if sys.platform == "darwin" else "xdg-open"
-    try:
-        subprocess.run([opener, str(path)], check=False)
-    except OSError as exc:
-        utils.warning_print(f"Could not open {path}: {exc}")
+    utils.reveal_in_file_manager(Path(path))
 
 
 def _open_in_browser(get_window: Callable[[], Any]) -> None:
@@ -221,7 +210,7 @@ def _open_licenses() -> None:
     if path is None:
         utils.warning_print("THIRD-PARTY-LICENSES is not bundled in this build.")
         return
-    _open_path(path)
+    utils.reveal_in_file_manager(path)
 
 
 def enhance_menu_bar(get_window: Callable[[], Any]) -> None:

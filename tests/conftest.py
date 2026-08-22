@@ -95,6 +95,25 @@ def _sandbox_cwd(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _sandbox_user_config(tmp_path, monkeypatch):
+    """Keep per-user clipgen state out of the developer's real home.
+
+    ``start_settings.config_dir()`` resolves from ``Path.home()`` (or
+    ``LOCALAPPDATA`` on Windows), and it now holds ``studio_settings.json`` as
+    well as ``start.json`` — so an unsandboxed run would read the maintainer's
+    real preferences and, on any settings PUT, overwrite them.
+
+    Deliberately patching the *inputs* rather than ``config_dir`` itself:
+    ``test_start_settings.py`` asserts the per-platform resolution by patching
+    ``Path.home``/``LOCALAPPDATA`` in the test body, which runs after this
+    fixture and therefore still wins. Stubbing ``config_dir`` would break it.
+    """
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "Local"))
+
+
+@pytest.fixture(autouse=True)
 def _reset_gui_launch():
     """Restore ``utils.GUI_LAUNCH`` after every test.
 

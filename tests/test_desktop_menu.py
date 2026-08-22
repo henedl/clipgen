@@ -89,7 +89,7 @@ def test_every_action_is_a_no_op_without_a_window(monkeypatch):
     opened = []
     monkeypatch.setattr(desktop_menu.webbrowser, "open", opened.append)
     monkeypatch.setattr(
-        desktop_menu.subprocess, "run", lambda *a, **k: opened.append(a)
+        desktop_menu.utils, "reveal_in_file_manager", lambda p: opened.append(p)
     )
     for action in walk_actions(desktop_menu.build_menus(lambda: None)):
         action.function()
@@ -114,7 +114,9 @@ def test_menus_are_gated_to_macos(monkeypatch):
 
 def test_open_folder_skips_missing_directories(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(desktop_menu.subprocess, "run", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(
+        desktop_menu.utils, "reveal_in_file_manager", lambda p: calls.append(p)
+    )
     desktop_menu._open_folder("")
     desktop_menu._open_folder(str(tmp_path / "nope"))
     assert calls == []
