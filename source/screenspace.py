@@ -17,7 +17,7 @@ Thirteen analysis tools (passed as 'type' when creating a task):
 
 Workflow: user draws regions on a frame → enqueues tasks → ScreenspaceWorker processes in
 a background thread → results are timestamps or artifact files → state persisted to
-screenspace_manifest.json. Region coordinates are normalized (0–1); source_width/source_height
+the ``screenspace`` section of the output-dir manifest. Region coordinates are normalized (0–1); source_width/source_height
 are stored for denormalization to target video resolution.
 
 This module is a thin re-export facade: the implementation lives in the cohesive

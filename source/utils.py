@@ -749,69 +749,157 @@ def require_optional(module_name: str, feature_label: str) -> None:
         ) from None
 
 
-def load_json_manifest(
-    filename: str, *, default: Any = None, warn_label: str = ""
-) -> Any:
-    """Load a JSON manifest from the output directory.
+# Unified output-dir manifest: one file, one top-level key per tool section.
+# Cache holds per-section JSON text keyed on the file's (mtime_ns, size) stamp,
+# so a load parses only its section and a save re-encodes only its section.
+_MANIFEST_LOCK = threading.Lock()
+_manifest_cache: dict[str, Any] = {
+    "path": None,
+    "stamp": None,
+    "sections": {},
+    # An unreadable file disables saves, so one bad read can't wipe every section.
+    "broken": False,
+}
 
-    Returns parsed data, or *default* on missing/corrupt file. An unreadable
-    (as opposed to missing) file logs a warning when *warn_label* is set,
-    mirroring :func:`save_json_manifest`.
-    """
-    path = Path(get_effective_output_dir()) / filename
-    if not path.is_file():
-        return default
+
+def _manifest_path() -> Path:
+    return Path(get_effective_output_dir()) / config.MANIFEST_FILENAME
+
+
+def _manifest_stamp(path: Path) -> tuple[int, int] | None:
+    """(mtime_ns, size) of *path*, or None when absent."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _dump_section(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def _read_sections(path: Path) -> dict[str, str] | None:
+    """Parse the whole file into per-section JSON text; None when unreadable."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        if warn_label:
-            warning_print(f"Could not read {warn_label}; using defaults.")
-        return default
+        warning_print(
+            f"Could not read {path.name}; saving is paused until it is fixed."
+        )
+        return None
+    if not isinstance(doc, dict):
+        warning_print(f"{path.name} is not a JSON object; saving is paused.")
+        return None
+    return {str(k): _dump_section(v) for k, v in doc.items()}
 
 
-def save_json_manifest(
-    filename: str, data: Any, *, warn_label: str = ""
-) -> Path | None:
-    """Write *data* as JSON to *filename* in the output directory.
+def _sections_locked() -> dict[str, str]:
+    """Cached section texts, refreshed when the file's path or stamp changed."""
+    path = _manifest_path()
+    stamp = _manifest_stamp(path)
+    if _manifest_cache["path"] != str(path) or _manifest_cache["stamp"] != stamp:
+        sections = _read_sections(path) if stamp else {}
+        _manifest_cache["path"] = str(path)
+        _manifest_cache["stamp"] = stamp
+        _manifest_cache["sections"] = sections or {}
+        _manifest_cache["broken"] = sections is None
+    return _manifest_cache["sections"]
 
-    Writes via a sibling .tmp file and ``os.replace()`` so a crash or ENOSPC
-    mid-write leaves the previous manifest intact rather than corrupted.
-    Creates parent dirs. Returns the path on success, ``None`` on failure.
-    Logs a warning on write/serialization failure using *warn_label*.
-    """
-    import os as _os
 
-    path = Path(get_effective_output_dir()) / filename
+def _write_sections_locked(sections: dict[str, str]) -> Path | None:
+    """Atomically rewrite the file from section texts; delete it when empty."""
+    path = _manifest_path()
     tmp = path.with_suffix(path.suffix + ".tmp")
+    if not sections:
+        for candidate in (path, tmp):
+            try:
+                candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
+        _manifest_cache["path"] = str(path)
+        _manifest_cache["stamp"] = None
+        _manifest_cache["sections"] = {}
+        _manifest_cache["broken"] = False
+        return None
+    # Section texts are already indent=2; nesting them one level deeper is a
+    # plain re-indent because json.dumps escapes newlines inside strings.
+    body = ",\n".join(
+        f"  {json.dumps(key)}: {text.replace(chr(10), chr(10) + '  ')}"
+        for key, text in sorted(sections.items())
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(data, ensure_ascii=False, indent=2)
-        tmp.write_text(payload, encoding="utf-8")
-        _os.replace(tmp, path)
-        return path
-    except (OSError, TypeError, ValueError) as exc:
+        tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
-        if warn_label:
-            warning_print(f"Could not write {warn_label}: {exc}")
+        warning_print(f"Could not write {path.name}: {exc}")
         return None
+    _manifest_cache["path"] = str(path)
+    _manifest_cache["stamp"] = _manifest_stamp(path)
+    _manifest_cache["sections"] = sections
+    _manifest_cache["broken"] = False
+    return path
 
 
-def remove_json_manifest(filename: str) -> None:
-    """Delete a manifest and any stale ``.tmp`` sibling from the output dir.
+def load_manifest_section(section: str, *, default: Any = None) -> Any:
+    """Parse one section of the output-dir manifest; *default* when absent.
 
-    Used by the save wrappers when a manifest is semantically empty: rather than
-    writing an empty artifact into the user's CWD, remove the file so a
-    zero-interaction launch leaves no junk. No-op when nothing is on disk.
+    Every call returns fresh objects, so callers may mutate the result freely.
     """
-    path = Path(get_effective_output_dir()) / filename
-    for candidate in (path, path.with_suffix(path.suffix + ".tmp")):
+    with _MANIFEST_LOCK:
+        text = _sections_locked().get(section)
+    return default if text is None else json.loads(text)
+
+
+def save_manifest_section(section: str, data: Any) -> Path | None:
+    """Persist one section; ``None`` removes it. Deletes the file when empty.
+
+    Writes via a sibling .tmp file and ``os.replace()`` so a crash mid-write
+    leaves the previous manifest intact. Returns the path, or ``None`` on
+    failure or removal.
+    """
+    text: str | None = None
+    if data is not None:
         try:
-            candidate.unlink(missing_ok=True)
-        except OSError:
-            pass
+            text = _dump_section(data)
+        except (TypeError, ValueError) as exc:
+            warning_print(f"Could not serialize {section}: {exc}")
+            return None
+    with _MANIFEST_LOCK:
+        sections = dict(_sections_locked())
+        if _manifest_cache["broken"]:
+            return None
+        if text is None:
+            sections.pop(section, None)
+        else:
+            sections[section] = text
+        return _write_sections_locked(sections)
+
+
+def manifest_sections() -> set[str]:
+    """Names of the sections present on disk, without parsing them."""
+    with _MANIFEST_LOCK:
+        return set(_sections_locked())
+
+
+def manifest_mtime() -> int:
+    """The manifest file's mtime_ns, or 0 when absent."""
+    stamp = _manifest_stamp(_manifest_path())
+    return stamp[0] if stamp else 0
+
+
+def _reset_manifest_cache() -> None:
+    """Drop the in-memory section cache. Intended for test fixtures."""
+    with _MANIFEST_LOCK:
+        _manifest_cache["path"] = None
+        _manifest_cache["stamp"] = None
+        _manifest_cache["sections"] = {}
+        _manifest_cache["broken"] = False
 
 
 def sweep_stale_temp_artifacts() -> None:

@@ -66,9 +66,7 @@ def api_convergence_offsets_get():
 
     Response: {"ok": true, "offsets": {"P01": {"sheet": 12.5, "screenspace": 12.5}}}
     """
-    data = utils.load_json_manifest(
-        config.CONVERGENCE_OFFSETS_FILENAME, default={"offsets": {}}
-    )
+    data = utils.load_manifest_section("convergence", default={})
     raw = data.get("offsets") if isinstance(data, dict) else None
     return ok(offsets=_clean_convergence_offsets(raw))
 
@@ -79,8 +77,8 @@ def api_convergence_offsets_put():
 
     Body: {"offsets": {"P01": {"sheet": 12.5, ...}, ...}}. Unknown sources,
     zeros, and non-finite values are dropped per lane; participants left with
-    no lanes are dropped. When the cleaned dict is empty, the manifest file is
-    deleted so a clean output dir has no leftover empty manifest.
+    no lanes are dropped. When the cleaned dict is empty, the section is
+    removed so a clean output dir has no leftover empty manifest.
     """
     data = request.get_json(silent=True) or {}
     raw = data.get("offsets")
@@ -89,13 +87,9 @@ def api_convergence_offsets_put():
 
     cleaned = _clean_convergence_offsets(raw)
 
-    if not cleaned:
-        # Also sweeps a stale .tmp sibling from an interrupted save.
-        utils.remove_json_manifest(config.CONVERGENCE_OFFSETS_FILENAME)
-    else:
-        utils.save_json_manifest(
-            config.CONVERGENCE_OFFSETS_FILENAME, {"offsets": cleaned}
-        )
+    utils.save_manifest_section(
+        "convergence", {"offsets": cleaned} if cleaned else None
+    )
 
     return ok(offsets=cleaned)
 

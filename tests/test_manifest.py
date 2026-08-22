@@ -3,6 +3,7 @@ import threading
 import time
 
 import config
+import utils
 import viewer
 
 
@@ -93,7 +94,7 @@ def test_manifest_contains_valid_timeline_data_structure(tmp_path, monkeypatch):
         mode="batch",
     )
 
-    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())["clips"]
     assert "meta" in raw
     assert "artifacts" in raw
     assert "timeline" in raw
@@ -145,7 +146,7 @@ def test_save_and_load_reels_roundtrip(tmp_path, monkeypatch):
     assert len(loaded_reels[0]["components"]) == 2
 
     # Verify reels key is in raw JSON
-    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())["clips"]
     assert "reels" in raw
     assert len(raw["reels"]) == 1
 
@@ -269,3 +270,50 @@ def test_save_manifest_concurrent_writes_keep_every_id(tmp_path, monkeypatch):
     reel_ids = {r["id"] for r in viewer.load_manifest_both()[1]}
     assert artifact_ids == {f"a{i}" for i in range(n)}
     assert reel_ids == {f"reel{i}" for i in range(n)}
+
+
+# ---- Section store (utils.load/save_manifest_section) ----
+
+
+def test_store_sections_round_trip_and_sorted(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    utils.save_manifest_section("zeta", {"n": 1, "s": "multi\nline"})
+    utils.save_manifest_section("alpha", [1, 2])
+    raw = json.loads((tmp_path / config.MANIFEST_FILENAME).read_text())
+    assert list(raw) == ["alpha", "zeta"]
+    assert raw["zeta"] == {"n": 1, "s": "multi\nline"}
+    assert utils.load_manifest_section("alpha") == [1, 2]
+    assert utils.load_manifest_section("missing", default="d") == "d"
+    assert utils.manifest_sections() == {"alpha", "zeta"}
+
+
+def test_store_load_returns_fresh_objects(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    utils.save_manifest_section("one", {"items": []})
+    utils.load_manifest_section("one")["items"].append("leak")
+    assert utils.load_manifest_section("one") == {"items": []}
+
+
+def test_store_picks_up_external_rewrite(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    utils.save_manifest_section("one", 1)
+    path = tmp_path / config.MANIFEST_FILENAME
+    path.write_text(json.dumps({"one": 2, "two": 3}))
+    assert utils.load_manifest_section("one") == 2
+    assert utils.manifest_sections() == {"one", "two"}
+
+
+def test_store_corrupt_file_reads_as_empty_and_blocks_saves(tmp_path, monkeypatch):
+    """A bad read must never let the next save wipe the other sections."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    path = tmp_path / config.MANIFEST_FILENAME
+    path.write_text("not json")
+    assert utils.load_manifest_section("one", default=0) == 0
+    assert utils.manifest_sections() == set()
+    assert utils.save_manifest_section("one", {"a": 1}) is None
+    assert utils.save_manifest_section("one", None) is None
+    assert path.read_text() == "not json"
+    # Fixing the file on disk re-enables saves.
+    path.write_text(json.dumps({"two": 2}))
+    assert utils.save_manifest_section("one", 1) is not None
+    assert utils.manifest_sections() == {"one", "two"}

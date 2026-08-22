@@ -1168,11 +1168,11 @@ class TestTranscriptsManifest:
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         path = transcripts.save_transcripts_manifest({}, [])
         assert path is None
-        assert not (tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME).exists()
+        assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
     def test_emptying_existing_manifest_removes_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        manifest = tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME
+        manifest = tmp_path / config.MANIFEST_FILENAME
         transcripts.save_transcripts_manifest(
             {}, [{"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"}]
         )
@@ -1183,14 +1183,14 @@ class TestTranscriptsManifest:
 
     def test_load_corrupt_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        (tmp_path / config.TRANSCRIPTS_MANIFEST_FILENAME).write_text("not json")
+        (tmp_path / config.MANIFEST_FILENAME).write_text("not json")
         m = transcripts.load_transcripts_manifest()
         assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
 
-    def test_load_returns_independent_deep_copies(self, tmp_path, monkeypatch):
+    def test_load_returns_independent_copies(self, tmp_path, monkeypatch):
         """Mutating a returned entry in place must not corrupt the cache."""
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        transcripts._reset_transcripts_manifest_cache()
+        utils._reset_manifest_cache()
         source = {
             "P01": {
                 "segments": [{"start": 0.0, "end": 1.0, "text": "hi"}],
@@ -1212,19 +1212,20 @@ class TestTranscriptsManifest:
     def test_repeated_load_reuses_cache(self, tmp_path, monkeypatch):
         """A second load with an unchanged file must not re-read/parse from disk."""
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        transcripts._reset_transcripts_manifest_cache()
+        utils._reset_manifest_cache()
         transcripts.save_transcripts_manifest(
             {}, [{"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"}]
         )
+        utils._reset_manifest_cache()
 
         calls = {"n": 0}
-        real_load = utils.load_json_manifest
+        real_read = utils._read_sections
 
-        def _counting_load(*args, **kwargs):
+        def _counting_read(*args, **kwargs):
             calls["n"] += 1
-            return real_load(*args, **kwargs)
+            return real_read(*args, **kwargs)
 
-        monkeypatch.setattr(utils, "load_json_manifest", _counting_load)
+        monkeypatch.setattr(utils, "_read_sections", _counting_read)
 
         transcripts.load_transcripts_manifest()  # miss -> one disk read
         transcripts.load_transcripts_manifest()  # hit  -> no disk read
@@ -1233,7 +1234,7 @@ class TestTranscriptsManifest:
     def test_save_busts_cache(self, tmp_path, monkeypatch):
         """After a save the next load must reflect the new data, not the cache."""
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        transcripts._reset_transcripts_manifest_cache()
+        utils._reset_manifest_cache()
         transcripts.save_transcripts_manifest(
             {}, [{"id": "c1", "from": "a", "to": "b", "created": "2025-01-01T00:00:00"}]
         )

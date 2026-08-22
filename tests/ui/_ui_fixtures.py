@@ -257,8 +257,9 @@ def ensure_run_dirs() -> None:
     reseed cost nor loses state it just poked in through ``--eval``.
     """
     _make_run_dirs()
+    present = _read_manifest()
     for name in _MANIFESTS:
-        if not (OUTPUT_DIR / f"{name}_manifest.json").is_file():
+        if name not in present:
             _SEEDERS[name]()
 
 
@@ -312,27 +313,36 @@ def _seed_start_settings() -> None:
     )
 
 
-def _write(name: str, payload: dict[str, Any]) -> None:
-    """Write a manifest by absolute path.
+def _read_manifest() -> dict[str, Any]:
+    path = OUTPUT_DIR / "clipgen.json"
+    if not path.is_file():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
-    Not ``utils.save_json_manifest``: that resolves against
+
+def _write(section: str, payload: dict[str, Any]) -> None:
+    """Merge one section into the unified manifest by absolute path.
+
+    Not ``utils.save_manifest_section``: that resolves against
     ``config.OUTPUT_DIR``, which would make seeding order-dependent on when the
     caller patched config.
     """
-    (OUTPUT_DIR / name).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    doc = _read_manifest()
+    doc[section] = payload
+    (OUTPUT_DIR / "clipgen.json").write_text(
+        json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
-# Every manifest below must be non-empty. Each subsystem's `_init_*_state` runs a
-# guarded persist on startup that DELETES a manifest it considers empty, and an
+# Every section below must be non-empty. Each subsystem's `_init_*_state` runs a
+# guarded persist on startup that DROPS a section it considers empty, and an
 # empty one also means the page renders its zero-state — which is not what a
 # smoke check wants to photograph.
 
 
 def _seed_screenspace() -> None:
     _write(
-        "screenspace_manifest.json",
+        "screenspace",
         {
             "regions": {
                 "toolbar": {
@@ -416,7 +426,7 @@ def _seed_screenspace() -> None:
 
 def _seed_transcripts() -> None:
     _write(
-        "transcripts_manifest.json",
+        "transcripts",
         {
             "source_transcripts": {
                 "P01": {
@@ -474,11 +484,11 @@ def _seed_transcripts() -> None:
 
 def _seed_composer() -> None:
     # composer_server never persists on init, so this one is not at risk of
-    # deletion — it exists purely so the cuts track renders non-empty.
+    # removal — it exists purely so the cuts track renders non-empty.
     # `markerSources` is left out and backfilled from the server's defaults
     # rather than hard-coding its private source list here.
     _write(
-        "composer_manifest.json",
+        "composer",
         {
             "cuts": [
                 {
@@ -497,10 +507,10 @@ def _seed_composer() -> None:
 
 def _seed_workflows() -> None:
     # BUILTIN_STASHES already make the stash library non-empty, but a *user*
-    # blueprint needs >=1 node or _is_empty_workflows_manifest deletes the file
+    # blueprint needs >=1 node or _is_empty_workflows_manifest drops the section
     # on init. Seeding one also suppresses the page's auto-POST of an "Untitled".
     _write(
-        "workflows_manifest.json",
+        "workflows",
         {
             "blueprints": [
                 {

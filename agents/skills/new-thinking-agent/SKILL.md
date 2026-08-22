@@ -11,7 +11,7 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
 2. **Agent implementation** (`thinking_agents.py`)
    - Write a `run(transcript_entry: dict) -> value | None` callable
      - Returns the value to store in the manifest field, or `None` to skip
-     - `transcript_entry` is the dict for one participant from `transcripts_manifest.json`
+     - `transcript_entry` is the dict for one participant from the `transcripts` section of `clipgen.json`
    - Append an `Agent(...)` entry to the `AGENTS` list
      - Respect topological order: dependencies must appear before dependents
      - Set `depends_on` to the agent *keys* (not `manifest_field` names) of agents this one needs

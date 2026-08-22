@@ -166,16 +166,18 @@ segs = [
     }
     for i in range(2400)
 ]
-out = pathlib.Path("/tmp/tsbench/transcripts_manifest.json")
+out = pathlib.Path("/tmp/tsbench/clipgen.json")
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(
     json.dumps(
         {
-            "source_transcripts": {
-                "P01": {"segments": segs, "language": "en", "model": "synthetic"}
-            },
-            "corrections": [],
-            "marks": {},
+            "transcripts": {
+                "source_transcripts": {
+                    "P01": {"segments": segs, "language": "en", "model": "synthetic"}
+                },
+                "corrections": [],
+                "marks": [],
+            }
         }
     )
 )

@@ -24,7 +24,6 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, Response, request
@@ -1071,31 +1070,20 @@ def _trigger_enabled(trigger: Any, trigger_type: str) -> bool:
     )
 
 
-def _manifest_mtime(filename: str) -> float:
-    """The manifest file's mtime in the output dir, or 0.0 when absent."""
-    try:
-        return os.stat(Path(utils.get_effective_output_dir()) / filename).st_mtime
-    except OSError:
-        return 0.0
-
-
 def _transcript_markers() -> dict[str, str]:
     """``{pid: transcribed_at}`` for every transcribed participant.
 
-    mtime-gated: the (potentially large, all-segments) transcripts manifest is
-    re-parsed only when its file actually changed — a handful of times per
-    session, not once per poll tick.
+    mtime-gated: the (potentially large, all-segments) transcripts section is
+    re-parsed only when the manifest file actually changed — a handful of
+    times per session, not once per poll tick.
     """
     global _watch_transcript_cache
-    mtime = _manifest_mtime(config.TRANSCRIPTS_MANIFEST_FILENAME)
+    mtime = utils.manifest_mtime()
     if mtime == _watch_transcript_cache[0]:
         return _watch_transcript_cache[1]
     markers: dict[str, str] = {}
     if mtime:
-        manifest = (
-            utils.load_json_manifest(config.TRANSCRIPTS_MANIFEST_FILENAME, default={})
-            or {}
-        )
+        manifest = utils.load_manifest_section("transcripts", default={}) or {}
         source = manifest.get("source_transcripts", {}) or {}
         if isinstance(source, dict):
             for pid, entry in source.items():
@@ -1108,15 +1096,12 @@ def _transcript_markers() -> dict[str, str]:
 def _scan_markers() -> dict[str, str]:
     """``{task_id: participant}`` for every completed Screenspace task (mtime-gated)."""
     global _watch_scan_cache
-    mtime = _manifest_mtime(config.SCREENSPACE_MANIFEST_FILENAME)
+    mtime = utils.manifest_mtime()
     if mtime == _watch_scan_cache[0]:
         return _watch_scan_cache[1]
     markers: dict[str, str] = {}
     if mtime:
-        manifest = (
-            utils.load_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME, default={})
-            or {}
-        )
+        manifest = utils.load_manifest_section("screenspace", default={}) or {}
         for task in manifest.get("tasks", []) or []:
             if (
                 isinstance(task, dict)

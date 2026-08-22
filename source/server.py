@@ -1184,22 +1184,37 @@ def _generate_intake_clips(
     return results
 
 
+# Reel and artifact stashes share the manifest's "stashes" section.
+def _load_stash_list(kind: str) -> list[dict[str, Any]]:
+    data = utils.load_manifest_section("stashes", default={})
+    items = data.get(kind) if isinstance(data, dict) else None
+    return items if isinstance(items, list) else []
+
+
+def _save_stash_list(kind: str, stashes: list[dict[str, Any]]) -> Path | None:
+    data = utils.load_manifest_section("stashes", default={})
+    if not isinstance(data, dict):
+        data = {}
+    data[kind] = stashes
+    if not any(data.values()):
+        return utils.save_manifest_section("stashes", None)
+    return utils.save_manifest_section("stashes", data)
+
+
 def _load_stashes() -> list[dict[str, Any]]:
-    return utils.load_json_manifest(config.STASHES_MANIFEST_FILENAME, default=[])
+    return _load_stash_list("reels")
 
 
 def _save_stashes(stashes: list[dict[str, Any]]) -> Path | None:
-    return utils.save_json_manifest(config.STASHES_MANIFEST_FILENAME, stashes)
+    return _save_stash_list("reels", stashes)
 
 
 def _load_artifact_stashes() -> list[dict[str, Any]]:
-    return utils.load_json_manifest(
-        config.ARTIFACT_STASHES_MANIFEST_FILENAME, default=[]
-    )
+    return _load_stash_list("artifacts")
 
 
 def _save_artifact_stashes(stashes: list[dict[str, Any]]) -> Path | None:
-    return utils.save_json_manifest(config.ARTIFACT_STASHES_MANIFEST_FILENAME, stashes)
+    return _save_stash_list("artifacts", stashes)
 
 
 def _coerce_studio_setting(name: str, value: Any) -> tuple[bool, Any, str | None]:
@@ -3757,14 +3772,14 @@ def build_combined_app(
 
     @combined.route("/api/export/status")
     def api_export_status() -> Response:
-        """Report which surface manifests are present in the output directory.
+        """Report which exportable manifest sections are present.
 
         Used by the frontend to gate the Export quick action — if no
-        manifests exist there is nothing for ``write_export_bundle`` to write.
+        sections exist there is nothing for ``write_export_bundle`` to write.
         """
-        output_dir = Path(utils.get_effective_output_dir())
-        screenspace = (output_dir / config.SCREENSPACE_MANIFEST_FILENAME).is_file()
-        transcripts = (output_dir / config.TRANSCRIPTS_MANIFEST_FILENAME).is_file()
+        present = utils.manifest_sections()
+        screenspace = "screenspace" in present
+        transcripts = "transcripts" in present
         return ok(
             screenspace=screenspace,
             transcripts=transcripts,
@@ -3778,7 +3793,7 @@ def build_combined_app(
 
         output_dir = Path(utils.get_effective_output_dir())
         try:
-            written = data_export.write_export_bundle(output_dir)
+            written = data_export.write_export_bundle()
         except Exception as exc:
             return err(str(exc), 500)
         if not written:

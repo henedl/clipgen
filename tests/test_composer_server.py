@@ -1,7 +1,7 @@
 """Smoke tests for the Composer Flask blueprint.
 
 Verifies the page serves, participant/part discovery, the composer manifest
-round-trip (cuts CRUD + UI toggles persisted to ``composer_manifest.json``),
+round-trip (cuts CRUD + UI toggles persisted to the ``composer`` section),
 and span clamping — mirroring tests/test_workflows_api.py's bare-blueprint
 setup. Combined-app registration (topnav-visible ``/composer/`` + the
 ``/api/status`` flag) is exercised against ``server.build_combined_app``.
@@ -64,9 +64,10 @@ def co_client(co_app, tmp_path, monkeypatch):
 
 
 def _manifest_on_disk(tmp_path):
-    return json.loads(
-        (tmp_path / config.COMPOSER_MANIFEST_FILENAME).read_text(encoding="utf-8")
-    )
+    """The composer section, or the empty shape once it has been dropped."""
+    path = tmp_path / config.MANIFEST_FILENAME
+    doc = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    return doc.get("composer") or {"cuts": [], "trims": {}, "annotations": []}
 
 
 def test_page_serves(co_client):
@@ -192,7 +193,7 @@ def test_cuts_crud_round_trip(co_client, tmp_path):
     cut_id = created["cut"]["id"]
     assert cut_id.startswith("cut_")
 
-    # Persisted to composer_manifest.json (save-after-mutation).
+    # Persisted to the composer section (save-after-mutation).
     disk = _manifest_on_disk(tmp_path)
     assert [c["id"] for c in disk["cuts"]] == [cut_id]
 
@@ -208,6 +209,8 @@ def test_cuts_crud_round_trip(co_client, tmp_path):
     deleted = co_client.delete(f"/composer/api/cuts/{cut_id}").get_json()
     assert deleted["ok"] is True
     assert _manifest_on_disk(tmp_path)["cuts"] == []
+    # Nothing left worth persisting → the section (and lone file) is dropped.
+    assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
 
 def test_cut_create_rejects_inverted_span(co_client):

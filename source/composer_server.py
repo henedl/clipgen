@@ -22,10 +22,10 @@ span via the ffmpeg ``overlay`` filter with span-relative
 recording-part boundary is first stitched into a temp clip (t=0 == span start)
 via ``pipeline.cut_global_range`` — the same cut/stitch chain Studio's intake
 uses — so the overlay pass always sees one continuous input. Exported artifacts
-land in the regular ``clipgen_manifest.json`` via ``viewer.save_manifest``.
+land in the ``clips`` section of the output-dir manifest via ``viewer.save_manifest``.
 
-All Composer state lives in ``composer_manifest.json`` in the output dir
-(load-on-startup, save-after-mutations). Composer never writes to the
+All Composer state lives in the ``composer`` section of the output-dir
+manifest (load-on-startup, save-after-mutations). Composer never writes to the
 spreadsheet — cut pairs feed clip generation through Studio's
 ``/api/generate-intake`` endpoint, which takes raw start/end seconds.
 
@@ -120,19 +120,23 @@ def _empty_manifest() -> dict[str, Any]:
 
 
 def _load_manifest() -> dict[str, Any]:
-    data = utils.load_json_manifest(
-        config.COMPOSER_MANIFEST_FILENAME, warn_label="the composer manifest"
-    )
+    data = utils.load_manifest_section("composer")
     return data if isinstance(data, dict) else _empty_manifest()
 
 
+def _is_empty_manifest(data: dict[str, Any]) -> bool:
+    """True when no cuts, trims, or annotations exist and the UI is at defaults."""
+    if data.get("cuts") or data.get("trims") or data.get("annotations"):
+        return False
+    return data.get("ui") == _empty_manifest()["ui"]
+
+
 def _persist_locked() -> None:
-    """Write the composer manifest to disk atomically (tmp + ``os.replace`` via
-    :func:`utils.save_json_manifest`) so an interrupted write can't truncate the
-    file and silently drop the session's cuts/trims/annotations. Caller must hold
+    """Write the composer section (atomic via the manifest store); drop it when
+    empty so an untouched Composer launch leaves no junk. Caller must hold
     ``_manifest_lock``."""
-    utils.save_json_manifest(
-        config.COMPOSER_MANIFEST_FILENAME, _manifest, warn_label="composer manifest"
+    utils.save_manifest_section(
+        "composer", None if _is_empty_manifest(_manifest) else _manifest
     )
 
 
