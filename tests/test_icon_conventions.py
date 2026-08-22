@@ -15,6 +15,7 @@ from _frontend_source import WEB, strip_comments
 # Reasons: animations needing SVG children, self-contained exported
 # pages (no /icons/ route offline), brand glyphs, tile artworks.
 _INLINE_SVG = {
+    "boot.html": 1,  # brand mark; the boot dispatcher serves no /logos/ route
     "gallery.html": 1,  # favicon data-URI (self-contained export)
     "hotkeys.css": 1,  # cheatsheet icon; hotkeys.css inlined into exports
     "start-overlay.html": 5,  # brand tab glyphs + tool-tile artworks
