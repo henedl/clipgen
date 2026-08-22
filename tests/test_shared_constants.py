@@ -148,6 +148,7 @@ def test_clipgen_config_defaults_match_python():
         == py_config["composerScrubMaxAudioSeconds"]
     )
     assert js_config["composerDoubleClickCuts"] == py_config["composerDoubleClickCuts"]
+    assert js_config["crossReferences"] == py_config["crossReferences"]
     assert js_config["mediaContainerWarning"] == py_config["mediaContainerWarning"]
     # The Embed Subtitles dialog filters its target list against these, so JS
     # drifting from video.SUBTITLE_CODEC_BY_CONTAINER means promising output
@@ -212,6 +213,7 @@ def test_get_frontend_config_shape():
         "composerAnnotationSpanSeconds",
         "composerScrubMaxAudioSeconds",
         "composerDoubleClickCuts",
+        "crossReferences",
         "mediaContainerWarning",
         "subtitleContainers",
         "hotkeyOverrides",

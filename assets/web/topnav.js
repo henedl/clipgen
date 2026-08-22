@@ -189,24 +189,6 @@
     settingsBtn.appendChild(settingsIcon);
     right.appendChild(settingsBtn);
 
-    // Tooltip toggle — opt-in per page (Studio + Transcripts). Keeps the
-    // existing #tooltipToggle id so studio.js / transcripts.js bindings continue.
-    var showTooltip = state.activeFrontend === "studio" || state.activeFrontend === "transcripts";
-    if (showTooltip) {
-      var tooltipBtn = document.createElement("button");
-      tooltipBtn.type = "button";
-      tooltipBtn.id = "tooltipToggle";
-      tooltipBtn.className = "topnav-icon-btn";
-      tooltipBtn.setAttribute("data-tooltip", "Toggle cross-reference tooltips");
-      tooltipBtn.setAttribute("aria-label", "Toggle cross-reference tooltips");
-      tooltipBtn.setAttribute("aria-pressed", "true");
-      var tooltipIcon = document.createElement("span");
-      tooltipIcon.className = "topnav-icon";
-      tooltipIcon.style.cssText = iconMaskStyle("chat-bubble-left-ellipsis");
-      tooltipBtn.appendChild(tooltipIcon);
-      right.appendChild(tooltipBtn);
-    }
-
     // Theme toggle.
     // Keeps the existing #themeToggle id + .theme-toggle-icon class names so
     // initThemeToggle() in utils.js continues to work without changes.

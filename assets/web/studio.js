@@ -87,7 +87,6 @@
     trIntakeFilterText: "",
     trIntakeShowAll: false,
     trIntakeHoveredIdx: -1,
-    trIntakeTooltipsEnabled: true,
     coIntakeItems: [],
     coTrimCardKeys: {},
     coIntakeFilterParticipants: [],
@@ -4565,7 +4564,18 @@
         renderIntake(false);
       }
     }
+    if (applyCrossRefSetting(null, state.settingsData)) rerenderCrossRefs();
   }
+
+  // Shared by the settings modal and the command palette's cross-ref command.
+  // A flip while a card is hovered (palette, no mouse move) leaves the tooltip
+  // painted; rebuilding the cards alone does not take it down.
+  function rerenderCrossRefs() {
+    var tooltip = qs("#trIntakeTooltip");
+    if (tooltip) tooltip.classList.add("hidden");
+    renderIntake(false);
+  }
+  window.clipgenRerenderCrossRefs = rerenderCrossRefs;
 
   function persistTitlecardSettings() {
     var cb = qs("#titlecardEnabled");
@@ -4754,7 +4764,6 @@
   function refreshComposerIntake() { return STUDIO.refreshComposerIntake && STUDIO.refreshComposerIntake.apply(null, arguments); }
   function refreshMindnodeIntake() { return STUDIO.refreshMindnodeIntake && STUDIO.refreshMindnodeIntake.apply(null, arguments); }
   function focusComposerIntakeItem() { return STUDIO.focusComposerIntakeItem && STUDIO.focusComposerIntakeItem.apply(null, arguments); }
-  function initTooltipToggle() { return STUDIO.initTooltipToggle && STUDIO.initTooltipToggle.apply(null, arguments); }
   function refreshIntakeCardStates() { return STUDIO.refreshIntakeCardStates && STUDIO.refreshIntakeCardStates.apply(null, arguments); }
   function renderIntake() { return STUDIO.renderIntake && STUDIO.renderIntake.apply(null, arguments); }
   function _syncMarkCategoriesFromSettings() { return STUDIO._syncMarkCategoriesFromSettings && STUDIO._syncMarkCategoriesFromSettings.apply(null, arguments); }
@@ -4914,7 +4923,6 @@
     setActiveTabAttr(state.activePreviewTab);
     bindSidebarToggle();
     initThemeToggle();
-    initTooltipToggle();
     initPreviewTabs();
     initDropTargets();
     initWheelScroll();

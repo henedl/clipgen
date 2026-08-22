@@ -1112,6 +1112,7 @@ def get_frontend_config() -> dict[str, Any]:
         "convergenceSources": list(config.CONVERGENCE_SOURCES),
         "cardScrubberSpriteCols": config.STUDIO_SCRUBBER_SPRITE_COLS,
         "cardScrubberSpriteRows": config.STUDIO_SCRUBBER_SPRITE_ROWS,
+        "crossReferences": config.CROSS_REFERENCES_ENABLED,
         "clipFormat": config.FILEFORMAT,
         "screenshotFormat": config.SCREENSHOT_FORMAT,
         "gifFormat": config.GIF_FORMAT,

@@ -261,6 +261,14 @@
     if (fn) fn();
   }
 
+  // Shared by the settings modal and the command palette's cross-ref command.
+  // Convergence detail rows hold the page's only cross-reference badges;
+  // syncTab would close the open zone detail without rebuilding those rows.
+  function rerenderCrossRefs() {
+    if (OV.convergenceRenderCrossRefs) OV.convergenceRenderCrossRefs();
+  }
+  window.clipgenRerenderCrossRefs = rerenderCrossRefs;
+
   function syncTab(animate) {
     var panels = {
       convergence: qs("#convergencePanel"),
@@ -357,7 +365,13 @@
     if (typeof initThemeToggle === "function") {
       initThemeToggle();
     }
-    if (window.wireSettingsButton) window.wireSettingsButton({});
+    if (window.wireSettingsButton) {
+      window.wireSettingsButton({
+        onApply: function (applied, settings) {
+          if (applyCrossRefSetting(applied, settings)) rerenderCrossRefs();
+        },
+      });
+    }
 
     var refreshBtn = qs("#ovRefresh");
     if (refreshBtn) {

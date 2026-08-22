@@ -66,43 +66,6 @@ body {
   overflow: hidden;
 }
 
-/* Theme toggle (matches viewer.css) */
-
-#tooltipToggle {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
-  background: var(--color-surface-alt);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) ease, box-shadow var(--duration-normal) ease;
-  flex-shrink: 0;
-  color: var(--color-text);
-}
-
-#tooltipToggle:hover {
-  background: var(--color-surface);
-  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.3);
-}
-
-#tooltipToggle:active {
-  transform: scale(0.96);
-}
-
-#tooltipToggle:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-#tooltipToggle[aria-pressed="false"] {
-  opacity: 0.4;
-}
-
 /* Transcript intake tooltip */
 
 .tr-intake-tooltip {

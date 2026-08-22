@@ -226,13 +226,13 @@
         run: function () { window.ClipgenStartOverlay.open(); },
       },
       {
-        id: "global:tooltips",
-        title: "Toggle cross-reference tooltips",
+        id: "global:crossrefs",
+        title: "Toggle cross-references",
         icon: "chat-bubble-left-ellipsis",
-        keywords: "xref hover badges",
+        keywords: "xref hover badges overlap tooltips",
         section: "Global",
-        visible: function () { return !!document.getElementById("tooltipToggle"); },
-        run: function () { document.getElementById("tooltipToggle").click(); },
+        visible: function () { return typeof setCrossReferences === "function"; },
+        run: function () { setCrossReferences(!CLIPGEN_CONFIG.crossReferences); },
       },
     ];
   }
