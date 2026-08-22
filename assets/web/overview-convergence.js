@@ -57,6 +57,10 @@
     participants: [],
     sortByDensity: false,
     swimLaneEl: null,
+    // Cross-references were flipped while this tab was hidden; re-render on
+    // the next activate. A hidden panel measures zero width, so rendering
+    // straight away would bake a broken swim lane in.
+    crossRefsStale: false,
     _snapshot: null,
   };
 
@@ -755,6 +759,7 @@
   }
 
   function renderImpl() {
+    cvState.crossRefsStale = false;
     renderTimeline();
     if (cvState.selection && cvState.selection.zone) {
       // Re-render the inline detail panel after the swim-lane rebuild.
@@ -1124,6 +1129,7 @@
       // recalculate() re-reads the reassigned baselines and clears the paint.
       recalculate();
     } else {
+      if (cvState.crossRefsStale) render();
       checkStaleness();
     }
   }
@@ -1685,8 +1691,17 @@
     });
   }
 
+  // The detail rows bake their cross-reference badges into the DOM, so a
+  // settings flip needs a re-render — render() rebuilds the swim lane and
+  // reopens the selected zone's detail from cvState.selection.
+  function renderCrossRefs() {
+    if (cvState.active) render();
+    else cvState.crossRefsStale = true;
+  }
+
   // --- Hub exports (OV namespace) ---
   window.ClipgenOverview.convergenceActivate = activate;
+  window.ClipgenOverview.convergenceRenderCrossRefs = renderCrossRefs;
   window.ClipgenOverview.convergenceDeactivate = deactivate;
   window.ClipgenOverview.convergenceResize = debounce(function () {
     if (!cvState.active) return;

@@ -55,7 +55,6 @@
     xrefPoller: null,
     xrefEligible: false,
     xrefIndex: { eventsByParticipant: {}, sheetByParticipant: {} },
-    tooltipsEnabled: true,
     summaryEditing: false,
     summaryText: "",
     summaryCitations: null,
@@ -1087,7 +1086,7 @@
       html += sevDotHtml;
       html += '<span class="segment-timestamp">' + formatTime(seg.start);
       // Cross-reference badges in gutter (inside timestamp, positioned at right edge)
-      if (state.tooltipsEnabled) {
+      if (CLIPGEN_CONFIG.crossReferences) {
         var xref = findOverlapsForSearch(state.selectedParticipant, seg.start, seg.end);
         if (xref.screenspaceEvents.length > 0 || xref.sheetObservations.length > 0) {
           html += '<span class="segment-xref-badges">';
@@ -2552,19 +2551,6 @@
     return TS.loadCorrections && TS.loadCorrections();
   }
 
-  function initTooltipToggle() {
-    state.tooltipsEnabled = getStoredTooltipPref();
-    var btn = qs("#tooltipToggle");
-    if (!btn) return;
-    btn.setAttribute("aria-pressed", state.tooltipsEnabled ? "true" : "false");
-    btn.addEventListener("click", function () {
-      state.tooltipsEnabled = !state.tooltipsEnabled;
-      btn.setAttribute("aria-pressed", state.tooltipsEnabled ? "true" : "false");
-      setStoredTooltipPref(state.tooltipsEnabled);
-      if (state.segments.length > 0) renderSegments();
-    });
-  }
-
   // ---- Settings (shared modal lives in settings-modal.js) ----
 
   // Models are also fetched for per-pill model overrides; keep a tiny
@@ -3080,7 +3066,14 @@
       hideMarkPopover();
       if (state.selectedParticipant) loadTranscript(state.selectedParticipant);
     }
+    if (applyCrossRefSetting(applied, settings)) rerenderCrossRefs();
   }
+
+  // Shared by the settings modal and the command palette's cross-ref command.
+  function rerenderCrossRefs() {
+    if (state.segments.length > 0) renderSegments();
+  }
+  window.clipgenRerenderCrossRefs = rerenderCrossRefs;
 
   // A changed transcription model invalidates the prewarm guards: the new
   // model may be uncached and must get its own download confirmation, so we
@@ -4195,7 +4188,6 @@
 
   document.addEventListener("DOMContentLoaded", function () {
     initThemeToggle();
-    initTooltipToggle();
     initStatusIndicatorTooltip();
     checkNavLinks();
     initFrontendSwitcher();

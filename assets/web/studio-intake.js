@@ -684,8 +684,8 @@
   // the Add-All/Reel-All buttons, threshold, search, and the per-type extra
   // control. Must be called exactly once per panel at startup — never from a
   // render path (CODE-REVIEW.md listener-cleanup rule). Per-type behavior is
-  // supplied via cfg; the shared `#trIntakeTooltip` host and the
-  // `trIntakeTooltipsEnabled` gate are owned here so both panels behave alike.
+  // supplied via cfg; the shared `#trIntakeTooltip` host and its cross-reference
+  // gate are owned here so both panels behave alike.
   function initIntakePanel(cfg) {
     var cards = qs(cfg.cardsSel);
     if (!cards) return;
@@ -731,7 +731,7 @@
         if (densityEl) densityEl.setHovered(idx);
       }
       var tooltip = qs("#trIntakeTooltip");
-      if (tooltip && state.trIntakeTooltipsEnabled) {
+      if (tooltip && CLIPGEN_CONFIG.crossReferences) {
         var tooltipText = cfg.onCardHover(card, idx) || "";
         if (tooltipText) {
           tooltip.textContent = tooltipText;
@@ -1617,22 +1617,6 @@
     renderIntakeCards(MN_INTAKE, filtered);
   }
 
-  function initTooltipToggle() {
-    state.trIntakeTooltipsEnabled = getStoredTooltipPref();
-    var btn = qs("#tooltipToggle");
-    if (!btn) return;
-    btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
-    btn.addEventListener("click", function () {
-      state.trIntakeTooltipsEnabled = !state.trIntakeTooltipsEnabled;
-      btn.setAttribute("aria-pressed", state.trIntakeTooltipsEnabled ? "true" : "false");
-      setStoredTooltipPref(state.trIntakeTooltipsEnabled);
-      if (!state.trIntakeTooltipsEnabled) {
-        var tt = qs("#trIntakeTooltip");
-        if (tt) tt.classList.add("hidden");
-      }
-    });
-  }
-
   // Init the intake panels. Folded from the hub-boot initIntakePanel calls
   // so the SS_INTAKE/TR_INTAKE/CO_INTAKE configs never need to leave this file.
   function initIntake() {
@@ -1687,7 +1671,6 @@
   STUDIO.refreshComposerIntake = refreshComposerIntake;
   STUDIO.refreshMindnodeIntake = refreshMindnodeIntake;
   STUDIO.focusComposerIntakeItem = focusComposerIntakeItem;
-  STUDIO.initTooltipToggle = initTooltipToggle;
   STUDIO.refreshIntakeCardStates = refreshIntakeCardStates;
   STUDIO.renderIntake = renderIntake;
   STUDIO._syncMarkCategoriesFromSettings = _syncMarkCategoriesFromSettings;

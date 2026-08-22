@@ -68,6 +68,7 @@ var CLIPGEN_CONFIG = {
   composerAnnotationSpanSeconds: 10.0,
   composerScrubMaxAudioSeconds: 180.0,
   composerDoubleClickCuts: true,
+  crossReferences: true,
   mediaContainerWarning: true,
   // Mirrors video.SUBTITLE_CODEC_BY_CONTAINER / SUBTITLE_ALWAYS_DEFAULT_CONTAINERS.
   // `supported` is what mux_subtitles can write at all; `alwaysDefault` is the
@@ -159,6 +160,9 @@ var clipgenApplyConfig = function (payload) {
   }
   if (typeof payload.composerDoubleClickCuts === "boolean") {
     CLIPGEN_CONFIG.composerDoubleClickCuts = payload.composerDoubleClickCuts;
+  }
+  if (typeof payload.crossReferences === "boolean") {
+    CLIPGEN_CONFIG.crossReferences = payload.crossReferences;
   }
   if (typeof payload.mediaContainerWarning === "boolean") {
     CLIPGEN_CONFIG.mediaContainerWarning = payload.mediaContainerWarning;
@@ -1884,6 +1888,7 @@ var xrefBadgeIcon = function (iconName) {
 // intake cards and the Overview page (Convergence detail rows, Map drill-down).
 // selfBadge: optional { icon, color, title } to prepend as the "self" source badge.
 var buildXrefBadges = function (xref, selfSource, selfBadge) {
+  if (!CLIPGEN_CONFIG.crossReferences) return null;
   var badges = [];
   if (selfBadge) badges.push(selfBadge);
   if (selfSource !== "screenspace" && xref.screenspaceEvents.length > 0) {
@@ -2069,7 +2074,6 @@ function categoryColor(label, alpha) {
 // ---- Shared settings (localStorage) ----
 
 var THEME_STORAGE_KEY = "clipgen-theme";
-var TOOLTIP_STORAGE_KEY = "clipgen-tooltips";
 
 // In the native window the theme is not just the page's business: AppKit fills
 // the area a resize exposes with an appearance-derived colour for the frame
@@ -2216,18 +2220,37 @@ var initFrontendSwitcher = function () {
     .catch(function () {});
 };
 
-var getStoredTooltipPref = function () {
-  try {
-    var v = window.localStorage.getItem(TOOLTIP_STORAGE_KEY);
-    if (v === "false") return false;
-  } catch (_) {}
-  return true;
+// Cross-reference badges: three pages mirror the setting, the command palette
+// flips it. applyCrossRefSetting reads a /api/settings save or reset payload and
+// reports whether the value moved, so callers only re-render when it did.
+var applyCrossRefSetting = function (applied, settings) {
+  var value;
+  if (applied && applied.CROSS_REFERENCES_ENABLED !== undefined) {
+    value = applied.CROSS_REFERENCES_ENABLED;
+  } else if (settings) {
+    for (var i = 0; i < settings.length; i++) {
+      if (settings[i].name === "CROSS_REFERENCES_ENABLED") {
+        value = settings[i].value;
+        break;
+      }
+    }
+  }
+  if (value === undefined) return false;
+  var changed = CLIPGEN_CONFIG.crossReferences !== !!value;
+  CLIPGEN_CONFIG.crossReferences = !!value;
+  return changed;
 };
 
-var setStoredTooltipPref = function (enabled) {
-  try {
-    window.localStorage.setItem(TOOLTIP_STORAGE_KEY, enabled ? "true" : "false");
-  } catch (_) {}
+// Settings live at the combined-app root, not under the page prefix.
+var setCrossReferences = function (enabled) {
+  return apiPut("/api/settings", { settings: { CROSS_REFERENCES_ENABLED: enabled } })
+    .then(function () {
+      CLIPGEN_CONFIG.crossReferences = enabled;
+      if (typeof window.clipgenRerenderCrossRefs === "function") {
+        window.clipgenRerenderCrossRefs();
+      }
+    })
+    .catch(function () {});
 };
 
 // ---- Participant deep links (location.hash) ----
