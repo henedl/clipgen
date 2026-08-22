@@ -149,9 +149,7 @@ GALLERY_BUNDLE_ENABLED: bool = False  # embed images as base64 data URIs in gall
 CLIP_PARALLEL_WORKERS: int = 0  # Max concurrent ffmpeg processes for clip/screenshot/GIF generation; 0 = auto (min(4, cpu_count))
 MAX_FILESIZE_MB: int = 0  # Maximum output file size in MB (0 = disabled)
 MIN_SOURCE_VIDEO_SIZE_MB: int = 100  # Minimum file size (MB) to consider as a source video candidate during fuzzy matching
-MANIFEST_FILENAME: str = (
-    "clipgen_manifest.json"  # cumulative artifact manifest; consumed by --regenerate
-)
+MANIFEST_FILENAME: str = "clipgen.json"  # one sectioned state file per output dir; see utils.load_manifest_section
 MANIFEST_ENABLED: bool = (
     False  # use --manifest CLI flag or set True to write manifest alongside artifacts
 )
@@ -167,14 +165,9 @@ DESKTOP_CHROME_BAR_HEIGHT: int = 48  # titlebar band height; drives --topnav-hei
 # margin centering leaves above them ((bar - 16) / 2 = 16), pitched 20px apart, so
 # the row ends at 16 + 40 + 14 = 70. The rest is breathing room before the brand.
 DESKTOP_TRAFFIC_LIGHT_INSET: int = 87
-STASHES_MANIFEST_FILENAME: str = "reel_stashes.json"
-ARTIFACT_STASHES_MANIFEST_FILENAME: str = "artifact_stashes.json"
-# Unlike the manifests above, this one lives in the per-user config dir
+# Unlike the manifest above, this one lives in the per-user config dir
 # beside start.json — preferences, not project data.
 STUDIO_SETTINGS_FILENAME: str = "studio_settings.json"
-WORKFLOWS_MANIFEST_FILENAME: str = (
-    "workflows_manifest.json"  # node-canvas blueprints, stashes, run history
-)
 # Prefix for clipgen's own scratch temp-files in the output dir, so
 # sweep_stale_temp_artifacts() can reclaim orphans left by a hard kill without
 # ever touching user files.
@@ -188,10 +181,6 @@ WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
 # and heavy graphs serialize on those shared resources anyway, so they rarely
 # benefit past 2. Clamped to [1, 4]. Server-only.
 WORKFLOWS_BATCH_WORKERS: int = 1
-CONVERGENCE_OFFSETS_FILENAME: str = "convergence_offsets.json"
-COMPOSER_MANIFEST_FILENAME: str = (
-    "composer_manifest.json"  # Composer cut pairs, trims, annotations, UI state
-)
 # Composer annotation defaults. Geometry is normalized to the video frame (stroke
 # width to frame width, font size to frame height) so the browser preview and the
 # PIL/ffmpeg burn-in agree at any resolution. Mirrored to JS via
@@ -250,8 +239,6 @@ CROSS_REFERENCES_ENABLED: bool = True
 STUDIO_METADATA_CLUSTER_SCREENSPACE: bool = True
 
 # ── Screenspace ──────────────────────────────────────────────────────
-SCREENSPACE_MANIFEST_FILENAME: str = "screenspace_manifest.json"
-TRANSCRIPTS_MANIFEST_FILENAME: str = "transcripts_manifest.json"
 SCREENSPACE_DEFAULT_INTERVAL: float = (
     1.0  # default frame sampling interval (seconds) for analysis tasks
 )

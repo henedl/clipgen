@@ -71,10 +71,8 @@ def test_api_convergence_offsets_put_persists(overview_client, seeded_output_dir
     assert data["ok"] is True
     assert data["offsets"] == expected
 
-    saved = json.loads(
-        (seeded_output_dir / config.CONVERGENCE_OFFSETS_FILENAME).read_text()
-    )
-    assert saved == {"offsets": expected}
+    saved = json.loads((seeded_output_dir / config.MANIFEST_FILENAME).read_text())
+    assert saved == {"convergence": {"offsets": expected}}
 
     resp2 = overview_client.get("/overview/api/convergence/offsets")
     assert resp2.get_json()["offsets"] == expected
@@ -124,7 +122,7 @@ def test_api_convergence_offsets_put_empty_removes_file(
         "/overview/api/convergence/offsets",
         json={"offsets": {"P01": {"sheet": 3.0}}},
     )
-    settings_file = seeded_output_dir / config.CONVERGENCE_OFFSETS_FILENAME
+    settings_file = seeded_output_dir / config.MANIFEST_FILENAME
     assert settings_file.is_file()
 
     resp = overview_client.put(
@@ -140,7 +138,7 @@ def test_api_convergence_offsets_put_empty_sweeps_stale_tmp(
     overview_client, seeded_output_dir
 ):
     """An interrupted save's .tmp sibling is removed along with the manifest."""
-    stale_tmp = seeded_output_dir / (config.CONVERGENCE_OFFSETS_FILENAME + ".tmp")
+    stale_tmp = seeded_output_dir / (config.MANIFEST_FILENAME + ".tmp")
     stale_tmp.write_text("{}")
 
     resp = overview_client.put(

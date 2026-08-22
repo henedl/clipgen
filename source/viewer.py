@@ -23,7 +23,7 @@ Gallery (--gallery), from gallery.html::
 
 Gallery artifacts are NOT written to the manifest by default.
 
-The manifest helpers merge new artifacts/reels into clipgen_manifest.json,
+The manifest helpers merge new artifacts/reels into the manifest's clips section,
 deduplicating by id (newer wins), for --regenerate and standalone --viewer.
 """
 
@@ -163,10 +163,9 @@ def finalize_timeline_data(
 
 
 # Module-level mtime cache for the screenspace-events-for-viewer transform.
-# Viewer exports call load_screenspace_events_for_viewer() repeatedly; re-reading
-# and re-parsing screenspace_manifest.json each time is pure overhead. Keyed on
-# the manifest's (path, mtime_ns), so it invalidates automatically when the file
-# is rewritten. Bounded at one entry — this is a single-process export path.
+# Viewer exports call load_screenspace_events_for_viewer() repeatedly; re-parsing
+# the screenspace section each time is pure overhead. Keyed on the manifest's
+# (output dir, mtime_ns), so any rewrite invalidates it. One entry suffices.
 _SS_EVENTS_CACHE_LOCK = threading.Lock()
 _ss_events_cache: dict[str, Any] = {
     "path": None,
@@ -191,12 +190,8 @@ def load_screenspace_events_for_viewer() -> list[dict[str, Any]]:
     """
     import screenspace
 
-    path = Path(utils.get_effective_output_dir()) / config.SCREENSPACE_MANIFEST_FILENAME
-    path_str = str(path)
-    try:
-        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
-    except OSError:
-        mtime_ns = None
+    path_str = str(utils.get_effective_output_dir())
+    mtime_ns: int | None = utils.manifest_mtime() or None
 
     with _SS_EVENTS_CACHE_LOCK:
         if (
@@ -513,76 +508,20 @@ def generate_gallery_viewer(
     )
 
 
-# Module-level cache for the parsed manifest, keyed on the file's path and
-# mtime_ns. Studio/Transcripts all hit `load_manifest_artifacts()`
-# repeatedly on every request; re-reading and re-parsing the JSON each time is
-# pure overhead. The cache is invalidated automatically whenever the file is
-# rewritten (save_manifest bumps mtime) so no explicit bust is required in the
-# normal happy path — _reset_manifest_cache() exists only for tests that reuse
-# the same output directory across mutations without touching mtime.
-_MANIFEST_CACHE_LOCK = threading.Lock()
 # Serializes the full load-merge-write cycle in save_manifest() so concurrent
-# Studio completions cannot last-writer-wins a partial merge. Always acquired
-# before _MANIFEST_CACHE_LOCK, never the reverse, so the two cannot deadlock.
+# Studio completions cannot last-writer-wins a partial merge.
 _MANIFEST_WRITE_LOCK = threading.Lock()
-_manifest_cache: dict[str, Any] = {
-    "path": None,
-    "mtime_ns": None,
-    "artifacts": [],
-    "reels": [],
-}
-
-
-def _reset_manifest_cache() -> None:
-    """Drop the in-memory manifest cache. Intended for test fixtures."""
-    with _MANIFEST_CACHE_LOCK:
-        _manifest_cache["path"] = None
-        _manifest_cache["mtime_ns"] = None
-        _manifest_cache["artifacts"] = []
-        _manifest_cache["reels"] = []
 
 
 def load_manifest_both() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Load artifact and reel records from the manifest in a single read.
+    """Load artifact and reel records from the manifest's ``clips`` section.
 
     Returns (artifacts, reels). Both default to [] on missing/corrupt file.
-
-    Memoizes the parsed result keyed on the manifest's path + mtime_ns so
-    repeated calls from the same process share a single read/parse until the
-    file is rewritten. Returns shallow copies so callers that mutate the
-    returned lists do not corrupt the cached state.
     """
-    path = Path(utils.get_effective_output_dir()) / config.MANIFEST_FILENAME
-    path_str = str(path)
-    try:
-        mtime_ns: int | None = path.stat().st_mtime_ns if path.is_file() else None
-    except OSError:
-        mtime_ns = None
-
-    with _MANIFEST_CACHE_LOCK:
-        if (
-            mtime_ns is not None
-            and _manifest_cache["path"] == path_str
-            and _manifest_cache["mtime_ns"] == mtime_ns
-        ):
-            return (
-                list(_manifest_cache["artifacts"]),
-                list(_manifest_cache["reels"]),
-            )
-
-    data = utils.load_json_manifest(
-        config.MANIFEST_FILENAME, default={"artifacts": [], "reels": []}
-    )
-    artifacts = data.get("artifacts", [])
-    reels = data.get("reels", [])
-
-    with _MANIFEST_CACHE_LOCK:
-        _manifest_cache["path"] = path_str
-        _manifest_cache["mtime_ns"] = mtime_ns
-        _manifest_cache["artifacts"] = artifacts
-        _manifest_cache["reels"] = reels
-
-    return (list(artifacts), list(reels))
+    data = utils.load_manifest_section("clips", default={})
+    if not isinstance(data, dict):
+        return [], []
+    return data.get("artifacts", []), data.get("reels", [])
 
 
 def load_manifest_artifacts() -> list[dict[str, Any]]:
@@ -632,11 +571,4 @@ def save_manifest(
             mode=mode,
         )
 
-        result = utils.save_json_manifest(
-            config.MANIFEST_FILENAME, data, warn_label="manifest"
-        )
-        # Invalidate the cache so the next load picks up what we just wrote,
-        # even if the filesystem's mtime resolution elides the change.
-        if result is not None:
-            _reset_manifest_cache()
-    return result
+        return utils.save_manifest_section("clips", data)

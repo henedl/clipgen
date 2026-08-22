@@ -82,7 +82,7 @@ class TestManifest:
 
     def test_load_malformed_json(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
+        manifest_path = tmp_path / config.MANIFEST_FILENAME
         manifest_path.write_text("not json")
         result = screenspace.load_screenspace_manifest()
         assert result == {
@@ -160,7 +160,7 @@ class TestEmptyManifestGuard:
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         path = screenspace.save_screenspace_manifest({}, [])
         assert path is None
-        assert not (tmp_path / config.SCREENSPACE_MANIFEST_FILENAME).exists()
+        assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
     def test_nonempty_save_writes_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -169,14 +169,14 @@ class TestEmptyManifestGuard:
 
     def test_emptying_existing_manifest_removes_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
-        manifest = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
+        manifest = tmp_path / config.MANIFEST_FILENAME
         screenspace.save_screenspace_manifest({"hud": {"x": 0}}, [])
         assert manifest.is_file()
         # A stale .tmp from a prior crashed write must also be reclaimed.
-        (tmp_path / (config.SCREENSPACE_MANIFEST_FILENAME + ".tmp")).write_text("x")
+        (tmp_path / (config.MANIFEST_FILENAME + ".tmp")).write_text("x")
         screenspace.save_screenspace_manifest({}, [])
         assert not manifest.exists()
-        assert not (tmp_path / (config.SCREENSPACE_MANIFEST_FILENAME + ".tmp")).exists()
+        assert not (tmp_path / (config.MANIFEST_FILENAME + ".tmp")).exists()
 
 
 # ---------------------------------------------------------------------------

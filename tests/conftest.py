@@ -22,7 +22,7 @@ def _anchor_cwd_outside_repo(tmp_path_factory):
     cwd on teardown — the repo root, since that is where pytest is invoked. Any
     write that lands after that teardown therefore hits the repo: a
     ``workflows_server`` run thread outliving its test persisted
-    ``workflows_manifest.json`` into the root exactly that way, and being
+    ``clipgen.json`` into the root exactly that way, and being
     gitignored it accumulated unnoticed.
 
     Anchoring the session cwd to a tmp directory makes that restore point
@@ -48,12 +48,12 @@ def _repo_root_stays_clean():
     ``_sandbox_cwd`` below is the *prevention*; this is the detection. Both the
     artifacts it describes and the manifests a late worker thread persists are
     gitignored (``*.json``, ``*.mp4``), so an escape leaves no trace in
-    ``git status`` and accumulates unnoticed — ``workflows_manifest.json`` did
+    ``git status`` and accumulates unnoticed — ``clipgen.json`` did
     exactly that. Comparing a before/after listing of the root turns the next
     one into a red run instead of silent litter.
 
     Scoped to *product* writes, which in this codebase are all plainly named
-    (``*_manifest.json``, ``*.mp4``, ``*.png``). Test-runner artifacts are a
+    (``clipgen.json``, ``*.mp4``, ``*.png``). Test-runner artifacts are a
     different category and legitimately belong at the rootdir: under CI's
     ``-n auto``, ``pytest-cov`` writes one
     ``.coverage.<host>.<pid>.<random>`` per xdist worker there by design, and

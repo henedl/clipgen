@@ -613,7 +613,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--ss-clips",
         action="store_true",
         help=(
-            "Cut clips from existing Screenspace events (reads screenspace_manifest.json). "
+            "Cut clips from existing Screenspace events (reads the manifest). "
             "Filter with --ss-clips-detector / --ss-clips-region / --ss-clips-participant / "
             "--ss-clips-min-confidence / --ss-clips-event-type. Cluster nearby events with "
             "--cluster-gap and pad with --clip-pre / --clip-post."
@@ -623,7 +623,7 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
         "--transcript-clips",
         action="store_true",
         help=(
-            "Cut clips from transcript segments or marks (reads transcripts_manifest.json). "
+            "Cut clips from transcript segments or marks (reads the manifest). "
             "Filter with --transcript-clips-participant / --transcript-clips-mark / "
             "--transcript-clips-text. Cluster nearby segments with --cluster-gap."
         ),
@@ -2652,7 +2652,7 @@ def _truncate_for_filename(text: str, *, limit: int = 60) -> str:
 
 
 def _run_ss_clips(args: argparse.Namespace) -> None:
-    """Cut clips from existing Screenspace events and append to clipgen_manifest.json."""
+    """Cut clips from existing Screenspace events and append to the manifest."""
     import pipeline
     import screenspace
 
@@ -2740,7 +2740,7 @@ def _run_ss_clips(args: argparse.Namespace) -> None:
 
 
 def _run_transcript_clips(args: argparse.Namespace) -> None:
-    """Cut clips from transcript segments/marks and append to clipgen_manifest.json."""
+    """Cut clips from transcript segments/marks and append to the manifest."""
     import pipeline
 
     manifest = transcripts.load_transcripts_manifest()

@@ -3119,7 +3119,7 @@
   //
   // Cuts one clip per cluster of marked lines through Studio's
   // ../studio/api/generate-intake — the endpoint Studio's Transcript Intake tab
-  // uses — so output lands in clipgen_manifest.json as if queued there and this
+  // uses — so output lands in the clips manifest section as if queued there and this
   // page needs no generation backend. Unlike Studio's queue path it also sends
   // `text`/`label`, which is what gives each artifact a readable description
   // instead of a bare category (see _process_intake_item in server.py).

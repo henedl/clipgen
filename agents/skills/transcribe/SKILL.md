@@ -60,7 +60,7 @@ Friction detection (depends on `summary`; surfaces moments of likely interest):
   moments (whose rationales render as inline callouts under the segments they quote).
   Highlight tints matching segments and draws the timeline density band; Isolate hides
   everything else. Run/re-run/stop also live in the participant pill dropdown.
-- Results persist to `transcripts_manifest.json` under each participant's `friction` field
+- Results persist to the `transcripts` section of `clipgen.json` under each participant's `friction` field
   and flow into `--export` (`clipgen_export_friction_moments.*` / `_friction_segments.*`).
 
 ## Step 5: Cut clips from transcript segments or marks
@@ -92,7 +92,7 @@ uv run clipgen.py --transcript-clips --transcript-clips-text "checkout flow" -i 
 uv run clipgen.py --transcript-clips --transcript-clips-participant P01 --cluster-gap 0 -i INPUT -o OUTPUT
 ```
 
-When a mark filter is set, the clip's category is `mark-{category}`; otherwise `transcript`. Clips are appended to `clipgen_manifest.json`.
+When a mark filter is set, the clip's category is `mark-{category}`; otherwise `transcript`. Clips are appended to the `clips` section of `clipgen.json`.
 
 ## Step 6: Batch-mark segments by text term
 
@@ -110,7 +110,7 @@ Optional:
 - `--transcript-mark-participant P01,P02` — restrict to specific participants. Omit to mark across all transcripts.
 - `--transcript-mark-label "follow up"` — label written onto every created/updated mark.
 
-Existing marks on matching segments are updated in place (category and, if given, label). Non-matching segments' marks are untouched. The created marks live in `transcripts_manifest.json` and are immediately consumable by `--transcript-clips --transcript-clips-mark CAT`.
+Existing marks on matching segments are updated in place (category and, if given, label). Non-matching segments' marks are untouched. The created marks live in the `transcripts` section of `clipgen.json` and are immediately consumable by `--transcript-clips --transcript-clips-mark CAT`.
 
 Example:
 
@@ -123,6 +123,6 @@ uv run clipgen.py --transcript-clips --transcript-clips-mark insight -i IN -o OU
 ## Notes
 
 - `config.DEBUGGING = True` returns stub transcripts without loading the Whisper model, useful for development
-- Thinking agent results are stored in `transcripts_manifest.json` under each participant's entry
+- Thinking agent results are stored in the `transcripts` section of `clipgen.json` under each participant's entry
 - Agents run in dependency order: both `citations` and `friction` depend on `summary` being populated first (friction runs after summary even when citations is disabled)
 - Ollama must be running (`ollama serve`) or clipgen will attempt to auto-start it

@@ -144,7 +144,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="output_dir",
         type=Path,
         help="Override config.OUTPUT_DIR (manifests). Point this at a "
-        "synthesized transcripts_manifest.json or a --ss-task output dir "
+        "synthesized clipgen.json or a --ss-task output dir "
         "to measure transcripts.renderSegments / screenspace.renderResults "
         "on a real-sized list.",
     )

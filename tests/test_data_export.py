@@ -365,8 +365,13 @@ def test_to_json_envelope_shape(screenspace_manifest):
 # ---- Bundle writer ------------------------------------------------------
 
 
-def _write_manifest(tmp_path: Path, filename: str, content: dict) -> None:
-    (tmp_path / filename).write_text(json.dumps(content), encoding="utf-8")
+@pytest.fixture(autouse=True)
+def _output_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+
+
+def _write_manifest(tmp_path: Path, section: str, content: dict) -> None:
+    utils.save_manifest_section(section, content)
 
 
 _EMPTY_SS_MANIFEST = {"regions": {}, "tasks": [], "events": [], "stashes": []}
@@ -395,15 +400,15 @@ def test_bundle_writer(
     expected_name_substrs,
 ):
     fixture_map = {
-        "screenspace": (config.SCREENSPACE_MANIFEST_FILENAME, screenspace_manifest),
-        "screenspace_empty": (config.SCREENSPACE_MANIFEST_FILENAME, _EMPTY_SS_MANIFEST),
-        "transcripts": (config.TRANSCRIPTS_MANIFEST_FILENAME, transcripts_manifest),
+        "screenspace": ("screenspace", screenspace_manifest),
+        "screenspace_empty": ("screenspace", _EMPTY_SS_MANIFEST),
+        "transcripts": ("transcripts", transcripts_manifest),
     }
     for spec in manifest_specs:
         filename, content = fixture_map[spec]
         _write_manifest(tmp_path, filename, content)
 
-    written = data_export.write_export_bundle(tmp_path)
+    written = data_export.write_export_bundle()
     assert len(written) == expected_count
     names = {p.name for p in written}
     for substr in expected_name_substrs:
@@ -411,10 +416,8 @@ def test_bundle_writer(
 
 
 def test_bundle_csv_has_data_rows(tmp_path, screenspace_manifest):
-    _write_manifest(
-        tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, screenspace_manifest
-    )
-    data_export.write_export_bundle(tmp_path)
+    _write_manifest(tmp_path, "screenspace", screenspace_manifest)
+    data_export.write_export_bundle()
     csv_path = tmp_path / "clipgen_export_screenspace_events.csv"
     text = csv_path.read_text(encoding="utf-8")
     reader = csv.DictReader(io.StringIO(text))
@@ -510,10 +513,8 @@ def test_screenspace_pins_builder_handles_malformed_shapes(pins_value):
 
 
 def test_bundle_writer_includes_pins(tmp_path):
-    _write_manifest(
-        tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, _ss_manifest_with_pins()
-    )
-    written = data_export.write_export_bundle(tmp_path)
+    _write_manifest(tmp_path, "screenspace", _ss_manifest_with_pins())
+    written = data_export.write_export_bundle()
     names = {p.name for p in written}
     assert "clipgen_export_screenspace_pins.json" in names
     assert "clipgen_export_screenspace_pins.csv" in names
@@ -532,8 +533,8 @@ def test_bundle_writer_events_and_pins_coexist(tmp_path, screenspace_manifest):
     # carrying both must emit four files (events + pins, each JSON & CSV).
     manifest = dict(screenspace_manifest)
     manifest["pins"] = _ss_manifest_with_pins()["pins"]
-    _write_manifest(tmp_path, config.SCREENSPACE_MANIFEST_FILENAME, manifest)
-    written = data_export.write_export_bundle(tmp_path)
+    _write_manifest(tmp_path, "screenspace", manifest)
+    written = data_export.write_export_bundle()
     names = {p.name for p in written}
     assert names == {
         "clipgen_export_screenspace_events.json",

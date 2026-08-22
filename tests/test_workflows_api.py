@@ -475,17 +475,17 @@ def test_zero_interaction_launch_writes_no_manifest(wf_client, tmp_path):
     # node-less blueprint must not drop a manifest file in the output dir.
     resp = wf_client.post("/workflows/api/blueprints", json={})
     assert resp.status_code == 200
-    assert not (tmp_path / config.WORKFLOWS_MANIFEST_FILENAME).exists()
+    assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
 
 def test_blueprint_with_node_persists_manifest(wf_client, tmp_path):
     _make_blueprint(wf_client, nodes=[{"id": "n1", "type": "video_source"}])
-    assert (tmp_path / config.WORKFLOWS_MANIFEST_FILENAME).is_file()
+    assert (tmp_path / config.MANIFEST_FILENAME).is_file()
 
 
 def test_emptying_blueprint_removes_manifest(wf_client, tmp_path):
     bp_id = _make_blueprint(wf_client, nodes=[{"id": "n1", "type": "video_source"}])
-    manifest = tmp_path / config.WORKFLOWS_MANIFEST_FILENAME
+    manifest = tmp_path / config.MANIFEST_FILENAME
     assert manifest.is_file()
     # Clear the graph back to empty (the autosave PUT shape) → file reclaimed.
     wf_client.put(f"/workflows/api/blueprints/{bp_id}", json={"nodes": [], "edges": []})
@@ -1552,8 +1552,8 @@ def _arm(client, bp_id, trigger_type):
 
 def _write_transcripts_manifest(entries):
     """Write a minimal transcripts manifest: {pid: transcribed_at}."""
-    utils.save_json_manifest(
-        config.TRANSCRIPTS_MANIFEST_FILENAME,
+    utils.save_manifest_section(
+        "transcripts",
         {
             "source_transcripts": {
                 pid: {"segments": [], "transcribed_at": stamp}
@@ -1565,8 +1565,8 @@ def _write_transcripts_manifest(entries):
 
 def _write_screenspace_manifest(tasks):
     """Write a minimal screenspace manifest: [(task_id, participant, status)]."""
-    utils.save_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME,
+    utils.save_manifest_section(
+        "screenspace",
         {
             "tasks": [
                 {"id": tid, "participant": pid, "status": status}
@@ -1654,21 +1654,23 @@ def test_transcript_markers_mtime_gate_skips_reparse(wf_client, monkeypatch):
     _write_transcripts_manifest({"P01": "2026-07-19T09:00:00+00:00"})
 
     parses = {"n": 0}
-    real_load = utils.load_json_manifest
+    real_load = utils.load_manifest_section
 
-    def counting_load(filename, **kw):
-        if filename == config.TRANSCRIPTS_MANIFEST_FILENAME:
+    def counting_load(section, **kw):
+        if section == "transcripts":
             parses["n"] += 1
-        return real_load(filename, **kw)
+        return real_load(section, **kw)
 
-    monkeypatch.setattr(utils, "load_json_manifest", counting_load)
+    monkeypatch.setattr(utils, "load_manifest_section", counting_load)
     workflows_server._watch_poll_once()
-    first = parses["n"]
-    assert first >= 1
-    # Unchanged file → the next polls never re-parse it.
+    assert parses["n"] >= 1
+    # The fired trigger persisted a run, so one more poll may re-read the file;
+    # after that, an unchanged manifest is never re-parsed.
+    workflows_server._watch_poll_once()
+    settled = parses["n"]
     workflows_server._watch_poll_once()
     workflows_server._watch_poll_once()
-    assert parses["n"] == first
+    assert parses["n"] == settled
 
 
 def test_disarm_uses_blueprints_current_type(wf_client):
@@ -1813,8 +1815,8 @@ def test_legacy_trigger_types_load_as_disarmed(wf_client):
     # A Phase-2 manifest can carry {"type": "watch_dir", "enabled": true}; the
     # watcher only fires known TRIGGER_TYPES, so the loader must read unknown
     # types as disarmed — an "armed" toolbar state that never fires is a lie.
-    utils.save_json_manifest(
-        config.WORKFLOWS_MANIFEST_FILENAME,
+    utils.save_manifest_section(
+        "workflows",
         {
             "blueprints": [
                 {

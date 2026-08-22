@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import config
 import utils
 from screenspace_tools import _extract_confidence
 
@@ -228,8 +227,8 @@ def _empty_screenspace_manifest() -> dict[str, Any]:
 
 def load_screenspace_manifest() -> dict[str, Any]:
     """Load the screenspace manifest from the output directory."""
-    return utils.load_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME, default=_empty_screenspace_manifest()
+    return utils.load_manifest_section(
+        "screenspace", default=_empty_screenspace_manifest()
     )
 
 
@@ -290,13 +289,9 @@ def save_screenspace_manifest(
         }
     )
     if _is_empty_screenspace_manifest(payload):
-        utils.remove_json_manifest(config.SCREENSPACE_MANIFEST_FILENAME)
+        utils.save_manifest_section("screenspace", None)
         return None
-    return utils.save_json_manifest(
-        config.SCREENSPACE_MANIFEST_FILENAME,
-        payload,
-        warn_label="screenspace manifest",
-    )
+    return utils.save_manifest_section("screenspace", payload)
 
 
 def _offset_result_times(result: dict[str, Any], offset: int) -> None:

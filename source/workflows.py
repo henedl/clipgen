@@ -17,7 +17,7 @@ dict rather than a copy — tests patch node executors through
 ``workflows.NODE_TYPES`` and depend on that identity. Re-binding a name here only
 rebinds it on the facade; patch the owning sibling to stub a seam.
 
-Manifest shape (``workflows_manifest.json`` in the output directory)::
+Manifest shape (the ``workflows`` section of the output-dir manifest)::
 
     {
         "blueprints": [ {id, name, nodes, edges, viewport, trigger} ],
@@ -102,12 +102,12 @@ def empty_workflows_manifest() -> dict[str, list[Any]]:
 
 
 def load_workflows_manifest() -> dict[str, Any]:
-    """Load ``workflows_manifest.json`` from the output dir (empty default).
+    """Load the ``workflows`` manifest section (empty default).
 
     Missing or corrupt files fall back to :func:`empty_workflows_manifest` so
     callers always get the full key set, never a partial dict.
     """
-    data = utils.load_json_manifest(config.WORKFLOWS_MANIFEST_FILENAME, default=None)
+    data = utils.load_manifest_section("workflows")
     if not isinstance(data, dict):
         return empty_workflows_manifest()
     # Backfill any missing top-level keys so callers can index unconditionally.
@@ -156,13 +156,9 @@ def save_workflows_manifest(
         "runs": runs or [],
     }
     if _is_empty_workflows_manifest(payload):
-        utils.remove_json_manifest(config.WORKFLOWS_MANIFEST_FILENAME)
+        utils.save_manifest_section("workflows", None)
         return None
-    return utils.save_json_manifest(
-        config.WORKFLOWS_MANIFEST_FILENAME,
-        payload,
-        warn_label="workflows manifest",
-    )
+    return utils.save_manifest_section("workflows", payload)
 
 
 # ---------------------------------------------------------------------------

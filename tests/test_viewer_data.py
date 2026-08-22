@@ -288,7 +288,7 @@ def test_load_screenspace_events_for_viewer_caches_by_mtime(tmp_path, monkeypatc
         ],
         pins={},
     )
-    manifest_path = tmp_path / config.SCREENSPACE_MANIFEST_FILENAME
+    manifest_path = tmp_path / config.MANIFEST_FILENAME
     st = manifest_path.stat()
     os.utime(manifest_path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
 
