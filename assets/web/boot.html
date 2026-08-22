@@ -7,8 +7,8 @@
 
   Standing exception to the tokens.css / no-hardcoded-hex rules: this page must
   be fully self-contained (inline CSS + ES5 JS, no external fetches) because
-  the boot dispatcher serves no /icons/, tokens.css, fonts, or utils.js routes.
-  Color values mirror tokens.css --bg/--fg/--fg-muted/--accent for both themes;
+  the boot dispatcher serves no /icons/, /logos/, tokens.css, fonts, or utils.js
+  routes. Color values mirror tokens.css --bg/--fg/--fg-muted for both themes;
   the dark background also matches desktop.py's _WINDOW_BACKGROUND.
 -->
 <html lang="en" data-theme="dark">
@@ -50,22 +50,48 @@
     letter-spacing: 0.02em;
     margin-bottom: 28px;
   }
-  .boot-spinner {
-    width: 22px;
-    height: 22px;
+  /* Looping brand mark; inlined because boot loads no stylesheet.
+     Mirrors assets/logos/favicon.svg. */
+  .boot-mark {
+    width: 40px;
+    height: 40px;
     margin: 0 auto 20px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.16);
-    border-top-color: #2D6BFF;
-    animation: boot-spin 0.8s linear infinite;
   }
-  html[data-theme="light"] .boot-spinner {
-    border-color: rgba(20, 21, 26, 0.14);
-    border-top-color: #2D6BFF;
+  .boot-mark svg {
+    display: block;
+    width: 100%;
+    height: 100%;
   }
-  @keyframes boot-spin { to { transform: rotate(360deg); } }
+  /* Offsets run 3L (hidden) to 2L (drawn) to L (travelled off the end),
+     where L is the path length. Never negative: WebKit renders a negative
+     stroke-dashoffset as its absolute value, which rewinds the draw
+     instead of continuing it. Shifting up one dash period avoids that. */
+  .boot-mark__line {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 13;
+    stroke-linecap: square;
+    stroke-linejoin: miter;
+    stroke-dasharray: var(--boot-mark-len);
+    stroke-dashoffset: var(--boot-mark-in);
+    animation: boot-mark-draw 2.6s linear infinite;
+  }
+  /* Cascade at 0/350/700ms: draw 400ms, hold 250ms, travel out
+     450ms, beat, repeat. */
+  .boot-mark__line--1 { --boot-mark-len: 128; --boot-mark-in: 384; --boot-mark-drawn: 256; --boot-mark-out: 128; animation-delay:    0s; }
+  .boot-mark__line--2 { --boot-mark-len:  84; --boot-mark-in: 252; --boot-mark-drawn: 168; --boot-mark-out:  84; animation-delay: 350ms; }
+  .boot-mark__line--3 { --boot-mark-len:  40; --boot-mark-in: 120; --boot-mark-drawn:  80; --boot-mark-out:  40; animation-delay: 700ms; }
+  @keyframes boot-mark-draw {
+    0%    { stroke-dashoffset: var(--boot-mark-in);
+            animation-timing-function: cubic-bezier(0.65, 0, 0.35, 1); }
+    15.4% { stroke-dashoffset: var(--boot-mark-drawn); }
+    51.9% { stroke-dashoffset: var(--boot-mark-drawn);
+            animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    69.2% { stroke-dashoffset: var(--boot-mark-out); }
+    100%  { stroke-dashoffset: var(--boot-mark-out); }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .boot-spinner { animation-duration: 2.4s; }
+    .boot-mark__line { animation: none; stroke-dashoffset: 0; }
   }
   .boot-msg {
     font-size: 13px;
@@ -73,9 +99,8 @@
     min-height: 18px;
   }
   html[data-theme="light"] .boot-msg { color: rgba(20, 21, 26, 0.68); }
-  /* Sweeping highlight on the boot message, a local copy of tokens.css's
-     .cg-shimmer for the same reason boot-spin duplicates `spin`: this page is
-     served before the app and loads no stylesheet. Keep the two in sync. */
+  /* Local copy of tokens.css .cg-shimmer; this page loads no
+     stylesheet. Keep synced. */
   .cg-shimmer {
     display: inline-block;
     background-image: linear-gradient(90deg,
@@ -151,7 +176,13 @@
 <div class="boot-drag pywebview-drag-region"></div>
 <div class="boot">
   <div class="boot-wordmark">clipgen</div>
-  <div class="boot-spinner" id="bootSpinner"></div>
+  <div class="boot-mark" id="bootMark" aria-hidden="true">
+    <svg viewBox="0 0 100 100" focusable="false">
+      <path class="boot-mark__line boot-mark__line--1" d="M 18 18 L 82 18 L 82 82"/>
+      <path class="boot-mark__line boot-mark__line--2" d="M 18 40 L 60 40 L 60 82"/>
+      <path class="boot-mark__line boot-mark__line--3" d="M 18 62 L 38 62 L 38 82"/>
+    </svg>
+  </div>
   <div class="boot-msg cg-shimmer" id="bootMsg">Starting clipgen&#8230;</div>
   <div class="boot-elapsed" id="bootElapsed"></div>
   <div class="boot-err" id="bootErr"></div>
@@ -161,7 +192,7 @@
     var msgEl = document.getElementById("bootMsg");
     var errEl = document.getElementById("bootErr");
     var elapsedEl = document.getElementById("bootElapsed");
-    var spinnerEl = document.getElementById("bootSpinner");
+    var markEl = document.getElementById("bootMark");
     var started = Date.now();
     var stopped = false;
 
@@ -196,7 +227,7 @@
           }
           if (data.error) {
             stopped = true;
-            spinnerEl.style.display = "none";
+            markEl.style.display = "none";
             msgEl.classList.remove("cg-shimmer");
             msgEl.textContent = "clipgen failed to start";
             errEl.textContent = data.error;
