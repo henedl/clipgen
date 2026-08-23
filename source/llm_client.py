@@ -73,25 +73,30 @@ _HF_API_TIMEOUT = 30  # seconds; the tree listing is a small JSON response
 _MODELS_MAX = "2"
 
 # Curated Hugging Face refs the Summaries settings offer for download.
-# Same shape as transcripts.WHISPER_MODELS; sizes from each repo's tree.
+# Same shape as transcripts.WHISPER_MODELS plus a "label": the raw ref is what
+# the download needs, the label is what a non-technical user reads.
 SUGGESTED_MODELS: list[dict[str, Any]] = [
     {
         "name": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
+        "label": "Qwen 3.5 Small (2B)",
         "size_mb": 1222,
         "description": "Fastest, fine for short transcripts",
     },
     {
         "name": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+        "label": "Qwen 3.5 Medium (4B)",
         "size_mb": 2614,
         "description": "Fast, good for most sessions",
     },
     {
         "name": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+        "label": "Qwen 3.5 Large (9B)",
         "size_mb": 5417,
         "description": "Best quality, needs more RAM",
     },
     {
         "name": "unsloth/gemma-4-E2B-it-GGUF:Q4_K_M",
+        "label": "Gemma 4 Compact (2B)",
         "size_mb": 2963,
         "description": "Gemma, compact alternative",
     },
@@ -128,6 +133,37 @@ def model_name(value: str) -> str:
     if "/" in value:
         return value.replace("/", "--").replace(":", "--")
     return value.removesuffix(".gguf")
+
+
+def _catalog_entry(value: str) -> dict[str, Any] | None:
+    """Curated entry for an HF ref or its on-disk stem, else None."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    for m in SUGGESTED_MODELS:
+        if value in (m["name"], model_name(m["name"])):
+            return m
+    return None
+
+
+def model_label(value: str) -> str:
+    """Friendly catalog name for a ref or stem; empty when not curated."""
+    entry = _catalog_entry(value)
+    return entry["label"] if entry else ""
+
+
+def model_card_url(value: str) -> str:
+    """Hugging Face page for a ref or catalog stem; empty when unknown.
+
+    A stem only resolves through the catalog: repo names contain dashes, so
+    the ``--``-joined stem cannot be reversed, and a guessed link is worse
+    than none.
+    """
+    entry = _catalog_entry(value)
+    if not entry:
+        return ""
+    repo, _ = _split_hf_ref(entry["name"])
+    return f"https://huggingface.co/{repo}"
 
 
 def model_file(value: str) -> Path:

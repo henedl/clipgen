@@ -2744,6 +2744,8 @@
       var cancelBtn = qs("#modelInstallCancel");
       var confirmBtn = qs("#modelInstallConfirm");
       var hintEl = qs("#modelInstallHint");
+      var licenseEl = qs("#modelInstallLicense");
+      var licenseLink = qs("#modelInstallLicenseLink");
 
       // The progress line shimmers only while the install/check is actually
       // moving; pass working=false for anything terminal (failed, installed,
@@ -2758,6 +2760,8 @@
       setProgressText("", false);
       hintEl.classList.add("hidden");
       hintEl.textContent = "";
+      licenseEl.classList.add("hidden");
+      licenseLink.removeAttribute("href");
       cancelBtn.disabled = false;
       cancelBtn.textContent = "Cancel";
       confirmBtn.disabled = false;
@@ -2792,9 +2796,15 @@
         confirmBtn.textContent = "Download";
       } else {
         titleEl.textContent = "Download AI model?";
-        msgEl.textContent = 'The AI model "' + opts.model + '" used by the ' +
-          (opts.agentKey || "analysis") +
+        msgEl.textContent = 'The AI model "' + (opts.label || opts.model) +
+          '" used by the ' + (opts.agentKey || "analysis") +
           " agent isn't downloaded. Download it now? The model is stored locally and may take several minutes.";
+        // Only curated models have a source page, so this is what tells the
+        // user whose terms they are accepting before a multi-GB download.
+        if (opts.modelUrl) {
+          licenseLink.href = opts.modelUrl;
+          licenseEl.classList.remove("hidden");
+        }
         confirmBtn.textContent = "Download";
       }
 
@@ -2973,7 +2983,13 @@
       if (agents[i].key === agentKey) { info = agents[i]; break; }
     }
     if (!info || info.installed || !info.model) return true;
-    return confirmModelInstall({ kind: "llm", agentKey: agentKey, model: info.model });
+    return confirmModelInstall({
+      kind: "llm",
+      agentKey: agentKey,
+      model: info.model,
+      label: info.label,
+      modelUrl: info.model_url,
+    });
   }
 
   function _applySettingsSnapshot(applied, settings) {

@@ -76,6 +76,7 @@ class TestSuggestedModels:
             assert "/" in m["name"]
             assert m["size_mb"] > 0
             assert m["description"]
+            assert m["label"]
             user, rest = m["name"].split("/", 1)
             repo, quant = rest.split(":", 1)
             assert llm_client.model_name(m["name"]) == f"{user}--{repo}--{quant}"
@@ -87,6 +88,28 @@ class TestSuggestedModels:
         # Compare stems: an earlier test may leave the value in stem form.
         stems = {llm_client.model_name(m["name"]) for m in llm_client.SUGGESTED_MODELS}
         assert llm_client.model_name(config.LLM_SUMMARY_MODEL) in stems
+
+
+class TestModelLabelAndCardUrl:
+    """The pickers resolve a friendly name and a source page from either form."""
+
+    def test_catalog_ref_and_stem_both_resolve(self):
+        entry = llm_client.SUGGESTED_MODELS[0]
+        stem = llm_client.model_name(entry["name"])
+        assert llm_client.model_label(entry["name"]) == entry["label"]
+        assert llm_client.model_label(stem) == entry["label"]
+        repo = entry["name"].split(":", 1)[0]
+        assert (
+            llm_client.model_card_url(entry["name"]) == f"https://huggingface.co/{repo}"
+        )
+        assert llm_client.model_card_url(stem) == f"https://huggingface.co/{repo}"
+
+    def test_non_catalog_models_get_nothing(self):
+        """A hand-dropped GGUF has no repo to name, and a guess would be wrong."""
+        assert llm_client.model_label("my-model-q4") == ""
+        assert llm_client.model_card_url("my-model-q4") == ""
+        assert llm_client.model_card_url("acme/unknown:Q4_K_M") == ""
+        assert llm_client.model_card_url("") == ""
 
 
 class TestModelName:

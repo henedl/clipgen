@@ -4520,9 +4520,13 @@ def build_combined_app(
         # — an Ollama-converted GGUF looks fine until llama.cpp tries to read
         # it — so the picker reports what the last attempt learned.
         failures = llm_client.load_failures()
+        # label/model_url are empty for anything outside the catalog: a
+        # hand-dropped GGUF has no repo we can name or link to.
         llm_models = [
             {
                 "name": m["name"],
+                "label": llm_client.model_label(m["name"]),
+                "model_url": llm_client.model_card_url(m["name"]),
                 "size_mb": round(m["size_bytes"] / (1024 * 1024)),
                 "unusable": failures.get(m["name"], ""),
             }
@@ -4532,6 +4536,8 @@ def build_combined_app(
         llm_suggested = [
             {
                 "name": m["name"],
+                "label": m["label"],
+                "model_url": llm_client.model_card_url(m["name"]),
                 "stem": llm_client.model_name(m["name"]),
                 "size_mb": m["size_mb"],
                 "description": m["description"],
@@ -4550,6 +4556,8 @@ def build_combined_app(
                 {
                     "key": a["key"],
                     "model": model,
+                    "label": llm_client.model_label(model),
+                    "model_url": llm_client.model_card_url(model),
                     "installed": llm_client.is_model_installed(model, raw),
                     "unusable": failures.get(llm_client.model_name(model), ""),
                 }

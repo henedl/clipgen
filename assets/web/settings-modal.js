@@ -188,10 +188,38 @@
       });
     }
 
+    // Friendly name on top, raw id in mono beneath. A model outside the
+    // catalog has no friendly name, so its id stays the primary text.
+    function _modelNameBlock(model) {
+      var name = el("div", "settings-llm-model-name");
+      var title = el("span", "settings-llm-model-title", model.label || model.name);
+      if (!model.label) title.classList.add("settings-llm-model-title--mono");
+      name.appendChild(title);
+      if (model.label) {
+        name.appendChild(el("span", "settings-llm-model-id", model.name));
+      }
+      return name;
+    }
+
+    // Only catalog models carry a source page; the rest get no link at all.
+    function _modelLinkButton(model) {
+      if (!model.model_url) return null;
+      var link = el("a", "settings-llm-model-reveal");
+      link.href = model.model_url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "View this model on Hugging Face";
+      link.setAttribute("aria-label", "View this model on Hugging Face");
+      link.appendChild(
+        el("span", "settings-llm-model-icon settings-llm-model-icon--link")
+      );
+      return link;
+    }
+
     // A curated model: Download with an in-row progress bar, or "Downloaded".
     function _buildSuggestedRow(model) {
       var row = el("div", "settings-llm-model-row");
-      var name = el("div", "settings-llm-model-name", model.name);
+      var name = _modelNameBlock(model);
       name.appendChild(el("span", "settings-llm-model-desc", model.description));
       if (model.unusable) {
         name.appendChild(el("span", "settings-llm-model-reason", model.unusable));
@@ -200,6 +228,8 @@
       row.appendChild(name);
       var size = el("span", "settings-llm-model-size", _formatSize(model.size_mb));
       row.appendChild(size);
+      var sugLink = _modelLinkButton(model);
+      if (sugLink) row.appendChild(sugLink);
 
       if (model.installed) {
         var done = el("span", "settings-llm-model-state");
@@ -252,7 +282,7 @@
 
     function _buildLlmModelRow(model) {
       var row = el("div", "settings-llm-model-row");
-      var name = el("span", "settings-llm-model-name", model.name);
+      var name = _modelNameBlock(model);
       if (model.unusable) {
         // Only a failed load can discover this, so say what the router said
         // rather than a generic "incompatible".
@@ -263,6 +293,9 @@
       if (model.size_mb) {
         row.appendChild(el("span", "settings-llm-model-size", _formatSize(model.size_mb)));
       }
+      var link = _modelLinkButton(model);
+      if (link) row.appendChild(link);
+
       var showBtn = el("button", "settings-llm-model-reveal");
       showBtn.type = "button";
       showBtn.title = "Show in file browser";
@@ -335,15 +368,16 @@
         var m = models[i];
         var opt = document.createElement("option");
         opt.value = refByStem[m.name] || m.name;
-        var label = m.name;
+        // An option has no room for the raw id under a friendly name, so it
+        // moves to the tooltip.
+        var label = m.label || m.name;
         if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
-        if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
         if (m.description) label += " \u2014 " + m.description;
         // Selectable on purpose: a llama.cpp upgrade may fix it, and the mark
         // is what stops the user picking it again by accident.
         if (m.unusable) label += " \u2014 won't load";
         opt.textContent = label;
-        if (m.unusable) opt.title = m.unusable;
+        opt.title = m.unusable ? m.name + " \u2014 " + m.unusable : m.name;
         if (opt.value === currentValue || m.name === currentValue) {
           opt.selected = true;
           hasCurrentValue = true;
@@ -361,8 +395,9 @@
         }
         var sopt = document.createElement("option");
         sopt.value = sm.name;
-        sopt.textContent = sm.name + " (" + _formatSize(sm.size_mb) + ") \u2014 not downloaded";
-        sopt.title = sm.description;
+        sopt.textContent = (sm.label || sm.name) + " (" + _formatSize(sm.size_mb) +
+          ") \u2014 not downloaded";
+        sopt.title = sm.name + " \u2014 " + sm.description;
         if (sm.name === currentValue) {
           sopt.selected = true;
           hasCurrentValue = true;

@@ -2174,6 +2174,44 @@ body {
   margin-bottom: var(--space-4);
 }
 
+/* The model's source page, where its license is stated. Only curated models
+   have one, so the row is hidden by default. */
+.model-install-license {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.model-install-license.hidden {
+  display: none;
+}
+
+.model-install-license a {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.model-install-license a:hover {
+  text-decoration: underline;
+}
+
+.model-install-license-icon {
+  display: inline-block;
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  background-color: currentColor;
+  -webkit-mask-image: url("icons/arrow-up-right.svg");
+  mask-image: url("icons/arrow-up-right.svg");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
 .model-install-hint {
   margin: calc(-1 * var(--space-2)) 0 var(--space-4);
   padding: var(--space-2) var(--space-3);
