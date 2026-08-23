@@ -24,8 +24,10 @@ no-kind fallback; each `scan_*` / multitool pass sets the tool name so a
 workflow of mixed detectors does not lump analysis into one bucket. Callback
 flushes pass `peak=` (largest single frame). `ffmpeg.run` / `ffmpeg.bytes`
 (every encode/extract subprocess) and `ffprobe.run` (duration / props / keyframe
-probes — the label `_parallel_probe` was measured without). `media_cache.*` and
-`video.*_cache.*` (hit/miss counters), `worker.progress_lock_wait`, `route <rule>`
+probes — the label `_parallel_probe` was measured without). `media_cache.*`,
+`video.*_cache.*`, and `screenspace.*_cache.*` (hit/miss counters; the last
+covers the frame-JPEG, decoded-frame, and pin-OCR LRUs in
+`screenspace_server.py`), `worker.progress_lock_wait`, `route <rule>`
 (per-route totals; polls aggregate instead of spamming), `stream <rule>` and
 `sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`
 (Google via `_call_with_api_retry`; local `.xlsx` is `sheets.excel_load`),

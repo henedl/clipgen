@@ -71,6 +71,7 @@ from flask import Blueprint, Response, jsonify, request, send_file
 
 import config
 import files
+import profiling
 import remux_server
 import screenspace
 import spreadsheet
@@ -636,7 +637,9 @@ def _decoded_video_frame(video_path: str, mtime_ns: int, ts: float) -> "Any | No
         cached = _decoded_frame_cache.get(key)
         if cached is not None:
             _decoded_frame_cache.move_to_end(key)
+            profiling.count("screenspace.decoded_frame_cache.hit")
             return cached
+    profiling.count("screenspace.decoded_frame_cache.miss")
     frame = video.extract_frame_at_timestamp(video_path, ts)
     if frame is None:
         return None
@@ -684,7 +687,9 @@ def _make_pin_ocr_reader(
             cached = _pin_ocr_cache.get(key)
             if cached is not None:
                 _pin_ocr_cache.move_to_end(key)
+                profiling.count("screenspace.pin_ocr_cache.hit")
                 return cached
+        profiling.count("screenspace.pin_ocr_cache.miss")
         readings = screenspace.run_calibration_ocr(frame, region_coords, params)
         with _pin_ocr_cache_lock:
             _pin_ocr_cache[key] = readings
@@ -1057,6 +1062,11 @@ def api_video_frame(participant: str, timestamp: str) -> FlaskResponse:
         if cached is not None:
             # Refresh LRU recency.
             _frame_cache.move_to_end(cache_key)
+    profiling.count(
+        "screenspace.frame_cache.hit"
+        if cached is not None
+        else "screenspace.frame_cache.miss"
+    )
     if cached is not None:
         return Response(
             cached,
