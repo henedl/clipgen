@@ -74,6 +74,9 @@ REQUIRED_IDS = [
     "embedSubsProgressText",
     "embedSubsCancel",
     "embedSubsConfirm",
+    "termInput",
+    "addTermBtn",
+    "termsList",
 ]
 
 

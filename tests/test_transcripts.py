@@ -493,6 +493,22 @@ class TestBuildTranscribeKwargs:
         kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
         assert kwargs["word_timestamps"] is True
 
+    def test_hotwords_omitted_by_default(self):
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert "hotwords" not in kwargs
+
+    def test_hotwords_passed_through(self):
+        kwargs = transcripts._build_transcribe_kwargs(
+            language=None, initial_prompt="", hotwords="Frobnicator, Widget Bay"
+        )
+        assert kwargs["hotwords"] == "Frobnicator, Widget Bay"
+
+    def test_empty_hotwords_omitted(self):
+        kwargs = transcripts._build_transcribe_kwargs(
+            language=None, initial_prompt="", hotwords=""
+        )
+        assert "hotwords" not in kwargs
+
 
 class TestTranscribeVideoWhisperKwargs:
     def test_transcribe_passes_kwargs_to_model(self, monkeypatch):
@@ -528,6 +544,38 @@ class TestTranscribeVideoWhisperKwargs:
         assert result is not None
         assert captured["vad_filter"] is True
         assert "word_timestamps" not in captured
+
+    def test_known_terms_become_hotwords(self, monkeypatch):
+        import video as video_mod
+
+        captured: dict = {}
+
+        class FakeSeg:
+            text = " hello"
+            start = 0.0
+            end = 1.0
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **kwargs):
+                captured.update(kwargs)
+                return iter([FakeSeg()]), FakeInfo()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
+        )
+
+        result = transcripts.transcribe_video(
+            "/fake/video.mp4", known_terms=["Frobnicator", "Widget Bay"]
+        )
+        assert result is not None
+        assert captured["hotwords"] == "Frobnicator, Widget Bay"
 
     def test_segments_carry_rounded_words_and_tightened_bounds(self, monkeypatch):
         """Word timing rides on the segment; segment bounds tighten to the words."""
@@ -1055,6 +1103,28 @@ class TestApplyCorrections:
 
 
 # ---------------------------------------------------------------------------
+# get_known_terms
+# ---------------------------------------------------------------------------
+
+
+class TestGetKnownTerms:
+    def test_missing_key(self):
+        assert transcripts.get_known_terms({}) == []
+
+    def test_strips_and_drops_empties(self):
+        m = {"known_terms": ["  Frobnicator  ", "", "   "]}
+        assert transcripts.get_known_terms(m) == ["Frobnicator"]
+
+    def test_dedupes_case_insensitively_keeping_first_spelling(self):
+        m = {"known_terms": ["Frobnicator", "frobnicator", "Widget Bay"]}
+        assert transcripts.get_known_terms(m) == ["Frobnicator", "Widget Bay"]
+
+    def test_preserves_order(self):
+        m = {"known_terms": ["b", "a", "c"]}
+        assert transcripts.get_known_terms(m) == ["b", "a", "c"]
+
+
+# ---------------------------------------------------------------------------
 # get_corrections_keywords
 # ---------------------------------------------------------------------------
 
@@ -1090,12 +1160,22 @@ class TestGetCorrectionsKeywords:
 class TestTranscriptsManifest:
     def test_empty_manifest_default(self):
         m = transcripts._empty_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
+        assert m == {
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+            "known_terms": [],
+        }
 
     def test_load_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         m = transcripts.load_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
+        assert m == {
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+            "known_terms": [],
+        }
 
     def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -1170,6 +1250,26 @@ class TestTranscriptsManifest:
         assert path is None
         assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
+    def test_known_terms_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts.save_transcripts_manifest({}, [], known_terms=["Frobnicator"])
+        loaded = transcripts.load_transcripts_manifest()
+        assert loaded["known_terms"] == ["Frobnicator"]
+
+    def test_terms_only_manifest_persists(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        path = transcripts.save_transcripts_manifest({}, [], known_terms=["Widget"])
+        assert path is not None
+
+    def test_known_terms_preserved_when_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts.save_transcripts_manifest({}, [], known_terms=["Widget"])
+        transcripts.save_transcripts_manifest(
+            {}, [{"id": "c1", "from": "a", "to": "b"}]
+        )
+        loaded = transcripts.load_transcripts_manifest()
+        assert loaded["known_terms"] == ["Widget"]
+
     def test_emptying_existing_manifest_removes_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest = tmp_path / config.MANIFEST_FILENAME
@@ -1185,7 +1285,12 @@ class TestTranscriptsManifest:
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         (tmp_path / config.MANIFEST_FILENAME).write_text("not json")
         m = transcripts.load_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
+        assert m == {
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+            "known_terms": [],
+        }
 
     def test_load_returns_independent_copies(self, tmp_path, monkeypatch):
         """Mutating a returned entry in place must not corrupt the cache."""

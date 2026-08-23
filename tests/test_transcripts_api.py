@@ -44,6 +44,7 @@ def tr_client(tr_app, tmp_path, monkeypatch):
             "source_transcripts": {},
             "corrections": [],
             "marks": [],
+            "known_terms": [],
         },
     )
     monkeypatch.setattr(
@@ -2618,6 +2619,70 @@ def test_corrected_segments_cached_and_invalidated_on_correction(
     seg = r3.get_json()["segments"][0]
     assert seg["text"] == "the cat"
     assert seg["corrected"] is True
+
+
+def test_known_terms_crud(tr_client, monkeypatch):
+    """List, add, and remove the study vocabulary."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == []
+
+    resp = tr_client.post(
+        "/transcripts/api/known-terms", json={"term": "  Frobnicator  "}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["term"] == "Frobnicator"
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == [
+        "Frobnicator"
+    ]
+
+    resp = tr_client.delete("/transcripts/api/known-terms/Frobnicator")
+    assert resp.status_code == 200
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == []
+
+
+def test_known_terms_reject_empty(tr_client):
+    resp = tr_client.post("/transcripts/api/known-terms", json={"term": "   "})
+    assert resp.status_code == 400
+
+
+def test_known_terms_duplicate_is_not_an_error(tr_client, monkeypatch):
+    """A repeat term reports duplicate rather than failing, and is not stored twice."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Widget"})
+    resp = tr_client.post("/transcripts/api/known-terms", json={"term": "widget"})
+    assert resp.status_code == 200
+    assert resp.get_json()["duplicate"] is True
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == [
+        "Widget"
+    ]
+
+
+def test_known_terms_delete_unknown_is_404(tr_client):
+    assert tr_client.delete("/transcripts/api/known-terms/nope").status_code == 404
+
+
+def test_known_term_does_not_invalidate_corrected_cache(tr_client, monkeypatch):
+    """Terms bias the next transcription; they never rewrite stored text, so the
+    corrected-segments cache must survive one (inverse of the corrections test)."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
 
 
 def test_vtt_shares_corrected_segments_cache(tr_client, monkeypatch):

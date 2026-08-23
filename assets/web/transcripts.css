@@ -2355,6 +2355,70 @@ body {
   display: none;
 }
 
+/* Dictionary modal: a Corrections section and a Known-terms section. */
+.dict-section + .dict-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.dict-section h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.dict-hint {
+  margin: var(--space-1) 0 var(--space-3);
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+}
+
+.dict-empty {
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  padding: var(--space-2) 0;
+}
+
+.term-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.term-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.term-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-alt);
+  font-size: var(--text-xs);
+}
+
+.term-remove {
+  background: none;
+  border: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1;
+  padding: 0;
+  transition: color var(--duration-fast);
+}
+
+.term-remove:hover {
+  color: var(--sev-critical);
+}
+
 .correction-form {
   display: flex;
   align-items: center;
@@ -2364,7 +2428,8 @@ body {
   border-bottom: 1px solid var(--color-border);
 }
 
-.correction-form input {
+.correction-form input,
+.term-form input {
   flex: 1;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border);
@@ -2375,7 +2440,8 @@ body {
   outline: none;
 }
 
-.correction-form input:focus {
+.correction-form input:focus,
+.term-form input:focus {
   border-color: var(--color-accent);
 }
 

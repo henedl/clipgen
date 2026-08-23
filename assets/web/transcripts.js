@@ -22,6 +22,7 @@
     selectedParticipant: null,
     segments: [],
     corrections: [],
+    knownTerms: [],
     tasks: [],
     // Task ids with a cancel DELETE in flight → { at, progress }. The server
     // keeps reporting a cancelled-but-still-running task as "running" until the

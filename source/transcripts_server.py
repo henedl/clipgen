@@ -24,6 +24,9 @@ API endpoints (all under /transcripts/):
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
+  GET  /api/known-terms                           - list the study vocabulary
+  POST /api/known-terms                           - add a known term
+  DELETE /api/known-terms/<term>                  - remove a known term
   GET  /api/intake-poll                           - Studio-intake poll: running-state booleans + resolved marks
   GET  /api/marks                                 - list all marks with resolved segment data
   POST /api/marks                                 - create marks for segments
@@ -1432,6 +1435,62 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
     return ok()
 
 
+# ---- Known terms ----
+#
+# The study glossary: product names, features, jargon. Forwarded to Whisper as
+# hotwords on the next transcription so it spells them right the first time,
+# where a correction only rewrites a mistake after the fact. Terms never touch
+# stored text, so none of these routes bump the corrected-segments version.
+
+
+@transcripts_bp.route("/api/known-terms")
+def api_known_terms_list() -> FlaskResponse:
+    """List the study vocabulary."""
+    with _manifest_lock:
+        terms = list(_manifest.get("known_terms", []))
+    return ok(terms=terms)
+
+
+@transcripts_bp.route("/api/known-terms", methods=["POST"])
+def api_known_terms_add() -> FlaskResponse:
+    """Add a known term."""
+    data = request.get_json(silent=True)
+    if not data:
+        return err("Missing JSON body")
+
+    term = str(data.get("term", "")).strip()
+    if not term:
+        return err("'term' required")
+
+    with _manifest_lock:
+        terms = _manifest.setdefault("known_terms", [])
+        # A duplicate is not an error — the user typed a term that is already
+        # covered, so the input should just clear.
+        duplicate = any(t.lower() == term.lower() for t in terms)
+        if not duplicate:
+            terms.append(term)
+    if duplicate:
+        return ok(term=None, duplicate=True)
+    _schedule_persist()
+    return ok(term=term)
+
+
+@transcripts_bp.route("/api/known-terms/<path:term>", methods=["DELETE"])
+def api_known_terms_delete(term: str) -> FlaskResponse:
+    """Remove a known term."""
+    with _manifest_lock:
+        terms = _manifest.get("known_terms", [])
+        kept = [t for t in terms if t.lower() != term.lower()]
+        removed = len(terms) - len(kept)
+        _manifest["known_terms"] = kept
+
+    if removed == 0:
+        return err("Term not found", 404)
+
+    _schedule_persist()
+    return ok()
+
+
 # ---- Marks ----
 
 
@@ -2261,6 +2320,7 @@ def _do_persist() -> None:
         _manifest.get("source_transcripts", {}),
         _manifest.get("corrections", []),
         marks=_manifest.get("marks"),
+        known_terms=_manifest.get("known_terms", []),
     )
 
 
