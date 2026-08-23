@@ -1439,8 +1439,20 @@ def test_models_payload_lists_suggested_models_with_install_state(client, monkey
         assert entry["size_mb"] == catalog["size_mb"]
         assert entry["description"] == catalog["description"]
         assert entry["stem"] == llm_client.model_name(catalog["name"])
+        assert entry["label"] == catalog["label"]
+        repo = catalog["name"].split(":", 1)[0]
+        assert entry["model_url"] == f"https://huggingface.co/{repo}"
         assert entry["unusable"] == ""
     assert [m["installed"] for m in suggested] == [False, True, False, False]
+
+    # The downloaded list and the agent gate name and link the same model.
+    installed = body["llm"]["models"][0]
+    catalog = llm_client.SUGGESTED_MODELS[1]
+    assert installed["label"] == catalog["label"]
+    assert installed["model_url"] == suggested[1]["model_url"]
+    for agent in body["llm"]["agents"]:
+        assert agent["label"] == llm_client.model_label(agent["model"])
+        assert agent["model_url"] == llm_client.model_card_url(agent["model"])
 
 
 def test_llm_download_routes_are_reachable_from_the_combined_root(client, monkeypatch):

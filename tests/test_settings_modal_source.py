@@ -108,6 +108,26 @@ def test_suggested_rows_offer_download_or_downloaded():
     assert ".settings-llm-model-bar-fill {" in css
 
 
+def test_model_rows_name_and_link_the_model():
+    """Friendly name on top, raw id beneath, source page one click away."""
+    block = _JS[
+        _JS.index("function _modelNameBlock") : _JS.index("function _buildSuggestedRow")
+    ]
+    assert "model.label || model.name" in block
+    assert '"settings-llm-model-title"' in block
+    assert '"settings-llm-model-id"' in block
+    # No catalog entry, no link: a stem cannot be reversed into a repo.
+    assert "if (!model.model_url) return null;" in block
+    assert 'link.target = "_blank"' in block
+    assert 'link.rel = "noopener noreferrer"' in block
+    assert "model-icon--link" in block
+
+    css = read("settings-modal.css")
+    assert ".settings-llm-model-title--mono {" in css
+    assert ".settings-llm-model-id {" in css
+    assert 'url("icons/arrow-up-right.svg")' in css
+
+
 def test_download_routes_go_through_the_api_root():
     assert '_getApiRoot() + "/models/llm/download"' in _JS
     assert '_getApiRoot() + "/models/llm/download-status?model="' in _JS

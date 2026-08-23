@@ -55,6 +55,8 @@ REQUIRED_IDS = [
     "frictionJumpPrev",
     "frictionJumpNext",
     "frictionStaleDot",
+    "modelInstallLicense",
+    "modelInstallLicenseLink",
     "clipMarksModal",
     "clipMarksScope",
     "clipMarksGap",

@@ -751,8 +751,25 @@ html[data-theme="dark"] .settings-panel {
 
 .settings-llm-model-name {
   flex: 1;
-  font-family: var(--font-mono);
   font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Friendly catalog name. A model outside the catalog has none, so its raw id
+   takes this slot and keeps the mono treatment. */
+.settings-llm-model-title {
+  font-family: var(--font-sans);
+}
+
+.settings-llm-model-title--mono {
+  font-family: var(--font-mono);
+}
+
+.settings-llm-model-id {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
   overflow-wrap: anywhere;
 }
 
@@ -765,6 +782,7 @@ html[data-theme="dark"] .settings-panel {
 /* A model the router already refused. Dimmed, not hidden: it stays deletable,
    and a llama.cpp upgrade may yet make it work. */
 .settings-llm-model-row--unusable .settings-llm-model-name,
+.settings-llm-model-row--unusable .settings-llm-model-title,
 .settings-llm-model-row--unusable .settings-llm-model-size {
   color: var(--color-text-dim);
 }
@@ -777,7 +795,8 @@ html[data-theme="dark"] .settings-panel {
 }
 
 /* Reveal is chromeless so Delete, which carries its label, reads as the
-   heavier of the two actions. */
+   heavier of the two actions. The Hugging Face link is an <a> wearing the
+   same class, hence text-decoration. */
 .settings-llm-model-reveal {
   display: inline-flex;
   align-items: center;
@@ -786,6 +805,7 @@ html[data-theme="dark"] .settings-panel {
   background: none;
   color: var(--color-text-dim);
   cursor: pointer;
+  text-decoration: none;
   transition: color var(--duration-fast);
 }
 
@@ -814,6 +834,13 @@ html[data-theme="dark"] .settings-panel {
 .settings-llm-model-icon--reveal {
   -webkit-mask-image: url("icons/magnifying-glass.svg");
   mask-image: url("icons/magnifying-glass.svg");
+}
+
+.settings-llm-model-icon--link {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  -webkit-mask-image: url("icons/arrow-up-right.svg");
+  mask-image: url("icons/arrow-up-right.svg");
 }
 
 .settings-llm-model-icon--delete {
