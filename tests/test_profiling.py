@@ -646,7 +646,7 @@ def test_transcribe_records_nothing_when_profiling_off(whisper_probe, monkeypatc
     assert profiling.snapshot() == {}
 
 
-# ---------- expanded hooks (ffprobe / scan kind / excel / heatmap / ollama) --
+# ---------- expanded hooks (ffprobe / scan kind / excel / heatmap / llm) --
 
 
 def test_scan_callback_label_uses_profile_kind(monkeypatch):
@@ -802,11 +802,11 @@ def test_heatmap_gifs_pair_wall_records(monkeypatch, tmp_path):
     assert "heatmap.rolling" in snap
 
 
-def test_ollama_generate_records_even_on_connection_error(monkeypatch):
+def test_llm_generate_records_even_on_connection_error(monkeypatch):
     import urllib.error
     import urllib.request
 
-    import ollama_client
+    import llm_client
 
     monkeypatch.setattr(config, "PROFILING", True)
 
@@ -815,5 +815,5 @@ def test_ollama_generate_records_even_on_connection_error(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", _boom)
     with pytest.raises(urllib.error.URLError):
-        ollama_client._do_generate({"model": "x", "prompt": "y"})
-    assert "ollama.generate" in profiling.snapshot()
+        llm_client._do_generate({"model": "x", "prompt": "y"})
+    assert "llm.generate" in profiling.snapshot()

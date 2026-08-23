@@ -294,7 +294,7 @@ def test_catalog_serves_param_editor_metadata(wf_client):
     # Region picker type + free-text completion sources.
     assert _param("region", "name")["type"] == "region"
     assert "auto" in _param("transcribe", "language")["suggestions"]
-    assert _param("summarize", "model")["datalist"] == "ollama-models"
+    assert _param("summarize", "model")["datalist"] == "llm-models"
 
 
 def test_catalog_serves_coverage_gap_nodes(wf_client):
@@ -672,12 +672,12 @@ def test_stash_write_preserves_blueprints_and_runs(wf_client):
 
 
 def test_run_executes_small_dag(wf_client, monkeypatch):
-    # No real media/Whisper/Ollama: empty video paths short-circuit transcribe to
-    # a stub, and Ollama is forced unavailable so summarize returns "".
+    # No real media/Whisper/LLM: empty video paths short-circuit transcribe to
+    # a stub, and the AI server is forced unavailable so summarize returns "".
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "is_available", lambda: False)
 
     bp_id = _make_blueprint(
         wf_client,
@@ -1451,9 +1451,9 @@ def test_watch_multipart_fires_once(wf_client, monkeypatch):
 
 def test_resume_seeds_completed_nodes_and_reruns_failed(wf_client, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "is_available", lambda: False)
 
     calls = {"transcribe": 0, "summarize": 0}
     real_transcribe = workflows.NODE_TYPES["transcribe"]["execute"]
@@ -1464,7 +1464,7 @@ def test_resume_seeds_completed_nodes_and_reruns_failed(wf_client, monkeypatch):
 
     def failing_summarize(ctx, inputs, params):
         calls["summarize"] += 1
-        raise RuntimeError("ollama exploded")
+        raise RuntimeError("llm exploded")
 
     monkeypatch.setitem(
         workflows.NODE_TYPES["transcribe"], "execute", counting_transcribe

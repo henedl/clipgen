@@ -934,7 +934,7 @@ def test_summary_stop_schedules_model_unload(
 ):
     """A successful summary /stop must schedule an unload timer for the
     summary model. We force a long delay so the timer is observable."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
     transcripts_server._orchestrator._in_flight["summary"].add(pid)
@@ -942,7 +942,7 @@ def test_summary_stop_schedules_model_unload(
 
     tr_client.post(f"/transcripts/api/agent/summary/{pid}/stop")
 
-    model = config.OLLAMA_SUMMARY_MODEL
+    model = config.LLM_SUMMARY_MODEL
     assert model in transcripts_server._pending_model_unloads
 
 
@@ -950,7 +950,7 @@ def test_citations_stop_schedules_model_unload(
     tr_client, _agent_state_clean, monkeypatch
 ):
     """A successful citations /stop must schedule an unload timer."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
     transcripts_server._orchestrator._in_flight["citations"].add(pid)
@@ -958,15 +958,15 @@ def test_citations_stop_schedules_model_unload(
 
     tr_client.post(f"/transcripts/api/agent/citations/{pid}/stop")
 
-    model = config.OLLAMA_SUMMARY_MODEL
+    model = config.LLM_SUMMARY_MODEL
     assert model in transcripts_server._pending_model_unloads
 
 
 def test_starting_a_run_cancels_pending_unload(_agent_state_clean, monkeypatch):
     """When a new agent run starts, any pending unload for the same model is
     cancelled so we don't churn on rapid stop→run cycles."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
-    model = config.OLLAMA_SUMMARY_MODEL
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
+    model = config.LLM_SUMMARY_MODEL
     transcripts_server._schedule_model_unload(model)
     assert model in transcripts_server._pending_model_unloads
 
@@ -976,11 +976,11 @@ def test_starting_a_run_cancels_pending_unload(_agent_state_clean, monkeypatch):
 
 def test_unload_fires_after_delay(_agent_state_clean, monkeypatch):
     """With a tiny delay, the scheduled unload should actually fire and call
-    ollama_client.unload_model with the right model."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 0.05)
+    llm_client.unload_model with the right model."""
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 0.05)
     calls: list[str] = []
     monkeypatch.setattr(
-        transcripts_server.ollama_client,
+        transcripts_server.llm_client,
         "unload_model",
         lambda m: calls.append(m) or True,
     )
@@ -995,11 +995,11 @@ def test_unload_fires_after_delay(_agent_state_clean, monkeypatch):
 
 
 def test_zero_delay_unloads_immediately(_agent_state_clean, monkeypatch):
-    """OLLAMA_UNLOAD_DELAY_SECONDS=0 unloads synchronously without scheduling."""
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 0)
+    """LLM_UNLOAD_DELAY_SECONDS=0 unloads synchronously without scheduling."""
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 0)
     calls: list[str] = []
     monkeypatch.setattr(
-        transcripts_server.ollama_client,
+        transcripts_server.llm_client,
         "unload_model",
         lambda m: calls.append(m) or True,
     )
@@ -1996,8 +1996,8 @@ def test_friction_regenerate_404_without_summary(tr_client, _agent_state_clean):
 def test_friction_regenerate_triggers(tr_client, _agent_state_clean, monkeypatch):
     # The stub stores nothing, so the chain advances — without this the seeded
     # entry (summary, no citations) would spawn the REAL citations agent, a
-    # live Ollama generation leaking past the end of the test.
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    # live LLM generation leaking past the end of the test.
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry(friction={"stale": False, "moments": []})
 
@@ -2046,16 +2046,16 @@ def test_report_regenerate_404_without_summary(tr_client, _agent_state_clean):
 def test_report_regenerate_runs_when_disabled(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    """Manual-trigger contract: OLLAMA_REPORT_ENABLED=False keeps report out of
+    """Manual-trigger contract: LLM_REPORT_ENABLED=False keeps report out of
     the auto-chain, but the regenerate route runs it anyway (force=True). The
     orchestrator's snapshot must also carry the participant id for the report
     agent's injected getters."""
-    monkeypatch.setattr(config, "OLLAMA_REPORT_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_REPORT_ENABLED", False)
     # The seeded entry has no citations, and the post-run chain advance would
     # otherwise spawn the REAL citations agent (enabled by default) — a live
-    # Ollama call in a daemon thread that outlives this test and corrupts the
+    # LLM call in a daemon thread that outlives this test and corrupts the
     # shared orchestrator for whichever chain test runs next.
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -2095,13 +2095,13 @@ def test_friction_stop_sets_cancel_event(tr_client, _agent_state_clean):
 def test_friction_stop_schedules_model_unload(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    monkeypatch.setattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 30.0)
+    monkeypatch.setattr(config, "LLM_UNLOAD_DELAY_SECONDS", 30.0)
     pid = "P01"
     evt = threading.Event()
     transcripts_server._orchestrator._in_flight["friction"].add(pid)
     transcripts_server._orchestrator._cancel_events["friction"][pid] = evt
     tr_client.post(f"/transcripts/api/agent/friction/{pid}/stop")
-    # Friction inherits the summary model (OLLAMA_FRICTION_MODEL is blank by
+    # Friction inherits the summary model (LLM_FRICTION_MODEL is blank by
     # default), so the unload targets the resolved model.
     assert thinking_agents.friction_model() in transcripts_server._pending_model_unloads
 
@@ -2129,7 +2129,7 @@ def test_agent_stop_unknown_key_404(tr_client, _agent_state_clean):
 def test_friction_not_eligible_when_disabled(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", False)
     # summary + citations present so those passes are skipped; friction is the
     # only remaining candidate.
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
@@ -2137,7 +2137,7 @@ def test_friction_not_eligible_when_disabled(
 
 
 def test_friction_eligible_when_enabled(tr_client, _agent_state_clean, monkeypatch):
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
     agent = transcripts_server._orchestrator.next_eligible("P01")
     assert agent is not None and agent["key"] == "friction"
@@ -2147,8 +2147,8 @@ def test_friction_eligible_without_citations(
     tr_client, _agent_state_clean, monkeypatch
 ):
     """Friction depends only on summary — it runs even when citations is off."""
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     _seed_friction_entry()  # summary present, no citations
     agent = transcripts_server._orchestrator.next_eligible("P01")
     assert agent is not None and agent["key"] == "friction"
@@ -2157,9 +2157,9 @@ def test_friction_eligible_without_citations(
 def test_friction_force_eligible_regardless_of_flag(
     tr_client, _agent_state_clean, monkeypatch
 ):
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
-    monkeypatch.setattr(config, "OLLAMA_SUMMARY_ENABLED", False)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_SUMMARY_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", False)
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
     agent = transcripts_server._orchestrator.next_eligible("P01", force=True)
     assert agent is not None and agent["key"] == "friction"
@@ -2171,8 +2171,8 @@ def test_next_eligible_honors_skip(tr_client, _agent_state_clean, monkeypatch):
     Its manifest field is still empty, so without skip it is picked straight
     back and the chain spins on it instead of reaching its siblings.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     _seed_friction_entry()  # summary present; citations + friction both pending
 
     agent = transcripts_server._orchestrator.next_eligible("P01")
@@ -2191,8 +2191,8 @@ def test_failed_citations_still_chains_to_friction(
     committed. Friction depends only on the summary, so the chain has to carry
     on past the failure rather than stopping at the uncommitted step.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -2227,8 +2227,8 @@ def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monke
     Same stall as the uncommitted-result path — friction depends only on the
     summary and would otherwise never start after a citations exception.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -2241,7 +2241,7 @@ def test_raising_agent_still_chains_past_it(tr_client, _agent_state_clean, monke
         _boom,
     )
     # The spy passes friction through to the real run_agent; without a stub
-    # that is a REAL Ollama generation on machines where Ollama runs. It
+    # that is a REAL LLM generation on machines where the server runs. It
     # outlives the 2 s thread join, then commits into a later test's manifest
     # and squats the shared in-flight slot — the suite's flakiest interleaving.
     monkeypatch.setitem(
@@ -2276,8 +2276,8 @@ def test_chain_terminates_when_every_agent_stores_nothing(
     them take turns indefinitely — one live model call per lap. The skip set
     accumulates across the chain to make each agent run at most once.
     """
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", True)
-    monkeypatch.setattr(config, "OLLAMA_CITATIONS_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_CITATIONS_ENABLED", True)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     _seed_friction_entry()
 
@@ -2635,7 +2635,7 @@ def test_citations_regenerate_does_not_run_disabled_friction(
     """Regression (H1): a manual single-agent regenerate must not cascade into a
     disabled sibling. The post-success chain advance is force=False, so with
     friction off, regenerating citations recomputes only citations."""
-    monkeypatch.setattr(config, "OLLAMA_FRICTION_ENABLED", False)
+    monkeypatch.setattr(config, "LLM_FRICTION_ENABLED", False)
     monkeypatch.setattr(transcripts_server, "_persist_manifest", lambda: None)
     # summary + citations present, friction absent — friction is the only empty field.
     _seed_friction_entry(citations=[{"sentence": "s", "refs": []}])
@@ -2696,7 +2696,7 @@ def test_on_task_complete_registers_summary_before_disk_write(
     runs — not only after it. Otherwise the frontend can observe the task as
     completed with no agent running and stop polling until a manual reload.
     """
-    monkeypatch.setattr(config, "OLLAMA_SUMMARY_ENABLED", True)
+    monkeypatch.setattr(config, "LLM_SUMMARY_ENABLED", True)
 
     pid = "P01"
     completed_task = {
@@ -2754,48 +2754,48 @@ def test_on_task_complete_registers_summary_before_disk_write(
 
 
 # ---------------------------------------------------------------------------
-# Local-model install gating: Ollama pull endpoints + /api/models surface
+# Local-model download gating: GGUF download endpoints + /api/models surface
 # ---------------------------------------------------------------------------
 
 
-def test_ollama_pull_requires_model(tr_client):
-    resp = tr_client.post("/transcripts/api/models/ollama/pull", json={})
+def test_llm_download_requires_model(tr_client):
+    resp = tr_client.post("/transcripts/api/models/llm/download", json={})
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
 
 
-def test_ollama_pull_status_unknown_model(tr_client):
-    resp = tr_client.get("/transcripts/api/models/ollama/pull-status?model=ghost:1b")
+def test_llm_download_status_unknown_model(tr_client):
+    resp = tr_client.get("/transcripts/api/models/llm/download-status?model=ghost:1b")
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["ok"] is True
     assert data["found"] is False
 
 
-def test_ollama_pull_starts_and_reports_success(tr_client, monkeypatch):
+def test_llm_download_starts_and_reports_success(tr_client, monkeypatch):
     import time
 
-    import ollama_client
+    import llm_client
 
     def _fake_pull(model, on_progress=None):
         if on_progress:
             on_progress({"status": "downloading", "total": 10, "completed": 5})
         return True
 
-    monkeypatch.setattr(ollama_client, "pull_model", _fake_pull)
-    transcripts_server._ollama_pull_status.clear()
+    monkeypatch.setattr(llm_client, "download_model", _fake_pull)
+    transcripts_server._llm_download_status.clear()
 
     resp = tr_client.post(
-        "/transcripts/api/models/ollama/pull", json={"model": "tiny:1b"}
+        "/transcripts/api/models/llm/download", json={"model": "tiny:1b"}
     )
     assert resp.status_code == 200
     assert resp.get_json()["started"] is True
 
-    # The pull runs in a daemon thread; poll until it reports done.
+    # The download runs in a daemon thread; poll until it reports done.
     status = {}
     for _ in range(100):
         status = tr_client.get(
-            "/transcripts/api/models/ollama/pull-status?model=tiny:1b"
+            "/transcripts/api/models/llm/download-status?model=tiny:1b"
         ).get_json()
         if status.get("found") and status.get("done"):
             break
@@ -2805,21 +2805,21 @@ def test_ollama_pull_starts_and_reports_success(tr_client, monkeypatch):
     assert status["succeeded"] is True
 
 
-def test_ollama_pull_reports_failure(tr_client, monkeypatch):
+def test_llm_download_reports_failure(tr_client, monkeypatch):
     import time
 
-    import ollama_client
+    import llm_client
 
     monkeypatch.setattr(
-        ollama_client, "pull_model", lambda model, on_progress=None: False
+        llm_client, "download_model", lambda model, on_progress=None: False
     )
-    transcripts_server._ollama_pull_status.clear()
+    transcripts_server._llm_download_status.clear()
 
-    tr_client.post("/transcripts/api/models/ollama/pull", json={"model": "bad:1b"})
+    tr_client.post("/transcripts/api/models/llm/download", json={"model": "bad:1b"})
     status = {}
     for _ in range(100):
         status = tr_client.get(
-            "/transcripts/api/models/ollama/pull-status?model=bad:1b"
+            "/transcripts/api/models/llm/download-status?model=bad:1b"
         ).get_json()
         if status.get("found") and status.get("done"):
             break
@@ -2829,143 +2829,18 @@ def test_ollama_pull_reports_failure(tr_client, monkeypatch):
     assert status["error"]
 
 
-def test_ollama_install_rejected_where_unsupported(tr_client, monkeypatch):
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: False)
-    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
-    assert resp.status_code == 400
-    assert resp.get_json()["ok"] is False
-
-
-def test_ollama_install_short_circuits_when_installed(tr_client, monkeypatch):
-    """The idempotent path: a working install must not re-download.
-
-    Stubs is_working_install, which is what the route gates on — stubbing only
-    is_installed leaves the real predicate running, and on a machine with no
-    ollama on PATH that answers False, so the route falls through and spawns a
-    genuine 145 MB install_managed() on a daemon thread.
-    """
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_working_install", lambda: True)
-
-    def _must_not_run(on_progress=None):
-        raise AssertionError("install_managed must not run for a working install")
-
-    monkeypatch.setattr(ollama_client, "install_managed", _must_not_run)
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-
-    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
-    assert resp.status_code == 200
-    assert resp.get_json()["already_installed"] is True
-
-
-def test_ollama_install_status_before_any_install(tr_client, monkeypatch):
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-    resp = tr_client.get("/transcripts/api/models/ollama/install-status")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    assert data["found"] is False
-
-
-def test_ollama_install_starts_and_reports_success(tr_client, monkeypatch):
-    import time
-
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    # The route gates on is_working_install (is_installed only asks whether a
-    # file exists, which a half-extracted tree also satisfies).
-    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
-
-    def _fake_install(on_progress=None):
-        if on_progress:
-            on_progress({"status": "downloading Ollama", "total": 100, "completed": 40})
-        return True
-
-    monkeypatch.setattr(ollama_client, "install_managed", _fake_install)
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-
-    resp = tr_client.post("/transcripts/api/models/ollama/install", json={})
-    assert resp.status_code == 200
-    assert resp.get_json()["started"] is True
-
-    status = {}
-    for _ in range(100):
-        status = tr_client.get(
-            "/transcripts/api/models/ollama/install-status"
-        ).get_json()
-        if status.get("found") and status.get("done"):
-            break
-        time.sleep(0.02)
-    assert status["found"] is True
-    assert status["done"] is True
-    assert status["succeeded"] is True
-    assert status["status"] == "success"
-
-
-def test_ollama_install_retries_a_broken_install(tr_client, monkeypatch):
-    """A half-extracted tree satisfies is_installed(), and this route is the
-    only way to repair one — so gating on it answered already_installed
-    forever and stranded the user with no in-app recovery."""
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: True)
-    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
-    monkeypatch.setattr(ollama_client, "install_managed", lambda on_progress=None: True)
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-
-    body = tr_client.post("/transcripts/api/models/ollama/install", json={}).get_json()
-    assert body.get("already_installed") is not True
-    assert body["started"] is True
-
-
-def test_ollama_install_second_post_attaches(tr_client, monkeypatch):
-    import threading as threading_mod
-
-    import ollama_client
-
-    monkeypatch.setattr(ollama_client, "can_install_managed", lambda: True)
-    # The route gates on is_working_install (is_installed only asks whether a
-    # file exists, which a half-extracted tree also satisfies).
-    monkeypatch.setattr(ollama_client, "is_working_install", lambda: False)
-    release = threading_mod.Event()
-    monkeypatch.setattr(
-        ollama_client,
-        "install_managed",
-        lambda on_progress=None: release.wait(2.0),
-    )
-    monkeypatch.setattr(transcripts_server, "_ollama_install_status", None)
-    try:
-        first = tr_client.post("/transcripts/api/models/ollama/install", json={})
-        assert first.get_json()["started"] is True
-        second = tr_client.post("/transcripts/api/models/ollama/install", json={})
-        assert second.get_json()["already_installing"] is True
-    finally:
-        release.set()
-
-
 def test_api_models_includes_cached_and_agents(monkeypatch):
-    import ollama_client
+    import llm_client
     import server as server_mod
 
     monkeypatch.setattr(
         transcripts, "is_whisper_model_cached", lambda n=None: n == "base"
     )
     monkeypatch.setattr(
-        ollama_client,
+        llm_client,
         "list_models",
         lambda: [
-            {
-                "name": "qwen3.5:9b",
-                "size_bytes": 0,
-                "parameter_size": "",
-                "family": "",
-            }
+            {"name": llm_client.model_name(config.LLM_SUMMARY_MODEL), "size_bytes": 0}
         ],
     )
 
@@ -2981,30 +2856,29 @@ def test_api_models_includes_cached_and_agents(monkeypatch):
     tiny = next(m for m in whisper if m["name"] == "tiny")
     assert tiny["cached"] is False
 
-    agents = data["ollama"]["agents"]
+    agents = data["llm"]["agents"]
     assert {a["key"] for a in agents} == {"summary", "citations", "friction", "report"}
-    # The configured summary model is present in the faked install list, and the
+    # The configured summary model is present in the faked models dir, and the
     # blank friction/report models resolve to it.
     assert all(a["installed"] for a in agents)
 
 
 def _models_payload(monkeypatch, *, binary_present, server_answers):
-    import ollama_client
+    import llm_client
     import server as server_mod
 
     monkeypatch.setattr(transcripts, "is_whisper_model_cached", lambda n=None: True)
-    monkeypatch.setattr(ollama_client, "is_installed", lambda: binary_present)
-    monkeypatch.setattr(
-        ollama_client, "list_models", lambda: [] if server_answers else None
-    )
+    monkeypatch.setattr(llm_client, "is_installed", lambda: binary_present)
+    monkeypatch.setattr(llm_client, "is_available", lambda: server_answers)
+    monkeypatch.setattr(llm_client, "list_models", list)
     app = server_mod.build_combined_app()
     with app.test_client() as c:
-        return c.get("/api/models").get_json()["ollama"]
+        return c.get("/api/models").get_json()["llm"]
 
 
 def test_api_models_separates_not_installed_from_not_running(monkeypatch):
     """`available` alone cannot tell the two apart, and they need opposite
-    advice — telling someone who never installed Ollama to "start it" was the
+    advice — telling someone who never installed the runtime to "start it" was the
     bug this field exists to fix."""
     missing = _models_payload(monkeypatch, binary_present=False, server_answers=False)
     assert missing["installed"] is False
@@ -3025,7 +2899,7 @@ def test_api_models_ships_install_guidance(monkeypatch):
     payload = _models_payload(monkeypatch, binary_present=False, server_answers=False)
     hint = payload["install_hint"]
     assert hint and all(isinstance(line, str) for line in hint)
-    assert any("ollama.com" in line for line in hint)
+    assert any("llama" in line.lower() for line in hint)
 
 
 # ---- Completed-task merge semantics ----

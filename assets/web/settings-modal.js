@@ -64,10 +64,10 @@
     if (_modelsCachePromise) return _modelsCachePromise;
     _modelsCachePromise = apiGet(_getApiRoot() + "/models")
       .then(function (data) {
-        // Only pin a result that actually discovered Ollama. If the server
+        // Only pin a result that actually discovered the AI server. If it
         // wasn't reachable yet, don't cache the empty list for the session —
         // reset so a later open re-fetches and picks up installed models.
-        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+        if (data && data.ok && !(data.llm && data.llm.available === false)) {
           _modelsCache = data;
         } else {
           _modelsCachePromise = null;
@@ -85,8 +85,8 @@
       var models = [];
       if (provider === "whisper") {
         models = (data.whisper && data.whisper.models) || [];
-      } else if (provider === "ollama") {
-        models = (data.ollama && data.ollama.models) || [];
+      } else if (provider === "llm") {
+        models = (data.llm && data.llm.models) || [];
       }
 
       sel.innerHTML = "";
@@ -124,11 +124,11 @@
       }
       sel.disabled = false;
 
-      // An Ollama dropdown whose only entry is "<model> (current)" looks like a
-      // populated list, so a user with no Ollama at all gets no signal that the
+      // An AI-model dropdown whose only entry is "<model> (current)" looks like a
+      // populated list, so a user with no runtime at all gets no signal that the
       // setting cannot do anything. Say so next to the control.
-      if (provider === "ollama") {
-        var status = clipgenOllamaStatus(data.ollama);
+      if (provider === "llm") {
+        var status = clipgenLlmStatus(data.llm);
         var note = sel.parentNode && sel.parentNode.querySelector(".settings-model-note");
         if (status.state !== "ok" && sel.parentNode) {
           if (!note) {

@@ -4460,7 +4460,7 @@ def build_combined_app(
 
     @combined.route("/api/models")
     def api_models() -> Response:
-        import ollama_client
+        import llm_client
         import thinking_agents
         import transcripts
 
@@ -4475,53 +4475,41 @@ def build_combined_app(
             for m in transcripts.WHISPER_MODELS
         ]
 
-        ollama_models: list[dict[str, Any]] = []
-        ollama_available = False
-        raw = ollama_client.list_models()
-        if raw is not None:
-            ollama_available = True
-            for m in raw:
-                size_mb = round(m["size_bytes"] / (1024 * 1024))
-                ollama_models.append(
-                    {
-                        "name": m["name"],
-                        "size_mb": size_mb,
-                        "parameter_size": m["parameter_size"],
-                        "family": m["family"],
-                    }
-                )
+        # A filesystem scan, so the catalog answers even with the server down.
+        raw = llm_client.list_models()
+        llm_models = [
+            {"name": m["name"], "size_mb": round(m["size_bytes"] / (1024 * 1024))}
+            for m in raw
+        ]
 
         # Per thinking-agent model + install status, so the Transcripts UI can
         # confirm a download before running an agent against a missing model.
-        ollama_agents = []
+        llm_agents = []
         for a in thinking_agents.AGENTS:
             model = thinking_agents.resolve_model(a)
-            ollama_agents.append(
+            llm_agents.append(
                 {
                     "key": a["key"],
                     "model": model,
-                    "installed": ollama_client.is_model_installed(model, raw or []),
+                    "installed": llm_client.is_model_installed(model, raw),
                 }
             )
 
         return ok(
             whisper={"models": whisper_models},
-            ollama={
-                "available": ollama_available,
+            llm={
+                "available": llm_client.is_available(),
                 # "not installed" and "installed but not running" need opposite
                 # advice, and `available` alone cannot tell them apart — the
-                # pages used to tell a user who had never installed Ollama to
-                # "start it". install_hint carries the platform-specific
-                # commands that previously only ever reached the terminal.
-                "installed": ollama_client.is_installed(),
-                "install_hint": ollama_client.install_guidance_lines(),
-                # Whether clipgen can download the CLI itself in-app (macOS
-                # managed install), plus the download size for consent labels.
-                "can_install": ollama_client.can_install_managed(),
-                "install_size_mb": ollama_client.managed_install_size_mb(),
-                "models": ollama_models,
-                "agents": ollama_agents,
-                "base_url": config.OLLAMA_BASE_URL,
+                # pages used to tell a user who had never installed the runtime
+                # to "start it". install_hint carries the platform-specific
+                # commands. Frozen builds bundle llama-server, so installed is
+                # effectively always True there.
+                "installed": llm_client.is_installed(),
+                "install_hint": llm_client.install_guidance_lines(),
+                "models": llm_models,
+                "agents": llm_agents,
+                "base_url": config.LLM_BASE_URL,
             },
         )
 

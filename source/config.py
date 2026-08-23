@@ -177,7 +177,7 @@ TEMP_ARTIFACT_PREFIX: str = "clipgen_tmp_"
 # 2x this (a file must stat identically across two polls). Server-only.
 WORKFLOWS_WATCH_POLL_SECONDS: float = 5.0
 # Concurrent participants per Workflows whole-study batch; 1 = sequential. Higher
-# values pool the child runs, multiplying peak ffmpeg/Whisper/OCR/Ollama load —
+# values pool the child runs, multiplying peak ffmpeg/Whisper/OCR/LLM load —
 # and heavy graphs serialize on those shared resources anyway, so they rarely
 # benefit past 2. Clamped to [1, 4]. Server-only.
 WORKFLOWS_BATCH_WORKERS: int = 1
@@ -536,48 +536,50 @@ MARK_CATEGORIES: dict[str, dict[str, str]] = {
 # only persists and structurally validates this dict, never interprets it.
 HOTKEY_OVERRIDES: dict[str, str] = {}
 
-# ── Ollama (Local AI) ───────────────────────────────────────────────
-OLLAMA_SUMMARY_ENABLED: bool = (
-    True  # auto-generate transcript summaries via Ollama after transcription completes
+# ── Local AI (llama.cpp) ────────────────────────────────────────────
+LLM_SUMMARY_ENABLED: bool = (
+    True  # auto-generate transcript summaries after transcription completes
 )
-OLLAMA_CITATIONS_ENABLED: bool = (
-    True  # auto-generate citation links via Ollama after the summary completes
+LLM_CITATIONS_ENABLED: bool = (
+    True  # auto-generate citation links after the summary completes
 )
-OLLAMA_FRICTION_ENABLED: bool = (
-    False  # auto-detect friction moments via Ollama after the summary completes
+LLM_FRICTION_ENABLED: bool = (
+    False  # auto-detect friction moments after the summary completes
 )
-OLLAMA_SUMMARY_MODEL: str = (
-    "qwen3.5:9b"  # model for transcript summaries, citations, and friction
+LLM_SUMMARY_MODEL: str = (
+    # Hugging Face ref (user/repo:QUANT) or the stem of a GGUF already in the
+    # models dir; llm_client.model_name() maps either onto the router id.
+    "unsloth/Qwen3.5-9B-GGUF:Q4_K_M"  # model for summaries, citations, and friction
 )
-OLLAMA_FRICTION_MODEL: str = (
-    ""  # friction agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
+LLM_FRICTION_MODEL: str = (
+    ""  # friction agent model; blank → use LLM_SUMMARY_MODEL, set to override
 )
-OLLAMA_REPORT_ENABLED: bool = False  # mini-report is manual-only (Overview → Summary); True adds it to the auto-chain
-OLLAMA_REPORT_MODEL: str = (
-    ""  # report agent model; blank → use OLLAMA_SUMMARY_MODEL, set to override
+LLM_REPORT_ENABLED: bool = False  # mini-report is manual-only (Overview → Summary); True adds it to the auto-chain
+LLM_REPORT_MODEL: str = (
+    ""  # report agent model; blank → use LLM_SUMMARY_MODEL, set to override
 )
-OLLAMA_BASE_URL: str = "http://localhost:11434"  # Ollama server address
-OLLAMA_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
+LLM_BASE_URL: str = "http://127.0.0.1:8790"  # llama-server router address
+LLM_UNLOAD_DELAY_SECONDS: float = 15.0  # after Stop, evict the model from memory if no new run starts within this delay
 
 # ── Thinking-agent prompts ───────────────────────────────────────────
 # Editable via Settings → Summaries → "Agent prompts". thinking_agents.py reads
 # these at call time, so an edit takes effect on the next agent run. The user
 # prompts are .format()-ed with the placeholders noted below; the *_SYSTEM
 # prompts are sent verbatim (never formatted), so braces in them are literal.
-OLLAMA_SUMMARY_PROMPT: str = """\
+LLM_SUMMARY_PROMPT: str = """\
 Summarize this user research session transcript. Write a concise paragraph \
 (2-4 sentences) describing what happened in the session. Then list the key \
 topics or themes as bullet points (prefix each with "- ").
 
 Transcript:
 {text}"""
-OLLAMA_CITATIONS_SYSTEM: str = (
+LLM_CITATIONS_SYSTEM: str = (
     "You match transcript segments to summary claims. "
     "For each claim, select only the 1-3 most relevant and representative "
     "segments. Prefer segments that most clearly and directly support the claim. "
     "Use the exact format shown."
 )
-OLLAMA_CITATIONS_PROMPT: str = """\
+LLM_CITATIONS_PROMPT: str = """\
 Claims:
 {claims}
 
@@ -590,12 +592,12 @@ Format your response exactly as:
 1: 0:45, 1:02
 2: NONE
 Write NONE if no segments clearly support a claim."""
-OLLAMA_FRICTION_SYSTEM: str = (
+LLM_FRICTION_SYSTEM: str = (
     "You analyze UX research session transcripts for moments of friction: "
     "points where the participant struggled, hesitated, got confused, or showed "
     "frustration. You respond with a JSON array only."
 )
-OLLAMA_FRICTION_PROMPT: str = """\
+LLM_FRICTION_PROMPT: str = """\
 Session summary:
 {summary}
 
@@ -614,13 +616,13 @@ Output a JSON array only — no prose, no markdown fences, no <think> blocks:
   {{"segment_ids": ["P01:7", "P01:8"], "category": "frustration",
     "rationale": "Participant repeatedly tried to find the save button", "score": 0.85}}
 ]"""
-OLLAMA_REPORT_SYSTEM: str = (
+LLM_REPORT_SYSTEM: str = (
     "You are a UX research assistant writing a short per-participant session "
     "report. Ground every statement in the provided data. Never invent quotes, "
     "observations, or timestamps; if the data does not support a claim, leave "
     "it out."
 )
-OLLAMA_REPORT_PROMPT: str = """\
+LLM_REPORT_PROMPT: str = """\
 Write a concise research mini-report for participant {participant}, using only \
 the data below.
 
@@ -722,21 +724,21 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "FILMSTRIP_ENABLED": "Show thumbnail images on timeline markers instead of solid colors (in the HTML viewer).",
     "GALLERY_BUNDLE_ENABLED": "Embed gallery images as base64 data URIs in the HTML file, making it fully self-contained.",
     "CLIP_PARALLEL_WORKERS": "Number of concurrent ffmpeg processes for clip generation. 0 = auto, 1 = sequential.",
-    "OLLAMA_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
-    "OLLAMA_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
-    "OLLAMA_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
-    "OLLAMA_SUMMARY_MODEL": "Ollama model used for transcript summaries, citation linking, and friction detection.",
-    "OLLAMA_FRICTION_MODEL": "Ollama model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
-    "OLLAMA_BASE_URL": "Base URL of the local Ollama server.",
-    "OLLAMA_SUMMARY_PROMPT": "Prompt that generates each session summary. Keep the {text} placeholder. The transcript is inserted there.",
-    "OLLAMA_CITATIONS_SYSTEM": "System instruction that frames the citation agent's behavior. Sent verbatim; no placeholders.",
-    "OLLAMA_CITATIONS_PROMPT": "Prompt that links summary claims to transcript segments. Keep the {claims} and {transcript} placeholders.",
-    "OLLAMA_FRICTION_SYSTEM": "System instruction that frames the friction agent's behavior. Sent verbatim; no placeholders.",
-    "OLLAMA_FRICTION_PROMPT": "Prompt that detects friction moments. Keep the {summary}, {segments}, and {limit} placeholders.",
-    "OLLAMA_REPORT_ENABLED": "Auto-generate a per-participant mini-report after the summary completes. Off by default: generate reports from the Overview page's Reports tab instead.",
-    "OLLAMA_REPORT_MODEL": "Ollama model for mini-report generation. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
-    "OLLAMA_REPORT_SYSTEM": "System instruction that frames the report agent's behavior. Sent verbatim; no placeholders.",
-    "OLLAMA_REPORT_PROMPT": "Prompt that writes the per-participant mini-report. Keep the {participant}, {summary}, {observations}, and {bookmarks} placeholders.",
+    "LLM_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
+    "LLM_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
+    "LLM_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
+    "LLM_SUMMARY_MODEL": "AI model for transcript summaries, citation linking, and friction detection. A Hugging Face ref (user/repo:QUANT) or a downloaded model name.",
+    "LLM_FRICTION_MODEL": "AI model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
+    "LLM_BASE_URL": "Base URL of the local llama-server router.",
+    "LLM_SUMMARY_PROMPT": "Prompt that generates each session summary. Keep the {text} placeholder. The transcript is inserted there.",
+    "LLM_CITATIONS_SYSTEM": "System instruction that frames the citation agent's behavior. Sent verbatim; no placeholders.",
+    "LLM_CITATIONS_PROMPT": "Prompt that links summary claims to transcript segments. Keep the {claims} and {transcript} placeholders.",
+    "LLM_FRICTION_SYSTEM": "System instruction that frames the friction agent's behavior. Sent verbatim; no placeholders.",
+    "LLM_FRICTION_PROMPT": "Prompt that detects friction moments. Keep the {summary}, {segments}, and {limit} placeholders.",
+    "LLM_REPORT_ENABLED": "Auto-generate a per-participant mini-report after the summary completes. Off by default: generate reports from the Overview page's Reports tab instead.",
+    "LLM_REPORT_MODEL": "AI model for mini-report generation. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
+    "LLM_REPORT_SYSTEM": "System instruction that frames the report agent's behavior. Sent verbatim; no placeholders.",
+    "LLM_REPORT_PROMPT": "Prompt that writes the per-participant mini-report. Keep the {participant}, {summary}, {observations}, and {bookmarks} placeholders.",
     "SCREENSHOT_FORMAT": "File format for screenshot artifacts. WebP is smaller but requires modern browsers (Safari 16+).",
     "GIF_FORMAT": "File format for animated artifacts. WebM (VP9) is the smallest and most-compatible modern option; animated WebP is also small but requires Safari 16+; GIF works everywhere but is large.",
     "WEBP_QUALITY": "WebP encoding quality (0-100). Higher values mean better quality and larger files.",
@@ -1024,86 +1026,86 @@ STUDIO_SETTINGS: dict[str, dict[str, Any]] = {
         "group": "",
         "type": "hotkeys",
     },
-    "OLLAMA_SUMMARY_ENABLED": {
+    "LLM_SUMMARY_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_CITATIONS_ENABLED": {
+    "LLM_CITATIONS_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_FRICTION_ENABLED": {
+    "LLM_FRICTION_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_REPORT_ENABLED": {
+    "LLM_REPORT_ENABLED": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "bool",
     },
-    "OLLAMA_SUMMARY_MODEL": {
+    "LLM_SUMMARY_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
-        "provider": "ollama",
+        "provider": "llm",
     },
-    "OLLAMA_FRICTION_MODEL": {
+    "LLM_FRICTION_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
-        "provider": "ollama",
-        # Blank value inherits OLLAMA_SUMMARY_MODEL; surfaced as this option.
+        "provider": "llm",
+        # Blank value inherits LLM_SUMMARY_MODEL; surfaced as this option.
         "emptyLabel": "Same as summary model",
     },
-    "OLLAMA_REPORT_MODEL": {
+    "LLM_REPORT_MODEL": {
         "tab": "Summaries",
         "group": "AI Summary",
         "type": "model_select",
-        "provider": "ollama",
-        # Blank value inherits OLLAMA_SUMMARY_MODEL; surfaced as this option.
+        "provider": "llm",
+        # Blank value inherits LLM_SUMMARY_MODEL; surfaced as this option.
         "emptyLabel": "Same as summary model",
     },
-    "OLLAMA_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
-    "OLLAMA_SUMMARY_PROMPT": {
+    "LLM_BASE_URL": {"tab": "Summaries", "group": "AI Summary", "type": "str"},
+    "LLM_SUMMARY_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["text"],
     },
-    "OLLAMA_CITATIONS_SYSTEM": {
+    "LLM_CITATIONS_SYSTEM": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
     },
-    "OLLAMA_CITATIONS_PROMPT": {
+    "LLM_CITATIONS_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["claims", "transcript"],
     },
-    "OLLAMA_FRICTION_SYSTEM": {
+    "LLM_FRICTION_SYSTEM": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
     },
-    "OLLAMA_FRICTION_PROMPT": {
+    "LLM_FRICTION_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": ["summary", "segments", "limit"],
     },
-    "OLLAMA_REPORT_SYSTEM": {
+    "LLM_REPORT_SYSTEM": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",
         "placeholders": [],
     },
-    "OLLAMA_REPORT_PROMPT": {
+    "LLM_REPORT_PROMPT": {
         "tab": "Summaries",
         "group": "Agent prompts",
         "type": "prompt",

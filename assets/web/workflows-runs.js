@@ -642,7 +642,7 @@
       if (ns.error) row.title = ns.error;
       else if (ns.note) row.title = ns.note;
       rows.appendChild(row);
-      // A non-fatal note (Ollama down, nothing wired, an adapter that couldn't
+      // A non-fatal note (AI server down, nothing wired, an adapter that couldn't
       // coerce): the node completed but produced nothing useful — surface why.
       if (ns.note) rows.appendChild(el("div", "wf-run-node-note", ns.note));
       if (ns.hasResult) {

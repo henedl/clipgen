@@ -574,7 +574,7 @@ body {
   -webkit-mask-image: url(icons/fire.svg);
 }
 
-/* Marks a control that starts a local Ollama thinking agent (the Summary /
+/* Marks a control that starts a local AI thinking agent (the Summary /
    Citations / Friction run buttons, in the panel and in the pill dropdown), so
    the glyph sits on the action that spends local compute rather than on the
    pane showing its output. Lives here rather than in tokens.css because

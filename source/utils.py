@@ -593,7 +593,7 @@ def install_guidance_lines(
 ) -> list[str]:
     """Build platform-specific "how do I install this" lines for a missing tool.
 
-    Shared by the ffmpeg and Ollama guidance so the two stay in step — both are
+    Shared by the ffmpeg and LLM guidance so the two stay in step — both are
     surfaced to users who have no console (a native alert, or the browser), and
     both used to hand macOS users ``brew install …`` unconditionally. That is a
     dead end on a machine without Homebrew, which is the *default* state of a

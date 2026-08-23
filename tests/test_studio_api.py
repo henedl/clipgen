@@ -235,137 +235,137 @@ def test_settings_records_include_card_pickers(client):
     assert by_name["ENDCARD_COLOR"]["type"] == "hidden"
 
 
-def test_settings_records_include_ollama_model_pickers(client):
+def test_settings_records_include_llm_model_pickers(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}
     # Summary and friction models are dynamic pickers populated from installed
-    # Ollama models (gemma/llama/qwen/...), not a fixed list.
-    assert by_name["OLLAMA_SUMMARY_MODEL"]["type"] == "model_select"
-    assert by_name["OLLAMA_SUMMARY_MODEL"]["provider"] == "ollama"
-    assert by_name["OLLAMA_FRICTION_MODEL"]["type"] == "model_select"
-    assert by_name["OLLAMA_FRICTION_MODEL"]["provider"] == "ollama"
+    # downloaded GGUF models, not a fixed list.
+    assert by_name["LLM_SUMMARY_MODEL"]["type"] == "model_select"
+    assert by_name["LLM_SUMMARY_MODEL"]["provider"] == "llm"
+    assert by_name["LLM_FRICTION_MODEL"]["type"] == "model_select"
+    assert by_name["LLM_FRICTION_MODEL"]["provider"] == "llm"
     # Friction and report inherit the summary model via a blank value, shown as
     # a label.
-    assert by_name["OLLAMA_FRICTION_MODEL"]["emptyLabel"]
-    assert by_name["OLLAMA_REPORT_MODEL"]["type"] == "model_select"
-    assert by_name["OLLAMA_REPORT_MODEL"]["provider"] == "ollama"
-    assert by_name["OLLAMA_REPORT_MODEL"]["emptyLabel"]
+    assert by_name["LLM_FRICTION_MODEL"]["emptyLabel"]
+    assert by_name["LLM_REPORT_MODEL"]["type"] == "model_select"
+    assert by_name["LLM_REPORT_MODEL"]["provider"] == "llm"
+    assert by_name["LLM_REPORT_MODEL"]["emptyLabel"]
 
 
 def test_settings_records_include_agent_prompts(client):
     data = client.get("/studio/api/settings").get_json()
     by_name = {s["name"]: s for s in data["settings"]}
     for name in (
-        "OLLAMA_SUMMARY_PROMPT",
-        "OLLAMA_CITATIONS_SYSTEM",
-        "OLLAMA_CITATIONS_PROMPT",
-        "OLLAMA_FRICTION_SYSTEM",
-        "OLLAMA_FRICTION_PROMPT",
-        "OLLAMA_REPORT_SYSTEM",
-        "OLLAMA_REPORT_PROMPT",
+        "LLM_SUMMARY_PROMPT",
+        "LLM_CITATIONS_SYSTEM",
+        "LLM_CITATIONS_PROMPT",
+        "LLM_FRICTION_SYSTEM",
+        "LLM_FRICTION_PROMPT",
+        "LLM_REPORT_SYSTEM",
+        "LLM_REPORT_PROMPT",
     ):
         assert by_name[name]["type"] == "prompt"
         assert by_name[name]["tab"] == "Summaries"
         assert by_name[name]["group"] == "Agent prompts"
     # User prompts are .format()-ed; their placeholders drive validation.
-    assert by_name["OLLAMA_SUMMARY_PROMPT"]["placeholders"] == ["text"]
-    assert by_name["OLLAMA_CITATIONS_PROMPT"]["placeholders"] == [
+    assert by_name["LLM_SUMMARY_PROMPT"]["placeholders"] == ["text"]
+    assert by_name["LLM_CITATIONS_PROMPT"]["placeholders"] == [
         "claims",
         "transcript",
     ]
-    assert by_name["OLLAMA_FRICTION_PROMPT"]["placeholders"] == [
+    assert by_name["LLM_FRICTION_PROMPT"]["placeholders"] == [
         "summary",
         "segments",
         "limit",
     ]
-    assert by_name["OLLAMA_REPORT_PROMPT"]["placeholders"] == [
+    assert by_name["LLM_REPORT_PROMPT"]["placeholders"] == [
         "participant",
         "summary",
         "observations",
         "bookmarks",
     ]
     # System prompts are sent verbatim — no placeholders.
-    assert by_name["OLLAMA_CITATIONS_SYSTEM"]["placeholders"] == []
-    assert by_name["OLLAMA_FRICTION_SYSTEM"]["placeholders"] == []
-    assert by_name["OLLAMA_REPORT_SYSTEM"]["placeholders"] == []
+    assert by_name["LLM_CITATIONS_SYSTEM"]["placeholders"] == []
+    assert by_name["LLM_FRICTION_SYSTEM"]["placeholders"] == []
+    assert by_name["LLM_REPORT_SYSTEM"]["placeholders"] == []
 
 
 def test_settings_put_persists_custom_prompt(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
     # Baseline via monkeypatch so the PUT's direct setattr is restored on teardown.
     monkeypatch.setattr(
-        server.config, "OLLAMA_SUMMARY_PROMPT", server.config.OLLAMA_SUMMARY_PROMPT
+        server.config, "LLM_SUMMARY_PROMPT", server.config.LLM_SUMMARY_PROMPT
     )
     custom = "Custom summary instructions.\n\nTranscript:\n{text}"
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_SUMMARY_PROMPT": custom}},
+        json={"settings": {"LLM_SUMMARY_PROMPT": custom}},
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_SUMMARY_PROMPT == custom
+    assert server.config.LLM_SUMMARY_PROMPT == custom
     saved = server.start_settings.load_config_json(
         server.config.STUDIO_SETTINGS_FILENAME, default={}
     )
-    assert saved.get("OLLAMA_SUMMARY_PROMPT") == custom
+    assert saved.get("LLM_SUMMARY_PROMPT") == custom
     # GET reflects the new value.
     by_name = {
         s["name"]: s for s in client.get("/studio/api/settings").get_json()["settings"]
     }
-    assert by_name["OLLAMA_SUMMARY_PROMPT"]["value"] == custom
+    assert by_name["LLM_SUMMARY_PROMPT"]["value"] == custom
 
 
 def test_settings_put_rejects_prompt_missing_placeholder(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    default = server.config.OLLAMA_SUMMARY_PROMPT
-    monkeypatch.setattr(server.config, "OLLAMA_SUMMARY_PROMPT", default)
+    default = server.config.LLM_SUMMARY_PROMPT
+    monkeypatch.setattr(server.config, "LLM_SUMMARY_PROMPT", default)
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_SUMMARY_PROMPT": "No placeholder here."}},
+        json={"settings": {"LLM_SUMMARY_PROMPT": "No placeholder here."}},
     )
     assert resp.status_code == 400
     body = resp.get_json()
     assert body["ok"] is False
     assert "{text}" in body["error"]
-    assert server.config.OLLAMA_SUMMARY_PROMPT == default  # unchanged
+    assert server.config.LLM_SUMMARY_PROMPT == default  # unchanged
 
 
 def test_settings_put_rejects_prompt_unknown_placeholder(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    default = server.config.OLLAMA_CITATIONS_PROMPT
-    monkeypatch.setattr(server.config, "OLLAMA_CITATIONS_PROMPT", default)
+    default = server.config.LLM_CITATIONS_PROMPT
+    monkeypatch.setattr(server.config, "LLM_CITATIONS_PROMPT", default)
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_CITATIONS_PROMPT": "{claims} {transcript} {bogus}"}},
+        json={"settings": {"LLM_CITATIONS_PROMPT": "{claims} {transcript} {bogus}"}},
     )
     assert resp.status_code == 400
     assert resp.get_json()["ok"] is False
-    assert server.config.OLLAMA_CITATIONS_PROMPT == default
+    assert server.config.LLM_CITATIONS_PROMPT == default
 
 
 def test_settings_put_accepts_system_prompt_verbatim(client, tmp_path, monkeypatch):
     """*_SYSTEM prompts are never .format()-ed, so braces are literal and any
     text is accepted."""
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.config, "OLLAMA_CITATIONS_SYSTEM", "baseline")
+    monkeypatch.setattr(server.config, "LLM_CITATIONS_SYSTEM", "baseline")
     weird = 'Reply with JSON like {"a": 1} and emphasise {clarity}.'
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_CITATIONS_SYSTEM": weird}},
+        json={"settings": {"LLM_CITATIONS_SYSTEM": weird}},
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_CITATIONS_SYSTEM == weird
+    assert server.config.LLM_CITATIONS_SYSTEM == weird
 
 
 def test_settings_reset_summaries_restores_prompt(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    default = server._settings_defaults["OLLAMA_SUMMARY_PROMPT"]
-    monkeypatch.setattr(server.config, "OLLAMA_SUMMARY_PROMPT", "Edited {text}")
+    default = server._settings_defaults["LLM_SUMMARY_PROMPT"]
+    monkeypatch.setattr(server.config, "LLM_SUMMARY_PROMPT", "Edited {text}")
     resp = client.put("/studio/api/settings", json={"reset": "tab:Summaries"})
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_SUMMARY_PROMPT == default
+    assert server.config.LLM_SUMMARY_PROMPT == default
 
 
 def test_settings_records_include_boundary_post_processing(client):
@@ -396,14 +396,14 @@ def test_settings_put_persists_boundary_knobs(client, tmp_path, monkeypatch):
 
 def test_settings_put_persists_friction_model(client, tmp_path, monkeypatch):
     monkeypatch.setattr(server.config, "OUTPUT_DIR", str(tmp_path))
-    monkeypatch.setattr(server.config, "OLLAMA_FRICTION_MODEL", "")
+    monkeypatch.setattr(server.config, "LLM_FRICTION_MODEL", "")
     resp = client.put(
         "/studio/api/settings",
-        json={"settings": {"OLLAMA_FRICTION_MODEL": "gemma4:latest"}},
+        json={"settings": {"LLM_FRICTION_MODEL": "gemma4:latest"}},
     )
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
-    assert server.config.OLLAMA_FRICTION_MODEL == "gemma4:latest"
+    assert server.config.LLM_FRICTION_MODEL == "gemma4:latest"
 
 
 def test_settings_put_persists_card_color(client, tmp_path, monkeypatch):
@@ -2864,10 +2864,10 @@ def test_api_settings_includes_provider_field(client):
     resp = client.get("/studio/api/settings")
     data = resp.get_json()
     model_settings = [s for s in data["settings"] if s["type"] == "model_select"]
-    assert len(model_settings) >= 2  # TRANSCRIBE_MODEL + OLLAMA_SUMMARY_MODEL
+    assert len(model_settings) >= 2  # TRANSCRIBE_MODEL + LLM_SUMMARY_MODEL
     for s in model_settings:
         assert "provider" in s
-        assert s["provider"] in ("whisper", "ollama")
+        assert s["provider"] in ("whisper", "llm")
 
 
 def test_api_settings_put_applies_values(client, monkeypatch):
@@ -3073,8 +3073,8 @@ def test_load_studio_settings_skips_invalid_prompt(monkeypatch, tmp_path):
     the card_picker guard, while a valid setting alongside it still applies.
     """
     monkeypatch.setattr(server.start_settings, "config_dir", lambda: tmp_path)
-    default_prompt = server.config.OLLAMA_FRICTION_PROMPT
-    monkeypatch.setattr(server.config, "OLLAMA_FRICTION_PROMPT", default_prompt)
+    default_prompt = server.config.LLM_FRICTION_PROMPT
+    monkeypatch.setattr(server.config, "LLM_FRICTION_PROMPT", default_prompt)
     monkeypatch.setattr(server.config, "REENCODING", server.config.REENCODING)
 
     settings_file = tmp_path / server.config.STUDIO_SETTINGS_FILENAME
@@ -3082,15 +3082,15 @@ def test_load_studio_settings_skips_invalid_prompt(monkeypatch, tmp_path):
         json.dumps(
             {
                 # Missing required {summary}/{segments}/{limit} placeholders → rejected.
-                "OLLAMA_FRICTION_PROMPT": "tampered prompt with no placeholders",
+                "LLM_FRICTION_PROMPT": "tampered prompt with no placeholders",
                 "REENCODING": True,  # valid → applied
             }
         )
     )
 
     applied = server._load_studio_settings()
-    assert "OLLAMA_FRICTION_PROMPT" not in applied
-    assert server.config.OLLAMA_FRICTION_PROMPT == default_prompt
+    assert "LLM_FRICTION_PROMPT" not in applied
+    assert server.config.LLM_FRICTION_PROMPT == default_prompt
     assert applied["REENCODING"] is True
     assert server.config.REENCODING is True
 

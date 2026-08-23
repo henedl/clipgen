@@ -456,19 +456,19 @@ def _exec_transcript_export(
     return {"artifacts": {"artifacts": [rec], "study": study, "count": 1}}
 
 
-# ---- Thinking (Ollama) ----
+# ---- Thinking (local LLM) ----
 
 
 def _exec_summarize(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
-    if not ollama_client.is_available():
-        return {"summary": "", "__note__": "Ollama not available. Summary skipped"}
+    if not llm_client.is_available():
+        return {"summary": "", "__note__": "AI server not available. Summary skipped"}
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -478,14 +478,17 @@ def _exec_summarize(
 def _exec_citations(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     summary = str(inputs.get("summary") or "")
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
-    if not ollama_client.is_available():
-        return {"citations": [], "__note__": "Ollama not available. Citations skipped"}
+    if not llm_client.is_available():
+        return {
+            "citations": [],
+            "__note__": "AI server not available. Citations skipped",
+        }
     cites = thinking_agents.find_citations(
         summary,
         segments,
@@ -499,14 +502,14 @@ def _exec_friction(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
     import friction
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
-    if not ollama_client.is_available():
-        return {"friction": [], "__note__": "Ollama not available. Friction skipped"}
+    if not llm_client.is_available():
+        return {"friction": [], "__note__": "AI server not available. Friction skipped"}
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
     moments = thinking_agents.find_friction_moments(
@@ -526,7 +529,7 @@ def _exec_friction(
 def _exec_report(
     ctx: NodeContext, inputs: dict[str, Any], params: dict[str, Any]
 ) -> dict[str, Any]:
-    import ollama_client
+    import llm_client
     import thinking_agents
 
     summary = str(inputs.get("summary") or "")
@@ -534,8 +537,8 @@ def _exec_report(
     participant = str(src.get("participant", "") or "")
     if not summary:
         return {"report": "", "__note__": "No summary wired"}
-    if not ollama_client.is_available():
-        return {"report": "", "__note__": "Ollama not available. Report skipped"}
+    if not llm_client.is_available():
+        return {"report": "", "__note__": "AI server not available. Report skipped"}
     # Sheet observations + transcript marks come through the same configured
     # seam the Overview Reports tab uses; unwired (no sheet / CLI) both are
     # empty and the report covers the summary alone.

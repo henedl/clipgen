@@ -36,8 +36,8 @@ API endpoints (all under /transcripts/):
   DELETE /api/transcribe/<task_id>                 - cancel or dismiss a transcription task
   POST /api/transcribe/warmup                     - background-load Whisper when prewarm is enabled (confirms before downloading a non-cached model; force=true to proceed)
   GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
-  POST /api/models/ollama/pull                     - download (install) an Ollama model in the background
-  GET  /api/models/ollama/pull-status              - poll progress of an in-flight Ollama model pull
+  POST /api/models/llm/download                 - download a GGUF model in the background
+  GET  /api/models/llm/download-status          - poll progress of an in-flight model download
 """
 
 import atexit
@@ -60,7 +60,7 @@ from flask import Blueprint, Response, jsonify, request, send_file, stream_with_
 import config
 import files
 import friction
-import ollama_client
+import llm_client
 import remux_server
 import thinking_agents
 import transcripts
@@ -105,39 +105,34 @@ _transcript_model_warming_lock = threading.Lock()
 # state. Routes call its methods; nothing else reaches into its internals.
 _orchestrator: "AgentOrchestrator"
 
-# After a Stop, a delayed unload evicts the Ollama model if no follow-up run
+# After a Stop, a delayed unload evicts the model if no follow-up run
 # starts soon (model name → Timer). A new run for the same model cancels the
 # pending unload, so rapid stop→run cycles don't churn.
 _pending_model_unloads: dict[str, threading.Timer] = {}
 _pending_model_unloads_lock = threading.Lock()
 
-# In-flight Ollama pulls by model name: {status, completed, total, done,
-# succeeded, error}. The UI polls /api/models/ollama/pull-status after kicking off
-# the pull, so a model is only ever installed on explicit user confirmation.
-_ollama_pull_status: dict[str, dict[str, Any]] = {}
-_ollama_pull_lock = threading.Lock()
-
-# Progress for the (single, unkeyed) managed install of the Ollama CLI itself —
-# the same shape as a pull entry so the frontend reuses its pull rendering.
-_ollama_install_status: dict[str, Any] | None = None
-_ollama_install_lock = threading.Lock()
+# In-flight GGUF downloads by model value: {status, completed, total, done,
+# succeeded, error}. The UI polls /api/models/llm/download-status after kicking
+# off the download, so a model only ever lands on explicit user confirmation.
+_llm_download_status: dict[str, dict[str, Any]] = {}
+_llm_download_lock = threading.Lock()
 
 
 def _schedule_model_unload(model: str) -> None:
-    """Schedule an Ollama model unload after ``config.OLLAMA_UNLOAD_DELAY_SECONDS``.
+    """Schedule a model unload after ``config.LLM_UNLOAD_DELAY_SECONDS``.
 
     Replaces any pending unload timer for the same model so the delay always
     measures from the most recent Stop.
     """
-    delay = float(getattr(config, "OLLAMA_UNLOAD_DELAY_SECONDS", 15.0))
+    delay = float(getattr(config, "LLM_UNLOAD_DELAY_SECONDS", 15.0))
     if delay <= 0:
-        ollama_client.unload_model(model)
+        llm_client.unload_model(model)
         return
 
     def _unload() -> None:
         with _pending_model_unloads_lock:
             _pending_model_unloads.pop(model, None)
-        ollama_client.unload_model(model)
+        llm_client.unload_model(model)
 
     timer = threading.Timer(delay, _unload)
     timer.daemon = True
@@ -158,7 +153,7 @@ def _cancel_pending_unload(model: str) -> None:
 
 
 def _agent_model(agent_key: str) -> str | None:
-    """Look up the Ollama model name configured for *agent_key*.
+    """Look up the model configured for *agent_key*.
 
     A blank model knob means "inherit the summary model" (friction's default), so
     unload scheduling targets the model the agent actually loaded.
@@ -1248,7 +1243,7 @@ def api_agent_regenerate(agent_key: str, participant: str) -> FlaskResponse:
 def api_agent_stop(agent_key: str, participant: str) -> FlaskResponse:
     """Abort an in-flight agent run.
 
-    Sets the cancel event so the streaming Ollama call closes its response
+    Sets the cancel event so the streaming LLM call closes its response
     promptly, freeing the model for another run. The UI flips to idle
     immediately. After a short delay, the model is unloaded from memory if no
     new run has started in the meantime.
@@ -1832,23 +1827,23 @@ def api_transcribe_model_status() -> FlaskResponse:
     )
 
 
-@transcripts_bp.route("/api/models/ollama/pull", methods=["POST"])
-def api_ollama_pull() -> FlaskResponse:
-    """Download (install) an Ollama model in the background, tracking progress.
+@transcripts_bp.route("/api/models/llm/download", methods=["POST"])
+def api_llm_download() -> FlaskResponse:
+    """Download a GGUF model in the background, tracking progress.
 
-    The frontend calls this only after the user confirms the install, then
-    polls /api/models/ollama/pull-status for progress.
+    The frontend calls this only after the user confirms the download, then
+    polls /api/models/llm/download-status for progress.
     """
     data = request.get_json(silent=True) or {}
     model = (data.get("model") or "").strip()
     if not model:
         return err("Missing model")
 
-    with _ollama_pull_lock:
-        existing = _ollama_pull_status.get(model)
+    with _llm_download_lock:
+        existing = _llm_download_status.get(model)
         if existing is not None and not existing.get("done"):
-            return ok(already_pulling=True)
-        _ollama_pull_status[model] = {
+            return ok(already_downloading=True)
+        _llm_download_status[model] = {
             "status": "starting",
             "completed": 0,
             "total": 0,
@@ -1858,8 +1853,8 @@ def api_ollama_pull() -> FlaskResponse:
         }
 
     def _on_progress(chunk: dict[str, Any]) -> None:
-        with _ollama_pull_lock:
-            st = _ollama_pull_status.get(model)
+        with _llm_download_lock:
+            st = _llm_download_status.get(model)
             if st is None:
                 return
             status = chunk.get("status")
@@ -1872,33 +1867,35 @@ def api_ollama_pull() -> FlaskResponse:
             if isinstance(completed, (int, float)):
                 st["completed"] = int(completed)
 
-    def _run_pull() -> None:
+    def _run_download() -> None:
         succeeded = False
         try:
-            succeeded = ollama_client.pull_model(model, on_progress=_on_progress)
+            succeeded = llm_client.download_model(model, on_progress=_on_progress)
         finally:
-            with _ollama_pull_lock:
-                st = _ollama_pull_status.get(model)
+            with _llm_download_lock:
+                st = _llm_download_status.get(model)
                 if st is not None:
                     st["done"] = True
                     st["succeeded"] = succeeded
                     if succeeded:
                         st["status"] = "success"
                     elif not st.get("error"):
-                        st["error"] = "Pull failed"
+                        st["error"] = "Download failed"
 
-    threading.Thread(target=_run_pull, daemon=True, name=f"ollama-pull-{model}").start()
+    threading.Thread(
+        target=_run_download, daemon=True, name=f"llm-download-{model}"
+    ).start()
     return ok(started=True)
 
 
-@transcripts_bp.route("/api/models/ollama/pull-status")
-def api_ollama_pull_status() -> FlaskResponse:
-    """Report progress for a model pull started via /api/models/ollama/pull."""
+@transcripts_bp.route("/api/models/llm/download-status")
+def api_llm_download_status() -> FlaskResponse:
+    """Report progress for a download started via /api/models/llm/download."""
     model = (request.args.get("model") or "").strip()
     if not model:
         return err("Missing model")
-    with _ollama_pull_lock:
-        st = _ollama_pull_status.get(model)
+    with _llm_download_lock:
+        st = _llm_download_status.get(model)
         snapshot = dict(st) if st is not None else None
     if snapshot is None:
         return ok(found=False)
@@ -1907,104 +1904,23 @@ def api_ollama_pull_status() -> FlaskResponse:
     return jsonify(snapshot)
 
 
-@transcripts_bp.route("/api/models/ollama/start", methods=["POST"])
-def api_ollama_start() -> FlaskResponse:
-    """Start ``ollama serve`` on the user's behalf and report the outcome.
+@transcripts_bp.route("/api/models/llm/start", methods=["POST"])
+def api_llm_start() -> FlaskResponse:
+    """Start ``llama-server`` on the user's behalf and report the outcome.
 
-    ``ollama_client.start_server()`` already existed and was already
-    lock-serialized, but the only thing that ever reached it was a
-    connection-refused retry buried inside ``generate()`` — so a user looking at
-    a dead AI panel had no way to trigger it. Synchronous on purpose: it is
-    bounded by the client's own ~10 s startup timeout, and a user who just
-    clicked "Start Ollama" wants the answer, not a second poller to babysit.
+    ``llm_client.start_server()`` is lock-serialized and also reachable from
+    the connection-refused retry inside ``generate()``; this route exists so a
+    user looking at a dead AI panel can trigger it directly. Synchronous on
+    purpose: it is bounded by the client's own ~15 s startup timeout, and a
+    user who just clicked "Start AI server" wants the answer, not a second
+    poller to babysit.
     """
-    if not ollama_client.is_installed():
-        return err("Ollama is not installed")
-    started = ollama_client.start_server()
+    if not llm_client.is_installed():
+        return err("AI runtime is not installed")
+    started = llm_client.start_server()
     if not started:
-        return err("Ollama did not start")
+        return err("AI server did not start")
     return ok(started=True)
-
-
-@transcripts_bp.route("/api/models/ollama/install", methods=["POST"])
-def api_ollama_install() -> FlaskResponse:
-    """Download and install the Ollama CLI (macOS and Windows).
-
-    The consent-gated counterpart of /api/models/ollama/pull one level down:
-    same background-thread + status-dict + polling shape, so the frontend
-    reuses its pull rendering. Only ever reached from the explicit install
-    dialog on the Transcripts page.
-    """
-    global _ollama_install_status
-    if not ollama_client.can_install_managed():
-        return err("In-app Ollama install is not supported on this platform")
-    # is_working_install, not is_installed: the latter only asks whether a file
-    # is present, which a half-extracted tree also satisfies — and answering
-    # already_installed there is a dead end, since this route is the only way
-    # to repair one. install_managed applies the same predicate internally, so
-    # a genuinely working install still short-circuits immediately.
-    if ollama_client.is_working_install():
-        return ok(already_installed=True)
-    with _ollama_install_lock:
-        if _ollama_install_status is not None and not _ollama_install_status.get(
-            "done"
-        ):
-            return ok(already_installing=True)
-        _ollama_install_status = {
-            "status": "starting",
-            "completed": 0,
-            "total": 0,
-            "done": False,
-            "succeeded": False,
-            "error": None,
-        }
-
-    def _on_progress(chunk: dict[str, Any]) -> None:
-        with _ollama_install_lock:
-            st = _ollama_install_status
-            if st is None:
-                return
-            status = chunk.get("status")
-            if status:
-                st["status"] = status
-            total = chunk.get("total")
-            completed = chunk.get("completed")
-            if isinstance(total, (int, float)):
-                st["total"] = int(total)
-            if isinstance(completed, (int, float)):
-                st["completed"] = int(completed)
-
-    def _run_install() -> None:
-        succeeded = False
-        try:
-            succeeded = ollama_client.install_managed(on_progress=_on_progress)
-        finally:
-            with _ollama_install_lock:
-                st = _ollama_install_status
-                if st is not None:
-                    st["done"] = True
-                    st["succeeded"] = succeeded
-                    if succeeded:
-                        st["status"] = "success"
-                    elif not st.get("error"):
-                        st["error"] = "Install failed"
-
-    threading.Thread(target=_run_install, daemon=True, name="ollama-install").start()
-    return ok(started=True)
-
-
-@transcripts_bp.route("/api/models/ollama/install-status")
-def api_ollama_install_status() -> FlaskResponse:
-    """Report progress for the managed install started via .../install."""
-    with _ollama_install_lock:
-        snapshot = (
-            dict(_ollama_install_status) if _ollama_install_status is not None else None
-        )
-    if snapshot is None:
-        return ok(found=False)
-    snapshot["ok"] = True
-    snapshot["found"] = True
-    return jsonify(snapshot)
 
 
 @transcripts_bp.route("/api/transcribe", methods=["POST"])
@@ -2404,7 +2320,7 @@ class AgentOrchestrator:
     against the pre-refactor behavior.
 
     Per-run cancel events: when an agent starts for a participant, a fresh
-    ``threading.Event`` is registered; the Ollama transport closes its
+    ``threading.Event`` is registered; the LLM transport closes its
     streaming HTTP response on ``event.set()``, which unblocks the read loop
     and frees the model promptly. ``stop`` looks up the event and sets it.
     The ``cancel_event.is_set()`` re-check in ``run_agent`` gates the

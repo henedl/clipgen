@@ -32,7 +32,7 @@ uv run clipgen.py --transcripts -i INPUT_DIR -o OUTPUT_DIR
 
 UI at `http://127.0.0.1:8089/transcripts/`
 
-## Step 4: Run thinking agents (requires Ollama)
+## Step 4: Run thinking agents (requires the local AI server)
 
 Summaries (Pass 1: paragraph + bullets):
 ```
@@ -44,15 +44,15 @@ Citations (Pass 2: requires summaries to exist first):
 uv run clipgen.py --citations [P01 P03 ...] -i INPUT_DIR -o OUTPUT_DIR
 ```
 
-To use a specific Ollama model: `--ollama-model MODEL`
+To use a specific AI model: `--llm-model MODEL`
 
 Friction detection (depends on `summary`; surfaces moments of likely interest):
 - A deterministic scorer (`friction.py`) flags hesitation / confusion / frustration /
   surprise / self-correction / help-seeking per segment; a local LLM then refines the
   top candidates into ~5 "moments".
-- Off by default. Enable auto-run after summaries with `OLLAMA_FRICTION_ENABLED` (also
-  in the Studio settings **Summaries → AI Summary** tab). Friction uses the same Ollama
-  model as summaries/citations (`OLLAMA_SUMMARY_MODEL`); set `OLLAMA_FRICTION_MODEL` only
+- Off by default. Enable auto-run after summaries with `LLM_FRICTION_ENABLED` (also
+  in the Studio settings **Summaries → AI Summary** tab). Friction uses the same
+  model as summaries/citations (`LLM_SUMMARY_MODEL`); set `LLM_FRICTION_MODEL` only
   to pin friction to a different model (blank = follow the summary model).
 - Drive it from the **Transcripts UI**: the **Friction tab** is a control surface over the
   transcript below it — an `Off / Highlight / Isolate` mode switch, a score histogram whose
@@ -125,4 +125,4 @@ uv run clipgen.py --transcript-clips --transcript-clips-mark insight -i IN -o OU
 - `config.DEBUGGING = True` returns stub transcripts without loading the Whisper model, useful for development
 - Thinking agent results are stored in the `transcripts` section of `clipgen.json` under each participant's entry
 - Agents run in dependency order: both `citations` and `friction` depend on `summary` being populated first (friction runs after summary even when citations is disabled)
-- Ollama must be running (`ollama serve`) or clipgen will attempt to auto-start it
+- `llama-server` must be installed (brew or bundled); clipgen auto-starts it on demand

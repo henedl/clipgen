@@ -267,7 +267,7 @@ def test_a_failed_boot_fetch_clears_the_placeholders():
 
 
 def test_every_thinking_agent_run_button_carries_the_local_ai_badge():
-    """The badge marks the control that *starts* an Ollama run, not the pane that
+    """The badge marks the control that *starts* an LLM agent run, not the pane that
     shows its output — so it belongs on the run buttons and not on the tabs (which
     could never mark Citations, having no tab of its own)."""
     tabbar = _HTML[_HTML.index('class="panel-tabbar"') : _HTML.index('id="summaryTab"')]
@@ -301,7 +301,7 @@ def test_icon_only_agent_buttons_get_the_badge_via_the_tooltip_sidecar():
 
 
 def test_pill_dropdown_badges_the_thinking_agents_but_not_transcription():
-    """Transcription is Whisper, not an Ollama thinking agent — badging its row
+    """Transcription is Whisper, not an LLM thinking agent — badging its row
     would make the marker meaningless. All four rows share one builder, so the
     flag is the only thing keeping them apart."""
     pills = read("transcripts-pills.js")
@@ -310,7 +310,7 @@ def test_pill_dropdown_badges_the_thinking_agents_but_not_transcription():
     for agent in ("summary", "citations", "friction"):
         row = section[section.index(f'agent: "{agent}"') :]
         assert "aiBadge: true" in row[: row.index("onStart")], (
-            f"the {agent} pill row is Ollama-backed but passes no aiBadge"
+            f"the {agent} pill row is LLM-backed but passes no aiBadge"
         )
     transcription = section[section.index('agent: "transcription"') :]
     assert "aiBadge" not in transcription[: transcription.index("onStart")], (
@@ -878,17 +878,16 @@ def test_the_wip_badge_is_shared_not_forked():
 # ---- Transcribe All (Quick action -> batch transcription enqueue) ----
 
 
-def test_ollama_start_posts_to_the_transcripts_blueprint():
+def test_llm_start_posts_to_the_transcripts_blueprint():
     """A leading slash would hit GET-only /api/models on the combined app.
 
-    The start route lives on transcripts_bp as POST /transcripts/api/models/ollama/start
-    (sibling of install/pull). apiPost("/api/models/ollama/start") 404s; the
-    .catch swallows it, so after a managed install — whose silent Windows
-    installer does not auto-start the tray — Ollama never comes up and the
-    Start Ollama button is a no-op.
+    The start route lives on transcripts_bp as POST /transcripts/api/models/llm/start
+    (sibling of download). apiPost("/api/models/llm/start") 404s; the .catch
+    swallows it, so the AI server never comes up and the Start button is a
+    no-op.
     """
-    assert _JS.count('apiPost("api/models/ollama/start"') == 2
-    assert 'apiPost("/api/models/ollama/start"' not in _JS
+    assert _JS.count('apiPost("api/models/llm/start"') == 1
+    assert 'apiPost("/api/models/llm/start"' not in _JS
 
 
 def test_transcribe_all_reaches_a_published_satellite_function():

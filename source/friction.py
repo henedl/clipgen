@@ -6,7 +6,7 @@ six categories and produces, per segment, a friction score plus the matched
 markers, then aggregates session-level stats and selects the top candidates for
 the LLM refinement stage (``thinking_agents._run_friction``).
 
-Intentionally pure: no Ollama, no I/O, no ``config`` import — the LLM/prompt/parse
+Intentionally pure: no LLM calls, no I/O, no ``config`` import — the LLM/prompt/parse
 layer lives in ``thinking_agents.py``. Category keys here are mirrored by
 ``config.FRICTION_CATEGORIES`` (display labels), and ``tests/test_friction_scorer``
 asserts the two key sets stay equal.

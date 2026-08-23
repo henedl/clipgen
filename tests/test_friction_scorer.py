@@ -1,6 +1,6 @@
 """Tests for the programmatic friction scorer (friction.py).
 
-Pure deterministic engine — no Ollama, no I/O. Covers phrase matching per
+Pure deterministic engine — no LLM, no I/O. Covers phrase matching per
 category, the score formula, candidate selection, and stats aggregation.
 """
 

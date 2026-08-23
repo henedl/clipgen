@@ -45,7 +45,7 @@ def _ss_args(**overrides):
         "transcript_format": None,
         "pre_transcribe": None,
         "whisper_model": None,
-        "ollama_model": None,
+        "llm_model": None,
         "summarize": None,
         "citations": None,
         "ss_task": None,

@@ -3,7 +3,7 @@ adapters (M3).
 
 The M4 ``WorkflowRunner`` does not exist yet, so each executor is exercised by
 calling ``NODE_TYPES[id]["execute"](ctx, inputs, params)`` directly. Whisper /
-ffmpeg paths run under ``config.DEBUGGING`` or with ffmpeg mocked; Ollama and
+ffmpeg paths run under ``config.DEBUGGING`` or with ffmpeg mocked; the AI server and
 Screenspace scans are monkeypatched so no model/subprocess/network is touched.
 """
 
@@ -158,10 +158,10 @@ def test_transcript_marks_resolves_categories_and_pads(tmp_path, monkeypatch):
 
 
 def test_report_builds_from_summary_and_sources(tmp_path, monkeypatch):
-    import ollama_client
+    import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "is_available", lambda: True)
     monkeypatch.setattr(
         thinking_agents,
         "report_source_lines",
@@ -349,13 +349,13 @@ def test_transcribe_raises_when_decode_fails(tmp_path, monkeypatch):
         raise AssertionError("decode failure must fail the node, not return empty")
 
 
-# ---- Thinking (Ollama) ----
+# ---- Thinking (local LLM) ----
 
 
-def test_thinking_executors_empty_when_ollama_unavailable(tmp_path, monkeypatch):
-    import ollama_client
+def test_thinking_executors_empty_when_llm_unavailable(tmp_path, monkeypatch):
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "is_available", lambda: False)
     ctx = _ctx(tmp_path)
     segs = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": {}}
     tr = {"segments": [{"start": 0, "end": 1, "text": "hi"}]}
@@ -365,10 +365,10 @@ def test_thinking_executors_empty_when_ollama_unavailable(tmp_path, monkeypatch)
     assert summarize["summary"] == ""
     assert citations["citations"] == []
     assert friction["friction"] == []
-    # Degraded-but-completed: a __note__ explains the empty output (Ollama down).
-    assert "Ollama" in summarize["__note__"]
-    assert "Ollama" in citations["__note__"]
-    assert "Ollama" in friction["__note__"]
+    # Degraded-but-completed: a __note__ explains the empty output (AI server down).
+    assert "AI server" in summarize["__note__"]
+    assert "AI server" in citations["__note__"]
+    assert "AI server" in friction["__note__"]
 
 
 def test_make_clips_notes_when_nothing_wired(tmp_path):
@@ -403,10 +403,10 @@ def test_multitool_step_flag_matches_tool_capability():
 
 
 def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
-    import ollama_client
+    import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "is_available", lambda: True)
     monkeypatch.setattr(
         thinking_agents, "summarize_transcript", lambda segments, **kw: "the summary"
     )
@@ -418,10 +418,10 @@ def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
 
 def test_thinking_executors_thread_model_param(tmp_path, monkeypatch):
     """The ``model`` node param reaches each thinking agent; blank → None."""
-    import ollama_client
+    import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "is_available", lambda: True)
     seen: dict[str, Any] = {}
 
     monkeypatch.setattr(

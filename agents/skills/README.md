@@ -13,7 +13,7 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 - [bump](bump/SKILL.md) — increment patch version
 - [new-mode](new-mode/SKILL.md) — checklist for adding a CLI mode or flag
 - [new-screenspace-tool](new-screenspace-tool/SKILL.md) — checklist for adding a Screenspace tool
-- [new-thinking-agent](new-thinking-agent/SKILL.md) — checklist for adding an Ollama thinking agent
+- [new-thinking-agent](new-thinking-agent/SKILL.md) — checklist for adding a local-LLM thinking agent
 - [sync-constants](sync-constants/SKILL.md) — audit Python ↔ JS constant mirroring
 - [carve-satellite](carve-satellite/SKILL.md) — carve a JS hub into hub + satellite without ReferenceErrors
 - [split-module](split-module/SKILL.md) — split a Python god-file into facade + siblings

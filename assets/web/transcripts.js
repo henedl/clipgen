@@ -7,7 +7,7 @@
  *   - Transcription warmup: a single `tryPostTranscriptionWarmup()` post that
  *     asks the backend to preload the Whisper model. `_transcriptionWarmupPosted`
  *     guards it so we never double-post per page load.
- *   - Summary / citations: Ollama-generated; `_summaryPoller` and
+ *   - Summary / citations: LLM-generated; `_summaryPoller` and
  *     `_citationsPoller` (createPoller handles) poll the backend until the
  *     result lands or the user navigates away.
  */
@@ -2571,10 +2571,10 @@
     if (_trModelsCachePromise) return _trModelsCachePromise;
     _trModelsCachePromise = apiGet("/api/models")
       .then(function (data) {
-        // Don't pin a result where Ollama wasn't reachable — otherwise the
-        // agent gate and pickers stay blind to installed models for the whole
-        // session. Reset so the next call re-fetches once the server is up.
-        if (data && data.ok && !(data.ollama && data.ollama.available === false)) {
+        // Don't pin a result where the AI server wasn't reachable — otherwise
+        // the agent gate and pickers stay blind to available models for the
+        // whole session. Reset so the next call re-fetches once it is up.
+        if (data && data.ok && !(data.llm && data.llm.available === false)) {
           _trModelsCache = data;
         } else {
           _trModelsCachePromise = null;
@@ -2628,9 +2628,9 @@
   }
 
   // ---- Local-model install confirmation ----
-  // Both whisper transcription models and Ollama agent models are "local
-  // models" that get installed on demand. We never download one silently:
-  // confirmModelInstall() gates every install behind an explicit dialog.
+  // Both whisper transcription models and GGUF agent models are "local
+  // models" that get downloaded on demand. We never download one silently:
+  // confirmModelInstall() gates every download behind an explicit dialog.
 
   function _trFormatModelSize(mb) {
     if (!mb || mb <= 0) return "";
@@ -2638,16 +2638,16 @@
     return Math.round(mb) + " MB";
   }
 
-  // Stream an Ollama pull, reporting progress dicts via onProgress. Resolves
+  // Stream a GGUF download, reporting progress dicts via onProgress. Resolves
   // true on success, false on failure/cancellation. isCancelled() is polled
-  // each tick so a dismissed dialog stops the poll (the server-side pull keeps
-  // running and resumes from cached layers). The poll also self-terminates
-  // after a run of unanswered status checks so it can never leak forever.
-  function installOllamaModel(model, onProgress, isCancelled) {
-    return apiPost("api/models/ollama/pull", { model: model }).then(function (data) {
+  // each tick so a dismissed dialog stops the poll (the server-side download
+  // keeps running). The poll also self-terminates after a run of unanswered
+  // status checks so it can never leak forever.
+  function downloadLlmModel(model, onProgress, isCancelled) {
+    return apiPost("api/models/llm/download", { model: model }).then(function (data) {
       if (!data || !data.ok) return false;
       return new Promise(function (resolve) {
-        // createPoller, not a raw setInterval: the install dialog can sit
+        // createPoller, not a raw setInterval: the download dialog can sit
         // open in a backgrounded tab for minutes, and this must pause with
         // it instead of streaming 1 Hz requests at the server.
         var misses = 0;
@@ -2657,7 +2657,7 @@
             resolve(false);
             return;
           }
-          apiGet("api/models/ollama/pull-status?model=" + encodeURIComponent(model))
+          apiGet("api/models/llm/download-status?model=" + encodeURIComponent(model))
             .then(function (st) {
               if (!st || !st.ok || !st.found) {
                 if (++misses >= 20) { poller.stop(); resolve(false); }
@@ -2673,54 +2673,14 @@
             .catch(function () {
               if (++misses >= 20) { poller.stop(); resolve(false); }
             });
-        }, 1000, { runImmediately: true, label: "transcripts.ollamaPull" });
-        poller.start();
-      });
-    }).catch(function () { return false; });
-  }
-
-  // Stream the managed install of the Ollama CLI itself (macOS): same
-  // start-then-poll shape as installOllamaModel, against the unkeyed
-  // install/install-status endpoints. `already_installing` attaches to the
-  // in-flight install rather than failing, so a reopened dialog resumes its
-  // progress display.
-  function installOllamaRuntime(onProgress, isCancelled) {
-    return apiPost("api/models/ollama/install", {}).then(function (data) {
-      if (!data || !data.ok) return false;
-      if (data.already_installed) return true;
-      return new Promise(function (resolve) {
-        // Same createPoller rationale as installOllamaModel above.
-        var misses = 0;
-        var poller = createPoller(function () {
-          if (isCancelled && isCancelled()) {
-            poller.stop();
-            resolve(false);
-            return;
-          }
-          apiGet("api/models/ollama/install-status")
-            .then(function (st) {
-              if (!st || !st.ok || !st.found) {
-                if (++misses >= 20) { poller.stop(); resolve(false); }
-                return;
-              }
-              misses = 0;
-              if (onProgress) onProgress(st);
-              if (st.done) {
-                poller.stop();
-                resolve(!!st.succeeded);
-              }
-            })
-            .catch(function () {
-              if (++misses >= 20) { poller.stop(); resolve(false); }
-            });
-        }, 1000, { runImmediately: true, label: "transcripts.ollamaInstall" });
+        }, 1000, { runImmediately: true, label: "transcripts.llmDownload" });
         poller.start();
       });
     }).catch(function () { return false; });
   }
 
   // Show the confirm/install dialog. Resolves true when the model is available
-  // to use (whisper: user agreed to the download; ollama: pull succeeded),
+  // to use (whisper: user agreed to the download; llm: download succeeded),
   // false when the user cancels or the install fails. Calls are serialized
   // (see _modelInstallChain) so concurrent callers never share the one modal.
   function confirmModelInstall(opts) {
@@ -2743,7 +2703,6 @@
       var progressText = qs("#modelInstallProgressText");
       var cancelBtn = qs("#modelInstallCancel");
       var confirmBtn = qs("#modelInstallConfirm");
-      var altBtn = qs("#modelInstallAlt");
       var hintEl = qs("#modelInstallHint");
 
       // The progress line shimmers only while the install/check is actually
@@ -2763,39 +2722,29 @@
       cancelBtn.textContent = "Cancel";
       confirmBtn.disabled = false;
       confirmBtn.classList.remove("hidden");
-      altBtn.classList.add("hidden");
-      altBtn.disabled = false;
 
-      if (opts.kind === "ollama-runtime") {
-        // Ollama missing or down is a different problem from "the model isn't
-        // pulled", and the one case the gate used to stay silent about. On macOS
-        // clipgen can download the CLI itself (this dialog *is* the consent);
-        // elsewhere show the commands and offer a re-check. Not status.message —
-        // that is written for a panel banner and ends in "then Refresh", the wrong
-        // instruction beside a button that does the re-check itself.
+      if (opts.kind === "llm-runtime") {
+        // The runtime missing or down is a different problem from "the model
+        // isn't downloaded", and the one case the gate used to stay silent
+        // about. Frozen builds bundle llama-server, so "missing" only appears
+        // on source-tree runs: show the commands and offer a re-check. Not
+        // status.message — that is written for a panel banner and ends in
+        // "then Refresh", the wrong instruction beside a button that does the
+        // re-check itself.
         if (opts.state === "missing") {
-          titleEl.textContent = "Ollama isn't installed";
-          if (opts.canInstall) {
-            var dlSize = opts.installSizeMb ? " (~" + _trFormatModelSize(opts.installSizeMb) + ")" : "";
-            msgEl.textContent = "clipgen couldn't find Ollama on this machine. " +
-              "The AI summaries, citations and reports need it — everything else works without it. " +
-              "clipgen can download it for you" + dlSize + ", or install it yourself:";
-            confirmBtn.textContent = "Download & install";
-            altBtn.classList.remove("hidden");
-          } else {
-            msgEl.textContent = "clipgen couldn't find Ollama on this machine. " +
-              "The AI summaries, citations and reports need it — everything else works without it.";
-            confirmBtn.textContent = "I've installed it — retry";
-          }
+          titleEl.textContent = "AI runtime isn't installed";
+          msgEl.textContent = "clipgen couldn't find llama-server on this machine. " +
+            "The AI summaries, citations and reports need it — everything else works without it.";
+          confirmBtn.textContent = "I've installed it — retry";
           if (opts.hint && opts.hint.length) {
             hintEl.textContent = opts.hint.join("\n");
             hintEl.classList.remove("hidden");
           }
         } else {
-          titleEl.textContent = "Ollama isn't running";
-          msgEl.textContent = "Ollama is installed but isn't answering at " +
+          titleEl.textContent = "AI server isn't running";
+          msgEl.textContent = "The AI server isn't answering at " +
             (opts.baseUrl || "localhost") + ". clipgen can start it for you.";
-          confirmBtn.textContent = "Start Ollama";
+          confirmBtn.textContent = "Start AI server";
         }
       } else if (opts.kind === "whisper") {
         titleEl.textContent = "Download transcription model?";
@@ -2809,17 +2758,16 @@
         }
         confirmBtn.textContent = "Download";
       } else {
-        titleEl.textContent = "Install AI model?";
-        msgEl.textContent = 'The Ollama model "' + opts.model + '" used by the ' +
+        titleEl.textContent = "Download AI model?";
+        msgEl.textContent = 'The AI model "' + opts.model + '" used by the ' +
           (opts.agentKey || "analysis") +
-          " agent isn't installed. Install it now? This downloads the model locally and may take several minutes.";
-        confirmBtn.textContent = "Install";
+          " agent isn't downloaded. Download it now? The model is stored locally and may take several minutes.";
+        confirmBtn.textContent = "Download";
       }
 
       function cleanup() {
         cancelBtn.removeEventListener("click", onCancel);
         confirmBtn.removeEventListener("click", onConfirm);
-        altBtn.removeEventListener("click", onRuntimeConfirm);
         closeBlockingModal(modal);
       }
       function close(result) {
@@ -2830,17 +2778,16 @@
       }
       function onCancel() { close(false); }
 
-      // "Start Ollama" / "I've installed it — retry": both end in the same
-      // question — is Ollama usable now? Re-fetch rather than trusting the
-      // start call, so a server that spawned but never came up still reads as
-      // a failure.
+      // "Start AI server" / "I've installed it — retry": both end in the same
+      // question — is the runtime usable now? Re-fetch rather than trusting
+      // the start call, so a server that spawned but never came up still
+      // reads as a failure.
       function onRuntimeConfirm() {
         confirmBtn.disabled = true;
-        altBtn.disabled = true;
         progress.classList.remove("hidden");
         setProgressText(opts.state === "stopped" ? "Starting…" : "Checking…");
         var step = opts.state === "stopped"
-          ? apiPost("api/models/ollama/start", {}).catch(function () { return null; })
+          ? apiPost("api/models/llm/start", {}).catch(function () { return null; })
           : Promise.resolve(null);
         // Re-enabling the button and relabelling Cancel is the only way out of
         // the "Checking…" state, so it has to happen on *every* ending — a
@@ -2850,7 +2797,6 @@
           if (cancelled) return;
           setProgressText(text, false);
           confirmBtn.disabled = false;
-          altBtn.disabled = false;
           cancelBtn.textContent = "Close";
         }
 
@@ -2861,7 +2807,7 @@
         }).then(function (data) {
           if (cancelled) return;
           // _trFetchModels resolves null rather than rejecting when the fetch
-          // fails, and clipgenOllamaStatus(null) is "ok" by design (an unknown
+          // fails, and clipgenLlmStatus(null) is "ok" by design (an unknown
           // state must never block an action elsewhere). Here that default is
           // wrong in the other direction: the user asked "is it ready now?" and
           // a failed check is not a yes.
@@ -2869,93 +2815,31 @@
             stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
             return;
           }
-          if (clipgenOllamaStatus(data.ollama).state === "ok") {
-            showToast("Ollama is ready");
+          if (clipgenLlmStatus(data.llm).state === "ok") {
+            showToast("AI server is ready");
             close(true);
             return;
           }
           stillUnavailable(opts.state === "stopped"
-            ? "Ollama still isn't responding."
-            : "Still not finding Ollama. Open a new terminal and check `ollama --version`.");
+            ? "The AI server still isn't responding."
+            : "Still not finding it. Open a new terminal and check `llama-server --version`.");
         }).catch(function () {
           stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
         });
       }
 
-      // Download the Ollama CLI itself, then chain into the same "is it usable
-      // now?" sequence the Start button runs: serve → refetch → status check.
-      // The server-side install keeps running if the dialog is dismissed, and
-      // reopening re-attaches via `already_installing` + the status poll.
-      function onManagedInstall() {
-        confirmBtn.classList.add("hidden");
-        altBtn.classList.add("hidden");
-        hintEl.classList.add("hidden");
-        progress.classList.remove("hidden");
-        setProgressText("Starting download…");
-        installOllamaRuntime(function (st) {
-          if (st.total > 0) {
-            var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
-            barFill.style.width = pct + "%";
-            setProgressText((st.status || "Downloading") + ": " + pct + "%");
-          } else {
-            setProgressText(st.status || "Working…");
-          }
-        }, function () { return cancelled; }).then(function (installed) {
-          if (cancelled) return;
-          if (!installed) {
-            setProgressText("Installation failed. Retry, or install Ollama yourself:", false);
-            if (opts.hint && opts.hint.length) {
-              hintEl.textContent = opts.hint.join("\n");
-              hintEl.classList.remove("hidden");
-            }
-            // Both buttons come back, same as stillUnavailable() above: hiding
-            // them left the only recovery path behind a dismiss-and-redo of
-            // the whole AI action. Retrying is safe now that the server no
-            // longer reports a broken install as already_installed.
-            progress.classList.add("hidden");
-            confirmBtn.classList.remove("hidden");
-            confirmBtn.disabled = false;
-            altBtn.classList.remove("hidden");
-            altBtn.disabled = false;
-            cancelBtn.textContent = "Close";
-            return;
-          }
-          setProgressText("Installed. Starting Ollama…");
-          apiPost("api/models/ollama/start", {}).catch(function () { return null; })
-            .then(function () {
-              _trModelsCache = null;
-              _trModelsCachePromise = null;
-              return _trFetchModels();
-            }).then(function (data) {
-              if (cancelled) return;
-              if (data && data.ok && clipgenOllamaStatus(data.ollama).state === "ok") {
-                showToast("Ollama installed and running");
-                close(true);
-                return;
-              }
-              setProgressText("Installed, but Ollama isn't answering yet. Close and retry the action.", false);
-              cancelBtn.textContent = "Close";
-            }).catch(function () {
-              if (cancelled) return;
-              setProgressText("Installed, but couldn't confirm Ollama is running. Close and retry the action.", false);
-              cancelBtn.textContent = "Close";
-            });
-        });
-      }
-
       function onConfirm() {
-        if (opts.kind === "ollama-runtime") {
-          if (opts.state === "missing" && opts.canInstall) { onManagedInstall(); return; }
+        if (opts.kind === "llm-runtime") {
           onRuntimeConfirm();
           return;
         }
         if (opts.kind === "whisper") { close(true); return; }
-        // Ollama: kick off the pull and show progress in place. Cancel stays
+        // llm: kick off the download and show progress in place. Cancel stays
         // enabled so the user can dismiss while it runs.
         confirmBtn.classList.add("hidden");
         progress.classList.remove("hidden");
         setProgressText("Starting…");
-        installOllamaModel(opts.model, function (st) {
+        downloadLlmModel(opts.model, function (st) {
           if (st.total > 0) {
             var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
             barFill.style.width = pct + "%";
@@ -2964,16 +2848,16 @@
             setProgressText(st.status || "Working…");
           }
         }, function () { return cancelled; }).then(function (ok) {
-          if (cancelled) return; // dialog dismissed mid-pull — no toast, no re-close
+          if (cancelled) return; // dialog dismissed mid-download — no toast, no re-close
           if (ok) {
             _trModelsCache = null;
             _trModelsCachePromise = null;
-            showToast("Model installed");
+            showToast("Model downloaded");
             close(true);
           } else {
             // Leave the dialog open so the user can read the failure and
             // dismiss it; Cancel now resolves false.
-            setProgressText("Installation failed. Check that Ollama is running.", false);
+            setProgressText("Download failed. Check the model name and connection.", false);
             cancelBtn.textContent = "Close";
           }
         });
@@ -2981,7 +2865,6 @@
 
       cancelBtn.addEventListener("click", onCancel);
       confirmBtn.addEventListener("click", onConfirm);
-      altBtn.addEventListener("click", onRuntimeConfirm);
       modal.classList.remove("hidden");
       // Escape and backdrop click both cancel (no focus trap — matches prior
       // behavior for this lightweight progress dialog).
@@ -2989,32 +2872,30 @@
     });
   }
 
-  // Gate an agent run on Ollama being usable and its model installed; resolves
-  // true to proceed, false to abort.
+  // Gate an agent run on the AI server being usable and its model downloaded;
+  // resolves true to proceed, false to abort.
   //
-  // An unreachable Ollama gets its own dialog rather than falling through to the
-  // downstream "model unavailable" error, which only appears on two agent
+  // An unreachable server gets its own dialog rather than falling through to
+  // the downstream "model unavailable" error, which only appears on two agent
   // surfaces and never says how to fix anything — and it is the state a
   // first-time user is actually in. An *unknown* state (fetch failed) still
   // passes: never block an action on a question we couldn't ask.
   function ensureAgentModelInstalled(agentKey) {
     return _trFetchModels().then(function (data) {
-      var oll = data && data.ollama;
-      if (!oll) return true;
-      var status = clipgenOllamaStatus(oll);
+      var llm = data && data.llm;
+      if (!llm) return true;
+      var status = clipgenLlmStatus(llm);
       if (status.state !== "ok") {
         return confirmModelInstall({
-          kind: "ollama-runtime",
+          kind: "llm-runtime",
           state: status.state,
           baseUrl: status.baseUrl,
           hint: status.hint,
-          canInstall: status.canInstall,
-          installSizeMb: status.installSizeMb,
         }).then(function (recovered) {
           if (!recovered) return false;
-          // Ollama is up now, but that says nothing about the agent's model —
-          // the payload we started from listed no models at all. Ask again
-          // against the fresh one the dialog just refetched.
+          // The server is up now, but that says nothing about the agent's
+          // model — the payload we started from may list no models at all.
+          // Ask again against the fresh one the dialog just refetched.
           return _trFetchModels().then(function (fresh) {
             return _ensureModelFromPayload(fresh, agentKey);
           });
@@ -3024,18 +2905,18 @@
     }).catch(function () { return true; });
   }
 
-  // The "is this agent's model pulled?" half of the gate, against an already
-  // fetched /api/models payload. Resolves true to proceed.
+  // The "is this agent's model downloaded?" half of the gate, against an
+  // already fetched /api/models payload. Resolves true to proceed.
   function _ensureModelFromPayload(data, agentKey) {
-    var oll = data && data.ollama;
-    if (!oll) return true;
-    var agents = oll.agents || [];
+    var llm = data && data.llm;
+    if (!llm) return true;
+    var agents = llm.agents || [];
     var info = null;
     for (var i = 0; i < agents.length; i++) {
       if (agents[i].key === agentKey) { info = agents[i]; break; }
     }
     if (!info || info.installed || !info.model) return true;
-    return confirmModelInstall({ kind: "ollama", agentKey: agentKey, model: info.model });
+    return confirmModelInstall({ kind: "llm", agentKey: agentKey, model: info.model });
   }
 
   function _applySettingsSnapshot(applied, settings) {
@@ -4235,7 +4116,7 @@
         startXrefPolling();
         if (_anyTxEtaActive()) _txEtaTicker.ensure();
         // Re-check summary + citations on tab refocus. Background-running
-        // Ollama agents finish without notifying the frontend; if the citations
+        // Thinking agents finish without notifying the frontend; if the citations
         // poll already gave up (or summary completed after we stopped polling)
         // the manifest result would only surface on a full page reload. This
         // catches the common "user goes to another tab, comes back" case.

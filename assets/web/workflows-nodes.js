@@ -153,10 +153,10 @@
   }
 
   // Completion sources for free-text params. Static `suggestions` ride on the
-  // catalog spec; the "ollama-models" source is fetched once from the combined
+  // catalog spec; the "llm-models" source is fetched once from the combined
   // app's /api/models (page-relative ../api/models) and fills in when it lands.
   // Datalists are appended to <body> and shared by name across all cards.
-  var _ollamaModelsRequested = false;
+  var _llmModelsRequested = false;
   function suggestionListId(spec) {
     if (Array.isArray(spec.suggestions) && spec.suggestions.length) {
       var id = "wfDatalist-" + spec.name;
@@ -172,22 +172,22 @@
       }
       return id;
     }
-    if (spec.datalist === "ollama-models") {
-      var mid = "wfDatalistOllamaModels";
+    if (spec.datalist === "llm-models") {
+      var mid = "wfDatalistLlmModels";
       var mdl = document.getElementById(mid);
       if (!mdl) {
         mdl = el("datalist");
         mdl.id = mid;
         document.body.appendChild(mdl);
       }
-      if (!_ollamaModelsRequested) {
-        _ollamaModelsRequested = true;
+      if (!_llmModelsRequested) {
+        _llmModelsRequested = true;
         fetch("../api/models")
           .then(function (r) {
             return r.json();
           })
           .then(function (res) {
-            var models = (res && res.ollama && res.ollama.models) || [];
+            var models = (res && res.llm && res.llm.models) || [];
             models.forEach(function (m) {
               var o = el("option");
               o.value = m.name;

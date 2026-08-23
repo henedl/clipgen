@@ -109,7 +109,7 @@ class ParamSpec(TypedDict):
     # Static completion suggestions (rendered as a datalist; input stays free).
     suggestions: NotRequired[list[str]]
     # Named dynamic completion source the frontend resolves itself (currently
-    # "ollama-models" → GET ../api/models). Input stays free text.
+    # "llm-models" → GET ../api/models). Input stays free text.
     datalist: NotRequired[str]
 
 
@@ -134,15 +134,15 @@ class NodeType(TypedDict):
     multitoolStep: NotRequired[bool]
 
 
-# Shared by the three Ollama thinking nodes: a free-text override of the model
+# Shared by the thinking nodes: a free-text override of the model
 # name (blank → the configured default). A ``string`` rather than ``enum`` because
-# the installed Ollama models are environment-specific and not known server-side.
-_OLLAMA_MODEL_PARAM: ParamSpec = {
+# the downloaded models are environment-specific and not known server-side.
+_LLM_MODEL_PARAM: ParamSpec = {
     "name": "model",
     "type": "string",
     "default": "",
-    "label": "Ollama model (blank = default)",
-    "datalist": "ollama-models",
+    "label": "AI model (blank = default)",
+    "datalist": "llm-models",
 }
 
 
@@ -352,22 +352,22 @@ NODE_TYPES: dict[str, NodeType] = {
         ],
         "requires": [],
     },
-    # ---- Thinking (Ollama) ----
+    # ---- Thinking (local LLM) ----
     "summarize": {
         "id": "summarize",
         "label": "Summarize",
-        "description": "Summarize a transcript into a paragraph and key bullet points (Ollama).",
+        "description": "Summarize a transcript into a paragraph and key bullet points.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [{"name": "transcript", "type": "transcript"}],
         "outputs": [{"name": "summary", "type": "summary"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     "citations": {
         "id": "citations",
         "label": "Citations",
-        "description": "Link summary claims back to the transcript segments that support them (Ollama).",
+        "description": "Link summary claims back to the transcript segments that support them.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -375,7 +375,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "segments", "type": "segments"},
         ],
         "outputs": [{"name": "citations", "type": "citations"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     "friction": {
@@ -389,13 +389,13 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "summary", "type": "summary", "optional": True},
         ],
         "outputs": [{"name": "friction", "type": "friction"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     "report": {
         "id": "report",
         "label": "Report",
-        "description": "Synthesize a per-participant mini-report from the summary plus sheet observations and transcript marks (Ollama).",
+        "description": "Synthesize a per-participant mini-report from the summary plus sheet observations and transcript marks.",
         "domain": "thinking",
         "category": "Thinking",
         "inputs": [
@@ -405,7 +405,7 @@ NODE_TYPES: dict[str, NodeType] = {
             {"name": "video", "type": "video", "optional": True},
         ],
         "outputs": [{"name": "report", "type": "report"}],
-        "params": [_OLLAMA_MODEL_PARAM],
+        "params": [_LLM_MODEL_PARAM],
         "requires": [],
     },
     # ---- Screenspace ----

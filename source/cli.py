@@ -311,10 +311,10 @@ Note: Non-interactive mode (using -b, -l, -r, -C, -c, -p, -k, -S, -M, -R, or -T)
 
     ai_opts = parser.add_argument_group("AI models")
     ai_opts.add_argument(
-        "--ollama-model",
+        "--llm-model",
         type=str,
         metavar="MODEL",
-        help="Ollama model for transcript summaries, citations, and friction (e.g. gemma3:4b)",
+        help="AI model for transcript summaries, citations, and friction (HF ref or downloaded name)",
     )
 
     paths = parser.add_argument_group("spreadsheet & directories")
@@ -3027,7 +3027,7 @@ def _run_summarize(args: argparse.Namespace) -> None:
         summary = thinking_agents.summarize_transcript(entry.get("segments") or [])
         if not summary:
             utils.warning_print(
-                f"{pid}: summary not produced (transcript too short or Ollama unavailable)."
+                f"{pid}: summary not produced (transcript too short or AI server unavailable)."
             )
             skipped += 1
             continue
@@ -3077,7 +3077,7 @@ def _run_citations(args: argparse.Namespace) -> None:
         )
         if not citations:
             utils.warning_print(
-                f"{pid}: no citations produced (Ollama unavailable or empty summary)."
+                f"{pid}: no citations produced (AI server unavailable or empty summary)."
             )
             skipped += 1
             continue
@@ -3143,7 +3143,7 @@ def _run_friction_agent(args: argparse.Namespace) -> None:
         else:
             utils.warning_print(
                 f"  {pid}: programmatic scores stored, but LLM moment detection "
-                "failed (Ollama unavailable?)."
+                "failed (AI server unavailable?)."
             )
         processed += 1
 
@@ -3451,7 +3451,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         key="summarize",
         truthy=lambda a: getattr(a, "summarize", None) is not None,
         error="--summarize cannot be combined with mode, format, or other standalone flags.",
-        hint="Use --summarize with -i/-o (directories), -v (verbose), and --ollama-model.",
+        hint="Use --summarize with -i/-o (directories), -v (verbose), and --llm-model.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
         implies_cli_mode=True,
     ),
@@ -3459,7 +3459,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         key="citations",
         truthy=lambda a: getattr(a, "citations", None) is not None,
         error="--citations cannot be combined with mode, format, or other standalone flags.",
-        hint="Use --citations with -i/-o (directories), -v (verbose), and --ollama-model.",
+        hint="Use --citations with -i/-o (directories), -v (verbose), and --llm-model.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
         implies_cli_mode=True,
     ),
@@ -3467,7 +3467,7 @@ _EXCLUSIVE_MODES: tuple[_ModeSpec, ...] = (
         key="friction",
         truthy=lambda a: getattr(a, "friction", None) is not None,
         error="--friction cannot be combined with mode, format, or other standalone flags.",
-        hint="Use --friction with -i/-o (directories), -v (verbose), and --ollama-model.",
+        hint="Use --friction with -i/-o (directories), -v (verbose), and --llm-model.",
         selector_attrs=_BASE_SELECTOR_ATTRS + ("highlights",),
         implies_cli_mode=True,
     ),
@@ -3579,8 +3579,8 @@ def _apply_config_overrides(args: Any, cli_mode: bool) -> CliModeArgs:
         config.TRANSCRIBE_HALLUCINATION_SILENCE_THRESHOLD = (
             args.whisper_hallucination_silence
         )
-    if getattr(args, "ollama_model", None):
-        config.OLLAMA_SUMMARY_MODEL = args.ollama_model
+    if getattr(args, "llm_model", None):
+        config.LLM_SUMMARY_MODEL = args.llm_model
 
     return parse_cli_mode_args(args)
 
@@ -3879,7 +3879,7 @@ def main() -> None:
     # ships its own feature-verified ffmpeg/ffprobe under <bundle>/bin, which
     # must win over any system copy, while the Homebrew append below remains
     # the fallback for tools the bundle does not carry (e.g. a user-installed
-    # ollama). Both must run before anything calls shutil.which.
+    # llama.cpp). Both must run before anything calls shutil.which.
     utils.prepend_bundled_bin_to_path()
     # Finder gives a GUI process a bare PATH that omits Homebrew, so ffmpeg is
     # invisible and startup aborts.
