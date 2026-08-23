@@ -218,6 +218,17 @@ uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
     --ss-tolerance 20,30,30 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-color --profile
 ```
 
+**The clip pipeline has the same harness** — `tests/perf/clip_bench.py` runs
+three scenarios (plain clips, carded clips, a carded reel) against a
+generated video+sheet fixture and reports `pipeline.clip`, the pool
+parallelism ratio, and the titlecard copy/reencode split, with the same
+`--save`/`--compare`/`--runs` treatment:
+
+```bash
+uv run python tests/perf/clip_bench.py --save /tmp/clipbase.json
+uv run python tests/perf/clip_bench.py --compare /tmp/clipbase.json  # Δclip %
+```
+
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`
 (404 without the flag; `?reset=1` snapshots then clears, bracketing a window).
 
