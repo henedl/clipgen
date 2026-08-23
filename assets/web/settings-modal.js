@@ -78,9 +78,9 @@
     return _modelsCachePromise;
   }
 
-  // Downloaded AI models with a delete action, on the Summaries tab beneath
-  // the model selects — GGUFs are ~6 GB each, so this is where disk gets
-  // reclaimed. Deleting a symlinked external model only removes the link.
+  // Downloaded AI models with show + delete actions, on the Summaries tab
+  // beneath the model selects — GGUFs are ~6 GB each, so this is where disk
+  // gets reclaimed. Deleting a symlinked external model only removes the link.
   function _buildLlmModelsBlock() {
     var wrap = el("div", "settings-llm-models");
     wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
@@ -107,22 +107,39 @@
       if (model.size_mb) {
         row.appendChild(el("span", "settings-llm-model-size", _formatSize(model.size_mb)));
       }
-      var delBtn = el("button", "btn btn-small", "Delete");
+      var showBtn = el("button", "settings-llm-model-reveal");
+      showBtn.type = "button";
+      showBtn.title = "Show in file browser";
+      showBtn.setAttribute("aria-label", "Show in file browser");
+      showBtn.appendChild(
+        el("span", "settings-llm-model-icon settings-llm-model-icon--reveal")
+      );
+      showBtn.addEventListener("click", function () {
+        apiPost(_getApiRoot() + "/models/llm/reveal", { model: model.name })
+          .catch(function (e) {
+            _setStatus((e && e.message) || "Could not open the folder");
+          });
+      });
+      row.appendChild(showBtn);
+
+      var delBtn = el("button", "btn btn-small btn-icon");
       delBtn.type = "button";
+      delBtn.appendChild(
+        el("span", "settings-llm-model-icon settings-llm-model-icon--delete")
+      );
+      delBtn.appendChild(document.createTextNode("Delete"));
       delBtn.addEventListener("click", function () {
         delBtn.disabled = true;
         apiDelete(_getApiRoot() + "/models/llm/" + encodeURIComponent(model.name))
-          .then(function (res) {
-            if (!res || !res.ok) {
-              delBtn.disabled = false;
-              delBtn.textContent = (res && res.error) || "Delete failed";
-              return;
-            }
+          .then(function () {
             _modelsCache = null;
             _modelsCachePromise = null;
             refresh();
           })
-          .catch(function () { delBtn.disabled = false; });
+          .catch(function (e) {
+            delBtn.disabled = false;
+            _setStatus((e && e.message) || "Delete failed");
+          });
       });
       row.appendChild(delBtn);
       return row;

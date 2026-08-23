@@ -4429,6 +4429,25 @@ def build_combined_app(
             return err("Could not open the folder")
         return ok(path=str(path))
 
+    @combined.route("/api/models/llm/reveal", methods=["POST"])
+    def combined_llm_reveal() -> FlaskResponse:
+        """Show a downloaded model's GGUF in the OS file browser.
+
+        Ollama-installed models have no file in the models dir until they are
+        selected, so those reveal their blob in Ollama's own store.
+        """
+        import llm_client
+
+        name = str((request.get_json(silent=True) or {}).get("model", "")).strip()
+        if not name:
+            return err("Missing model")
+        path = llm_client.model_path(name)
+        if path is None:
+            return err("Model not found", 404)
+        if not utils.reveal_in_file_manager(path):
+            return err("Could not open the folder")
+        return ok(path=str(path))
+
     # ---- Titlecard / endcard background picker (shared settings modal) ----
     combined.add_url_rule(
         "/api/titlecards", "combined_titlecards_list", api_titlecards_list
@@ -4453,6 +4472,15 @@ def build_combined_app(
         "/api/titlecards/image/<path:name>",
         "combined_titlecard_delete",
         api_titlecard_delete,
+        methods=["DELETE"],
+    )
+
+    # The settings modal opens from every page, so its model delete calls the
+    # combined root; the rule itself lives on the transcripts blueprint.
+    combined.add_url_rule(
+        "/api/models/llm/<name>",
+        "combined_llm_delete",
+        transcripts_server.api_llm_delete,
         methods=["DELETE"],
     )
 

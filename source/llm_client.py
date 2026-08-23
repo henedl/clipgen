@@ -104,6 +104,18 @@ def model_file(value: str) -> Path:
     return models_dir() / f"{model_name(value)}.gguf"
 
 
+def model_path(value: str) -> Path | None:
+    """Installed model's file: the models dir, else an ecosystem cache.
+
+    ``list_models()`` also offers Ollama-installed models that have no file in
+    the models dir until they are selected, so those resolve to their blob.
+    """
+    target = model_file(value)
+    if target.is_file() or target.is_symlink():
+        return target
+    return _find_external_gguf(value)
+
+
 def _llama_cache_dir() -> Path:
     """llama.cpp's own model cache: LLAMA_CACHE, else the platform default."""
     env = os.environ.get("LLAMA_CACHE")

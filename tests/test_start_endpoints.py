@@ -1350,3 +1350,64 @@ def test_settings_reveal_reports_failure(client, monkeypatch, tmp_path):
     body = client.post("/api/settings/reveal", json={}).get_json()
     assert body["ok"] is False
     assert "folder" in body["error"]
+
+
+# ---------- /api/models/llm ------------------------------------------------
+
+
+def test_llm_reveal_shows_the_gguf(client, monkeypatch, tmp_path):
+    """Reveal hands the model's file in the models dir to the file browser."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    gguf = models / "tiny.gguf"
+    gguf.write_bytes(b"stub")
+    shown: list[Path] = []
+    monkeypatch.setattr(
+        server.utils, "reveal_in_file_manager", lambda p: shown.append(p) or True
+    )
+
+    body = client.post("/api/models/llm/reveal", json={"model": "tiny"}).get_json()
+    assert body["ok"] is True
+    assert shown == [gguf]
+    assert body["path"] == str(gguf)
+
+
+def test_llm_reveal_rejects_an_unknown_model(client, monkeypatch, tmp_path):
+    """Nothing on disk under that name is a 404, not a blank file-browser call."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: True)
+
+    resp = client.post("/api/models/llm/reveal", json={"model": "ghost"})
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "Model not found"
+
+
+def test_llm_reveal_reports_failure(client, monkeypatch, tmp_path):
+    """A file browser that would not start is an error, not a silent ok."""
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / "tiny.gguf").write_bytes(b"stub")
+    monkeypatch.setattr(server.utils, "reveal_in_file_manager", lambda p: False)
+
+    body = client.post("/api/models/llm/reveal", json={"model": "tiny"}).get_json()
+    assert body["ok"] is False
+    assert "folder" in body["error"]
+
+
+def test_llm_delete_is_reachable_from_the_combined_root(client, monkeypatch, tmp_path):
+    """The settings modal opens from every page, so it calls the root path.
+
+    The rule itself lives on the transcripts blueprint; without the root
+    registration this 404s on routing and the Delete button does nothing.
+    """
+    monkeypatch.setattr(start_settings, "config_dir", lambda: tmp_path)
+    models = tmp_path / "models"
+    models.mkdir()
+    gguf = models / "tiny.gguf"
+    gguf.write_bytes(b"stub")
+
+    body = client.delete("/api/models/llm/tiny").get_json()
+    assert body["ok"] is True
+    assert not gguf.exists()
