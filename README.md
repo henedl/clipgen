@@ -63,9 +63,9 @@ Selection modes: batch (`-b`), line (`-l`), range (`-r`), category (`-C`), cell 
 To build locally with PyInstaller:
 
 ```shell
-pip install pyinstaller
-uv run build/fetch_binaries.py      # pinned ffmpeg/ffprobe for the bundle (SHA256-verified)
-pyinstaller --clean --noconfirm build/clipgen.spec
+uv sync --extra build               # PyInstaller, pinned in pyproject.toml
+uv run build/fetch_binaries.py      # pinned ffmpeg/ffprobe/llama-server + OCR models (SHA256-verified)
+uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
 ## Third-party attribution

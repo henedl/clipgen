@@ -11,6 +11,7 @@ Skill procedures for development workflows and CLI usage. Each skill is also ava
 - [test-perf](test-perf/SKILL.md) — verify new tests are not slow, and fix the ones that are
 - [profile](profile/SKILL.md) — enable the instrumentation, capture numbers, prove a perf fix
 - [bump](bump/SKILL.md) — increment patch version
+- [bump-pins](bump-pins/SKILL.md) — update the pinned ffmpeg / llama.cpp / OCR / PyInstaller versions
 - [new-mode](new-mode/SKILL.md) — checklist for adding a CLI mode or flag
 - [new-screenspace-tool](new-screenspace-tool/SKILL.md) — checklist for adding a Screenspace tool
 - [new-thinking-agent](new-thinking-agent/SKILL.md) — checklist for adding a local-LLM thinking agent

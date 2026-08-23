@@ -69,8 +69,11 @@ datas += _rapidocr_datas
 # Vendored non-default recognition models (fetch_binaries.py OCR_MODEL_PINS),
 # guarded like ffmpeg below: a build that skipped the fetch must fail here.
 # "ocr_models" matches screenspace_ocr._vendored_rec_model's frozen lookup.
+sys.path.insert(0, str(Path(SPECPATH)))  # noqa: F821
+from fetch_binaries import OCR_MODEL_PINS, PINS  # noqa: E402
+
 _ocr_vendor = Path(SPECPATH) / "vendor" / "ocr"  # noqa: F821
-_ocr_models = ["latin_rec.onnx", "japan_rec.onnx", "korean_rec.onnx"]
+_ocr_models = [pin["target"] for pin in OCR_MODEL_PINS]
 _missing_models = [n for n in _ocr_models if not (_ocr_vendor / n).is_file()]
 if _missing_models:
     raise SystemExit(
@@ -112,14 +115,12 @@ excludes = [
 # THIRD-PARTY-LICENSES carries the licenses). They land in <bundle>/bin/,
 # which cli.main prepends to PATH on frozen launches, so every "ffmpeg" /
 # "llama-server" argv in the codebase resolves to these copies. The tool list
-# is derived from PINS so this guard can never drift from the pin set.
+# is derived from PINS (imported with OCR_MODEL_PINS above) so this guard can
+# never drift from the pin set.
 # Guarded like source/ below: a build that skipped the fetch step must fail
 # here, not ship an app that dies on its startup ffmpeg check.
 _vendor_platform = "macos-arm64" if sys.platform == "darwin" else "windows-x64"
 _vendor_bin = Path(SPECPATH) / "vendor" / _vendor_platform / "bin"  # noqa: F821
-sys.path.insert(0, str(Path(SPECPATH)))  # noqa: F821
-from fetch_binaries import PINS  # noqa: E402
-
 _tool_names = [
     member["target"]
     for archive in PINS[_vendor_platform]
