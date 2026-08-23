@@ -78,6 +78,60 @@
     return _modelsCachePromise;
   }
 
+  // Downloaded AI models with a delete action, on the Summaries tab beneath
+  // the model selects — GGUFs are ~6 GB each, so this is where disk gets
+  // reclaimed. Deleting a symlinked external model only removes the link.
+  function _buildLlmModelsBlock() {
+    var wrap = el("div", "settings-llm-models");
+    wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
+    var list = el("div", "settings-llm-models-list");
+    wrap.appendChild(list);
+
+    function refresh() {
+      _fetchModels().then(function (data) {
+        list.textContent = "";
+        var models = (data && data.llm && data.llm.models) || [];
+        if (!models.length) {
+          list.appendChild(el("div", "settings-model-note", "No models downloaded yet."));
+          return;
+        }
+        for (var i = 0; i < models.length; i++) {
+          list.appendChild(_buildLlmModelRow(models[i]));
+        }
+      });
+    }
+
+    function _buildLlmModelRow(model) {
+      var row = el("div", "settings-llm-model-row");
+      row.appendChild(el("span", "settings-llm-model-name", model.name));
+      if (model.size_mb) {
+        row.appendChild(el("span", "settings-llm-model-size", _formatSize(model.size_mb)));
+      }
+      var delBtn = el("button", "btn btn-small", "Delete");
+      delBtn.type = "button";
+      delBtn.addEventListener("click", function () {
+        delBtn.disabled = true;
+        apiDelete(_getApiRoot() + "/models/llm/" + encodeURIComponent(model.name))
+          .then(function (res) {
+            if (!res || !res.ok) {
+              delBtn.disabled = false;
+              delBtn.textContent = (res && res.error) || "Delete failed";
+              return;
+            }
+            _modelsCache = null;
+            _modelsCachePromise = null;
+            refresh();
+          })
+          .catch(function () { delBtn.disabled = false; });
+      });
+      row.appendChild(delBtn);
+      return row;
+    }
+
+    refresh();
+    return wrap;
+  }
+
   function _loadModelsForSelect(sel, provider, currentValue, emptyLabel) {
     _fetchModels().then(function (data) {
       if (!data || !data.ok) { sel.disabled = false; return; }
@@ -137,10 +191,8 @@
             sel.parentNode.appendChild(note);
           }
           var extra = "";
-          if (status.state === "missing") {
-            extra = status.canInstall
-              ? " clipgen can download it for you — run any AI action on the Transcripts page."
-              : (status.hint.length ? " " + status.hint[0] : "");
+          if (status.state === "missing" && status.hint.length) {
+            extra = " " + status.hint[0];
           }
           note.textContent = status.message + extra;
         } else if (note) {
@@ -1258,6 +1310,8 @@
           panel.appendChild(_buildRow(gitems[gii]));
         }
       }
+
+      if (name === "Summaries") panel.appendChild(_buildLlmModelsBlock());
 
       var resetTabBtn = el("button", "btn btn-small settings-tab-reset", "Reset this tab");
       resetTabBtn.type = "button";

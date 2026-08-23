@@ -10,6 +10,7 @@ SUMMARY
 Component                   Version    License
 -------------------------   --------   ---------------
 FFmpeg (ffmpeg + ffprobe)   8.1.x      GPL-3.0-or-later
+llama.cpp (llama-server)    b10588     MIT
 gspread                     6.2.1      MIT
 openpyxl                    3.1.5      MIT
 icecream                    2.1.10     MIT
@@ -53,7 +54,16 @@ MIT LICENSE
 The following components are licensed under the MIT License:
   gspread, openpyxl, icecream, rich, faster-whisper, CTranslate2,
   onnxruntime, colorlog, six, opencv-python-headless (Python bindings),
-  pyobjc-core, pyobjc-framework-Cocoa, Silero VAD, Heroicons, Octicons
+  pyobjc-core, pyobjc-framework-Cocoa, Silero VAD, Heroicons, Octicons,
+  llama.cpp (the bundled llama-server executable and its ggml/llama
+  libraries; release b10588 — see build/fetch_binaries.py for provenance)
+
+---
+
+llama.cpp
+Copyright (c) 2023-2026 The ggml authors
+
+Licensed under the MIT License (text as below).
 
 ---
 

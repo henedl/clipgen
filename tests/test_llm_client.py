@@ -22,10 +22,17 @@ import llm_client
 
 @pytest.fixture(autouse=True)
 def _isolated_models_dir(tmp_path, monkeypatch):
-    """Point the models dir into tmp so tests never see real downloads."""
+    """Point the models dir and external caches into tmp.
+
+    Without the env overrides, is_model_installed/download_model would probe
+    the host's real llama.cpp cache and HF hub via _find_external_gguf.
+    """
     monkeypatch.setattr(
         llm_client.start_settings, "config_dir", lambda: tmp_path / "cfg"
     )
+    monkeypatch.setenv("LLAMA_CACHE", str(tmp_path / "no-llama-cache"))
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "no-hub"))
+    monkeypatch.setenv("OLLAMA_MODELS", str(tmp_path / "no-ollama"))
 
 
 def _chunk(piece: str, finish: str | None = None) -> dict:
@@ -131,6 +138,206 @@ class TestIsModelInstalled:
         installed = [{"name": "acme--tiny--Q8_0", "size_bytes": 4}]
         assert llm_client.is_model_installed("acme/tiny:Q8_0", installed) is True
         assert llm_client.is_model_installed("other/x:Q4_K_M", installed) is False
+
+
+class TestExternalCaches:
+    """Ecosystem caches (llama.cpp, HF hub) are honored before downloading."""
+
+    def _llama_cache(self, tmp_path, monkeypatch):
+        cache = tmp_path / "llamacache"
+        cache.mkdir()
+        monkeypatch.setenv("LLAMA_CACHE", str(cache))
+        return cache
+
+    def _hub(self, tmp_path, monkeypatch):
+        hub = tmp_path / "hub"
+        hub.mkdir()
+        monkeypatch.setenv("HF_HUB_CACHE", str(hub))
+        return hub
+
+    def test_hub_snapshot_match(self, tmp_path, monkeypatch):
+        self._llama_cache(tmp_path, monkeypatch)
+        hub = self._hub(tmp_path, monkeypatch)
+        snap = hub / "models--acme--tiny" / "snapshots" / "abc123"
+        snap.mkdir(parents=True)
+        (snap / "tiny-Q8_0.gguf").write_bytes(b"GGUF")
+        found = llm_client._find_external_gguf("acme/tiny:Q8_0")
+        assert found == snap / "tiny-Q8_0.gguf"
+
+    def test_llama_cache_mangled_name_match(self, tmp_path, monkeypatch):
+        cache = self._llama_cache(tmp_path, monkeypatch)
+        self._hub(tmp_path, monkeypatch)
+        (cache / "unsloth_Qwen3.5-9B-GGUF_Qwen3.5-9B-Q4_K_M.gguf").write_bytes(b"GGUF")
+        found = llm_client._find_external_gguf("unsloth/Qwen3.5-9B-GGUF:Q4_K_M")
+        assert found is not None and found.name.startswith("unsloth_")
+
+    def test_bare_stem_matches_llama_cache(self, tmp_path, monkeypatch):
+        cache = self._llama_cache(tmp_path, monkeypatch)
+        (cache / "local-model.gguf").write_bytes(b"GGUF")
+        assert (
+            llm_client._find_external_gguf("local-model") == cache / "local-model.gguf"
+        )
+
+    def test_quant_mismatch_finds_nothing(self, tmp_path, monkeypatch):
+        cache = self._llama_cache(tmp_path, monkeypatch)
+        self._hub(tmp_path, monkeypatch)
+        (cache / "acme_tiny_tiny-Q2_K.gguf").write_bytes(b"GGUF")
+        assert llm_client._find_external_gguf("acme/tiny:Q8_0") is None
+
+    def test_installed_check_materializes_symlink(self, tmp_path, monkeypatch):
+        cache = self._llama_cache(tmp_path, monkeypatch)
+        self._hub(tmp_path, monkeypatch)
+        (cache / "acme_tiny_tiny-Q8_0.gguf").write_bytes(b"GGUF")
+        assert llm_client.is_model_installed("acme/tiny:Q8_0") is True
+        target = llm_client.model_file("acme/tiny:Q8_0")
+        assert target.is_symlink()
+        assert target.read_bytes() == b"GGUF"
+        # Served under the deterministic stem via the models-dir scan.
+        assert [m["name"] for m in llm_client.list_models()] == ["acme--tiny--Q8_0"]
+
+    def test_download_short_circuits_on_external(self, tmp_path, monkeypatch):
+        cache = self._llama_cache(tmp_path, monkeypatch)
+        self._hub(tmp_path, monkeypatch)
+        (cache / "acme_tiny_tiny-Q8_0.gguf").write_bytes(b"GGUF")
+        with patch("llm_client.urllib.request.urlopen") as mock_urlopen:
+            assert llm_client.download_model("acme/tiny:Q8_0") is True
+            mock_urlopen.assert_not_called()
+
+    def test_no_external_no_link(self, tmp_path, monkeypatch):
+        self._llama_cache(tmp_path, monkeypatch)
+        self._hub(tmp_path, monkeypatch)
+        assert llm_client.is_model_installed("acme/tiny:Q8_0") is False
+        assert not llm_client.model_file("acme/tiny:Q8_0").exists()
+
+
+class TestOllamaStore:
+    """Ollama-installed models are discovered from manifests and reused."""
+
+    def _seed(
+        self, tmp_path, monkeypatch, namespace="library", name="llama3.2", tag="latest"
+    ):
+        root = tmp_path / "ollama"
+        monkeypatch.setenv("OLLAMA_MODELS", str(root))
+        blob = root / "blobs" / "sha256-abc"
+        blob.parent.mkdir(parents=True)
+        blob.write_bytes(b"GGUF-ollama")
+        manifest = root / "manifests" / "registry.ollama.ai" / namespace / name / tag
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            json.dumps(
+                {
+                    "layers": [
+                        {
+                            "mediaType": "application/vnd.ollama.image.template",
+                            "digest": "sha256:zzz",
+                        },
+                        {
+                            "mediaType": "application/vnd.ollama.image.model",
+                            "digest": "sha256:abc",
+                        },
+                    ]
+                }
+            )
+        )
+        return blob
+
+    def test_manifest_discovery(self, tmp_path, monkeypatch):
+        blob = self._seed(tmp_path, monkeypatch)
+        records = llm_client._ollama_manifest_models()
+        assert records == [{"stem": "llama3.2-latest", "path": blob, "size_bytes": 11}]
+
+    def test_namespaced_model_stem(self, tmp_path, monkeypatch):
+        self._seed(tmp_path, monkeypatch, namespace="acme", name="custom", tag="7b")
+        assert llm_client._ollama_manifest_models()[0]["stem"] == "acme-custom-7b"
+
+    def test_listed_alongside_own_models(self, tmp_path, monkeypatch):
+        self._seed(tmp_path, monkeypatch)
+        directory = llm_client.models_dir()
+        directory.mkdir(parents=True)
+        (directory / "own.gguf").write_bytes(b"GGUF")
+        names = [m["name"] for m in llm_client.list_models()]
+        assert names == ["own", "llama3.2-latest"]
+
+    def test_stem_selection_links_blob(self, tmp_path, monkeypatch):
+        blob = self._seed(tmp_path, monkeypatch)
+        assert llm_client.is_model_installed("llama3.2-latest") is True
+        target = llm_client.model_file("llama3.2-latest")
+        assert target.is_symlink() and target.resolve() == blob
+
+    def test_dangling_symlink_swept_from_list(self, tmp_path, monkeypatch):
+        blob = self._seed(tmp_path, monkeypatch)
+        assert llm_client.is_model_installed("llama3.2-latest") is True
+        blob.unlink()  # e.g. `ollama rm`
+        assert llm_client.list_models() == []
+        assert not llm_client.model_file("llama3.2-latest").is_symlink()
+
+    def test_missing_blob_not_offered(self, tmp_path, monkeypatch):
+        blob = self._seed(tmp_path, monkeypatch)
+        blob.unlink()
+        assert llm_client._ollama_manifest_models() == []
+
+
+class TestRouterRegistry:
+    @patch("llm_client.urllib.request.urlopen")
+    def test_router_model_ids_parses_data(self, mock_urlopen):
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(
+            {"data": [{"id": "a"}, {"id": "b"}]}
+        ).encode()
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = resp
+        assert llm_client._router_model_ids() == ["a", "b"]
+
+    @patch("llm_client.urllib.request.urlopen")
+    def test_router_model_ids_none_when_down(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("refused")
+        assert llm_client._router_model_ids() is None
+
+    @patch("llm_client.start_server")
+    @patch("llm_client._router_model_ids")
+    def test_ensure_registered_noop_when_file_absent(self, mock_ids, mock_start):
+        llm_client._ensure_registered("ghost")
+        mock_ids.assert_not_called()
+        mock_start.assert_not_called()
+
+    @patch("llm_client.start_server")
+    @patch("llm_client._router_model_ids")
+    def test_ensure_registered_noop_when_id_present(self, mock_ids, mock_start):
+        directory = llm_client.models_dir()
+        directory.mkdir(parents=True)
+        (directory / "known.gguf").write_bytes(b"GGUF")
+        mock_ids.return_value = ["known"]
+        llm_client._ensure_registered("known")
+        mock_start.assert_not_called()
+
+    @patch("llm_client.start_server")
+    @patch("llm_client._terminate_server")
+    @patch("llm_client._router_model_ids")
+    def test_ensure_registered_restarts_owned_child(
+        self, mock_ids, mock_term, mock_start, monkeypatch
+    ):
+        directory = llm_client.models_dir()
+        directory.mkdir(parents=True)
+        (directory / "fresh.gguf").write_bytes(b"GGUF")
+        mock_ids.return_value = ["other"]
+        monkeypatch.setattr(llm_client, "_server_proc", MagicMock())
+        llm_client._ensure_registered("fresh")
+        mock_term.assert_called_once()
+        mock_start.assert_called_once()
+
+    @patch("llm_client.start_server")
+    @patch("llm_client._router_model_ids")
+    def test_ensure_registered_warns_for_external_server(
+        self, mock_ids, mock_start, monkeypatch
+    ):
+        directory = llm_client.models_dir()
+        directory.mkdir(parents=True)
+        (directory / "fresh.gguf").write_bytes(b"GGUF")
+        mock_ids.return_value = ["other"]
+        monkeypatch.setattr(llm_client, "_server_proc", None)
+        llm_client._ensure_registered("fresh")
+        mock_start.assert_not_called()
 
 
 class TestUnloadModel:
