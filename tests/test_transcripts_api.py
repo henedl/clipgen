@@ -2829,6 +2829,62 @@ def test_llm_download_reports_failure(tr_client, monkeypatch):
     assert status["error"]
 
 
+def _models_dir(tmp_path, monkeypatch):
+    import llm_client
+
+    monkeypatch.setattr(llm_client.start_settings, "config_dir", lambda: tmp_path)
+    directory = tmp_path / "models"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def test_llm_delete_removes_model_file(tr_client, tmp_path, monkeypatch):
+    import llm_client
+
+    directory = _models_dir(tmp_path, monkeypatch)
+    (directory / "tiny.gguf").write_bytes(b"GGUF")
+    monkeypatch.setattr(llm_client, "unload_model", lambda name: True)
+    resp = tr_client.delete("/transcripts/api/models/llm/tiny")
+    assert resp.status_code == 200
+    assert resp.get_json()["deleted"] is True
+    assert not (directory / "tiny.gguf").exists()
+
+
+def test_llm_delete_symlink_keeps_target(tr_client, tmp_path, monkeypatch):
+    """Deleting an external model unlinks; the ecosystem cache is untouched."""
+    import llm_client
+
+    directory = _models_dir(tmp_path, monkeypatch)
+    external = tmp_path / "cache" / "big.gguf"
+    external.parent.mkdir()
+    external.write_bytes(b"GGUF-external")
+    (directory / "big.gguf").symlink_to(external)
+    monkeypatch.setattr(llm_client, "unload_model", lambda name: True)
+    resp = tr_client.delete("/transcripts/api/models/llm/big")
+    assert resp.status_code == 200
+    assert not (directory / "big.gguf").is_symlink()
+    assert external.read_bytes() == b"GGUF-external"
+
+
+def test_llm_delete_unknown_model_404(tr_client, tmp_path, monkeypatch):
+    _models_dir(tmp_path, monkeypatch)
+    resp = tr_client.delete("/transcripts/api/models/llm/ghost")
+    assert resp.status_code == 404
+
+
+def test_llm_delete_refused_while_generating(tr_client, tmp_path, monkeypatch):
+
+    directory = _models_dir(tmp_path, monkeypatch)
+    (directory / "busy.gguf").write_bytes(b"GGUF")
+    monkeypatch.setattr(
+        transcripts_server._orchestrator, "busy_models", lambda: {"busy"}
+    )
+    resp = tr_client.delete("/transcripts/api/models/llm/busy")
+    assert resp.status_code == 400
+    assert "in use" in resp.get_json()["error"]
+    assert (directory / "busy.gguf").exists()
+
+
 def test_api_models_includes_cached_and_agents(monkeypatch):
     import llm_client
     import server as server_mod

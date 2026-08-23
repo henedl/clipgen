@@ -22,9 +22,12 @@ import atexit
 import hashlib
 import http.client
 import json
+import os
+import re
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -101,6 +104,150 @@ def model_file(value: str) -> Path:
     return models_dir() / f"{model_name(value)}.gguf"
 
 
+def _llama_cache_dir() -> Path:
+    """llama.cpp's own model cache: LLAMA_CACHE, else the platform default."""
+    env = os.environ.get("LLAMA_CACHE")
+    if env:
+        return Path(env)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "llama.cpp"
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        return Path(local) / "llama.cpp"
+    return Path.home() / ".cache" / "llama.cpp"
+
+
+def _hf_hub_dir() -> Path:
+    """The Hugging Face hub cache shared by transformers/hf CLI."""
+    env = os.environ.get("HF_HUB_CACHE")
+    if env:
+        return Path(env)
+    home = os.environ.get("HF_HOME")
+    if home:
+        return Path(home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _normalize_token(text: str) -> str:
+    """Lowercase and strip separators so cache-mangled names compare equal."""
+    return re.sub(r"[/_\-.]", "", text.lower())
+
+
+def _ollama_models_dir() -> Path:
+    """Ollama's model store: OLLAMA_MODELS, else ~/.ollama/models."""
+    env = os.environ.get("OLLAMA_MODELS")
+    return Path(env) if env else Path.home() / ".ollama" / "models"
+
+
+def _ollama_manifest_models() -> list[dict[str, Any]]:
+    """List Ollama-installed models as ``{stem, path, size_bytes}`` records.
+
+    Ollama stores each model as an OCI-style manifest
+    (``manifests/<registry>/<namespace>/<name>/<tag>``) whose
+    ``vnd.ollama.image.model`` layer names a GGUF blob in ``blobs/``. The
+    stem is ``name-tag`` (namespace prefixed unless ``library``), matching
+    clipgen's bare-stem model values. Reuse is opportunistic: blobs are plain
+    GGUF, but Ollama's fork sometimes writes metadata upstream llama.cpp
+    rejects — such a model fails at load, not at discovery.
+    """
+    manifests = _ollama_models_dir() / "manifests"
+    blobs = _ollama_models_dir() / "blobs"
+    if not manifests.is_dir():
+        return []
+    records = []
+    for path in sorted(manifests.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        digest = ""
+        for layer in manifest.get("layers", []):
+            if isinstance(layer, dict) and layer.get("mediaType", "").endswith(
+                "image.model"
+            ):
+                digest = str(layer.get("digest", ""))
+                break
+        blob = blobs / digest.replace(":", "-")
+        if not digest or not blob.is_file():
+            continue
+        # manifests/<registry>/<namespace>/<name>/<tag>
+        tag = path.name
+        name = path.parent.name
+        namespace = path.parent.parent.name
+        stem = (
+            f"{name}-{tag}" if namespace == "library" else f"{namespace}-{name}-{tag}"
+        )
+        records.append({"stem": stem, "path": blob, "size_bytes": blob.stat().st_size})
+    return records
+
+
+def _find_external_gguf(value: str) -> Path | None:
+    """Find *value*'s GGUF in the llama.cpp cache or the HF hub cache.
+
+    Honors the ecosystem's existing downloads before clipgen fetches its own
+    copy. An HF ref matches the hub's ``models--org--repo/snapshots/**`` tree
+    by quant, and the llama.cpp cache's URL-mangled flat names by repo+quant;
+    a bare stem matches an identically named file in the llama.cpp cache.
+    Returns the first match, or None.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    if "/" not in value:
+        stem = value.removesuffix(".gguf")
+        candidate = _llama_cache_dir() / f"{stem}.gguf"
+        if candidate.is_file():
+            return candidate
+        for record in _ollama_manifest_models():
+            if record["stem"] == stem:
+                return record["path"]
+        return None
+
+    repo, quant = _split_hf_ref(value)
+    repo_token = _normalize_token(repo)
+    quant_token = _normalize_token(quant)
+
+    hub_repo = _hf_hub_dir() / f"models--{repo.replace('/', '--')}" / "snapshots"
+    if hub_repo.is_dir():
+        for path in sorted(hub_repo.rglob("*.gguf")):
+            if quant_token in _normalize_token(path.stem) and path.is_file():
+                return path
+
+    cache = _llama_cache_dir()
+    if cache.is_dir():
+        for path in sorted(cache.glob("*.gguf")):
+            name_token = _normalize_token(path.stem)
+            if repo_token in name_token and quant_token in name_token:
+                return path
+    return None
+
+
+def _materialize_external(value: str) -> bool:
+    """Symlink an externally cached GGUF into the models dir.
+
+    The router serves exactly one ``--models-dir`` (cache discovery is
+    disabled when it is set), so an external model becomes servable by
+    linking it in under the deterministic stem. Best-effort: returns False
+    when nothing matches or the link cannot be created (e.g. Windows without
+    symlink rights), in which case the normal download path takes over.
+    """
+    found = _find_external_gguf(value)
+    if found is None:
+        return False
+    target = model_file(value)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(found)
+    except OSError:
+        return False
+    utils.info_print(f"Linked cached model {model_name(value)}.")
+    return True
+
+
 def is_available() -> bool:
     """Check whether the llama-server router is reachable.
 
@@ -116,21 +263,30 @@ def is_available() -> bool:
 
 
 def list_models() -> list[dict[str, Any]]:
-    """List downloaded GGUF models from the models dir.
+    """List usable GGUF models: the models dir plus Ollama's store.
 
     A filesystem scan, not a server call, so it answers even while the server
     is stopped. Returns dicts with keys: name (router id / stem), size_bytes.
+    Ollama-installed models are offered under their ``name-tag`` stem;
+    selecting one links its blob in via ``_materialize_external``. A dangling
+    symlink (its target deleted, e.g. by ``ollama rm``) is swept here.
     """
-    directory = models_dir()
-    if not directory.is_dir():
-        return []
     models = []
-    for path in sorted(directory.glob("*.gguf")):
-        try:
-            size = path.stat().st_size
-        except OSError:
-            continue
-        models.append({"name": path.stem, "size_bytes": size})
+    seen = set()
+    directory = models_dir()
+    if directory.is_dir():
+        for path in sorted(directory.glob("*.gguf")):
+            try:
+                size = path.stat().st_size
+            except OSError:
+                if path.is_symlink():
+                    path.unlink(missing_ok=True)
+                continue
+            models.append({"name": path.stem, "size_bytes": size})
+            seen.add(path.stem)
+    for record in _ollama_manifest_models():
+        if record["stem"] not in seen:
+            models.append({"name": record["stem"], "size_bytes": record["size_bytes"]})
     return models
 
 
@@ -145,9 +301,13 @@ def is_model_installed(
     if not model:
         return False
     name = model_name(model)
-    if installed is not None:
-        return any(m["name"] == name for m in installed)
-    return model_file(model).is_file()
+    if installed is not None and any(m["name"] == name for m in installed):
+        return True
+    if model_file(model).is_file():
+        return True
+    # Not in our dir — an ecosystem cache (llama.cpp, HF hub) may already
+    # hold it; linking it in counts as installed.
+    return _materialize_external(model)
 
 
 def unload_model(model: str) -> bool:
@@ -227,7 +387,8 @@ def _base_host_port() -> tuple[str, str]:
 
 
 def _terminate_server() -> None:
-    """SIGTERM our router at exit so it reaps its model children."""
+    """SIGTERM our router (at exit, or before a rescan restart)."""
+    global _server_proc
     proc = _server_proc
     if proc is None or proc.poll() is not None:
         return
@@ -236,9 +397,51 @@ def _terminate_server() -> None:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+    _server_proc = None
 
 
 atexit.register(_terminate_server)
+
+
+def _router_model_ids() -> list[str] | None:
+    """Model ids the running router can serve, or None when unreachable."""
+    try:
+        req = urllib.request.Request(f"{config.LLM_BASE_URL}/models")
+        with urllib.request.urlopen(req, timeout=_HEALTH_TIMEOUT) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException):
+        return None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return None
+    return [str(m.get("id", "")) for m in data if isinstance(m, dict)]
+
+
+def _ensure_registered(value: str) -> None:
+    """Make sure the router's registry includes *value*'s model.
+
+    The router scans ``--models-dir`` once at startup and has no rescan or
+    dynamic-load API (verified empirically), so a GGUF that landed after the
+    start — a fresh download, a just-linked external model — is invisible
+    until restart. When the file exists but the id is missing and the router
+    is clipgen's own child, restart it; a restart aborts any in-flight
+    generation on another model (rare: first use of a new model during a
+    concurrent run), which the stream-truncation guard reports as a failed
+    run rather than committing partial text. An externally started server
+    cannot be restarted from here — warn and let the request fail.
+    """
+    if not model_file(value).is_file():
+        return
+    ids = _router_model_ids()
+    if ids is None or model_name(value) in ids:
+        return
+    if _server_proc is None:
+        utils.warning_print("Restart llama-server to pick up new models.")
+        return
+    utils.info_print("Restarting AI server to pick up new models...")
+    with _start_server_lock:
+        _terminate_server()
+    start_server()
 
 
 def start_server() -> bool:
@@ -534,6 +737,9 @@ def generate(
     Returns the generated text string, or None on any failure or cancellation.
     """
     resolved_model = model or config.LLM_SUMMARY_MODEL
+    if not model_file(resolved_model).is_file():
+        _materialize_external(resolved_model)
+    _ensure_registered(resolved_model)
     messages: list[dict[str, str]] = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -674,6 +880,8 @@ def download_model(
         return False
     target = model_file(ref)
     if target.is_file():
+        return True
+    if _materialize_external(ref):
         return True
 
     resolved = _resolve_hf_file(ref)

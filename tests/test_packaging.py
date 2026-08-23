@@ -91,15 +91,16 @@ def _fetch_binaries_module():
     return module
 
 
-def test_ffmpeg_pins_cover_both_platforms_and_are_wellformed() -> None:
-    """The desktop bundle ships pinned ffmpeg/ffprobe; a malformed or partial
-    PINS table only surfaces on the (slow, per-platform) release build."""
+def test_vendor_pins_cover_both_platforms_and_are_wellformed() -> None:
+    """The desktop bundle ships pinned ffmpeg/ffprobe + llama-server; a
+    malformed or partial PINS table only surfaces on the (slow, per-platform)
+    release build."""
     pins = _fetch_binaries_module().PINS
-    expected_targets = {
-        "macos-arm64": {"ffmpeg", "ffprobe"},
-        "windows-x64": {"ffmpeg.exe", "ffprobe.exe"},
+    required_targets = {
+        "macos-arm64": {"ffmpeg", "ffprobe", "llama-server"},
+        "windows-x64": {"ffmpeg.exe", "ffprobe.exe", "llama-server.exe"},
     }
-    assert set(pins) == set(expected_targets)
+    assert set(pins) == set(required_targets)
     for plat, archives in pins.items():
         targets = set()
         for archive in archives:
@@ -108,7 +109,12 @@ def test_ffmpeg_pins_cover_both_platforms_and_are_wellformed() -> None:
             for member in archive["members"].values():
                 assert _looks_like_sha256(member["sha256"]), member["target"]
                 targets.add(member["target"])
-        assert targets == expected_targets[plat], plat
+        # Superset: llama-server rides with its dylib/DLL closure, whose file
+        # list is the pin's concern, not this test's.
+        assert required_targets[plat] <= targets, plat
+        assert len(targets) == sum(len(a["members"]) for a in archives), (
+            f"{plat}: duplicate member targets"
+        )
 
 
 def _looks_like_sha256(value: str) -> bool:
@@ -121,8 +127,9 @@ def test_spec_guards_and_upx_excludes_the_vendored_tools() -> None:
     never touch them (it corrupts signed mach-O / packed ffmpeg.exe)."""
     spec_text = (_ROOT / "build" / "clipgen.spec").read_text(encoding="utf-8")
     assert "fetch_binaries.py" in spec_text, "vendor guard missing from spec"
-    assert spec_text.count('upx_exclude=["ffmpeg*", "ffprobe*"]') == 2, (
-        "both EXE and COLLECT must exclude the bundled video tools from UPX"
+    _upx = 'upx_exclude=["ffmpeg*", "ffprobe*", "llama*", "libllama*", "libggml*", "ggml*", "libomp*", "mtmd*"]'
+    assert spec_text.count(_upx) == 2, (
+        "both EXE and COLLECT must exclude the bundled tools from UPX"
     )
     assert "binaries=binaries" in spec_text, (
         "Analysis must collect the vendored binaries list"

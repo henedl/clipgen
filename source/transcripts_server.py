@@ -38,6 +38,7 @@ API endpoints (all under /transcripts/):
   GET  /api/transcribe/model-status               - whether the Whisper model is loaded or warming
   POST /api/models/llm/download                 - download a GGUF model in the background
   GET  /api/models/llm/download-status          - poll progress of an in-flight model download
+  DELETE /api/models/llm/<name>                   - delete a downloaded GGUF (or unlink an external model)
 """
 
 import atexit
@@ -1904,6 +1905,34 @@ def api_llm_download_status() -> FlaskResponse:
     return jsonify(snapshot)
 
 
+@transcripts_bp.route("/api/models/llm/<name>", methods=["DELETE"])
+def api_llm_delete(name: str) -> FlaskResponse:
+    """Delete a downloaded GGUF (or an external model's symlink).
+
+    Only touches the models dir; deleting a symlink to an ecosystem cache
+    (llama.cpp, HF hub, Ollama) removes the link, never the cached file.
+    Refused while any agent is generating with the model, since the unload
+    would abort that run mid-stream.
+    """
+    name = (name or "").strip()
+    if not name:
+        return err("Missing model")
+    target = llm_client.model_file(name)
+    if target.parent != llm_client.models_dir() or not (
+        target.is_file() or target.is_symlink()
+    ):
+        return err("Model not found", 404)
+    busy = {llm_client.model_name(m) for m in _orchestrator.busy_models()}
+    if llm_client.model_name(name) in busy:
+        return err("Model is in use")
+    llm_client.unload_model(name)
+    try:
+        target.unlink()
+    except OSError as exc:
+        return err(f"Delete failed: {exc}")
+    return ok(deleted=True)
+
+
 @transcripts_bp.route("/api/models/llm/start", methods=["POST"])
 def api_llm_start() -> FlaskResponse:
     """Start ``llama-server`` on the user's behalf and report the outcome.
@@ -2391,6 +2420,17 @@ class AgentOrchestrator:
         if event is not None:
             event.set()
         return True
+
+    def busy_models(self) -> set[str]:
+        """Model values of agents with an in-flight run (delete-route guard)."""
+        with self._lock:
+            keys = [k for k, pids in self._in_flight.items() if pids]
+        models = set()
+        for key in keys:
+            model = _agent_model(key)
+            if model:
+                models.add(model)
+        return models
 
     def stop_all(self) -> None:
         """Abort every in-flight run across all agents (used on sheet swap).

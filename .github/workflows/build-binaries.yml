@@ -123,13 +123,13 @@ jobs:
             echo "::error::self-built cv2 wheel still bundles dylibs"; exit 1
           fi
 
-      - name: Cache pinned vendor files (ffmpeg + OCR models)
+      - name: Cache pinned vendor files (ffmpeg + llama-server + OCR models)
         uses: actions/cache@v6
         with:
           path: build/vendor
           key: ffmpeg-vendor-${{ runner.os }}-${{ hashFiles('build/fetch_binaries.py') }}
 
-      - name: Fetch pinned vendor files (ffmpeg + OCR models)
+      - name: Fetch pinned vendor files (ffmpeg + llama-server + OCR models)
         # Idempotent: a cache hit makes this a hash-check no-op. The spec
         # refuses to build without these files. --no-sync: see Install
         # dependencies.
@@ -157,6 +157,12 @@ jobs:
           done
           "$FF" -hide_banner -filters | grep -q " drawtext " \
             || { echo "::error::bundled ffmpeg lacks the drawtext filter"; exit 1; }
+          # The bundled AI runtime must run from the bundle — a missing dylib
+          # in its closure (fetch_binaries member drift) dies right here.
+          LS="$(find dist/clipgen.app -type f -name llama-server -path "*/bin/*" | head -1)"
+          test -n "$LS" || { echo "::error::bundle lacks llama-server"; exit 1; }
+          "$LS" --version 2>&1 | grep -q "build" \
+            || { echo "::error::bundled llama-server does not run"; exit 1; }
           # faster-whisper's Silero VAD model must ship, or every default
           # (VAD-on) transcription dies with NO_SUCHFILE. Match *.onnx, not the
           # current filename, so an upstream rename doesn't require a CI edit.
@@ -241,6 +247,8 @@ jobs:
               throw "bundled ffmpeg lacks encoder $name"
             }
           }
+          & dist/clipgen/lib/bin/llama-server.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "bundled llama-server.exe does not run" }
           $filters = & $ff -hide_banner -filters
           if (-not ($filters | Select-String -Quiet " drawtext ")) {
             throw "bundled ffmpeg lacks the drawtext filter"
@@ -321,8 +329,10 @@ jobs:
              clipgen.app and it opens in its own window. You won't see this
              message again.
 
-          Nothing else to install: ffmpeg and ffprobe, which clipgen uses to cut
-          and inspect video, are bundled inside the app.
+          Nothing else to install: ffmpeg and ffprobe (video cutting and
+          inspection) and llama-server (the local AI runtime behind summaries
+          and reports) are bundled inside the app. AI models download on
+          first use, with your confirmation.
 
           LICENSING
 
@@ -334,10 +344,6 @@ jobs:
           corresponding source code. You can also print it with:
 
               /Applications/clipgen.app/Contents/MacOS/clipgen --licenses
-
-          Ollama (https://ollama.com/download) is optional — it powers the AI
-          summaries and reports. Everything else works without it, and clipgen
-          offers to download it for you the first time you use those features.
 
           clipgen also still works as a command-line tool. Run the binary inside
           the bundle directly:
@@ -390,17 +396,15 @@ jobs:
           * This zip - portable. Unzip the folder anywhere (a USB stick works)
             and run clipgen.exe. Keep clipgen.exe and lib\ together.
 
-          Nothing else to install: ffmpeg and ffprobe, which clipgen uses to
-          cut and inspect video, are bundled (in lib\bin\). They are
-          GPL-licensed free software, run as separate programs - see
-          THIRD-PARTY-LICENSES in this folder for the license text and where to
-          get their source code, or run: clipgen.exe --licenses
+          Nothing else to install: ffmpeg and ffprobe (video cutting and
+          inspection, GPL-licensed, run as separate programs) and llama-server
+          (the MIT-licensed local AI runtime behind summaries and reports) are
+          bundled in lib\bin\. AI models download on first use, with your
+          confirmation. See THIRD-PARTY-LICENSES in this folder for license
+          text and source locations, or run: clipgen.exe --licenses
 
           clipgen's own source code is MIT-licensed and lives at
           https://github.com/henedl/clipgen.
-
-          Ollama (https://ollama.com/download) is optional - it powers the AI
-          summaries and reports. Everything else works without it.
 
           clipgen.exe also works from a terminal: clipgen.exe --help
           "@

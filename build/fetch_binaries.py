@@ -31,6 +31,16 @@ Provenance (THIRD-PARTY-LICENSES cites this block):
     whenever you touch this file, and expect a 404 here if the pin has
     lapsed.
 
+  llama.cpp (both platforms): ggml-org/llama.cpp GitHub release b10588 (MIT),
+    https://github.com/ggml-org/llama.cpp/releases/tag/b10588 — the exact
+    build the router-mode gate validation ran against. Assets:
+    llama-b10588-bin-macos-arm64.tar.gz (llama-server + its dylib closure,
+    Metal + CPU backends) and llama-b10588-bin-win-vulkan-x64.zip
+    (llama-server.exe + DLLs; Vulkan for vendor-agnostic GPU, with the
+    ggml-cpu-* per-arch DLLs as the no-Vulkan fallback llama.cpp picks at
+    runtime). Release assets are permanent; member hashes were computed from
+    the archives at pin time.
+
 Updating the pins: pick a new build/tag on the provider, update the archive
 URL + sha256 (from the provider's published .sha256 / checksums.sha256 files),
 clear build/vendor/, run this script — it prints the extracted-file hashes on
@@ -42,6 +52,7 @@ still carries everything clipgen's soft gates probe for.
 import hashlib
 import platform
 import sys
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -69,6 +80,56 @@ PINS: dict[str, list[dict]] = {
                 },
             },
         },
+        {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10588/llama-b10588-bin-macos-arm64.tar.gz",
+            "sha256": "239b46e4b9f537a811fb0c8bc34cd282acee05c4bec49d1d022e66680107b66a",
+            "members": {
+                "llama-b10588/llama-server": {
+                    "target": "llama-server",
+                    "sha256": "9f34137ff2559c40a0fe9b130937fd745726130074173665127d863846152198",
+                },
+                "llama-b10588/libllama-server-impl.dylib": {
+                    "target": "libllama-server-impl.dylib",
+                    "sha256": "3e1fdf04f0aa51ad6b9f638378e4791a1fd842efeb8e8dc1a6a2ba779b779710",
+                },
+                "llama-b10588/libllama-common.0.2.0.dylib": {
+                    "target": "libllama-common.0.dylib",
+                    "sha256": "bb8a1a8a874f66bcd87ddafa9c186ee7137384db1e307a47c12a92b3cee803a1",
+                },
+                "llama-b10588/libmtmd.0.2.0.dylib": {
+                    "target": "libmtmd.0.dylib",
+                    "sha256": "63a098e14deeee314ab4a21acf3e6528810b2df7d7c5f1a0bdae2a95ffccd91f",
+                },
+                "llama-b10588/libllama.0.2.0.dylib": {
+                    "target": "libllama.0.dylib",
+                    "sha256": "60ef12f0e628dfeaf707ca11900097ff27e609827a7827dceda127569b887a67",
+                },
+                "llama-b10588/libggml.0.21.0.dylib": {
+                    "target": "libggml.0.dylib",
+                    "sha256": "ff6664f0778261f54a3bca59a51a05ed5b37aa1a3bafbab8a57a21030fed7e4a",
+                },
+                "llama-b10588/libggml-cpu.0.21.0.dylib": {
+                    "target": "libggml-cpu.0.dylib",
+                    "sha256": "af74bad18ff0600e13eca2e01592e66cbf129091f6a00b36b7ad985212dcce55",
+                },
+                "llama-b10588/libggml-blas.0.21.0.dylib": {
+                    "target": "libggml-blas.0.dylib",
+                    "sha256": "3bc6de095906be6121fb109d48fd177f90b1aec9e0c51d96a6a65e5c2166a51f",
+                },
+                "llama-b10588/libggml-metal.0.21.0.dylib": {
+                    "target": "libggml-metal.0.dylib",
+                    "sha256": "0cf2cf6a5d955524bbcd5087f855d2fbb22ff187bb80aa22f41743fb22f819d1",
+                },
+                "llama-b10588/libggml-rpc.0.21.0.dylib": {
+                    "target": "libggml-rpc.0.dylib",
+                    "sha256": "af6a9ab1db29b6e7d5c421eb39ab6f3da2b6e0b07ec3446c012624ef4b0a3059",
+                },
+                "llama-b10588/libggml-base.0.21.0.dylib": {
+                    "target": "libggml-base.0.dylib",
+                    "sha256": "1cc45592cb8d243811ff118b23805ad206c94b261fdbd001fee4d441563b4058",
+                },
+            },
+        },
     ],
     "windows-x64": [
         {
@@ -82,6 +143,108 @@ PINS: dict[str, list[dict]] = {
                 "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffprobe.exe": {
                     "target": "ffprobe.exe",
                     "sha256": "9fe11967029cff5562e7b0c2e74987690bea1b8b877fcadd6c9939a334fc9fb3",
+                },
+            },
+        },
+        {
+            "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10588/llama-b10588-bin-win-vulkan-x64.zip",
+            "sha256": "906af65e149b4890d174969875ff6fa2c6e319518cb745b83413706d5fd2d1f5",
+            "members": {
+                "ggml-base.dll": {
+                    "target": "ggml-base.dll",
+                    "sha256": "c11a101013510dc4a8dc541d31c8b1e05ff54cbfdad334bf80a46e4ff87a8fd4",
+                },
+                "ggml-cpu-alderlake.dll": {
+                    "target": "ggml-cpu-alderlake.dll",
+                    "sha256": "4dbb608492bc0cead7df9bb247b2ecac898ae9b2d1c037276db0fb9753411b57",
+                },
+                "ggml-cpu-cannonlake.dll": {
+                    "target": "ggml-cpu-cannonlake.dll",
+                    "sha256": "9bd9097d731f3bcedb9a26d95c4ea33b2388ce9a233215b0501d119980e90ecb",
+                },
+                "ggml-cpu-cascadelake.dll": {
+                    "target": "ggml-cpu-cascadelake.dll",
+                    "sha256": "e89212731aceaa4cf099b52dae962071aec2ad7bf2892c5806531a446f9e80ec",
+                },
+                "ggml-cpu-cooperlake.dll": {
+                    "target": "ggml-cpu-cooperlake.dll",
+                    "sha256": "953eb64ced873b4016fb832fc4801fe0409aac475cc88c6e09399484303e45fd",
+                },
+                "ggml-cpu-haswell.dll": {
+                    "target": "ggml-cpu-haswell.dll",
+                    "sha256": "4dfa0acb6affa1efa556d043e94cd208af29aa4810e63670089e735503de301d",
+                },
+                "ggml-cpu-icelake.dll": {
+                    "target": "ggml-cpu-icelake.dll",
+                    "sha256": "d2b89cd49c3e7f90a0c3a6fc4568ae566b638a10d8f26ac72b908bc04306877a",
+                },
+                "ggml-cpu-ivybridge.dll": {
+                    "target": "ggml-cpu-ivybridge.dll",
+                    "sha256": "067bd5266190a81430c1444af918c735c287df430e77c53f8f43a35fb8c36203",
+                },
+                "ggml-cpu-piledriver.dll": {
+                    "target": "ggml-cpu-piledriver.dll",
+                    "sha256": "691a38b555ed6c03579f5cd8163d51e8577d16e39005d5773fd4e6912fdbe5f4",
+                },
+                "ggml-cpu-sandybridge.dll": {
+                    "target": "ggml-cpu-sandybridge.dll",
+                    "sha256": "6754b1e103aa3788b8d3c93caab27abc06719d2d28c8291d1d6597d815766442",
+                },
+                "ggml-cpu-sapphirerapids.dll": {
+                    "target": "ggml-cpu-sapphirerapids.dll",
+                    "sha256": "b72b53f24d901ee3df87758f6364fd4337b73d0097202e0f74580862fa980165",
+                },
+                "ggml-cpu-skylakex.dll": {
+                    "target": "ggml-cpu-skylakex.dll",
+                    "sha256": "c65fd4ceadc76c28d44319a5a3dd92d4bf3ce2a2dfd2b656cf66b5c029acdda1",
+                },
+                "ggml-cpu-sse42.dll": {
+                    "target": "ggml-cpu-sse42.dll",
+                    "sha256": "1024c81019618f86afe2e0cf4d6c2831bb8924ace09412fd1c359b81e6890845",
+                },
+                "ggml-cpu-x64.dll": {
+                    "target": "ggml-cpu-x64.dll",
+                    "sha256": "272ed607d294c4c544a42307c8e199e8cfe3a897e1db6e304628e8a836634f0e",
+                },
+                "ggml-cpu-zen4.dll": {
+                    "target": "ggml-cpu-zen4.dll",
+                    "sha256": "70c4cb299c8a1119db24173d849b51ab33cf838c98349ad422a799cc719bbd3b",
+                },
+                "ggml-rpc.dll": {
+                    "target": "ggml-rpc.dll",
+                    "sha256": "1aa925a4e436e437a4b48c493ef62a0daae299efdf966c8c824a9eeca5e40209",
+                },
+                "ggml-vulkan.dll": {
+                    "target": "ggml-vulkan.dll",
+                    "sha256": "0fefae7ed4c19f08788184052578d2e85e092b4653d44393ec5d13bb1ebe4abf",
+                },
+                "ggml.dll": {
+                    "target": "ggml.dll",
+                    "sha256": "b7feb6fba7e63377233afd9146b0ca0b1e36369e7a13a12896975e5bfb992f65",
+                },
+                "libomp.dll": {
+                    "target": "libomp.dll",
+                    "sha256": "a12116ba72d1d6820407cf30be23da04ce79d6bb8a71a5ee71759c5a1faa6f1c",
+                },
+                "llama-common.dll": {
+                    "target": "llama-common.dll",
+                    "sha256": "c94cab2feb7f9a9a5b191619848f7c47f946da88961e0d09917e9e275cd10860",
+                },
+                "llama-server-impl.dll": {
+                    "target": "llama-server-impl.dll",
+                    "sha256": "4344686908c4d481349443e5d8643ba532fe4a9c74319ce1d4c621096cd211e5",
+                },
+                "llama-server.exe": {
+                    "target": "llama-server.exe",
+                    "sha256": "9a0d241988d0ccc89e7062be4779923f5cee6f6621e9175fe6ed67d2201e0c99",
+                },
+                "llama.dll": {
+                    "target": "llama.dll",
+                    "sha256": "f421778948695b1b20b8f091fd92cffabbb3f3e612a08287d4125f63ffbf4b68",
+                },
+                "mtmd.dll": {
+                    "target": "mtmd.dll",
+                    "sha256": "d536d0534d73742bfef632a5a78b3f601ee97a081a8d2341ce6bc5dc42c9238e",
                 },
             },
         },
@@ -185,14 +348,31 @@ def download_archive(url: str, expected_sha256: str, dest: Path) -> None:
     print(f"fetch_binaries: verified archive ({received / 1e6:.0f} MB)")
 
 
+def _open_member(bundle, member_name: str):
+    """One member as a readable file object, from a zip or tar bundle."""
+    if isinstance(bundle, zipfile.ZipFile):
+        return bundle.open(member_name)
+    handle = bundle.extractfile(member_name)
+    if handle is None:
+        raise SystemExit(
+            f"fetch_binaries: {member_name} is not a regular file in the archive"
+        )
+    return handle
+
+
 def extract_members(
     archive_path: Path, members: dict[str, dict], vendor_bin: Path
 ) -> None:
-    with zipfile.ZipFile(archive_path) as bundle:
+    opener = (
+        tarfile.open
+        if archive_path.name.endswith((".tar.gz", ".tgz"))
+        else zipfile.ZipFile
+    )
+    with opener(archive_path) as bundle:
         for member_name, member in members.items():
             target = vendor_bin / member["target"]
             digest = hashlib.sha256()
-            with bundle.open(member_name) as src, target.open("wb") as out:
+            with _open_member(bundle, member_name) as src, target.open("wb") as out:
                 while chunk := src.read(_CHUNK):
                     digest.update(chunk)
                     out.write(chunk)
@@ -239,8 +419,11 @@ def main() -> None:
         for archive in archives:
             # Temp file next to the targets so the rename-free write stays on
             # one filesystem, and a hash failure leaves nothing half-extracted.
+            suffix = (
+                ".tar.gz" if archive["url"].endswith((".tar.gz", ".tgz")) else ".zip"
+            )
             with tempfile.NamedTemporaryFile(
-                dir=vendor_bin, suffix=".zip", delete=False
+                dir=vendor_bin, suffix=suffix, delete=False
             ) as tmp:
                 archive_path = Path(tmp.name)
             try:

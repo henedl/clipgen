@@ -729,3 +729,32 @@ html[data-theme="dark"] .settings-panel {
     transition: none;
   }
 }
+
+/* Downloaded AI models (Summaries tab): one row per GGUF with a delete
+   action. Deleting a symlinked external model only removes the link. */
+.settings-llm-models-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-llm-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-llm-model-name {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.settings-llm-model-size {
+  color: var(--color-text-dim);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}

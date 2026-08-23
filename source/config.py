@@ -727,7 +727,7 @@ SETTINGS_DESCRIPTIONS: dict[str, str] = {
     "LLM_SUMMARY_ENABLED": "Auto-generate an AI summary of each transcript after transcription completes. Disable to keep summaries manual-only (the per-participant Regenerate Summary button still works).",
     "LLM_CITATIONS_ENABLED": "Auto-generate citation links between summary claims and transcript segments after the summary completes. Disable to keep citations manual-only (the per-participant Regenerate Citations button still works).",
     "LLM_FRICTION_ENABLED": "Auto-detect friction moments after the summary completes. Disable to keep friction manual-only (the per-participant Run/Re-run friction button still works). Uses the AI summary model.",
-    "LLM_SUMMARY_MODEL": "AI model for transcript summaries, citation linking, and friction detection. A Hugging Face ref (user/repo:QUANT) or a downloaded model name.",
+    "LLM_SUMMARY_MODEL": "AI model for transcript summaries, citation linking, and friction detection. A Hugging Face ref (user/repo:QUANT) or a downloaded model name. Models already in the llama.cpp cache, HF cache, or Ollama are reused automatically.",
     "LLM_FRICTION_MODEL": "AI model for friction-moment detection. Leave as 'Same as summary model' to reuse the summary model, or pick a different installed model.",
     "LLM_BASE_URL": "Base URL of the local llama-server router.",
     "LLM_SUMMARY_PROMPT": "Prompt that generates each session summary. Keep the {text} placeholder. The transcript is inserted there.",

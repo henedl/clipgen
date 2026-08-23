@@ -106,16 +106,25 @@ excludes = [
     "imagehash", "skimage", "scipy", "pywt",
 ]
 
-# Bundled ffmpeg/ffprobe: pinned static GPL builds, fetched by
-# `uv run build/fetch_binaries.py` into build/vendor/<platform>/bin/ (see the
-# PINS block there for provenance; THIRD-PARTY-LICENSES carries the license).
-# They land in <bundle>/bin/, which cli.main prepends to PATH on frozen
-# launches, so every "ffmpeg" argv in the codebase resolves to these copies.
+# Bundled tools: pinned ffmpeg/ffprobe builds plus llama.cpp's llama-server
+# (and its libraries), fetched by `uv run build/fetch_binaries.py` into
+# build/vendor/<platform>/bin/ (see the PINS block there for provenance;
+# THIRD-PARTY-LICENSES carries the licenses). They land in <bundle>/bin/,
+# which cli.main prepends to PATH on frozen launches, so every "ffmpeg" /
+# "llama-server" argv in the codebase resolves to these copies. The tool list
+# is derived from PINS so this guard can never drift from the pin set.
 # Guarded like source/ below: a build that skipped the fetch step must fail
 # here, not ship an app that dies on its startup ffmpeg check.
 _vendor_platform = "macos-arm64" if sys.platform == "darwin" else "windows-x64"
 _vendor_bin = Path(SPECPATH) / "vendor" / _vendor_platform / "bin"  # noqa: F821
-_tool_names = ["ffmpeg", "ffprobe"] if sys.platform == "darwin" else ["ffmpeg.exe", "ffprobe.exe"]
+sys.path.insert(0, str(Path(SPECPATH)))  # noqa: F821
+from fetch_binaries import PINS  # noqa: E402
+
+_tool_names = [
+    member["target"]
+    for archive in PINS[_vendor_platform]
+    for member in archive["members"].values()
+]
 _missing_tools = [name for name in _tool_names if not (_vendor_bin / name).is_file()]
 if _missing_tools:
     raise SystemExit(
@@ -196,7 +205,7 @@ exe = EXE(
     # Belt-and-braces should UPX ever be re-enabled: it corrupts signed
     # mach-O binaries, and on Windows a packed ffmpeg.exe is a known-broken
     # combination. Mirrored in COLLECT below.
-    upx_exclude=["ffmpeg*", "ffprobe*"],
+    upx_exclude=["ffmpeg*", "ffprobe*", "llama*", "libllama*", "libggml*", "ggml*", "libomp*", "mtmd*"],
     runtime_tmpdir=None,
     # Windows keeps a console so `clipgen.exe --gif ...` still prints — a
     # GUI-subsystem build has no stdout at all, and PyInstaller has no dual-mode
@@ -226,7 +235,7 @@ coll = COLLECT(
     a.datas,
     strip=_strip,
     upx=False,
-    upx_exclude=["ffmpeg*", "ffprobe*"],  # see EXE above
+    upx_exclude=["ffmpeg*", "ffprobe*", "llama*", "libllama*", "libggml*", "ggml*", "libomp*", "mtmd*"],  # see EXE above
     name="clipgen",
 )
 
