@@ -461,101 +461,18 @@ def _ensure_registered(value: str) -> None:
     start_server()
 
 
-def ensure_server() -> bool:
-    """Return True if the AI server answers, starting it first if it does not.
-
-    ``start_server()`` is idempotent and lock-serialized; this names the intent
-    at the call sites that only need the server up, not started specifically.
-    """
-    return is_available() or start_server()
-
-
-def start_server() -> bool:
-    """Start ``llama-server`` in router mode and wait for it to answer.
-
-    Serialized via ``_start_server_lock`` so concurrent connection-refused
-    retries don't both spawn a server process — the first one to acquire the
-    lock spawns it, the rest see the already-running server when they re-poll.
-
-    Returns True if the server is responding after startup, False otherwise.
-    """
-    binary = resolve_server_bin()
-    if binary is None:
-        utils.warning_print(
-            "llama-server is not installed.",
-            details=install_guidance_lines(),
-        )
-        return False
-
-    with _start_server_lock:
-        # Another thread may have already started the server while we waited.
-        if is_available():
-            return True
-
-        directory = models_dir()
-        try:
-            directory.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            utils.warning_print(f"Could not create the models dir: {exc}")
-            return False
-
-        host, port = _base_host_port()
-        utils.info_print("Starting AI server...")
-        try:
-            proc = subprocess.Popen(
-                [
-                    binary,
-                    "--models-dir",
-                    str(directory),
-                    "--host",
-                    host,
-                    "--port",
-                    port,
-                    "--no-webui",
-                    "--models-max",
-                    _MODELS_MAX,
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except OSError as exc:
-            utils.warning_print(f"Failed to start AI server: {exc}")
-            return False
-
-        global _server_proc
-        _server_proc = proc
-
-        deadline = time.monotonic() + _START_TIMEOUT
-        while time.monotonic() < deadline:
-            if is_available():
-                utils.info_print("AI server started.")
-                return True
-            # The router dying instantly (port already held, broken install)
-            # would otherwise burn the whole timeout with the lock held and
-            # report only a generic "did not start".
-            code = proc.poll()
-            if code is not None:
-                _server_proc = None
-                utils.warning_print(
-                    f"AI server exited immediately (code {code}) — "
-                    "is the port already in use?"
-                )
-                return False
-            time.sleep(_START_POLL_INTERVAL)
-
-    utils.warning_print("AI server did not start within timeout.")
-    return False
-
-
-def _fail(message: str) -> str:
-    """Warn about a generation failure and remember it for the caller.
+def _fail(message: str, details: list[str] | None = None) -> str:
+    """Warn about an AI failure and remember it for the caller.
 
     The warning used to be the only trace, which put every AI failure in the
-    terminal and none of them in the app.
+    terminal and none of them in the app. *details* stays terminal-only — it is
+    multi-line install guidance, not toast material.
     """
     _thread_state.last_error = message
-    utils.warning_print(message)
+    if details:
+        utils.warning_print(message, details=details)
+    else:
+        utils.warning_print(message)
     return message
 
 
@@ -619,6 +536,90 @@ def _http_error_detail(exc: urllib.error.HTTPError) -> str:
     if isinstance(error, str) and error:
         return error
     return str(exc.reason)
+
+
+def ensure_server() -> bool:
+    """Return True if the AI server answers, starting it first if it does not.
+
+    ``start_server()`` is idempotent and lock-serialized; this names the intent
+    at the call sites that only need the server up, not started specifically.
+    """
+    return is_available() or start_server()
+
+
+def start_server() -> bool:
+    """Start ``llama-server`` in router mode and wait for it to answer.
+
+    Serialized via ``_start_server_lock`` so concurrent connection-refused
+    retries don't both spawn a server process — the first one to acquire the
+    lock spawns it, the rest see the already-running server when they re-poll.
+
+    Returns True if the server is responding after startup, False otherwise.
+    """
+    binary = resolve_server_bin()
+    if binary is None:
+        _fail("llama-server is not installed.", install_guidance_lines())
+        return False
+
+    with _start_server_lock:
+        # Another thread may have already started the server while we waited.
+        if is_available():
+            return True
+
+        directory = models_dir()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            _fail(f"Could not create the models dir: {exc}")
+            return False
+
+        host, port = _base_host_port()
+        utils.info_print("Starting AI server...")
+        try:
+            proc = subprocess.Popen(
+                [
+                    binary,
+                    "--models-dir",
+                    str(directory),
+                    "--host",
+                    host,
+                    "--port",
+                    port,
+                    "--no-webui",
+                    "--models-max",
+                    _MODELS_MAX,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as exc:
+            _fail(f"Failed to start AI server: {exc}")
+            return False
+
+        global _server_proc
+        _server_proc = proc
+
+        deadline = time.monotonic() + _START_TIMEOUT
+        while time.monotonic() < deadline:
+            if is_available():
+                utils.info_print("AI server started.")
+                return True
+            # The router dying instantly (port already held, broken install)
+            # would otherwise burn the whole timeout with the lock held and
+            # report only a generic "did not start".
+            code = proc.poll()
+            if code is not None:
+                _server_proc = None
+                _fail(
+                    f"AI server exited immediately (code {code}) — "
+                    "is the port already in use?"
+                )
+                return False
+            time.sleep(_START_POLL_INTERVAL)
+
+    _fail("AI server did not start within timeout.")
+    return False
 
 
 def _shutdown_response_socket(resp: Any) -> None:
@@ -854,6 +855,9 @@ def generate(
     try:
         text = _generate_with_load_retry(body, cancel_event, on_token)
         _record_failure(resolved_model, "")  # it works now; forget any old mark
+        # A load retry can fail once and then succeed; that first reason must
+        # not outlive the call and get pinned on an unrelated empty result.
+        take_last_error()
         return text
     except urllib.error.HTTPError as exc:
         detail = _http_error_detail(exc)
@@ -870,12 +874,17 @@ def generate(
         if not _is_connection_refused(exc):
             _fail(f"AI generate failed (connection): {exc}")
             return None
-        # Connection refused — try to start the server and retry once
+        # Connection refused — try to start the server and retry once.
         if not start_server():
+            # start_server records the specific reason (not installed, port
+            # held, startup timeout); this only covers a silent False.
+            if not getattr(_thread_state, "last_error", ""):
+                _fail("The AI server is not running and would not start.")
             return None
         try:
             text = _generate_with_load_retry(body, cancel_event, on_token)
             _record_failure(resolved_model, "")
+            take_last_error()
             return text
         except urllib.error.HTTPError as retry_exc:
             detail = _http_error_detail(retry_exc)

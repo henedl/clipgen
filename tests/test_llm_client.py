@@ -716,6 +716,56 @@ class TestAutoStartServer:
         assert llm_client.generate("hi", model="tiny") is None
         assert llm_client.load_failures() == {}
 
+    @patch("llm_client.start_server")
+    @patch("llm_client.urllib.request.urlopen")
+    def test_a_failed_server_start_reaches_the_caller(self, mock_urlopen, mock_start):
+        """Otherwise the orchestrator can only say "produced no result".
+
+        That is the path Overview's Generate takes now that a stopped server no
+        longer blocks the button, and a chained agent takes if the router dies
+        between steps.
+        """
+        mock_urlopen.side_effect = urllib.error.URLError(ConnectionRefusedError())
+        mock_start.return_value = False
+        llm_client.take_last_error()
+
+        assert llm_client.generate("hi") is None
+        assert llm_client.take_last_error() == (
+            "The AI server is not running and would not start."
+        )
+
+    @patch("llm_client.subprocess.Popen")
+    @patch("llm_client.is_available")
+    @patch("llm_client.shutil.which")
+    def test_start_server_records_why_it_could_not_start(
+        self, mock_which, mock_available, mock_popen, monkeypatch
+    ):
+        """The specific reason beats the caller's generic fallback."""
+        mock_which.return_value = "/usr/local/bin/llama-server"
+        mock_available.return_value = False
+        mock_popen.return_value.poll.return_value = 1
+        monkeypatch.setattr(llm_client, "_START_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(llm_client, "_START_TIMEOUT", 0.2)
+        llm_client.take_last_error()
+
+        assert llm_client.start_server() is False
+        assert "port already in use" in llm_client.take_last_error()
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_a_successful_generate_leaves_no_stale_reason(self, mock_run):
+        """A load retry can fail once then succeed; that reason must not linger.
+
+        It would otherwise be pinned on whatever stored nothing next.
+        """
+
+        def fail_once_then_succeed(*args, **kwargs):
+            llm_client._fail("transient load hiccup")
+            return "hello"
+
+        mock_run.side_effect = fail_once_then_succeed
+        assert llm_client.generate("hi", model="tiny") == "hello"
+        assert llm_client.take_last_error() == ""
+
     def test_take_last_error_pops_the_recorded_reason(self):
         """The orchestrator reads it once and turns it into a toast."""
         llm_client.take_last_error()  # drain anything a prior test left
