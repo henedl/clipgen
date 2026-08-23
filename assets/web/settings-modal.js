@@ -37,6 +37,11 @@
   var _opts = {};
   var _modelsCache = null;
   var _modelsCachePromise = null;
+  // Running GGUF downloads by model ref → listener list. A row rebuilt on
+  // reopen attaches here instead of starting a second poll.
+  var _llmDownloadWatch = {};
+  // The Summaries tab's model block refresh, set when the block is built.
+  var _llmBlockRefresh = null;
   var _closeTimer = null;
   // Titlecard/endcard picker state (shared by the title + end pickers).
   var _cardsCache = null;
@@ -78,6 +83,81 @@
     return _modelsCachePromise;
   }
 
+  function _invalidateModels() {
+    _modelsCache = null;
+    _modelsCachePromise = null;
+  }
+
+  // Refetch once and repaint the model block plus every AI-model dropdown.
+  function _refreshLlmViews() {
+    _invalidateModels();
+    if (_llmBlockRefresh) _llmBlockRefresh();
+    _refreshLlmSelects();
+  }
+
+  function _refreshLlmSelects() {
+    if (!_panelsEl) return;
+    var sels = _panelsEl.querySelectorAll(".settings-row[data-setting] .settings-model-dropdown");
+    for (var i = 0; i < sels.length; i++) {
+      var row = sels[i].parentNode;
+      while (row && !(row.getAttribute && row.getAttribute("data-setting"))) row = row.parentNode;
+      var s = row && _findSetting(row.getAttribute("data-setting"));
+      if (s && s.provider === "llm") {
+        _loadModelsForSelect(sels[i], s.provider, s.value, s.emptyLabel);
+      }
+    }
+  }
+
+  // Start (or join) a GGUF download and report status dicts to onProgress.
+  // Mirrors transcripts.js downloadLlmModel, but the modal can close and
+  // reopen mid-download, so one poll per model is shared across rows.
+  function _watchLlmDownload(model, onProgress) {
+    var watch = _llmDownloadWatch[model];
+    if (watch) { watch.listeners.push(onProgress); return; }
+    watch = { listeners: [onProgress] };
+    _llmDownloadWatch[model] = watch;
+
+    function emit(st) {
+      for (var i = 0; i < watch.listeners.length; i++) watch.listeners[i](st);
+    }
+    function finish(st) {
+      delete _llmDownloadWatch[model];
+      emit(st);
+      if (st.succeeded) _refreshLlmViews();
+    }
+
+    apiPost(_getApiRoot() + "/models/llm/download", { model: model }).then(function (data) {
+      if (!data || !data.ok) {
+        finish({ done: true, succeeded: false, error: (data && data.error) || "Download failed" });
+        return;
+      }
+      var misses = 0;
+      var poller = createPoller(function () {
+        return apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model))
+          .then(function (st) {
+            if (!st || !st.ok || !st.found) {
+              if (++misses >= 20) {
+                poller.stop();
+                finish({ done: true, succeeded: false, error: "Download failed" });
+              }
+              return;
+            }
+            misses = 0;
+            if (st.done) { poller.stop(); finish(st); } else emit(st);
+          })
+          .catch(function () {
+            if (++misses >= 20) {
+              poller.stop();
+              finish({ done: true, succeeded: false, error: "Download failed" });
+            }
+          });
+      }, 1000, { runImmediately: true, label: "settings.llmDownload" });
+      poller.start();
+    }).catch(function () {
+      finish({ done: true, succeeded: false, error: "Download failed" });
+    });
+  }
+
   // Downloaded AI models with show + delete actions, on the Summaries tab
   // beneath the model selects — GGUFs are ~6 GB each, so this is where disk
   // gets reclaimed. Deleting a symlinked external model only removes the link.
@@ -86,19 +166,88 @@
     wrap.appendChild(el("div", "settings-group-label", "Downloaded models"));
     var list = el("div", "settings-llm-models-list");
     wrap.appendChild(list);
+    wrap.appendChild(el("div", "settings-group-label", "Suggested models"));
+    var suggestedList = el("div", "settings-llm-models-list");
+    wrap.appendChild(suggestedList);
 
     function refresh() {
       _fetchModels().then(function (data) {
         list.textContent = "";
+        suggestedList.textContent = "";
         var models = (data && data.llm && data.llm.models) || [];
         if (!models.length) {
           list.appendChild(el("div", "settings-model-note", "No models downloaded yet."));
-          return;
         }
         for (var i = 0; i < models.length; i++) {
           list.appendChild(_buildLlmModelRow(models[i]));
         }
+        var suggested = (data && data.llm && data.llm.suggested) || [];
+        for (var j = 0; j < suggested.length; j++) {
+          suggestedList.appendChild(_buildSuggestedRow(suggested[j]));
+        }
       });
+    }
+
+    // A curated model: Download with an in-row progress bar, or "Downloaded".
+    function _buildSuggestedRow(model) {
+      var row = el("div", "settings-llm-model-row");
+      var name = el("div", "settings-llm-model-name", model.name);
+      name.appendChild(el("span", "settings-llm-model-desc", model.description));
+      if (model.unusable) {
+        name.appendChild(el("span", "settings-llm-model-reason", model.unusable));
+        row.classList.add("settings-llm-model-row--unusable");
+      }
+      row.appendChild(name);
+      var size = el("span", "settings-llm-model-size", _formatSize(model.size_mb));
+      row.appendChild(size);
+
+      if (model.installed) {
+        var done = el("span", "settings-llm-model-state");
+        done.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--done"));
+        done.appendChild(document.createTextNode("Downloaded"));
+        row.appendChild(done);
+        return row;
+      }
+
+      var bar = el("div", "settings-llm-model-bar");
+      var fill = el("div", "settings-llm-model-bar-fill");
+      bar.appendChild(fill);
+      var dlBtn = el("button", "btn btn-small btn-icon");
+      dlBtn.type = "button";
+      dlBtn.appendChild(el("span", "settings-llm-model-icon settings-llm-model-icon--download"));
+      dlBtn.appendChild(document.createTextNode("Download"));
+      row.appendChild(dlBtn);
+
+      function onProgress(st) {
+        if (st.done) {
+          if (!st.succeeded) {
+            bar.remove();
+            dlBtn.disabled = false;
+            size.textContent = _formatSize(model.size_mb);
+            _setStatus(st.error || "Download failed");
+          }
+          return;
+        }
+        if (st.total > 0) {
+          var pct = Math.max(0, Math.min(100, Math.round((st.completed / st.total) * 100)));
+          fill.style.width = pct + "%";
+          size.textContent = _formatSize(Math.round(st.completed / 1048576)) +
+            " / " + _formatSize(model.size_mb);
+        }
+      }
+      function startWatching() {
+        dlBtn.disabled = true;
+        name.appendChild(bar);
+        _watchLlmDownload(model.name, onProgress);
+      }
+      dlBtn.addEventListener("click", startWatching);
+      // A download started before the modal was closed is still running.
+      apiGet(_getApiRoot() + "/models/llm/download-status?model=" + encodeURIComponent(model.name))
+        .then(function (st) {
+          if (st && st.ok && st.found && !st.done) startWatching();
+        })
+        .catch(function () {});
+      return row;
     }
 
     function _buildLlmModelRow(model) {
@@ -138,11 +287,7 @@
       delBtn.addEventListener("click", function () {
         delBtn.disabled = true;
         apiDelete(_getApiRoot() + "/models/llm/" + encodeURIComponent(model.name))
-          .then(function () {
-            _modelsCache = null;
-            _modelsCachePromise = null;
-            refresh();
-          })
+          .then(function () { _refreshLlmViews(); })
           .catch(function (e) {
             delBtn.disabled = false;
             _setStatus((e && e.message) || "Delete failed");
@@ -152,6 +297,7 @@
       return row;
     }
 
+    _llmBlockRefresh = refresh;
     refresh();
     return wrap;
   }
@@ -177,11 +323,18 @@
         if (!currentValue) inheritOpt.selected = true;
         sel.appendChild(inheritOpt);
       }
+      // Settings hold HF refs while installed entries are file stems; the
+      // catalog carries both so an installed suggestion matches its ref.
+      var suggested = (provider === "llm" && data.llm && data.llm.suggested) || [];
+      var refByStem = {};
+      for (var si = 0; si < suggested.length; si++) {
+        refByStem[suggested[si].stem] = suggested[si].name;
+      }
       var hasCurrentValue = false;
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
         var opt = document.createElement("option");
-        opt.value = m.name;
+        opt.value = refByStem[m.name] || m.name;
         var label = m.name;
         if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
         if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
@@ -191,12 +344,32 @@
         if (m.unusable) label += " \u2014 won't load";
         opt.textContent = label;
         if (m.unusable) opt.title = m.unusable;
-        if (m.name === currentValue) {
+        if (opt.value === currentValue || m.name === currentValue) {
           opt.selected = true;
           hasCurrentValue = true;
         }
         sel.appendChild(opt);
       }
+      // Selectable before download; the Transcripts gate fetches on first use.
+      var group = null;
+      for (var sj = 0; sj < suggested.length; sj++) {
+        var sm = suggested[sj];
+        if (sm.installed) continue;
+        if (!group) {
+          group = document.createElement("optgroup");
+          group.label = "Suggested";
+        }
+        var sopt = document.createElement("option");
+        sopt.value = sm.name;
+        sopt.textContent = sm.name + " (" + _formatSize(sm.size_mb) + ") \u2014 not downloaded";
+        sopt.title = sm.description;
+        if (sm.name === currentValue) {
+          sopt.selected = true;
+          hasCurrentValue = true;
+        }
+        group.appendChild(sopt);
+      }
+      if (group) sel.appendChild(group);
       if (!hasCurrentValue && currentValue) {
         var custom = document.createElement("option");
         custom.value = currentValue;

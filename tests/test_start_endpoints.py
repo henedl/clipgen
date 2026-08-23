@@ -1413,6 +1413,62 @@ def test_llm_delete_is_reachable_from_the_combined_root(client, monkeypatch, tmp
     assert not gguf.exists()
 
 
+def test_models_payload_lists_suggested_models_with_install_state(client, monkeypatch):
+    """Every catalog entry is offered; only the one on disk reads installed."""
+    import llm_client
+
+    on_disk = llm_client.model_name(llm_client.SUGGESTED_MODELS[1]["name"])
+    monkeypatch.setattr(
+        llm_client, "list_models", lambda: [{"name": on_disk, "size_bytes": 1024}]
+    )
+    monkeypatch.setattr(llm_client, "load_failures", dict)
+    monkeypatch.setattr(
+        llm_client,
+        "is_model_installed",
+        lambda m, installed=None: any(
+            x["name"] == llm_client.model_name(m) for x in installed or []
+        ),
+    )
+
+    body = client.get("/api/models").get_json()
+    suggested = body["llm"]["suggested"]
+    assert [m["name"] for m in suggested] == [
+        m["name"] for m in llm_client.SUGGESTED_MODELS
+    ]
+    for entry, catalog in zip(suggested, llm_client.SUGGESTED_MODELS):
+        assert entry["size_mb"] == catalog["size_mb"]
+        assert entry["description"] == catalog["description"]
+        assert entry["stem"] == llm_client.model_name(catalog["name"])
+        assert entry["unusable"] == ""
+    assert [m["installed"] for m in suggested] == [False, True, False, False]
+
+
+def test_llm_download_routes_are_reachable_from_the_combined_root(client, monkeypatch):
+    """The Summaries tab's Download button posts to the root, like Delete."""
+    import time
+
+    import llm_client
+    import transcripts_server
+
+    monkeypatch.setattr(
+        llm_client, "download_model", lambda model, on_progress=None: True
+    )
+    transcripts_server._llm_download_status.clear()
+
+    body = client.post("/api/models/llm/download", json={"model": "acme/tiny"})
+    assert body.get_json()["started"] is True
+
+    status = {}
+    for _ in range(100):
+        status = client.get(
+            "/api/models/llm/download-status?model=acme/tiny"
+        ).get_json()
+        if status.get("found") and status.get("done"):
+            break
+        time.sleep(0.02)
+    assert status["succeeded"] is True
+
+
 def test_models_payload_flags_a_model_that_would_not_load(client, monkeypatch):
     """The picker must say which models are known-bad, and why.
 

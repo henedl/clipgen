@@ -196,8 +196,11 @@
   border-radius: calc(var(--radius) - 2px);
 }
 
+/* Capped like the note below it: a long catalog option must not push the
+   label column into one word per line. */
 .settings-model-dropdown {
   min-width: 14rem;
+  max-width: 22rem;
   border-radius: calc(var(--radius) - 2px);
 }
 
@@ -818,4 +821,59 @@ html[data-theme="dark"] .settings-panel {
   height: var(--icon-size-sm);
   -webkit-mask-image: url("icons/trash.svg");
   mask-image: url("icons/trash.svg");
+}
+
+/* Suggested models: the curated catalog beneath the downloaded list. Each
+   row downloads in place; the bar grows under the name while it runs. */
+.settings-llm-model-desc {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+}
+
+.settings-llm-model-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
+.settings-llm-model-bar {
+  height: var(--space-1);
+  margin-top: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.settings-llm-model-bar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--color-accent);
+  transition: width var(--duration-normal);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-llm-model-bar-fill {
+    transition: none;
+  }
+}
+
+.settings-llm-model-icon--download,
+.settings-llm-model-icon--done {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+}
+
+.settings-llm-model-icon--download {
+  -webkit-mask-image: url("icons/arrow-down-tray.svg");
+  mask-image: url("icons/arrow-down-tray.svg");
+}
+
+.settings-llm-model-icon--done {
+  -webkit-mask-image: url("icons/check.svg");
+  mask-image: url("icons/check.svg");
 }
