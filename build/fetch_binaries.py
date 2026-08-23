@@ -18,18 +18,14 @@ Provenance (THIRD-PARTY-LICENSES cites this block):
     Build 1783011502_8.1.2 — FFmpeg 8.1.2 release, GPLv3 build
     (--enable-gpl --enable-version3, with libx264/libvpx/libwebp/libfreetype;
     VideoToolbox enabled by default on macOS). Permanent per-build URLs.
-  windows-x64: BtbN FFmpeg-Builds, https://github.com/BtbN/FFmpeg-Builds
-    Release tag autobuild-2026-08-16-13-00 (a dated tag — never pin "latest",
-    its assets are replaced daily), asset
-    ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip — FFmpeg 8.1 release
-    branch, GPLv3 build. Archive hash cross-checked against the release's
-    published checksums.sha256.
-    CAUTION: BtbN prunes dated autobuild tags after roughly two weeks, so
-    this pin has a shelf life. CI usually survives on the build/vendor cache,
-    but any change to this file rotates the cache key and forces a real
-    download — so refresh this pin (tag, asset name, all three hashes)
-    whenever you touch this file, and expect a 404 here if the pin has
-    lapsed.
+  windows-x64: Gyan Doshi's builds, https://www.gyan.dev/ffmpeg/builds/
+    Package ffmpeg-8.1.2-essentials_build.zip — FFmpeg 8.1.2 release, GPLv3
+    build (--enable-gpl --enable-version3, with libx264/libvpx/libwebp/
+    libfreetype). Versioned packages under /builds/packages/ are permanent;
+    the archive hash matches the provider's published .sha256 file. Never pin
+    the "release-essentials" / "git-essentials" aliases: those move. (The
+    earlier BtbN autobuild pin was dropped because BtbN prunes dated tags
+    after ~2 weeks and any edit here rotates the CI cache key.)
 
   llama.cpp (both platforms): ggml-org/llama.cpp GitHub release b10588 (MIT),
     https://github.com/ggml-org/llama.cpp/releases/tag/b10588 — the exact
@@ -41,22 +37,27 @@ Provenance (THIRD-PARTY-LICENSES cites this block):
     runtime). Release assets are permanent; member hashes were computed from
     the archives at pin time.
 
-Updating the pins: pick a new build/tag on the provider, update the archive
-URL + sha256 (from the provider's published .sha256 / checksums.sha256 files),
-clear build/vendor/, run this script — it prints the extracted-file hashes on
-mismatch so the member sha256s can be copied in — then let CI's post-build
-feature check (libx264/libwebp/libvpx-vp9/drawtext) confirm the new build
-still carries everything clipgen's soft gates probe for.
+Updating the pins: `uv run build/fetch_binaries.py --repin <new-url>` finds
+the entry the URL replaces (same host, same platform), downloads it, checks
+the archive against the provider's published `<url>.sha256` when one exists,
+re-hashes the members the old entry pinned, and rewrites the entry in place.
+`--check-urls` probes every pinned URL (the weekly pin-health workflow runs
+it). The full procedure — provenance notes, THIRD-PARTY-LICENSES, CI
+dispatch, launching the frozen app — is agents/skills/bump-pins/SKILL.md.
 """
 
+import argparse
 import hashlib
 import platform
+import re
 import sys
 import tarfile
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 PINS: dict[str, list[dict]] = {
     "macos-arm64": [
@@ -133,16 +134,16 @@ PINS: dict[str, list[dict]] = {
     ],
     "windows-x64": [
         {
-            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-08-16-13-00/ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1.zip",
-            "sha256": "d2425b12dc746a2b044148c6100440d4065876ac4ed6e3eb13a68437b7719796",
+            "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.zip",
+            "sha256": "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
             "members": {
-                "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffmpeg.exe": {
+                "ffmpeg-8.1.2-essentials_build/bin/ffmpeg.exe": {
                     "target": "ffmpeg.exe",
-                    "sha256": "361c161fa536922d32badacad5f32fbd8561f945bd6e0bf4cb1f1017deb03541",
+                    "sha256": "1326dde4c84ff1f96fe6b8916c5bed29e163e9b5dccf995f6f3db069d143ec5e",
                 },
-                "ffmpeg-n8.1.2-44-g7c533d0f86-win64-gpl-8.1/bin/ffprobe.exe": {
+                "ffmpeg-8.1.2-essentials_build/bin/ffprobe.exe": {
                     "target": "ffprobe.exe",
-                    "sha256": "9fe11967029cff5562e7b0c2e74987690bea1b8b877fcadd6c9939a334fc9fb3",
+                    "sha256": "b49ccc7c6547b141ad5a2f6ec69cc04323d7133d7704d70b331b904c63eecb07",
                 },
             },
         },
@@ -279,6 +280,16 @@ OCR_MODEL_PINS: list[dict] = [
 ]
 
 _CHUNK = 1024 * 1024
+_USER_AGENT = "clipgen-fetch-binaries"
+
+
+def _request(
+    url: str, method: str = "GET", headers: dict[str, str] | None = None
+) -> urllib.request.Request:
+    # martin-riedl.de returns 403 to urllib's default Python-urllib/3.x agent.
+    return urllib.request.Request(
+        url, method=method, headers={"User-Agent": _USER_AGENT, **(headers or {})}
+    )
 
 
 def host_platform() -> str:
@@ -320,13 +331,9 @@ def download_archive(url: str, expected_sha256: str, dest: Path) -> None:
     print(f"fetch_binaries: downloading {url}")
     digest = hashlib.sha256()
     received = 0
-    # martin-riedl.de returns 403 to urllib's default Python-urllib/3.x agent.
-    request = urllib.request.Request(
-        url, headers={"User-Agent": "clipgen-fetch-binaries"}
-    )
     try:
         with (
-            urllib.request.urlopen(request, timeout=60) as response,
+            urllib.request.urlopen(_request(url), timeout=60) as response,
             dest.open("wb") as out,
         ):
             while chunk := response.read(_CHUNK):
@@ -360,15 +367,16 @@ def _open_member(bundle, member_name: str):
     return handle
 
 
+def _opener(archive_path: Path):
+    if archive_path.name.endswith((".tar.gz", ".tgz")):
+        return tarfile.open
+    return zipfile.ZipFile
+
+
 def extract_members(
     archive_path: Path, members: dict[str, dict], vendor_bin: Path
 ) -> None:
-    opener = (
-        tarfile.open
-        if archive_path.name.endswith((".tar.gz", ".tgz"))
-        else zipfile.ZipFile
-    )
-    with opener(archive_path) as bundle:
+    with _opener(archive_path)(archive_path) as bundle:
         for member_name, member in members.items():
             target = vendor_bin / member["target"]
             digest = hashlib.sha256()
@@ -408,7 +416,230 @@ def fetch_ocr_models() -> None:
     print(f"fetch_binaries: done — {vendor_ocr} is ready.")
 
 
+def all_pinned_urls() -> list[str]:
+    """Every pinned URL: both platforms' archives plus the OCR models."""
+    urls = [a["url"] for archives in PINS.values() for a in archives]
+    return urls + [pin["url"] for pin in OCR_MODEL_PINS]
+
+
+def _probe(url: str) -> int:
+    """HTTP status for *url*: HEAD, then a one-byte GET for hosts that reject HEAD."""
+    status = 0
+    for method, headers in (("HEAD", {}), ("GET", {"Range": "bytes=0-0"})):
+        try:
+            with urllib.request.urlopen(
+                _request(url, method, headers), timeout=30
+            ) as response:
+                return 200 if response.status in (200, 206) else response.status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+        except OSError:
+            status = 0
+    return status
+
+
+def check_urls() -> None:
+    """Probe every pinned URL; exit non-zero when any has gone away."""
+    urls = all_pinned_urls()
+    gone = []
+    for url in urls:
+        status = _probe(url)
+        print(f"fetch_binaries: {status or 'ERR':>3}  {url}")
+        if status != 200:
+            gone.append(url)
+    if gone:
+        raise SystemExit(
+            f"fetch_binaries: {len(gone)} of {len(urls)} pinned URLs unreachable:\n  "
+            + "\n  ".join(gone)
+        )
+    print(f"fetch_binaries: all {len(urls)} pinned URLs reachable.")
+
+
+def published_sha256(url: str) -> str | None:
+    """The provider's `<url>.sha256` digest, or None when it publishes none."""
+    try:
+        with urllib.request.urlopen(_request(url + ".sha256"), timeout=30) as resp:
+            text = resp.read(4096).decode("utf-8", "replace")
+    except OSError:
+        return None
+    match = re.search(r"\b[0-9a-f]{64}\b", text)
+    return match.group(0) if match else None
+
+
+_PLATFORM_TOKEN = {"macos-arm64": "macos", "windows-x64": "win"}
+
+
+def _entry_for(url: str) -> dict:
+    """The PINS / OCR entry *url* replaces: same host, then platform or family."""
+    host = urlsplit(url).netloc
+    name = Path(urlsplit(url).path).name.lower()
+    archives = [
+        (plat, a)
+        for plat, entries in PINS.items()
+        for a in entries
+        if urlsplit(a["url"]).netloc == host
+    ]
+    if len(archives) > 1:
+        archives = [(p, a) for p, a in archives if _PLATFORM_TOKEN[p] in name]
+    models = [
+        ("ocr", pin)
+        for pin in OCR_MODEL_PINS
+        if urlsplit(pin["url"]).netloc == host
+        and pin["target"].removesuffix("_rec.onnx") in name
+    ]
+    candidates = archives + models
+    if len(candidates) != 1:
+        raise SystemExit(
+            f"fetch_binaries: {url} matches {len(candidates)} pinned entries; "
+            "expected exactly one (same host, platform token in the filename)."
+        )
+    return candidates[0][1]
+
+
+def _member_target(name: str) -> str:
+    """Pinned target for an archive member: basename, dylibs sans minor.patch."""
+    base = name.rsplit("/", 1)[-1]
+    return re.sub(r"^(.+?\.\d+)\.\d+\.\d+\.dylib$", r"\1.dylib", base)
+
+
+def _archive_files(archive_path: Path) -> list[str]:
+    with _opener(archive_path)(archive_path) as bundle:
+        if isinstance(bundle, zipfile.ZipFile):
+            return [i.filename for i in bundle.infolist() if not i.is_dir()]
+        return [m.name for m in bundle.getmembers() if m.isfile()]
+
+
+def _rehash_members(archive_path: Path, old_members: dict[str, dict]) -> dict:
+    """Re-pin each old member target against the new archive's files."""
+    by_target = {_member_target(n): n for n in _archive_files(archive_path)}
+    missing = [
+        m["target"] for m in old_members.values() if m["target"] not in by_target
+    ]
+    if missing:
+        raise SystemExit(
+            f"fetch_binaries: {archive_path.name} lacks pinned members {missing} "
+            "— the provider's closure changed; edit the entry by hand."
+        )
+    members: dict[str, dict] = {}
+    with _opener(archive_path)(archive_path) as bundle:
+        for old in old_members.values():
+            name = by_target[old["target"]]
+            digest = hashlib.sha256()
+            with _open_member(bundle, name) as src:
+                while chunk := src.read(_CHUNK):
+                    digest.update(chunk)
+            members[name] = {"target": old["target"], "sha256": digest.hexdigest()}
+    return members
+
+
+def _render_entry(entry: dict, indent: int) -> list[str]:
+    """The entry as source lines in ruff's layout, so the diff stays minimal."""
+    pad = " " * indent
+    lines = [
+        f"{pad}{{\n",
+        f'{pad}    "url": "{entry["url"]}",\n',
+        f'{pad}    "sha256": "{entry["sha256"]}",\n',
+    ]
+    if "members" in entry:
+        lines.append(f'{pad}    "members": {{\n')
+        for name, member in entry["members"].items():
+            lines += [
+                f'{pad}        "{name}": {{\n',
+                f'{pad}            "target": "{member["target"]}",\n',
+                f'{pad}            "sha256": "{member["sha256"]}",\n',
+                f"{pad}        }},\n",
+            ]
+        lines.append(f"{pad}    }},\n")
+    else:
+        lines.append(f'{pad}    "target": "{entry["target"]}",\n')
+    lines.append(f"{pad}}},\n")
+    return lines
+
+
+def _replace_entry(old_url: str, entry: dict) -> None:
+    """Rewrite the PINS / OCR entry holding *old_url* in this file."""
+    source = Path(__file__)
+    lines = source.read_text(encoding="utf-8").splitlines(keepends=True)
+    url_line = next(i for i, line in enumerate(lines) if f'"url": "{old_url}"' in line)
+    start = url_line - 1
+    assert lines[start].strip() == "{", lines[start]
+    depth = 0
+    for end in range(start, len(lines)):
+        depth += lines[end].count("{") - lines[end].count("}")
+        if depth == 0:
+            break
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    lines[start : end + 1] = _render_entry(entry, indent)
+    source.write_text("".join(lines), encoding="utf-8")
+
+
+def repin(url: str) -> None:
+    """Point the entry *url* replaces at *url*, with freshly computed hashes."""
+    old = _entry_for(url)
+    print(f"fetch_binaries: re-pinning {old['url']}\n  -> {url}")
+    with tempfile.TemporaryDirectory() as tmp:
+        archive_path = Path(tmp) / Path(urlsplit(url).path).name
+        print(f"fetch_binaries: downloading {url}")
+        try:
+            with (
+                urllib.request.urlopen(_request(url), timeout=60) as response,
+                archive_path.open("wb") as out,
+            ):
+                while chunk := response.read(_CHUNK):
+                    out.write(chunk)
+        except OSError as exc:
+            raise SystemExit(
+                f"fetch_binaries: download failed for {url}: {exc}"
+            ) from exc
+        sha256 = file_sha256(archive_path)
+        published = published_sha256(url)
+        if published is None:
+            print(
+                "fetch_binaries: provider publishes no .sha256 — trusting first download"
+            )
+        elif published != sha256:
+            raise SystemExit(
+                f"fetch_binaries: {url} does not match the provider's .sha256\n"
+                f"  published {published}\n  received  {sha256}"
+            )
+        else:
+            print("fetch_binaries: archive matches the provider's published .sha256")
+        entry = {"url": url, "sha256": sha256}
+        if "members" in old:
+            entry["members"] = _rehash_members(archive_path, old["members"])
+        else:
+            entry["target"] = old["target"]
+    _replace_entry(old["url"], entry)
+    print(
+        f"fetch_binaries: rewrote {Path(__file__).name}. Next: update the provenance "
+        "docstring and build/THIRD-PARTY-LICENSES, clear build/vendor/, rerun "
+        "this script, dispatch build-binaries."
+    )
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser.add_argument(
+        "--repin",
+        metavar="URL",
+        nargs="+",
+        help="re-pin the entries these URLs replace",
+    )
+    parser.add_argument(
+        "--check-urls", action="store_true", help="probe every pinned URL and exit"
+    )
+    args = parser.parse_args()
+    if args.check_urls:
+        check_urls()
+        return
+    if args.repin:
+        for url in args.repin:
+            repin(url)
+        return
+    fetch_vendor()
+
+
+def fetch_vendor() -> None:
     plat = host_platform()
     archives = PINS[plat]
     vendor_bin = Path(__file__).resolve().parent / "vendor" / plat / "bin"

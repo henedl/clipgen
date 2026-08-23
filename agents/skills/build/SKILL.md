@@ -12,8 +12,8 @@ frozen build — most of the cost here has historically gone into rediscovering 
 ## Build it
 
 ```bash
-uv pip install pyinstaller==6.19.0          # match the CI pin
-uv run --no-sync build/fetch_binaries.py    # pinned ffmpeg/ffprobe → build/vendor/ (idempotent)
+uv sync --extra build                       # PyInstaller, pinned once in pyproject.toml
+uv run --no-sync build/fetch_binaries.py    # pinned ffmpeg/ffprobe/llama-server + OCR models → build/vendor/ (idempotent)
 uv run --no-sync pyinstaller --clean --noconfirm build/clipgen.spec
 ```
 
@@ -21,7 +21,8 @@ Takes ~90 s. Output: `dist/clipgen.app` (macOS) or `dist/clipgen/` (Windows: `cl
 `lib/`). The build is **one-dir** — see "Why one-dir" below before changing that.
 
 The fetch step downloads the pinned static GPL ffmpeg/ffprobe builds (SHA256-verified, see the
-`PINS` block in `build/fetch_binaries.py` for provenance) into the gitignored `build/vendor/`.
+`PINS` block in `build/fetch_binaries.py` for provenance; bumping a pin is
+[bump-pins](../bump-pins/SKILL.md)) into the gitignored `build/vendor/`.
 The spec hard-fails without them — a build that skipped the step must break on the build machine,
 not ship an app that dies on its startup ffmpeg check. They land in `<bundle>/bin/`, which
 `utils.prepend_bundled_bin_to_path()` puts at the head of PATH on frozen launches, so the app
@@ -249,6 +250,7 @@ the build instead of silently degrading webp/vp9/titlecards.
 ## Related
 
 - [agents/skills/check/SKILL.md](../check/SKILL.md) — the pre-commit gate
+- [agents/skills/bump-pins/SKILL.md](../bump-pins/SKILL.md) — updating the pinned ffmpeg / llama.cpp / OCR / PyInstaller versions
 - [plans/archive/DESKTOP-PACKAGING-PLAN.md](../../../plans/archive/DESKTOP-PACKAGING-PLAN.md) — how
   the current shape was arrived at. Its "deferred ffmpeg bundling" note is resolved: the bundle now
   ships pinned GPL ffmpeg/ffprobe (licensing recorded in `build/THIRD-PARTY-LICENSES` and

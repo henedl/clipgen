@@ -128,4 +128,5 @@ The version lives in [build/VERSION](build/VERSION). Agents bump the patch numbe
 - **Performance** — [agents/PERFORMANCE.md](agents/PERFORMANCE.md). Measure before optimizing: [agents/skills/profile/SKILL.md](agents/skills/profile/SKILL.md) (`--profile`, `/api/profile`, `shot.py --perf`).
 - **Code review** — [agents/CODE-REVIEW.md](agents/CODE-REVIEW.md).
 - **CLI command recipes** — [agents/skills/generate/SKILL.md](agents/skills/generate/SKILL.md).
+- **Pinned binaries** (ffmpeg, llama.cpp, OCR models, PyInstaller) — [agents/skills/bump-pins/SKILL.md](agents/skills/bump-pins/SKILL.md). Pins live in `build/fetch_binaries.py`; `--repin <url>` rewrites one, `--check-urls` probes them all (weekly `pin-health` workflow).
 - **Diagnostics** — [agents/skills/debug/SKILL.md](agents/skills/debug/SKILL.md).

@@ -121,6 +121,125 @@ def _looks_like_sha256(value: str) -> bool:
     return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
+def test_vendor_pin_member_paths_belong_to_their_archive() -> None:
+    """A half-bumped entry (new URL, stale ``llama-b…/`` member paths) only
+    fails at extraction on the slow per-platform release build."""
+    pins = _fetch_binaries_module().PINS
+    for archives in pins.values():
+        for archive in archives:
+            archive_name = archive["url"].rsplit("/", 1)[1]
+            for member in archive["members"]:
+                top, sep, _rest = member.partition("/")
+                if sep:
+                    assert top in archive_name, f"{member} is not from {archive_name}"
+
+
+def test_vendor_pin_entries_round_trip_through_repin() -> None:
+    """``--repin`` rewrites an entry by rendering it; the rendering must match
+    the file's (ruff-formatted) layout or every bump produces a noisy diff."""
+    module = _fetch_binaries_module()
+    text = (_ROOT / "build" / "fetch_binaries.py").read_text(encoding="utf-8")
+    entries = [a for archives in module.PINS.values() for a in archives]
+    entries += module.OCR_MODEL_PINS
+    for entry in entries:
+        indent = 8 if "members" in entry else 4
+        rendered = "".join(module._render_entry(entry, indent))
+        assert rendered in text, f"rendering drifted for {entry['url']}"
+
+
+def test_member_target_strips_dylib_minor_versions() -> None:
+    """``--repin`` matches new archive members to old targets by this rule."""
+    target = _fetch_binaries_module()._member_target
+    assert target("llama-b10588/libggml.0.21.0.dylib") == "libggml.0.dylib"
+    assert target("llama-b10588/llama-server") == "llama-server"
+    assert target("ffmpeg-8.1.2-essentials_build/bin/ffmpeg.exe") == "ffmpeg.exe"
+    assert target("ggml-cpu-x64.dll") == "ggml-cpu-x64.dll"
+
+
+def test_ocr_model_pins_match_the_ocr_module() -> None:
+    """The vendored rec models must cover every non-default family the OCR
+    module maps languages to, at the PP-OCR version its dev fallback asks for."""
+    import screenspace_ocr
+
+    pins = _fetch_binaries_module().OCR_MODEL_PINS
+    families = {
+        model
+        for model in screenspace_ocr._OCR_LANG_TO_MODEL.values()
+        if model != screenspace_ocr._OCR_MODEL_DEFAULT
+    }
+    assert {pin["target"] for pin in pins} == {f"{m}_rec.onnx" for m in families}
+    for pin in pins:
+        family = pin["target"].removesuffix("_rec.onnx")
+        # Mirrors _build_ocr_reader: japan has no PP-OCRv5 ONNX model upstream.
+        version = "PP-OCRv4" if family == "japan" else "PP-OCRv5"
+        assert f"/{version}/" in pin["url"], pin["url"]
+        assert f"{family}_{version}_rec_mobile.onnx" in pin["url"], pin["url"]
+
+
+def _pyproject() -> dict:
+    return tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def test_pyinstaller_is_pinned_once() -> None:
+    """The ``build`` extra is the only place PyInstaller's version lives."""
+    build = _pyproject()["project"]["optional-dependencies"]["build"]
+    assert len(build) == 1 and re.fullmatch(r"pyinstaller==[\d.]+", build[0]), build
+    for rel in (
+        ".github/workflows/build-binaries.yml",
+        "README.md",
+        "agents/skills/build/SKILL.md",
+    ):
+        text = (_ROOT / rel).read_text(encoding="utf-8")
+        assert "pyinstaller==" not in text, f"{rel} restates the PyInstaller pin"
+    workflow = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "uv sync --locked --extra build" in workflow
+
+
+def test_opencv_pin_agrees_across_pyproject_and_ci() -> None:
+    """The macOS leg rebuilds opencv from its sdist: floor, sdist URL, cache
+    key, and extracted dir must all name the same version."""
+    dep = next(
+        d
+        for d in _pyproject()["project"]["dependencies"]
+        if d.startswith("opencv-python-headless")
+    )
+    match = re.search(r">=([\d.]+)", dep)
+    assert match, dep
+    version = match.group(1)
+    workflow = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
+        encoding="utf-8"
+    )
+    assert f"opencv_python_headless-{version}.tar.gz" in workflow
+    assert f"opencv-noffmpeg-{version}-" in workflow
+    assert f"/tmp/opencv_python_headless-{version}" in workflow
+    other = set(re.findall(r"opencv[_-]python[_-]headless-(\d+(?:\.\d+)*)", workflow))
+    assert other == {version}, other
+
+
+def test_ruff_pin_agrees_across_pyproject_and_ci() -> None:
+    required = _pyproject()["tool"]["ruff"]["required-version"]
+    version = required.removeprefix(">=")
+    workflow = (_ROOT / ".github" / "workflows" / "tests.yml").read_text(
+        encoding="utf-8"
+    )
+    pinned = set(re.findall(r"uvx ruff@([\d.]+)", workflow))
+    assert pinned == {version}, (required, pinned)
+
+
+def test_pin_health_workflow_probes_every_url() -> None:
+    """Pinned downloads live on other people's servers; a vanished asset only
+    shows up on a release-day cache miss unless something probes weekly."""
+    workflow = (_ROOT / ".github" / "workflows" / "pin-health.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "schedule:" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "build/fetch_binaries.py --check-urls" in workflow
+    assert "uv lock --check" in workflow
+
+
 def test_spec_guards_and_upx_excludes_the_vendored_tools() -> None:
     """The spec must refuse to build without the fetched binaries (a silent
     skip ships an app that dies on its startup ffmpeg check), and UPX must
@@ -148,8 +267,8 @@ def test_ci_verifies_all_vendored_ocr_models() -> None:
     yml = (_ROOT / ".github" / "workflows" / "build-binaries.yml").read_text(
         encoding="utf-8"
     )
-    for name in ("latin_rec.onnx", "japan_rec.onnx", "korean_rec.onnx"):
-        assert name in yml, name
+    for pin in _fetch_binaries_module().OCR_MODEL_PINS:
+        assert pin["target"] in yml, pin["target"]
 
 
 def test_spec_never_strips_or_packs_on_windows() -> None:

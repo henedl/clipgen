@@ -61,9 +61,8 @@ jobs:
         # which would silently replace the force-reinstalled no-FFmpeg cv2
         # wheel (below) with the official GPL-tainted one from PyPI — the
         # pre-PyInstaller assert caught exactly that on the first CI run.
-        run: |
-          uv sync --locked
-          uv pip install pyinstaller==6.19.0
+        # --extra build: PyInstaller, pinned once in pyproject.toml.
+        run: uv sync --locked --extra build
 
       # The official opencv-python-headless macOS arm64 wheels bundle a
       # GPL-3-configured Homebrew FFmpeg (upstream bug opencv/opencv-python#1260,

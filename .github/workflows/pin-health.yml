@@ -1,0 +1,32 @@
+name: pin-health
+
+# Every pinned download in build/fetch_binaries.py lives on someone else's
+# server. The build only fetches on a cache miss, so a vanished asset stays
+# invisible until the next pin edit rotates the cache key — usually on a
+# release day. Probe weekly instead, and surface lockfile drift while here.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Probe every pinned URL
+        # stdlib-only script; the runner's python3 is enough.
+        run: python3 build/fetch_binaries.py --check-urls
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Lockfile agrees with pyproject
+        run: uv lock --check

@@ -37,6 +37,10 @@ dev = ["pytest", "pytest-randomly"]
 # barely matters: the harness always passes `executable_path` explicitly rather
 # than letting playwright resolve the browser build it expects.
 ui = ["playwright>=1.55"]
+# PyInstaller for the desktop bundle (agents/skills/build/SKILL.md). Pinned
+# exactly, and only here: CI and the build docs install it with
+# `uv sync --extra build`, so a bump is a one-line change plus `uv lock`.
+build = ["pyinstaller==6.19.0"]
 
 [tool.setuptools]
 packages = []
