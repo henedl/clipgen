@@ -44,7 +44,9 @@ Citations (Pass 2: requires summaries to exist first):
 uv run clipgen.py --citations [P01 P03 ...] -i INPUT_DIR -o OUTPUT_DIR
 ```
 
-To use a specific AI model: `--llm-model MODEL`
+To use a specific AI model: `--llm-model MODEL` (a Hugging Face `user/repo:QUANT` ref or a
+GGUF stem). Settings → Summaries lists `llm_client.SUGGESTED_MODELS` with a Download button;
+the dropdown shows not-yet-downloaded suggestions too, and the Transcripts gate fetches one on first use.
 
 Friction detection (depends on `summary`; surfaces moments of likely interest):
 - A deterministic scorer (`friction.py`) flags hesitation / confusion / frustration /

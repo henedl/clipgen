@@ -1,8 +1,9 @@
 """Local LLM transport for clipgen, backed by llama.cpp's ``llama-server``.
 
 A thin HTTP wrapper around llama-server running in router mode
-(``--models-dir``): server lifecycle, model-dir scanning, GGUF downloads from
-Hugging Face, generation over ``/v1/chat/completions``, and model unload.
+(``--models-dir``): server lifecycle, model-dir scanning, the curated
+``SUGGESTED_MODELS`` catalog, GGUF downloads from Hugging Face, generation
+over ``/v1/chat/completions``, and model unload.
 Every function fails gracefully (returns None / False) and never raises on a
 network error; on connection refused, ``generate()`` auto-starts the server
 and retries once.
@@ -70,6 +71,31 @@ _HF_API_TIMEOUT = 30  # seconds; the tree listing is a small JSON response
 # "friction on its own model while summary stays warm" case without inviting
 # three 9B models into RAM.
 _MODELS_MAX = "2"
+
+# Curated Hugging Face refs the Summaries settings offer for download.
+# Same shape as transcripts.WHISPER_MODELS; sizes from each repo's tree.
+SUGGESTED_MODELS: list[dict[str, Any]] = [
+    {
+        "name": "unsloth/Qwen3.5-2B-GGUF:Q4_K_M",
+        "size_mb": 1222,
+        "description": "Fastest, fine for short transcripts",
+    },
+    {
+        "name": "unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+        "size_mb": 2614,
+        "description": "Fast, good for most sessions",
+    },
+    {
+        "name": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+        "size_mb": 5417,
+        "description": "Best quality, needs more RAM",
+    },
+    {
+        "name": "unsloth/gemma-4-E2B-it-GGUF:Q4_K_M",
+        "size_mb": 2963,
+        "description": "Gemma, compact alternative",
+    },
+]
 
 # Serializes start_server() calls so two threads hitting connection-refused at
 # the same time don't both spawn a router process.

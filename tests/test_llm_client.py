@@ -67,6 +67,28 @@ def _make_streaming_resp(lines: list[bytes]) -> MagicMock:
     return resp
 
 
+class TestSuggestedModels:
+    def test_entries_are_downloadable_hf_refs(self):
+        """download_model() refuses anything without a ``user/repo`` part."""
+        names = [m["name"] for m in llm_client.SUGGESTED_MODELS]
+        assert len(names) == len(set(names))
+        for m in llm_client.SUGGESTED_MODELS:
+            assert "/" in m["name"]
+            assert m["size_mb"] > 0
+            assert m["description"]
+            user, rest = m["name"].split("/", 1)
+            repo, quant = rest.split(":", 1)
+            assert llm_client.model_name(m["name"]) == f"{user}--{repo}--{quant}"
+
+    def test_default_model_is_in_the_catalog(self):
+        """The shipped default must be one the settings rows can download."""
+        import config
+
+        # Compare stems: an earlier test may leave the value in stem form.
+        stems = {llm_client.model_name(m["name"]) for m in llm_client.SUGGESTED_MODELS}
+        assert llm_client.model_name(config.LLM_SUMMARY_MODEL) in stems
+
+
 class TestModelName:
     def test_hf_ref_maps_to_deterministic_stem(self):
         assert (
