@@ -17,6 +17,8 @@
 
   var state = {
     participants: [],
+    // "<pid>/<agent>" -> the failure reason already toasted for that run.
+    agentErrorsSeen: {},
     selectedParticipant: null,
     segments: [],
     corrections: [],
@@ -707,6 +709,43 @@
     renderEmptyState();
   }
 
+  // An AI run that fails stores nothing and the panel just goes empty. This is
+  // the one poll that watches every participant, so it is where the reason
+  // reaches the user however the run was started (panel button, pill menu, or
+  // an auto-chained agent on a participant that isn't even selected).
+  //
+  // Deduped per participant+agent: the poll repeats the reason until the next
+  // run clears it server-side, and re-toasting it every few seconds would bury
+  // the page. Dropping the key when the error clears is what lets an identical
+  // second failure toast again.
+  function _reportAgentErrors(participants) {
+    var live = {};
+    for (var i = 0; i < participants.length; i++) {
+      var pid = participants[i].id;
+      var errors = participants[i].agent_errors || {};
+      for (var agent in errors) {
+        if (!Object.prototype.hasOwnProperty.call(errors, agent)) continue;
+        live[pid + "/" + agent] = true;
+        reportAgentError(pid, agent, errors[agent]);
+      }
+    }
+    var seen = state.agentErrorsSeen;
+    for (var known in seen) {
+      if (!Object.prototype.hasOwnProperty.call(live, known)) delete seen[known];
+    }
+  }
+
+  // The single toast for a failed AI run, shared with the per-agent panel polls
+  // (which see the same reason sooner on the selected participant). Whichever
+  // gets there first wins; the other is deduped.
+  function reportAgentError(pid, agentKey, message) {
+    if (!message) return;
+    var key = pid + "/" + agentKey;
+    if (state.agentErrorsSeen[key] === message) return;
+    state.agentErrorsSeen[key] = message;
+    showToast(pid + " " + agentKey + ": " + message);
+  }
+
   function loadParticipants() {
     return apiGet("api/participants").then(function (data) {
       if (!data.ok) {
@@ -718,6 +757,7 @@
       // which is status-gated and lands (if ever) after first render.
       if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants;
+      _reportAgentErrors(data.participants);
       state.hasSheet = !!data.has_sheet;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
@@ -4197,6 +4237,7 @@
   var TS = (window.ClipgenTranscripts = window.ClipgenTranscripts || {});
   TS.state = state;
   TS.showToast = showToast;
+  TS.reportAgentError = reportAgentError;
   // Hub helpers the satellites call outward.
   TS.loadTranscript = loadTranscript; // corrections, search, agents
   TS.findOverlapsForSearch = findOverlapsForSearch; // search

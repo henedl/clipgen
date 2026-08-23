@@ -313,6 +313,13 @@ def api_participants() -> FlaskResponse:
                 info["has_summary"] = bool(entry.get("summary"))
             result.append(info)
 
+    # Why each agent's last run stored nothing. The pills poll is the one
+    # surface watching every participant, so it is where a failure reaches the
+    # user however the run was triggered. Outside the lock: the orchestrator
+    # guards its own state with the same (non-reentrant) _manifest_lock.
+    for info in result:
+        info["agent_errors"] = _orchestrator.errors_for(info["id"])
+
     # Per-file stat()s and the (ffprobe-backed on a cache miss) multi-part
     # timeline probe run after the lock is released — this I/O previously
     # blocked every other route for the duration of the probes.
@@ -1196,7 +1203,7 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     # Nothing stored and nothing running: if the last run failed, say why. The
     # reason was previously a terminal warning only, so the page just showed an
     # empty panel and the user had no idea an unloadable model was the cause.
-    error = _orchestrator.take_error(participant, agent_key)
+    error = _orchestrator.error_for(participant, agent_key)
     deterministic = _deterministic_friction(agent_key, segments_snapshot)
     if deterministic is not None:
         resp = {"ok": True, "friction": deterministic}
@@ -2400,10 +2407,24 @@ class AgentOrchestrator:
             a["key"]: {} for a in thinking_agents.AGENTS
         }
 
-    def take_error(self, participant: str, agent_key: str) -> str:
-        """Pop the reason *agent_key*'s last run for *participant* stored nothing."""
+    def error_for(self, participant: str, agent_key: str) -> str:
+        """Why *agent_key*'s last run for *participant* stored nothing (``""``).
+
+        Peeked, not popped: a reload must still explain an empty panel, and two
+        surfaces read it (the agent route and the participants payload). The
+        next run for that pair clears it.
+        """
         with self._lock:
-            return self._errors.get(agent_key, {}).pop(participant, "")
+            return self._errors.get(agent_key, {}).get(participant, "")
+
+    def errors_for(self, participant: str) -> dict[str, str]:
+        """Every agent's last failure reason for *participant*, keyed by agent."""
+        with self._lock:
+            return {
+                key: per_pid[participant]
+                for key, per_pid in self._errors.items()
+                if participant in per_pid
+            }
 
     def _record_error(self, agent_key: str, participant: str, message: str) -> None:
         """Remember why a run stored nothing, for the next status poll."""

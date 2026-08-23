@@ -1165,13 +1165,18 @@ def test_a_cancelled_stream_does_not_leave_its_footer_behind():
 def test_agent_failures_are_reported_to_the_user():
     """An AI failure used to be a terminal warning and a silently empty panel.
 
-    The poll surfaces both shapes the route can carry: ``data.error`` beside a
-    200 (friction keeps its deterministic scores) and the reason on the 404.
+    Two polls can see the reason first: the per-agent panel poll (fastest, but
+    only for the selected participant) and the participants poll (the only one
+    watching a run started from another pill's menu). Both go through the hub's
+    one reporter so the toast fires once, whichever wins.
     """
     agents = read("transcripts-agents.js")
-    assert "_reportAgentFailure(desc, data.error)" in agents
-    assert "_reportAgentFailure(desc, err.serverMessage)" in agents
-    # Deduped per poll run, or a 1.2s summary poll would toast every tick.
-    assert "desc._lastError === message" in agents
+    assert "reportAgentError(pid, desc.key, data.error)" in agents
+    assert "reportAgentError(pid, desc.key, err.serverMessage)" in agents
+    assert "TS.reportAgentError" in agents, "the satellite must not fork the toast"
+    assert "TS.reportAgentError = reportAgentError" in _JS
+    assert "_reportAgentErrors(data.participants)" in _JS
+    # Deduped per participant+agent, or a 1.2s poll would toast every tick.
+    assert "state.agentErrorsSeen[key] === message" in _JS
     # The generic "Server error 404" filler must not reach the user.
     assert "e.serverMessage = message" in read("utils.js")
