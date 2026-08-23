@@ -12,6 +12,7 @@ import socketserver
 import threading
 import time
 import urllib.error
+from email.message import Message
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -652,6 +653,143 @@ class TestAutoStartServer:
         assert "--models-dir" in args
         assert "--no-webui" in args
         assert "--models-max" in args
+
+    def test_http_error_detail_prefers_the_routers_own_message(self):
+        """A 500 reason is "Internal Server Error"; the body names the model."""
+        body = json.dumps(
+            {"error": {"code": 500, "message": "model name=tiny failed to load"}}
+        ).encode()
+        exc = urllib.error.HTTPError(
+            "http://x/v1/chat/completions",
+            500,
+            "Internal Server Error",
+            Message(),
+            None,
+        )
+        exc.read = lambda: body  # ty: ignore[invalid-assignment]
+        assert llm_client._http_error_detail(exc) == "model name=tiny failed to load"
+
+    def test_http_error_detail_falls_back_to_the_reason(self):
+        exc = urllib.error.HTTPError(
+            "http://x", 503, "Service Unavailable", Message(), None
+        )
+        exc.read = lambda: b"<html>nope</html>"  # ty: ignore[invalid-assignment]
+        assert llm_client._http_error_detail(exc) == "Service Unavailable"
+
+    def _load_error(self, model="tiny"):
+        body = json.dumps(
+            {"error": {"message": f"model name={model} failed to load"}}
+        ).encode()
+        exc = urllib.error.HTTPError(
+            "http://x", 500, "Internal Server Error", Message(), None
+        )
+        exc.read = lambda: body  # ty: ignore[invalid-assignment]
+        return exc
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_remembers_a_model_that_would_not_load(self, mock_run):
+        """Discovery cannot predict this; only a failed load can teach it."""
+        mock_run.side_effect = self._load_error()
+        assert llm_client.generate("hi", model="tiny") is None
+        assert "failed to load" in llm_client.load_failures()["tiny"]
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_forgets_the_mark_once_the_model_works(self, mock_run):
+        """A llama.cpp upgrade can fix one, so the mark must not be permanent."""
+        mock_run.side_effect = self._load_error()
+        llm_client.generate("hi", model="tiny")
+        assert "tiny" in llm_client.load_failures()
+
+        mock_run.side_effect = None
+        mock_run.return_value = "hello"
+        assert llm_client.generate("hi", model="tiny") == "hello"
+        assert "tiny" not in llm_client.load_failures()
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_does_not_blame_the_model_for_a_server_error(self, mock_run):
+        """A 500 that is not a load failure says nothing about the model."""
+        exc = urllib.error.HTTPError(
+            "http://x", 500, "Internal Server Error", Message(), None
+        )
+        exc.read = lambda: b'{"error": {"message": "context shift failed"}}'  # ty: ignore[invalid-assignment]
+        mock_run.side_effect = exc
+        assert llm_client.generate("hi", model="tiny") is None
+        assert llm_client.load_failures() == {}
+
+    @patch("llm_client.start_server")
+    @patch("llm_client.urllib.request.urlopen")
+    def test_a_failed_server_start_reaches_the_caller(self, mock_urlopen, mock_start):
+        """Otherwise the orchestrator can only say "produced no result".
+
+        That is the path Overview's Generate takes now that a stopped server no
+        longer blocks the button, and a chained agent takes if the router dies
+        between steps.
+        """
+        mock_urlopen.side_effect = urllib.error.URLError(ConnectionRefusedError())
+        mock_start.return_value = False
+        llm_client.take_last_error()
+
+        assert llm_client.generate("hi") is None
+        assert llm_client.take_last_error() == (
+            "The AI server is not running and would not start."
+        )
+
+    @patch("llm_client.subprocess.Popen")
+    @patch("llm_client.is_available")
+    @patch("llm_client.shutil.which")
+    def test_start_server_records_why_it_could_not_start(
+        self, mock_which, mock_available, mock_popen, monkeypatch
+    ):
+        """The specific reason beats the caller's generic fallback."""
+        mock_which.return_value = "/usr/local/bin/llama-server"
+        mock_available.return_value = False
+        mock_popen.return_value.poll.return_value = 1
+        monkeypatch.setattr(llm_client, "_START_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(llm_client, "_START_TIMEOUT", 0.2)
+        llm_client.take_last_error()
+
+        assert llm_client.start_server() is False
+        assert "port already in use" in llm_client.take_last_error()
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_a_successful_generate_leaves_no_stale_reason(self, mock_run):
+        """A load retry can fail once then succeed; that reason must not linger.
+
+        It would otherwise be pinned on whatever stored nothing next.
+        """
+
+        def fail_once_then_succeed(*args, **kwargs):
+            llm_client._fail("transient load hiccup")
+            return "hello"
+
+        mock_run.side_effect = fail_once_then_succeed
+        assert llm_client.generate("hi", model="tiny") == "hello"
+        assert llm_client.take_last_error() == ""
+
+    def test_take_last_error_pops_the_recorded_reason(self):
+        """The orchestrator reads it once and turns it into a toast."""
+        llm_client.take_last_error()  # drain anything a prior test left
+        llm_client._fail("AI generate failed: model name=tiny failed to load")
+        assert "failed to load" in llm_client.take_last_error()
+        assert llm_client.take_last_error() == ""
+
+    @patch("llm_client.start_server")
+    @patch("llm_client.is_available")
+    def test_ensure_server_skips_the_start_when_already_up(
+        self, mock_available, mock_start
+    ):
+        mock_available.return_value = True
+        assert llm_client.ensure_server() is True
+        mock_start.assert_not_called()
+
+    @patch("llm_client.start_server")
+    @patch("llm_client.is_available")
+    def test_ensure_server_starts_a_stopped_server(self, mock_available, mock_start):
+        """The whole point: nobody has to press a button to get the AI back."""
+        mock_available.return_value = False
+        mock_start.return_value = True
+        assert llm_client.ensure_server() is True
+        mock_start.assert_called_once()
 
     @patch("llm_client.shutil.which")
     def test_start_server_returns_false_when_binary_missing(self, mock_which):

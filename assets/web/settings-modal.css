@@ -730,8 +730,8 @@ html[data-theme="dark"] .settings-panel {
   }
 }
 
-/* Downloaded AI models (Summaries tab): one row per GGUF with a delete
-   action. Deleting a symlinked external model only removes the link. */
+/* Downloaded AI models (Summaries tab): one row per GGUF with reveal and
+   delete actions. Deleting a symlinked external model only removes the link. */
 .settings-llm-models-list {
   display: flex;
   flex-direction: column;
@@ -757,4 +757,65 @@ html[data-theme="dark"] .settings-panel {
   color: var(--color-text-dim);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+
+/* A model the router already refused. Dimmed, not hidden: it stays deletable,
+   and a llama.cpp upgrade may yet make it work. */
+.settings-llm-model-row--unusable .settings-llm-model-name,
+.settings-llm-model-row--unusable .settings-llm-model-size {
+  color: var(--color-text-dim);
+}
+
+.settings-llm-model-reason {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+}
+
+/* Reveal is chromeless so Delete, which carries its label, reads as the
+   heavier of the two actions. */
+.settings-llm-model-reveal {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1);
+  border: none;
+  background: none;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  transition: color var(--duration-fast);
+}
+
+.settings-llm-model-reveal:hover {
+  color: var(--color-accent);
+}
+
+.settings-llm-model-reveal:focus-visible {
+  color: var(--color-accent);
+  outline: none;
+}
+
+.settings-llm-model-icon {
+  display: inline-block;
+  width: var(--icon-size-md);
+  height: var(--icon-size-md);
+  background-color: currentColor;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+}
+
+.settings-llm-model-icon--reveal {
+  -webkit-mask-image: url("icons/magnifying-glass.svg");
+  mask-image: url("icons/magnifying-glass.svg");
+}
+
+.settings-llm-model-icon--delete {
+  width: var(--icon-size-sm);
+  height: var(--icon-size-sm);
+  -webkit-mask-image: url("icons/trash.svg");
+  mask-image: url("icons/trash.svg");
 }

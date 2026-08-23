@@ -54,6 +54,7 @@ SELECTORS = {
     "ss-result-row": "#resultsList .result-row",
     # Row-level clicks are a no-op; only the timestamp/text children seek.
     "ts-segment-seek": '#segmentList .segment-row[data-index="1"] .segment-timestamp',
+    "ts-pill-options": "body > .pill-options",
     "settings-input": '.settings-row[data-setting="WEBP_QUALITY"] .settings-control input',
     "settings-status": ".settings-save-status",
     "start-tab-excel": '#startOverlay .sheet-card__tab[data-tab="excel"]',
@@ -182,6 +183,36 @@ def test_transcripts_segment_click_seeks_video(
         )
         page.evaluate("() => document.querySelector('#videoPlayer').pause()")
     assert not log.fatal, _fatal_message("transcripts-seek", log, "journey-transcripts")
+
+
+def test_transcripts_pill_menu_stays_anchored_across_a_re_render(
+    live_server: LiveServer, browser_context: Any
+) -> None:
+    """A pill poll must not fling the open options pane into the corner.
+
+    The pane is ``position: fixed`` placed by inline left/top, and a poll that
+    takes the patch path swaps it for a fresh node. Without a re-position that
+    node has no coordinates and paints at (0, 0).
+    """
+    with _journey(
+        browser_context, live_server, "transcripts", "journey-transcripts-pill"
+    ) as (page, log):
+        page.evaluate("() => window.ClipgenTranscripts.togglePillOptions('P01')")
+        page.wait_for_selector(SELECTORS["ts-pill-options"], timeout=_WAIT_MS)
+        before = page.evaluate(
+            "() => { const r = document.querySelector('body > .pill-options')"
+            ".getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top)]; }"
+        )
+        assert before != [0, 0], "the pane never got its opening position"
+        page.evaluate("() => window.ClipgenTranscripts.renderPills()")
+        after = page.evaluate(
+            "() => { const r = document.querySelector('body > .pill-options')"
+            ".getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top)]; }"
+        )
+        assert after == before, f"pane moved on re-render: {before} -> {after}"
+    assert not log.fatal, _fatal_message(
+        "transcripts-pill", log, "journey-transcripts-pill"
+    )
 
 
 def test_settings_change_persists_across_reload(

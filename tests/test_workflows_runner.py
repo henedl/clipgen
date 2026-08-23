@@ -150,7 +150,7 @@ def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
     import llm_client
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
 
     runner = _runner(
         tmp_path,
@@ -176,7 +176,7 @@ def test_runner_writes_node_result_sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
     import llm_client
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
     runner = _runner(
         tmp_path,
         nodes=[

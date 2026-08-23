@@ -677,7 +677,7 @@ def test_run_executes_small_dag(wf_client, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
     import llm_client
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
 
     bp_id = _make_blueprint(
         wf_client,
@@ -1453,7 +1453,7 @@ def test_resume_seeds_completed_nodes_and_reruns_failed(wf_client, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
     import llm_client
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
 
     calls = {"transcribe": 0, "summarize": 0}
     real_transcribe = workflows.NODE_TYPES["transcribe"]["execute"]

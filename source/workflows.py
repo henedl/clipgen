@@ -467,8 +467,8 @@ def _exec_summarize(
 
     transcript = inputs.get("transcript") or {}
     segments = transcript.get("segments") or []
-    if not llm_client.is_available():
-        return {"summary": "", "__note__": "AI server not available. Summary skipped"}
+    if not llm_client.ensure_server():
+        return {"summary": "", "__note__": "AI server would not start. Summary skipped"}
     summary = thinking_agents.summarize_transcript(
         segments, model=params.get("model") or None, cancel_event=ctx.cancel_event
     )
@@ -484,10 +484,10 @@ def _exec_citations(
     summary = str(inputs.get("summary") or "")
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
-    if not llm_client.is_available():
+    if not llm_client.ensure_server():
         return {
             "citations": [],
-            "__note__": "AI server not available. Citations skipped",
+            "__note__": "AI server would not start. Citations skipped",
         }
     cites = thinking_agents.find_citations(
         summary,
@@ -508,8 +508,11 @@ def _exec_friction(
     seg_val = inputs.get("segments") or {}
     segments = seg_val.get("segments") or []
     summary = str(inputs.get("summary") or "")
-    if not llm_client.is_available():
-        return {"friction": [], "__note__": "AI server not available. Friction skipped"}
+    if not llm_client.ensure_server():
+        return {
+            "friction": [],
+            "__note__": "AI server would not start. Friction skipped",
+        }
     scored = friction.score_segments(segments)
     candidates = friction.select_candidates(scored, config.FRICTION_CANDIDATE_LIMIT)
     moments = thinking_agents.find_friction_moments(
@@ -537,8 +540,8 @@ def _exec_report(
     participant = str(src.get("participant", "") or "")
     if not summary:
         return {"report": "", "__note__": "No summary wired"}
-    if not llm_client.is_available():
-        return {"report": "", "__note__": "AI server not available. Report skipped"}
+    if not llm_client.ensure_server():
+        return {"report": "", "__note__": "AI server would not start. Report skipped"}
     # Sheet observations + transcript marks come through the same configured
     # seam the Overview Reports tab uses; unwired (no sheet / CLI) both are
     # empty and the report covers the summary alone.

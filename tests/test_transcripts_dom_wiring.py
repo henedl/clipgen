@@ -890,6 +890,25 @@ def test_llm_start_posts_to_the_transcripts_blueprint():
     assert 'apiPost("/api/models/llm/start"' not in _JS
 
 
+def test_a_stopped_ai_server_is_started_not_asked_about():
+    """The gate starts the runtime itself; only a missing one raises a dialog.
+
+    A user who has llama-server installed should never be asked for permission
+    to run it — that dialog was the reason the AI "never started by itself".
+    """
+    gate = _JS[
+        _JS.index("function ensureAgentModelInstalled") : _JS.index(
+            "function _ensureModelFromPayload"
+        )
+    ]
+    assert 'status.state === "stopped"' in gate
+    assert "_startAiServer()" in gate
+    # The dialog is reached for "missing" only, so it no longer takes a state.
+    assert 'kind: "llm-runtime"' in gate
+    assert "state: status.state" not in gate
+    assert "Start AI server" not in _JS
+
+
 def test_transcribe_all_reaches_a_published_satellite_function():
     """The hub delegates to TS.transcribeParticipants, which lives in the pills
     satellite. test_frontend_satellite_wiring.py only catches *bare* cross-file
@@ -1141,3 +1160,23 @@ def test_a_cancelled_stream_does_not_leave_its_footer_behind():
         "cancel the queued insert first, or a backgrounded RAF re-adds the footer"
     )
     assert ".streaming-indicator" in branch and "removeChild" in branch
+
+
+def test_agent_failures_are_reported_to_the_user():
+    """An AI failure used to be a terminal warning and a silently empty panel.
+
+    Two polls can see the reason first: the per-agent panel poll (fastest, but
+    only for the selected participant) and the participants poll (the only one
+    watching a run started from another pill's menu). Both go through the hub's
+    one reporter so the toast fires once, whichever wins.
+    """
+    agents = read("transcripts-agents.js")
+    assert "reportAgentError(pid, desc.key, data.error)" in agents
+    assert "reportAgentError(pid, desc.key, err.serverMessage)" in agents
+    assert "TS.reportAgentError" in agents, "the satellite must not fork the toast"
+    assert "TS.reportAgentError = reportAgentError" in _JS
+    assert "_reportAgentErrors(data.participants)" in _JS
+    # Deduped per participant+agent, or a 1.2s poll would toast every tick.
+    assert "state.agentErrorsSeen[key] === message" in _JS
+    # The generic "Server error 404" filler must not reach the user.
+    assert "e.serverMessage = message" in read("utils.js")

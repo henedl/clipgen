@@ -143,25 +143,19 @@
     return false;
   }
 
-  // Generate is blocked only when the AI server is positively unreachable or the
+  // Generate is blocked only when the AI runtime is positively missing or the
   // report model is positively missing (same stance as the Transcripts page:
-  // an unknown /api/models state never blocks).
+  // an unknown /api/models state never blocks). A stopped server does not
+  // block — the run starts it.
   function llmGate() {
     var o = rpState.llm;
     if (!o) return null;
     var status = clipgenLlmStatus(o);
-    if (status.state !== "ok") {
-      // The install guidance only helps the "missing" case; a stopped server
-      // just needs starting, and this panel's Refresh re-checks either way.
+    if (status.state === "missing") {
       // The install dialog itself lives on the Transcripts page, so point there.
-      var extra;
-      if (status.state === "missing") {
-        extra = status.canInstall
-          ? " clipgen can download it for you — run any AI action on the Transcripts page."
-          : (status.hint.length ? " " + status.hint[0] : "");
-      } else {
-        extra = " Start it, then Refresh.";
-      }
+      var extra = status.canInstall
+        ? " clipgen can download it for you — run any AI action on the Transcripts page."
+        : (status.hint.length ? " " + status.hint[0] : "");
       return status.message + extra;
     }
     var agents = o.agents || [];
@@ -667,9 +661,14 @@
         if (g !== rpState.gen || !rpState.active) return;
         applyReportResponse(data, pid, g);
       })
-      .catch(function () {
+      .catch(function (err) {
         // 404 = no report stored for this participant (apiGet throws on it).
+        // It carries a reason when the run actually failed — an AI failure was
+        // otherwise a terminal warning and a silently empty panel here.
         if (g !== rpState.gen || !rpState.active) return;
+        if (err && err.serverMessage) {
+          showNotice(err.serverMessage, null, null, null);
+        }
         stopReportPoll();
         rpState.reportGenerating = false;
         rpState.reportMissing = true;

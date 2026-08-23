@@ -23,6 +23,7 @@
   var TS = window.ClipgenTranscripts;
   var state = TS.state;
   var showToast = TS.showToast,
+    reportAgentError = TS.reportAgentError,
     renderTimeline = TS.renderTimeline,
     seekVideo = TS.seekVideo,
     scrollToSegment = TS.scrollToSegment,
@@ -146,6 +147,7 @@
         apiGet(desc.urlBase + "/" + pid).then(function (data) {
           if (ver !== state.participantReqVer) return;
           desc._failStreak = 0;
+          if (data.error) reportAgentError(pid, desc.key, data.error);
           if (data.ok && desc.getResult(data)) {
             _stopAgentPoll(desc);
             desc.onResult(pid, data);
@@ -160,7 +162,8 @@
           if (err && err.status === 404) {
             // The endpoint 404s once the run is over with nothing persisted
             // (find_citations' failure return, AI server down) — the genuine
-            // empty case.
+            // empty case. It carries the reason when the run actually failed.
+            if (err.serverMessage) reportAgentError(pid, desc.key, err.serverMessage);
             _stopAgentPoll(desc);
             desc.onEmpty(pid);
             return;
@@ -438,16 +441,14 @@
     hintEl.classList.add("hidden");
     hintEl.textContent = "";
     _trFetchModels().then(function (data) {
+      // A stopped server is not worth a hint: running the summary starts it.
       var status = clipgenLlmStatus(data && data.llm);
-      if (status.state === "ok") return;
-      var extra = "";
-      if (status.state === "missing") {
-        // Running the summary raises the install dialog, so the shortest true
-        // instruction here is "just run it".
-        extra = status.canInstall
-          ? " clipgen can download it for you when you run the summary."
-          : (status.hint.length ? " " + status.hint[0] : "");
-      }
+      if (status.state !== "missing") return;
+      // Running the summary raises the install dialog, so the shortest true
+      // instruction here is "just run it".
+      var extra = status.canInstall
+        ? " clipgen can download it for you when you run the summary."
+        : (status.hint.length ? " " + status.hint[0] : "");
       hintEl.textContent = status.message + extra;
       hintEl.classList.remove("hidden");
     }).catch(function () { /* leave the plain empty state alone */ });

@@ -75,6 +75,11 @@ _MODELS_MAX = "2"
 # the same time don't both spawn a router process.
 _start_server_lock = threading.Lock()
 
+# Last generation failure, per thread. Agent runs each own a daemon thread and
+# call generate() on it, so thread-local storage attributes the reason to the
+# right run without a lock or any cross-talk between concurrent agents.
+_thread_state = threading.local()
+
 # The router we spawned, if any — terminated at exit. SIGTERM, never SIGKILL:
 # the router reaps its per-model children only on a clean shutdown (gate
 # scenario 6: a killed router orphans them).
@@ -102,6 +107,18 @@ def model_name(value: str) -> str:
 def model_file(value: str) -> Path:
     """Local GGUF path for a settings value."""
     return models_dir() / f"{model_name(value)}.gguf"
+
+
+def model_path(value: str) -> Path | None:
+    """Installed model's file: the models dir, else an ecosystem cache.
+
+    ``list_models()`` also offers Ollama-installed models that have no file in
+    the models dir until they are selected, so those resolve to their blob.
+    """
+    target = model_file(value)
+    if target.is_file() or target.is_symlink():
+        return target
+    return _find_external_gguf(value)
 
 
 def _llama_cache_dir() -> Path:
@@ -444,6 +461,92 @@ def _ensure_registered(value: str) -> None:
     start_server()
 
 
+def _fail(message: str, details: list[str] | None = None) -> str:
+    """Warn about an AI failure and remember it for the caller.
+
+    The warning used to be the only trace, which put every AI failure in the
+    terminal and none of them in the app. *details* stays terminal-only — it is
+    multi-line install guidance, not toast material.
+    """
+    _thread_state.last_error = message
+    if details:
+        utils.warning_print(message, details=details)
+    else:
+        utils.warning_print(message)
+    return message
+
+
+def take_last_error() -> str:
+    """Pop this thread's last generation failure (``""`` when there is none)."""
+    message = getattr(_thread_state, "last_error", "")
+    _thread_state.last_error = ""
+    return message
+
+
+# Models the router refused to load, remembered across runs so the picker can
+# say so before the user waits on another failed run. Ollama-sourced GGUFs are
+# the common case: the fork's conversion diverges from upstream llama.cpp
+# (reordered SSM weights, fused vision/audio towers), and nothing short of
+# attempting a load can tell.
+_FAILURES_FILE = "model_failures.json"
+
+
+def load_failures() -> dict[str, str]:
+    """Model name -> why the router last refused to load it."""
+    data = start_settings.load_config_json(_FAILURES_FILE, default={})
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def _record_failure(model: str, reason: str) -> None:
+    """Remember that *model* would not load, or forget it when *reason* is empty."""
+    name = model_name(model)
+    failures = load_failures()
+    if reason:
+        if failures.get(name) == reason:
+            return
+        failures[name] = reason
+    elif name in failures:
+        del failures[name]
+    else:
+        return
+    if failures:
+        start_settings.save_config_json(_FAILURES_FILE, failures)
+    else:
+        start_settings.remove_config_json(_FAILURES_FILE)
+
+
+def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+    """The router's own message for a failed request, else the HTTP reason.
+
+    llama-server answers an unloadable model with 500 and a JSON body naming
+    it ("model name=X failed to load"); ``exc.reason`` alone is the useless
+    "Internal Server Error". Ollama-sourced GGUFs land here regularly — the
+    fork writes metadata upstream llama.cpp rejects, and the model only fails
+    at load, never at discovery.
+    """
+    try:
+        payload = json.loads(exc.read().decode("utf-8", "replace"))
+    except (OSError, ValueError, AttributeError):
+        return str(exc.reason)
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    if isinstance(error, str) and error:
+        return error
+    return str(exc.reason)
+
+
+def ensure_server() -> bool:
+    """Return True if the AI server answers, starting it first if it does not.
+
+    ``start_server()`` is idempotent and lock-serialized; this names the intent
+    at the call sites that only need the server up, not started specifically.
+    """
+    return is_available() or start_server()
+
+
 def start_server() -> bool:
     """Start ``llama-server`` in router mode and wait for it to answer.
 
@@ -455,10 +558,7 @@ def start_server() -> bool:
     """
     binary = resolve_server_bin()
     if binary is None:
-        utils.warning_print(
-            "llama-server is not installed.",
-            details=install_guidance_lines(),
-        )
+        _fail("llama-server is not installed.", install_guidance_lines())
         return False
 
     with _start_server_lock:
@@ -470,7 +570,7 @@ def start_server() -> bool:
         try:
             directory.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
-            utils.warning_print(f"Could not create the models dir: {exc}")
+            _fail(f"Could not create the models dir: {exc}")
             return False
 
         host, port = _base_host_port()
@@ -494,7 +594,7 @@ def start_server() -> bool:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except OSError as exc:
-            utils.warning_print(f"Failed to start AI server: {exc}")
+            _fail(f"Failed to start AI server: {exc}")
             return False
 
         global _server_proc
@@ -511,14 +611,14 @@ def start_server() -> bool:
             code = proc.poll()
             if code is not None:
                 _server_proc = None
-                utils.warning_print(
+                _fail(
                     f"AI server exited immediately (code {code}) — "
                     "is the port already in use?"
                 )
                 return False
             time.sleep(_START_POLL_INTERVAL)
 
-    utils.warning_print("AI server did not start within timeout.")
+    _fail("AI server did not start within timeout.")
     return False
 
 
@@ -645,7 +745,7 @@ def _do_generate(
                 continue
             error = chunk.get("error")
             if error:
-                utils.warning_print(f"AI generate failed: {error}")
+                _fail(f"AI generate failed: {error}")
                 return None
             piece, finished = _delta_piece(chunk)
             if piece:
@@ -667,7 +767,7 @@ def _do_generate(
         if watcher is not None:
             watcher.join(timeout=0.5)
         if deadline_exceeded:
-            utils.warning_print(
+            _fail(
                 f"AI generate exceeded {_GENERATE_DEADLINE}s deadline "
                 f"(model: {body.get('model')}); aborting."
             )
@@ -679,13 +779,11 @@ def _do_generate(
         # restarted, the model was unloaded mid-run, or the connection
         # dropped. The accumulated text is a truncated prefix; returning it
         # would commit a half-written result as a finished one.
-        utils.warning_print(
-            f"AI stream ended before completion (model: {body.get('model')})"
-        )
+        _fail(f"AI stream ended before completion (model: {body.get('model')})")
         return None
     text = "".join(parts).strip()
     if not text:
-        utils.warning_print(f"AI returned empty response (model: {body.get('model')})")
+        _fail(f"AI returned empty response (model: {body.get('model')})")
         return None
     return text
 
@@ -755,40 +853,63 @@ def generate(
     }
 
     try:
-        return _generate_with_load_retry(body, cancel_event, on_token)
+        text = _generate_with_load_retry(body, cancel_event, on_token)
+        _record_failure(resolved_model, "")  # it works now; forget any old mark
+        # A load retry can fail once and then succeed; that first reason must
+        # not outlive the call and get pinned on an unrelated empty result.
+        take_last_error()
+        return text
     except urllib.error.HTTPError as exc:
-        utils.warning_print(f"AI generate failed (HTTP {exc.code}): {exc.reason}")
+        detail = _http_error_detail(exc)
+        # llama.cpp's own wording for a model it cannot read. Anything else
+        # (connection, timeout, empty answer) is not the model's fault, so it
+        # must not brand it unusable.
+        if "failed to load" in detail.lower():
+            _record_failure(resolved_model, detail)
+        _fail(f"AI generate failed: {detail}")
         return None
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         if cancel_event is not None and cancel_event.is_set():
             return None
         if not _is_connection_refused(exc):
-            utils.warning_print(f"AI generate failed (connection): {exc}")
+            _fail(f"AI generate failed (connection): {exc}")
             return None
-        # Connection refused — try to start the server and retry once
+        # Connection refused — try to start the server and retry once.
         if not start_server():
+            # start_server records the specific reason (not installed, port
+            # held, startup timeout); this only covers a silent False.
+            if not getattr(_thread_state, "last_error", ""):
+                _fail("The AI server is not running and would not start.")
             return None
         try:
-            return _generate_with_load_retry(body, cancel_event, on_token)
+            text = _generate_with_load_retry(body, cancel_event, on_token)
+            _record_failure(resolved_model, "")
+            take_last_error()
+            return text
+        except urllib.error.HTTPError as retry_exc:
+            detail = _http_error_detail(retry_exc)
+            if "failed to load" in detail.lower():
+                _record_failure(resolved_model, detail)
+            _fail(f"AI generate failed after retry: {detail}")
+            return None
         except (
             urllib.error.URLError,
-            urllib.error.HTTPError,
             OSError,
             http.client.HTTPException,
         ) as retry_exc:
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            utils.warning_print(f"AI generate failed after retry: {retry_exc}")
+            _fail(f"AI generate failed after retry: {retry_exc}")
             return None
         except (json.JSONDecodeError, KeyError, ValueError) as retry_exc:
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            utils.warning_print(f"AI generate failed (response): {retry_exc}")
+            _fail(f"AI generate failed (response): {retry_exc}")
             return None
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
         if cancel_event is not None and cancel_event.is_set():
             return None
-        utils.warning_print(f"AI generate failed (response): {exc}")
+        _fail(f"AI generate failed (response): {exc}")
         return None
 
 

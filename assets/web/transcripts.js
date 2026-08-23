@@ -17,6 +17,8 @@
 
   var state = {
     participants: [],
+    // "<pid>/<agent>" -> the failure reason already toasted for that run.
+    agentErrorsSeen: {},
     selectedParticipant: null,
     segments: [],
     corrections: [],
@@ -707,6 +709,43 @@
     renderEmptyState();
   }
 
+  // An AI run that fails stores nothing and the panel just goes empty. This is
+  // the one poll that watches every participant, so it is where the reason
+  // reaches the user however the run was started (panel button, pill menu, or
+  // an auto-chained agent on a participant that isn't even selected).
+  //
+  // Deduped per participant+agent: the poll repeats the reason until the next
+  // run clears it server-side, and re-toasting it every few seconds would bury
+  // the page. Dropping the key when the error clears is what lets an identical
+  // second failure toast again.
+  function _reportAgentErrors(participants) {
+    var live = {};
+    for (var i = 0; i < participants.length; i++) {
+      var pid = participants[i].id;
+      var errors = participants[i].agent_errors || {};
+      for (var agent in errors) {
+        if (!Object.prototype.hasOwnProperty.call(errors, agent)) continue;
+        live[pid + "/" + agent] = true;
+        reportAgentError(pid, agent, errors[agent]);
+      }
+    }
+    var seen = state.agentErrorsSeen;
+    for (var known in seen) {
+      if (!Object.prototype.hasOwnProperty.call(live, known)) delete seen[known];
+    }
+  }
+
+  // The single toast for a failed AI run, shared with the per-agent panel polls
+  // (which see the same reason sooner on the selected participant). Whichever
+  // gets there first wins; the other is deduped.
+  function reportAgentError(pid, agentKey, message) {
+    if (!message) return;
+    var key = pid + "/" + agentKey;
+    if (state.agentErrorsSeen[key] === message) return;
+    state.agentErrorsSeen[key] = message;
+    showToast(pid + " " + agentKey + ": " + message);
+  }
+
   function loadParticipants() {
     return apiGet("api/participants").then(function (data) {
       if (!data.ok) {
@@ -718,6 +757,7 @@
       // which is status-gated and lands (if ever) after first render.
       if (data.config) clipgenApplyConfig(data.config);
       state.participants = data.participants;
+      _reportAgentErrors(data.participants);
       state.hasSheet = !!data.has_sheet;
       state.transcribePrewarm = data.transcribe_prewarm || "queue_open";
       renderPills();
@@ -2724,27 +2764,20 @@
       confirmBtn.classList.remove("hidden");
 
       if (opts.kind === "llm-runtime") {
-        // The runtime missing or down is a different problem from "the model
-        // isn't downloaded", and the one case the gate used to stay silent
-        // about. Frozen builds bundle llama-server, so "missing" only appears
-        // on source-tree runs: show the commands and offer a re-check. Not
+        // A missing runtime is the one AI state clipgen cannot fix for itself
+        // (a stopped one is simply started), so it is the only one that asks.
+        // Frozen builds bundle llama-server, so this only appears on
+        // source-tree runs: show the commands and offer a re-check. Not
         // status.message — that is written for a panel banner and ends in
         // "then Refresh", the wrong instruction beside a button that does the
         // re-check itself.
-        if (opts.state === "missing") {
-          titleEl.textContent = "AI runtime isn't installed";
-          msgEl.textContent = "clipgen couldn't find llama-server on this machine. " +
-            "The AI summaries, citations and reports need it — everything else works without it.";
-          confirmBtn.textContent = "I've installed it — retry";
-          if (opts.hint && opts.hint.length) {
-            hintEl.textContent = opts.hint.join("\n");
-            hintEl.classList.remove("hidden");
-          }
-        } else {
-          titleEl.textContent = "AI server isn't running";
-          msgEl.textContent = "The AI server isn't answering at " +
-            (opts.baseUrl || "localhost") + ". clipgen can start it for you.";
-          confirmBtn.textContent = "Start AI server";
+        titleEl.textContent = "AI runtime isn't installed";
+        msgEl.textContent = "clipgen couldn't find llama-server on this machine. " +
+          "The AI summaries, citations and reports need it — everything else works without it.";
+        confirmBtn.textContent = "I've installed it — retry";
+        if (opts.hint && opts.hint.length) {
+          hintEl.textContent = opts.hint.join("\n");
+          hintEl.classList.remove("hidden");
         }
       } else if (opts.kind === "whisper") {
         titleEl.textContent = "Download transcription model?";
@@ -2778,17 +2811,12 @@
       }
       function onCancel() { close(false); }
 
-      // "Start AI server" / "I've installed it — retry": both end in the same
-      // question — is the runtime usable now? Re-fetch rather than trusting
-      // the start call, so a server that spawned but never came up still
-      // reads as a failure.
+      // "I've installed it — retry": re-fetch rather than trusting the user,
+      // so a runtime that still isn't on PATH reads as a failure.
       function onRuntimeConfirm() {
         confirmBtn.disabled = true;
         progress.classList.remove("hidden");
-        setProgressText(opts.state === "stopped" ? "Starting…" : "Checking…");
-        var step = opts.state === "stopped"
-          ? apiPost("api/models/llm/start", {}).catch(function () { return null; })
-          : Promise.resolve(null);
+        setProgressText("Checking…");
         // Re-enabling the button and relabelling Cancel is the only way out of
         // the "Checking…" state, so it has to happen on *every* ending — a
         // /api/models that rejects left the dialog stuck mid-check with both
@@ -2800,11 +2828,9 @@
           cancelBtn.textContent = "Close";
         }
 
-        step.then(function () {
-          _trModelsCache = null;
-          _trModelsCachePromise = null;
-          return _trFetchModels();
-        }).then(function (data) {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        _trFetchModels().then(function (data) {
           if (cancelled) return;
           // _trFetchModels resolves null rather than rejecting when the fetch
           // fails, and clipgenLlmStatus(null) is "ok" by design (an unknown
@@ -2815,14 +2841,15 @@
             stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
             return;
           }
-          if (clipgenLlmStatus(data.llm).state === "ok") {
-            showToast("AI server is ready");
+          // "stopped" counts: a freshly installed runtime is never already
+          // running, and the caller starts it.
+          if (clipgenLlmStatus(data.llm).state !== "missing") {
+            showToast("AI runtime found");
             close(true);
             return;
           }
-          stillUnavailable(opts.state === "stopped"
-            ? "The AI server still isn't responding."
-            : "Still not finding it. Open a new terminal and check `llama-server --version`.");
+          stillUnavailable(
+            "Still not finding it. Open a new terminal and check `llama-server --version`.");
         }).catch(function () {
           stillUnavailable("Couldn't check — clipgen didn't answer. Try again.");
         });
@@ -2875,34 +2902,64 @@
   // Gate an agent run on the AI server being usable and its model downloaded;
   // resolves true to proceed, false to abort.
   //
-  // An unreachable server gets its own dialog rather than falling through to
-  // the downstream "model unavailable" error, which only appears on two agent
-  // surfaces and never says how to fix anything — and it is the state a
-  // first-time user is actually in. An *unknown* state (fetch failed) still
-  // passes: never block an action on a question we couldn't ask.
+  // A runtime that is installed but not answering is not a decision the user
+  // has to make, so it is started here rather than asked about. Only a missing
+  // runtime gets the dialog: nothing clipgen can do fixes that one. An
+  // *unknown* state (fetch failed) passes: never block an action on a question
+  // we couldn't ask.
   function ensureAgentModelInstalled(agentKey) {
     return _trFetchModels().then(function (data) {
       var llm = data && data.llm;
       if (!llm) return true;
       var status = clipgenLlmStatus(llm);
-      if (status.state !== "ok") {
+      if (status.state === "stopped") {
+        return _startAiServer().then(function (fresh) {
+          if (!fresh) return false;
+          // The server is up now, but that says nothing about the agent's
+          // model — the payload we started from may list no models at all.
+          return _ensureModelFromPayload(fresh, agentKey);
+        });
+      }
+      if (status.state === "missing") {
         return confirmModelInstall({
           kind: "llm-runtime",
-          state: status.state,
           baseUrl: status.baseUrl,
           hint: status.hint,
         }).then(function (recovered) {
           if (!recovered) return false;
-          // The server is up now, but that says nothing about the agent's
-          // model — the payload we started from may list no models at all.
-          // Ask again against the fresh one the dialog just refetched.
-          return _trFetchModels().then(function (fresh) {
+          // Installed now, but never already running — same path as stopped.
+          return _startAiServer().then(function (fresh) {
+            if (!fresh) return false;
             return _ensureModelFromPayload(fresh, agentKey);
           });
         });
       }
       return _ensureModelFromPayload(data, agentKey);
     }).catch(function () { return true; });
+  }
+
+  // Start the AI server and resolve the refreshed /api/models payload, or null
+  // if it never came up. The toast is the only sign of the ~2 s boot, which
+  // otherwise reads as a click that did nothing.
+  function _startAiServer() {
+    showToast("Starting AI server…");
+    return apiPost("api/models/llm/start", {})
+      .then(function () {
+        _trModelsCache = null;
+        _trModelsCachePromise = null;
+        return _trFetchModels();
+      })
+      .then(function (fresh) {
+        if (fresh && fresh.ok && clipgenLlmStatus(fresh.llm).state === "ok") {
+          return fresh;
+        }
+        showToast("The AI server did not start");
+        return null;
+      })
+      .catch(function (e) {
+        showToast((e && e.message) || "The AI server did not start");
+        return null;
+      });
   }
 
   // The "is this agent's model downloaded?" half of the gate, against an
@@ -4180,6 +4237,7 @@
   var TS = (window.ClipgenTranscripts = window.ClipgenTranscripts || {});
   TS.state = state;
   TS.showToast = showToast;
+  TS.reportAgentError = reportAgentError;
   // Hub helpers the satellites call outward.
   TS.loadTranscript = loadTranscript; // corrections, search, agents
   TS.findOverlapsForSearch = findOverlapsForSearch; // search
