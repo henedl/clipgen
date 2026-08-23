@@ -20,7 +20,8 @@ phash-skip never hides the callback). Each tool writes to its own wiped
 output dir so a cached manifest can never absorb the scan. `--runs N` keeps
 the fastest run per tool (minimum callback seconds), the standard treatment
 for scheduler noise. `text` is excluded from the default sweep: OCR is an
-order of magnitude slower than every other tool and pins ~1 GB of RSS.
+order of magnitude slower than every other tool and pins ~0.8 GB of RSS per
+pooled OCR engine (measured 3.3 GB at the default auto pool of 4).
 
 The parser (`parse_profile`) is unit-tested in test_scan_bench_parse.py;
 everything else is a thin subprocess driver kept dependency-free on purpose.

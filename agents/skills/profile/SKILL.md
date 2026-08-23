@@ -210,7 +210,8 @@ uv run python tests/perf/scan_bench.py --compare /tmp/base.json  # Δcallback %
 ```
 
 `--tools color,text` narrows the sweep (`text` is off by default: OCR is 10×
-slower and pins ~1 GB RSS); `--runs 2` keeps the fastest run per tool. For a
+slower and pins ~0.8 GB RSS per pooled engine — 3.3 GB at the default auto
+pool of 4); `--runs 2` keeps the fastest run per tool. For a
 single tool the direct CLI form is still useful (unique `-o` dir per run):
 
 ```bash
