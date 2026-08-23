@@ -438,16 +438,14 @@
     hintEl.classList.add("hidden");
     hintEl.textContent = "";
     _trFetchModels().then(function (data) {
+      // A stopped server is not worth a hint: running the summary starts it.
       var status = clipgenLlmStatus(data && data.llm);
-      if (status.state === "ok") return;
-      var extra = "";
-      if (status.state === "missing") {
-        // Running the summary raises the install dialog, so the shortest true
-        // instruction here is "just run it".
-        extra = status.canInstall
-          ? " clipgen can download it for you when you run the summary."
-          : (status.hint.length ? " " + status.hint[0] : "");
-      }
+      if (status.state !== "missing") return;
+      // Running the summary raises the install dialog, so the shortest true
+      // instruction here is "just run it".
+      var extra = status.canInstall
+        ? " clipgen can download it for you when you run the summary."
+        : (status.hint.length ? " " + status.hint[0] : "");
       hintEl.textContent = status.message + extra;
       hintEl.classList.remove("hidden");
     }).catch(function () { /* leave the plain empty state alone */ });

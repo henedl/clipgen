@@ -161,7 +161,7 @@ def test_report_builds_from_summary_and_sources(tmp_path, monkeypatch):
     import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: True)
     monkeypatch.setattr(
         thinking_agents,
         "report_source_lines",
@@ -355,7 +355,7 @@ def test_transcribe_raises_when_decode_fails(tmp_path, monkeypatch):
 def test_thinking_executors_empty_when_llm_unavailable(tmp_path, monkeypatch):
     import llm_client
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: False)
     ctx = _ctx(tmp_path)
     segs = {"segments": [{"start": 0, "end": 1, "text": "hi"}], "source": {}}
     tr = {"segments": [{"start": 0, "end": 1, "text": "hi"}]}
@@ -406,7 +406,7 @@ def test_summarize_wires_thinking_agent(tmp_path, monkeypatch):
     import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: True)
     monkeypatch.setattr(
         thinking_agents, "summarize_transcript", lambda segments, **kw: "the summary"
     )
@@ -421,7 +421,7 @@ def test_thinking_executors_thread_model_param(tmp_path, monkeypatch):
     import llm_client
     import thinking_agents
 
-    monkeypatch.setattr(llm_client, "is_available", lambda: True)
+    monkeypatch.setattr(llm_client, "ensure_server", lambda: True)
     seen: dict[str, Any] = {}
 
     monkeypatch.setattr(

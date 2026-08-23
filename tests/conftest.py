@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -262,6 +263,35 @@ def _reset_thinking_agents_getters():
     finally:
         thinking_agents._observation_rows_getter = original_rows
         thinking_agents._participant_marks_getter = original_marks
+
+
+@pytest.fixture(autouse=True)
+def _no_real_llama_server(monkeypatch):
+    """Never spawn a real ``llama-server`` from the suite.
+
+    ``ensure_server()`` starts one whenever the runtime is installed, so a test
+    that only stubs ``is_available`` would fork a 15-second orphan on a
+    developer machine that has llama.cpp. ``start_server`` catches OSError and
+    degrades to False, which is the answer such a test wants anyway. The
+    start-server tests patch ``subprocess.Popen`` themselves, and a decorator
+    patch is applied after fixtures, so they still see their own mock.
+    """
+    import llm_client
+
+    class _NoPopen:
+        """Stands in for the ``subprocess`` module inside llm_client only.
+
+        Patching ``llm_client.subprocess.Popen`` would hit the shared stdlib
+        module and break every ``subprocess.run`` in the suite (ffmpeg).
+        """
+
+        def Popen(self, *args, **kwargs):
+            raise OSError("llama-server spawning is disabled under pytest")
+
+        def __getattr__(self, name):
+            return getattr(subprocess, name)
+
+    monkeypatch.setattr(llm_client, "subprocess", _NoPopen())
 
 
 @pytest.fixture

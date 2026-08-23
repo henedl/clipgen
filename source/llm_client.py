@@ -456,6 +456,15 @@ def _ensure_registered(value: str) -> None:
     start_server()
 
 
+def ensure_server() -> bool:
+    """Return True if the AI server answers, starting it first if it does not.
+
+    ``start_server()`` is idempotent and lock-serialized; this names the intent
+    at the call sites that only need the server up, not started specifically.
+    """
+    return is_available() or start_server()
+
+
 def start_server() -> bool:
     """Start ``llama-server`` in router mode and wait for it to answer.
 

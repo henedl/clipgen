@@ -653,6 +653,24 @@ class TestAutoStartServer:
         assert "--no-webui" in args
         assert "--models-max" in args
 
+    @patch("llm_client.start_server")
+    @patch("llm_client.is_available")
+    def test_ensure_server_skips_the_start_when_already_up(
+        self, mock_available, mock_start
+    ):
+        mock_available.return_value = True
+        assert llm_client.ensure_server() is True
+        mock_start.assert_not_called()
+
+    @patch("llm_client.start_server")
+    @patch("llm_client.is_available")
+    def test_ensure_server_starts_a_stopped_server(self, mock_available, mock_start):
+        """The whole point: nobody has to press a button to get the AI back."""
+        mock_available.return_value = False
+        mock_start.return_value = True
+        assert llm_client.ensure_server() is True
+        mock_start.assert_called_once()
+
     @patch("llm_client.shutil.which")
     def test_start_server_returns_false_when_binary_missing(self, mock_which):
         mock_which.return_value = None
