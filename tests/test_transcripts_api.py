@@ -752,6 +752,54 @@ def test_citations_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
     assert "P01" not in transcripts_server._orchestrator._cancel_events["citations"]
 
 
+def test_agents_read_corrected_segments(_agent_state_clean, monkeypatch):
+    """Agents must see what the reader sees.
+
+    apply_corrections is a read-time transform, so the stored segments stay
+    raw forever. Nothing re-applies them on the agent path, which left every
+    summary quoting text the UI had already fixed. Ids must survive the
+    round-trip too: apply_corrections returns fresh segments without one, and
+    friction moments key on it.
+    """
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+    transcripts_server._manifest = {
+        "source_transcripts": {
+            pid: {
+                "segments": [
+                    {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh frobnicator"}
+                ]
+            }
+        },
+        "corrections": [{"id": "c1", "from": "teh", "to": "the"}],
+        "marks": [],
+        "known_terms": [],
+    }
+
+    seen: dict = {}
+    done = threading.Event()
+
+    # Returns None so no summary is committed: a committed one advances the
+    # chain into a real citations pass, which outlives the test and its
+    # monkeypatches.
+    def capture(snapshot, cancel_event, on_token=None):
+        seen["segments"] = snapshot["segments"]
+        done.set()
+
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+    monkeypatch.setitem(summary_agent, "run", capture)
+
+    orch.run_agent("summary", pid, force=True)
+    assert done.wait(timeout=5), "summary agent never ran"
+
+    assert seen["segments"][0]["text"] == "the frobnicator"
+    assert seen["segments"][0]["id"] == "P01:0"
+    # The manifest keeps the raw text so corrections survive re-transcription.
+    raw = transcripts_server._manifest["source_transcripts"][pid]["segments"][0]
+    assert raw["text"] == "teh frobnicator"
+
+
 def test_orchestrator_stop_then_restart_isolates_run_state(
     _agent_state_clean, monkeypatch
 ):

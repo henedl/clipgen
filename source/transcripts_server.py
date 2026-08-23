@@ -450,6 +450,33 @@ def _corrected_segments(
     return corrected
 
 
+def _corrected_segments_with_ids(
+    participant: str,
+    raw_segments: list[Any],
+    corrections: list[Any],
+    version: int | None = None,
+) -> list[Any]:
+    """Corrected segments that keep their ids, for the thinking agents.
+
+    apply_corrections() returns fresh TranscriptSegments carrying no ``id`` —
+    read routes recover it by zipping against the raw list. Agents need the same
+    treatment for a second reason: friction moments and their UI jump targets
+    are keyed on the id, and an id-less segment silently falls back to its
+    positional index.
+    """
+    corrected = _corrected_segments(
+        participant, raw_segments, corrections, version=version
+    )
+    out: list[Any] = []
+    for raw, cor in zip(raw_segments, corrected):
+        seg = dict(cor)
+        seg_id = raw.get("id")
+        if seg_id:
+            seg["id"] = seg_id
+        out.append(seg)
+    return out
+
+
 @transcripts_bp.route("/api/transcript/<participant>")
 def api_transcript(participant: str) -> FlaskResponse:
     """Return full transcript segments for a participant (corrections applied)."""
@@ -2801,6 +2828,18 @@ class AgentOrchestrator:
                     # written back (only entry[manifest_field] is committed),
                     # so this key cannot leak into the manifest.
                     snapshot["participant"] = participant
+                    # Agents read what the reader reads. Corrections are a
+                    # read-time transform, so the stored segments stay raw
+                    # (that is what lets them re-apply after a re-transcribe)
+                    # and nothing on this path had ever applied them — every
+                    # summary quoted text the UI had already fixed. self._lock
+                    # *is* _manifest_lock, so this is the documented lock order
+                    # and the version may be omitted.
+                    snapshot["segments"] = _corrected_segments_with_ids(
+                        participant,
+                        list(entry["segments"]),
+                        list(_manifest.get("corrections", [])),
+                    )
 
                 def _sink(tok: str) -> None:
                     with self._partial_lock:
