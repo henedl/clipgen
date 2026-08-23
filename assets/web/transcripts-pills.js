@@ -185,9 +185,8 @@
       var newWrap = _findPillWrap(openPid);
       var floating = document.querySelector("body > .pill-options");
       if (newWrap && floating) {
+        // Repositions against the rebuilt wrap on its own.
         _refreshPillOptionsContent(openPid, taskByPid);
-        var refreshed = document.querySelector("body > .pill-options[data-pid='" + openPid + "']");
-        if (refreshed) _positionPillOptions(refreshed, newWrap);
       } else {
         closePillOptions();
       }
@@ -208,6 +207,10 @@
     var fresh = buildPillOptions(p, s);
     fresh.setAttribute("data-pid", pid);
     floating.parentNode.replaceChild(fresh, floating);
+    // The pane is position:fixed and placed by inline left/top, which the fresh
+    // node does not carry — without this it paints in the viewport corner.
+    var wrap = _findPillWrap(pid);
+    if (wrap) _positionPillOptions(fresh, wrap);
     // The swap discards the painted cursor while pillOptionsCursor stays set.
     _pillNavRestoreCursor(navId);
   }
