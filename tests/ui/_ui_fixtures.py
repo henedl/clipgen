@@ -68,7 +68,7 @@ def require_ffmpeg() -> None:
         raise UiUnavailable(
             f"{' and '.join(missing)} not found on PATH — the UI harness needs them "
             "to build its fixture videos.\n"
-            "  brew install ffmpeg    (or scripts/install-ffmpeg-ollama.sh)"
+            "  brew install ffmpeg    (or scripts/install-deps.sh)"
         )
 
 
