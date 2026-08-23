@@ -4475,13 +4475,24 @@ def build_combined_app(
         methods=["DELETE"],
     )
 
-    # The settings modal opens from every page, so its model delete calls the
-    # combined root; the rule itself lives on the transcripts blueprint.
+    # The settings modal opens from every page, so its model delete and
+    # download calls hit the combined root; the rules live on transcripts_bp.
     combined.add_url_rule(
         "/api/models/llm/<name>",
         "combined_llm_delete",
         transcripts_server.api_llm_delete,
         methods=["DELETE"],
+    )
+    combined.add_url_rule(
+        "/api/models/llm/download",
+        "combined_llm_download",
+        transcripts_server.api_llm_download,
+        methods=["POST"],
+    )
+    combined.add_url_rule(
+        "/api/models/llm/download-status",
+        "combined_llm_download_status",
+        transcripts_server.api_llm_download_status,
     )
 
     # ---- Model discovery ----
@@ -4517,6 +4528,18 @@ def build_combined_app(
             }
             for m in raw
         ]
+        # Curated downloads; installed flips the settings row to "Downloaded".
+        llm_suggested = [
+            {
+                "name": m["name"],
+                "stem": llm_client.model_name(m["name"]),
+                "size_mb": m["size_mb"],
+                "description": m["description"],
+                "installed": llm_client.is_model_installed(m["name"], raw),
+                "unusable": failures.get(llm_client.model_name(m["name"]), ""),
+            }
+            for m in llm_client.SUGGESTED_MODELS
+        ]
 
         # Per thinking-agent model + install status, so the Transcripts UI can
         # confirm a download before running an agent against a missing model.
@@ -4545,6 +4568,7 @@ def build_combined_app(
                 "installed": llm_client.is_installed(),
                 "install_hint": llm_client.install_guidance_lines(),
                 "models": llm_models,
+                "suggested": llm_suggested,
                 "agents": llm_agents,
                 "base_url": config.LLM_BASE_URL,
             },

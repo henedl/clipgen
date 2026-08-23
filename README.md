@@ -44,7 +44,7 @@ Two optional rows: a `Baseline time` row converts clock timestamps (e.g. `09:12:
 
 ### Local AI (optional)
 
-Transcript summaries and Overview reports run on a local LLM via [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. The desktop app bundles it; source-tree runs install it once (`brew install llama.cpp`, or `scripts/install-deps.*`) and clipgen starts and stops it for you. Models download from Hugging Face on first use, with your confirmation — and models you already have in the llama.cpp cache, the Hugging Face cache, or an Ollama install are reused automatically instead of re-downloaded. Transcription itself does not need the AI server.
+Transcript summaries and Overview reports run on a local LLM via [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. The desktop app bundles it; source-tree runs install it once (`brew install llama.cpp`, or `scripts/install-deps.*`) and clipgen starts and stops it for you. Models download from Hugging Face on first use, with your confirmation — and models you already have in the llama.cpp cache, the Hugging Face cache, or an Ollama install are reused automatically instead of re-downloaded. **Settings → Summaries** lists a few suggested models (from a 1.2 GB Qwen3.5 2B up to the 9B default) with a Download button; any Hugging Face `user/repo:QUANT` GGUF ref works too. Transcription itself does not need the AI server.
 
 ## Command line
 
