@@ -135,6 +135,7 @@
       var started = Date.now();
       var ver = state.participantReqVer;
       desc._failStreak = 0;
+      desc._lastError = "";
       desc._poller = createPoller(function () {
         if (ver !== state.participantReqVer ||
             state.selectedParticipant !== pid ||
@@ -146,6 +147,7 @@
         apiGet(desc.urlBase + "/" + pid).then(function (data) {
           if (ver !== state.participantReqVer) return;
           desc._failStreak = 0;
+          if (data.error) _reportAgentFailure(desc, data.error);
           if (data.ok && desc.getResult(data)) {
             _stopAgentPoll(desc);
             desc.onResult(pid, data);
@@ -160,7 +162,8 @@
           if (err && err.status === 404) {
             // The endpoint 404s once the run is over with nothing persisted
             // (find_citations' failure return, AI server down) — the genuine
-            // empty case.
+            // empty case. It carries the reason when the run actually failed.
+            if (err.serverMessage) _reportAgentFailure(desc, err.serverMessage);
             _stopAgentPoll(desc);
             desc.onEmpty(pid);
             return;
@@ -178,6 +181,15 @@
       }, desc.interval, { runImmediately: false, label: "transcripts.agent." + desc.key });
       desc._poller.start();
     };
+  }
+
+  // An AI run that fails leaves an empty panel and a terminal warning nobody
+  // sees. Toast the server's reason instead — it names the real cause ("model
+  // name=X failed to load"), which the panel's own empty state never can.
+  function _reportAgentFailure(desc, message) {
+    if (!message || desc._lastError === message) return;
+    desc._lastError = message;
+    showToast(message);
   }
 
   // Timer-only teardown (mirrors the old per-agent _stop*Poll): does NOT reset

@@ -1198,12 +1198,15 @@ var clipgenWheelToHorizontal = function (el) {
 // Shared !r.ok handling: reject with the server's {ok:false, error} envelope
 // message when the body carries one (so toasts show "The span is outside the
 // recording", not "Server error 400"), with .status set for callers that
-// branch on it (409 busy, etc.).
+// branch on it (409 busy, etc.) and .serverMessage set only when the body
+// actually explained itself — a caller that shows the reason to the user must
+// be able to tell it apart from the generic "Server error 404" filler.
 var _apiJson = function (r) {
   if (!r.ok) {
     var mkError = function (message) {
       var e = new Error(message || "Server error " + r.status);
       e.status = r.status;
+      e.serverMessage = message || "";
       return e;
     };
     return r.json().then(

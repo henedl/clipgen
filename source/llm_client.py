@@ -75,6 +75,11 @@ _MODELS_MAX = "2"
 # the same time don't both spawn a router process.
 _start_server_lock = threading.Lock()
 
+# Last generation failure, per thread. Agent runs each own a daemon thread and
+# call generate() on it, so thread-local storage attributes the reason to the
+# right run without a lock or any cross-talk between concurrent agents.
+_thread_state = threading.local()
+
 # The router we spawned, if any — terminated at exit. SIGTERM, never SIGKILL:
 # the router reaps its per-model children only on a clean shutdown (gate
 # scenario 6: a killed router orphans them).
@@ -543,6 +548,45 @@ def start_server() -> bool:
     return False
 
 
+def _fail(message: str) -> str:
+    """Warn about a generation failure and remember it for the caller.
+
+    The warning used to be the only trace, which put every AI failure in the
+    terminal and none of them in the app.
+    """
+    _thread_state.last_error = message
+    utils.warning_print(message)
+    return message
+
+
+def take_last_error() -> str:
+    """Pop this thread's last generation failure (``""`` when there is none)."""
+    message = getattr(_thread_state, "last_error", "")
+    _thread_state.last_error = ""
+    return message
+
+
+def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+    """The router's own message for a failed request, else the HTTP reason.
+
+    llama-server answers an unloadable model with 500 and a JSON body naming
+    it ("model name=X failed to load"); ``exc.reason`` alone is the useless
+    "Internal Server Error". Ollama-sourced GGUFs land here regularly — the
+    fork writes metadata upstream llama.cpp rejects, and the model only fails
+    at load, never at discovery.
+    """
+    try:
+        payload = json.loads(exc.read().decode("utf-8", "replace"))
+    except (OSError, ValueError, AttributeError):
+        return str(exc.reason)
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return str(error["message"])
+    if isinstance(error, str) and error:
+        return error
+    return str(exc.reason)
+
+
 def _shutdown_response_socket(resp: Any) -> None:
     """Force-close the underlying socket of a urllib HTTPResponse.
 
@@ -666,7 +710,7 @@ def _do_generate(
                 continue
             error = chunk.get("error")
             if error:
-                utils.warning_print(f"AI generate failed: {error}")
+                _fail(f"AI generate failed: {error}")
                 return None
             piece, finished = _delta_piece(chunk)
             if piece:
@@ -688,7 +732,7 @@ def _do_generate(
         if watcher is not None:
             watcher.join(timeout=0.5)
         if deadline_exceeded:
-            utils.warning_print(
+            _fail(
                 f"AI generate exceeded {_GENERATE_DEADLINE}s deadline "
                 f"(model: {body.get('model')}); aborting."
             )
@@ -700,13 +744,11 @@ def _do_generate(
         # restarted, the model was unloaded mid-run, or the connection
         # dropped. The accumulated text is a truncated prefix; returning it
         # would commit a half-written result as a finished one.
-        utils.warning_print(
-            f"AI stream ended before completion (model: {body.get('model')})"
-        )
+        _fail(f"AI stream ended before completion (model: {body.get('model')})")
         return None
     text = "".join(parts).strip()
     if not text:
-        utils.warning_print(f"AI returned empty response (model: {body.get('model')})")
+        _fail(f"AI returned empty response (model: {body.get('model')})")
         return None
     return text
 
@@ -778,13 +820,13 @@ def generate(
     try:
         return _generate_with_load_retry(body, cancel_event, on_token)
     except urllib.error.HTTPError as exc:
-        utils.warning_print(f"AI generate failed (HTTP {exc.code}): {exc.reason}")
+        _fail(f"AI generate failed: {_http_error_detail(exc)}")
         return None
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         if cancel_event is not None and cancel_event.is_set():
             return None
         if not _is_connection_refused(exc):
-            utils.warning_print(f"AI generate failed (connection): {exc}")
+            _fail(f"AI generate failed (connection): {exc}")
             return None
         # Connection refused — try to start the server and retry once
         if not start_server():
@@ -799,17 +841,17 @@ def generate(
         ) as retry_exc:
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            utils.warning_print(f"AI generate failed after retry: {retry_exc}")
+            _fail(f"AI generate failed after retry: {retry_exc}")
             return None
         except (json.JSONDecodeError, KeyError, ValueError) as retry_exc:
             if cancel_event is not None and cancel_event.is_set():
                 return None
-            utils.warning_print(f"AI generate failed (response): {retry_exc}")
+            _fail(f"AI generate failed (response): {retry_exc}")
             return None
     except (json.JSONDecodeError, KeyError, ValueError) as exc:
         if cancel_event is not None and cancel_event.is_set():
             return None
-        utils.warning_print(f"AI generate failed (response): {exc}")
+        _fail(f"AI generate failed (response): {exc}")
         return None
 
 

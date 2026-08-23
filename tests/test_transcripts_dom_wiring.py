@@ -1160,3 +1160,18 @@ def test_a_cancelled_stream_does_not_leave_its_footer_behind():
         "cancel the queued insert first, or a backgrounded RAF re-adds the footer"
     )
     assert ".streaming-indicator" in branch and "removeChild" in branch
+
+
+def test_agent_failures_are_reported_to_the_user():
+    """An AI failure used to be a terminal warning and a silently empty panel.
+
+    The poll surfaces both shapes the route can carry: ``data.error`` beside a
+    200 (friction keeps its deterministic scores) and the reason on the 404.
+    """
+    agents = read("transcripts-agents.js")
+    assert "_reportAgentFailure(desc, data.error)" in agents
+    assert "_reportAgentFailure(desc, err.serverMessage)" in agents
+    # Deduped per poll run, or a 1.2s summary poll would toast every tick.
+    assert "desc._lastError === message" in agents
+    # The generic "Server error 404" filler must not reach the user.
+    assert "e.serverMessage = message" in read("utils.js")

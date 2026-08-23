@@ -1193,9 +1193,18 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         if deterministic is not None:
             resp["friction"] = deterministic
         return jsonify(resp)
+    # Nothing stored and nothing running: if the last run failed, say why. The
+    # reason was previously a terminal warning only, so the page just showed an
+    # empty panel and the user had no idea an unloadable model was the cause.
+    error = _orchestrator.take_error(participant, agent_key)
     deterministic = _deterministic_friction(agent_key, segments_snapshot)
     if deterministic is not None:
-        return jsonify({"ok": True, "friction": deterministic})
+        resp = {"ok": True, "friction": deterministic}
+        if error:
+            resp["error"] = error
+        return jsonify(resp)
+    if error:
+        return jsonify({"ok": False, "error": error}), 404
     return jsonify({"ok": False}), 404
 
 
@@ -2384,6 +2393,22 @@ class AgentOrchestrator:
             a["key"]: {} for a in thinking_agents.AGENTS
         }
         self._partial_lock = threading.Lock()
+        # Why the last run for this participant stored nothing. Set when a run
+        # ends empty, popped by the status route — the failure is otherwise
+        # only a terminal warning, and the page just shows an empty panel.
+        self._errors: dict[str, dict[str, str]] = {
+            a["key"]: {} for a in thinking_agents.AGENTS
+        }
+
+    def take_error(self, participant: str, agent_key: str) -> str:
+        """Pop the reason *agent_key*'s last run for *participant* stored nothing."""
+        with self._lock:
+            return self._errors.get(agent_key, {}).pop(participant, "")
+
+    def _record_error(self, agent_key: str, participant: str, message: str) -> None:
+        """Remember why a run stored nothing, for the next status poll."""
+        with self._lock:
+            self._errors.setdefault(agent_key, {})[participant] = message
 
     def partial_text(self, participant: str, agent_key: str) -> str:
         """Return the tokens streamed so far for an in-flight run (``""`` if none)."""
@@ -2528,6 +2553,7 @@ class AgentOrchestrator:
             self._in_flight[agent_key].add(participant)
             self._cancel_events[agent_key][participant] = cancel_event
             self._started_at[agent_key][participant] = datetime.now(UTC).timestamp()
+            self._errors[agent_key].pop(participant, None)
         with self._partial_lock:
             self._partial[agent_key][participant] = []
 
@@ -2594,6 +2620,12 @@ class AgentOrchestrator:
                     # (friction needs only the summary) would never start. Skip
                     # this agent for that lookup: without it next_eligible picks
                     # the same empty field straight back and the chain spins.
+                    self._record_error(
+                        agent_key,
+                        participant,
+                        llm_client.take_last_error()
+                        or f"The {agent_key} agent produced no result.",
+                    )
                     self.run_chain(
                         participant, force=False, skip=chain_skip | {agent_key}
                     )
@@ -2601,6 +2633,7 @@ class AgentOrchestrator:
                 utils.warning_print(
                     f"{agent_key} generation failed for {participant}: {exc}"
                 )
+                self._record_error(agent_key, participant, str(exc))
                 # A raising agent stores nothing either, so the chain has to move
                 # on for the same reason as the else-branch above. Skip it after a
                 # cancel, though: Stop is not a failure to route around, and the

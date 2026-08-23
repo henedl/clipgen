@@ -879,6 +879,41 @@ def test_summary_partial_streams_via_sink_and_clears(
     assert orch.partial_text(pid, "summary") == ""
 
 
+def test_failed_agent_run_reports_its_reason_once(tr_client, monkeypatch):
+    """A failed AI run must reach the page, not just the terminal.
+
+    The run stores nothing, so the route 404s; without the reason riding along
+    the user sees an empty panel and no hint that the model failed to load.
+    """
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+    transcripts_server._manifest = {
+        "source_transcripts": {pid: {"segments": [{"id": "s0", "text": "x"}]}},
+        "corrections": [],
+        "marks": [],
+    }
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+
+    def failing_run(snapshot, cancel_event, on_token=None):
+        import llm_client
+
+        llm_client._fail("AI generate failed: model name=tiny failed to load")
+
+    monkeypatch.setitem(summary_agent, "run", failing_run)
+
+    orch.run_agent("summary", pid, force=True)
+    _join_orchestrator_threads(orch)
+
+    resp = tr_client.get(f"/transcripts/api/agent/summary/{pid}")
+    assert resp.status_code == 404
+    assert "failed to load" in resp.get_json()["error"]
+    # Popped, so the next poll doesn't re-toast a failure the user has seen.
+    assert tr_client.get(f"/transcripts/api/agent/summary/{pid}").get_json() == {
+        "ok": False
+    }
+
+
 def test_summary_stream_emits_partial_then_done(
     tr_client, _agent_state_clean, monkeypatch
 ):

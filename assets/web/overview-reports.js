@@ -661,9 +661,14 @@
         if (g !== rpState.gen || !rpState.active) return;
         applyReportResponse(data, pid, g);
       })
-      .catch(function () {
+      .catch(function (err) {
         // 404 = no report stored for this participant (apiGet throws on it).
+        // It carries a reason when the run actually failed — an AI failure was
+        // otherwise a terminal warning and a silently empty panel here.
         if (g !== rpState.gen || !rpState.active) return;
+        if (err && err.serverMessage) {
+          showNotice(err.serverMessage, null, null, null);
+        }
         stopReportPoll();
         rpState.reportGenerating = false;
         rpState.reportMissing = true;

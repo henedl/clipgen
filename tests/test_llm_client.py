@@ -12,6 +12,7 @@ import socketserver
 import threading
 import time
 import urllib.error
+from email.message import Message
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -652,6 +653,35 @@ class TestAutoStartServer:
         assert "--models-dir" in args
         assert "--no-webui" in args
         assert "--models-max" in args
+
+    def test_http_error_detail_prefers_the_routers_own_message(self):
+        """A 500 reason is "Internal Server Error"; the body names the model."""
+        body = json.dumps(
+            {"error": {"code": 500, "message": "model name=tiny failed to load"}}
+        ).encode()
+        exc = urllib.error.HTTPError(
+            "http://x/v1/chat/completions",
+            500,
+            "Internal Server Error",
+            Message(),
+            None,
+        )
+        exc.read = lambda: body  # ty: ignore[invalid-assignment]
+        assert llm_client._http_error_detail(exc) == "model name=tiny failed to load"
+
+    def test_http_error_detail_falls_back_to_the_reason(self):
+        exc = urllib.error.HTTPError(
+            "http://x", 503, "Service Unavailable", Message(), None
+        )
+        exc.read = lambda: b"<html>nope</html>"  # ty: ignore[invalid-assignment]
+        assert llm_client._http_error_detail(exc) == "Service Unavailable"
+
+    def test_take_last_error_pops_the_recorded_reason(self):
+        """The orchestrator reads it once and turns it into a toast."""
+        llm_client.take_last_error()  # drain anything a prior test left
+        llm_client._fail("AI generate failed: model name=tiny failed to load")
+        assert "failed to load" in llm_client.take_last_error()
+        assert llm_client.take_last_error() == ""
 
     @patch("llm_client.start_server")
     @patch("llm_client.is_available")
