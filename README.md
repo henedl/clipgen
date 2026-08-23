@@ -25,7 +25,7 @@ The macOS build is unsigned, so Gatekeeper blocks the first launch: right-click 
 
 1. Download or clone the repository.
 2. Install [uv](https://docs.astral.sh/uv/) and run `uv sync`.
-3. Install ffmpeg: either manually or by `scripts/install-ffmpeg-ollama.sh` (macOS/Linux) or `scripts/install-ffmpeg-ollama.bat` (Windows).
+3. Install ffmpeg (and, for the AI features, llama.cpp): either manually or by `scripts/install-deps.sh` (macOS/Linux) or `scripts/install-deps.bat` (Windows).
 4. Run `uv run clipgen.py`.
 
 ### Your videos
@@ -44,7 +44,7 @@ Two optional rows: a `Baseline time` row converts clock timestamps (e.g. `09:12:
 
 ### Local AI (optional)
 
-Transcript summaries and Overview reports require [Ollama](https://ollama.com/download). clipgen offers to install Ollama and pull the models the first time you use an AI feature, and starts `ollama serve` for you. Transcription itself does not need Ollama.
+Transcript summaries and Overview reports run on a local LLM via [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server`. The desktop app bundles it; source-tree runs install it once (`brew install llama.cpp`, or `scripts/install-deps.*`) and clipgen starts and stops it for you. Models download from Hugging Face on first use, with your confirmation — and models you already have in the llama.cpp cache, the Hugging Face cache, or an Ollama install are reused automatically instead of re-downloaded. Transcription itself does not need the AI server.
 
 ## Command line
 

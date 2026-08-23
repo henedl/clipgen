@@ -259,7 +259,7 @@ def check_ffmpeg_tools_available() -> bool:
     if not getattr(sys, "frozen", False):
         # Source checkouts ship a script that does the whole job; a frozen
         # bundle has no repo to run it from, so only mention it when there is.
-        details.append("Or, from this checkout: scripts/install-ffmpeg-ollama.sh")
+        details.append("Or, from this checkout: scripts/install-deps.sh")
     # Not error_print: this aborts startup, and a windowed launch has no console
     # for the guidance above — the app would quit with nothing on screen.
     utils.fatal_startup_error("Required video tools are missing from PATH.", details)
