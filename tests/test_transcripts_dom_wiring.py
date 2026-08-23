@@ -77,6 +77,9 @@ REQUIRED_IDS = [
     "termInput",
     "addTermBtn",
     "termsList",
+    "exportDictBtn",
+    "saveGlobalDictBtn",
+    "dictGlobalHint",
 ]
 
 

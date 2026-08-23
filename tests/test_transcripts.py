@@ -1125,6 +1125,25 @@ class TestGetKnownTerms:
 
 
 # ---------------------------------------------------------------------------
+# Dictionary CSV interchange
+# ---------------------------------------------------------------------------
+
+
+class TestDictionaryCsv:
+    def test_empty_dictionary_still_has_a_header(self):
+        assert transcripts.dictionary_to_csv([], []).startswith("type,from,to")
+
+    def test_exports_both_halves(self):
+        text = transcripts.dictionary_to_csv([{"from": "teh", "to": "the"}], ["Widget"])
+        assert "correction,teh,the" in text
+        assert "term,,Widget" in text
+
+    def test_export_skips_half_filled_corrections(self):
+        text = transcripts.dictionary_to_csv([{"from": "teh", "to": ""}], [])
+        assert "teh" not in text
+
+
+# ---------------------------------------------------------------------------
 # get_corrections_keywords
 # ---------------------------------------------------------------------------
 

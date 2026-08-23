@@ -35,6 +35,7 @@ Corrections and vocabulary:
   apply_corrections(segments, corrections) → new segment list with from→to substitutions applied
   get_corrections_keywords(corrections) → unique "to" values for Whisper context_keywords
   get_known_terms(manifest) → study glossary, deduped, for Whisper hotwords
+  dictionary_to_csv(corrections, known_terms) → "type,from,to" CSV text
 
 Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which checks the
 transcripts manifest for pre-existing source transcripts, then falls back to live Whisper.
@@ -55,7 +56,6 @@ Timestamp tightening (both on by default):
 """
 
 import copy
-
 import os
 import queue
 import re
@@ -1204,6 +1204,32 @@ def get_known_terms(manifest: dict[str, Any]) -> list[str]:
             seen.add(term.lower())
             terms.append(term)
     return terms
+
+
+# ---------------------------------------------------------------------------
+# Dictionary interchange (corrections + known terms as one CSV)
+# ---------------------------------------------------------------------------
+
+# One flat table carries both halves so a study's vocabulary travels as a single
+# file: "correction" rows use both text columns, "term" rows only ``to``.
+DICTIONARY_CSV_COLUMNS = ("type", "from", "to")
+
+
+def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str]) -> str:
+    """Serialize corrections + known terms as ``type,from,to`` CSV."""
+    import data_export
+
+    rows: list[dict[str, Any]] = [
+        {"type": "correction", "from": c.get("from", ""), "to": c.get("to", "")}
+        for c in corrections
+        if c.get("from") and c.get("to")
+    ]
+    rows += [{"type": "term", "from": "", "to": term} for term in known_terms]
+    if not rows:
+        # to_csv derives its columns from the data, so an empty dictionary would
+        # export a zero-byte file that cannot be re-imported.
+        return ",".join(DICTIONARY_CSV_COLUMNS) + "\r\n"
+    return data_export.to_csv(rows, preferred_column_order=DICTIONARY_CSV_COLUMNS)
 
 
 # ---------------------------------------------------------------------------

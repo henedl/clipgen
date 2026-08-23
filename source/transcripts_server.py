@@ -27,6 +27,9 @@ API endpoints (all under /transcripts/):
   GET  /api/known-terms                           - list the study vocabulary
   POST /api/known-terms                           - add a known term
   DELETE /api/known-terms/<term>                  - remove a known term
+  GET  /api/dictionary.csv                        - corrections + terms as one CSV
+  GET  /api/dictionary/global                     - counts for the saved global copy
+  POST /api/dictionary/global                     - save this study's dictionary globally
   GET  /api/intake-poll                           - Studio-intake poll: running-state booleans + resolved marks
   GET  /api/marks                                 - list all marks with resolved segment data
   POST /api/marks                                 - create marks for segments
@@ -66,6 +69,7 @@ import files
 import friction
 import llm_client
 import remux_server
+import start_settings
 import thinking_agents
 import transcripts
 import utils
@@ -1489,6 +1493,60 @@ def api_known_terms_delete(term: str) -> FlaskResponse:
 
     _schedule_persist()
     return ok()
+
+
+# ---- Dictionary export ----
+#
+# Corrections and known terms travel together as one `type,from,to` CSV, plus a
+# global copy in the config dir so a house style-guide can seed a new study.
+
+_GLOBAL_DICTIONARY_FILE = "dictionary.json"
+
+
+@transcripts_bp.route("/api/dictionary.csv")
+def api_dictionary_export() -> FlaskResponse:
+    """Download corrections + known terms as one CSV."""
+    with _manifest_lock:
+        corrections = list(_manifest.get("corrections", []))
+        terms = list(_manifest.get("known_terms", []))
+    return Response(
+        transcripts.dictionary_to_csv(corrections, terms), content_type="text/csv"
+    )
+
+
+@transcripts_bp.route("/api/dictionary/global")
+def api_dictionary_global_status() -> FlaskResponse:
+    """Counts for the saved global dictionary, so the UI can label its buttons."""
+    saved = start_settings.load_config_json(_GLOBAL_DICTIONARY_FILE, default=None)
+    if not isinstance(saved, dict):
+        return ok(exists=False, corrections=0, terms=0)
+    return ok(
+        exists=True,
+        corrections=len(saved.get("corrections", [])),
+        terms=len(saved.get("known_terms", [])),
+    )
+
+
+@transcripts_bp.route("/api/dictionary/global", methods=["POST"])
+def api_dictionary_global_save() -> FlaskResponse:
+    """Copy this study's dictionary to the config dir for reuse elsewhere."""
+    with _manifest_lock:
+        corrections = list(_manifest.get("corrections", []))
+        terms = list(_manifest.get("known_terms", []))
+    if not corrections and not terms:
+        return err("Nothing to save")
+
+    path = start_settings.save_config_json(
+        _GLOBAL_DICTIONARY_FILE,
+        {
+            "corrections": corrections,
+            "known_terms": terms,
+            "saved": datetime.now(UTC).isoformat(),
+        },
+    )
+    if path is None:
+        return err("Could not write the global dictionary")
+    return ok(corrections=len(corrections), terms=len(terms))
 
 
 # ---- Marks ----

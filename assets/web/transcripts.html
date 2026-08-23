@@ -233,7 +233,10 @@
     <div class="modal-content">
       <div class="modal-header">
         <h3>Transcript Dictionary</h3>
-        <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+        <div class="dict-actions">
+          <button id="exportDictBtn" type="button" class="btn btn-small">Export CSV</button>
+          <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+        </div>
       </div>
       <section class="dict-section">
         <h4>Corrections</h4>
@@ -254,6 +257,13 @@
           <button id="addTermBtn" class="btn btn-small">Add</button>
         </div>
         <div id="termsList" class="term-chips"></div>
+      </section>
+      <section class="dict-section dict-global">
+        <h4>Global dictionary</h4>
+        <p class="dict-hint" id="dictGlobalHint">Reuse one house glossary across studies.</p>
+        <div class="dict-global-actions">
+          <button id="saveGlobalDictBtn" type="button" class="btn btn-small">Save as global</button>
+        </div>
       </section>
     </div>
   </div>

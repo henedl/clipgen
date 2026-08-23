@@ -2374,6 +2374,13 @@ body {
   font-size: var(--text-xs);
 }
 
+.dict-actions,
+.dict-global-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .dict-empty {
   color: var(--color-text-dim);
   font-size: var(--text-sm);

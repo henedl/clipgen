@@ -6,8 +6,10 @@
  * needing a correction. Loaded after transcripts.js; reads the hub's shared
  * state + helpers through window.ClipgenTranscripts (TS) and publishes
  * initCorrectionsModal / loadCorrections back so the hub's boot and the
- * inline-edit saveCorrections() flow can reach them. Plain utils.js globals
- * (qs/apiGet/apiPost/apiDelete/escapeHtml) are reached via the scope chain.
+ * inline-edit saveCorrections() flow can reach them. Both halves export together
+ * as one CSV, or as a global copy. Plain utils.js globals
+ * (qs/apiGet/apiPost/apiDelete/escapeHtml/clipgenSaveFromUrl/clipgenPluralUnit)
+ * are reached via the scope chain.
  */
 (function () {
   "use strict";
@@ -35,6 +37,7 @@
       });
       loadCorrections();
       loadKnownTerms();
+      loadGlobalStatus();
     });
 
     qs("#closeCorrectionsBtn").addEventListener("click", closeCorrectionsModal);
@@ -61,6 +64,10 @@
         addKnownTerm();
       }
     });
+
+    qs("#exportDictBtn").addEventListener("click", exportDictionary);
+
+    qs("#saveGlobalDictBtn").addEventListener("click", saveGlobalDictionary);
   }
 
   function loadCorrections() {
@@ -194,6 +201,41 @@
       }
     }).catch(function () {
       showToast("Failed to remove term");
+    });
+  }
+
+  // ---- Export ----
+
+  function exportDictionary() {
+    // Server-side CSV so there is one writer for the format, not two.
+    clipgenSaveFromUrl("api/dictionary.csv", "clipgen_dictionary.csv", function (path, err) {
+      if (err) showToast("Export failed");
+      else if (path) showToast("Dictionary exported");
+    });
+  }
+
+  // ---- Global dictionary ----
+
+  function loadGlobalStatus() {
+    var hint = qs("#dictGlobalHint");
+    apiGet("api/dictionary/global").then(function (data) {
+      if (!data.ok) return;
+      hint.textContent = data.exists
+        ? "Saved: " +
+          clipgenPluralUnit(data.corrections, "correction", "corrections") +
+          ", " +
+          clipgenPluralUnit(data.terms, "term", "terms") +
+          "."
+        : "Reuse one house glossary across studies.";
+    });
+  }
+
+  function saveGlobalDictionary() {
+    apiPost("api/dictionary/global", {}).then(function () {
+      showToast("Saved as the global dictionary");
+      loadGlobalStatus();
+    }).catch(function (e) {
+      showToast(e.serverMessage || "Could not save");
     });
   }
 

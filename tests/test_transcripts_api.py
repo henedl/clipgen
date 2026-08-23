@@ -11,6 +11,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config
+import start_settings
 import thinking_agents
 import transcripts
 import transcripts_server
@@ -2683,6 +2684,43 @@ def test_known_term_does_not_invalidate_corrected_cache(tr_client, monkeypatch):
     tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
     tr_client.get("/transcripts/api/transcript/P01")
     assert calls["n"] == 1
+
+
+def test_dictionary_export_csv(tr_client, monkeypatch):
+    """Both halves of the dictionary land in one CSV."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+
+    resp = tr_client.get("/transcripts/api/dictionary.csv")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    body = resp.get_data(as_text=True)
+    assert body.startswith("type,from,to")
+    assert "correction,teh,the" in body
+    assert "term,,Frobnicator" in body
+
+
+def test_global_dictionary_save(tr_client, tmp_path, monkeypatch):
+    """Saving copies this study's dictionary into the config dir."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    monkeypatch.setattr(
+        start_settings, "config_json_path", lambda name: tmp_path / name
+    )
+
+    assert (
+        tr_client.get("/transcripts/api/dictionary/global").get_json()["exists"]
+        is False
+    )
+    assert tr_client.post("/transcripts/api/dictionary/global").status_code == 400
+
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+    saved = tr_client.post("/transcripts/api/dictionary/global").get_json()
+    assert (saved["corrections"], saved["terms"]) == (1, 1)
+
+    status = tr_client.get("/transcripts/api/dictionary/global").get_json()
+    assert (status["exists"], status["corrections"], status["terms"]) == (True, 1, 1)
 
 
 def test_vtt_shares_corrected_segments_cache(tr_client, monkeypatch):
