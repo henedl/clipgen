@@ -671,7 +671,7 @@
     btn.type = "button";
     btn.className = "btn btn-small pill-agent-btn";
     btn.setAttribute("data-nav-id", "agent:" + opts.agent);
-    // Ollama rows carry the badge; its own node so Run/Stop swaps leave it.
+    // Agent rows carry the badge; its own node so Run/Stop swaps leave it.
     if (opts.aiBadge) {
       var badge = document.createElement("span");
       badge.className = "ai-agent-badge";

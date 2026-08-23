@@ -1,8 +1,8 @@
 """Engine tests for the Workflows run engine (M4).
 
 Exercises ``topo_order`` + ``WorkflowRunner`` directly (synchronously, no HTTP),
-using ``config.DEBUGGING`` + a forced-unavailable Ollama so no Whisper / ffmpeg /
-Ollama is needed. The HTTP surface is covered in tests/test_workflows_api.py.
+using ``config.DEBUGGING`` + a forced-unavailable AI server so no Whisper / ffmpeg /
+LLM is needed. The HTTP surface is covered in tests/test_workflows_api.py.
 """
 
 import json
@@ -148,9 +148,9 @@ def test_runner_snapshot_carries_triggered_flag(tmp_path):
 
 def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "is_available", lambda: False)
 
     runner = _runner(
         tmp_path,
@@ -174,9 +174,9 @@ def test_runner_executes_chain_to_completion(tmp_path, monkeypatch):
 
 def test_runner_writes_node_result_sidecars(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEBUGGING", True, raising=False)
-    import ollama_client
+    import llm_client
 
-    monkeypatch.setattr(ollama_client, "is_available", lambda: False)
+    monkeypatch.setattr(llm_client, "is_available", lambda: False)
     runner = _runner(
         tmp_path,
         nodes=[

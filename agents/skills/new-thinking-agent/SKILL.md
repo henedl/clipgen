@@ -1,12 +1,12 @@
-# clipgen-new-thinking-agent — Add an Ollama thinking agent
+# clipgen-new-thinking-agent — Add a local-LLM thinking agent
 
 Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key. No orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing.
 
 ## Checklist
 
 1. **Config** (`config.py`)
-   - Add `OLLAMA_{NAME}_ENABLED: bool` toggle
-   - Add `OLLAMA_{NAME}_MODEL: str` default model name
+   - Add `LLM_{NAME}_ENABLED: bool` toggle
+   - Add `LLM_{NAME}_MODEL: str` default model value (HF ref or GGUF stem)
 
 2. **Agent implementation** (`thinking_agents.py`)
    - Write a `run(transcript_entry: dict) -> value | None` callable
@@ -49,4 +49,4 @@ Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pi
 
 - `transcripts_server.py` routes (the generic `/api/agent/<key>/...` routes and
   orchestrator both key off `AGENTS`; the chain auto-advances)
-- `ollama_client.py` (pure transport layer)
+- `llm_client.py` (pure transport layer)

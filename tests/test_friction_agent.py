@@ -1,6 +1,6 @@
 """Tests for the friction thinking agent (thinking_agents friction helpers).
 
-Covers defensive JSON extraction/parsing, candidate formatting, the Ollama-
+Covers defensive JSON extraction/parsing, candidate formatting, the LLM-
 backed moment finder, and the _run_friction assembler. Transport is mocked.
 """
 
@@ -146,12 +146,12 @@ class TestFormatFrictionCandidates:
 
 class TestFindFrictionMoments:
     def test_empty_candidates_skips_model(self):
-        with patch("thinking_agents.ollama_client.generate") as mock_gen:
+        with patch("thinking_agents.llm_client.generate") as mock_gen:
             result = thinking_agents.find_friction_moments("summary", [], [])
         assert result == []
         mock_gen.assert_not_called()
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_builds_prompt_from_summary_and_candidates(self, mock_gen):
         mock_gen.return_value = "[]"
         segments = [
@@ -164,9 +164,8 @@ class TestFindFrictionMoments:
         prompt = mock_gen.call_args[0][0]
         assert "The user struggled." in prompt
         assert "[P01:1]" in prompt
-        assert mock_gen.call_args[1]["think"] is False
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_parses_and_caps_moments(self, mock_gen, monkeypatch):
         monkeypatch.setattr(config, "FRICTION_MOMENT_LIMIT", 2)
         mock_gen.return_value = (
@@ -181,7 +180,7 @@ class TestFindFrictionMoments:
         assert result is not None
         assert len(result) == 2
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_none_when_generate_fails(self, mock_gen):
         # None (model failure) is distinct from [] (ran, no moments) so the
         # caller can surface the failure instead of pretending it computed.
@@ -192,7 +191,7 @@ class TestFindFrictionMoments:
         )
         assert result is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_returns_empty_list_when_model_runs_but_finds_nothing(self, mock_gen):
         mock_gen.return_value = "[]"
         segments = [{"id": "P01:1", "start": 5, "text": "um where is it"}]
@@ -204,7 +203,7 @@ class TestFindFrictionMoments:
     def test_no_candidates_returns_empty_not_none(self):
         assert thinking_agents.find_friction_moments("summary", [], []) == []
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_drops_unsourced_moments_and_trims_ids(self, mock_gen):
         # A moment citing only unknown segment IDs is dropped; one citing a mix
         # keeps the real IDs and drops hallucinated ones.
@@ -222,13 +221,13 @@ class TestFindFrictionMoments:
         assert result[0]["segment_ids"] == ["P01:1"]
 
     def test_friction_model_defaults_to_summary_model(self, monkeypatch):
-        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.2")
+        monkeypatch.setattr(config, "LLM_FRICTION_MODEL", "")
+        monkeypatch.setattr(config, "LLM_SUMMARY_MODEL", "llama3.2")
         assert thinking_agents.friction_model() == "llama3.2"
-        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "tiny:1b")
+        monkeypatch.setattr(config, "LLM_FRICTION_MODEL", "tiny:1b")
         assert thinking_agents.friction_model() == "tiny:1b"
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_passes_cancel_event_and_model(self, mock_gen):
         mock_gen.return_value = "[]"
         evt = threading.Event()
@@ -268,7 +267,7 @@ class TestRunFriction:
         entry = {"segments": [{"id": "P01:0", "text": "um"}]}
         assert thinking_agents._run_friction(entry, None) is None
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_cancel_before_llm_returns_none(self, mock_gen):
         evt = threading.Event()
         evt.set()
@@ -276,7 +275,7 @@ class TestRunFriction:
         assert result is None
         mock_gen.assert_not_called()
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_success_returns_full_dict(self, mock_gen):
         mock_gen.return_value = (
             '[{"segment_ids": ["P01:1"], "category": "frustration", '
@@ -300,7 +299,7 @@ class TestRunFriction:
         assert result["moments"][0]["category"] == "frustration"
         assert "by_category" in result["stats"]
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_llm_failure_persists_scores_with_llm_ok_false(self, mock_gen):
         # Model unavailable (e.g. wrong model → HTTP 404) returns None from
         # generate; the friction dict must still carry programmatic scores/stats
@@ -313,17 +312,17 @@ class TestRunFriction:
         assert len(result["segments"]) == 3
         assert "by_category" in result["stats"]
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_run_friction_uses_resolved_model(self, mock_gen, monkeypatch):
-        monkeypatch.setattr(config, "OLLAMA_FRICTION_MODEL", "")
-        monkeypatch.setattr(config, "OLLAMA_SUMMARY_MODEL", "llama3.2")
+        monkeypatch.setattr(config, "LLM_FRICTION_MODEL", "")
+        monkeypatch.setattr(config, "LLM_SUMMARY_MODEL", "llama3.2")
         mock_gen.return_value = "[]"
         result = thinking_agents._run_friction(self._entry(), None)
         assert result is not None
         assert result["model"] == "llama3.2"
         assert mock_gen.call_args[1]["model"] == "llama3.2"
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_registry_run_callable_dispatches(self, mock_gen):
         mock_gen.return_value = "[]"
         agent = thinking_agents.get_agent("friction")
@@ -339,7 +338,7 @@ class TestFrictionIdAlignment:
     they carry no ids; the scorer synthesizes str(index) and the prompt
     formatter and validity filter must use the same scheme."""
 
-    @patch("thinking_agents.ollama_client.generate")
+    @patch("thinking_agents.llm_client.generate")
     def test_idless_segments_round_trip(self, mock_generate):
         import friction
 

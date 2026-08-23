@@ -44,7 +44,7 @@ def _agent_args(**overrides):
         "transcript_format": None,
         "pre_transcribe": None,
         "whisper_model": None,
-        "ollama_model": None,
+        "llm_model": None,
         "summarize": None,
         "citations": None,
         "friction": None,
@@ -98,13 +98,13 @@ def test_parse_summarize(monkeypatch, argv_extra, expected):
     assert args.summarize == expected
 
 
-def test_parse_citations_with_ollama_model(monkeypatch):
+def test_parse_citations_with_llm_model(monkeypatch):
     monkeypatch.setattr(
-        "sys.argv", ["clipgen.py", "--citations", "P01", "--ollama-model", "gemma3:4b"]
+        "sys.argv", ["clipgen.py", "--citations", "P01", "--llm-model", "gemma3:4b"]
     )
     args = cli.parse_arguments()
     assert args.citations == ["P01"]
-    assert args.ollama_model == "gemma3:4b"
+    assert args.llm_model == "gemma3:4b"
 
 
 # ---- Conflict validation ----

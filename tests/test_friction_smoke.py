@@ -1,7 +1,7 @@
 """End-to-end smoke test for the friction pipeline.
 
 Stub Whisper output (segments) flows through the programmatic scorer into the
-friction agent's _run callable, with the Ollama call mocked. Verifies the whole
+friction agent's _run callable, with the LLM call mocked. Verifies the whole
 chain produces scored segments, aggregated stats, and parsed moments in the
 expected manifest shape.
 """
@@ -33,7 +33,7 @@ _STUB_MOMENTS = (
 )
 
 
-@patch("thinking_agents.ollama_client.generate")
+@patch("thinking_agents.llm_client.generate")
 def test_friction_pipeline_end_to_end(mock_generate):
     mock_generate.return_value = _STUB_MOMENTS
 
@@ -66,7 +66,7 @@ def test_friction_pipeline_end_to_end(mock_generate):
     assert result["model"] == thinking_agents.friction_model()
 
 
-@patch("thinking_agents.ollama_client.generate")
+@patch("thinking_agents.llm_client.generate")
 def test_friction_pipeline_survives_unparseable_model_output(mock_generate):
     # The programmatic layer must still produce scores/stats even when the LLM
     # response yields no usable moments.

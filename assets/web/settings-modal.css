@@ -201,7 +201,7 @@
   border-radius: calc(var(--radius) - 2px);
 }
 
-/* Why an Ollama model dropdown has nothing useful in it. */
+/* Why an AI model dropdown has nothing useful in it. */
 .settings-model-note {
   max-width: 22rem;
   margin-top: var(--space-1);

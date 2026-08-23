@@ -783,7 +783,7 @@ def test_settings_rejected_with_no_input(monkeypatch, capsys):
     "flag,attr,value",
     [
         ("--whisper-model", "whisper_model", "medium"),
-        ("--ollama-model", "ollama_model", "gemma3:4b"),
+        ("--llm-model", "llm_model", "gemma3:4b"),
     ],
 )
 def test_model_flag_parses(monkeypatch, flag, attr, value):
@@ -830,7 +830,7 @@ def test_whisper_hallucination_silence_flag_applies_to_config(monkeypatch):
     "flag,value,config_attr",
     [
         ("--whisper-model", "small", "TRANSCRIBE_MODEL"),
-        ("--ollama-model", "gemma3:4b", "OLLAMA_SUMMARY_MODEL"),
+        ("--llm-model", "gemma3:4b", "LLM_SUMMARY_MODEL"),
     ],
 )
 def test_model_flag_applies_to_config(monkeypatch, flag, value, config_attr):

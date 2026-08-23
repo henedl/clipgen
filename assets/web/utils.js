@@ -2304,41 +2304,38 @@ var clipgenHashTab = function () {
   return m ? m[1] : "";
 };
 
-// ---- Ollama availability ----
+// ---- Local AI availability ----
 
-// Classify the `ollama` block of /api/models into something a panel can render.
+// Classify the `llm` block of /api/models into something a panel can render.
 // Returns {state, message, hint, baseUrl} where state is "ok" (usable or
 // unknown), "missing" (binary absent) or "stopped" (installed, not answering).
 //
 // The two failure states need opposite advice, and every page used to collapse
-// them into one boolean — Overview told users who had never installed Ollama to
-// "start it, then Refresh". Transcripts, Overview and Settings all route their
-// wording through here so the answer is the same wherever it is asked.
+// them into one boolean — Overview told users who had never installed the
+// runtime to "start it, then Refresh". Transcripts, Overview and Settings all
+// route their wording through here so the answer is the same wherever it is
+// asked.
 //
 // An absent or unfetched payload is deliberately "ok": an unknown state must
 // never block an action or paint a scary banner.
-var clipgenOllamaStatus = function (ollama) {
-  var baseUrl = (ollama && ollama.base_url) || "localhost";
-  var hint = (ollama && ollama.install_hint) || [];
-  // Whether clipgen can download the Ollama CLI itself in-app (macOS managed
-  // install) — "missing" surfaces point at that flow instead of shell commands.
-  var canInstall = !!(ollama && ollama.can_install);
-  var installSizeMb = (ollama && ollama.install_size_mb) || 0;
-  var base = { hint: hint, baseUrl: baseUrl, canInstall: canInstall, installSizeMb: installSizeMb };
-  if (!ollama) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl, canInstall: false, installSizeMb: 0 };
+var clipgenLlmStatus = function (llm) {
+  var baseUrl = (llm && llm.base_url) || "localhost";
+  var hint = (llm && llm.install_hint) || [];
+  var base = { hint: hint, baseUrl: baseUrl };
+  if (!llm) return { state: "ok", message: "", hint: hint, baseUrl: baseUrl };
   // The messages name the problem but prescribe no particular control — the
   // three surfaces that show them have different affordances (Overview has a
   // Refresh, Settings has nothing, the dialog has its own retry button), and a
   // banner telling you to press something that isn't there is worse than one
   // that just says what is wrong.
-  if (ollama.installed === false) {
+  if (llm.installed === false) {
     base.state = "missing";
-    base.message = "Ollama is not installed — the AI summaries, citations and reports need it.";
+    base.message = "The local AI runtime is not installed — summaries, citations and reports need it.";
     return base;
   }
-  if (ollama.available === false) {
+  if (llm.available === false) {
     base.state = "stopped";
-    base.message = "Ollama is installed but not running at " + baseUrl + ".";
+    base.message = "The AI server is not running at " + baseUrl + ".";
     return base;
   }
   base.state = "ok";

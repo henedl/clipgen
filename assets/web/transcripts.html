@@ -152,7 +152,7 @@
         </div>
         <div id="summaryEmpty" class="panel-empty hidden">
           <p class="panel-empty-text">No summary yet.</p>
-          <!-- Filled by renderSummaryEmpty() when Ollama is missing or stopped,
+          <!-- Filled by renderSummaryEmpty() when the AI server is missing or stopped,
                so the Run button below doesn't just fail silently. -->
           <p id="summaryEmptyHint" class="panel-empty-hint hidden"></p>
           <button id="summaryRunCta" type="button" class="btn btn-small" data-tooltip="Runs a local AI thinking agent on this transcript">
@@ -244,14 +244,14 @@
     </div>
   </div>
 
-  <!-- Model install/download confirmation (whisper download + ollama pull) -->
+  <!-- Model download confirmation (whisper download + GGUF download) -->
   <div id="modelInstallModal" class="modal cg-modal-overlay hidden">
     <div class="modal-content model-install-modal">
       <div class="modal-header">
         <h3 id="modelInstallTitle">Download model?</h3>
       </div>
       <p id="modelInstallMessage" class="model-install-message"></p>
-      <!-- Platform install commands, shown only for the "Ollama isn't
+      <!-- Platform install commands, shown only for the "AI runtime isn't
            installed" flavour. Monospaced because it holds shell commands. -->
       <pre id="modelInstallHint" class="model-install-hint hidden"></pre>
       <div id="modelInstallProgress" class="model-install-progress hidden">
@@ -260,11 +260,7 @@
       </div>
       <div class="model-install-actions">
         <button id="modelInstallCancel" type="button" class="btn btn-small">Cancel</button>
-        <!-- Secondary action for the "Ollama isn't installed" flavour when the
-             in-app download is offered: primary downloads, this one re-checks
-             after a manual install. Hidden in every other flavour. -->
-        <button id="modelInstallAlt" type="button" class="btn btn-small hidden">I've installed it — retry</button>
-        <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Install</button>
+        <button id="modelInstallConfirm" type="button" class="btn btn-small btn-primary">Download</button>
       </div>
     </div>
   </div>

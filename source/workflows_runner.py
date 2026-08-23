@@ -25,7 +25,7 @@ from workflows_catalog import ADAPTERS, NODE_TYPES, NodeContext
 # server), calling executors directly with the uniform ``NodeContext`` contract so
 # a cross-domain DAG gets end-to-end progress + cancellation without routing
 # through the per-domain worker queues. Execution is strictly sequential —
-# Whisper/Ollama are single-resource — though intra-node pools still apply.
+# Whisper/LLM are single-resource — though intra-node pools still apply.
 
 # Run + per-node status constants. Deliberately duplicated from
 # screenspace_manifest's TASK_STATUS_* (and transcripts' status strings): the only
@@ -511,7 +511,7 @@ class WorkflowRunner:
                 "status": NODE_STATUS_QUEUED,
                 "progress": 0.0,
                 "error": None,
-                # Non-fatal note for a degraded-but-completed node (Ollama down,
+                # Non-fatal note for a degraded-but-completed node (AI server down,
                 # nothing wired, an adapter that couldn't coerce) — distinct from
                 # ``error`` (which means FAILED). Surfaced in the run history.
                 "note": None,
@@ -819,7 +819,7 @@ class WorkflowRunner:
                     result = executor(self.ctx, inputs, params)
                 result = result if isinstance(result, dict) else {}
                 # A reserved ``__note__`` key lets an executor flag a non-fatal
-                # degraded outcome (e.g. Ollama unavailable, nothing wired) that
+                # degraded outcome (e.g. AI server unavailable, nothing wired) that
                 # still completes — surfaced on the node, never stored as a result
                 # port. Merge it with any adapter-coercion notes from gathering.
                 notes = list(input_notes)

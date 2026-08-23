@@ -3,7 +3,7 @@
  * The tabbed analysis panel: the AI summary (+ inline edit + citations) and the
  * friction pass (mode switch, score histogram, category chips, moment jump strip,
  * and the decorations they drive on the transcript below), plus the panel tab
- * switching. These are the Ollama "thinking agent" results
+ * switching. These are the local-LLM "thinking agent" results
  * surfaced per participant. Loaded LAST (after transcripts.js + the other
  * satellites); reads the hub's shared state + helpers through
  * window.ClipgenTranscripts (TS) and publishes its load/clear/stop/init entry
@@ -45,7 +45,7 @@
   // entry plus render hooks — no new poll/stop plumbing. Summary is richest (SSE
   // token stream, citation chaining, inline edit); that rides in its hooks.
 
-  // Hard cap on agent polls (citations + friction). Long Ollama runs on big
+  // Hard cap on agent polls (citations + friction). Long LLM runs on big
   // transcripts once outlived a shorter timeout, so the result landed in the
   // manifest after we'd given up and only surfaced on a full reload. Five
   // minutes covers realistic completion; the server's `generating: false`
@@ -94,12 +94,12 @@
         if (!state.citationsGenerating) return;
         // Otherwise the run is genuinely over with nothing to show: the route
         // 404s (which apiGet rejects) once it ends without persisting — after
-        // find_citations' failure return, the Ollama-unavailable path. Say so
+        // find_citations' failure return, the server-unavailable path. Say so
         // instead of just dropping "Finding sources…". The cause is a
         // suggestion, not a claim: a transport blip lands here too, and the fix
         // is the same. Participant switch and poll timeout go to onStale.
         state.citationsGenerating = false;
-        _renderCitationsNote("Couldn't find sources. Check that Ollama is running, then re-run citations.");
+        _renderCitationsNote("Couldn't find sources. Check that the AI server is running, then re-run citations.");
       },
       onStale: function () { _clearCitationsStatus(); },
     },
@@ -159,7 +159,7 @@
           if (ver !== state.participantReqVer) return;
           if (err && err.status === 404) {
             // The endpoint 404s once the run is over with nothing persisted
-            // (find_citations' failure return, Ollama down) — the genuine
+            // (find_citations' failure return, AI server down) — the genuine
             // empty case.
             _stopAgentPoll(desc);
             desc.onEmpty(pid);
@@ -167,7 +167,7 @@
           }
           // Transient transport blip or server hiccup mid-run: keep the poll
           // armed and the rendered panel untouched — one failed GET must not
-          // wipe a five-minute Ollama run. Only a streak gives up, and via
+          // wipe a five-minute LLM run. Only a streak gives up, and via
           // onStale so the painted state survives.
           desc._failStreak = (desc._failStreak || 0) + 1;
           if (desc._failStreak >= 3) {
@@ -438,7 +438,7 @@
     hintEl.classList.add("hidden");
     hintEl.textContent = "";
     _trFetchModels().then(function (data) {
-      var status = clipgenOllamaStatus(data && data.ollama);
+      var status = clipgenLlmStatus(data && data.llm);
       if (status.state === "ok") return;
       var extra = "";
       if (status.state === "missing") {
@@ -1771,7 +1771,7 @@
         ? "Run friction analysis to surface AI-refined moments."
         : "Run Summary to surface AI-refined friction moments.";
     }
-    if (fd.llm_ok === false) return "Moment detection failed. Re-run with an installed Ollama model.";
+    if (fd.llm_ok === false) return "Moment detection failed. Re-run with a downloaded AI model.";
     if (!(fd.moments && fd.moments.length)) return "No friction moments found in this transcript.";
     // Moments exist but none reached the strip. Either the filter excluded them
     // all, or they cite segments that are gone — different causes, different

@@ -1,6 +1,6 @@
 /* Overview Reports tab — per-participant mini-report (overview-reports.js).
  *
- * Feeds three data sources into the local Ollama "report" thinking agent:
+ * Feeds three data sources into the local LLM "report" thinking agent:
  * sheet observations (hub state.sheetData), the transcript summary, and
  * marked transcript lines (hub state.trIntakeMarks). Generation is manual:
  * the backend agent is disabled by default and only runs through the generic
@@ -43,7 +43,7 @@
     participants: [], // ../transcripts/api/participants ∪ sheet-only ids
     selected: null,
     gen: 0, // generation counter — bumped on participant switch
-    ollama: null, // /api/models "ollama" payload (null = not fetched/unknown)
+    llm: null, // /api/models "llm" payload (null = not fetched/unknown)
     report: null, // stored report payload for the selected participant
     reportGenerating: false,
     reportPartial: "",
@@ -143,13 +143,13 @@
     return false;
   }
 
-  // Generate is blocked only when Ollama is positively unreachable or the
+  // Generate is blocked only when the AI server is positively unreachable or the
   // report model is positively missing (same stance as the Transcripts page:
   // an unknown /api/models state never blocks).
-  function ollamaGate() {
-    var o = rpState.ollama;
+  function llmGate() {
+    var o = rpState.llm;
     if (!o) return null;
-    var status = clipgenOllamaStatus(o);
+    var status = clipgenLlmStatus(o);
     if (status.state !== "ok") {
       // The install guidance only helps the "missing" case; a stopped server
       // just needs starting, and this panel's Refresh re-checks either way.
@@ -167,7 +167,7 @@
     var agents = o.agents || [];
     for (var i = 0; i < agents.length; i++) {
       if (agents[i].key === "report" && agents[i].installed === false) {
-        return "Ollama model " + agents[i].model + " is not installed — install it from the Transcripts page, or pick another in Settings → Summaries.";
+        return "AI model " + agents[i].model + " is not downloaded — download it from the Transcripts page, or pick another in Settings → Summaries.";
       }
     }
     return null;
@@ -518,7 +518,7 @@
     }
 
     var canGenerate = !!r.has_transcript && agentState(r, "summary") === "done";
-    var gate = ollamaGate();
+    var gate = llmGate();
     var genBtn = P.createBtn({
       label: rpState.report ? "Regenerate" : "Generate report",
       icon: "octicon/dependabot-16",
@@ -621,11 +621,11 @@
   function loadModels() {
     apiGet("/api/models")
       .then(function (data) {
-        rpState.ollama = (data && data.ollama) || null;
+        rpState.llm = (data && data.llm) || null;
         if (rpState.active) renderMain();
       })
       .catch(function () {
-        rpState.ollama = null;
+        rpState.llm = null;
       });
   }
 
