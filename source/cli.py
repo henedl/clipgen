@@ -1447,6 +1447,7 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
     source_transcripts = manifest["source_transcripts"]
     corrections = manifest["corrections"]
     context_keywords = transcripts.get_corrections_keywords(corrections) or None
+    known_terms = transcripts.get_known_terms(manifest) or None
 
     skipped = 0
     transcribed = 0
@@ -1474,7 +1475,9 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
         if len(source_paths) == 1:
             # Single-video fast path: transcribe directly, no duration probe.
             result = transcripts.transcribe_video(
-                str(source_paths[0]), context_keywords=context_keywords
+                str(source_paths[0]),
+                context_keywords=context_keywords,
+                known_terms=known_terms,
             )
         else:
             # Multi-video: parts form one continuous timeline; transcribe each
@@ -1485,7 +1488,9 @@ def _run_pre_transcribe(worksheet: Any, args: Any) -> None:
                 None
                 if timeline is None
                 else transcripts.transcribe_timeline(
-                    timeline, context_keywords=context_keywords
+                    timeline,
+                    context_keywords=context_keywords,
+                    known_terms=known_terms,
                 )
             )
         if result is None:

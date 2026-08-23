@@ -227,20 +227,47 @@
     </section>
   </main>
 
-  <!-- Corrections modal -->
+  <!-- Transcript dictionary modal: corrections (fix past text) + known terms
+       (bias future transcription) -->
   <div id="correctionsModal" class="modal cg-modal-overlay hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Corrections Dictionary</h3>
-        <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+        <h3>Transcript Dictionary</h3>
+        <div class="dict-actions">
+          <button id="importDictBtn" type="button" class="btn btn-small">Import CSV</button>
+          <button id="exportDictBtn" type="button" class="btn btn-small">Export CSV</button>
+          <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
+        </div>
       </div>
-      <div id="addCorrectionForm" class="correction-form">
-        <input id="correctionFrom" type="text" placeholder="Original text" autocomplete="off">
-        <span class="correction-arrow">&rarr;</span>
-        <input id="correctionTo" type="text" placeholder="Corrected text" autocomplete="off">
-        <button id="addCorrectionBtn" class="btn btn-small">Add</button>
-      </div>
-      <div id="correctionsList"></div>
+      <input id="importDictFile" type="file" accept="text/csv,.csv" hidden>
+      <section class="dict-section">
+        <h4>Corrections</h4>
+        <p class="dict-hint">Rewrites text in transcripts you already have.</p>
+        <div id="addCorrectionForm" class="correction-form">
+          <input id="correctionFrom" type="text" placeholder="Original text" autocomplete="off">
+          <span class="correction-arrow">&rarr;</span>
+          <input id="correctionTo" type="text" placeholder="Corrected text" autocomplete="off">
+          <button id="addCorrectionBtn" class="btn btn-small">Add</button>
+        </div>
+        <div id="correctionsList"></div>
+      </section>
+      <section class="dict-section">
+        <h4>Known terms</h4>
+        <p class="dict-hint">Study vocabulary sent to the transcriber. Applies on the next run.</p>
+        <div class="term-form">
+          <input id="termInput" type="text" placeholder="Product or feature name" autocomplete="off">
+          <button id="addTermBtn" class="btn btn-small">Add</button>
+        </div>
+        <div id="termsList" class="term-chips"></div>
+      </section>
+      <section class="dict-section dict-global">
+        <h4>Global dictionary</h4>
+        <p class="dict-hint" id="dictGlobalHint">Reuse one house glossary across studies.</p>
+        <div class="dict-global-actions">
+          <button id="saveGlobalDictBtn" type="button" class="btn btn-small">Save as global</button>
+          <button id="loadGlobalDictBtn" type="button" class="btn btn-small">Load global</button>
+        </div>
+      </section>
     </div>
   </div>
 

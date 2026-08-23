@@ -24,6 +24,14 @@ API endpoints (all under /transcripts/):
   GET  /api/corrections                           - list all study-local corrections
   POST /api/corrections                           - add a correction manually
   DELETE /api/corrections/<id>                    - remove a correction
+  GET  /api/known-terms                           - list the study vocabulary
+  POST /api/known-terms                           - add a known term
+  DELETE /api/known-terms/<term>                  - remove a known term
+  GET  /api/dictionary.csv                        - corrections + terms as one CSV
+  POST /api/dictionary/import                     - merge a dictionary CSV
+  GET  /api/dictionary/global                     - counts for the saved global copy
+  POST /api/dictionary/global                     - save this study's dictionary globally
+  POST /api/dictionary/global/load                - merge the global copy into the study
   GET  /api/intake-poll                           - Studio-intake poll: running-state booleans + resolved marks
   GET  /api/marks                                 - list all marks with resolved segment data
   POST /api/marks                                 - create marks for segments
@@ -63,6 +71,7 @@ import files
 import friction
 import llm_client
 import remux_server
+import start_settings
 import thinking_agents
 import transcripts
 import utils
@@ -439,6 +448,33 @@ def _corrected_segments(
         if _corrections_version == version:
             _corrected_cache[participant] = (version, corrected)
     return corrected
+
+
+def _corrected_segments_with_ids(
+    participant: str,
+    raw_segments: list[Any],
+    corrections: list[Any],
+    version: int | None = None,
+) -> list[Any]:
+    """Corrected segments that keep their ids, for the thinking agents.
+
+    apply_corrections() returns fresh TranscriptSegments carrying no ``id`` —
+    read routes recover it by zipping against the raw list. Agents need the same
+    treatment for a second reason: friction moments and their UI jump targets
+    are keyed on the id, and an id-less segment silently falls back to its
+    positional index.
+    """
+    corrected = _corrected_segments(
+        participant, raw_segments, corrections, version=version
+    )
+    out: list[Any] = []
+    for raw, cor in zip(raw_segments, corrected):
+        seg = dict(cor)
+        seg_id = raw.get("id")
+        if seg_id:
+            seg["id"] = seg_id
+        out.append(seg)
+    return out
 
 
 @transcripts_bp.route("/api/transcript/<participant>")
@@ -1432,6 +1468,199 @@ def api_corrections_delete(correction_id: str) -> FlaskResponse:
     return ok()
 
 
+# ---- Known terms ----
+#
+# The study glossary: product names, features, jargon. Forwarded to Whisper as
+# hotwords on the next transcription so it spells them right the first time,
+# where a correction only rewrites a mistake after the fact. Terms never touch
+# stored text, so none of these routes bump the corrected-segments version.
+
+
+@transcripts_bp.route("/api/known-terms")
+def api_known_terms_list() -> FlaskResponse:
+    """List the study vocabulary."""
+    with _manifest_lock:
+        terms = list(_manifest.get("known_terms", []))
+    return ok(terms=terms)
+
+
+@transcripts_bp.route("/api/known-terms", methods=["POST"])
+def api_known_terms_add() -> FlaskResponse:
+    """Add a known term."""
+    data = request.get_json(silent=True)
+    if not data:
+        return err("Missing JSON body")
+
+    term = str(data.get("term", "")).strip()
+    if not term:
+        return err("'term' required")
+
+    with _manifest_lock:
+        terms = _manifest.setdefault("known_terms", [])
+        # A duplicate is not an error — the user typed a term that is already
+        # covered, so the input should just clear.
+        duplicate = any(t.lower() == term.lower() for t in terms)
+        if not duplicate:
+            terms.append(term)
+    if duplicate:
+        return ok(term=None, duplicate=True)
+    _schedule_persist()
+    return ok(term=term)
+
+
+@transcripts_bp.route("/api/known-terms/<path:term>", methods=["DELETE"])
+def api_known_terms_delete(term: str) -> FlaskResponse:
+    """Remove a known term."""
+    with _manifest_lock:
+        terms = _manifest.get("known_terms", [])
+        kept = [t for t in terms if t.lower() != term.lower()]
+        removed = len(terms) - len(kept)
+        _manifest["known_terms"] = kept
+
+    if removed == 0:
+        return err("Term not found", 404)
+
+    _schedule_persist()
+    return ok()
+
+
+# ---- Dictionary import / export ----
+#
+# Corrections and known terms travel together as one `type,from,to` CSV, plus a
+# global copy in the config dir so a house style-guide can seed a new study.
+# Import always merges: a study's own entries are never dropped by loading
+# someone else's file, and re-importing the same file is a no-op.
+
+_GLOBAL_DICTIONARY_FILE = "dictionary.json"
+
+
+def _merge_dictionary_locked(
+    corrections: list[dict[str, str]], terms: list[str]
+) -> tuple[int, int]:
+    """Merge entries into _manifest, skipping duplicates. Caller holds the lock.
+
+    Returns the (corrections, terms) actually added.
+    """
+    existing = _manifest.setdefault("corrections", [])
+    seen = {(c.get("from", "").lower(), c.get("to", "").lower()) for c in existing}
+    added_corrections = 0
+    for c in corrections:
+        key = (c["from"].lower(), c["to"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(
+            {
+                "id": f"c_{uuid.uuid4().hex[:8]}",
+                "from": c["from"],
+                "to": c["to"],
+                "created": datetime.now(UTC).isoformat(),
+            }
+        )
+        added_corrections += 1
+
+    known = _manifest.setdefault("known_terms", [])
+    seen_terms = {t.lower() for t in known}
+    added_terms = 0
+    for term in terms:
+        if term.lower() in seen_terms:
+            continue
+        seen_terms.add(term.lower())
+        known.append(term)
+        added_terms += 1
+
+    if added_corrections:
+        # Imported corrections rewrite displayed text; terms never do.
+        _bump_corrections_version()
+    return added_corrections, added_terms
+
+
+@transcripts_bp.route("/api/dictionary.csv")
+def api_dictionary_export() -> FlaskResponse:
+    """Download corrections + known terms as one CSV."""
+    with _manifest_lock:
+        corrections = list(_manifest.get("corrections", []))
+        terms = list(_manifest.get("known_terms", []))
+    return Response(
+        transcripts.dictionary_to_csv(corrections, terms), content_type="text/csv"
+    )
+
+
+@transcripts_bp.route("/api/dictionary/import", methods=["POST"])
+def api_dictionary_import() -> FlaskResponse:
+    """Merge a dictionary CSV into the study."""
+    data = request.get_json(silent=True)
+    if not data or not str(data.get("csv", "")).strip():
+        return err("Missing CSV content")
+
+    corrections, terms = transcripts.parse_dictionary_csv(str(data["csv"]))
+    if not corrections and not terms:
+        return err("No corrections or terms found in that file")
+
+    with _manifest_lock:
+        added_corrections, added_terms = _merge_dictionary_locked(corrections, terms)
+    _schedule_persist()
+    return ok(
+        corrections=added_corrections,
+        terms=added_terms,
+        skipped=(len(corrections) + len(terms)) - (added_corrections + added_terms),
+    )
+
+
+@transcripts_bp.route("/api/dictionary/global")
+def api_dictionary_global_status() -> FlaskResponse:
+    """Counts for the saved global dictionary, so the UI can label its buttons."""
+    saved = start_settings.load_config_json(_GLOBAL_DICTIONARY_FILE, default=None)
+    if not isinstance(saved, dict):
+        return ok(exists=False, corrections=0, terms=0)
+    return ok(
+        exists=True,
+        corrections=len(saved.get("corrections", [])),
+        terms=len(saved.get("known_terms", [])),
+    )
+
+
+@transcripts_bp.route("/api/dictionary/global", methods=["POST"])
+def api_dictionary_global_save() -> FlaskResponse:
+    """Copy this study's dictionary to the config dir for reuse elsewhere."""
+    with _manifest_lock:
+        corrections = list(_manifest.get("corrections", []))
+        terms = list(_manifest.get("known_terms", []))
+    if not corrections and not terms:
+        return err("Nothing to save")
+
+    path = start_settings.save_config_json(
+        _GLOBAL_DICTIONARY_FILE,
+        {
+            "corrections": corrections,
+            "known_terms": terms,
+            "saved": datetime.now(UTC).isoformat(),
+        },
+    )
+    if path is None:
+        return err("Could not write the global dictionary")
+    return ok(corrections=len(corrections), terms=len(terms))
+
+
+@transcripts_bp.route("/api/dictionary/global/load", methods=["POST"])
+def api_dictionary_global_load() -> FlaskResponse:
+    """Merge the saved global dictionary into this study."""
+    saved = start_settings.load_config_json(_GLOBAL_DICTIONARY_FILE, default=None)
+    if not isinstance(saved, dict):
+        return err("No global dictionary saved yet", 404)
+
+    corrections = [
+        {"from": c.get("from", ""), "to": c.get("to", "")}
+        for c in saved.get("corrections", [])
+        if c.get("from") and c.get("to")
+    ]
+    terms = [str(t).strip() for t in saved.get("known_terms", []) if str(t).strip()]
+    with _manifest_lock:
+        added_corrections, added_terms = _merge_dictionary_locked(corrections, terms)
+    _schedule_persist()
+    return ok(corrections=added_corrections, terms=added_terms)
+
+
 # ---- Marks ----
 
 
@@ -2261,6 +2490,7 @@ def _do_persist() -> None:
         _manifest.get("source_transcripts", {}),
         _manifest.get("corrections", []),
         marks=_manifest.get("marks"),
+        known_terms=_manifest.get("known_terms", []),
     )
 
 
@@ -2598,6 +2828,18 @@ class AgentOrchestrator:
                     # written back (only entry[manifest_field] is committed),
                     # so this key cannot leak into the manifest.
                     snapshot["participant"] = participant
+                    # Agents read what the reader reads. Corrections are a
+                    # read-time transform, so the stored segments stay raw
+                    # (that is what lets them re-apply after a re-transcribe)
+                    # and nothing on this path had ever applied them — every
+                    # summary quoted text the UI had already fixed. self._lock
+                    # *is* _manifest_lock, so this is the documented lock order
+                    # and the version may be omitted.
+                    snapshot["segments"] = _corrected_segments_with_ids(
+                        participant,
+                        list(entry["segments"]),
+                        list(_manifest.get("corrections", [])),
+                    )
 
                 def _sink(tok: str) -> None:
                     with self._partial_lock:

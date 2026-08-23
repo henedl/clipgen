@@ -11,6 +11,7 @@ import pytest
 Flask = pytest.importorskip("flask").Flask
 
 import config
+import start_settings
 import thinking_agents
 import transcripts
 import transcripts_server
@@ -44,6 +45,7 @@ def tr_client(tr_app, tmp_path, monkeypatch):
             "source_transcripts": {},
             "corrections": [],
             "marks": [],
+            "known_terms": [],
         },
     )
     monkeypatch.setattr(
@@ -748,6 +750,54 @@ def test_citations_stop_when_not_running_is_noop(tr_client, _agent_state_clean):
     assert data["ok"] is True
     assert data["running"] is False
     assert "P01" not in transcripts_server._orchestrator._cancel_events["citations"]
+
+
+def test_agents_read_corrected_segments(_agent_state_clean, monkeypatch):
+    """Agents must see what the reader sees.
+
+    apply_corrections is a read-time transform, so the stored segments stay
+    raw forever. Nothing re-applies them on the agent path, which left every
+    summary quoting text the UI had already fixed. Ids must survive the
+    round-trip too: apply_corrections returns fresh segments without one, and
+    friction moments key on it.
+    """
+    orch = transcripts_server._orchestrator
+    pid = "P01"
+    transcripts_server._manifest = {
+        "source_transcripts": {
+            pid: {
+                "segments": [
+                    {"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh frobnicator"}
+                ]
+            }
+        },
+        "corrections": [{"id": "c1", "from": "teh", "to": "the"}],
+        "marks": [],
+        "known_terms": [],
+    }
+
+    seen: dict = {}
+    done = threading.Event()
+
+    # Returns None so no summary is committed: a committed one advances the
+    # chain into a real citations pass, which outlives the test and its
+    # monkeypatches.
+    def capture(snapshot, cancel_event, on_token=None):
+        seen["segments"] = snapshot["segments"]
+        done.set()
+
+    summary_agent = thinking_agents.get_agent("summary")
+    assert summary_agent is not None
+    monkeypatch.setitem(summary_agent, "run", capture)
+
+    orch.run_agent("summary", pid, force=True)
+    assert done.wait(timeout=5), "summary agent never ran"
+
+    assert seen["segments"][0]["text"] == "the frobnicator"
+    assert seen["segments"][0]["id"] == "P01:0"
+    # The manifest keeps the raw text so corrections survive re-transcription.
+    raw = transcripts_server._manifest["source_transcripts"][pid]["segments"][0]
+    assert raw["text"] == "teh frobnicator"
 
 
 def test_orchestrator_stop_then_restart_isolates_run_state(
@@ -2618,6 +2668,215 @@ def test_corrected_segments_cached_and_invalidated_on_correction(
     seg = r3.get_json()["segments"][0]
     assert seg["text"] == "the cat"
     assert seg["corrected"] is True
+
+
+def test_known_terms_crud(tr_client, monkeypatch):
+    """List, add, and remove the study vocabulary."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == []
+
+    resp = tr_client.post(
+        "/transcripts/api/known-terms", json={"term": "  Frobnicator  "}
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["term"] == "Frobnicator"
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == [
+        "Frobnicator"
+    ]
+
+    resp = tr_client.delete("/transcripts/api/known-terms/Frobnicator")
+    assert resp.status_code == 200
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == []
+
+
+def test_known_terms_reject_empty(tr_client):
+    resp = tr_client.post("/transcripts/api/known-terms", json={"term": "   "})
+    assert resp.status_code == 400
+
+
+def test_known_terms_duplicate_is_not_an_error(tr_client, monkeypatch):
+    """A repeat term reports duplicate rather than failing, and is not stored twice."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Widget"})
+    resp = tr_client.post("/transcripts/api/known-terms", json={"term": "widget"})
+    assert resp.status_code == 200
+    assert resp.get_json()["duplicate"] is True
+    assert tr_client.get("/transcripts/api/known-terms").get_json()["terms"] == [
+        "Widget"
+    ]
+
+
+def test_known_terms_delete_unknown_is_404(tr_client):
+    assert tr_client.delete("/transcripts/api/known-terms/nope").status_code == 404
+
+
+def test_known_term_does_not_invalidate_corrected_cache(tr_client, monkeypatch):
+    """Terms bias the next transcription; they never rewrite stored text, so the
+    corrected-segments cache must survive one (inverse of the corrections test)."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
+
+
+def test_dictionary_export_csv(tr_client, monkeypatch):
+    """Both halves of the dictionary land in one CSV."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+
+    resp = tr_client.get("/transcripts/api/dictionary.csv")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    body = resp.get_data(as_text=True)
+    assert body.startswith("type,from,to")
+    assert "correction,teh,the" in body
+    assert "term,,Frobnicator" in body
+
+
+def test_dictionary_import_merges_and_skips_duplicates(tr_client, monkeypatch):
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+
+    csv_text = (
+        "type,from,to\n"
+        "correction,teh,the\n"
+        "term,,Frobnicator\n"  # already present, case-insensitively
+        "term,,Widget Bay\n"
+    )
+    resp = tr_client.post("/transcripts/api/dictionary/import", json={"csv": csv_text})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert (data["corrections"], data["terms"], data["skipped"]) == (1, 1, 1)
+
+    terms = tr_client.get("/transcripts/api/known-terms").get_json()["terms"]
+    assert terms == ["Frobnicator", "Widget Bay"]
+    assert (
+        len(tr_client.get("/transcripts/api/corrections").get_json()["corrections"])
+        == 1
+    )
+
+
+def test_dictionary_import_is_idempotent(tr_client, monkeypatch):
+    """Re-importing the same file adds nothing — merge never duplicates."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    csv_text = "type,from,to\ncorrection,teh,the\nterm,,Widget\n"
+    tr_client.post("/transcripts/api/dictionary/import", json={"csv": csv_text})
+    again = tr_client.post(
+        "/transcripts/api/dictionary/import", json={"csv": csv_text}
+    ).get_json()
+    assert (again["corrections"], again["terms"]) == (0, 0)
+
+
+def test_dictionary_import_rejects_empty_and_unusable(tr_client):
+    assert (
+        tr_client.post(
+            "/transcripts/api/dictionary/import", json={"csv": ""}
+        ).status_code
+        == 400
+    )
+    resp = tr_client.post(
+        "/transcripts/api/dictionary/import", json={"csv": "nothing,useful\n1,2\n"}
+    )
+    assert resp.status_code == 400
+
+
+def test_dictionary_import_invalidates_corrected_cache(tr_client, monkeypatch):
+    """Imported corrections rewrite displayed text, so the cache must drop."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    assert calls["n"] == 1
+    tr_client.post(
+        "/transcripts/api/dictionary/import",
+        json={"csv": "type,from,to\ncorrection,teh,the\n"},
+    )
+    r = tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 2
+    assert r.get_json()["segments"][0]["text"] == "the cat"
+
+
+def test_dictionary_import_of_terms_only_keeps_cache(tr_client, monkeypatch):
+    """A terms-only import changes no text, so the cache survives."""
+    calls = {"n": 0}
+    real_apply = transcripts.apply_corrections
+
+    def _counting_apply(segments, corrections):
+        calls["n"] += 1
+        return real_apply(segments, corrections)
+
+    monkeypatch.setattr(transcripts, "apply_corrections", _counting_apply)
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "teh cat"}],
+    }
+
+    assert tr_client.get("/transcripts/api/transcript/P01").status_code == 200
+    tr_client.post(
+        "/transcripts/api/dictionary/import",
+        json={"csv": "type,from,to\nterm,,Widget\n"},
+    )
+    tr_client.get("/transcripts/api/transcript/P01")
+    assert calls["n"] == 1
+
+
+def test_global_dictionary_save_and_load(tr_client, tmp_path, monkeypatch):
+    """The global copy round-trips through the config dir and merges back in."""
+    monkeypatch.setattr(transcripts_server, "_schedule_persist", lambda: None)
+    monkeypatch.setattr(
+        start_settings, "config_json_path", lambda name: tmp_path / name
+    )
+
+    assert (
+        tr_client.get("/transcripts/api/dictionary/global").get_json()["exists"]
+        is False
+    )
+    assert tr_client.post("/transcripts/api/dictionary/global").status_code == 400
+    assert tr_client.post("/transcripts/api/dictionary/global/load").status_code == 404
+
+    tr_client.post("/transcripts/api/corrections", json={"from": "teh", "to": "the"})
+    tr_client.post("/transcripts/api/known-terms", json={"term": "Frobnicator"})
+    saved = tr_client.post("/transcripts/api/dictionary/global").get_json()
+    assert (saved["corrections"], saved["terms"]) == (1, 1)
+
+    status = tr_client.get("/transcripts/api/dictionary/global").get_json()
+    assert (status["exists"], status["corrections"], status["terms"]) == (True, 1, 1)
+
+    # Loading into a study that already has them adds nothing...
+    again = tr_client.post("/transcripts/api/dictionary/global/load").get_json()
+    assert (again["corrections"], again["terms"]) == (0, 0)
+
+    # ...but into an empty study it restores both halves.
+    transcripts_server._manifest["corrections"] = []
+    transcripts_server._manifest["known_terms"] = []
+    restored = tr_client.post("/transcripts/api/dictionary/global/load").get_json()
+    assert (restored["corrections"], restored["terms"]) == (1, 1)
 
 
 def test_vtt_shares_corrected_segments_cache(tr_client, monkeypatch):

@@ -1004,17 +1004,22 @@ def _transcribe_segments(
             )
         else:
             context_keywords = transcripts.get_corrections_keywords(corrections) or None
+            known_terms = transcripts.get_known_terms(manifest) or None
             timeline = clip.get("source_timeline")
             if timeline:
                 # Multi-video participant: transcribe all parts as one global
                 # timeline so segment times match the clip artifacts.
                 transcript_cache[base_video] = transcripts.transcribe_timeline(
-                    timeline, context_keywords=context_keywords
+                    timeline,
+                    context_keywords=context_keywords,
+                    known_terms=known_terms,
                 )
             else:
                 resolved = str(utils.resolve_input_path(base_video))
                 transcript_cache[base_video] = transcripts.transcribe_video(
-                    resolved, context_keywords=context_keywords
+                    resolved,
+                    context_keywords=context_keywords,
+                    known_terms=known_terms,
                 )
     full_transcript = transcript_cache[base_video]
     if not full_transcript:

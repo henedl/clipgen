@@ -128,7 +128,7 @@ def test_summarize_and_citations_conflict():
 def test_summarize_default_runs_all(monkeypatch):
     saved = {}
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved["source_transcripts"] = {
             k: dict(v) for k, v in source_transcripts.items()
         }
@@ -154,7 +154,7 @@ def test_summarize_default_runs_all(monkeypatch):
 def test_summarize_specific_ids_only(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(
@@ -180,7 +180,7 @@ def test_summarize_specific_ids_only(monkeypatch):
 def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append(True)
 
     manifest = _make_manifest(
@@ -205,7 +205,7 @@ def test_summarize_skips_existing_without_no_input(monkeypatch, capsys):
 def test_summarize_overwrites_with_no_input(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(
@@ -276,7 +276,7 @@ def test_citations_requires_summary(monkeypatch, capsys):
 def test_citations_writes_refs(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(
@@ -382,7 +382,7 @@ def test_friction_skips_existing_without_no_input(monkeypatch, capsys):
 def test_friction_writes_result_with_no_input(monkeypatch):
     saved = []
 
-    def fake_save(source_transcripts, corrections, marks=None):
+    def fake_save(source_transcripts, corrections, marks=None, known_terms=None):
         saved.append({k: dict(v) for k, v in source_transcripts.items()})
 
     manifest = _make_manifest(

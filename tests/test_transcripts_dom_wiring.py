@@ -74,6 +74,15 @@ REQUIRED_IDS = [
     "embedSubsProgressText",
     "embedSubsCancel",
     "embedSubsConfirm",
+    "termInput",
+    "addTermBtn",
+    "termsList",
+    "importDictBtn",
+    "importDictFile",
+    "exportDictBtn",
+    "saveGlobalDictBtn",
+    "loadGlobalDictBtn",
+    "dictGlobalHint",
 ]
 
 

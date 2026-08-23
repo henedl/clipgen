@@ -279,6 +279,13 @@ def _exec_transcribe(
     # streams differently. Any future control here should be a name hint
     # ("audio_track_contains"), not an index.
 
+    # Study vocabulary and correction keywords, same as every other entry point.
+    manifest = transcripts.load_transcripts_manifest()
+    context_keywords = (
+        transcripts.get_corrections_keywords(manifest.get("corrections", [])) or None
+    )
+    known_terms = transcripts.get_known_terms(manifest) or None
+
     result: Any = None
     if not paths:
         return {
@@ -299,6 +306,8 @@ def _exec_transcribe(
                 timeline,
                 model_name=model_name,
                 language=lang,
+                context_keywords=context_keywords,
+                known_terms=known_terms,
                 cancel_flag=ctx.cancel_flag,
             )
     else:
@@ -306,6 +315,8 @@ def _exec_transcribe(
             paths[0],
             model_name=model_name,
             language=lang,
+            context_keywords=context_keywords,
+            known_terms=known_terms,
             cancel_flag=ctx.cancel_flag,
         )
 

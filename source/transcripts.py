@@ -13,8 +13,10 @@ Data types (defined below):
                       enriched segment for manifest storage
 
 Key functions:
-  transcribe_video(path, *, model_name, language, initial_prompt, context_keywords)
-    → TranscriptResult; context_keywords are appended to the initial prompt;
+  transcribe_video(path, *, model_name, language, initial_prompt, context_keywords,
+                   known_terms)
+    → TranscriptResult; context_keywords are appended to the initial prompt and
+      known_terms are passed as Whisper hotwords;
       model_name overrides config.TRANSCRIBE_MODEL for one call
   filter_segments(result, start_sec, end_sec, *, offset_to_zero)
     → TranscriptResult for a clip's time range; offset_to_zero=True shifts to clip-relative times
@@ -24,12 +26,17 @@ Key functions:
   get_transcript_extension(fmt) → file extension string for a format
 
 Manifest I/O:
-  load_transcripts_manifest() → dict with source_transcripts, corrections, and marks keys
-  save_transcripts_manifest(source_transcripts, corrections, marks=None) → assigns segment IDs, writes JSON
+  load_transcripts_manifest() → dict with source_transcripts, corrections, marks,
+    and known_terms keys
+  save_transcripts_manifest(source_transcripts, corrections, marks=None,
+    known_terms=None) → assigns segment IDs, writes JSON
 
-Corrections:
+Corrections and vocabulary:
   apply_corrections(segments, corrections) → new segment list with from→to substitutions applied
   get_corrections_keywords(corrections) → unique "to" values for Whisper context_keywords
+  get_known_terms(manifest) → study glossary, deduped, for Whisper hotwords
+  dictionary_to_csv(corrections, known_terms) → "type,from,to" CSV text
+  parse_dictionary_csv(text) → (corrections, known terms) from that CSV
 
 Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which checks the
 transcripts manifest for pre-existing source transcripts, then falls back to live Whisper.
@@ -50,7 +57,8 @@ Timestamp tightening (both on by default):
 """
 
 import copy
-
+import csv
+import io
 import os
 import queue
 import re
@@ -434,8 +442,16 @@ def _build_transcribe_kwargs(
     *,
     language: str | None,
     initial_prompt: str,
+    hotwords: str | None = None,
 ) -> dict[str, Any]:
-    """Return keyword arguments for ``WhisperModel.transcribe`` from config."""
+    """Return keyword arguments for ``WhisperModel.transcribe`` from config.
+
+    *hotwords* is the study glossary. Unlike ``initial_prompt``, faster-whisper
+    re-prepends it to every 30 s window, so it does not decay as context fills;
+    it is truncated at half the prompt budget and ignored when ``prefix`` is set
+    (clipgen never sets ``prefix``). Omitted entirely when empty, so a study
+    without terms decodes with the exact same arguments as before.
+    """
     kwargs: dict[str, Any] = {
         "beam_size": config.TRANSCRIBE_BEAM_SIZE,
         "language": language,
@@ -446,6 +462,8 @@ def _build_transcribe_kwargs(
         "compression_ratio_threshold": config.TRANSCRIBE_COMPRESSION_RATIO_THRESHOLD,
         "condition_on_previous_text": config.TRANSCRIBE_CONDITION_ON_PREVIOUS_TEXT,
     }
+    if hotwords:
+        kwargs["hotwords"] = hotwords
     # Recall-safe VAD tuning: a low threshold plus boundary padding so quiet speech
     # and word edges aren't clipped. Sent only when VAD is on; faster-whisper merges
     # this partial dict with its VadOptions defaults.
@@ -679,6 +697,7 @@ def transcribe_video(
     audio_index: int | None = None,
     initial_prompt: str | None = None,
     context_keywords: list[str] | None = None,
+    known_terms: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
     start_seconds: float | None = None,
@@ -701,6 +720,7 @@ def transcribe_video(
             ``start_seconds`` before it is stored or streamed.
         initial_prompt: Override the default initial prompt.
         context_keywords: Extra keywords to append to the prompt.
+        known_terms: Study glossary passed to Whisper as hotwords.
         on_segment: Optional callback invoked after each segment with the
             segment's end time (seconds) and the TranscriptSegment.
             Useful for progress tracking and streaming partial results.
@@ -794,7 +814,9 @@ def transcribe_video(
             with profiling.span("transcribe.energy_envelope"):
                 snapper = _build_energy_snapper(audio_source)
         transcribe_kwargs = _build_transcribe_kwargs(
-            language=lang, initial_prompt=prompt
+            language=lang,
+            initial_prompt=prompt,
+            hotwords=", ".join(known_terms) if known_terms else None,
         )
         # Not a free call: faster-whisper extracts features and runs VAD +
         # language detection *eagerly* here, then hands back a lazy
@@ -936,6 +958,7 @@ def transcribe_timeline(
     language: str | None = None,
     audio_index: int | None = None,
     context_keywords: list[str] | None = None,
+    known_terms: list[str] | None = None,
     on_segment: Callable[[float, "TranscriptSegment"], None] | None = None,
     cancel_flag: Callable[[], bool] | None = None,
     start_seconds: float | None = None,
@@ -1000,6 +1023,7 @@ def transcribe_timeline(
             language=language,
             audio_index=resolved_audio_index,
             context_keywords=context_keywords,
+            known_terms=known_terms,
             on_segment=part_on_segment,
             cancel_flag=cancel_flag,
             start_seconds=local_start,
@@ -1025,13 +1049,21 @@ def transcribe_timeline(
 
 
 def _empty_transcripts_manifest() -> dict[str, Any]:
-    return {"source_transcripts": {}, "corrections": [], "marks": []}
+    return {
+        "source_transcripts": {},
+        "corrections": [],
+        "marks": [],
+        "known_terms": [],
+    }
 
 
 def _is_empty_transcripts_manifest(data: dict[str, Any]) -> bool:
-    """True when no transcripts, corrections, or marks exist — nothing to persist."""
+    """True when no transcripts, corrections, marks, or terms exist."""
     return not (
-        data.get("source_transcripts") or data.get("corrections") or data.get("marks")
+        data.get("source_transcripts")
+        or data.get("corrections")
+        or data.get("marks")
+        or data.get("known_terms")
     )
 
 
@@ -1050,6 +1082,7 @@ def save_transcripts_manifest(
     source_transcripts: dict[str, Any],
     corrections: list[dict[str, Any]],
     marks: list[dict[str, Any]] | None = None,
+    known_terms: list[str] | None = None,
 ) -> Path | None:
     """Write the transcripts manifest to disk.
 
@@ -1057,8 +1090,8 @@ def save_transcripts_manifest(
     already have one, but never overwrites an existing id — so marks and
     corrections that reference ``seg["id"]`` keep pointing at the same
     segment even when later segments are added, edited, or reordered.
-    *marks* defaults to ``None`` which preserves whatever marks are already on
-    disk (load → merge → save).  Pass an explicit list to overwrite.
+    *marks* and *known_terms* default to ``None`` which preserves whatever is
+    already on disk (load → merge → save). Pass a list to overwrite.
     Returns the manifest path on success, or ``None`` on failure.
     """
     for participant_id, entry in source_transcripts.items():
@@ -1066,15 +1099,20 @@ def save_transcripts_manifest(
             if not seg.get("id"):
                 seg["id"] = f"{participant_id}:{idx}"
 
-    # When marks is None, preserve existing marks from disk
-    if marks is None:
+    # When marks/known_terms are None, preserve what is already on disk.
+    if marks is None or known_terms is None:
         # .get: a KeyError here would silently kill the debounce timer thread.
-        marks = load_transcripts_manifest().get("marks", [])
+        on_disk = load_transcripts_manifest()
+        if marks is None:
+            marks = on_disk.get("marks", [])
+        if known_terms is None:
+            known_terms = on_disk.get("known_terms", [])
 
     data = {
         "source_transcripts": source_transcripts,
         "corrections": corrections,
         "marks": marks,
+        "known_terms": known_terms,
     }
     if _is_empty_transcripts_manifest(data):
         utils.save_manifest_section("transcripts", None)
@@ -1153,6 +1191,72 @@ def get_corrections_keywords(corrections: list[dict[str, Any]]) -> list[str]:
             seen.add(to_val)
             keywords.append(to_val)
     return keywords
+
+
+def get_known_terms(manifest: dict[str, Any]) -> list[str]:
+    """Study vocabulary from the manifest, for Whisper hotwords.
+
+    Deduped case-insensitively; the first spelling wins so the user's casing
+    reaches the decoder.
+    """
+    seen: set[str] = set()
+    terms: list[str] = []
+    for raw in manifest.get("known_terms", []):
+        term = str(raw).strip()
+        if term and term.lower() not in seen:
+            seen.add(term.lower())
+            terms.append(term)
+    return terms
+
+
+# ---------------------------------------------------------------------------
+# Dictionary interchange (corrections + known terms as one CSV)
+# ---------------------------------------------------------------------------
+
+# One flat table carries both halves so a study's vocabulary travels as a single
+# file: "correction" rows use both text columns, "term" rows only ``to``.
+DICTIONARY_CSV_COLUMNS = ("type", "from", "to")
+
+
+def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str]) -> str:
+    """Serialize corrections + known terms as ``type,from,to`` CSV."""
+    import data_export
+
+    rows: list[dict[str, Any]] = [
+        {"type": "correction", "from": c.get("from", ""), "to": c.get("to", "")}
+        for c in corrections
+        if c.get("from") and c.get("to")
+    ]
+    rows += [{"type": "term", "from": "", "to": term} for term in known_terms]
+    if not rows:
+        # to_csv derives its columns from the data, so an empty dictionary would
+        # export a zero-byte file that cannot be re-imported.
+        return ",".join(DICTIONARY_CSV_COLUMNS) + "\r\n"
+    return data_export.to_csv(rows, preferred_column_order=DICTIONARY_CSV_COLUMNS)
+
+
+def parse_dictionary_csv(text: str) -> tuple[list[dict[str, str]], list[str]]:
+    """Parse a dictionary CSV into (corrections, known terms).
+
+    Needs the ``type,from,to`` header row. Unknown types and rows missing their
+    required text are skipped rather than failing the whole file — a glossary is
+    often hand-edited in a spreadsheet. A term may sit in either text column so
+    a one-column-per-word sheet still imports.
+    """
+    corrections: list[dict[str, str]] = []
+    terms: list[str] = []
+    for row in csv.DictReader(io.StringIO(text)):
+        kind = (row.get("type") or "").strip().lower()
+        frm = (row.get("from") or "").strip()
+        to = (row.get("to") or "").strip()
+        if kind == "correction":
+            if frm and to:
+                corrections.append({"from": frm, "to": to})
+        elif kind == "term":
+            term = to or frm
+            if term:
+                terms.append(term)
+    return corrections, terms
 
 
 # ---------------------------------------------------------------------------
@@ -1739,10 +1843,11 @@ class TranscriptWorker:
             return
         window_len = win_end - win_start if win_end is not None else 0.0
 
-        # Load corrections for context keywords
+        # Load corrections for context keywords, plus the study glossary.
         manifest = load_transcripts_manifest()
         corrections = manifest.get("corrections", [])
         context_kw = get_corrections_keywords(corrections) or None
+        known_terms = get_known_terms(manifest) or None
 
         # Load the model up front (a no-op when already cached) so the ~10s
         # cold construction is visible as its own phase instead of an opaque
@@ -1808,6 +1913,7 @@ class TranscriptWorker:
                     language=task.get("language"),
                     audio_index=audio_index,
                     context_keywords=context_kw,
+                    known_terms=known_terms,
                     on_segment=_on_seg,
                     cancel_flag=lambda: bool(task.get("_cancelled")),
                     start_seconds=dispatch_start,
@@ -1820,6 +1926,7 @@ class TranscriptWorker:
                     language=task.get("language"),
                     audio_index=audio_index,
                     context_keywords=context_kw,
+                    known_terms=known_terms,
                     on_segment=_on_seg,
                     cancel_flag=lambda: bool(task.get("_cancelled")),
                     start_seconds=dispatch_start,

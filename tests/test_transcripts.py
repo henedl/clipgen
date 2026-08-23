@@ -493,6 +493,22 @@ class TestBuildTranscribeKwargs:
         kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
         assert kwargs["word_timestamps"] is True
 
+    def test_hotwords_omitted_by_default(self):
+        kwargs = transcripts._build_transcribe_kwargs(language=None, initial_prompt="")
+        assert "hotwords" not in kwargs
+
+    def test_hotwords_passed_through(self):
+        kwargs = transcripts._build_transcribe_kwargs(
+            language=None, initial_prompt="", hotwords="Frobnicator, Widget Bay"
+        )
+        assert kwargs["hotwords"] == "Frobnicator, Widget Bay"
+
+    def test_empty_hotwords_omitted(self):
+        kwargs = transcripts._build_transcribe_kwargs(
+            language=None, initial_prompt="", hotwords=""
+        )
+        assert "hotwords" not in kwargs
+
 
 class TestTranscribeVideoWhisperKwargs:
     def test_transcribe_passes_kwargs_to_model(self, monkeypatch):
@@ -528,6 +544,38 @@ class TestTranscribeVideoWhisperKwargs:
         assert result is not None
         assert captured["vad_filter"] is True
         assert "word_timestamps" not in captured
+
+    def test_known_terms_become_hotwords(self, monkeypatch):
+        import video as video_mod
+
+        captured: dict = {}
+
+        class FakeSeg:
+            text = " hello"
+            start = 0.0
+            end = 1.0
+
+        class FakeInfo:
+            language = "en"
+
+        class FakeModel:
+            def transcribe(self, audio, **kwargs):
+                captured.update(kwargs)
+                return iter([FakeSeg()]), FakeInfo()
+
+        monkeypatch.setattr(config, "DEBUGGING", False)
+        monkeypatch.setattr(
+            transcripts, "_load_model", lambda model_name=None: FakeModel()
+        )
+        monkeypatch.setattr(
+            video_mod, "decode_audio_pcm", lambda _path, _idx=0, **_kw: _FAKE_AUDIO
+        )
+
+        result = transcripts.transcribe_video(
+            "/fake/video.mp4", known_terms=["Frobnicator", "Widget Bay"]
+        )
+        assert result is not None
+        assert captured["hotwords"] == "Frobnicator, Widget Bay"
 
     def test_segments_carry_rounded_words_and_tightened_bounds(self, monkeypatch):
         """Word timing rides on the segment; segment bounds tighten to the words."""
@@ -1055,6 +1103,70 @@ class TestApplyCorrections:
 
 
 # ---------------------------------------------------------------------------
+# get_known_terms
+# ---------------------------------------------------------------------------
+
+
+class TestGetKnownTerms:
+    def test_missing_key(self):
+        assert transcripts.get_known_terms({}) == []
+
+    def test_strips_and_drops_empties(self):
+        m = {"known_terms": ["  Frobnicator  ", "", "   "]}
+        assert transcripts.get_known_terms(m) == ["Frobnicator"]
+
+    def test_dedupes_case_insensitively_keeping_first_spelling(self):
+        m = {"known_terms": ["Frobnicator", "frobnicator", "Widget Bay"]}
+        assert transcripts.get_known_terms(m) == ["Frobnicator", "Widget Bay"]
+
+    def test_preserves_order(self):
+        m = {"known_terms": ["b", "a", "c"]}
+        assert transcripts.get_known_terms(m) == ["b", "a", "c"]
+
+
+# ---------------------------------------------------------------------------
+# Dictionary CSV interchange
+# ---------------------------------------------------------------------------
+
+
+class TestDictionaryCsv:
+    def test_round_trip(self):
+        corrections = [{"from": "teh", "to": "the"}]
+        terms = ["Frobnicator", 'a 27" display']
+        text = transcripts.dictionary_to_csv(corrections, terms)
+        assert transcripts.parse_dictionary_csv(text) == (corrections, terms)
+
+    def test_empty_dictionary_still_has_a_header(self):
+        text = transcripts.dictionary_to_csv([], [])
+        assert text.startswith("type,from,to")
+        assert transcripts.parse_dictionary_csv(text) == ([], [])
+
+    def test_export_skips_half_filled_corrections(self):
+        text = transcripts.dictionary_to_csv([{"from": "teh", "to": ""}], [])
+        assert "teh" not in text
+
+    def test_parse_skips_unknown_types_and_blank_rows(self):
+        text = "type,from,to\nnonsense,a,b\ncorrection,,x\nterm,,\ncorrection,teh,the\n"
+        assert transcripts.parse_dictionary_csv(text) == (
+            [{"from": "teh", "to": "the"}],
+            [],
+        )
+
+    def test_term_may_sit_in_either_column(self):
+        text = "type,from,to\nterm,Frobnicator,\n"
+        assert transcripts.parse_dictionary_csv(text) == ([], ["Frobnicator"])
+
+    def test_parse_trims_whitespace(self):
+        text = "type,from,to\ncorrection,  teh , the  \nterm,,  Widget \n"
+        corrections, terms = transcripts.parse_dictionary_csv(text)
+        assert corrections == [{"from": "teh", "to": "the"}]
+        assert terms == ["Widget"]
+
+    def test_garbage_input_yields_nothing(self):
+        assert transcripts.parse_dictionary_csv("not a csv at all") == ([], [])
+
+
+# ---------------------------------------------------------------------------
 # get_corrections_keywords
 # ---------------------------------------------------------------------------
 
@@ -1090,12 +1202,22 @@ class TestGetCorrectionsKeywords:
 class TestTranscriptsManifest:
     def test_empty_manifest_default(self):
         m = transcripts._empty_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
+        assert m == {
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+            "known_terms": [],
+        }
 
     def test_load_missing_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         m = transcripts.load_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
+        assert m == {
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+            "known_terms": [],
+        }
 
     def test_save_and_load_roundtrip(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
@@ -1170,6 +1292,26 @@ class TestTranscriptsManifest:
         assert path is None
         assert not (tmp_path / config.MANIFEST_FILENAME).exists()
 
+    def test_known_terms_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts.save_transcripts_manifest({}, [], known_terms=["Frobnicator"])
+        loaded = transcripts.load_transcripts_manifest()
+        assert loaded["known_terms"] == ["Frobnicator"]
+
+    def test_terms_only_manifest_persists(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        path = transcripts.save_transcripts_manifest({}, [], known_terms=["Widget"])
+        assert path is not None
+
+    def test_known_terms_preserved_when_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        transcripts.save_transcripts_manifest({}, [], known_terms=["Widget"])
+        transcripts.save_transcripts_manifest(
+            {}, [{"id": "c1", "from": "a", "to": "b"}]
+        )
+        loaded = transcripts.load_transcripts_manifest()
+        assert loaded["known_terms"] == ["Widget"]
+
     def test_emptying_existing_manifest_removes_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         manifest = tmp_path / config.MANIFEST_FILENAME
@@ -1185,7 +1327,12 @@ class TestTranscriptsManifest:
         monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
         (tmp_path / config.MANIFEST_FILENAME).write_text("not json")
         m = transcripts.load_transcripts_manifest()
-        assert m == {"source_transcripts": {}, "corrections": [], "marks": []}
+        assert m == {
+            "source_transcripts": {},
+            "corrections": [],
+            "marks": [],
+            "known_terms": [],
+        }
 
     def test_load_returns_independent_copies(self, tmp_path, monkeypatch):
         """Mutating a returned entry in place must not corrupt the cache."""
