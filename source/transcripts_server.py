@@ -28,8 +28,10 @@ API endpoints (all under /transcripts/):
   POST /api/known-terms                           - add a known term
   DELETE /api/known-terms/<term>                  - remove a known term
   GET  /api/dictionary.csv                        - corrections + terms as one CSV
+  POST /api/dictionary/import                     - merge a dictionary CSV
   GET  /api/dictionary/global                     - counts for the saved global copy
   POST /api/dictionary/global                     - save this study's dictionary globally
+  POST /api/dictionary/global/load                - merge the global copy into the study
   GET  /api/intake-poll                           - Studio-intake poll: running-state booleans + resolved marks
   GET  /api/marks                                 - list all marks with resolved segment data
   POST /api/marks                                 - create marks for segments
@@ -1495,12 +1497,55 @@ def api_known_terms_delete(term: str) -> FlaskResponse:
     return ok()
 
 
-# ---- Dictionary export ----
+# ---- Dictionary import / export ----
 #
 # Corrections and known terms travel together as one `type,from,to` CSV, plus a
 # global copy in the config dir so a house style-guide can seed a new study.
+# Import always merges: a study's own entries are never dropped by loading
+# someone else's file, and re-importing the same file is a no-op.
 
 _GLOBAL_DICTIONARY_FILE = "dictionary.json"
+
+
+def _merge_dictionary_locked(
+    corrections: list[dict[str, str]], terms: list[str]
+) -> tuple[int, int]:
+    """Merge entries into _manifest, skipping duplicates. Caller holds the lock.
+
+    Returns the (corrections, terms) actually added.
+    """
+    existing = _manifest.setdefault("corrections", [])
+    seen = {(c.get("from", "").lower(), c.get("to", "").lower()) for c in existing}
+    added_corrections = 0
+    for c in corrections:
+        key = (c["from"].lower(), c["to"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(
+            {
+                "id": f"c_{uuid.uuid4().hex[:8]}",
+                "from": c["from"],
+                "to": c["to"],
+                "created": datetime.now(UTC).isoformat(),
+            }
+        )
+        added_corrections += 1
+
+    known = _manifest.setdefault("known_terms", [])
+    seen_terms = {t.lower() for t in known}
+    added_terms = 0
+    for term in terms:
+        if term.lower() in seen_terms:
+            continue
+        seen_terms.add(term.lower())
+        known.append(term)
+        added_terms += 1
+
+    if added_corrections:
+        # Imported corrections rewrite displayed text; terms never do.
+        _bump_corrections_version()
+    return added_corrections, added_terms
 
 
 @transcripts_bp.route("/api/dictionary.csv")
@@ -1511,6 +1556,27 @@ def api_dictionary_export() -> FlaskResponse:
         terms = list(_manifest.get("known_terms", []))
     return Response(
         transcripts.dictionary_to_csv(corrections, terms), content_type="text/csv"
+    )
+
+
+@transcripts_bp.route("/api/dictionary/import", methods=["POST"])
+def api_dictionary_import() -> FlaskResponse:
+    """Merge a dictionary CSV into the study."""
+    data = request.get_json(silent=True)
+    if not data or not str(data.get("csv", "")).strip():
+        return err("Missing CSV content")
+
+    corrections, terms = transcripts.parse_dictionary_csv(str(data["csv"]))
+    if not corrections and not terms:
+        return err("No corrections or terms found in that file")
+
+    with _manifest_lock:
+        added_corrections, added_terms = _merge_dictionary_locked(corrections, terms)
+    _schedule_persist()
+    return ok(
+        corrections=added_corrections,
+        terms=added_terms,
+        skipped=(len(corrections) + len(terms)) - (added_corrections + added_terms),
     )
 
 
@@ -1547,6 +1613,25 @@ def api_dictionary_global_save() -> FlaskResponse:
     if path is None:
         return err("Could not write the global dictionary")
     return ok(corrections=len(corrections), terms=len(terms))
+
+
+@transcripts_bp.route("/api/dictionary/global/load", methods=["POST"])
+def api_dictionary_global_load() -> FlaskResponse:
+    """Merge the saved global dictionary into this study."""
+    saved = start_settings.load_config_json(_GLOBAL_DICTIONARY_FILE, default=None)
+    if not isinstance(saved, dict):
+        return err("No global dictionary saved yet", 404)
+
+    corrections = [
+        {"from": c.get("from", ""), "to": c.get("to", "")}
+        for c in saved.get("corrections", [])
+        if c.get("from") and c.get("to")
+    ]
+    terms = [str(t).strip() for t in saved.get("known_terms", []) if str(t).strip()]
+    with _manifest_lock:
+        added_corrections, added_terms = _merge_dictionary_locked(corrections, terms)
+    _schedule_persist()
+    return ok(corrections=added_corrections, terms=added_terms)
 
 
 # ---- Marks ----

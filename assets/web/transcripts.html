@@ -234,10 +234,12 @@
       <div class="modal-header">
         <h3>Transcript Dictionary</h3>
         <div class="dict-actions">
+          <button id="importDictBtn" type="button" class="btn btn-small">Import CSV</button>
           <button id="exportDictBtn" type="button" class="btn btn-small">Export CSV</button>
           <button id="closeCorrectionsBtn" class="btn btn-small">Close</button>
         </div>
       </div>
+      <input id="importDictFile" type="file" accept="text/csv,.csv" hidden>
       <section class="dict-section">
         <h4>Corrections</h4>
         <p class="dict-hint">Rewrites text in transcripts you already have.</p>
@@ -263,6 +265,7 @@
         <p class="dict-hint" id="dictGlobalHint">Reuse one house glossary across studies.</p>
         <div class="dict-global-actions">
           <button id="saveGlobalDictBtn" type="button" class="btn btn-small">Save as global</button>
+          <button id="loadGlobalDictBtn" type="button" class="btn btn-small">Load global</button>
         </div>
       </section>
     </div>

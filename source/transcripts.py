@@ -36,6 +36,7 @@ Corrections and vocabulary:
   get_corrections_keywords(corrections) → unique "to" values for Whisper context_keywords
   get_known_terms(manifest) → study glossary, deduped, for Whisper hotwords
   dictionary_to_csv(corrections, known_terms) → "type,from,to" CSV text
+  parse_dictionary_csv(text) → (corrections, known terms) from that CSV
 
 Pipeline integration: clipgen.process_clips() calls _transcribe_segments() which checks the
 transcripts manifest for pre-existing source transcripts, then falls back to live Whisper.
@@ -56,6 +57,8 @@ Timestamp tightening (both on by default):
 """
 
 import copy
+import csv
+import io
 import os
 import queue
 import re
@@ -1230,6 +1233,30 @@ def dictionary_to_csv(corrections: list[dict[str, Any]], known_terms: list[str])
         # export a zero-byte file that cannot be re-imported.
         return ",".join(DICTIONARY_CSV_COLUMNS) + "\r\n"
     return data_export.to_csv(rows, preferred_column_order=DICTIONARY_CSV_COLUMNS)
+
+
+def parse_dictionary_csv(text: str) -> tuple[list[dict[str, str]], list[str]]:
+    """Parse a dictionary CSV into (corrections, known terms).
+
+    Needs the ``type,from,to`` header row. Unknown types and rows missing their
+    required text are skipped rather than failing the whole file — a glossary is
+    often hand-edited in a spreadsheet. A term may sit in either text column so
+    a one-column-per-word sheet still imports.
+    """
+    corrections: list[dict[str, str]] = []
+    terms: list[str] = []
+    for row in csv.DictReader(io.StringIO(text)):
+        kind = (row.get("type") or "").strip().lower()
+        frm = (row.get("from") or "").strip()
+        to = (row.get("to") or "").strip()
+        if kind == "correction":
+            if frm and to:
+                corrections.append({"from": frm, "to": to})
+        elif kind == "term":
+            term = to or frm
+            if term:
+                terms.append(term)
+    return corrections, terms
 
 
 # ---------------------------------------------------------------------------

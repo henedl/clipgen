@@ -1130,17 +1130,40 @@ class TestGetKnownTerms:
 
 
 class TestDictionaryCsv:
-    def test_empty_dictionary_still_has_a_header(self):
-        assert transcripts.dictionary_to_csv([], []).startswith("type,from,to")
+    def test_round_trip(self):
+        corrections = [{"from": "teh", "to": "the"}]
+        terms = ["Frobnicator", 'a 27" display']
+        text = transcripts.dictionary_to_csv(corrections, terms)
+        assert transcripts.parse_dictionary_csv(text) == (corrections, terms)
 
-    def test_exports_both_halves(self):
-        text = transcripts.dictionary_to_csv([{"from": "teh", "to": "the"}], ["Widget"])
-        assert "correction,teh,the" in text
-        assert "term,,Widget" in text
+    def test_empty_dictionary_still_has_a_header(self):
+        text = transcripts.dictionary_to_csv([], [])
+        assert text.startswith("type,from,to")
+        assert transcripts.parse_dictionary_csv(text) == ([], [])
 
     def test_export_skips_half_filled_corrections(self):
         text = transcripts.dictionary_to_csv([{"from": "teh", "to": ""}], [])
         assert "teh" not in text
+
+    def test_parse_skips_unknown_types_and_blank_rows(self):
+        text = "type,from,to\nnonsense,a,b\ncorrection,,x\nterm,,\ncorrection,teh,the\n"
+        assert transcripts.parse_dictionary_csv(text) == (
+            [{"from": "teh", "to": "the"}],
+            [],
+        )
+
+    def test_term_may_sit_in_either_column(self):
+        text = "type,from,to\nterm,Frobnicator,\n"
+        assert transcripts.parse_dictionary_csv(text) == ([], ["Frobnicator"])
+
+    def test_parse_trims_whitespace(self):
+        text = "type,from,to\ncorrection,  teh , the  \nterm,,  Widget \n"
+        corrections, terms = transcripts.parse_dictionary_csv(text)
+        assert corrections == [{"from": "teh", "to": "the"}]
+        assert terms == ["Widget"]
+
+    def test_garbage_input_yields_nothing(self):
+        assert transcripts.parse_dictionary_csv("not a csv at all") == ([], [])
 
 
 # ---------------------------------------------------------------------------

@@ -6,8 +6,8 @@
  * needing a correction. Loaded after transcripts.js; reads the hub's shared
  * state + helpers through window.ClipgenTranscripts (TS) and publishes
  * initCorrectionsModal / loadCorrections back so the hub's boot and the
- * inline-edit saveCorrections() flow can reach them. Both halves export together
- * as one CSV, or as a global copy. Plain utils.js globals
+ * inline-edit saveCorrections() flow can reach them. Both halves travel together
+ * through the CSV import/export and the global copy. Plain utils.js globals
  * (qs/apiGet/apiPost/apiDelete/escapeHtml/clipgenSaveFromUrl/clipgenPluralUnit)
  * are reached via the scope chain.
  */
@@ -67,7 +67,17 @@
 
     qs("#exportDictBtn").addEventListener("click", exportDictionary);
 
+    var file = qs("#importDictFile");
+    qs("#importDictBtn").addEventListener("click", function () {
+      file.click();
+    });
+    file.addEventListener("change", function () {
+      importDictionary(file.files && file.files[0]);
+      file.value = ""; // allow re-importing the same file
+    });
+
     qs("#saveGlobalDictBtn").addEventListener("click", saveGlobalDictionary);
+    qs("#loadGlobalDictBtn").addEventListener("click", loadGlobalDictionary);
   }
 
   function loadCorrections() {
@@ -204,7 +214,19 @@
     });
   }
 
-  // ---- Export ----
+  // ---- Import / export ----
+
+  // Reloads both lists and the open transcript after entries arrive. Imported
+  // corrections rewrite displayed text, so the transcript has to be refetched.
+  function afterImport(data, what) {
+    var parts = [];
+    if (data.corrections) parts.push(clipgenPluralUnit(data.corrections, "correction", "corrections"));
+    if (data.terms) parts.push(clipgenPluralUnit(data.terms, "term", "terms"));
+    showToast(parts.length ? "Added " + parts.join(" and ") : "Nothing new in " + what);
+    loadCorrections();
+    loadKnownTerms();
+    if (data.corrections && state.selectedParticipant) loadTranscript(state.selectedParticipant);
+  }
 
   function exportDictionary() {
     // Server-side CSV so there is one writer for the format, not two.
@@ -214,12 +236,31 @@
     });
   }
 
+  function importDictionary(file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onerror = function () {
+      showToast("Could not read that file");
+    };
+    reader.onload = function () {
+      // _apiJson rejects on non-2xx with the server's own message on
+      // .serverMessage, so "No corrections or terms found" reaches the toast.
+      apiPost("api/dictionary/import", { csv: String(reader.result) }).then(function (data) {
+        afterImport(data, "that file");
+      }).catch(function (e) {
+        showToast(e.serverMessage || "Import failed");
+      });
+    };
+    reader.readAsText(file);
+  }
+
   // ---- Global dictionary ----
 
   function loadGlobalStatus() {
     var hint = qs("#dictGlobalHint");
     apiGet("api/dictionary/global").then(function (data) {
       if (!data.ok) return;
+      qs("#loadGlobalDictBtn").disabled = !data.exists;
       hint.textContent = data.exists
         ? "Saved: " +
           clipgenPluralUnit(data.corrections, "correction", "corrections") +
@@ -236,6 +277,14 @@
       loadGlobalStatus();
     }).catch(function (e) {
       showToast(e.serverMessage || "Could not save");
+    });
+  }
+
+  function loadGlobalDictionary() {
+    apiPost("api/dictionary/global/load", {}).then(function (data) {
+      afterImport(data, "the global dictionary");
+    }).catch(function (e) {
+      showToast(e.serverMessage || "Could not load");
     });
   }
 
