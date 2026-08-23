@@ -1411,3 +1411,39 @@ def test_llm_delete_is_reachable_from_the_combined_root(client, monkeypatch, tmp
     body = client.delete("/api/models/llm/tiny").get_json()
     assert body["ok"] is True
     assert not gguf.exists()
+
+
+def test_models_payload_flags_a_model_that_would_not_load(client, monkeypatch):
+    """The picker must say which models are known-bad, and why.
+
+    Nothing about a GGUF on disk predicts this — an Ollama-converted file looks
+    healthy until llama.cpp tries to read it — so the payload reports what the
+    last attempt learned.
+    """
+    import llm_client
+
+    monkeypatch.setattr(
+        llm_client, "list_models", lambda: [{"name": "tiny", "size_bytes": 1024}]
+    )
+    monkeypatch.setattr(
+        llm_client,
+        "load_failures",
+        lambda: {"tiny": "model name=tiny failed to load"},
+    )
+
+    body = client.get("/api/models").get_json()
+    entry = next(m for m in body["llm"]["models"] if m["name"] == "tiny")
+    assert entry["unusable"] == "model name=tiny failed to load"
+
+
+def test_models_payload_leaves_working_models_unflagged(client, monkeypatch):
+    import llm_client
+
+    monkeypatch.setattr(
+        llm_client, "list_models", lambda: [{"name": "tiny", "size_bytes": 1024}]
+    )
+    monkeypatch.setattr(llm_client, "load_failures", dict)
+
+    body = client.get("/api/models").get_json()
+    entry = next(m for m in body["llm"]["models"] if m["name"] == "tiny")
+    assert entry["unusable"] == ""

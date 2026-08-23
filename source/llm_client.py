@@ -566,6 +566,40 @@ def take_last_error() -> str:
     return message
 
 
+# Models the router refused to load, remembered across runs so the picker can
+# say so before the user waits on another failed run. Ollama-sourced GGUFs are
+# the common case: the fork's conversion diverges from upstream llama.cpp
+# (reordered SSM weights, fused vision/audio towers), and nothing short of
+# attempting a load can tell.
+_FAILURES_FILE = "model_failures.json"
+
+
+def load_failures() -> dict[str, str]:
+    """Model name -> why the router last refused to load it."""
+    data = start_settings.load_config_json(_FAILURES_FILE, default={})
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items()}
+
+
+def _record_failure(model: str, reason: str) -> None:
+    """Remember that *model* would not load, or forget it when *reason* is empty."""
+    name = model_name(model)
+    failures = load_failures()
+    if reason:
+        if failures.get(name) == reason:
+            return
+        failures[name] = reason
+    elif name in failures:
+        del failures[name]
+    else:
+        return
+    if failures:
+        start_settings.save_config_json(_FAILURES_FILE, failures)
+    else:
+        start_settings.remove_config_json(_FAILURES_FILE)
+
+
 def _http_error_detail(exc: urllib.error.HTTPError) -> str:
     """The router's own message for a failed request, else the HTTP reason.
 
@@ -818,9 +852,17 @@ def generate(
     }
 
     try:
-        return _generate_with_load_retry(body, cancel_event, on_token)
+        text = _generate_with_load_retry(body, cancel_event, on_token)
+        _record_failure(resolved_model, "")  # it works now; forget any old mark
+        return text
     except urllib.error.HTTPError as exc:
-        _fail(f"AI generate failed: {_http_error_detail(exc)}")
+        detail = _http_error_detail(exc)
+        # llama.cpp's own wording for a model it cannot read. Anything else
+        # (connection, timeout, empty answer) is not the model's fault, so it
+        # must not brand it unusable.
+        if "failed to load" in detail.lower():
+            _record_failure(resolved_model, detail)
+        _fail(f"AI generate failed: {detail}")
         return None
     except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         if cancel_event is not None and cancel_event.is_set():
@@ -832,10 +874,17 @@ def generate(
         if not start_server():
             return None
         try:
-            return _generate_with_load_retry(body, cancel_event, on_token)
+            text = _generate_with_load_retry(body, cancel_event, on_token)
+            _record_failure(resolved_model, "")
+            return text
+        except urllib.error.HTTPError as retry_exc:
+            detail = _http_error_detail(retry_exc)
+            if "failed to load" in detail.lower():
+                _record_failure(resolved_model, detail)
+            _fail(f"AI generate failed after retry: {detail}")
+            return None
         except (
             urllib.error.URLError,
-            urllib.error.HTTPError,
             OSError,
             http.client.HTTPException,
         ) as retry_exc:

@@ -61,3 +61,26 @@ def test_model_actions_report_their_errors():
 
 def test_settings_modal_is_es5():
     assert_es5(_JS, "settings-modal.js")
+
+
+def test_unusable_models_are_marked_with_their_reason():
+    """A model the router refused must say so before it wastes another run.
+
+    Marked, never hidden or disabled: a llama.cpp upgrade can fix one, and the
+    row still has to be deletable.
+    """
+    row = _JS[
+        _JS.index("function _buildLlmModelRow") : _JS.index("function _loadModels")
+    ]
+    assert "model.unusable" in row
+    assert '"settings-llm-model-reason"' in row
+    assert "settings-llm-model-row--unusable" in row
+    assert "disabled" not in row.split("delBtn")[0], "the row stays actionable"
+
+    select = _JS[_JS.index("function _loadModelsForSelect") :]
+    assert "m.unusable" in select
+    assert "won't load" in select
+
+    css = read("settings-modal.css")
+    assert ".settings-llm-model-reason {" in css
+    assert ".settings-llm-model-row--unusable" in css

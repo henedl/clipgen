@@ -4505,8 +4505,16 @@ def build_combined_app(
 
         # A filesystem scan, so the catalog answers even with the server down.
         raw = llm_client.list_models()
+        # Models the router already refused once. Discovery cannot predict this
+        # — an Ollama-converted GGUF looks fine until llama.cpp tries to read
+        # it — so the picker reports what the last attempt learned.
+        failures = llm_client.load_failures()
         llm_models = [
-            {"name": m["name"], "size_mb": round(m["size_bytes"] / (1024 * 1024))}
+            {
+                "name": m["name"],
+                "size_mb": round(m["size_bytes"] / (1024 * 1024)),
+                "unusable": failures.get(m["name"], ""),
+            }
             for m in raw
         ]
 
@@ -4520,6 +4528,7 @@ def build_combined_app(
                     "key": a["key"],
                     "model": model,
                     "installed": llm_client.is_model_installed(model, raw),
+                    "unusable": failures.get(llm_client.model_name(model), ""),
                 }
             )
 

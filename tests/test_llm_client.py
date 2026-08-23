@@ -676,6 +676,46 @@ class TestAutoStartServer:
         exc.read = lambda: b"<html>nope</html>"  # ty: ignore[invalid-assignment]
         assert llm_client._http_error_detail(exc) == "Service Unavailable"
 
+    def _load_error(self, model="tiny"):
+        body = json.dumps(
+            {"error": {"message": f"model name={model} failed to load"}}
+        ).encode()
+        exc = urllib.error.HTTPError(
+            "http://x", 500, "Internal Server Error", Message(), None
+        )
+        exc.read = lambda: body  # ty: ignore[invalid-assignment]
+        return exc
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_remembers_a_model_that_would_not_load(self, mock_run):
+        """Discovery cannot predict this; only a failed load can teach it."""
+        mock_run.side_effect = self._load_error()
+        assert llm_client.generate("hi", model="tiny") is None
+        assert "failed to load" in llm_client.load_failures()["tiny"]
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_forgets_the_mark_once_the_model_works(self, mock_run):
+        """A llama.cpp upgrade can fix one, so the mark must not be permanent."""
+        mock_run.side_effect = self._load_error()
+        llm_client.generate("hi", model="tiny")
+        assert "tiny" in llm_client.load_failures()
+
+        mock_run.side_effect = None
+        mock_run.return_value = "hello"
+        assert llm_client.generate("hi", model="tiny") == "hello"
+        assert "tiny" not in llm_client.load_failures()
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_does_not_blame_the_model_for_a_server_error(self, mock_run):
+        """A 500 that is not a load failure says nothing about the model."""
+        exc = urllib.error.HTTPError(
+            "http://x", 500, "Internal Server Error", Message(), None
+        )
+        exc.read = lambda: b'{"error": {"message": "context shift failed"}}'  # ty: ignore[invalid-assignment]
+        mock_run.side_effect = exc
+        assert llm_client.generate("hi", model="tiny") is None
+        assert llm_client.load_failures() == {}
+
     def test_take_last_error_pops_the_recorded_reason(self):
         """The orchestrator reads it once and turns it into a toast."""
         llm_client.take_last_error()  # drain anything a prior test left

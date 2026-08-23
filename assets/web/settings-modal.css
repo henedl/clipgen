@@ -759,6 +759,20 @@ html[data-theme="dark"] .settings-panel {
   white-space: nowrap;
 }
 
+/* A model the router already refused. Dimmed, not hidden: it stays deletable,
+   and a llama.cpp upgrade may yet make it work. */
+.settings-llm-model-row--unusable .settings-llm-model-name,
+.settings-llm-model-row--unusable .settings-llm-model-size {
+  color: var(--color-text-dim);
+}
+
+.settings-llm-model-reason {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+}
+
 /* Reveal is chromeless so Delete, which carries its label, reads as the
    heavier of the two actions. */
 .settings-llm-model-reveal {

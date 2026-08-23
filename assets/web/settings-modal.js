@@ -103,7 +103,14 @@
 
     function _buildLlmModelRow(model) {
       var row = el("div", "settings-llm-model-row");
-      row.appendChild(el("span", "settings-llm-model-name", model.name));
+      var name = el("span", "settings-llm-model-name", model.name);
+      if (model.unusable) {
+        // Only a failed load can discover this, so say what the router said
+        // rather than a generic "incompatible".
+        name.appendChild(el("span", "settings-llm-model-reason", model.unusable));
+        row.classList.add("settings-llm-model-row--unusable");
+      }
+      row.appendChild(name);
       if (model.size_mb) {
         row.appendChild(el("span", "settings-llm-model-size", _formatSize(model.size_mb)));
       }
@@ -179,7 +186,11 @@
         if (m.size_mb) label += " (" + _formatSize(m.size_mb) + ")";
         if (m.parameter_size) label += " \u00B7 " + m.parameter_size;
         if (m.description) label += " \u2014 " + m.description;
+        // Selectable on purpose: a llama.cpp upgrade may fix it, and the mark
+        // is what stops the user picking it again by accident.
+        if (m.unusable) label += " \u2014 won't load";
         opt.textContent = label;
+        if (m.unusable) opt.title = m.unusable;
         if (m.name === currentValue) {
           opt.selected = true;
           hasCurrentValue = true;
