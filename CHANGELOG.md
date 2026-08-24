@@ -8,6 +8,46 @@ Notable changes per release. One level-2 heading per version — `## <version> �
 
 `<Tool>` is one of `Core`, `Studio`, `Screenspace`, `Transcripts`, `Workflows`, `Composer`, `Overview`. Write for someone using clipgen, not building it: name the thing by what it is called in the interface, say what changed for them, and leave the internals in the commit. Add a second sentence only when the first leaves an obvious "so what". Lines render as **plain text** in the Start overlay's Recent updates tab — no backticks or markdown inside them, or it shows up literally.
 
+## v0.16.11 — 2026-08-24
+**Transcripts:** Fix: A failed AI run now names what went wrong instead of saying it produced no result.
+**Transcripts:** Fix: Summary citations point at the sentence they belong to again, and a summary that ends in a paragraph no longer folds it into the bullet list.
+**Transcripts:** Fix: Friction scoring reads your corrected text, so the highlighting stops shifting once a summary runs.
+**Transcripts:** Fix: Opening a different study no longer shows the previous study's transcript for a participant with the same name.
+**Core:** Fix: A reel that failed to build no longer reports that it created one.
+
+## v0.16.10 — 2026-08-23
+**Transcripts:** Feat: Corrections is now the Transcript Dictionary. Known terms steer the transcription up front, rather than fixing names after you have seen them go wrong.
+**Transcripts:** Feat: Take a dictionary between studies — export it as CSV, import one, or keep a saved copy any study can load.
+**Core:** Feat: AI models are listed by name with a link to their model card, instead of by file id.
+
+## v0.16.9 — 2026-08-23
+**Core:** Feat: Settings, Summaries suggests small AI models and downloads them in place, with progress in the row.
+
+## v0.16.8 — 2026-08-23
+**Core:** Feat: The local AI server starts on its own when a summary needs it, instead of asking you to start it first.
+**Core:** Feat: Each downloaded AI model can be shown on disk or deleted from Settings, Summaries.
+**Core:** Fix: An AI failure is reported in the app rather than only in the terminal.
+
+## v0.16.6 — 2026-08-23
+**Core:** Feat: The local AI runtime ships inside clipgen, and models you already downloaded through llama.cpp, Hugging Face or Ollama are reused instead of fetched again.
+
+## v0.16.5 — 2026-08-23
+**Core:** Feat: Local AI runs on llama.cpp. Models pulled by the old runtime do not carry over, so download the one you want again.
+
+## v0.16.4 — 2026-08-22
+**Core:** Feat: All of a project's saved work now lives in one clipgen.json in the output folder. Files written by an earlier version are left alone and not read.
+
+## v0.16.3 — 2026-08-22
+**Core:** Feat: Settings are kept per user, so switching projects no longer switches your preferences. The settings file can be opened from the modal.
+**Core:** Feat: The startup screen draws the clipgen mark instead of a spinner.
+
+## v0.16.2 — 2026-08-22
+**Core:** Feat: An exported viewer says which clipgen version wrote it and links back to the project.
+**Core:** Feat: Cross-references moved into Settings, General, and one switch now covers every badge and hover card.
+
+## v0.16.1 — 2026-08-21
+**Core:** Feat: The desktop app shows its window immediately and connects to your spreadsheet behind the startup screen, instead of waiting with nothing on screen.
+
 ## v0.16.0 — 2026-08-20
 **Core:** Feat: Choose how your source video files are named. A pattern under Settings → Video & Clips with {study} and {participant} placeholders replaces the fixed {study}_{participant}.mp4, so clipgen can find recordings you already named your own way.
 
