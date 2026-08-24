@@ -817,3 +817,24 @@ def test_llm_generate_records_even_on_connection_error(monkeypatch):
     with pytest.raises(urllib.error.URLError):
         llm_client._do_generate({"model": "x", "prompt": "y"})
     assert "llm.generate" in profiling.snapshot()
+
+
+def test_deep_report_survives_never_enabled_profilers(monkeypatch, capsys):
+    """One never-enabled profiler must not drop the whole label's block.
+
+    Python 3.12 allows one active cProfile per interpreter, so in a thread
+    pool only the winning thread records stats; the losers' profilers sit in
+    _DEEP with nothing to snapshot and pstats raises on them.
+    """
+    monkeypatch.setattr(config, "PROFILING", True)
+    monkeypatch.setattr(config, "PROFILE_DEEP", "unit.pool")
+    with profiling.span("unit.pool"):
+        _deep_probe_workload()
+    # Simulate a pool thread that lost the interpreter's profiler slot.
+    import cProfile
+
+    profiling._DEEP[("unit.pool", -1)] = cProfile.Profile()
+    profiling.report()
+    out = capsys.readouterr().out
+    assert "profile-deep | unit.pool" in out
+    assert "_deep_probe_workload" in out

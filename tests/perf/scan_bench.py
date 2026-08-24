@@ -20,7 +20,8 @@ phash-skip never hides the callback). Each tool writes to its own wiped
 output dir so a cached manifest can never absorb the scan. `--runs N` keeps
 the fastest run per tool (minimum callback seconds), the standard treatment
 for scheduler noise. `text` is excluded from the default sweep: OCR is an
-order of magnitude slower than every other tool and pins ~1 GB of RSS.
+order of magnitude slower than every other tool and pins ~0.8 GB of RSS per
+pooled OCR engine (measured 3.3 GB at the default auto pool of 4).
 
 The parser (`parse_profile`) is unit-tested in test_scan_bench_parse.py;
 everything else is a thin subprocess driver kept dependency-free on purpose.
@@ -137,9 +138,18 @@ def ensure_fixture(input_dir: Path, duration: int) -> Path:
 
 
 def run_tool(
-    tool: str, input_dir: Path, out_root: Path, interval: float
+    tool: str,
+    input_dir: Path,
+    out_root: Path,
+    interval: float,
+    deep: bool = False,
 ) -> dict[str, dict[str, float]]:
-    """Run one tool through the CLI into a wiped output dir; return the parse."""
+    """Run one tool through the CLI into a wiped output dir; return the parse.
+
+    With *deep*, attach ``--profile-deep scan.callback.<tool>`` and print the
+    pstats block verbatim — the harness owns the canonical flag set, so this
+    replaces hand-rolling the tool's CLI command just to drill into it.
+    """
     out_dir = out_root / f"bench-{tool}"
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -159,14 +169,24 @@ def run_tool(
         str(out_dir),
         "--profile",
     ]
+    if deep:
+        cmd += ["--profile-deep", f"scan.callback.{tool}"]
     proc = subprocess.run(
         cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800, check=False
     )
-    parsed = parse_profile(proc.stdout + proc.stderr)
+    output = proc.stdout + proc.stderr
+    parsed = parse_profile(output)
     if f"scan.callback.{tool}" not in parsed:
         print(f"  ! {tool}: no scan.callback.{tool} in report (task refused?)")
-        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-5:])
+        tail = "\n".join(output.strip().splitlines()[-5:])
         print("    " + tail.replace("\n", "\n    "))
+    if deep:
+        in_block = False
+        for line in output.splitlines():
+            if line.startswith("profile-deep |"):
+                in_block = True
+            if in_block:
+                print(line)
     return parsed
 
 
@@ -228,6 +248,11 @@ def main() -> int:
     )
     ap.add_argument("--save", type=Path, help="write results JSON here")
     ap.add_argument("--compare", type=Path, help="baseline JSON to diff against")
+    ap.add_argument(
+        "--deep",
+        action="store_true",
+        help="attach --profile-deep scan.callback.<tool> and print each pstats block",
+    )
     args = ap.parse_args()
 
     tools = [t.strip() for t in args.tools.split(",") if t.strip()]
@@ -247,7 +272,7 @@ def main() -> int:
         best: dict[str, float] | None = None
         for _ in range(max(1, args.runs)):
             summary = summarize(
-                tool, run_tool(tool, args.input, out_root, args.interval)
+                tool, run_tool(tool, args.input, out_root, args.interval, args.deep)
             )
             best = keep_best(best, summary)
         assert best is not None  # loop runs at least once

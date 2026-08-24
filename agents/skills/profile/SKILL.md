@@ -24,8 +24,10 @@ no-kind fallback; each `scan_*` / multitool pass sets the tool name so a
 workflow of mixed detectors does not lump analysis into one bucket. Callback
 flushes pass `peak=` (largest single frame). `ffmpeg.run` / `ffmpeg.bytes`
 (every encode/extract subprocess) and `ffprobe.run` (duration / props / keyframe
-probes — the label `_parallel_probe` was measured without). `media_cache.*` and
-`video.*_cache.*` (hit/miss counters), `worker.progress_lock_wait`, `route <rule>`
+probes — the label `_parallel_probe` was measured without). `media_cache.*`,
+`video.*_cache.*`, and `screenspace.*_cache.*` (hit/miss counters; the last
+covers the frame-JPEG, decoded-frame, and pin-OCR LRUs in
+`screenspace_server.py`), `worker.progress_lock_wait`, `route <rule>`
 (per-route totals; polls aggregate instead of spamming), `stream <rule>` and
 `sse.open <rule>` (streaming responses — see below), `transcribe.*`, `sheets.*`
 (Google via `_call_with_api_retry`; local `.xlsx` is `sheets.excel_load`),
@@ -208,12 +210,24 @@ uv run python tests/perf/scan_bench.py --compare /tmp/base.json  # Δcallback %
 ```
 
 `--tools color,text` narrows the sweep (`text` is off by default: OCR is 10×
-slower and pins ~1 GB RSS); `--runs 2` keeps the fastest run per tool. For a
+slower and pins ~0.8 GB RSS per pooled engine — 3.3 GB at the default auto
+pool of 4); `--runs 2` keeps the fastest run per tool. For a
 single tool the direct CLI form is still useful (unique `-o` dir per run):
 
 ```bash
 uv run clipgen.py --ss-task color P01 --ss-target-color '#FF0000' \
     --ss-tolerance 20,30,30 --ss-interval 0.1 -i /tmp/ssbench -o /tmp/ssbench/cb-color --profile
+```
+
+**The clip pipeline has the same harness** — `tests/perf/clip_bench.py` runs
+three scenarios (plain clips, carded clips, a carded reel) against a
+generated video+sheet fixture and reports `pipeline.clip`, the pool
+parallelism ratio, and the titlecard copy/reencode split, with the same
+`--save`/`--compare`/`--runs` treatment:
+
+```bash
+uv run python tests/perf/clip_bench.py --save /tmp/clipbase.json
+uv run python tests/perf/clip_bench.py --compare /tmp/clipbase.json  # Δclip %
 ```
 
 Live server: launch with `--profile`, then `curl http://127.0.0.1:8089/api/profile`

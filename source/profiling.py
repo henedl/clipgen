@@ -339,13 +339,20 @@ def _deep_report() -> None:
             groups.setdefault(label, []).append(prof)
     for label, profs in sorted(groups.items()):
         out = io.StringIO()
-        try:
-            stats = pstats.Stats(profs[0], stream=out)
-            for extra in profs[1:]:
-                stats.add(extra)
-        except (TypeError, ValueError):
-            continue  # a profiler that never enabled has no stats to snapshot
-        if not getattr(stats, "total_calls", 0):
+        # Merge per-profiler, skipping the ones that never enabled: Python 3.12
+        # allows one active cProfile per interpreter, so in a thread pool only
+        # the thread that wins the slot records stats — the losers raise here
+        # and must not take the winner's block down with them.
+        stats = None
+        for prof in profs:
+            try:
+                if stats is None:
+                    stats = pstats.Stats(prof, stream=out)
+                else:
+                    stats.add(prof)
+            except (TypeError, ValueError):
+                continue
+        if stats is None or not getattr(stats, "total_calls", 0):
             continue
         stats.strip_dirs().sort_stats("tottime").print_stats(_DEEP_TOP)
         print(f"profile-deep | {label}")  # bare print: see module docstring

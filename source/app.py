@@ -538,7 +538,11 @@ def _print_completion_message(
     """Print a summary of generated outputs tailored to format and reel mode."""
     output_dir = utils.get_effective_output_dir()
     if is_reel:
-        _print_run_summary(f"All done, created 1 reel!\nFiles are in {output_dir}")
+        # process_reel returns 0 on abort; the error is already printed.
+        if outputs_generated > 0:
+            _print_run_summary(f"All done, created 1 reel!\nFiles are in {output_dir}")
+        else:
+            _print_run_summary("No reel was created.")
         return
     noun = {"screen": "screenshots", "gif": "GIFs"}.get(output_format, "videos")
     _print_run_summary(

@@ -1365,3 +1365,16 @@ def test_process_reel_records_cards_that_actually_landed(monkeypatch, make_clip)
         [raw_clip], output_file="reel2.mp4", titlecards_enabled=True
     )
     assert records[0]["titlecards"] is True
+
+
+def test_completion_message_reports_aborted_reel(monkeypatch, capsys):
+    import app
+
+    monkeypatch.setattr(app.utils, "get_effective_output_dir", lambda: "/tmp/out")
+    app._print_completion_message(0, "clip", is_reel=True)
+    aborted = capsys.readouterr().out
+    assert "created 1 reel" not in aborted
+    assert "No reel was created" in aborted
+
+    app._print_completion_message(1, "clip", is_reel=True)
+    assert "created 1 reel" in capsys.readouterr().out
