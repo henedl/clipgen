@@ -1159,13 +1159,17 @@ def api_normalize_audio_cancel() -> FlaskResponse:
 
 
 def _deterministic_friction(
-    agent_key: str, segments: list[dict[str, Any]]
+    agent_key: str,
+    participant: str,
+    raw_segments: list[dict[str, Any]],
+    corrections: list[Any],
+    version: int | None = None,
 ) -> dict[str, Any] | None:
     """The friction payload that needs no summary and no LLM, or None.
 
-    *segments* must be a snapshot taken under ``_manifest_lock`` — the scorer
-    iterates the whole list, and the live entry's list can be rebound by a
-    concurrent merge mid-scan.
+    *raw_segments*, *corrections* and *version* must be a snapshot taken under
+    ``_manifest_lock`` — the scorer iterates the whole list, and the live
+    entry's list can be rebound by a concurrent merge mid-scan.
 
     Friction's per-segment scores + session stats come from a pure, deterministic
     scorer (friction.py). They are served both *before* the summary-gated agent
@@ -1173,9 +1177,16 @@ def _deterministic_friction(
     the whole time; only the LLM-refined "moments" wait on the agent. The
     ``deterministic`` flag lets the client show programmatic-only copy and keeps
     the friction poll from mistaking this for a completed run.
+
+    Scores the *corrected* text, exactly as the agent run does: the scorer
+    matches phrases, so scoring raw text here would make the histogram, tinting
+    and timeline band shift the moment a run lands, for no reason the user can see.
     """
-    if agent_key != "friction" or not segments:
+    if agent_key != "friction" or not raw_segments:
         return None
+    segments = _corrected_segments_with_ids(
+        participant, raw_segments, corrections, version=version
+    )
     scored = friction.score_segments(segments)
     stats = friction.compute_stats(scored, thinking_agents._segments_duration(segments))
     return {
@@ -1208,6 +1219,8 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         entry = _manifest.get("source_transcripts", {}).get(participant)
         result = entry.get(field) if entry else None
         segments_snapshot = list(entry.get("segments") or []) if entry else []
+        corrections_snapshot = list(_manifest.get("corrections", []))
+        version_snapshot = _corrections_version
     if result:
         resp: dict[str, Any] = {"ok": True, field: result}
         for dep in thinking_agents.AGENTS:
@@ -1232,7 +1245,13 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
         # on the LLM. Any client refetch mid-run (tab refocus, participant
         # re-select, page reload) would otherwise blank the histogram, chips,
         # transcript tinting and timeline band until the agent finished.
-        deterministic = _deterministic_friction(agent_key, segments_snapshot)
+        deterministic = _deterministic_friction(
+            agent_key,
+            participant,
+            segments_snapshot,
+            corrections_snapshot,
+            version=version_snapshot,
+        )
         if deterministic is not None:
             resp["friction"] = deterministic
         return jsonify(resp)
@@ -1240,7 +1259,13 @@ def api_agent_get(agent_key: str, participant: str) -> FlaskResponse:
     # reason was previously a terminal warning only, so the page just showed an
     # empty panel and the user had no idea an unloadable model was the cause.
     error = _orchestrator.error_for(participant, agent_key)
-    deterministic = _deterministic_friction(agent_key, segments_snapshot)
+    deterministic = _deterministic_friction(
+        agent_key,
+        participant,
+        segments_snapshot,
+        corrections_snapshot,
+        version=version_snapshot,
+    )
     if deterministic is not None:
         resp = {"ok": True, "friction": deterministic}
         if error:
@@ -2981,6 +3006,11 @@ def _init_transcripts_state(sheet_context: Any = None) -> None:
     _manifest = transcripts.load_transcripts_manifest()
     _merged_task_ids.clear()
     _pending_chain_pids.clear()
+    # The corrected-segments memo is keyed on (participant, version), not on the
+    # segments it was computed from. Participant ids repeat across studies, so a
+    # swap that left the version alone served the *old* study's corrected text
+    # for the new study's P01 — zipped against the new raw segments.
+    _bump_corrections_version()
 
     # mtime None forces the first _refresh_participants() call to build.
     _participant_source = {"sheet_context": sheet_context, "dir": "", "mtime": None}
