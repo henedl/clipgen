@@ -460,49 +460,60 @@
     state.summaryEditing = false;
     var content = qs("#summaryContent");
     var lines = text.split("\n");
-    var paragraphSentences = [];
-    var bullets = [];
-    var inBullets = false;
 
+    // Claims in document order, one block per run of same-kind lines. This walk
+    // must match thinking_agents._split_summary_sentences exactly: it is the
+    // backend's claim numbering, and data-cite-index is how renderCitations
+    // finds the claim a ref belongs to. A sticky "we're in bullets now" flag
+    // used to send prose written *after* the list into the <ul>, which both
+    // rendered it as a list item and slid every later citation onto the wrong
+    // sentence.
+    var blocks = [];
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim();
       if (!line) continue;
-      if (line.indexOf("- ") === 0 || line.indexOf("* ") === 0) {
-        inBullets = true;
-        bullets.push(clipgenRenderInlineMarkdown(line.substring(2)));
-      } else if (!inBullets) {
-        // Split paragraph into individual sentences for citation targeting
+      var isBullet = line.indexOf("- ") === 0 || line.indexOf("* ") === 0;
+      var kind = isBullet ? "ul" : "p";
+      if (!blocks.length || blocks[blocks.length - 1].kind !== kind) {
+        blocks.push({ kind: kind, items: [] });
+      }
+      var items = blocks[blocks.length - 1].items;
+      // Models emit **bold** / `code` emphasis; render it instead of showing
+      // literal asterisks (same helper as the Overview report).
+      if (isBullet) {
+        items.push(clipgenRenderInlineMarkdown(line.substring(2).trim()));
+      } else {
+        // Split prose into individual sentences for citation targeting.
         var parts = line.split(/(?<=[.!?])\s+/);
         for (var k = 0; k < parts.length; k++) {
           var part = parts[k].trim();
-          // Models emit **bold** / `code` emphasis; render it instead of
-          // showing literal asterisks (same helper as the Overview report).
-          if (part) paragraphSentences.push(clipgenRenderInlineMarkdown(part));
+          if (part) items.push(clipgenRenderInlineMarkdown(part));
         }
-      } else {
-        bullets.push(clipgenRenderInlineMarkdown(line));
       }
     }
 
     // Build HTML with data-cite-index on each sentence/bullet
     var citeIdx = 0;
     var html = "";
-    if (paragraphSentences.length > 0) {
-      html += "<p>";
-      for (var si = 0; si < paragraphSentences.length; si++) {
-        if (si > 0) html += " ";
-        html += '<span data-cite-index="' + citeIdx + '">' + paragraphSentences[si] + "</span>";
-        citeIdx++;
+    for (var b = 0; b < blocks.length; b++) {
+      var block = blocks[b];
+      if (!block.items.length) continue;
+      if (block.kind === "p") {
+        html += "<p>";
+        for (var si = 0; si < block.items.length; si++) {
+          if (si > 0) html += " ";
+          html += '<span data-cite-index="' + citeIdx + '">' + block.items[si] + "</span>";
+          citeIdx++;
+        }
+        html += "</p>";
+      } else {
+        html += "<ul>";
+        for (var j = 0; j < block.items.length; j++) {
+          html += '<li data-cite-index="' + citeIdx + '">' + block.items[j] + "</li>";
+          citeIdx++;
+        }
+        html += "</ul>";
       }
-      html += "</p>";
-    }
-    if (bullets.length > 0) {
-      html += "<ul>";
-      for (var j = 0; j < bullets.length; j++) {
-        html += '<li data-cite-index="' + citeIdx + '">' + bullets[j] + "</li>";
-        citeIdx++;
-      }
-      html += "</ul>";
     }
 
     content.innerHTML = html;
