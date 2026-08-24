@@ -914,12 +914,19 @@ def generate(
         "chat_template_kwargs": {"enable_thinking": False},
     }
 
+    # Whatever an earlier call on this thread left is not this call's reason.
+    take_last_error()
+
     try:
         text = _generate_with_load_retry(body, cancel_event, on_token)
-        _record_failure(resolved_model, "")  # it works now; forget any old mark
-        # A load retry can fail once and then succeed; that first reason must
-        # not outlive the call and get pinned on an unrelated empty result.
-        take_last_error()
+        # Only a *successful* call clears. A None means _do_generate already
+        # recorded why (empty answer, truncated stream, deadline), and the
+        # orchestrator turns that reason into the toast the user sees.
+        if text is not None:
+            _record_failure(resolved_model, "")  # it works now; forget any mark
+            # A load retry can fail once and then succeed; that first reason
+            # must not outlive the call and get pinned on an unrelated result.
+            take_last_error()
         return text
     except urllib.error.HTTPError as exc:
         detail = _http_error_detail(exc)
@@ -945,8 +952,9 @@ def generate(
             return None
         try:
             text = _generate_with_load_retry(body, cancel_event, on_token)
-            _record_failure(resolved_model, "")
-            take_last_error()
+            if text is not None:
+                _record_failure(resolved_model, "")
+                take_last_error()
             return text
         except urllib.error.HTTPError as retry_exc:
             detail = _http_error_detail(retry_exc)

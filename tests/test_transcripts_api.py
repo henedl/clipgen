@@ -775,6 +775,9 @@ def test_agents_read_corrected_segments(_agent_state_clean, monkeypatch):
         "marks": [],
         "known_terms": [],
     }
+    # Swapping _manifest wholesale is what _init_transcripts_state does, and the
+    # corrected-segments memo is keyed on (participant, version), not segments.
+    transcripts_server._bump_corrections_version()
 
     seen: dict = {}
     done = threading.Event()
@@ -1969,6 +1972,32 @@ def test_friction_get_keeps_deterministic_scores_while_the_agent_runs(
     )
     assert len(fr["segments"]) == 1 and "score" in fr["segments"][0]
     assert fr["moments"] == [], "only the LLM half waits on the agent"
+
+
+def test_friction_deterministic_scores_the_corrected_text(
+    tr_client, _agent_state_clean
+):
+    """The pre-run scores must match what a run would produce.
+
+    Stored segments stay raw so corrections can re-apply after a re-transcribe;
+    the agent snapshot applies them, so scoring raw text here made the
+    histogram, tinting and timeline band jump the moment a run landed.
+    """
+    transcripts_server._manifest["source_transcripts"]["P01"] = {
+        "segments": [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "this is fine"}],
+        "summary": "A session summary.",
+    }
+    transcripts_server._manifest["corrections"] = [
+        {"id": "c_1", "from": "this is fine", "to": "this is annoying"}
+    ]
+    transcripts_server._bump_corrections_version()
+    try:
+        fr = tr_client.get("/transcripts/api/agent/friction/P01").get_json()["friction"]
+    finally:
+        transcripts_server._manifest["corrections"] = []
+        transcripts_server._bump_corrections_version()
+    assert fr["segments"][0]["categories"] == ["frustration"]
+    assert fr["stats"]["total_markers"] == 1
 
 
 def test_friction_generating_without_segments_carries_no_scores(
@@ -3505,6 +3534,35 @@ def test_reinit_stops_previous_worker(tmp_path, monkeypatch):
         assert second is not first
         assert first.on_task_complete is None
         assert first._running is False
+    finally:
+        if transcripts_server._worker is not None:
+            transcripts_server._worker.stop(join_timeout=2.0)
+
+
+def test_reinit_invalidates_the_corrected_segments_cache(tmp_path, monkeypatch):
+    """Participant ids repeat across studies; the memo is keyed on the id.
+
+    Without the version bump a swap served the previous study's corrected text
+    for the new study's P01, zipped against the new raw segments.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "INPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(transcripts_server, "_worker", None)
+    monkeypatch.setattr(transcripts_server, "_manifest", {})
+    monkeypatch.setattr(transcripts_server, "_participant_source", None)
+    monkeypatch.setattr(transcripts_server, "_participants", [])
+
+    old = [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "old study"}]
+    transcripts_server._corrected_segments("P01", old, [])
+    assert "P01" in transcripts_server._corrected_cache
+
+    try:
+        transcripts_server._init_transcripts_state()
+        assert transcripts_server._corrected_cache == {}
+        new = [{"id": "P01:0", "start": 0.0, "end": 1.0, "text": "new study"}]
+        assert transcripts_server._corrected_segments("P01", new, [])[0]["text"] == (
+            "new study"
+        )
     finally:
         if transcripts_server._worker is not None:
             transcripts_server._worker.stop(join_timeout=2.0)

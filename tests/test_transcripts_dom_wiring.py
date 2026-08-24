@@ -12,9 +12,17 @@ has no JS DOM harness), but it catches HTML/JS drift for the elements that the
 render flow assumes exist.
 """
 
+import json
 import re
+import shutil
+import subprocess
 
+import pytest
+
+import thinking_agents
 from _frontend_source import WEB, concat_js, read
+
+NODE = shutil.which("node")
 
 _ICONS = WEB.parent / "icons"
 _CSS = read("transcripts.css")
@@ -1191,3 +1199,51 @@ def test_agent_failures_are_reported_to_the_user():
     assert "state.agentErrorsSeen[key] === message" in _JS
     # The generic "Server error 404" filler must not reach the user.
     assert "e.serverMessage = message" in read("utils.js")
+
+
+# ---- Citation claim numbering (frontend <-> backend contract) ----
+
+
+def _js_summary_claims(summary: str) -> list[str]:
+    """Claims renderSummary would number, run through node.
+
+    The claim-splitting block is sliced out of the real source, so the test
+    cannot drift from the shipped code the way a reimplementation would.
+    """
+    start = _JS.index('var lines = text.split("\\n");')
+    block = _JS[start : _JS.index("content.innerHTML = html;", start)]
+    script = (
+        "const text = JSON.parse(process.argv[1]);\n"
+        "const clipgenRenderInlineMarkdown = (s) => s;\n" + block + "const out = [];\n"
+        'const re = /data-cite-index="(\\d+)">([\\s\\S]*?)<\\/(?:span|li)>/g;\n'
+        "let m; while ((m = re.exec(html))) out[Number(m[1])] = m[2];\n"
+        "process.stdout.write(JSON.stringify(out));\n"
+    )
+    result = subprocess.run(
+        [str(NODE), "-e", script, json.dumps(summary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_summary_claim_numbering_matches_the_backend():
+    """data-cite-index IS the backend's claim index, so the two splits must agree.
+
+    A sticky "we're in bullets now" flag used to send prose written after the
+    list into the <ul>, which slid every later citation onto the wrong sentence
+    while the backend kept counting in document order.
+    """
+    summary = (
+        "The participant explored the dashboard. They struggled with filters.\n"
+        "\n"
+        "- Filters were hard to find\n"
+        "* Export flow was smooth\n"
+        "\n"
+        "Overall the session went well. Follow-up needed."
+    )
+    assert _js_summary_claims(summary) == thinking_agents._split_summary_sentences(
+        summary
+    )

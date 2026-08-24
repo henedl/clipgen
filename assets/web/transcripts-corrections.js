@@ -1,6 +1,6 @@
 /* clipgen Transcripts dictionary satellite — transcripts-corrections.js
  *
- * The dictionary modal's two halves. Corrections are find→replace rules that
+ * The Corrections modal's two halves. Corrections are find→replace rules that
  * rewrite transcript text you already have; known terms are the study glossary,
  * forwarded to Whisper as hotwords so the next run spells them right instead of
  * needing a correction. Loaded after transcripts.js; reads the hub's shared
