@@ -811,6 +811,30 @@ class TestAutoStartServer:
         assert llm_client.generate("hi", model="tiny") == "hello"
         assert llm_client.take_last_error() == ""
 
+    @patch("llm_client._generate_with_load_retry")
+    def test_a_failed_generate_keeps_its_reason(self, mock_run):
+        """The specific reason is the whole point of the failure toast.
+
+        _do_generate records why it gave up (empty answer, truncated stream,
+        deadline) and returns None without raising; clearing that on the way out
+        left the orchestrator with only "produced no result".
+        """
+
+        def fail(*args, **kwargs):
+            llm_client._fail("AI returned empty response (model: tiny)")
+
+        mock_run.side_effect = fail
+        assert llm_client.generate("hi", model="tiny") is None
+        assert "empty response" in llm_client.take_last_error()
+
+    @patch("llm_client._generate_with_load_retry")
+    def test_generate_drops_a_reason_left_by_an_earlier_call(self, mock_run):
+        """Agent threads are reused across runs; a stale reason must not carry."""
+        llm_client._fail("a reason from some earlier call")
+        mock_run.return_value = None
+        assert llm_client.generate("hi", model="tiny") is None
+        assert llm_client.take_last_error() == ""
+
     def test_take_last_error_pops_the_recorded_reason(self):
         """The orchestrator reads it once and turns it into a toast."""
         llm_client.take_last_error()  # drain anything a prior test left
