@@ -138,6 +138,7 @@ Two honest limits, worth knowing before you read the output:
 
 - **Never** add `tests/ui` to `/check` or to `.github/workflows/`. It needs a
   browser, a fixture encode and ~20 s; `/check` must stay fast and hermetic.
+  `tests/test_packaging.py::test_ui_suite_stays_opt_in` guards the locks.
 - **Never** remove `ui` from `norecursedirs` in `tests/pytest.ini`, or the
   `CLIPGEN_UI_CHECK` gates in `test_ui_smoke.py` / `test_ui_journeys.py`. They
   are two independent locks and both are deliberate.

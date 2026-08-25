@@ -21,7 +21,7 @@ Patterns distilled from recurring post-review and post-merge fixes across the pr
 
 ## Backend (Python / Flask)
 
-- **Route parameter types**: Prefer string route parameters with manual `float()`/`int()` parsing over Flask's `<float:x>` converter. JS may send integers where Flask expects floats, causing silent 404s.
+- **Route parameter types**: Prefer string route parameters with manual `float()`/`int()` parsing over Flask's `<float:x>` converter. JS may send integers where Flask expects floats, causing silent 404s. `tests/test_source_conventions.py` bans new converters.
 - **JSON serialization safety**: Filter `math.isfinite()` on any float derived from OpenCV or numpy before including in JSON responses. Non-finite floats produce invalid JSON that `JSON.parse` silently drops.
 - **numpy/ndarray in JSON**: Exclude numpy arrays and other non-serializable objects from manifest saves and API responses. Convert to lists or omit.
 - **Dependency manifests**: When importing a new package, immediately add it to `pyproject.toml`. Missing dependencies surface as silent task failures.
@@ -62,7 +62,7 @@ Wrong output with no error is the most user-damaging class in this codebase's hi
 
 `ty` is a blocking CI gate. These rules prevent the most common typecheck failures.
 
-- **Narrow Optional before use**: When a variable can be `None` (e.g. `cap: Optional[cv2.VideoCapture]`, `proc.stdout`, a lookup return), add `assert x is not None` before the first use, with a comment explaining the invariant (e.g. `# guaranteed by stdout=PIPE`). Do not use `# type: ignore` instead.
+- **Narrow Optional before use**: When a variable can be `None` (e.g. `cap: Optional[cv2.VideoCapture]`, `proc.stdout`, a lookup return), add `assert x is not None` before the first use, with a comment explaining the invariant (e.g. `# guaranteed by stdout=PIPE`). Do not use `# type: ignore` instead — `tests/test_source_conventions.py` bans new ones.
 - **JSON dicts need `cast`**: Iterating over dicts from JSON, `isinstance(item, dict)` narrows to `dict[Unknown, Unknown]`, not `Dict[str, Any]`. After the isinstance guard, use `cast(Dict[str, Any], item)`. Annotate the source list explicitly: `steps: list[dict[str, Any]] = data.get("steps", [])`.
 - **Avoid None-initialized result lists**: `[None] * n` forces `List[Optional[T]]` and requires narrowing at every use site. Define a typed empty sentinel (e.g. `_EMPTY: T = (0, [])`) and pre-fill with that.
 - **cv2 output parameters**: cv2 type stubs reject `None` for output-array parameters (e.g. `calcOpticalFlowFarneback`). Pass a pre-allocated `np.zeros(...)` array instead.
@@ -74,7 +74,7 @@ Wrong output with no error is the most user-damaging class in this codebase's hi
 
 - **Data contract completeness**: When creating records consumed by the frontend (artifacts, events, tasks), include all fields the renderer expects, even optional ones. Missing fields cause empty/broken cards.
 - **New flags in mode detection**: When adding a CLI flag, verify it appears in the mode-detection logic (`cli.py`), not just in argparse definition. See [agents/skills/new-mode/SKILL.md](skills/new-mode/SKILL.md) for the full checklist.
-- **Bundled/frozen paths**: Use `utils.get_bundled_assets_root()` for asset resolution, never raw `Path(__file__).parent`. Test that asset paths resolve in both source and PyInstaller environments.
+- **Bundled/frozen paths**: Use `utils.get_bundled_assets_root()` for asset resolution, never raw `Path(__file__).parent` (banned by `tests/test_source_conventions.py`). Test that asset paths resolve in both source and PyInstaller environments.
 - **No duplicated constants between Python and JS.** Any value that lives in `config.py` (or a Python helper) and that the frontend also needs — severity labels, default clip duration, annotation keyphrases (`!key`), ignored timestamp tokens (`x`) — must flow through `utils.get_frontend_config()`, not be hardcoded in JS. Procedure for adding a new mirrored constant: [agents/skills/sync-constants/SKILL.md](skills/sync-constants/SKILL.md).
 - **Parallel registries.** That hard rule is scoped to Python↔JS; most drift has been Python↔Python or JS↔JS. Adding a detector / tool / format means updating *every* parallel list, not just the catalog: filter chips, quiet-poll paths, hue and confidence maps, edit-restore branches, dropdown labels (`e1019f8f`, `ef3dfbde`, `178e7bf8`, `7116973d`). The per-subsystem lists are enumerated in [agents/skills/new-screenspace-tool/SKILL.md](skills/new-screenspace-tool/SKILL.md) and [agents/skills/new-mode/SKILL.md](skills/new-mode/SKILL.md).
 - **One computation, one implementation.** A preview or overlay must call the same primitive the real pipeline calls, never reimplement the math — a preview that diverges reads to the user as "the tool is wrong", not "the tool crashed" (`30192acd`, `684fd235`, `111f7747`, `d96c77a1`).

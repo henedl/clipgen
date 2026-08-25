@@ -22,7 +22,7 @@ public/test-touched name must be added to the facade's re-export block (see
 
 3. **Design token** (`assets/web/tokens.css`)
    - Add `--color-task-{name}` to the Screenspace task color block
-   - Read it in JS via `getComputedStyle(document.documentElement).getPropertyValue("--color-task-" + type)`. Never hardcode hex
+   - Read it in JS via `getComputedStyle(document.documentElement).getPropertyValue("--color-task-" + type)`. Never hardcode hex (`tests/test_js_color_discipline.py` ratchets)
 
 4. **Frontend UI** (`assets/web/screenspace*.js`)
    - Add the tool to the tool selector, and result rendering to `screenspace-results.js`

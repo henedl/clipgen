@@ -5,6 +5,7 @@ Transport-layer tests live in tests/test_llm_client.py.
 """
 
 import threading
+from pathlib import Path
 from unittest.mock import patch
 
 import config
@@ -59,6 +60,25 @@ class TestRegistry:
         assert "citations" in keys
         assert "friction" in keys
         assert "report" in keys
+
+    def test_config_keys_exist_with_right_types(self):
+        """new-thinking-agent/SKILL.md: enabled/model settings live in config.py."""
+        for agent in thinking_agents.AGENTS:
+            enabled = getattr(config, agent["enabled_config_key"])
+            assert isinstance(enabled, bool), agent["key"]
+            model = getattr(config, agent["model_config_key"])
+            assert isinstance(model, str), agent["key"]
+
+    def test_on_upstream_change_is_a_known_mode(self):
+        for agent in thinking_agents.AGENTS:
+            assert agent["on_upstream_change"] in ("clear", "stale"), agent["key"]
+
+    def test_every_agent_has_a_frontend_surface(self):
+        """Each agent's api/agent/<key> routes must be wired somewhere in JS."""
+        web = Path(thinking_agents.__file__).resolve().parent.parent / "assets" / "web"
+        corpus = "".join(p.read_text(encoding="utf-8") for p in web.glob("*.js"))
+        for agent in thinking_agents.AGENTS:
+            assert f"api/agent/{agent['key']}" in corpus, agent["key"]
 
     def test_resolve_model_uses_agent_model(self, monkeypatch):
         import config

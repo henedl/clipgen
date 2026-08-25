@@ -402,6 +402,44 @@ def test_build_workflow_does_not_set_a_release_body() -> None:
     assert re.search(r"(?m)^\s*body:", workflow) is None
 
 
+def test_ui_suite_stays_opt_in() -> None:
+    """ui-check/SKILL.md: browser tests never run in /check or CI.
+
+    Two independent locks per file plus the pytest.ini exclusion; a CI
+    workflow naming ``tests/ui`` would pull Playwright into every run.
+    """
+    pytest_ini = (_ROOT / "tests" / "pytest.ini").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^norecursedirs = .*\bui\b", pytest_ini)
+    for name in ("test_ui_smoke.py", "test_ui_journeys.py"):
+        text = (_ROOT / "tests" / "ui" / name).read_text(encoding="utf-8")
+        assert "CLIPGEN_UI_CHECK" in text, name
+        assert "pytest.mark.ui" in text, name
+    for workflow in (_ROOT / ".github" / "workflows").glob("*.yml"):
+        assert "tests/ui" not in workflow.read_text(encoding="utf-8"), workflow.name
+
+
+def test_no_markers_beyond_ui() -> None:
+    """test/SKILL.md: the tests/ui split is the only slow-path marker."""
+    pytest_ini = (_ROOT / "tests" / "pytest.ini").read_text(encoding="utf-8")
+    markers = re.findall(r"(?m)^    (\w+):", pytest_ini)
+    assert markers == ["ui"], markers
+
+
+def test_xdist_stays_out_of_the_lock() -> None:
+    """test/SKILL.md: pytest-xdist is CI/local opt-in, never a dependency."""
+    data = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = list(data["project"].get("dependencies", []))
+    for extra in data["project"].get("optional-dependencies", {}).values():
+        declared.extend(extra)
+    assert not [d for d in declared if "xdist" in d], declared
+
+
+def test_context_dir_stays_gitignored() -> None:
+    """ui-check/SKILL.md: the agent scratch subtree must never be committed."""
+    gitignore = (_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert ".context/" in gitignore.splitlines()
+
+
 def test_license_notice_is_tracked_and_bundled() -> None:
     """The bundle ships GPL/LGPL/MPL software, so the notice must travel with it.
 
