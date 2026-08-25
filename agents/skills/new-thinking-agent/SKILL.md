@@ -1,6 +1,6 @@
 # clipgen-new-thinking-agent — Add a local-LLM thinking agent
 
-Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key. No orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing.
+Both the orchestrator **and** the HTTP routes in `transcripts_server.py` auto-pick up new agents from the `AGENTS` list by key. No orchestrator or route edits needed. The frontend touch is a descriptor entry, not new plumbing. `tests/test_thinking_agents.py` enforces registry parity: config keys exist, topological order, `on_upstream_change` values, and a frontend `api/agent/<key>` surface.
 
 ## Checklist
 

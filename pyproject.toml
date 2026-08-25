@@ -96,13 +96,18 @@ root = [".", "./source"]
 required-version = ">=0.16.0"
 
 [tool.ruff.lint]
+# T201: user-facing messages go through utils.error_print / warning_print /
+# info_print / verbose_print (AGENTS.md), never bare print(). The per-file
+# carve-outs below hold every sanctioned raw-print site.
+extend-select = ["T201"]
 ignore = [
     # ~50 `except Exception:` handlers at ffmpeg / OCR / worker-thread / HTTP
     # boundaries. Narrowing them is semantic work, tracked as "Narrow
     # `except Exception`" in agents/CODE-REVIEW.md. Drop this once that pass lands.
     "BLE001",
     # Import sorting. Module import order in the screenspace.py / workflows.py
-    # re-export facades is a deliberate deepest-first DAG (agents/ARCHITECTURE.md).
+    # re-export facades is a deliberate deepest-first DAG (agents/ARCHITECTURE.md;
+    # the layer order itself is enforced by tests/test_import_layering.py).
     "I001",
     # Timestamps here are local wall-clock times for video/session metadata, never
     # cross-timezone instants. Naive datetimes are the correct representation.
@@ -117,7 +122,18 @@ ignore = [
 # B018   — bare `resp.data` expressions that intentionally consume a streamed
 #          response so the generator's finally-block runs.
 # RUF012 — mutable class attributes on throwaway test doubles; ClassVar noise.
-"tests/**" = ["B018", "RUF012"]
+"tests/**" = ["B018", "RUF012", "T201"]
+# Sanctioned bare-print sites (everything else routes through utils *_print):
+# utils.py     — the *_print helpers' own plain-terminal fallbacks.
+# profiling.py — profile report output, verbatim table rendering.
+# interactive.py — raw-terminal browse UI (rich fallback branches, key echo).
+# cli.py       — verbatim license text; see the comment at the call site.
+# build/**     — standalone build scripts, no utils import.
+"source/utils.py" = ["T201"]
+"source/profiling.py" = ["T201"]
+"source/interactive.py" = ["T201"]
+"source/cli.py" = ["T201"]
+"build/**" = ["T201"]
 
 [tool.coverage.run]
 source = ["."]

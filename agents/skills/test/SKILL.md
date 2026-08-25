@@ -44,13 +44,14 @@ Selection rules:
 - The only additive-by-default rule is the existing one below: every new CLI mode,
   flag, or selector gets at least one smoke test.
 - Bug was "page booted but the click did nothing" → add a journey in
-  `tests/ui/test_ui_journeys.py`, and only if the journey list is still ≤ 5.
+  `tests/ui/test_ui_journeys.py`, and only if the journey list is still ≤ 6.
 - Bug was "ffmpeg produced garbage / succeeded with partial output" → add an I/O
   test in `tests/test_pipeline_io.py`, not another mocked argv assert. Check
   `tests/test_clip_pipeline.py` first; the silent-wrong reel class is already
   locked under mocks there.
 - Do not add pytest markers (`unit` / `integration`). The `tests/ui/` directory
-  split is the slow-path marker.
+  split is the slow-path marker. `tests/test_packaging.py` guards this, the
+  ui-suite opt-in locks, and pytest-xdist staying out of `pyproject.toml`.
 
 ## CLI test pattern
 
