@@ -77,7 +77,9 @@ class TestFlowStaticGate:
 
         calls = [0]
 
-        def counting_flow(prev, curr, return_grid=False, mask=None):
+        def counting_flow(
+            prev, curr, return_grid=False, mask=None, grid_min_magnitude=None
+        ):
             calls[0] += 1
             return {
                 "magnitude": float(np.mean(cv2.absdiff(prev, curr))),

@@ -10,6 +10,7 @@ The one tools->multitool edge (``MultitoolTool.scan`` -> ``scan_multitool``) is 
 function-local import, keeping the module graph acyclic.
 """
 
+import functools
 import math
 from collections.abc import Callable
 from pathlib import Path
@@ -147,35 +148,53 @@ def _cached_crop(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> np.ndarray:
     """Region crop of *frame*, memoized on *cache* (shared across chain steps)."""
-    return _memo(
-        cache, _region_key("crop", region), lambda: extract_region(frame, region)
-    )
+    if cache is None:
+        return extract_region(frame, region)
+    key = _region_key("crop", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = extract_region(frame, region)
+    return value
+
+
+@functools.lru_cache(maxsize=64)
+def _mask_raster_cached(
+    points_key: tuple[Any, ...], h: int, w: int
+) -> np.ndarray | None:
+    """Rasterized shaped-region mask, cached across frames (shape + size constant)."""
+    return region_mask_for({"mask_points": points_key}, h, w)
 
 
 def _cached_mask(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, Any]
 ) -> np.ndarray | None:
-    """Shaped-region mask at the cached crop's size, memoized on *cache*.
+    """Shaped-region mask at the cached crop's size, cached across frames.
 
     ``None`` for rect regions, so masked tools can pass the value straight to
-    the primitives' optional ``mask`` params.
+    the primitives' optional ``mask`` params. The per-frame memo dict is fresh
+    each frame, so the raster lives in :func:`_mask_raster_cached` instead —
+    the polygon and crop size never change mid-scan. Callers must not mutate.
     """
-    return _memo(
-        cache,
-        _region_key("mask", region),
-        lambda: region_mask_for(region, *_cached_crop(cache, frame, region).shape[:2]),
-    )
+    points = region.get("mask_points")
+    if not points:
+        return None
+    crop = _cached_crop(cache, frame, region)
+    return _mask_raster_cached(mask_points_key(points), *crop.shape[:2])
 
 
 def _cached_gray(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> np.ndarray:
     """Grayscale of the region crop, memoized on *cache* (reuses the cached crop)."""
-    return _memo(
-        cache,
-        _region_key("gray", region),
-        lambda: cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY),
-    )
+    if cache is None:
+        return cv2.cvtColor(_cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY)
+    key = _region_key("gray", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = cv2.cvtColor(
+            _cached_crop(cache, frame, region), cv2.COLOR_BGR2GRAY
+        )
+    return value
 
 
 def _cached_blur_gray(
@@ -187,22 +206,26 @@ def _cached_blur_gray(
     frame's ``prev_cache``, so ChangeTool's previous-side blur+grayscale is a
     dict hit rather than a recompute.
     """
-    return _memo(
-        cache,
-        _region_key("blurgray", region),
-        lambda: blur_gray(_cached_crop(cache, frame, region)),
-    )
+    if cache is None:
+        return blur_gray(_cached_crop(cache, frame, region))
+    key = _region_key("blurgray", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = blur_gray(_cached_crop(cache, frame, region))
+    return value
 
 
 def _cached_phash(
     cache: dict[Any, Any] | None, frame: np.ndarray, region: dict[str, int]
 ) -> "Any":
     """Perceptual hash of the region crop, memoized on *cache* (reuses the crop)."""
-    return _memo(
-        cache,
-        _region_key("phash", region),
-        lambda: compute_phash(_cached_crop(cache, frame, region)),
-    )
+    if cache is None:
+        return compute_phash(_cached_crop(cache, frame, region))
+    key = _region_key("phash", region)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = compute_phash(_cached_crop(cache, frame, region))
+    return value
 
 
 def _cached_ocr(
@@ -221,17 +244,23 @@ def _cached_ocr(
     (fuzzy match, numeric operators, integers_only) is applied at scoring time.
     """
     langs = tuple(languages)
-    key = _region_key("ocr", region) + (langs, preprocess)
-    return _memo(
-        cache,
-        key,
-        lambda: _ocr_region_readings(
+    if cache is None:
+        return _ocr_region_readings(
             _cached_crop(cache, frame, region),
             languages=list(langs),
             preprocess=preprocess,
             mask_points=region.get("mask_points"),
-        ),
-    )
+        )
+    key = _region_key("ocr", region) + (langs, preprocess)
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        value = cache[key] = _ocr_region_readings(
+            _cached_crop(cache, frame, region),
+            languages=list(langs),
+            preprocess=preprocess,
+            mask_points=region.get("mask_points"),
+        )
+    return value
 
 
 def check_frame_for_tool(

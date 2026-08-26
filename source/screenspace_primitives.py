@@ -211,14 +211,30 @@ def region_mask_for(region: dict[str, Any], h: int, w: int) -> np.ndarray | None
     return mask
 
 
+_mask_points_keys: dict[int, tuple[Any, tuple[Any, ...]]] = {}
+
+
 def mask_points_key(contours: Any) -> tuple[Any, ...]:
     """Hashable key for a region's ``mask_points`` contour list (or None/[]).
 
     Cache keys (per-frame memos, pin-OCR readings) must distinguish same-bbox/
     different-shape regions; nested lists aren't hashable, so every keyed cache
     routes through this helper instead of hand-rolled ``tuple(map(tuple, …))``.
+
+    Interned per contour-list object: multitool memos rebuild region keys every
+    frame, and the O(vertices) tuple build dominated the lookup. The strong ref
+    pins the id; contour lists are never mutated in place, only replaced.
     """
-    return tuple(tuple(tuple(p) for p in contour) for contour in contours or ())
+    if not contours:
+        return ()
+    entry = _mask_points_keys.get(id(contours))
+    if entry is not None and entry[0] is contours:
+        return entry[1]
+    key = tuple(tuple(tuple(p) for p in contour) for contour in contours)
+    if len(_mask_points_keys) > 512:
+        _mask_points_keys.clear()
+    _mask_points_keys[id(contours)] = (contours, key)
+    return key
 
 
 def filter_matches_by_region_mask(
@@ -943,35 +959,30 @@ def _match_template_prepared(
     else:
         ys, xs = locs[0], locs[1]
 
-    detections: list[dict[str, Any]] = []
-    for pt_y, pt_x, raw in zip(ys, xs, scores):
-        score = float(raw)
-        if not math.isfinite(score):
-            continue
-        detections.append(
-            {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
-        )
-    detections.sort(key=lambda d: d["score"], reverse=True)
-
-    # Non-maximum suppression
+    # Vectorized greedy NMS. All boxes share the template's size, so IoU
+    # reduces to inter = max(0, tw-|dx|) * max(0, th-|dy|) over int arrays.
+    finite = np.isfinite(scores)
+    if not finite.all():
+        ys, xs, scores = ys[finite], xs[finite], scores[finite]
+    if scores.size == 0:
+        return []
+    # Stable sort keeps candidate order on ties, like the dict sort it replaced.
+    order = np.argsort(-scores, kind="stable")
+    ys = ys[order].astype(np.int64)
+    xs = xs[order].astype(np.int64)
+    scores = scores[order]
+    area = tw * th
     kept: list[dict[str, Any]] = []
-    for det in detections:
-        overlaps = False
-        for k_det in kept:
-            # Compute IoU
-            xa = max(det["x"], k_det["x"])
-            ya = max(det["y"], k_det["y"])
-            xb = min(det["x"] + det["w"], k_det["x"] + k_det["w"])
-            yb = min(det["y"] + det["h"], k_det["y"] + k_det["h"])
-            inter = max(0, xb - xa) * max(0, yb - ya)
-            area_a = det["w"] * det["h"]
-            area_b = k_det["w"] * k_det["h"]
-            union = area_a + area_b - inter
-            if union > 0 and inter / union > nms_overlap:
-                overlaps = True
-                break
-        if not overlaps:
-            kept.append(det)
+    while xs.size:
+        x0, y0 = int(xs[0]), int(ys[0])
+        kept.append({"x": x0, "y": y0, "w": tw, "h": th, "score": float(scores[0])})
+        if xs.size == 1:
+            break
+        inter = np.maximum(0, tw - np.abs(xs[1:] - x0)) * np.maximum(
+            0, th - np.abs(ys[1:] - y0)
+        )
+        keep = inter / (2 * area - inter) <= nms_overlap
+        xs, ys, scores = xs[1:][keep], ys[1:][keep], scores[1:][keep]
     return kept
 
 
@@ -1038,6 +1049,7 @@ def compute_optical_flow(
     pyr_scale: float = 0.0,
     return_grid: bool = False,
     mask: np.ndarray | None = None,
+    grid_min_magnitude: float | None = None,
 ) -> dict[str, Any]:
     """Compute dense optical flow between two grayscale frames.
 
@@ -1045,6 +1057,10 @@ def compute_optical_flow(
     *mask* (uint8, crop-sized) restricts the statistics instead. Vectors within
     ~one window of the polygon edge still see outside pixels — acceptable
     contamination for motion detection.
+
+    *grid_min_magnitude* skips the grid (angles and the per-cell loop) when the
+    mean magnitude lands below it — scan_flow discards those rows anyway, and
+    they are the common case on quiet footage. The key is absent, not empty.
 
     Returns:
         ``magnitude`` (mean vector length), ``angle`` (dominant direction, 0-360),
@@ -1068,10 +1084,10 @@ def compute_optical_flow(
     dx, dy = flow[..., 0], flow[..., 1]
     inside = mask > 0 if mask is not None else None
 
-    if return_grid:
-        mag, ang = cv2.cartToPolar(dx, dy, angleInDegrees=True)
-    else:
-        mag = cv2.magnitude(dx, dy)
+    # Angles (cv2.phase) are deferred to the grid branch below. Both halves
+    # track cartToPolar within last-ulp float32 drift (bound pinned in
+    # test_flow.py), far under the rounding of every emitted value.
+    mag = cv2.magnitude(dx, dy)
 
     mean_mag = (
         float(np.mean(mag[inside])) if inside is not None else float(np.mean(mag))
@@ -1096,7 +1112,11 @@ def compute_optical_flow(
         "angle": round(dominant_angle, 1),
     }
 
-    if return_grid:
+    # Gate on the rounded magnitude — the value callers threshold against.
+    if return_grid and (
+        grid_min_magnitude is None or result["magnitude"] >= grid_min_magnitude
+    ):
+        ang = cv2.phase(dx, dy, angleInDegrees=True)
         grid_size = config.SCREENSPACE_FLOW_GRID_SIZE
         min_mag_thresh = config.SCREENSPACE_FLOW_GRID_MIN_MAG
         gh, gw = mag.shape[:2]

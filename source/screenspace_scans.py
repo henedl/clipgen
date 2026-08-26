@@ -904,8 +904,14 @@ def scan_flow(
             if small_prev is None:
                 small_prev, _ = flow_downscale(prev_gray[0])
             small_curr, small_mask = flow_downscale(curr_gray, mask_for(pixels))
+            # grid_min_magnitude: sub-threshold rows are discarded below, so
+            # the grid (angles + cell loop) only materializes on emitted frames.
             flow_result = compute_optical_flow(
-                small_prev, small_curr, return_grid=True, mask=small_mask
+                small_prev,
+                small_curr,
+                return_grid=True,
+                mask=small_mask,
+                grid_min_magnitude=magnitude_threshold,
             )
             if flow_result["magnitude"] >= magnitude_threshold:
                 rd: dict[str, Any] = {
