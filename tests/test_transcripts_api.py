@@ -1914,13 +1914,19 @@ def test_normalize_audio_cancel_route_is_token_scoped(tr_client):
 
 
 def _seed_friction_entry(pid="P01", **extra):
-    """Insert a transcript entry with a summary for *pid* into the manifest."""
+    """Insert a transcript entry with a summary for *pid* into the manifest.
+
+    Bumps the corrections version: seeding replaces segments, and a stale
+    corrected-segments cache entry would otherwise leak into any later test
+    (even cross-module) that resolves this participant at the same version.
+    """
     entry = {
         "segments": [{"id": f"{pid}:0", "start": 0.0, "end": 1.0, "text": "um where"}],
         "summary": "A session summary.",
     }
     entry.update(extra)
     transcripts_server._manifest["source_transcripts"][pid] = entry
+    transcripts_server._bump_corrections_version()
     return entry
 
 
