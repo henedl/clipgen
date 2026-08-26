@@ -293,14 +293,20 @@ def test_participant_marks_resolved_and_filtered(client, monkeypatch):
             "corrections": [],
         },
     )
-    resp = client.get("/screenspace/api/participants/P01/marks")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["ok"] is True
-    # P02 filtered out (wrong participant); m3 dropped (out-of-range, unresolved).
-    assert [m["id"] for m in data["marks"]] == ["m1"]
-    assert data["marks"][0]["start"] == 5.0
-    assert data["marks"][0]["text"] == "hello"
+    # Swapping segments must bump, or another test's cached corrected P01
+    # (same version, different segments) resolves the mark to its start.
+    transcripts_server._bump_corrections_version()
+    try:
+        resp = client.get("/screenspace/api/participants/P01/marks")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        # P02 filtered out (wrong participant); m3 dropped (out-of-range, unresolved).
+        assert [m["id"] for m in data["marks"]] == ["m1"]
+        assert data["marks"][0]["start"] == 5.0
+        assert data["marks"][0]["text"] == "hello"
+    finally:
+        transcripts_server._bump_corrections_version()
 
 
 def test_participant_marks_unknown_participant(client):
