@@ -408,6 +408,7 @@ def api_participants() -> FlaskResponse:
 # change. Its own lock covers both the lock-holding caller (api_search) and the
 # lock-free one; lock order is always _manifest_lock -> _corrected_cache_lock.
 _corrected_cache: dict[str, tuple[int, list[Any]]] = {}
+_friction_cache: dict[str, tuple[int, dict[str, Any]]] = {}
 _corrected_cache_lock = threading.Lock()
 _corrections_version = 0
 
@@ -418,6 +419,7 @@ def _bump_corrections_version() -> None:
     with _corrected_cache_lock:
         _corrections_version += 1
         _corrected_cache.clear()
+        _friction_cache.clear()
 
 
 def _corrected_segments(
@@ -1184,12 +1186,20 @@ def _deterministic_friction(
     """
     if agent_key != "friction" or not raw_segments:
         return None
+    # Memoized like _corrected_segments: the agent poll refetches this every
+    # 3s for the whole LLM run, re-scoring thousands of segments for nothing.
+    with _corrected_cache_lock:
+        if version is None:
+            version = _corrections_version
+        cached = _friction_cache.get(participant)
+        if cached is not None and cached[0] == version:
+            return cached[1]
     segments = _corrected_segments_with_ids(
         participant, raw_segments, corrections, version=version
     )
     scored = friction.score_segments(segments)
     stats = friction.compute_stats(scored, thinking_agents._segments_duration(segments))
-    return {
+    payload = {
         "segments": scored,
         "moments": [],
         "stats": stats,
@@ -1198,6 +1208,10 @@ def _deterministic_friction(
         "stale": False,
         "deterministic": True,
     }
+    with _corrected_cache_lock:
+        if _corrections_version == version:
+            _friction_cache[participant] = (version, payload)
+    return payload
 
 
 @transcripts_bp.route("/api/agent/<agent_key>/<participant>")

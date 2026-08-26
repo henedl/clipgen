@@ -66,6 +66,7 @@ _NATURALLY_BOUNDED = {
     "_participant_timeline_cache": "one entry per participant in the cohort",
     "_video_metadata_cache": "one entry per participant video",
     "_corrected_cache": "one entry per participant transcript",
+    "_friction_cache": "one entry per participant transcript",
     "_ss_events_cache": "single entry, mtime-keyed",
     "_manifest_cache": "single entry (the one output dir), stamp-keyed",
     "_discover_videos_cache": "one entry per input dir seen this session",

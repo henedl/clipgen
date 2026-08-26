@@ -1,5 +1,6 @@
 """Tests for optical flow primitives, grid, and heatmap."""
 
+import cv2
 import numpy as np
 
 import config
@@ -47,6 +48,42 @@ class TestComputeOpticalFlow:
         out, mask = screenspace.flow_downscale(gray)
         assert out is gray
         assert mask is None
+
+    def test_magnitude_and_phase_match_carttopolar(self):
+        """Guards the cartToPolar -> magnitude/phase split in compute_optical_flow.
+
+        The grid path defers angles to cv2.phase and always takes magnitude
+        from cv2.magnitude. Neither is bit-identical to cartToPolar (different
+        SIMD paths, last-ulp float32 drift), so this pins the bound instead:
+        far below the 4-decimal mag / 1-decimal angle rounding of emitted rows.
+        """
+        rng = np.random.default_rng(7)
+        dx = rng.standard_normal((256, 256)).astype(np.float32)
+        dy = rng.standard_normal((256, 256)).astype(np.float32)
+        mag_ref, ang_ref = cv2.cartToPolar(dx, dy, angleInDegrees=True)
+        assert float(np.abs(cv2.magnitude(dx, dy) - mag_ref).max()) < 1e-5
+        ang = cv2.phase(dx, dy, angleInDegrees=True)
+        assert float(np.abs(ang - ang_ref).max()) < 1e-3
+
+    def test_grid_min_magnitude_gates_grid(self):
+        prev = np.zeros((80, 80), dtype=np.uint8)
+        curr = np.zeros((80, 80), dtype=np.uint8)
+        prev[20:40, 20:40] = 255
+        curr[30:50, 30:50] = 255
+        full = screenspace.compute_optical_flow(prev, curr, return_grid=True)
+        assert full["magnitude"] > 0
+        # At or above the gate: identical result, grid included.
+        gated_on = screenspace.compute_optical_flow(
+            prev, curr, return_grid=True, grid_min_magnitude=full["magnitude"]
+        )
+        assert gated_on == full
+        # Below the gate: same scalars, no flow_grid key at all.
+        gated_off = screenspace.compute_optical_flow(
+            prev, curr, return_grid=True, grid_min_magnitude=full["magnitude"] + 1
+        )
+        assert "flow_grid" not in gated_off
+        assert gated_off["magnitude"] == full["magnitude"]
+        assert gated_off["angle"] == full["angle"]
 
 
 class TestOpticalFlowGrid:

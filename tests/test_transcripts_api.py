@@ -1914,13 +1914,19 @@ def test_normalize_audio_cancel_route_is_token_scoped(tr_client):
 
 
 def _seed_friction_entry(pid="P01", **extra):
-    """Insert a transcript entry with a summary for *pid* into the manifest."""
+    """Insert a transcript entry with a summary for *pid* into the manifest.
+
+    Bumps the corrections version: seeding replaces segments, and a stale
+    corrected-segments cache entry would otherwise leak into any later test
+    (even cross-module) that resolves this participant at the same version.
+    """
     entry = {
         "segments": [{"id": f"{pid}:0", "start": 0.0, "end": 1.0, "text": "um where"}],
         "summary": "A session summary.",
     }
     entry.update(extra)
     transcripts_server._manifest["source_transcripts"][pid] = entry
+    transcripts_server._bump_corrections_version()
     return entry
 
 
@@ -1949,6 +1955,33 @@ def test_friction_get_deterministic_when_absent_and_idle(tr_client, _agent_state
     assert len(fr["segments"]) == 1
     assert "score" in fr["segments"][0]
     assert "by_category" in fr["stats"]
+
+
+def test_friction_deterministic_payload_cached_per_version(
+    tr_client, _agent_state_clean
+):
+    """The agent poll refetches this every 3s for a whole LLM run; the scorer
+    must not re-run per poll. Same version serves the cached payload object;
+    a corrections/segments bump invalidates it."""
+    _seed_friction_entry()
+    transcripts_server._bump_corrections_version()
+    segs = transcripts_server._manifest["source_transcripts"]["P01"]["segments"]
+    try:
+        first = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        second = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        assert first is second
+        transcripts_server._bump_corrections_version()
+        third = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        assert third is not second
+        assert third == second
+    finally:
+        transcripts_server._bump_corrections_version()
 
 
 def test_friction_get_keeps_deterministic_scores_while_the_agent_runs(

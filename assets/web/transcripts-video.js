@@ -183,13 +183,13 @@
     var fcolor = getCSSVar("--color-friction", "#ea580c");
     if (fcolor.charAt(0) !== "#") fcolor = "#ea580c";
     var numBins = Math.max(1, Math.floor(cssW));
-    var sums = new Array(numBins);
-    var counts = new Array(numBins);
-    for (var b = 0; b < numBins; b++) { sums[b] = 0; counts[b] = 0; }
+    var sums = new Float64Array(numBins);
+    var counts = new Float64Array(numBins);
+    var bandMap = state.frictionBandBySegId || {};
     var any = false;
     for (var i = 0; i < state.segments.length; i++) {
       var seg = state.segments[i];
-      var sc = (state.frictionBandBySegId || {})[seg.id] || 0;
+      var sc = bandMap[seg.id] || 0;
       if (sc <= 0) continue;
       any = true;
       var x0 = Math.max(0, Math.floor(timeToX(seg.start)));
@@ -198,13 +198,17 @@
       for (var x = x0; x <= x1; x++) { sums[x] += sc; counts[x] += 1; }
     }
     if (!any) return;
+    // Solid fill + per-pixel globalAlpha composites identically to a per-pixel
+    // rgba() string but skips building one color string per column.
+    ctx.fillStyle = fcolor;
     for (var px = 0; px < numBins; px++) {
       if (!counts[px]) continue;
       var v = sums[px] / counts[px];
       if (v <= 0) continue;
-      ctx.fillStyle = hexToRgba(fcolor, Math.min(0.85, 0.15 + v * 0.7));
+      ctx.globalAlpha = Math.min(0.85, 0.15 + v * 0.7);
       ctx.fillRect(px, bandY, 1, bandH);
     }
+    ctx.globalAlpha = 1;
   }
 
   // The selected participant's running transcription task (the last match, so
@@ -301,6 +305,9 @@
   // along the bottom edge. Tune these two to taste.
   var _TX_DOT_STEP = 6;
   var _TX_DOT_PEAK_ALPHA = 0.4;
+  // Offscreen dot-texture cache; rebuilt when size/color/dpr change.
+  var _txDotTexture = null;
+  var _txDotTextureKey = null;
 
   // Paint the faint "unfilled" dot texture across the *untranscribed* remainder
   // of the timeline (full height, right of the fill front). The transcribed
@@ -323,18 +330,32 @@
     ctx.beginPath();
     ctx.rect(fillW, 0, endX - fillW, cssH); // untranscribed remainder only
     ctx.clip();
-    ctx.fillStyle = theme.textDim;
-    var step = _TX_DOT_STEP;
-    for (var y = step / 2; y < cssH; y += step) {
-      // Vertical gradient: ~invisible at the top, strongest at the bottom.
-      var f = y / cssH;
-      ctx.globalAlpha = _TX_DOT_PEAK_ALPHA * f * f;
-      for (var x = step / 2; x < cssW; x += step) {
-        ctx.beginPath();
-        ctx.arc(x, y, 1, 0, Math.PI * 2);
-        ctx.fill();
+    // The texture is static per size/color, but this draw runs at 60fps for
+    // the whole run (RAF easing), so render it once offscreen and blit.
+    var dpr = window.devicePixelRatio || 1;
+    var key = cssW + "|" + cssH + "|" + theme.textDim + "|" + dpr;
+    if (_txDotTextureKey !== key) {
+      var off = document.createElement("canvas");
+      off.width = Math.max(1, Math.round(cssW * dpr));
+      off.height = Math.max(1, Math.round(cssH * dpr));
+      var octx = off.getContext("2d");
+      octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      octx.fillStyle = theme.textDim;
+      var step = _TX_DOT_STEP;
+      for (var y = step / 2; y < cssH; y += step) {
+        // Vertical gradient: ~invisible at the top, strongest at the bottom.
+        var f = y / cssH;
+        octx.globalAlpha = _TX_DOT_PEAK_ALPHA * f * f;
+        for (var x = step / 2; x < cssW; x += step) {
+          octx.beginPath();
+          octx.arc(x, y, 1, 0, Math.PI * 2);
+          octx.fill();
+        }
       }
+      _txDotTexture = off;
+      _txDotTextureKey = key;
     }
+    ctx.drawImage(_txDotTexture, 0, 0, cssW, cssH);
     ctx.restore();
   }
 

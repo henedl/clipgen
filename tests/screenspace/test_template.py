@@ -90,6 +90,60 @@ class TestCorrelationMapReuse:
         assert len(calls) == 1
 
 
+class TestNmsEquivalence:
+    """Vectorized NMS must reproduce the dict-loop NMS it replaced exactly."""
+
+    @staticmethod
+    def _reference_nms(result, tw, th, threshold, nms_overlap):
+        # The pre-vectorization implementation, kept as the behavioral spec.
+        import math
+
+        locs = np.where(result >= threshold)
+        scores = result[locs]
+        ys, xs = locs[0], locs[1]
+        detections = []
+        for pt_y, pt_x, raw in zip(ys, xs, scores):
+            score = float(raw)
+            if not math.isfinite(score):
+                continue
+            detections.append(
+                {"x": int(pt_x), "y": int(pt_y), "w": tw, "h": th, "score": score}
+            )
+        detections.sort(key=lambda d: d["score"], reverse=True)
+        kept = []
+        for det in detections:
+            overlaps = False
+            for k_det in kept:
+                xa = max(det["x"], k_det["x"])
+                ya = max(det["y"], k_det["y"])
+                xb = min(det["x"] + det["w"], k_det["x"] + k_det["w"])
+                yb = min(det["y"] + det["h"], k_det["y"] + k_det["h"])
+                inter = max(0, xb - xa) * max(0, yb - ya)
+                union = det["w"] * det["h"] + k_det["w"] * k_det["h"] - inter
+                if union > 0 and inter / union > nms_overlap:
+                    overlaps = True
+                    break
+            if not overlaps:
+                kept.append(det)
+        return kept
+
+    def test_matches_reference_on_dense_ties(self):
+        rng = np.random.RandomState(9)
+        template = rng.randint(0, 255, (8, 10, 3), dtype=np.uint8)
+        prepared = screenspace_primitives._prepare_template(template, None)
+        th, tw = prepared[0].shape[:2]
+        # Quantized map: thousands of candidates, heavy score ties, one inf.
+        corr = (rng.randint(0, 8, (60, 90)) / 8.0).astype(np.float32)
+        corr[0, 0] = np.inf
+        frame = np.zeros((10, 10, 3), dtype=np.uint8)  # unused when corr is given
+        for nms_overlap in (0.0, 0.3, 0.9):
+            got = screenspace_primitives._match_template_prepared(
+                frame, prepared, 0.25, nms_overlap, corr=corr
+            )
+            want = self._reference_nms(corr, tw, th, 0.25, nms_overlap)
+            assert got == want
+
+
 class TestPrepareTemplateMask:
     def test_binarizes_alpha_mask(self):
         """Mask should come out as strictly 0 or 255 (no soft-blurred edges)."""
