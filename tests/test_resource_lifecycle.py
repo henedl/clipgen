@@ -68,6 +68,7 @@ _NATURALLY_BOUNDED = {
     "_corrected_cache": "one entry per participant transcript",
     "_ss_events_cache": "single entry, mtime-keyed",
     "_manifest_cache": "single entry (the one output dir), stamp-keyed",
+    "_manifest_indent_cache": "one entry per manifest section, pruned each write",
     "_discover_videos_cache": "one entry per input dir seen this session",
     "_index_html_cache": "one entry per page template",
 }
