@@ -1736,11 +1736,25 @@
     return !(f && f[_frictionMomentCategory(m)] === false);
   }
 
+  // id->index map, rebuilt when the segments array is replaced. The linear
+  // scan ran per cited id per moment inside the per-frame threshold-drag
+  // recompute; the map makes that a dict hit.
+  var _segIndexMap = null;
+  var _segIndexMapFor = null;
+
   function _segmentIndexById(id) {
-    for (var i = 0; i < state.segments.length; i++) {
-      if (state.segments[i].id === id) return i;
+    if (_segIndexMapFor !== state.segments) {
+      _segIndexMap = {};
+      for (var i = 0; i < state.segments.length; i++) {
+        // First occurrence wins, matching the scan this replaced.
+        if (!(state.segments[i].id in _segIndexMap)) {
+          _segIndexMap[state.segments[i].id] = i;
+        }
+      }
+      _segIndexMapFor = state.segments;
     }
-    return -1;
+    var idx = _segIndexMap[id];
+    return idx === undefined ? -1 : idx;
   }
 
   function _seekToSegmentIndex(idx) {

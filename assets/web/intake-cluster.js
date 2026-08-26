@@ -29,6 +29,8 @@
     });
     var clusters = [];
     var cur = null;
+    // Running sum; re-summing events on every append is quadratic per cluster.
+    var curSum = 0;
     for (var i = 0; i < sorted.length; i++) {
       var ev = sorted[i];
       if (
@@ -53,12 +55,12 @@
           events: [ev],
           confidence_avg: ev.confidence,
         };
+        curSum = ev.confidence;
       } else {
         cur.end = Math.max(cur.end, ev.time_out);
         cur.events.push(ev);
-        var sum = 0;
-        for (var j = 0; j < cur.events.length; j++) sum += cur.events[j].confidence;
-        cur.confidence_avg = sum / cur.events.length;
+        curSum += ev.confidence;
+        cur.confidence_avg = curSum / cur.events.length;
       }
     }
     if (cur) clusters.push(cur);
