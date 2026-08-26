@@ -1951,6 +1951,33 @@ def test_friction_get_deterministic_when_absent_and_idle(tr_client, _agent_state
     assert "by_category" in fr["stats"]
 
 
+def test_friction_deterministic_payload_cached_per_version(
+    tr_client, _agent_state_clean
+):
+    """The agent poll refetches this every 3s for a whole LLM run; the scorer
+    must not re-run per poll. Same version serves the cached payload object;
+    a corrections/segments bump invalidates it."""
+    _seed_friction_entry()
+    transcripts_server._bump_corrections_version()
+    segs = transcripts_server._manifest["source_transcripts"]["P01"]["segments"]
+    try:
+        first = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        second = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        assert first is second
+        transcripts_server._bump_corrections_version()
+        third = transcripts_server._deterministic_friction(
+            "friction", "P01", list(segs), []
+        )
+        assert third is not second
+        assert third == second
+    finally:
+        transcripts_server._bump_corrections_version()
+
+
 def test_friction_get_keeps_deterministic_scores_while_the_agent_runs(
     tr_client, _agent_state_clean
 ):
