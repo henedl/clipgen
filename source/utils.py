@@ -807,6 +807,21 @@ def _sections_locked() -> dict[str, str]:
     return _manifest_cache["sections"]
 
 
+# Re-indented section texts, keyed by the section text itself. Unchanged
+# sections keep their cached string across writes, so this turns the per-save
+# full-text re-indent of every *other* section (a multi-MB transcripts section
+# on each mark edit) into a dict hit. Pruned to live sections on every write.
+_manifest_indent_cache: dict[str, str] = {}
+
+
+def _indented_section(text: str) -> str:
+    """*text* shifted one nesting level, memoized (texts are reused verbatim)."""
+    cached = _manifest_indent_cache.get(text)
+    if cached is None:
+        cached = _manifest_indent_cache[text] = text.replace("\n", "\n  ")
+    return cached
+
+
 def _write_sections_locked(sections: dict[str, str]) -> Path | None:
     """Atomically rewrite the file from section texts; delete it when empty."""
     path = _manifest_path()
@@ -821,13 +836,18 @@ def _write_sections_locked(sections: dict[str, str]) -> Path | None:
         _manifest_cache["stamp"] = None
         _manifest_cache["sections"] = {}
         _manifest_cache["broken"] = False
+        _manifest_indent_cache.clear()
         return None
     # Section texts are already indent=2; nesting them one level deeper is a
     # plain re-indent because json.dumps escapes newlines inside strings.
     body = ",\n".join(
-        f"  {json.dumps(key)}: {text.replace(chr(10), chr(10) + '  ')}"
+        f"  {json.dumps(key)}: {_indented_section(text)}"
         for key, text in sorted(sections.items())
     )
+    if len(_manifest_indent_cache) > len(sections):
+        live = set(sections.values())
+        for stale in [t for t in _manifest_indent_cache if t not in live]:
+            del _manifest_indent_cache[stale]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_text("{\n" + body + "\n}\n", encoding="utf-8")
@@ -862,6 +882,10 @@ def save_manifest_section(section: str, data: Any) -> Path | None:
     Writes via a sibling .tmp file and ``os.replace()`` so a crash mid-write
     leaves the previous manifest intact. Returns the path, or ``None`` on
     failure or removal.
+
+    A save whose text matches the stored section skips the write entirely —
+    idempotent persists (startup rewrites, debounced saves with no delta) cost
+    nothing and leave the mtime alone, so pollers see no phantom change.
     """
     text: str | None = None
     if data is not None:
@@ -875,8 +899,12 @@ def save_manifest_section(section: str, data: Any) -> Path | None:
         if _manifest_cache["broken"]:
             return None
         if text is None:
+            if section not in sections and sections:
+                return _manifest_path()
             sections.pop(section, None)
         else:
+            if sections.get(section) == text:
+                return _manifest_path()
             sections[section] = text
         return _write_sections_locked(sections)
 
@@ -899,6 +927,7 @@ def _reset_manifest_cache() -> None:
         _manifest_cache["path"] = None
         _manifest_cache["stamp"] = None
         _manifest_cache["sections"] = {}
+        _manifest_indent_cache.clear()
         _manifest_cache["broken"] = False
 
 

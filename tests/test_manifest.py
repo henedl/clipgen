@@ -303,6 +303,43 @@ def test_store_picks_up_external_rewrite(tmp_path, monkeypatch):
     assert utils.manifest_sections() == {"one", "two"}
 
 
+def test_store_identical_save_skips_the_write(tmp_path, monkeypatch):
+    """An idempotent save must not rewrite the file or bump its mtime.
+
+    Startup rewrites and debounced persists with no delta fire often; a
+    phantom mtime bump would also force every mtime-gated consumer
+    (workflow triggers, viewer events cache) to re-parse for nothing.
+    """
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    path = tmp_path / config.MANIFEST_FILENAME
+    utils.save_manifest_section("one", {"a": 1})
+    utils.save_manifest_section("two", [1, 2])
+    stamp = path.stat().st_mtime_ns
+    assert utils.save_manifest_section("one", {"a": 1}) == path
+    assert path.stat().st_mtime_ns == stamp
+    # Removing a section that is not stored is equally a no-op.
+    assert utils.save_manifest_section("ghost", None) == path
+    assert path.stat().st_mtime_ns == stamp
+    # A real change still writes.
+    utils.save_manifest_section("one", {"a": 2})
+    assert utils.load_manifest_section("one") == {"a": 2}
+    assert json.loads(path.read_text())["one"] == {"a": 2}
+
+
+def test_store_reindent_cache_yields_identical_file(tmp_path, monkeypatch):
+    """Cached re-indented section texts must produce the same bytes as a cold write."""
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    path = tmp_path / config.MANIFEST_FILENAME
+    big = {"rows": [{"i": i, "text": "line\nbreak"} for i in range(50)]}
+    utils.save_manifest_section("big", big)
+    utils.save_manifest_section("small", 1)  # re-indents "big" via the cache
+    warm = path.read_text()
+    utils._reset_manifest_cache()  # cold path: no cached indent texts
+    utils.save_manifest_section("small", 2)
+    utils.save_manifest_section("small", 1)
+    assert path.read_text() == warm
+
+
 def test_store_corrupt_file_reads_as_empty_and_blocks_saves(tmp_path, monkeypatch):
     """A bad read must never let the next save wipe the other sections."""
     monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
