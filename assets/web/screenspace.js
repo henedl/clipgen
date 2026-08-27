@@ -2617,6 +2617,11 @@
         chip.appendChild(trigger);
         var menu = el("div", "ss-cat-menu"); // visibility driven by chip.open
         menu.setAttribute("role", "menu");
+        // Names the category; the chip shows the active tool instead when selected.
+        menu.setAttribute("aria-label", cat.label + " tools");
+        var head = el("div", "ss-cat-menu-head", cat.label + " tools");
+        head.setAttribute("role", "presentation");
+        menu.appendChild(head);
         cat.tools.forEach(function (type, ti) {
           var item = el("button", "ss-cat-item");
           item.type = "button";
