@@ -1397,7 +1397,7 @@ body[data-frontend="screenspace"] {
 .ss-grouped-tools #workflowCategories { display: flex; }
 
 .ss-cat-nav {
-  gap: var(--space-1);
+  gap: var(--space-2); /* room for the between-segment hairline */
   flex-wrap: nowrap;
   align-items: stretch;
   border-bottom: 1px solid var(--color-border);
@@ -1414,6 +1414,20 @@ body[data-frontend="screenspace"] {
   min-width: 0;
 }
 .ss-cat-chip.open { z-index: var(--z-dropdown); } /* lift the menu above the action row */
+
+/* Hairline between segments, centered in the row gap. Dropped on either side of
+ * an active chip so no line touches its filled pill. */
+.ss-cat-chip + .ss-cat-chip::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-2) / -2);
+  top: 25%;
+  bottom: 25%;
+  width: 1px;
+  background: var(--color-border);
+}
+.ss-cat-chip.active::before,
+.ss-cat-chip.active + .ss-cat-chip::before { display: none; }
 
 .ss-cat-trigger {
   display: inline-flex;
