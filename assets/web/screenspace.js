@@ -250,7 +250,6 @@
     videoPlaying: false,
     videoMuted: false,
     videoPlaybackRate: 1,
-    modelViewOpen: false,
     overlayEnabled: false,
     overlayLayer: null,
     overlayBlinkActive: false,
@@ -259,14 +258,13 @@
     overlayImageTimestamp: null,
     overlayImageTool: null,
     overlayLayerSpec: {},
-    rightPaneTab: "queue",
+    rightPaneTab: "preview",
     resultsSwitcherOpen: false,
     amplitudeGraphEnabled: false,
     pins: [],
     maxPins: null,
     hoveredPinId: null,
     pinTrayHidden: false,
-    calibrationOpen: false,
     calibrationResult: null,
     calibrationOcrWarmed: false,
     calibrationGreen: false,
@@ -5105,22 +5103,13 @@
           },
         },
         {
-          id: "screenspace:toggle-model-view",
-          title: "Toggle model view",
+          id: "screenspace:show-preview",
+          title: "Show preview panel",
           icon: "eye",
-          keywords: "preview preprocess collapse expand panel",
+          keywords: "model view preprocess calibration pins ocr tab",
           section: "Screenspace",
-          visible: function () { return !!qs("#modelViewToggle"); },
-          run: function () { qs("#modelViewToggle").click(); },
-        },
-        {
-          id: "screenspace:toggle-calibration",
-          title: "Toggle calibration panel",
-          icon: "adjustments-horizontal",
-          keywords: "ocr pins collapse expand panel",
-          section: "Screenspace",
-          visible: function () { return !!qs("#calibrationToggle"); },
-          run: function () { qs("#calibrationToggle").click(); },
+          visible: function () { return !!qs('.rp-tab[data-tab="preview"]'); },
+          run: function () { setRightPaneTab("preview"); },
         },
         {
           id: "screenspace:toggle-bottom",
@@ -5286,7 +5275,10 @@
           if (typeof initialTs !== "number") initialTs = undefined;
           selectParticipant(pickId, initialTs);
           state.runParticipants = [pickId];
-          if (stored.rightPaneTab === "queue" || stored.rightPaneTab === "results") {
+          // Matched against the live tab strip rather than a name list, so a
+          // new tab never falls silently back to the default.
+          if (stored.rightPaneTab
+              && qs('.rp-tab[data-tab="' + CSS.escape(stored.rightPaneTab) + '"]')) {
             setRightPaneTab(stored.rightPaneTab);
           }
           if (stored.activeWorkflow) {

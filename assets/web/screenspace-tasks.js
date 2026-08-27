@@ -114,14 +114,20 @@
     qsa("#rightPaneTabs .rp-tab").forEach(function (b) {
       b.classList.toggle("active", b.dataset.tab === tab);
     });
-    var qp = qs("#taskQueuePanel");
-    var rp = qs("#resultsPanel");
-    if (qp) qp.classList.toggle("hidden", tab !== "queue");
-    if (rp) rp.classList.toggle("hidden", tab !== "results");
+    qsa("#rightPaneBody .rp-tab-panel").forEach(function (p) {
+      p.classList.toggle("hidden", p.dataset.tab !== tab);
+    });
     qsa("#rightPaneTabs .rp-tab-actions").forEach(function (a) {
       a.classList.toggle("hidden", a.dataset.for !== tab);
     });
     closeResultsSwitcher();
+    // Both preview surfaces skip work while their tab is hidden, so entering it
+    // has to ask for the frame and the pin scores the user came here to see.
+    // calRefresh is late-bound: the calibration satellite loads after this file.
+    if (tab === "preview") {
+      SS.refreshModelView();
+      if (SS.calRefresh) SS.calRefresh();
+    }
   }
 
   function updateResultsCrumb() {
@@ -223,8 +229,8 @@
       btn.addEventListener("click", function (e) {
         e.stopPropagation();
         var tab = btn.dataset.tab;
-        if (tab === "queue") {
-          setRightPaneTab("queue");
+        if (tab === "queue" || tab === "preview") {
+          setRightPaneTab(tab);
           return;
         }
         if (tab === "results") {

@@ -541,9 +541,10 @@
     updateRunButton();
   }
 
-  // Glide the threshold line(s) with the slider without refetching scores.
+  // Glide the threshold line(s) with the slider without refetching scores. Only
+  // worth doing while the Preview tab is showing the strips.
   function updateCalibrationThresholdLine() {
-    if (!state.calibrationOpen) return;
+    if (state.rightPaneTab !== "preview") return;
     var lines = document.querySelectorAll("#calibrationStrips .cal-threshold[data-cal-slider]");
     Array.prototype.forEach.call(lines, function (line) {
       var sid = line.getAttribute("data-cal-slider");
@@ -570,8 +571,8 @@
   // Annotate each threshold control with what the pins say: a hairline on the
   // slider track at the suggested cutoff, and a green/red tint on the value
   // readout for whether the *current* value satisfies every scored pin. Runs
-  // whether or not the strip is expanded — the panel ships collapsed, so this is
-  // the only calibration signal most users see while tuning.
+  // whether or not the Preview tab is showing — the sliders live in the left
+  // column, so this is the calibration signal users see while tuning.
   //
   // Sweep-then-apply, because the paths that invalidate a mark leave the slider
   // DOM in place: participant switch, clear-pins, a failed fetch, or a pin that
@@ -701,8 +702,8 @@
   }
 
   function refreshCalibration(opts) {
-    // Not gated on the panel being open: the Run "Calibrated" hint must reflect
-    // pin agreement whenever pins exist, even while the strip is collapsed.
+    // Not gated on the Preview tab being active: the Run "Calibrated" hint and
+    // the slider hairlines must reflect pin agreement from any tab.
     // _doRefreshCalibration() no-ops cheaply (no POST) when there are no pins,
     // so there's nothing to skip when the participant has none.
     if (_calibrationTimer) { clearTimeout(_calibrationTimer); _calibrationTimer = 0; }
@@ -713,34 +714,18 @@
     }
   }
 
-  // Hide the whole panel when the participant has no pins (distinct from the
-  // collapsed open/close state).
+  // Swap the strips for the "pin some frames" prompt when the participant has
+  // no pins. The section keeps its header either way — the Preview tab is a
+  // fixed pair of sections, not a list that grows and shrinks.
   function updateCalibrationVisibility() {
-    var panel = qs("#calibrationPanel");
-    if (!panel) return;
-    panel.classList.toggle("hidden", !(state.pins && state.pins.length));
-  }
-
-  function toggleCalibration() {
-    state.calibrationOpen = !state.calibrationOpen;
-    var panel = qs("#calibrationPanel");
     var body = qs("#calibrationBody");
-    var btn = qs("#calibrationToggle");
-    if (state.calibrationOpen) {
-      panel.classList.remove("collapsed");
-      body.classList.remove("hidden");
-      btn.setAttribute("aria-expanded", "true");
-      refreshCalibration();
-    } else {
-      panel.classList.add("collapsed");
-      body.classList.add("hidden");
-      btn.setAttribute("aria-expanded", "false");
-    }
+    var empty = qs("#calibrationEmpty");
+    var hasPins = !!(state.pins && state.pins.length);
+    if (body) body.classList.toggle("hidden", !hasPins);
+    if (empty) empty.classList.toggle("hidden", hasPins);
   }
 
   function initCalibration() {
-    var btn = qs("#calibrationToggle");
-    if (btn) btn.addEventListener("click", toggleCalibration);
     // Delegated listeners on the stable param containers: any control change
     // glides the threshold line (sync) and re-evaluates scores (debounced).
     // This catches every param input — sliders, text, selects, checkboxes —

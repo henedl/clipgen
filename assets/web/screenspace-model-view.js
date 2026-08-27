@@ -1,9 +1,10 @@
 /* clipgen Screenspace — model-view (preprocessed preview) satellite.
  *
  * Carved out of screenspace.js (the hub) following the hub+satellite convention
- * (see screenspace-overlay/timeline/...). Owns the "Model view" panel: the live
- * preprocessed-frame preview (api/preview), the overlay-layer catalog + toggle/
- * dropdown UI, the preview-region resolvers, and the color "Min area %" readout.
+ * (see screenspace-overlay/timeline/...). Owns the "Model view" section of the
+ * right pane's Preview tab: the live preprocessed-frame preview (api/preview),
+ * the overlay-layer catalog + toggle/dropdown UI, the preview-region resolvers,
+ * and the color "Min area %" readout.
  *
  * It is a read of the hub's shared `state` plus a few hub helpers, all reached
  * through window.ClipgenScreenspace (SS). apiGet / qs / numberOrDefault /
@@ -54,9 +55,6 @@
   };
 
   function initModelView() {
-    var btn = qs("#modelViewToggle");
-    if (btn) btn.addEventListener("click", toggleModelView);
-
     // Restore persisted overlay preferences (sessionStorage, per-tab).
     try {
       var stored = sessionStorage.getItem("ss_overlayEnabled");
@@ -183,25 +181,11 @@
     }
   }
 
-  function toggleModelView() {
-    state.modelViewOpen = !state.modelViewOpen;
-    var panel = qs("#modelViewPanel");
-    var body = qs("#modelViewBody");
-    var btn = qs("#modelViewToggle");
-    if (state.modelViewOpen) {
-      panel.classList.remove("collapsed");
-      body.classList.remove("hidden");
-      btn.setAttribute("aria-expanded", "true");
-      refreshModelView();
-    } else {
-      panel.classList.add("collapsed");
-      body.classList.add("hidden");
-      btn.setAttribute("aria-expanded", "false");
-    }
-  }
-
+  // The Preview tab is the panel's only disclosure, so an inactive tab means the
+  // image is not on screen. The overlay and the B-blink draw on the video
+  // instead, so each is an independent escape from that gate.
   function refreshModelView(opts) {
-    if (!state.modelViewOpen && !state.overlayEnabled && !state.overlayBlinkActive) return;
+    if (state.rightPaneTab !== "preview" && !state.overlayEnabled && !state.overlayBlinkActive) return;
     if (_modelViewTimer) {
       clearTimeout(_modelViewTimer);
       _modelViewTimer = 0;

@@ -50,6 +50,7 @@ SELECTORS = {
     # The spinner is `.active`-class-toggled (display:none base), never removed.
     "studio-spinner-idle": "#artifactsSpinner:not(.active)",
     "studio-status-open": "#statusOverlay:not(.hidden)",
+    "ss-queue-tab": '.rp-tab[data-tab="queue"]',
     "ss-task-card": "#taskList .task-card",
     "ss-result-row": "#resultsList .result-row",
     # Row-level clicks are a no-op; only the timestamp/text children seek.
@@ -139,6 +140,9 @@ def test_screenspace_result_row_seeks_playhead(
 ) -> None:
     """Select the seeded completed task, click its first result, land on 2.0 s.
 
+    The right pane opens on Preview, so the journey starts by clicking through
+    to Task Queue the way a user would.
+
     The assertion is the playhead state (``#timestampInput``), not
     ``video.currentTime``: Screenspace's ``loadFrame`` pauses the video and
     shows a still frame — the ``<video>`` element deliberately does not move.
@@ -149,6 +153,7 @@ def test_screenspace_result_row_seeks_playhead(
         page,
         log,
     ):
+        page.click(SELECTORS["ss-queue-tab"])
         page.click(SELECTORS["ss-task-card"])
         page.wait_for_selector(SELECTORS["ss-result-row"], timeout=_WAIT_MS)
         page.locator(SELECTORS["ss-result-row"]).first.click()
