@@ -212,6 +212,21 @@ def region_mask_for(region: dict[str, Any], h: int, w: int) -> np.ndarray | None
     return mask
 
 
+def attach_capture_mask(
+    params: dict[str, Any],
+    image_key: str,
+    mask_key: str,
+    region: dict[str, Any],
+) -> None:
+    """Set the reference alpha mask from a shaped capture region."""
+    image = params.get(image_key)
+    if not isinstance(image, np.ndarray) or image.size == 0:
+        return
+    mask = region_mask_for(region, int(image.shape[0]), int(image.shape[1]))
+    if mask is not None:
+        params[mask_key] = mask
+
+
 _mask_points_keys: dict[int, tuple[Any, tuple[Any, ...]]] = {}
 
 

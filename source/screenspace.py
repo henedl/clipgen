@@ -47,6 +47,7 @@ from screenspace_primitives import (
     _prepare_template,
     _template_correlation_map,
     average_color_hsv,
+    attach_capture_mask,
     canny_edges,
     blur_gray,
     color_matches,

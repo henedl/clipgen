@@ -232,6 +232,10 @@ def _exec_region(
         entry = regions.get(name)
         if isinstance(entry, dict):
             coords = {k: entry[k] for k in ("x", "y", "w", "h") if k in entry}
+            if entry.get("points"):
+                coords["points"] = entry["points"]
+            if entry.get("shape"):
+                coords["shape"] = entry["shape"]
     result: dict[str, Any] = {"region": {"name": name, "coords": coords}}
     if name and coords is None:
         # A named-but-missing region degrades to the full frame downstream
@@ -686,7 +690,7 @@ def _attach_ss_reference(
     base_params: dict[str, Any],
     params: dict[str, Any],
     video_path: str,
-    region_coords: dict[str, int],
+    region_coords: dict[str, Any],
 ) -> bool:
     """Self-extract a reference frame from ``video_path`` at ``reference_seconds``.
 
@@ -707,8 +711,14 @@ def _attach_ss_reference(
         base_params["reference_frame"] = crop
     elif tool_name == "template":
         base_params["template_image"] = crop
+        screenspace.attach_capture_mask(
+            base_params, "template_image", "template_mask", region_coords
+        )
     elif tool_name == "shape":
         base_params["shape_image"] = crop
+        screenspace.attach_capture_mask(
+            base_params, "shape_image", "shape_mask", region_coords
+        )
     elif tool_name == "scene":
         base_params["reference_scenes"] = [{"name": "ref", "frame": crop}]
     return True
@@ -834,7 +844,7 @@ def _exec_detect(
 
 def _resolve_region_coords(
     region_in: dict[str, Any], video_path: str
-) -> tuple[str, dict[str, int]]:
+) -> tuple[str, dict[str, Any]]:
     """Resolve a region input to pixel coords, defaulting to the **full frame**.
 
     A region port is optional on every Screenspace node; when it is unwired (or a
@@ -851,7 +861,7 @@ def _resolve_region_coords(
     props = video.probe_video_properties(video_path) or {}
     width = int(props.get("width", 0) or 0)
     height = int(props.get("height", 0) or 0)
-    coords: dict[str, int] = {"x": 0, "y": 0, "w": 0, "h": 0}
+    coords: dict[str, Any] = {"x": 0, "y": 0, "w": 0, "h": 0}
     norm = region_in.get("coords")
     if isinstance(norm, dict) and norm and width > 0 and height > 0:
         coords = screenspace.denormalize_region(norm, width, height)

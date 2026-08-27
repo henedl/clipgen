@@ -1576,12 +1576,11 @@ _SS_VALID_TASK_TYPES = (
 def _ss_resolve_videos_for_participant(participant_id: str) -> list[str]:
     """Resolve a participant's ordered source video path(s) via filename discovery.
 
-    Mirrors how screenspace_server falls back when no spreadsheet is loaded. A
-    multi-video participant (numbered parts) returns all parts in timeline order;
+    Honours ``config.FILENAME_OVERRIDES`` the same way the web tools do.
+    A multi-video participant (numbered parts) returns all parts in timeline order;
     a normal participant returns a single-element list. Returns [] when unknown.
     """
-    discovered = utils.discover_participant_videos("")
-    for entry in discovered:
+    for entry in files.resolve_participant_videos():
         if entry["id"] == participant_id and entry.get("has_video"):
             return list(entry["video_paths"])
     return []
@@ -2259,10 +2258,10 @@ def _ss_extract_scene_frames(
 
 def _ss_reference_coords(
     parameters: dict[str, Any],
-    region_coords: dict[str, int],
+    region_coords: dict[str, Any],
     manifest: dict[str, Any],
     dims: tuple[int, int] | None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Pixel rect a template/shape re-run cuts its sample from.
 
     The persisted capture region (``reference_region``) wins over the run
@@ -2283,7 +2282,7 @@ def _ss_rehydrate_task_media(
     task_type: str,
     parameters: dict[str, Any],
     frame_at: Callable[[float], "Any | None"],
-    region_coords: dict[str, int],
+    region_coords: dict[str, Any],
     manifest: dict[str, Any],
     dims: tuple[int, int] | None,
 ) -> None:
@@ -2298,7 +2297,7 @@ def _ss_rehydrate_task_media(
     """
     import screenspace
 
-    def _extract_frame(ref_ts: float, coords: dict[str, int], label: str) -> Any:
+    def _extract_frame(ref_ts: float, coords: dict[str, Any], label: str) -> Any:
         frame = frame_at(float(ref_ts))
         if frame is None:
             raise ValueError(f"{label}: could not read reference frame")
@@ -2317,10 +2316,14 @@ def _ss_rehydrate_task_media(
                 "template task built from an uploaded image cannot be re-run from the "
                 "manifest (no reference timestamp was saved)"
             )
+        coords = _ss_reference_coords(parameters, region_coords, manifest, dims)
         parameters["template_image"] = _extract_frame(
             parameters["reference_timestamp"],
-            _ss_reference_coords(parameters, region_coords, manifest, dims),
+            coords,
             "template",
+        )
+        screenspace.attach_capture_mask(
+            parameters, "template_image", "template_mask", coords
         )
 
     elif task_type == "shape":
@@ -2329,11 +2332,13 @@ def _ss_rehydrate_task_media(
                 "shape task built from an uploaded image cannot be re-run from the "
                 "manifest (no reference timestamp was saved)"
             )
+        coords = _ss_reference_coords(parameters, region_coords, manifest, dims)
         parameters["shape_image"] = _extract_frame(
             parameters["reference_timestamp"],
-            _ss_reference_coords(parameters, region_coords, manifest, dims),
+            coords,
             "shape",
         )
+        screenspace.attach_capture_mask(parameters, "shape_image", "shape_mask", coords)
 
     elif task_type == "scene":
         scene_refs = parameters.get("scene_references")
@@ -2378,6 +2383,9 @@ def _ss_rehydrate_task_media(
                     )
                 step["template_image"] = _extract_frame(
                     step["reference_timestamp"], step_coords, f"Step {i}"
+                )
+                screenspace.attach_capture_mask(
+                    step, "template_image", "template_mask", step_coords
                 )
             elif stype == "scene":
                 step_refs = step.get("scene_references")

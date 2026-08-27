@@ -16,6 +16,7 @@ CALIBRATION_JS = read("screenspace-calibration.js")
 SCREENSPACE_CSS = read("screenspace.css")
 SCREENSPACE_JS = read("screenspace.js")
 TASKS_JS = read("screenspace-tasks.js")
+MODEL_VIEW_JS = read("screenspace-model-view.js")
 
 
 def _shared_slider_rule() -> str:
@@ -162,3 +163,9 @@ def test_frame_preload_drops_results_for_a_replaced_source_file():
     assert "_preloadStopped" in body, (
         "a preload that resolves after pagehide must revoke its own blob URL"
     )
+
+
+def test_shape_model_view_has_meta_and_sends_capture_mask():
+    assert "shape:" in MODEL_VIEW_JS[MODEL_VIEW_JS.index("var MODEL_VIEW_META") :]
+    assert "ref_mask=" in MODEL_VIEW_JS
+    assert "function _encodeMaskContours(" in MODEL_VIEW_JS

@@ -134,13 +134,35 @@ def _preview_ref_rect(
             except ValueError:
                 pass
             else:
-                return {
+                region_coords = {
                     "x": round(rrx * frame_w),
                     "y": round(rry * frame_h),
                     "w": round(rrw * frame_w),
                     "h": round(rrh * frame_h),
                 }
+    ref_mask = _parse_mask_points(request.args.get("ref_mask", "").strip())
+    if region_coords is not None and ref_mask:
+        region_coords = dict(region_coords)
+        region_coords["mask_points"] = ref_mask
     return region_coords
+
+
+def _parse_mask_points(raw: str) -> list[list[list[float]]]:
+    """Parse bbox-relative contours from a preview mask query."""
+    if not raw:
+        return []
+    try:
+        mask_points = [
+            [
+                [float(u), float(v)]
+                for u, v in (pair.split(",") for pair in part.split(";"))
+            ]
+            for part in raw.split("|")
+            if part
+        ]
+    except ValueError:
+        return []
+    return [c for c in mask_points if len(c) >= 3]
 
 
 FlaskResponse = Response | tuple[Response, int]
@@ -1244,22 +1266,9 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
             # fractions, multiple contours joined with "|". Malformed values
             # are ignored (preview falls back to the plain rect) rather than
             # failing the whole preview.
-            mask_str = request.args.get("mask", "").strip()
-            if mask_str:
-                try:
-                    mask_points = [
-                        [
-                            [float(u), float(v)]
-                            for u, v in (pair.split(",") for pair in part.split(";"))
-                        ]
-                        for part in mask_str.split("|")
-                        if part
-                    ]
-                except ValueError:
-                    mask_points = []
-                mask_points = [c for c in mask_points if len(c) >= 3]
-                if mask_points:
-                    region_coords["mask_points"] = mask_points
+            mask_points = _parse_mask_points(request.args.get("mask", "").strip())
+            if mask_points:
+                region_coords["mask_points"] = mask_points
 
     # Prev frame for tools that consume a temporal pair. Attention's motion
     # channel compares at its own (shorter) sampling interval by default.
@@ -1327,6 +1336,9 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                     params["template_image"] = _ss_tpl.extract_region(
                         ref_frame_tpl, tpl_rect
                     )
+                    screenspace.attach_capture_mask(
+                        params, "template_image", "template_mask", tpl_rect
+                    )
 
     elif tool == "shape":
         import screenspace as _ss_shp
@@ -1354,6 +1366,9 @@ def api_preview(participant: str, timestamp: str) -> FlaskResponse:
                 if ref_frame_shp is not None:
                     params["shape_image"] = _ss_shp.extract_region(
                         ref_frame_shp, ref_rect
+                    )
+                    screenspace.attach_capture_mask(
+                        params, "shape_image", "shape_mask", ref_rect
                     )
 
     layer = (request.args.get("layer") or "").strip()
@@ -2145,12 +2160,9 @@ def _extract_tool_media(
             if frame is None:
                 return err(f"{context}could not read template frame")
             spec["template_image"] = screenspace.extract_region(frame, region_coords)
-            # A shaped capture region doubles as the template's alpha mask.
-            tpl_mask = screenspace.region_mask_for(
-                region_coords, *spec["template_image"].shape[:2]
+            screenspace.attach_capture_mask(
+                spec, "template_image", "template_mask", region_coords
             )
-            if tpl_mask is not None:
-                spec["template_mask"] = tpl_mask
 
     elif tool_type == "shape":
         upload_b64 = spec.pop("shape_image_data", None)
@@ -2168,13 +2180,9 @@ def _extract_tool_media(
             if frame is None:
                 return err(f"{context}could not read shape reference frame")
             spec["shape_image"] = screenspace.extract_region(frame, region_coords)
-            # A shaped capture region doubles as the reference mask: inner
-            # content (e.g. a button's label) can be lassoed out of the match.
-            crop_mask = screenspace.region_mask_for(
-                region_coords, *spec["shape_image"].shape[:2]
+            screenspace.attach_capture_mask(
+                spec, "shape_image", "shape_mask", region_coords
             )
-            if crop_mask is not None:
-                spec["shape_mask"] = crop_mask
 
     elif tool_type == "scene":
         scene_refs = cast(list[dict[str, Any]], spec["scene_references"])

@@ -44,6 +44,7 @@
     numbers: "Grayscale region fed to OCR.",
     timelapse: "Region crop. FFmpeg encodes this unmodified.",
     template: "Gray-blurred frame, template, and normalized match heatmap.",
+    shape: "Edge ridges and scale-swept match heatmap.",
     flow: "Prev + current gray frames with dense optical-flow vectors.",
     scene: "Region (≤128 px), Canny edges, and 8-bin hue histogram.",
     inactivity: "Region and pHash bit grid (white = 1, black = 0).",
@@ -290,6 +291,17 @@
     return !!(ref && ref.source !== "full_frame");
   }
 
+  function _encodeMaskContours(contours) {
+    if (!contours || !contours.length) return null;
+    return contours
+      .map(function (contour) {
+        return contour
+          .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
+          .join(";");
+      })
+      .join("|");
+  }
+
   // Bbox-relative contours of the previewed region as "u1,v1;u2,v2;…" (one
   // segment per contour, joined with "|") for the preview endpoint's optional
   // mask= param, or null for rect regions. A pending shaped draw carries
@@ -310,14 +322,7 @@
       var data = _regionObjectForRef(_previewRegionRef());
       if (data && data.points && data.points.length > 0) contours = data.points;
     }
-    if (!contours) return null;
-    return contours
-      .map(function (contour) {
-        return contour
-          .map(function (pt) { return pt[0].toFixed(4) + "," + pt[1].toFixed(4); })
-          .join(";");
-      })
-      .join("|");
+    return _encodeMaskContours(contours);
   }
 
   // True when the previewed region is shaped but the active tool can only
@@ -511,6 +516,8 @@
         if (capRect) {
           qsParts.push("ref_region=" + [capRect.x, capRect.y, capRect.w, capRect.h]
             .map(function (v) { return Number(v).toFixed(6); }).join(","));
+          var capMask = _encodeMaskContours(capRect.points);
+          if (capMask) qsParts.push("ref_mask=" + encodeURIComponent(capMask));
         }
       }
     }

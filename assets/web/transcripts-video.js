@@ -532,12 +532,35 @@
   // getStoredMarkersFor) into the request's start_seconds/end_seconds.
   var MARKERS_STORAGE_KEY = "ts_markers";
 
-  function _readStoredMarkers() {
+  function _markersScope() {
+    var ps = state.participants || [];
+    return ps.map(function (p) {
+      var file = p.video_path || (p.video_paths && p.video_paths[0]) || p.video_filename || "";
+      return p.id + "=" + file;
+    }).join("|");
+  }
+
+  function _readMarkerStore() {
     try {
       var raw = sessionStorage.getItem(MARKERS_STORAGE_KEY);
       var all = raw ? JSON.parse(raw) : null;
       return (all && typeof all === "object") ? all : {};
     } catch (_) { return {}; }
+  }
+
+  function _readStoredMarkers() {
+    var scoped = _readMarkerStore()[_markersScope()];
+    return (scoped && typeof scoped === "object") ? scoped : {};
+  }
+
+  function _writeStoredMarkers(pidMap) {
+    var store = _readMarkerStore();
+    var scope = _markersScope();
+    if (Object.keys(pidMap).length) store[scope] = pidMap;
+    else delete store[scope];
+    try {
+      sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(store));
+    } catch (_) { /* sessionStorage may be unavailable */ }
   }
 
   // {in, out} (numbers or null) for any participant — the batch transcribe
@@ -556,9 +579,7 @@
     var all = _readStoredMarkers();
     if (state.inMarker === null && state.outMarker === null) delete all[pid];
     else all[pid] = { in: state.inMarker, out: state.outMarker };
-    try {
-      sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all));
-    } catch (_) { /* sessionStorage may be unavailable */ }
+    _writeStoredMarkers(all);
   }
 
   // Clear a (possibly non-selected) participant's stored markers — the pill
@@ -567,9 +588,7 @@
     if (!pid) return;
     var all = _readStoredMarkers();
     delete all[pid];
-    try {
-      sessionStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(all));
-    } catch (_) { /* sessionStorage may be unavailable */ }
+    _writeStoredMarkers(all);
     if (pid === state.selectedParticipant) {
       state.inMarker = null;
       state.outMarker = null;
