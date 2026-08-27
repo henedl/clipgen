@@ -126,7 +126,8 @@
     { id: "composer.toggleSidebar",    section: "composer", group: "Panels", label: "Collapse / expand timelines sidebar", combos: ["F"] },
     { id: "composer.note.zoomTimeline", section: "composer", group: "Timeline", label: "Zoom / pan timeline", note: "scroll · drag to pan" },
 
-    { id: "screenspace.blink", section: "screenspace", group: "", label: "Blink region overlay (hold)", combos: ["B"] },
+    { id: "screenspace.blink", section: "screenspace", group: "Overlay", label: "Peek overlay (hold) / toggle (tap)", combos: ["B"] },
+    { id: "screenspace.cycleOverlayLayer", section: "screenspace", group: "Overlay", label: "Next overlay layer", combos: ["N"] },
     { id: "screenspace.stepBackFine", section: "screenspace", group: "Transport", label: "Fine step back 1 s", combos: ["Shift+ArrowLeft"] },
     { id: "screenspace.stepFwdFine",  section: "screenspace", group: "Transport", label: "Fine step forward 1 s", combos: ["Shift+ArrowRight"] },
     { id: "screenspace.setIn",  section: "screenspace", group: "Marks", label: "Set in marker", combos: ["I"] },

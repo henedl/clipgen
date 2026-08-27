@@ -127,6 +127,19 @@
     return _activeOverlayLayers().length > 0;
   }
 
+  // N steps the overlay layer picker. Driven through the <select> so the change
+  // handler above stays the one place that persists and refetches; the select
+  // is only populated when a tool has more than one layer, which is exactly
+  // when cycling means anything.
+  function cycleOverlayLayer() {
+    var sel = qs("#modelViewOverlayLayer");
+    if (!sel || sel.options.length < 2) return;
+    sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    // The picker lives in the Preview tab; name the layer for everyone else.
+    showToast(sel.options[sel.selectedIndex].textContent);
+  }
+
   function _resolveOverlayLayer() {
     var layers = _activeOverlayLayers();
     if (!layers.length) return null;
@@ -635,6 +648,7 @@
   // multitool-params + tasks (_updateMinAreaReadout) and calibration
   // (_previewRegionRef) — all of which load after this file.
   SS.initModelView = initModelView;
+  SS.cycleOverlayLayer = cycleOverlayLayer;
   SS.refreshModelView = refreshModelView;
   SS._updateOverlayUi = _updateOverlayUi;
   SS._overlayEligibleForActiveTool = _overlayEligibleForActiveTool;
